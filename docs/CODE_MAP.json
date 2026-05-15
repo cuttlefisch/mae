@@ -593,6 +593,14 @@
         {
           "name": "KnowledgeBase",
           "kind": "struct"
+        },
+        {
+          "name": "slugify",
+          "kind": "fn"
+        },
+        {
+          "name": "timestamp_id",
+          "kind": "fn"
         }
       ]
     },
@@ -819,6 +827,10 @@
     },
     {
       "name": "set-display-rule!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "set-buffer-kind-replaceable!",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -2822,15 +2834,27 @@
     },
     {
       "name": "kb-create",
-      "doc": "Create a new KB node: kb-create <id> <title> (SPC n c)"
+      "doc": "Find or create a note — type title, auto-generates ID (SPC n c)"
     },
     {
       "name": "kb-delete",
       "doc": "Delete a KB node by ID (SPC n d)"
     },
     {
+      "name": "capture-finalize",
+      "doc": "Save note and return from capture (C-c C-c)"
+    },
+    {
+      "name": "capture-abort",
+      "doc": "Abort capture, delete note (C-c C-k)"
+    },
+    {
+      "name": "kb-insert-link",
+      "doc": "Insert org-style link to a KB node at cursor (SPC n i)"
+    },
+    {
       "name": "kb-instances",
-      "doc": "Show all registered KB federation instances (SPC n i)"
+      "doc": "Show all registered KB federation instances (SPC n I)"
     },
     {
       "name": "help",

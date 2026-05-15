@@ -128,24 +128,20 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Regenerate code-map if stale
+      - name: Check code-map freshness
         run: |
           make code-map
           if git diff --quiet docs/CODE_MAP.md docs/CODE_MAP.json; then
-            echo "Code map is up to date."
+            echo "✅ Code map is up to date."
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add docs/CODE_MAP.md docs/CODE_MAP.json
-            git commit -m "docs: auto-update code-map [skip ci]"
-            git push
+            echo "❌ Code map is stale. Run 'make code-map' and commit before merging."
+            git diff --stat docs/CODE_MAP.md docs/CODE_MAP.json
+            exit 1
           fi
 
   badges:

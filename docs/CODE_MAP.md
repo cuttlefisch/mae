@@ -235,6 +235,8 @@ Source: `crates/kb/src/lib.rs`
 | `BrokenLink` | struct |
 | `KbHealthReport` | struct |
 | `KnowledgeBase` | struct |
+| `slugify` | fn |
+| `timestamp_id` | fn |
 
 ## mae-lookup
 
@@ -346,6 +348,7 @@ Source: `crates/spell/src/lib.rs`
 | `set-local-option!` | `crates/scheme/src/runtime.rs` |
 | `display-buffer-policy` | `crates/scheme/src/runtime.rs` |
 | `set-display-rule!` | `crates/scheme/src/runtime.rs` |
+| `set-buffer-kind-replaceable!` | `crates/scheme/src/runtime.rs` |
 | `shell-send-input` | `crates/scheme/src/runtime.rs` |
 | `recent-files-add!` | `crates/scheme/src/runtime.rs` |
 | `recent-projects-add!` | `crates/scheme/src/runtime.rs` |
@@ -426,7 +429,7 @@ Source: `crates/spell/src/lib.rs`
 | `command-exists?` | `crates/scheme/src/runtime.rs` |
 | `keymap-bindings` | `crates/scheme/src/runtime.rs` |
 
-## Commands (479 built-in)
+## Commands (482 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -850,9 +853,12 @@ Source: `crates/spell/src/lib.rs`
 | `show-buffer-keys` | Show all keybindings for the current buffer (?) |
 | `kb-find` | Search KB nodes (SPC n f) |
 | `kb-edit-source` | Jump to source .org file for current help node (SPC n e) |
-| `kb-create` | Create a new KB node: kb-create <id> <title> (SPC n c) |
+| `kb-create` | Find or create a note — type title, auto-generates ID (SPC n c) |
 | `kb-delete` | Delete a KB node by ID (SPC n d) |
-| `kb-instances` | Show all registered KB federation instances (SPC n i) |
+| `capture-finalize` | Save note and return from capture (C-c C-c) |
+| `capture-abort` | Abort capture, delete note (C-c C-k) |
+| `kb-insert-link` | Insert org-style link to a KB node at cursor (SPC n i) |
+| `kb-instances` | Show all registered KB federation instances (SPC n I) |
 | `help` | Open the *Help* buffer at the knowledge-base index |
 | `help-follow-link` | Follow the focused link in the *Help* buffer |
 | `help-back` | Navigate back in help history (C-o) |
