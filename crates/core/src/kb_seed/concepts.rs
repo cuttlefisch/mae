@@ -672,6 +672,36 @@ search cache. FTS5 with porter stemmer. Sub-millisecond search across \
 thousands of nodes. No Electron, no browser runtime.\n\n\
 See also: [[concept:knowledge-base]], [[concept:kb-federation]], [[concept:kb-workflows]]\n";
 
+pub(super) const CONCEPT_DAILIES: &str = "\
+**Org-dailies** provides daily journal notes with backward chain-linking, \
+inspired by `org-roam-dailies` in Emacs.\n\n\
+## How It Works\n\
+Each daily note lives at `<dailies-dir>/YYYY-MM-DD.org` with a unique ID \
+(`daily:YYYY-MM-DD`). When you open today's daily, MAE creates the file if \
+needed and **chain-fills** backward — creating stub files for any gaps and \
+inserting Previous links (e.g. `Previous: YYYY-MM-DD`) to form a \
+continuous backward chain.\n\n\
+## Keybindings (SPC n d)\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `SPC n d t` | [[cmd:daily-goto-today]] | Open today's daily (chain-fill) |\n\
+| `SPC n d y` | [[cmd:daily-goto-yesterday]] | Open yesterday's daily |\n\
+| `SPC n d d` | [[cmd:daily-goto-date]] | Open daily for a specific date |\n\
+| `SPC n d p` | [[cmd:daily-prev]] | Navigate to previous daily |\n\
+| `SPC n d n` | [[cmd:daily-next]] | Navigate to next daily |\n\n\
+## Configuration\n\
+- `kb_dailies_dir` — explicit path (default: `<kb_notes_dir>/daily`)\n\
+- `kb_daily_chain_gap_max` — max days to chain-fill backward (default: 90)\n\n\
+## Chain-Fill Algorithm\n\
+1. Ensure target date file exists (create stub if needed)\n\
+2. Walk backward day-by-day from target\n\
+3. For each missing day, create a stub `.org` file\n\
+4. Insert `Previous:` link in each stub pointing to the prior day\n\
+5. Stop when hitting a pre-existing daily or exhausting `kb_daily_chain_gap_max`\n\n\
+All file writes use a write-guard to prevent the filesystem watcher from \
+triggering duplicate reimports.\n\n\
+See also: [[concept:knowledge-base]], [[concept:kb-workflows]], [[concept:modules]]\n";
+
 pub(super) const CONCEPT_PROJECT: &str =
     "A **project** in MAE is a directory with optional `.project` TOML configuration.\n\n\
 ## Detection\n\

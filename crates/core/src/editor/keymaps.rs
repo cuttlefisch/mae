@@ -313,7 +313,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC n v"), "kb-view");
         normal.bind(parse_key_seq_spaced("SPC n e"), "kb-edit-source");
         normal.bind(parse_key_seq_spaced("SPC n c"), "kb-create");
-        normal.bind(parse_key_seq_spaced("SPC n d"), "kb-delete");
+        normal.bind(parse_key_seq_spaced("SPC n D"), "kb-delete");
         normal.bind(parse_key_seq_spaced("SPC n r"), "kb-register");
         normal.bind(parse_key_seq_spaced("SPC n R"), "kb-reimport");
         normal.bind(parse_key_seq_spaced("SPC n i"), "kb-insert-link");

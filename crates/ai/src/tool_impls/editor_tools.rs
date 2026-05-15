@@ -993,6 +993,29 @@ pub fn execute_pkg_command(editor: &mut Editor, command: &str) -> Result<String,
     ))
 }
 
+pub fn execute_keymap_query(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let keymap = args.get("keymap").and_then(|v| v.as_str());
+    let command = args.get("command").and_then(|v| v.as_str());
+    let prefix = args.get("prefix").and_then(|v| v.as_str());
+
+    let results = editor.query_keybindings(keymap, command, prefix);
+    let bindings: Vec<serde_json::Value> = results
+        .into_iter()
+        .map(|(key, cmd, km)| {
+            serde_json::json!({
+                "key": key,
+                "command": cmd,
+                "keymap": km,
+            })
+        })
+        .collect();
+    let output = serde_json::json!({
+        "bindings": bindings,
+        "count": bindings.len(),
+    });
+    serde_json::to_string_pretty(&output).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

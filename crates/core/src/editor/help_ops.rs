@@ -258,6 +258,9 @@ impl Editor {
                 }
             }
         };
+        // Record access for activity tracking (UserOrg notes only).
+        self.kb_record_access(&target);
+
         let prev_idx = self.active_buffer_idx();
         let idx = self.ensure_help_buffer_idx(&target);
         if idx != prev_idx {

@@ -217,7 +217,8 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
         | "window_layout"
         | "command_list"
         | "ai_permissions"
-        | "audit_configuration" => Some("introspection"),
+        | "audit_configuration"
+        | "keymap_query" => Some("introspection"),
 
         "create_file" | "buffer_write" | "buffer_read" | "open_file" | "close_buffer"
         | "switch_buffer" | "rename_file" | "file_read" => Some("editing"),

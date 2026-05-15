@@ -184,6 +184,8 @@ impl Editor {
                         self.kb_write_guard.insert(path.clone());
                         self.kb_reimport_file(&path);
                         self.kb_watcher_stats.reimports_total += 1;
+                        // Record modification for activity tracking.
+                        self.kb_record_modification(&path);
                         // Refresh help buffer if it's showing a node from this file
                         self.refresh_help_if_stale();
                     }

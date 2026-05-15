@@ -125,6 +125,8 @@ pub(super) fn handle_command_palette_mode(
                     let display = if doc.is_empty() { node_id.clone() } else { doc };
                     let link = format!("[[{}|{}]]", node_id, display);
                     editor.insert_at_cursor(&link);
+                    // Record link for activity tracking.
+                    editor.kb_record_link(&node_id);
                     editor.set_status(format!("Inserted link to {}", display));
                 }
                 (None, PalettePurpose::SwitchProject) => {
@@ -443,6 +445,14 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             if !tag.is_empty() {
                 editor.set_status(format!("Agenda filter: :{tag}:"));
                 // Agenda refresh with tag filter — handled by M8
+            }
+        }
+        MiniDialogContext::DailyGotoDate => {
+            let date_str = dialog.fields[0].value.trim().to_string();
+            if !date_str.is_empty() {
+                if let Err(e) = editor.kb_goto_daily_date(&date_str) {
+                    editor.set_status(format!("Daily: {}", e));
+                }
             }
         }
         MiniDialogContext::RevertBuffer { buf_idx } => {

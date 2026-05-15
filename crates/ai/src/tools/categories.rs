@@ -93,7 +93,8 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "spell_check"
         | "lookup_online"
         | "next_error"
-        | "search_tools" => ToolTier::Core,
+        | "search_tools"
+        | "keymap_query" => ToolTier::Core,
         // Everything else is extended
         _ => ToolTier::Extended,
     }

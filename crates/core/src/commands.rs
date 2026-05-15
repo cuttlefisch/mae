@@ -1080,7 +1080,19 @@ impl CommandRegistry {
             "kb-create",
             "Find or create a note — type title, auto-generates ID (SPC n c)",
         );
-        reg.register_builtin("kb-delete", "Delete a KB node by ID (SPC n d)");
+        reg.register_builtin("kb-delete", "Delete a KB node by ID (SPC n D)");
+        reg.register_builtin(
+            "daily-goto-today",
+            "Open today's daily note with chain-fill (SPC n d t)",
+        );
+        reg.register_builtin(
+            "daily-goto-yesterday",
+            "Open yesterday's daily note (SPC n d y)",
+        );
+        reg.register_builtin("daily-goto-date", "Open daily note for a date (SPC n d d)");
+        reg.register_builtin("daily-prev", "Navigate to previous daily note (SPC n d p)");
+        reg.register_builtin("daily-next", "Navigate to next daily note (SPC n d n)");
+        reg.register_builtin("kb-audit", "Run KB audit report (SPC n H a)");
         reg.register_builtin(
             "capture-finalize",
             "Save note and return from capture (C-c C-c)",

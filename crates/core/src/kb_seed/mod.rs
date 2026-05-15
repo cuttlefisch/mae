@@ -559,6 +559,14 @@ fn static_nodes() -> Vec<Node> {
         .with_tags(["kb", "comparison", "obsidian", "roam"])
         .with_aliases(["obsidian", "roam research", "notion", "logseq"]),
         Node::new(
+            "concept:dailies",
+            "Concept: Org-Dailies",
+            NodeKind::Concept,
+            CONCEPT_DAILIES,
+        )
+        .with_tags(["kb", "dailies", "journal", "org-roam"])
+        .with_aliases(["daily notes", "journal", "org-roam-dailies"]),
+        Node::new(
             "key:normal-mode",
             "Keys: Normal Mode",
             NodeKind::Key,
@@ -884,6 +892,7 @@ mod tests {
             "concept:kb-federation",
             "concept:kb-workflows",
             "concept:kb-vs-alternatives",
+            "concept:dailies",
             "guide:extension-authoring",
             "lesson:kb-import-roam",
             "key:leader-keys",

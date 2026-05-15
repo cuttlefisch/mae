@@ -639,6 +639,38 @@ For full setup guide: :help ai-setup";
                     self.set_status("No active capture");
                 }
             }
+            "daily-goto-today" => {
+                if let Err(e) = self.kb_goto_daily_today() {
+                    self.set_status(format!("Daily: {}", e));
+                }
+            }
+            "daily-goto-yesterday" => {
+                if let Err(e) = self.kb_goto_daily_yesterday() {
+                    self.set_status(format!("Daily: {}", e));
+                }
+            }
+            "daily-goto-date" => {
+                self.mini_dialog = Some(crate::command_palette::MiniDialogState::single_input(
+                    "Date (YYYY-MM-DD):",
+                    "",
+                    "",
+                    crate::command_palette::MiniDialogContext::DailyGotoDate,
+                ));
+                self.set_mode(crate::Mode::Command);
+            }
+            "daily-prev" => {
+                if let Err(e) = self.kb_daily_prev() {
+                    self.set_status(format!("Daily: {}", e));
+                }
+            }
+            "daily-next" => {
+                if let Err(e) = self.kb_daily_next() {
+                    self.set_status(format!("Daily: {}", e));
+                }
+            }
+            "kb-audit" => {
+                self.show_kb_audit_report();
+            }
             "ai-save" => {
                 self.set_status("Usage: :ai-save <path>");
             }

@@ -123,6 +123,7 @@ pub enum MiniDialogContext {
     RevertBuffer {
         buf_idx: usize,
     },
+    DailyGotoDate,
 }
 
 /// State for a multi-field mini-dialog (edit-link, rename, etc.)

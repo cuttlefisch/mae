@@ -1406,6 +1406,58 @@ impl Editor {
         self.keymaps.get(name)
     }
 
+    /// Look up a key binding by key string (e.g. "SPC n d t").
+    /// Returns (command_name, keymap_name) if found.
+    pub fn lookup_key_binding(&self, key_str: &str) -> Option<(String, String)> {
+        let seq = crate::keymap::parse_key_seq_spaced(key_str);
+        if seq.is_empty() {
+            return None;
+        }
+        for (name, km) in &self.keymaps {
+            for (bound_seq, cmd) in km.bindings() {
+                if *bound_seq == seq {
+                    return Some((cmd.clone(), name.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Query keybindings across all keymaps with optional filters.
+    /// Returns vec of (key_display, command, keymap_name).
+    pub fn query_keybindings(
+        &self,
+        keymap_filter: Option<&str>,
+        command_filter: Option<&str>,
+        prefix_filter: Option<&str>,
+    ) -> Vec<(String, String, String)> {
+        let prefix_seq = prefix_filter.map(crate::keymap::parse_key_seq_spaced);
+        let mut results = Vec::new();
+        for (name, km) in &self.keymaps {
+            if let Some(filter) = keymap_filter {
+                if name != filter {
+                    continue;
+                }
+            }
+            for (seq, cmd) in km.bindings() {
+                if let Some(ref cmd_filter) = command_filter {
+                    if !cmd.contains(cmd_filter) {
+                        continue;
+                    }
+                }
+                if let Some(ref prefix) = prefix_seq {
+                    if seq.len() < prefix.len() || &seq[..prefix.len()] != prefix.as_slice() {
+                        continue;
+                    }
+                }
+                let key_display = crate::keymap::format_key_seq(seq);
+                results.push((key_display, cmd.clone(), name.clone()));
+            }
+        }
+        results.sort_by(|a, b| a.2.cmp(&b.2).then(a.0.cmp(&b.0)));
+        results
+    }
+
     /// Merge which-key entries from the overlay keymap and its parent.
     fn merged_which_key_entries(&self, prefix: &[KeyPress]) -> Vec<WhichKeyEntry> {
         let Some((primary, fallback)) = self.current_keymap_names() else {
