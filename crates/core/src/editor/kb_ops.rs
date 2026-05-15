@@ -460,16 +460,10 @@ impl Editor {
             // Open the file for editing
             self.open_file(&path);
 
-            // Seed help buffer so SPC n v can toggle back to rendered view
-            self.open_help_at(&id);
-            // Switch focus back to the .org file (user wants to edit)
-            if let Some(file_idx) = self
-                .buffers
-                .iter()
-                .position(|b| b.file_path().is_some_and(|p| p == path))
-            {
-                self.display_buffer(file_idx);
-            }
+            // Seed help buffer (hidden) so SPC n v can toggle to rendered view later.
+            // Do NOT call open_help_at() — that would display it and create a split.
+            let help_idx = self.ensure_help_buffer_idx(&id);
+            self.help_populate_buffer(help_idx);
 
             // Enter capture mode (C-c C-c to finalize, C-c C-k to abort)
             self.capture_state = Some(super::CaptureState {
@@ -479,7 +473,7 @@ impl Editor {
             });
 
             self.set_status(format!(
-                "Capture: {} — C-c C-c to finish, C-c C-k to abort",
+                "Capture: {} — SPC n s to finish | SPC n k to abort",
                 title
             ));
             Ok((id, Some(path)))

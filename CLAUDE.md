@@ -201,6 +201,16 @@ Granular milestone tracking lives in **ROADMAP.md**.
 
 - **Terminal-first:** ratatui/crossterm for initial development. GPU rendering (Skia) is now the primary target.
 
+## Keybinding Architecture
+
+- **Kernel keymaps** (`keymaps.rs`): vi-modal primitives only (hjkl, operators, text objects, Escape, `:`). Currently also has SPC leader bindings as a transitional default — these are migrating to keymap flavor modules.
+- **Keymap flavor modules** (`modules/keymap-doom/`, future `keymap-emacs/`, `keymap-minimal/`): define the full SPC leader tree. Selected via `keymap_flavor` option (default: "doom").
+- **Feature modules** (dailies, git-status, etc.): add bindings ONLY for module-specific commands not covered by the keymap flavor.
+- **Scheme API**: `(define-key MAP KEY CMD)` and `(set-group-name MAP PREFIX LABEL)` are the canonical binding APIs. Both work at init time and REPL time (runtime redefinable).
+- **`(mae!)` block**: Declarative module selection in `init.scm`. Only declared modules load. If a kernel command's binding is in a module, the user MUST declare that module or the binding won't exist.
+- **Never duplicate** bindings between kernel and modules without a documented migration path. The current duplication between `keymaps.rs` and `keymap-doom` is acknowledged tech debt with a ROADMAP entry.
+- **Never add ad-hoc solutions**: Prefer proper architectural solutions over hardcoded workarounds. When you find yourself duplicating logic between TUI and GUI renderers, extract shared code.
+
 ## Emacs Lessons (Reference Data)
 
 These findings from analyzing the Emacs git repo (clone of emacs-mirror/emacs) motivated our architecture:

@@ -2,11 +2,12 @@
 ;;; Daily journal notes with backward chain-linking (org-roam-dailies parity).
 
 ;;; @module: dailies
-;;; @version: 0.1.0
+;;; @version: 0.2.0
 ;;; @stability: experimental
 ;;; @provides: dailies-autoloads
 
 ;; SPC n d — dailies prefix group
+(set-group-name "normal" "SPC n d" "+dailies")
 (define-key "normal" "SPC n d t" "daily-goto-today")
 (define-key "normal" "SPC n d y" "daily-goto-yesterday")
 (define-key "normal" "SPC n d d" "daily-goto-date")

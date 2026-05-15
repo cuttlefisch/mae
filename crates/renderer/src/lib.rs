@@ -265,7 +265,8 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
 
         let cols = (area.width as usize / 25).max(1);
         let rows = entries.len().div_ceil(cols);
-        let popup_height = (rows as u16 + 2).min(area.height / 2).max(3);
+        // @ai-caution: [which-key] Popup height formula (2/3 cap) must match gui/src/lib.rs
+        let popup_height = (rows as u16 + 2).min(area.height * 2 / 3).max(3);
 
         let chunks =
             Layout::vertical([Constraint::Min(1), Constraint::Length(popup_height)]).split(area);

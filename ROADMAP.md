@@ -101,11 +101,25 @@
 - [ ] Free AI-assisted setup (Gemini free tier for first-run guidance)
 - [ ] Step-through command execution (inspect AI tool call stdin/stdout)
 
+### Keymap Architecture Migration
+
+> **Goal**: Kernel provides only vi-modal primitives. All leader-key (SPC) bindings move to keymap flavor modules.
+>
+> 1. Trim `keymaps.rs` to minimal vi: Escape, hjkl, operators, text objects, `:`, search
+> 2. Make `keymap-doom` the sole source of the SPC tree
+> 3. Ship `keymap-emacs` and `keymap-minimal` flavor modules
+> 4. Auto-load the selected `keymap_flavor` module regardless of `(mae!)` declarations
+> 5. Expose `(clear-keymap-prefix)` for users who want to override, not just extend
+> 6. Group names (`set-group-name`) should come from the keymap flavor module, not the kernel
+
 ### Architecture Debt (v0.9.1+)
 
 - [ ] **Editor struct field extraction**: ~100+ fields accumulating (Emacs buffer.c trajectory). Extract into named sub-structs: `LspContext` (7 fields), `DapContext` (3+ fields), `ModuleContext` (4 fields), `RenderContext` (5+ fields). Keeps LOC flat, improves cohesion.
 - [ ] **dispatch/ui.rs split**: At 1,141 lines, "UI" dispatch is a semantic dumping ground (config, themes, terminal, help, registers, options, toggles, projects, AI). Split into dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs, dispatch/help.rs.
 - [ ] **Custom theme filesystem loading**: Only bundled themes work. No user theme search path (~/.config/mae/themes/). Emacs, Vim, Helix all support this.
+- [ ] **Binding ownership audit**: Every kernel-dispatched command should have a kernel default binding. Module bindings are for module-specific commands or user-facing overrides only.
+- [ ] **Ad-hoc solution review**: Thorough code review for hardcoded values, duplicated logic between TUI/GUI, and workarounds that should be proper abstractions — in prep for server-client architecture.
+- [ ] **Which-key idle delay**: Wire `which-key-idle-delay` option to event loop timer (default 0ms = immediate).
 
 ---
 

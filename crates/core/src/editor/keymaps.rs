@@ -310,6 +310,12 @@ impl Editor {
         // SPC o a / SPC o A — moved to modules/agenda/autoloads.scm
         // +register — moved to modules/registers/autoloads.scm
         // +notes (KB shortcuts)
+        // +dailies
+        normal.bind(parse_key_seq_spaced("SPC n d t"), "daily-goto-today");
+        normal.bind(parse_key_seq_spaced("SPC n d y"), "daily-goto-yesterday");
+        normal.bind(parse_key_seq_spaced("SPC n d d"), "daily-goto-date");
+        normal.bind(parse_key_seq_spaced("SPC n d p"), "daily-prev");
+        normal.bind(parse_key_seq_spaced("SPC n d n"), "daily-next");
         normal.bind(parse_key_seq_spaced("SPC n f"), "kb-find");
         normal.bind(parse_key_seq_spaced("SPC n v"), "kb-view");
         normal.bind(parse_key_seq_spaced("SPC n e"), "kb-edit-source");
@@ -355,6 +361,7 @@ impl Editor {
         normal.set_group_name(parse_key_seq_spaced("SPC p"), "+project");
         normal.set_group_name(parse_key_seq_spaced("SPC g"), "+git");
         normal.set_group_name(parse_key_seq_spaced("SPC n"), "+notes");
+        normal.set_group_name(parse_key_seq_spaced("SPC n d"), "+dailies");
         normal.set_group_name(parse_key_seq_spaced("SPC o"), "+open");
         normal.set_group_name(parse_key_seq_spaced("SPC l"), "+lsp");
         normal.set_group_name(parse_key_seq_spaced("SPC r"), "+register");
@@ -678,6 +685,39 @@ mod tests {
         ed.window_mgr.focused_window_mut().buffer_idx = help_idx;
         let names = ed.current_keymap_names();
         assert_eq!(names, Some(("help", Some("normal"))));
+    }
+
+    #[test]
+    fn dailies_bindings_registered() {
+        let ed = Editor::new();
+        let normal = ed.keymaps.get("normal").unwrap();
+        let entries = normal.which_key_entries(&parse_key_seq_spaced("SPC n d"), &ed.commands);
+        assert!(
+            entries.iter().any(|e| e.label.contains("today")),
+            "dailies bindings should include 'today'"
+        );
+        assert_eq!(entries.len(), 5, "should have 5 dailies bindings");
+    }
+
+    #[test]
+    fn spc_sub_prefixes_have_which_key_group_names() {
+        // Verify sub-prefixes (like SPC n d) also have group names
+        use crate::keymap::parse_key_seq_spaced;
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
+        let spc_n = parse_key_seq_spaced("SPC n");
+        let entries = normal.which_key_entries(&spc_n, &editor.commands);
+        let d_entry = entries.iter().find(|e| {
+            use crate::keymap::Key;
+            matches!(e.key.key, Key::Char('d'))
+        });
+        assert!(d_entry.is_some(), "SPC n should have a 'd' entry");
+        let d = d_entry.unwrap();
+        assert!(d.is_group, "SPC n d should be a group");
+        assert_eq!(
+            d.label, "+dailies",
+            "SPC n d group should be labeled +dailies"
+        );
     }
 
     #[test]

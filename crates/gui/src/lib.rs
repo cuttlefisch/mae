@@ -575,7 +575,8 @@ impl Renderer for GuiRenderer {
 
             let entry_cols = (cols / 25).max(1);
             let entry_rows = entries.len().div_ceil(entry_cols);
-            let popup_height = (entry_rows + 2).min(rows / 2).max(3);
+            // @ai-caution: [which-key] Popup height formula (2/3 cap) must match renderer/src/lib.rs
+            let popup_height = (entry_rows + 2).min(rows * 2 / 3).max(3);
 
             let win_height = rows.saturating_sub(popup_height);
             render_window_area(

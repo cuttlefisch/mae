@@ -504,6 +504,8 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
 
 // ---------------------------------------------------------------------------
 // Which-key popup
+// @ai-caution: [which-key] Mirror of TUI which_key_render.rs layout logic. Changes here
+// MUST be reflected in the TUI renderer.
 // ---------------------------------------------------------------------------
 
 pub fn render_which_key_popup(
@@ -519,7 +521,28 @@ pub fn render_which_key_popup(
     let group_fg = theme::ts_fg(editor, "ui.popup.group");
     let key_fg = theme::ts_fg(editor, "ui.popup.key");
     let text_fg = theme::ts_fg(editor, "ui.popup.text");
+    // Doc color: try ui.popup.doc, fallback to dimmed text color
+    let doc_fg = {
+        let style = editor.theme.style("ui.popup.doc");
+        if style.fg.is_some() {
+            theme::ts_fg(editor, "ui.popup.doc")
+        } else {
+            // Dim the text color by reducing alpha
+            let mut dimmed = text_fg;
+            dimmed.a *= 0.6;
+            dimmed
+        }
+    };
     let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
+
+    let separator = editor
+        .get_option("which-key-separator")
+        .map(|(v, _)| v)
+        .unwrap_or_else(|| " ".to_string());
+    let max_desc: usize = editor
+        .get_option("which-key-max-desc-length")
+        .and_then(|(v, _)| v.parse().ok())
+        .unwrap_or(40);
 
     canvas.draw_rect_fill(row_start, 0, cols, height, bg);
     let title = if let Some(t) = title_override {
@@ -540,14 +563,32 @@ pub fn render_which_key_popup(
     let inner_width = cols.saturating_sub(2);
     let inner_height = height.saturating_sub(2);
 
-    let col_width = 30_usize;
+    // Dynamic column width based on content
+    let max_entry_w = entries
+        .iter()
+        .map(|e| format_keypress(&e.key).len() + separator.len() + e.label.len().min(max_desc))
+        .max()
+        .unwrap_or(20);
+    let col_width = (max_entry_w + 2).clamp(25, 60);
     let num_cols = (inner_width / col_width).max(1);
 
     let mut row = 0;
     let mut col = 0;
+    let mut displayed = 0;
 
-    for entry in entries {
+    for entry in entries.iter() {
         if row >= inner_height {
+            // Overflow indicator
+            let remaining_count = entries.len() - displayed;
+            if remaining_count > 0 && row > 0 {
+                let overflow_text = format!("… +{} more", remaining_count);
+                canvas.draw_text_at(
+                    inner_row + row.saturating_sub(1),
+                    inner_col,
+                    &overflow_text,
+                    doc_fg,
+                );
+            }
             break;
         }
 
@@ -558,7 +599,7 @@ pub fn render_which_key_popup(
             (key_fg, text_fg)
         };
 
-        let max_label = col_width.saturating_sub(key_str.len() + 2);
+        let max_label = col_width.saturating_sub(key_str.len() + separator.len() + 1);
         let label = if entry.label.len() > max_label {
             format!("{}..", &entry.label[..max_label.saturating_sub(2)])
         } else {
@@ -567,9 +608,30 @@ pub fn render_which_key_popup(
 
         let x = inner_col + col * col_width;
         canvas.draw_text_at(inner_row + row, x, &key_str, kfg);
-        canvas.draw_text_at(inner_row + row, x + key_str.len() + 1, &label, lfg);
+        let sep_x = x + key_str.len();
+        canvas.draw_text_at(inner_row + row, sep_x, &separator, text_fg);
+        let label_x = sep_x + separator.len();
+        canvas.draw_text_at(inner_row + row, label_x, &label, lfg);
+
+        // Doc string display for leaf entries
+        if !entry.is_group {
+            if let Some(ref doc) = entry.doc {
+                let used = key_str.len() + separator.len() + label.len();
+                let remaining = col_width.saturating_sub(used + 2);
+                if remaining > 8 {
+                    let trunc = if doc.len() > remaining {
+                        format!("{}..", &doc[..remaining.saturating_sub(2)])
+                    } else {
+                        doc.clone()
+                    };
+                    let doc_x = label_x + label.len() + 1;
+                    canvas.draw_text_at(inner_row + row, doc_x, &trunc, doc_fg);
+                }
+            }
+        }
 
         col += 1;
+        displayed += 1;
         if col >= num_cols {
             col = 0;
             row += 1;

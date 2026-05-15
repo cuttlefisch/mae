@@ -14,6 +14,41 @@ pub fn execute_introspect(editor: &Editor, args: &serde_json::Value) -> Result<S
 
     let mut result = serde_json::Map::new();
 
+    // Always include version for diagnostic context
+    if section == "all" || section == "version" {
+        result.insert(
+            "version".into(),
+            json!({
+                "mae": env!("CARGO_PKG_VERSION"),
+                "build_profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+            }),
+        );
+    }
+    if section == "all" || section == "modules" {
+        let loaded: Vec<&str> = editor
+            .active_modules
+            .iter()
+            .filter(|m| m.status == "loaded")
+            .map(|m| m.name.as_str())
+            .collect();
+        let failed: Vec<&str> = editor
+            .active_modules
+            .iter()
+            .filter(|m| m.status != "loaded")
+            .map(|m| m.name.as_str())
+            .collect();
+        result.insert(
+            "modules".into(),
+            json!({
+                "total": editor.active_modules.len(),
+                "loaded_count": loaded.len(),
+                "loaded": loaded,
+                "failed_count": failed.len(),
+                "failed": failed,
+            }),
+        );
+    }
+
     if section == "all" || section == "threads" {
         result.insert("threads".into(), build_threads_section());
     }

@@ -135,6 +135,12 @@
 (define-key "normal" "SPC p c" "project-clean")
 
 ;; +notes
+;; +dailies
+(define-key "normal" "SPC n d t" "daily-goto-today")
+(define-key "normal" "SPC n d y" "daily-goto-yesterday")
+(define-key "normal" "SPC n d d" "daily-goto-date")
+(define-key "normal" "SPC n d p" "daily-prev")
+(define-key "normal" "SPC n d n" "daily-next")
 (define-key "normal" "SPC n f" "kb-find")
 (define-key "normal" "SPC n v" "kb-view")
 (define-key "normal" "SPC n e" "kb-edit-source")

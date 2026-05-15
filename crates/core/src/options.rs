@@ -346,6 +346,16 @@ impl OptionRegistry {
                 opt!("spell_enabled", &["spell-enabled"],
                     "Enable spell checking",
                     OptionKind::Bool, "false", Some("spell.enabled"), &[]),
+                // --- Which-key ---
+                opt!("which_key_idle_delay", &["which-key-idle-delay"],
+                    "Milliseconds before which-key popup appears (0 = immediate). NOTE: timer integration deferred.",
+                    OptionKind::Int, "0", None, &[]),
+                opt!("which_key_separator", &["which-key-separator"],
+                    "Separator between key and description in which-key popup",
+                    OptionKind::String, " ", None, &[]),
+                opt!("which_key_max_desc_length", &["which-key-max-desc-length"],
+                    "Maximum description length in which-key popup",
+                    OptionKind::Int, "40", None, &[]),
             ],
         }
     }
