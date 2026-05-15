@@ -591,6 +591,10 @@
           "kind": "struct"
         },
         {
+          "name": "StaleNode",
+          "kind": "struct"
+        },
+        {
           "name": "KbHealthReport",
           "kind": "struct"
         },
@@ -2647,6 +2651,10 @@
     {
       "name": "kb-health",
       "doc": "Show KB health report (orphans, broken links, namespace counts)"
+    },
+    {
+      "name": "kb-cleanup-orphans",
+      "doc": "Remove orphan user notes with no links (SPC n C)"
     },
     {
       "name": "describe-display-policy",

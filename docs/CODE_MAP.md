@@ -234,6 +234,7 @@ Source: `crates/kb/src/lib.rs`
 | `parse_links` | fn |
 | `BrokenLinkKind` | enum |
 | `BrokenLink` | struct |
+| `StaleNode` | struct |
 | `KbHealthReport` | struct |
 | `KnowledgeBase` | struct |
 | `slugify` | fn |
@@ -430,7 +431,7 @@ Source: `crates/spell/src/lib.rs`
 | `command-exists?` | `crates/scheme/src/runtime.rs` |
 | `keymap-bindings` | `crates/scheme/src/runtime.rs` |
 
-## Commands (488 built-in)
+## Commands (489 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -807,6 +808,7 @@ Source: `crates/spell/src/lib.rs`
 | `describe-option` | Show documentation for an editor option (SPC h o) |
 | `describe-configuration` | Show a configuration health report (AI, LSP, DAP status) |
 | `kb-health` | Show KB health report (orphans, broken links, namespace counts) |
+| `kb-cleanup-orphans` | Remove orphan user notes with no links (SPC n C) |
 | `describe-display-policy` | Show the active display policy rules (how buffers are placed in windows) |
 | `describe-bindings` | Show all keybindings for the current mode |
 | `describe-module` | Show module summary or detail (:describe-module [name]) |
