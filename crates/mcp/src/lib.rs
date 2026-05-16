@@ -514,4 +514,231 @@ mod tests {
         let parsed: JsonRpcResponse = serde_json::from_str(&msg).unwrap();
         assert!(parsed.result.is_some());
     }
+
+    // -----------------------------------------------------------------------
+    // Multi-client integration tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: send a JSON-RPC message over a Unix socket using line framing
+    /// and read back a Content-Length framed response.
+    async fn send_and_recv(
+        stream: &mut tokio::net::UnixStream,
+        msg: &serde_json::Value,
+    ) -> JsonRpcResponse {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let payload = serde_json::to_string(msg).unwrap();
+        stream
+            .write_all(format!("{}\n", payload).as_bytes())
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+
+        // Read Content-Length framed response.
+        let mut header_buf = Vec::new();
+        let mut byte = [0u8; 1];
+        // Read until we hit \r\n\r\n.
+        loop {
+            stream.read_exact(&mut byte).await.unwrap();
+            header_buf.push(byte[0]);
+            if header_buf.len() >= 4 && &header_buf[header_buf.len() - 4..] == b"\r\n\r\n" {
+                break;
+            }
+        }
+        let header = String::from_utf8(header_buf).unwrap();
+        let content_length: usize = header
+            .lines()
+            .find_map(|line| line.strip_prefix("Content-Length: "))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+
+        let mut body = vec![0u8; content_length];
+        stream.read_exact(&mut body).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn multi_client_concurrent_connections() {
+        let socket_path = format!("/tmp/mae-test-multi-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        // Set up the server with a mock tool handler.
+        let (tool_tx, mut tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let server = McpServer::new(&socket_path, tool_tx);
+        let tools = vec![ToolInfo {
+            name: "echo".to_string(),
+            description: "Echo tool".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }];
+
+        // Spawn the server.
+        tokio::spawn(async move {
+            server.run(tools).await;
+        });
+
+        // Spawn a mock tool handler that echoes the tool name back.
+        tokio::spawn(async move {
+            while let Some(req) = tool_rx.recv().await {
+                let _ = req.reply.send(McpToolResult {
+                    success: true,
+                    output: format!("echoed: {}", req.tool_name),
+                });
+            }
+        });
+
+        // Give server time to bind.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // --- Client 1 connects ---
+        let mut client1 = tokio::net::UnixStream::connect(&socket_path)
+            .await
+            .expect("client1 connect");
+
+        // Client 1: initialize
+        let resp = send_and_recv(
+            &mut client1,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "client-1", "version": "1.0"}}
+            }),
+        )
+        .await;
+        assert!(resp.error.is_none(), "client1 initialize failed");
+        let result = resp.result.unwrap();
+        assert_eq!(result["serverInfo"]["name"], "mae-editor");
+        // Verify multiClient capability is advertised.
+        assert_eq!(result["serverInfo"]["features"]["multiClient"], true);
+
+        // --- Client 2 connects while client 1 is still connected ---
+        let mut client2 = tokio::net::UnixStream::connect(&socket_path)
+            .await
+            .expect("client2 connect");
+
+        // Client 2: initialize
+        let resp = send_and_recv(
+            &mut client2,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "client-2"}}
+            }),
+        )
+        .await;
+        assert!(resp.error.is_none(), "client2 initialize failed");
+
+        // Both clients: tools/list
+        let resp1 = send_and_recv(
+            &mut client1,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+        )
+        .await;
+        let resp2 = send_and_recv(
+            &mut client2,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+        )
+        .await;
+        let tools1 = resp1.result.unwrap()["tools"].as_array().unwrap().len();
+        let tools2 = resp2.result.unwrap()["tools"].as_array().unwrap().len();
+        assert_eq!(tools1, 1);
+        assert_eq!(tools2, 1);
+
+        // Client 1: ping
+        let resp = send_and_recv(
+            &mut client1,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "$/ping"}),
+        )
+        .await;
+        assert_eq!(resp.result.unwrap(), "pong");
+
+        // Client 2: tool call
+        let resp = send_and_recv(
+            &mut client2,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {"name": "echo", "arguments": {}}
+            }),
+        )
+        .await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["content"][0]["text"], "echoed: echo");
+
+        // --- Disconnect client 1, client 2 should still work ---
+        drop(client1);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // Client 2: still alive — ping works
+        let resp = send_and_recv(
+            &mut client2,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "$/ping"}),
+        )
+        .await;
+        assert_eq!(resp.result.unwrap(), "pong");
+
+        // Client 2: tool call still works after client 1 dropped
+        let resp = send_and_recv(
+            &mut client2,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                "params": {"name": "echo", "arguments": {}}
+            }),
+        )
+        .await;
+        assert_eq!(resp.result.unwrap()["content"][0]["text"], "echoed: echo");
+
+        // Clean up.
+        drop(client2);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn multi_client_subscribe_events() {
+        let socket_path = format!("/tmp/mae-test-subscribe-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let server = McpServer::new(&socket_path, tool_tx);
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = tokio::net::UnixStream::connect(&socket_path)
+            .await
+            .expect("connect");
+
+        // Initialize.
+        send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "sub-test"}}
+            }),
+        )
+        .await;
+
+        // Subscribe to events.
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "notifications/subscribe",
+                "params": {"types": ["buffer_edit", "mode_change"]}
+            }),
+        )
+        .await;
+        assert!(resp.error.is_none());
+
+        // Shutdown.
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "shutdown"}),
+        )
+        .await;
+        assert!(resp.error.is_none());
+
+        drop(client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
 }
