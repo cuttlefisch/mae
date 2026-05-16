@@ -403,6 +403,42 @@ async fn handle_request(
                 .collect();
             JsonRpcResponse::success(id, serde_json::json!({ "tools": tools }))
         }
+        // --- Sync protocol methods ---
+        "sync/enable" | "sync/state_vector" | "sync/update" => {
+            let params = request.params.unwrap_or(serde_json::Value::Null);
+            let (reply_tx, reply_rx) = oneshot::channel();
+            let req = McpToolRequest {
+                tool_name: format!("__mcp_{}", request.method.replace('/', "_")),
+                arguments: params,
+                reply: reply_tx,
+            };
+            debug!(session = session.id, method = %request.method, "sync method dispatched");
+            if tool_tx.send(req).await.is_err() {
+                return JsonRpcResponse::error(
+                    id,
+                    McpError::internal_error("Editor channel closed".to_string()),
+                );
+            }
+            match reply_rx.await {
+                Ok(result) => {
+                    if result.success {
+                        match serde_json::from_str::<serde_json::Value>(&result.output) {
+                            Ok(val) => JsonRpcResponse::success(id, val),
+                            Err(_) => JsonRpcResponse::success(
+                                id,
+                                serde_json::json!({ "result": result.output }),
+                            ),
+                        }
+                    } else {
+                        JsonRpcResponse::error(id, McpError::internal_error(result.output))
+                    }
+                }
+                Err(_) => JsonRpcResponse::error(
+                    id,
+                    McpError::internal_error("Sync operation cancelled".to_string()),
+                ),
+            }
+        }
         "tools/call" => {
             let params = request.params.unwrap_or(serde_json::Value::Null);
             let tool_name = params

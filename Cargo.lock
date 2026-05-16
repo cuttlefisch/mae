@@ -2140,6 +2140,7 @@ dependencies = [
  "mae-make",
  "mae-snippets",
  "mae-spell",
+ "mae-sync",
  "regex",
  "ropey",
  "serde",

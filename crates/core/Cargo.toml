@@ -14,6 +14,7 @@ mae-lookup = { path = "../lookup" }
 mae-make = { path = "../make" }
 mae-snippets = { path = "../snippets" }
 mae-spell = { path = "../spell" }
+mae-sync = { path = "../sync" }
 ropey = "1"
 unicode-width = "0.2"
 unicode-segmentation = "1.12"

@@ -43,6 +43,12 @@ pub enum EditorEvent {
     /// A buffer was closed.
     #[serde(rename = "buffer_close")]
     BufferClosed { buffer_idx: usize },
+    /// A collaborative sync update was generated (yrs encoded, base64).
+    #[serde(rename = "sync_update")]
+    SyncUpdate {
+        buffer_name: String,
+        update_base64: String,
+    },
 }
 
 impl EditorEvent {
@@ -55,6 +61,7 @@ impl EditorEvent {
             EditorEvent::ModeChanged { .. } => "mode_change",
             EditorEvent::BufferOpened { .. } => "buffer_open",
             EditorEvent::BufferClosed { .. } => "buffer_close",
+            EditorEvent::SyncUpdate { .. } => "sync_update",
         }
     }
 }
