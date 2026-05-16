@@ -17,6 +17,22 @@
 
 ;; === Leader Key (SPC) Bindings ===
 
+;; Top-level group labels (shown in which-key popup)
+(set-group-name "normal" "SPC a" "+ai")
+(set-group-name "normal" "SPC b" "+buffer")
+(set-group-name "normal" "SPC c" "+code")
+(set-group-name "normal" "SPC e" "+eval")
+(set-group-name "normal" "SPC f" "+file")
+(set-group-name "normal" "SPC h" "+help")
+(set-group-name "normal" "SPC l" "+peek")
+(set-group-name "normal" "SPC n" "+notes")
+(set-group-name "normal" "SPC o" "+open")
+(set-group-name "normal" "SPC p" "+project")
+(set-group-name "normal" "SPC q" "+quit")
+(set-group-name "normal" "SPC s" "+select")
+(set-group-name "normal" "SPC t" "+toggle")
+(set-group-name "normal" "SPC w" "+window")
+
 ;; +buffer
 (define-key "normal" "SPC b s" "save")
 (define-key "normal" "SPC b b" "switch-buffer")

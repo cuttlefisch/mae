@@ -263,10 +263,34 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
             (editor.which_key_entries_for_current_keymap(), None)
         };
 
-        let cols = (area.width as usize / 25).max(1);
-        let rows = entries.len().div_ceil(cols);
-        // @ai-caution: [which-key] Popup height formula (2/3 cap) must match gui/src/lib.rs
-        let popup_height = (rows as u16 + 2).min(area.height * 2 / 3).max(3);
+        let separator = editor
+            .get_option("which-key-separator")
+            .map(|(v, _)| v)
+            .unwrap_or_else(|| " ".to_string());
+        let max_desc: usize = editor
+            .get_option("which-key-max-desc-length")
+            .and_then(|(v, _)| v.parse().ok())
+            .unwrap_or(40);
+        let sep_width = mae_core::text_utils::display_width(&separator);
+        let (_col_w, num_cols) = mae_core::text_utils::which_key_column_layout(
+            &entries,
+            area.width as usize - 2,
+            sep_width,
+            max_desc,
+        );
+        let entry_rows = entries.len().div_ceil(num_cols);
+        let max_pct: usize = editor
+            .get_option("which-key-max-height-pct")
+            .and_then(|(v, _)| v.parse().ok())
+            .unwrap_or(mae_core::text_utils::WK_MAX_HEIGHT_PCT_DEFAULT)
+            .clamp(
+                mae_core::text_utils::WK_MAX_HEIGHT_PCT_MIN,
+                mae_core::text_utils::WK_MAX_HEIGHT_PCT_MAX,
+            );
+        let max_h = (area.height as usize) * max_pct / 100;
+        let popup_height = ((entry_rows + 2) as u16)
+            .min(max_h as u16)
+            .max(mae_core::text_utils::WK_MIN_HEIGHT as u16);
 
         let chunks =
             Layout::vertical([Constraint::Min(1), Constraint::Length(popup_height)]).split(area);

@@ -7,11 +7,7 @@
 ;;; @provides: dailies-autoloads
 
 ;; SPC n d — dailies prefix group
+;; Keybindings live in keymap-doom; this module only adds the group label.
 (set-group-name "normal" "SPC n d" "+dailies")
-(define-key "normal" "SPC n d t" "daily-goto-today")
-(define-key "normal" "SPC n d y" "daily-goto-yesterday")
-(define-key "normal" "SPC n d d" "daily-goto-date")
-(define-key "normal" "SPC n d p" "daily-prev")
-(define-key "normal" "SPC n d n" "daily-next")
 
 (provide-feature "dailies-autoloads")

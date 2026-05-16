@@ -1,5 +1,8 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion.
 
+use mae_core::text_utils::{
+    display_width, format_keypress, which_key_column_layout, WK_BREADCRUMB_SEP, WK_DOC_MIN_WIDTH,
+};
 use mae_core::Editor;
 use skia_safe::Color4f;
 use unicode_width::UnicodeWidthChar;
@@ -553,7 +556,7 @@ pub fn render_which_key_popup(
             .iter()
             .map(format_keypress)
             .collect::<Vec<_>>()
-            .join(" > ");
+            .join(WK_BREADCRUMB_SEP);
         format!(" {} ", breadcrumb)
     };
     draw_border_titled(canvas, row_start, 0, cols, height, border_fg, &title);
@@ -563,32 +566,48 @@ pub fn render_which_key_popup(
     let inner_width = cols.saturating_sub(2);
     let inner_height = height.saturating_sub(2);
 
-    // Dynamic column width based on content
-    let max_entry_w = entries
-        .iter()
-        .map(|e| format_keypress(&e.key).len() + separator.len() + e.label.len().min(max_desc))
-        .max()
-        .unwrap_or(20);
-    let col_width = (max_entry_w + 2).clamp(25, 60);
-    let num_cols = (inner_width / col_width).max(1);
+    let sep_width = display_width(&separator);
+    let (col_width, num_cols) = which_key_column_layout(entries, inner_width, sep_width, max_desc);
+
+    // Total rows needed for all entries
+    let total_rows = entries.len().div_ceil(num_cols);
+
+    // Clamp scroll offset so it can't go past the last page
+    let max_scroll = total_rows.saturating_sub(inner_height);
+    let scroll = editor.which_key_scroll.min(max_scroll);
+
+    let skip_entries = scroll * num_cols;
+    let show_above = scroll > 0;
+    let show_below = total_rows > scroll + inner_height;
+
+    let effective_max_rows = if show_above && show_below {
+        inner_height.saturating_sub(2)
+    } else if show_above || show_below {
+        inner_height.saturating_sub(1)
+    } else {
+        inner_height
+    };
 
     let mut row = 0;
+
+    // "above" indicator
+    if show_above {
+        let above_count = skip_entries;
+        canvas.draw_text_at(
+            inner_row,
+            inner_col,
+            &format!("\u{2191} +{} above", above_count),
+            doc_fg,
+        );
+        row += 1;
+    }
+
+    let visible_entries = &entries[skip_entries..];
     let mut col = 0;
     let mut displayed = 0;
 
-    for entry in entries.iter() {
-        if row >= inner_height {
-            // Overflow indicator
-            let remaining_count = entries.len() - displayed;
-            if remaining_count > 0 && row > 0 {
-                let overflow_text = format!("… +{} more", remaining_count);
-                canvas.draw_text_at(
-                    inner_row + row.saturating_sub(1),
-                    inner_col,
-                    &overflow_text,
-                    doc_fg,
-                );
-            }
+    for entry in visible_entries.iter() {
+        if row >= effective_max_rows + if show_above { 1 } else { 0 } {
             break;
         }
 
@@ -599,32 +618,31 @@ pub fn render_which_key_popup(
             (key_fg, text_fg)
         };
 
-        let max_label = col_width.saturating_sub(key_str.len() + separator.len() + 1);
-        let label = if entry.label.len() > max_label {
-            format!("{}..", &entry.label[..max_label.saturating_sub(2)])
+        let key_w = display_width(&key_str);
+        let max_label = col_width.saturating_sub(key_w + sep_width + 1);
+        let label_w = display_width(&entry.label);
+        let label = if label_w > max_label {
+            truncate_end(&entry.label, max_label)
         } else {
             entry.label.clone()
         };
+        let actual_label_w = display_width(&label);
 
         let x = inner_col + col * col_width;
         canvas.draw_text_at(inner_row + row, x, &key_str, kfg);
-        let sep_x = x + key_str.len();
+        let sep_x = x + key_w;
         canvas.draw_text_at(inner_row + row, sep_x, &separator, text_fg);
-        let label_x = sep_x + separator.len();
+        let label_x = sep_x + sep_width;
         canvas.draw_text_at(inner_row + row, label_x, &label, lfg);
 
         // Doc string display for leaf entries
         if !entry.is_group {
             if let Some(ref doc) = entry.doc {
-                let used = key_str.len() + separator.len() + label.len();
+                let used = key_w + sep_width + actual_label_w;
                 let remaining = col_width.saturating_sub(used + 2);
-                if remaining > 8 {
-                    let trunc = if doc.len() > remaining {
-                        format!("{}..", &doc[..remaining.saturating_sub(2)])
-                    } else {
-                        doc.clone()
-                    };
-                    let doc_x = label_x + label.len() + 1;
+                if remaining > WK_DOC_MIN_WIDTH {
+                    let trunc = truncate_end(doc, remaining);
+                    let doc_x = label_x + actual_label_w + 1;
                     canvas.draw_text_at(inner_row + row, doc_x, &trunc, doc_fg);
                 }
             }
@@ -637,34 +655,23 @@ pub fn render_which_key_popup(
             row += 1;
         }
     }
+
+    // "below" indicator
+    if show_below {
+        let below_count = entries.len() - skip_entries - displayed;
+        if below_count > 0 {
+            let indicator_row = inner_row + inner_height.saturating_sub(1);
+            canvas.draw_text_at(
+                indicator_row,
+                inner_col,
+                &format!("\u{2193} +{} below", below_count),
+                doc_fg,
+            );
+        }
+    }
 }
 
-fn format_keypress(kp: &mae_core::KeyPress) -> String {
-    let mut s = String::new();
-    if kp.ctrl {
-        s.push_str("C-");
-    }
-    if kp.alt {
-        s.push_str("M-");
-    }
-    match &kp.key {
-        mae_core::Key::Char(' ') => s.push_str("SPC"),
-        mae_core::Key::Char(c) => s.push(*c),
-        mae_core::Key::Escape => s.push_str("Esc"),
-        mae_core::Key::Enter => s.push_str("Enter"),
-        mae_core::Key::Tab => s.push_str("Tab"),
-        mae_core::Key::Backspace => s.push_str("BS"),
-        mae_core::Key::Up => s.push_str("Up"),
-        mae_core::Key::Down => s.push_str("Down"),
-        mae_core::Key::Left => s.push_str("Left"),
-        mae_core::Key::Right => s.push_str("Right"),
-        mae_core::Key::F(n) => {
-            s.push_str(&format!("F{}", n));
-        }
-        _ => s.push('?'),
-    }
-    s
-}
+// format_keypress is now shared via mae_core::text_utils::format_keypress
 
 // ---------------------------------------------------------------------------
 // Hover popup

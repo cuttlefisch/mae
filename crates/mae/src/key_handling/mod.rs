@@ -223,6 +223,31 @@ pub fn handle_key(
         }
     }
 
+    // --- Which-key scroll intercept ---
+    // When the which-key popup is visible, C-j/C-k/C-n/C-p scroll it.
+    if editor.mode == Mode::Normal && !editor.which_key_prefix.is_empty() {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match (key.code, ctrl) {
+            (KeyCode::Char('j'), true) | (KeyCode::Char('n'), true) | (KeyCode::Down, _) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_add(1);
+                return;
+            }
+            (KeyCode::Char('k'), true) | (KeyCode::Char('p'), true) | (KeyCode::Up, _) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_sub(1);
+                return;
+            }
+            (KeyCode::Char('d'), true) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_add(5);
+                return;
+            }
+            (KeyCode::Char('u'), true) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_sub(5);
+                return;
+            }
+            _ => {} // fall through to normal dispatch
+        }
+    }
+
     let mode_before = editor.mode;
 
     // --- Macro recording intercept ---

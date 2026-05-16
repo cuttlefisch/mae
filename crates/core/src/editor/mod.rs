@@ -397,6 +397,8 @@ pub struct Editor {
     pub keymaps: HashMap<String, Keymap>,
     /// Current which-key prefix being accumulated. Empty = no popup.
     pub which_key_prefix: Vec<KeyPress>,
+    /// Scroll offset (in rows) for the which-key popup. Reset when prefix changes.
+    pub which_key_scroll: usize,
     /// In-editor message log (*Messages* buffer equivalent).
     /// Shared with the tracing layer via MessageLogHandle.
     pub message_log: MessageLog,
@@ -1071,6 +1073,7 @@ impl Editor {
             commands,
             keymaps,
             which_key_prefix: Vec::new(),
+            which_key_scroll: 0,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             theme: default_theme(),
             debug_state: None,
@@ -1484,14 +1487,61 @@ impl Editor {
     }
 
     /// Get which-key entries for the current keymap, merging overlay + parent.
+    /// Applies the `which-key-sort-order` option: groups first, then sorted.
     pub fn which_key_entries_for_current_keymap(&self) -> Vec<WhichKeyEntry> {
-        self.merged_which_key_entries(&self.which_key_prefix)
+        let mut entries = self.merged_which_key_entries(&self.which_key_prefix);
+        self.sort_which_key_entries(&mut entries);
+        entries
     }
 
     /// Get all top-level bindings for the current buffer's keymap + parent.
     /// Used by `show-buffer-keys` (`?`) to show a full keybind reference.
     pub fn buffer_keys_entries(&self) -> Vec<WhichKeyEntry> {
-        self.merged_which_key_entries(&[])
+        let mut entries = self.merged_which_key_entries(&[]);
+        self.sort_which_key_entries(&mut entries);
+        entries
+    }
+
+    /// Sort which-key entries: groups first (sorted by key), then leaves
+    /// sorted by the chosen field (`key`, `desc`, or `none`).
+    fn sort_which_key_entries(&self, entries: &mut [WhichKeyEntry]) {
+        let order = self
+            .get_option("which-key-sort-order")
+            .map(|(v, _)| v)
+            .unwrap_or_else(|| "key".to_string());
+        match order.as_str() {
+            "desc" => {
+                entries.sort_by(|a, b| {
+                    b.is_group
+                        .cmp(&a.is_group)
+                        .then_with(|| a.label.to_lowercase().cmp(&b.label.to_lowercase()))
+                });
+            }
+            "none" => {} // insertion order
+            _ => {
+                // "key" (default): groups first, then alphabetical by key
+                entries.sort_by(|a, b| {
+                    b.is_group.cmp(&a.is_group).then_with(|| {
+                        let ak = crate::text_utils::format_keypress(&a.key);
+                        let bk = crate::text_utils::format_keypress(&b.key);
+                        ak.cmp(&bk)
+                    })
+                });
+            }
+        }
+    }
+
+    /// Set the which-key prefix and reset scroll to top.
+    /// Use this instead of assigning `which_key_prefix` directly.
+    pub fn set_which_key_prefix(&mut self, prefix: Vec<KeyPress>) {
+        self.which_key_prefix = prefix;
+        self.which_key_scroll = 0;
+    }
+
+    /// Clear the which-key prefix and reset scroll.
+    pub fn clear_which_key_prefix(&mut self) {
+        self.which_key_prefix.clear();
+        self.which_key_scroll = 0;
     }
 
     // -- Redraw level methods (Emacs tiered redisplay pattern) ----------------

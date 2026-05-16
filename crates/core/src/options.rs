@@ -349,13 +349,19 @@ impl OptionRegistry {
                 // --- Which-key ---
                 opt!("which_key_idle_delay", &["which-key-idle-delay"],
                     "Milliseconds before which-key popup appears (0 = immediate). NOTE: timer integration deferred.",
-                    OptionKind::Int, "0", None, &[]),
+                    OptionKind::Int, "0", Some("which-key.idle-delay"), &[]),
                 opt!("which_key_separator", &["which-key-separator"],
                     "Separator between key and description in which-key popup",
-                    OptionKind::String, " ", None, &[]),
+                    OptionKind::String, " ", Some("which-key.separator"), &[]),
                 opt!("which_key_max_desc_length", &["which-key-max-desc-length"],
                     "Maximum description length in which-key popup",
-                    OptionKind::Int, "40", None, &[]),
+                    OptionKind::Int, "40", Some("which-key.max-desc-length"), &[]),
+                opt!("which_key_max_height_pct", &["which-key-max-height-pct"],
+                    "Maximum which-key popup height as percentage of screen (10-90, default 40)",
+                    OptionKind::Int, "40", Some("which-key.max-height-pct"), &[]),
+                opt!("which_key_sort_order", &["which-key-sort-order"],
+                    "Sort order for which-key entries: key (default), desc, none",
+                    OptionKind::String, "key", Some("which-key.sort-order"), &["key", "desc", "none"]),
             ],
         }
     }

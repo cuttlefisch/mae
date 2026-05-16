@@ -58,7 +58,7 @@ pub(super) fn handle_keymap_mode(
         LookupResult::Exact(cmd) => {
             let cmd = cmd.to_string();
             pending_keys.clear();
-            editor.which_key_prefix.clear();
+            editor.clear_which_key_prefix();
             let had_pending_op = editor.pending_operator.is_some();
             // Multiply operator count with motion count (e.g. 2d3j → 6j)
             if had_pending_op && Editor::is_motion_command(&cmd) {
@@ -79,7 +79,7 @@ pub(super) fn handle_keymap_mode(
             }
         }
         LookupResult::Prefix => {
-            editor.which_key_prefix = pending_keys.clone();
+            editor.set_which_key_prefix(pending_keys.clone());
         }
         LookupResult::None => {
             // Operator fallback: try splitting the sequence at each position
@@ -115,7 +115,7 @@ pub(super) fn handle_keymap_mode(
             if split_at > 0 {
                 let remaining: Vec<KeyPress> = pending_keys[split_at..].to_vec();
                 pending_keys.clear();
-                editor.which_key_prefix.clear();
+                editor.clear_which_key_prefix();
                 dispatch_command(editor, scheme, &split_cmd);
 
                 // Extract leading digits from remaining keys as count_prefix.
@@ -176,7 +176,7 @@ pub(super) fn handle_keymap_mode(
                             }
                         }
                         pending_keys.clear();
-                        editor.which_key_prefix.clear();
+                        editor.clear_which_key_prefix();
                         dispatch_command(editor, scheme, &cmd);
                         if had_pending && Editor::is_motion_command(&cmd) {
                             editor.apply_pending_operator_for_motion(&cmd);
@@ -185,12 +185,12 @@ pub(super) fn handle_keymap_mode(
                     LookupResult::Prefix => {
                         // Remaining keys are a prefix (e.g., `g` of `gg`).
                         // Keep them in pending_keys; next keystroke will complete.
-                        editor.which_key_prefix = pending_keys.clone();
+                        editor.set_which_key_prefix(pending_keys.clone());
                     }
                     LookupResult::None => {
                         // Remaining keys also don't match — give up.
                         pending_keys.clear();
-                        editor.which_key_prefix.clear();
+                        editor.clear_which_key_prefix();
                         editor.pending_operator = None;
                         editor.operator_start = None;
                         editor.operator_count = None;
@@ -202,7 +202,7 @@ pub(super) fn handle_keymap_mode(
                 if !editor.which_key_prefix.is_empty() {
                     editor.set_status("Key not bound");
                 }
-                editor.which_key_prefix.clear();
+                editor.clear_which_key_prefix();
             }
         }
     }
@@ -223,14 +223,14 @@ pub(super) fn handle_describe_key_await(
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         editor.awaiting_key_description = false;
         pending_keys.clear();
-        editor.which_key_prefix.clear();
+        editor.clear_which_key_prefix();
         editor.running = false;
         return;
     }
     if key.code == KeyCode::Esc {
         editor.awaiting_key_description = false;
         pending_keys.clear();
-        editor.which_key_prefix.clear();
+        editor.clear_which_key_prefix();
         editor.set_status("describe-key cancelled");
         return;
     }
@@ -251,7 +251,7 @@ pub(super) fn handle_describe_key_await(
             let cmd = cmd.to_string();
             editor.awaiting_key_description = false;
             pending_keys.clear();
-            editor.which_key_prefix.clear();
+            editor.clear_which_key_prefix();
             let id = format!("cmd:{}", cmd);
             if editor.kb.contains(&id) {
                 editor.open_help_at(&id);
@@ -263,12 +263,12 @@ pub(super) fn handle_describe_key_await(
             }
         }
         LookupResult::Prefix => {
-            editor.which_key_prefix = pending_keys.clone();
+            editor.set_which_key_prefix(pending_keys.clone());
         }
         LookupResult::None => {
             editor.awaiting_key_description = false;
             pending_keys.clear();
-            editor.which_key_prefix.clear();
+            editor.clear_which_key_prefix();
             editor.set_status("Key not bound");
         }
     }
@@ -365,7 +365,7 @@ pub(super) fn handle_normal_mode(
         editor.operator_count = None;
         if !editor.which_key_prefix.is_empty() {
             pending_keys.clear();
-            editor.which_key_prefix.clear();
+            editor.clear_which_key_prefix();
             return;
         }
     }
