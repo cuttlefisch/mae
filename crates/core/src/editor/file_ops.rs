@@ -1,7 +1,10 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use tracing::{debug, warn};
 
 use crate::buffer::Buffer;
 use crate::debug::{DebugState, DebugTarget, Scope, StackFrame, Variable};
+use crate::file_lock;
 use crate::theme::{bundled_theme_names, BundledResolver, Theme};
 
 use super::Editor;
@@ -40,6 +43,84 @@ impl Editor {
             }
         }
         (saved, errors)
+    }
+
+    /// Save a single buffer with content-hash verification.
+    ///
+    /// If the file on disk has been externally modified (hash mismatch) AND
+    /// the buffer has unsaved changes, returns an error telling the user to
+    /// use `:w!` to force. Otherwise proceeds with `buffer.save()`.
+    pub fn save_buffer_with_hash_check(&mut self, idx: usize) -> Result<(), String> {
+        if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+            if self.buffers[idx].check_disk_changed_by_hash() && self.buffers[idx].modified {
+                warn!(
+                    path = %path.display(),
+                    "content-hash mismatch: file changed on disk while buffer was modified"
+                );
+                return Err("File changed on disk. Use :w! to force save.".to_string());
+            }
+        }
+        self.buffers[idx].save().map_err(|e| e.to_string())?;
+        if let Some(path) = self.buffers[idx].file_path() {
+            debug!(path = %path.display(), "buffer saved (hash verified)");
+        }
+        Ok(())
+    }
+
+    /// Force-save a buffer, skipping the content-hash check.
+    /// Used by `:w!` when the user explicitly wants to overwrite.
+    pub fn save_buffer_force(&mut self, idx: usize) -> Result<(), String> {
+        self.buffers[idx].save().map_err(|e| e.to_string())?;
+        if let Some(path) = self.buffers[idx].file_path() {
+            debug!(path = %path.display(), "buffer force-saved (hash check skipped)");
+        }
+        Ok(())
+    }
+
+    /// Acquire an advisory file lock for the given path.
+    ///
+    /// If the lock is successfully acquired, the path is tracked in
+    /// `locked_files`. If another MAE instance holds the lock, a warning
+    /// is logged and the status message is set — but the open is NOT blocked.
+    pub fn acquire_file_lock(&mut self, path: &Path) {
+        let canonical = path.to_path_buf();
+        match file_lock::acquire_lock(path) {
+            Ok(()) => {
+                debug!(path = %path.display(), "advisory file lock acquired");
+                self.locked_files.insert(canonical);
+            }
+            Err(info) => {
+                warn!(
+                    path = %path.display(),
+                    holder_pid = info.pid,
+                    holder_host = %info.hostname,
+                    "file locked by another MAE instance"
+                );
+                self.status_msg = format!(
+                    "Warning: {} is locked by MAE pid {} on {}",
+                    path.display(),
+                    info.pid,
+                    info.hostname,
+                );
+            }
+        }
+    }
+
+    /// Release the advisory file lock for the given path.
+    pub fn release_file_lock(&mut self, path: &Path) {
+        file_lock::release_lock(path);
+        self.locked_files.remove(path);
+        debug!(path = %path.display(), "advisory file lock released");
+    }
+
+    /// Release all advisory file locks held by this editor instance.
+    /// Called on editor exit to clean up lock files.
+    pub fn release_all_file_locks(&mut self) {
+        let paths: Vec<PathBuf> = self.locked_files.drain().collect();
+        for path in &paths {
+            file_lock::release_lock(path);
+            debug!(path = %path.display(), "advisory file lock released (exit cleanup)");
+        }
     }
 
     /// Check whether any buffer has unsaved modifications.
@@ -1489,5 +1570,156 @@ mod tests {
             filename_at_offset(&rope, offset).as_deref(),
             Some("foo/bar.h")
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // save_buffer_with_hash_check / save_buffer_force tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn save_buffer_hash_check_blocks_on_mismatch() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "original content").unwrap();
+
+        let mut editor = Editor::new();
+        let buf = crate::buffer::Buffer::from_file(&file).unwrap();
+        editor.buffers.push(buf);
+        let idx = editor.buffers.len() - 1;
+
+        // Modify buffer (mark dirty)
+        editor.buffers[idx].modified = true;
+
+        // Externally overwrite the file (hash will mismatch)
+        std::fs::write(&file, "externally modified content").unwrap();
+
+        let result = editor.save_buffer_with_hash_check(idx);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("File changed on disk"));
+    }
+
+    #[test]
+    fn save_buffer_hash_check_passes_when_clean() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "original content").unwrap();
+
+        let mut editor = Editor::new();
+        let buf = crate::buffer::Buffer::from_file(&file).unwrap();
+        editor.buffers.push(buf);
+        let idx = editor.buffers.len() - 1;
+
+        // Modify buffer but don't touch the file externally
+        editor.buffers[idx].modified = true;
+
+        let result = editor.save_buffer_with_hash_check(idx);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn save_buffer_force_overwrites_despite_mismatch() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "original content").unwrap();
+
+        let mut editor = Editor::new();
+        let buf = crate::buffer::Buffer::from_file(&file).unwrap();
+        editor.buffers.push(buf);
+        let idx = editor.buffers.len() - 1;
+
+        // Modify buffer
+        editor.buffers[idx].modified = true;
+
+        // Externally overwrite the file
+        std::fs::write(&file, "externally modified content").unwrap();
+
+        // Force save should succeed despite mismatch
+        let result = editor.save_buffer_force(idx);
+        assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Editor-level file lock lifecycle tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn acquire_file_lock_tracks_in_set() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("locked.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let mut editor = Editor::new();
+        editor.acquire_file_lock(&file);
+
+        assert!(editor.locked_files.contains(&file));
+        // Clean up
+        editor.release_file_lock(&file);
+    }
+
+    #[test]
+    fn release_file_lock_removes_from_set() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("locked.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let mut editor = Editor::new();
+        editor.acquire_file_lock(&file);
+        assert!(editor.locked_files.contains(&file));
+
+        editor.release_file_lock(&file);
+        assert!(editor.locked_files.is_empty());
+        assert!(!crate::file_lock::lock_path(&file).exists());
+    }
+
+    #[test]
+    fn release_all_file_locks_cleans_up() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let files: Vec<_> = (0..3)
+            .map(|i| {
+                let f = tmp.path().join(format!("file{}.txt", i));
+                std::fs::write(&f, "content").unwrap();
+                f
+            })
+            .collect();
+
+        let mut editor = Editor::new();
+        for f in &files {
+            editor.acquire_file_lock(f);
+        }
+        assert_eq!(editor.locked_files.len(), 3);
+
+        editor.release_all_file_locks();
+        assert!(editor.locked_files.is_empty());
+        for f in &files {
+            assert!(!crate::file_lock::lock_path(f).exists());
+        }
+    }
+
+    #[test]
+    fn acquire_file_lock_contention_sets_status() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("contested.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        // Write a lock with parent PID (guaranteed alive, not our PID)
+        let parent_pid = unsafe { libc::getppid() } as u32;
+        let fake_lock = crate::file_lock::LockInfo {
+            pid: parent_pid,
+            hostname: "other-host".to_string(),
+            timestamp: 0,
+        };
+        let lpath = crate::file_lock::lock_path(&file);
+        std::fs::write(&lpath, serde_json::to_string(&fake_lock).unwrap()).unwrap();
+
+        let mut editor = Editor::new();
+        editor.acquire_file_lock(&file);
+
+        // Lock should NOT be in our set (we didn't acquire it)
+        assert!(!editor.locked_files.contains(&file));
+        // Status message should warn about contention
+        assert!(editor.status_msg.contains("locked by"));
+
+        // Clean up
+        let _ = std::fs::remove_file(&lpath);
     }
 }

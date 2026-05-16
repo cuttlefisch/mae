@@ -33,6 +33,9 @@ use tokio::net::UnixListener;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
+/// Maximum allowed Content-Length for a single MCP message (10 MB).
+const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+
 /// A tool call request sent from the MCP server to the main editor thread.
 pub struct McpToolRequest {
     pub tool_name: String,
@@ -154,6 +157,7 @@ async fn handle_client(
         };
 
         session.touch();
+        session.messages_received += 1;
 
         let response = handle_request(&msg, tool_definitions, &tool_tx, &mut session).await;
         let body = match serde_json::to_vec(&response) {
@@ -223,12 +227,32 @@ async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
                 break; // End of headers
             }
             if let Some(val) = trimmed.strip_prefix("Content-Length:") {
-                content_length = val.trim().parse().ok();
+                let raw = val.trim();
+                match raw.parse::<usize>() {
+                    Ok(v) => content_length = Some(v),
+                    Err(_) => {
+                        warn!(header = %trimmed, "non-numeric Content-Length");
+                        return Err(std::io::Error::other(format!(
+                            "non-numeric Content-Length: {}",
+                            raw
+                        )));
+                    }
+                }
             }
         }
 
         let len = content_length
             .ok_or_else(|| std::io::Error::other("Content-Length header missing value"))?;
+
+        if len == 0 {
+            return Err(std::io::Error::other("Content-Length must be > 0"));
+        }
+        if len > MAX_MESSAGE_SIZE {
+            return Err(std::io::Error::other(format!(
+                "Content-Length {} exceeds maximum {}",
+                len, MAX_MESSAGE_SIZE
+            )));
+        }
 
         let mut body = vec![0u8; len];
         tokio::io::AsyncReadExt::read_exact(reader, &mut body).await?;
@@ -342,6 +366,26 @@ async fn handle_request(
             }
             JsonRpcResponse::success(id, serde_json::Value::Null)
         }
+        "$/health" => {
+            let uptime = session.connected_at.elapsed().as_secs();
+            let health = serde_json::json!({
+                "uptime_secs": uptime,
+                "session_id": session.id,
+                "messages_received": session.messages_received,
+                "tool_calls": session.tool_calls,
+                "protocol_version": env!("CARGO_PKG_VERSION"),
+            });
+            JsonRpcResponse::success(id, health)
+        }
+        "$/resync" => {
+            let resync = serde_json::json!({
+                "session_id": session.id,
+                "subscriptions": session.subscriptions.iter().collect::<Vec<_>>(),
+                "messages_received": session.messages_received,
+                "message": "Full editor state resync requires tool call to introspect"
+            });
+            JsonRpcResponse::success(id, resync)
+        }
         "shutdown" => {
             info!(session = session.id, "client requested shutdown");
             JsonRpcResponse::success(id, serde_json::Value::Null)
@@ -378,6 +422,9 @@ async fn handle_request(
                 reply: reply_tx,
             };
 
+            debug!(session = session.id, tool = %tool_name, "tool call dispatched");
+            session.tool_calls += 1;
+
             if tool_tx.send(req).await.is_err() {
                 return JsonRpcResponse::error(
                     id,
@@ -387,6 +434,7 @@ async fn handle_request(
 
             match reply_rx.await {
                 Ok(result) => {
+                    debug!(session = session.id, tool = %tool_name, success = result.success, "tool call complete");
                     let call_result = ToolCallResult {
                         content: vec![ContentItem {
                             content_type: "text".to_string(),
@@ -513,6 +561,80 @@ mod tests {
         let msg = read_message(&mut reader).await.unwrap().unwrap();
         let parsed: JsonRpcResponse = serde_json::from_str(&msg).unwrap();
         assert!(parsed.result.is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // Content-Length framing edge-case tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn framing_zero_content_length() {
+        let data = b"Content-Length: 0\r\n\r\n";
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_message(&mut reader).await;
+        assert!(result.is_err() || result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn framing_huge_content_length() {
+        // Content-Length exceeding MAX_MESSAGE_SIZE should error
+        let data = b"Content-Length: 999999999\r\n\r\n";
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_message(&mut reader).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn framing_non_numeric() {
+        let data = b"Content-Length: abc\r\n\r\n";
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_message(&mut reader).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn framing_negative_content_length() {
+        let data = b"Content-Length: -1\r\n\r\n";
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_message(&mut reader).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn framing_partial_header_then_eof() {
+        // Partial header followed by EOF
+        let data = b"Content-Len";
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_message(&mut reader).await;
+        // Should get None (EOF in line mode) or error
+        assert!(result.is_ok()); // line mode reads "Content-Len" as a line
+    }
+
+    #[tokio::test]
+    async fn framing_utf8_invalid_body() {
+        let invalid_utf8 = vec![0xFF, 0xFE, 0x00];
+        let header = format!("Content-Length: {}\r\n\r\n", invalid_utf8.len());
+        let mut data = header.into_bytes();
+        data.extend_from_slice(&invalid_utf8);
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_message(&mut reader).await;
+        assert!(result.is_err()); // Invalid UTF-8
+    }
+
+    #[tokio::test]
+    async fn framing_mixed_modes() {
+        // Line-based message followed by Content-Length message
+        let line_msg = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n";
+        let cl_body = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"pong\"}";
+        let cl_header = format!("Content-Length: {}\r\n\r\n", cl_body.len());
+        let data = format!("{}{}{}", line_msg, cl_header, cl_body);
+        let mut reader = BufReader::new(data.as_bytes());
+
+        let msg1 = read_message(&mut reader).await.unwrap().unwrap();
+        assert!(msg1.contains("ping"));
+
+        let msg2 = read_message(&mut reader).await.unwrap().unwrap();
+        assert!(msg2.contains("pong"));
     }
 
     // -----------------------------------------------------------------------
@@ -739,6 +861,169 @@ mod tests {
         assert!(resp.error.is_none());
 
         drop(client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn client_lifecycle_full_sequence() {
+        let socket_path = format!("/tmp/mae-test-lifecycle-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, mut tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let server = McpServer::new(&socket_path, tool_tx);
+        let tools = vec![ToolInfo {
+            name: "test_tool".to_string(),
+            description: "Test".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }];
+
+        tokio::spawn(async move {
+            server.run(tools).await;
+        });
+        tokio::spawn(async move {
+            while let Some(req) = tool_rx.recv().await {
+                let _ = req.reply.send(McpToolResult {
+                    success: true,
+                    output: "ok".to_string(),
+                });
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+
+        // 1. Initialize
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "lifecycle-test", "version": "1.0"}}
+            }),
+        )
+        .await;
+        assert!(resp.error.is_none());
+
+        // 2. notifications/initialized
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "notifications/initialized"
+            }),
+        )
+        .await;
+        assert!(resp.error.is_none());
+
+        // 3. Tool call
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {"name": "test_tool", "arguments": {}}
+            }),
+        )
+        .await;
+        assert!(resp.error.is_none());
+
+        // 4. Ping
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 4, "method": "$/ping"
+            }),
+        )
+        .await;
+        assert_eq!(resp.result.unwrap(), "pong");
+
+        // 5. Health check
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 5, "method": "$/health"
+            }),
+        )
+        .await;
+        let health = resp.result.unwrap();
+        assert!(health["session_id"].as_u64().unwrap() > 0);
+
+        // 6. Shutdown
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 6, "method": "shutdown"
+            }),
+        )
+        .await;
+        assert!(resp.error.is_none());
+
+        drop(client);
+
+        // 7. Server still accepts new connections
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let mut client2 = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let resp = send_and_recv(
+            &mut client2,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "$/ping"
+            }),
+        )
+        .await;
+        assert_eq!(resp.result.unwrap(), "pong");
+
+        drop(client2);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn handle_request_resync() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut session = ClientSession::new();
+        session.subscriptions.insert("buffer_edit".to_string());
+        session.subscriptions.insert("mode_change".to_string());
+
+        let msg = r#"{"jsonrpc":"2.0","id":10,"method":"$/resync"}"#;
+        let resp = handle_request(msg, &[], &tx, &mut session).await;
+        let result = resp.result.unwrap();
+
+        assert_eq!(result["session_id"], session.id);
+        let subs = result["subscriptions"].as_array().unwrap();
+        assert_eq!(subs.len(), 2);
+        assert!(result["message"].as_str().unwrap().contains("resync"));
+    }
+
+    #[tokio::test]
+    async fn client_rapid_connect_disconnect() {
+        let socket_path = format!("/tmp/mae-test-rapid-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let server = McpServer::new(&socket_path, tool_tx);
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Rapidly connect and disconnect 10 clients
+        for _ in 0..10 {
+            let client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+            drop(client);
+        }
+
+        // Small delay for server to process disconnects
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Server should still be alive
+        let mut alive_client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let resp = send_and_recv(
+            &mut alive_client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "$/ping"
+            }),
+        )
+        .await;
+        assert_eq!(resp.result.unwrap(), "pong");
+
+        drop(alive_client);
         let _ = std::fs::remove_file(&socket_path);
     }
 }

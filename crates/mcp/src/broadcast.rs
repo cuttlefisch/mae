@@ -10,8 +10,9 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// Events emitted by the editor that clients can subscribe to.
 #[derive(Debug, Clone, Serialize)]
@@ -65,12 +66,15 @@ const DEFAULT_QUEUE_CAPACITY: usize = 100;
 pub struct EventBroadcaster {
     /// Map of session_id → (subscriptions, sender).
     clients: HashMap<u64, (Vec<String>, mpsc::Sender<EditorEvent>)>,
+    /// Monotonically increasing sequence number for event ordering.
+    next_seq: AtomicU64,
 }
 
 impl EventBroadcaster {
     pub fn new() -> Self {
         EventBroadcaster {
             clients: HashMap::new(),
+            next_seq: AtomicU64::new(1),
         }
     }
 
@@ -102,7 +106,9 @@ impl EventBroadcaster {
     /// Uses `try_send` — if a client's queue is full, the event is dropped
     /// for that client (backpressure).
     pub fn broadcast(&self, event: &EditorEvent) {
+        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         let event_type = event.event_type();
+        debug!(seq = seq, event_type = event_type, "broadcasting event");
         for (session_id, (subs, tx)) in &self.clients {
             if subs.iter().any(|s| s == event_type || s == "*") {
                 if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(event.clone()) {
@@ -120,6 +126,11 @@ impl EventBroadcaster {
     /// Number of currently subscribed clients.
     pub fn client_count(&self) -> usize {
         self.clients.len()
+    }
+
+    /// Current sequence number (next event will get this value).
+    pub fn current_seq(&self) -> u64 {
+        self.next_seq.load(Ordering::Relaxed)
     }
 }
 
@@ -204,5 +215,24 @@ mod tests {
         assert_eq!(bc.client_count(), 1);
         bc.unsubscribe(1);
         assert_eq!(bc.client_count(), 0);
+    }
+
+    #[test]
+    fn sequence_numbers_monotonic() {
+        let mut bc = EventBroadcaster::new();
+        assert_eq!(bc.current_seq(), 1); // starts at 1
+
+        let _rx = bc.subscribe(1, vec!["buffer_edit".to_string()]);
+
+        let event = EditorEvent::BufferEdited {
+            buffer_idx: 0,
+            version: 1,
+        };
+        bc.broadcast(&event);
+        assert_eq!(bc.current_seq(), 2);
+
+        bc.broadcast(&event);
+        bc.broadcast(&event);
+        assert_eq!(bc.current_seq(), 4); // 1 + 3 broadcasts
     }
 }

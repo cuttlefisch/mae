@@ -70,6 +70,23 @@ jobs:
       - name: Validate init.scm
         run: ./target/release/mae --check-config
 
+  server-client:
+    name: Server-Client Integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Multi-client integration tests
+        run: cargo test --package mae-mcp --lib -- --test-threads=1
+        timeout-minutes: 5
+      - name: KB WAL integration tests
+        run: cargo test --package mae-kb --lib -- wal changelog sync --test-threads=1
+        timeout-minutes: 3
+      - name: File safety tests
+        run: cargo test --package mae-core --lib -- content_hash file_lock --test-threads=1
+        timeout-minutes: 3
+
   gui-build:
     name: gui / build
     runs-on: ubuntu-latest
