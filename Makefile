@@ -44,7 +44,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean
+.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check
 
 # Default target: release build
 all: build
@@ -248,6 +248,17 @@ docker-dev:
 ## docker-clean: remove MAE Docker images and build cache
 docker-clean:
 	docker compose down --rmi local --volumes
+
+## docs-tangle: tangle KB ADR nodes → docs/adr/ markdown (future: automated from KB)
+docs-tangle:
+	@echo "ADR docs in docs/adr/ — currently maintained manually."
+	@echo "Future: automated tangle from KB concept:adr-* nodes."
+	@ls docs/adr/*.md 2>/dev/null || echo "No ADR docs found."
+
+## docs-tangle-check: verify docs/adr/ is present and non-empty (CI)
+docs-tangle-check:
+	@test -d docs/adr && test -n "$$(ls docs/adr/*.md 2>/dev/null)" || (echo "FAIL: docs/adr/ missing or empty" && exit 1)
+	@echo "docs-tangle-check passed ✓"
 
 ## help: print this help
 help:

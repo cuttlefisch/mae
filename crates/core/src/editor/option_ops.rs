@@ -141,6 +141,7 @@ impl super::Editor {
             "kb_daily_chain_gap_max" => self.kb_daily_chain_gap_max.to_string(),
             "format_on_save" => self.format_on_save.to_string(),
             "spell_enabled" => self.spell_enabled.to_string(),
+            "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -547,6 +548,9 @@ impl super::Editor {
             }
             "spell_enabled" => {
                 self.spell_enabled = parse_option_bool(value)?;
+            }
+            "file_tree_focus_on_open" => {
+                self.file_tree_focus_on_open = parse_option_bool(value)?;
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }

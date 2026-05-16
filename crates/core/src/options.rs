@@ -362,6 +362,10 @@ impl OptionRegistry {
                 opt!("which_key_sort_order", &["which-key-sort-order"],
                     "Sort order for which-key entries: key (default), desc, none",
                     OptionKind::String, "key", Some("which-key.sort-order"), &["key", "desc", "none"]),
+                // --- File tree ---
+                opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
+                    "Auto-focus the file tree window when it opens",
+                    OptionKind::Bool, "true", Some("editor.file_tree_focus_on_open"), &[]),
             ],
         }
     }

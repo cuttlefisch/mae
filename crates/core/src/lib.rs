@@ -23,6 +23,7 @@ pub mod editor;
 pub mod event_record;
 pub use mae_export as export;
 pub mod file_browser;
+pub mod file_lock;
 pub mod file_picker;
 pub mod file_tree;
 pub mod git_status;

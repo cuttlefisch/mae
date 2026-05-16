@@ -1,9 +1,18 @@
 use ropey::Rope;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+
+/// Compute a SHA-256 hex digest of the given content.
+/// Used for content-hash verification of files on disk.
+fn compute_content_hash(content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
 
 use crate::buffer_view::BufferView;
 use crate::conversation::Conversation;
@@ -192,6 +201,10 @@ pub struct Buffer {
     /// Last known modification time of the backing file on disk.
     /// Used by auto-reload to detect external changes.
     pub file_mtime: Option<SystemTime>,
+    /// SHA-256 hash of the file content at last load/save.
+    /// Used for content-hash verification — catches mtime failures
+    /// (sub-second edits, NFS clock skew, containers with wrong time).
+    pub content_hash: Option<String>,
     /// Project root associated with this buffer, detected from its file path.
     /// When set, `Editor::active_project_root()` prefers this over the
     /// editor-wide `project` field, enabling per-buffer project context.
@@ -313,6 +326,7 @@ impl Buffer {
             undo_group_acc: None,
             saved_undo_depth: None,
             file_mtime: None,
+            content_hash: None,
             project_root: None,
             git_branch: None,
             agent_shell: false,
@@ -465,6 +479,7 @@ impl Buffer {
 
     pub fn from_file(path: &Path) -> std::io::Result<Self> {
         let content = fs::read_to_string(path)?;
+        let hash = compute_content_hash(&content);
         let rope = Rope::from_str(&content);
         let mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
         let project_root = crate::project::detect_project_root(path);
@@ -476,6 +491,7 @@ impl Buffer {
                 .unwrap_or_else(|| path.display().to_string()),
             file_path: Some(path.to_path_buf()),
             file_mtime: mtime,
+            content_hash: Some(hash),
             project_root,
             saved_undo_depth: Some(0),
             ..Self::new()
@@ -502,6 +518,9 @@ impl Buffer {
             self.saved_undo_depth = Some(self.undo_stack.len());
             // changed_lines persist across saves — cleared on revert/reload.
             self.file_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
+            // Recompute content hash after successful save.
+            let text: String = self.rope.chars().collect();
+            self.content_hash = Some(compute_content_hash(&text));
             Ok(())
         } else {
             Err(std::io::Error::other("No file path set"))
@@ -546,6 +565,25 @@ impl Buffer {
         disk_mtime > stored
     }
 
+    /// Check if the file on disk has different content than what we last
+    /// loaded/saved, using SHA-256 content hashing. This catches cases
+    /// where mtime comparison fails (sub-second edits, NFS clock skew).
+    ///
+    /// Returns `true` if the file has been externally modified.
+    pub fn check_disk_changed_by_hash(&self) -> bool {
+        let Some(ref path) = self.file_path else {
+            return false;
+        };
+        let Some(ref stored_hash) = self.content_hash else {
+            return false;
+        };
+        let Ok(content) = fs::read_to_string(path) else {
+            return false;
+        };
+        let disk_hash = compute_content_hash(&content);
+        &disk_hash != stored_hash
+    }
+
     /// Reload buffer contents from its backing file. Returns Ok(()) on
     /// success, Err if file_path is None or the read fails. Clears the
     /// modified flag and undo/redo history.
@@ -556,6 +594,7 @@ impl Buffer {
             .ok_or_else(|| std::io::Error::other("No file path set"))?
             .clone();
         let content = fs::read_to_string(&path)?;
+        self.content_hash = Some(compute_content_hash(&content));
         self.rope = Rope::from_str(&content);
         self.modified = false;
         self.changed_lines.clear();

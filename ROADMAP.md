@@ -43,8 +43,18 @@
 - [x] Babel edit-special: `SPC m '` opens src block in dedicated buffer with language mode
 - [x] Babel edit-commit: `SPC m '` in edit buffer writes body back to source
 
-### Near-term
-- [ ] Server-client architecture refactoring and hardening
+### Near-term: Server-Client Architecture
+
+- [ ] **Multi-AI file contention protocol**: When multiple AI-assisted editors (MAE, VS Code + Copilot, Cursor, aider) operate on the same project simultaneously, file writes race, LSP state goes stale, and undo histories diverge. Short-term: git worktree isolation (each agent in its own worktree, merge at commit time). Medium-term: advisory file locks (`.mae.lock`), inotify coordination to detect external changes and pause AI operations. Long-term: canonical state server (see below).
+- [ ] **State server extraction** (`mae-state-server` crate): Extract Editor state into an RPC server process. Thin renderer clients own only local UI state (viewport, scroll, selection). Enables multi-window, multi-user, and headless AI-only sessions. Extend existing MCP JSON-RPC protocol with `editor_state_snapshot`, `editor_apply_command`, `editor_subscribe` methods.
+- [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
+  - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
+  - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
+  - *Tier 3* (100+ users, 500K+ nodes): PostgreSQL + pgvector, write sharding by namespace, event sourcing for real-time sync. ~3 months.
+  - Key bottlenecks: SQLite single-writer ceiling (~50 writes/sec), FTS5 index size at scale (~400MB at 100K nodes), network latency for RAG workflows (5-10 KB queries per AI turn × 30 concurrent agents = ~600 node fetches/sec peak).
+- [ ] **CRDT/OT collaborative editing**: Per-user cursors, per-user undo stacks, conflict resolution for concurrent AI and human edits. Prerequisite: state server.
+
+### Near-term: Other
 - [ ] PDF preview (GUI inline rendering via `hayro` pure-Rust rasterizer + midnight mode)
 - [ ] Semantic code search (vector embeddings)
 - [x] Org ↔ Markdown bidirectional conversion (`:markdown-to-org`, `:org-to-markdown`)
@@ -122,6 +132,11 @@
 - [ ] **Which-key idle delay**: Wire `which-key-idle-delay` option to event loop timer (default 0ms = immediate).
 - [ ] **Which-key floating popup mode**: Option to render which-key as a centered floating popup (like find-file/command-palette) instead of docked to bottom. Controlled by a `which-key-display` option (`docked` | `floating`).
 - [ ] **Scheme configurability audit**: Audit ALL OptionRegistry entries for missing `config_key` (prevents `:set-save` persistence). Verify every option round-trips through config.toml. Document full option surface in `:help concept:options` KB node.
+- [ ] **Performance regression testing**: Build a benchmark suite (`criterion` in `benches/` or `make bench`). Key metrics: startup time, frame render time (TUI + GUI at 50/500/5000 lines), which-key popup open latency, KB search at 100/1K/10K nodes, AI tool dispatch round-trip, memory usage under sustained editing. Integrate with CI to catch regressions per-PR.
+- [ ] **KB search scoping**: Allow per-project KB search that excludes MAE internal nodes (scheme:*, cmd:*, option:*). Add `kb_search_scope` option: `"all"` (default), `"user"` (exclude internal), `"project"` (only project-registered KBs). AI tools respect scope; `:help` always searches all.
+- [ ] **KB node visibility**: Add `visibility` property to nodes: `public` (default), `internal` (MAE system nodes), `private` (user personal notes). Internal nodes hidden from user-facing search unless explicitly queried with `:help` or `kb_get` by ID.
+- [ ] **Per-workspace KB isolation**: When multiple projects are open, `kb_search` defaults to the active project's registered KB instances. Cross-project search available via `kb_search --all` or `(kb-search-all query)` Scheme API.
+- [ ] **KB tangle pipeline**: `make docs-tangle` extracts ADR markdown from KB concept nodes. CI job validates freshness (same as code-map pattern). Enables KB as single source of truth for architecture docs.
 
 ---
 

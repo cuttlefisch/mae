@@ -1366,6 +1366,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostname"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link",
+]
+
+[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2082,6 +2093,7 @@ version = "0.9.0"
 name = "mae-core"
 version = "0.9.0"
 dependencies = [
+ "hostname",
  "imagesize",
  "kamadak-exif",
  "libc",
@@ -2097,6 +2109,7 @@ dependencies = [
  "ropey",
  "serde",
  "serde_json",
+ "sha2",
  "sysinfo",
  "tempfile",
  "toml",

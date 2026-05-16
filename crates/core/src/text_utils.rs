@@ -160,6 +160,31 @@ pub fn truncate_start(s: &str, max_cols: usize) -> String {
     format!("…{}", &s[start..])
 }
 
+// ---------------------------------------------------------------------------
+// Popup layout helpers (shared between TUI and GUI renderers)
+// ---------------------------------------------------------------------------
+
+/// Compute centered popup dimensions.
+/// Returns `(width, height, x_offset, y_offset)`.
+pub fn centered_popup_dims(
+    area_width: usize,
+    area_height: usize,
+    width_pct: usize,
+    height_pct: usize,
+    min_width: usize,
+    min_height: usize,
+) -> (usize, usize, usize, usize) {
+    let w = (area_width * width_pct / 100)
+        .max(min_width)
+        .min(area_width);
+    let h = (area_height * height_pct / 100)
+        .max(min_height)
+        .min(area_height);
+    let x = area_width.saturating_sub(w) / 2;
+    let y = area_height.saturating_sub(h) / 2;
+    (w, h, x, y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +371,28 @@ mod tests {
         let (col_w, num_cols) = which_key_column_layout(&entries, 80, 1, 40);
         assert_eq!(col_w, WK_COL_WIDTH_MIN); // fallback clamped to min
         assert!(num_cols >= 1);
+    }
+
+    #[test]
+    fn centered_popup_dims_basic() {
+        let (w, h, x, y) = centered_popup_dims(100, 50, 70, 60, 40, 10);
+        assert_eq!(w, 70);
+        assert_eq!(h, 30);
+        assert_eq!(x, 15);
+        assert_eq!(y, 10);
+    }
+
+    #[test]
+    fn centered_popup_dims_clamped_to_area() {
+        let (w, h, _, _) = centered_popup_dims(35, 8, 70, 60, 40, 10);
+        assert!(w <= 35);
+        assert!(h <= 8);
+    }
+
+    #[test]
+    fn centered_popup_dims_min_enforced() {
+        let (w, h, _, _) = centered_popup_dims(100, 50, 1, 1, 40, 10);
+        assert!(w >= 40);
+        assert!(h >= 10);
     }
 }

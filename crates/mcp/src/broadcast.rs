@@ -1,0 +1,208 @@
+//! Event broadcast system for multi-client MCP.
+//!
+//! When the editor processes a state-changing command, it emits an
+//! `EditorEvent` to the broadcaster. Each connected client with matching
+//! subscriptions receives the event via a bounded channel.
+//!
+//! Backpressure: if a client's queue is full, the event is dropped for
+//! that client (logged as a warning). This prevents one slow client from
+//! blocking the server.
+
+use serde::Serialize;
+use std::collections::HashMap;
+use tokio::sync::mpsc;
+use tracing::warn;
+
+/// Events emitted by the editor that clients can subscribe to.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", content = "data")]
+pub enum EditorEvent {
+    /// A buffer's content was modified.
+    #[serde(rename = "buffer_edit")]
+    BufferEdited { buffer_idx: usize, version: u64 },
+    /// The cursor moved in a buffer.
+    #[serde(rename = "cursor_move")]
+    CursorMoved {
+        buffer_idx: usize,
+        row: usize,
+        col: usize,
+    },
+    /// LSP diagnostics were updated for a buffer.
+    #[serde(rename = "diagnostics")]
+    DiagnosticsUpdated { buffer_idx: usize },
+    /// The editor mode changed.
+    #[serde(rename = "mode_change")]
+    ModeChanged { mode: String },
+    /// A new buffer was opened.
+    #[serde(rename = "buffer_open")]
+    BufferOpened {
+        buffer_idx: usize,
+        path: Option<String>,
+    },
+    /// A buffer was closed.
+    #[serde(rename = "buffer_close")]
+    BufferClosed { buffer_idx: usize },
+}
+
+impl EditorEvent {
+    /// The subscription category for this event type.
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            EditorEvent::BufferEdited { .. } => "buffer_edit",
+            EditorEvent::CursorMoved { .. } => "cursor_move",
+            EditorEvent::DiagnosticsUpdated { .. } => "diagnostics",
+            EditorEvent::ModeChanged { .. } => "mode_change",
+            EditorEvent::BufferOpened { .. } => "buffer_open",
+            EditorEvent::BufferClosed { .. } => "buffer_close",
+        }
+    }
+}
+
+/// Default per-client event queue capacity.
+const DEFAULT_QUEUE_CAPACITY: usize = 100;
+
+/// Manages per-client event channels.
+pub struct EventBroadcaster {
+    /// Map of session_id → (subscriptions, sender).
+    clients: HashMap<u64, (Vec<String>, mpsc::Sender<EditorEvent>)>,
+}
+
+impl EventBroadcaster {
+    pub fn new() -> Self {
+        EventBroadcaster {
+            clients: HashMap::new(),
+        }
+    }
+
+    /// Register a new client for event delivery.
+    /// Returns the receiver end of the bounded channel.
+    pub fn subscribe(
+        &mut self,
+        session_id: u64,
+        subscriptions: Vec<String>,
+    ) -> mpsc::Receiver<EditorEvent> {
+        let (tx, rx) = mpsc::channel(DEFAULT_QUEUE_CAPACITY);
+        self.clients.insert(session_id, (subscriptions, tx));
+        rx
+    }
+
+    /// Remove a client's subscription (on disconnect).
+    pub fn unsubscribe(&mut self, session_id: u64) {
+        self.clients.remove(&session_id);
+    }
+
+    /// Update a client's subscription list.
+    pub fn update_subscriptions(&mut self, session_id: u64, subscriptions: Vec<String>) {
+        if let Some((subs, _)) = self.clients.get_mut(&session_id) {
+            *subs = subscriptions;
+        }
+    }
+
+    /// Broadcast an event to all subscribed clients.
+    /// Uses `try_send` — if a client's queue is full, the event is dropped
+    /// for that client (backpressure).
+    pub fn broadcast(&self, event: &EditorEvent) {
+        let event_type = event.event_type();
+        for (session_id, (subs, tx)) in &self.clients {
+            if subs.iter().any(|s| s == event_type || s == "*") {
+                if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(event.clone()) {
+                    warn!(
+                        session_id = session_id,
+                        event_type = event_type,
+                        "client event queue full; dropping event"
+                    );
+                }
+                // Closed channels are silently ignored — cleanup happens on disconnect.
+            }
+        }
+    }
+
+    /// Number of currently subscribed clients.
+    pub fn client_count(&self) -> usize {
+        self.clients.len()
+    }
+}
+
+impl Default for EventBroadcaster {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn subscribe_and_broadcast() {
+        let mut bc = EventBroadcaster::new();
+        let mut rx = bc.subscribe(1, vec!["buffer_edit".to_string()]);
+
+        let event = EditorEvent::BufferEdited {
+            buffer_idx: 0,
+            version: 1,
+        };
+        bc.broadcast(&event);
+
+        let received = rx.recv().await.unwrap();
+        assert!(matches!(
+            received,
+            EditorEvent::BufferEdited {
+                buffer_idx: 0,
+                version: 1
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn unsubscribed_event_not_delivered() {
+        let mut bc = EventBroadcaster::new();
+        let mut rx = bc.subscribe(1, vec!["buffer_edit".to_string()]);
+
+        // Send an event type the client didn't subscribe to.
+        let event = EditorEvent::ModeChanged {
+            mode: "Normal".to_string(),
+        };
+        bc.broadcast(&event);
+
+        // Channel should be empty.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn wildcard_subscription() {
+        let mut bc = EventBroadcaster::new();
+        let mut rx = bc.subscribe(1, vec!["*".to_string()]);
+
+        let event = EditorEvent::ModeChanged {
+            mode: "Insert".to_string(),
+        };
+        bc.broadcast(&event);
+
+        assert!(rx.recv().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn backpressure_does_not_panic() {
+        let mut bc = EventBroadcaster::new();
+        let _rx = bc.subscribe(1, vec!["buffer_edit".to_string()]);
+
+        // Fill the queue beyond capacity — should not panic.
+        for i in 0..200 {
+            let event = EditorEvent::BufferEdited {
+                buffer_idx: 0,
+                version: i,
+            };
+            bc.broadcast(&event);
+        }
+    }
+
+    #[test]
+    fn unsubscribe_removes_client() {
+        let mut bc = EventBroadcaster::new();
+        let _rx = bc.subscribe(1, vec!["*".to_string()]);
+        assert_eq!(bc.client_count(), 1);
+        bc.unsubscribe(1);
+        assert_eq!(bc.client_count(), 0);
+    }
+}

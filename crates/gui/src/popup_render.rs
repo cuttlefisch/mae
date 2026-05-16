@@ -1,49 +1,15 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion.
 
 use mae_core::text_utils::{
-    display_width, format_keypress, which_key_column_layout, WK_BREADCRUMB_SEP, WK_DOC_MIN_WIDTH,
+    centered_popup_dims, display_width, format_keypress, truncate_end, truncate_start,
+    which_key_column_layout, WK_BREADCRUMB_SEP, WK_DOC_MIN_WIDTH,
 };
 use mae_core::Editor;
 use skia_safe::Color4f;
-use unicode_width::UnicodeWidthChar;
 
 use crate::canvas::{CellRect, SkiaCanvas};
 use crate::layout::FrameLayout;
 use crate::theme;
-
-/// Truncate `s` from the start, keeping the last `max_cols - 1` display columns
-/// and prepending '…'. Safe for multi-byte / wide characters.
-fn truncate_start(s: &str, max_cols: usize) -> String {
-    let target = max_cols.saturating_sub(1);
-    let mut cols = 0;
-    let mut start = s.len();
-    for (i, ch) in s.char_indices().rev() {
-        let w = ch.width().unwrap_or(1);
-        if cols + w > target {
-            break;
-        }
-        cols += w;
-        start = i;
-    }
-    format!("…{}", &s[start..])
-}
-
-/// Truncate `s` from the end, keeping the first `max_cols - 1` display columns
-/// and appending '…'. Safe for multi-byte / wide characters.
-fn truncate_end(s: &str, max_cols: usize) -> String {
-    let target = max_cols.saturating_sub(1);
-    let mut cols = 0;
-    for (byte_idx, ch) in s.char_indices() {
-        let w = ch.width().unwrap_or(1);
-        if cols + w > target {
-            let mut result = s[..byte_idx].to_string();
-            result.push('…');
-            return result;
-        }
-        cols += w;
-    }
-    s.to_string()
-}
 
 /// Centered popup rect using editor-configured percentages.
 pub fn centered_popup_rect_from(
@@ -52,14 +18,12 @@ pub fn centered_popup_rect_from(
     width_pct: usize,
     height_pct: usize,
 ) -> CellRect {
-    let w = (area_width * width_pct / 100).max(40).min(area_width);
-    let h = (area_height * height_pct / 100).max(10).min(area_height);
-    let x = (area_width.saturating_sub(w)) / 2;
-    let y = (area_height.saturating_sub(h)) / 2;
+    let (w, h, x, y) = centered_popup_dims(area_width, area_height, width_pct, height_pct, 40, 10);
     CellRect::new(y, x, w, h)
 }
 
-/// Centered popup rect (70% x 60% of the area, clamped).
+/// Centered popup rect using default 70%×60% (used by tests).
+#[cfg(test)]
 pub fn centered_popup_rect(area_width: usize, area_height: usize) -> CellRect {
     centered_popup_rect_from(area_width, area_height, 70, 60)
 }
@@ -183,7 +147,8 @@ pub fn render_file_picker(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize,
         None => return,
     };
 
-    let popup = centered_popup_rect(cols, rows);
+    let popup =
+        centered_popup_rect_from(cols, rows, editor.popup_width_pct, editor.popup_height_pct);
     let text_fg = theme::ts_fg(editor, "ui.text");
     let selection_bg = theme::ts_bg(editor, "ui.selection");
     let selection_fg = theme::ts_fg(editor, "ui.selection");
@@ -256,7 +221,7 @@ pub fn render_file_picker(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize,
 
         let fg = if is_selected { selection_fg } else { text_fg };
         let max_w = inner.width.saturating_sub(1);
-        let display = if unicode_width::UnicodeWidthStr::width(path.as_str()) > max_w {
+        let display = if display_width(path) > max_w {
             truncate_start(path, max_w)
         } else {
             path.clone()
@@ -275,7 +240,8 @@ pub fn render_file_browser(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize
         None => return,
     };
 
-    let popup = centered_popup_rect(cols, rows);
+    let popup =
+        centered_popup_rect_from(cols, rows, editor.popup_width_pct, editor.popup_height_pct);
     let text_fg = theme::ts_fg(editor, "ui.text");
     let selection_fg = theme::ts_fg(editor, "ui.selection");
     let selection_bg = theme::ts_bg(editor, "ui.selection");
@@ -337,7 +303,7 @@ pub fn render_file_browser(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize
 
         let mut name = entry.display();
         let max_w = inner.width.saturating_sub(1);
-        if unicode_width::UnicodeWidthStr::width(name.as_str()) > max_w {
+        if display_width(&name) > max_w {
             name = truncate_start(&name, max_w);
         }
         canvas.draw_text_at(row, inner.col, &name, fg);
@@ -360,7 +326,8 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         None => return,
     };
 
-    let popup = centered_popup_rect(cols, rows);
+    let popup =
+        centered_popup_rect_from(cols, rows, editor.popup_width_pct, editor.popup_height_pct);
     let text_fg = theme::ts_fg(editor, "ui.text");
     let selection_fg = theme::ts_fg(editor, "ui.selection");
     let selection_bg = theme::ts_bg(editor, "ui.selection");
@@ -476,8 +443,7 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         let fg = if is_selected { selection_fg } else { text_fg };
         let dfg = if is_selected { selection_fg } else { doc_fg };
 
-        let name_display = if unicode_width::UnicodeWidthStr::width(entry.name.as_str()) > name_col
-        {
+        let name_display = if display_width(&entry.name) > name_col {
             if full_width_name {
                 // For paths, show the end (most distinctive part)
                 truncate_start(&entry.name, name_col)
@@ -492,14 +458,12 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
 
         if !full_width_name {
             let available_for_doc = inner.width.saturating_sub(name_col + 3);
-            let doc_display = if unicode_width::UnicodeWidthStr::width(entry.doc.as_str())
-                > available_for_doc
-                && available_for_doc > 1
-            {
-                truncate_end(&entry.doc, available_for_doc)
-            } else {
-                entry.doc.clone()
-            };
+            let doc_display =
+                if display_width(&entry.doc) > available_for_doc && available_for_doc > 1 {
+                    truncate_end(&entry.doc, available_for_doc)
+                } else {
+                    entry.doc.clone()
+                };
             canvas.draw_text_at(row, inner.col + 1 + name_col + 2, &doc_display, dfg);
         }
     }

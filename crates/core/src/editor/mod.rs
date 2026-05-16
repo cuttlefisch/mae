@@ -804,6 +804,8 @@ pub struct Editor {
     pub conversation_pair: Option<ConversationPair>,
     /// Window ID of the file tree sidebar, if open. Used to track and close it.
     pub file_tree_window_id: Option<crate::window::WindowId>,
+    /// Whether to auto-focus the file tree window when it opens.
+    pub file_tree_focus_on_open: bool,
     /// Pending file tree action (rename/create). The command-line submit
     /// path checks this after the user types a new name.
     /// NOTE: Mostly replaced by MiniDialog — retained only for backward compat
@@ -1239,6 +1241,7 @@ impl Editor {
             ai_target_window_id: None,
             conversation_pair: None,
             file_tree_window_id: None,
+            file_tree_focus_on_open: true,
             file_tree_action: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),

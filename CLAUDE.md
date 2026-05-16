@@ -41,7 +41,8 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links | `rusqlite`, `tree-sitter`, `tree-sitter-org` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
-| `mae-mcp` | MCP server — Unix socket, JSON-RPC, stdio shim | `tokio`, `serde_json` |
+| `mae-mcp` | MCP server — Unix socket, JSON-RPC, multi-client, stdio shim | `tokio`, `serde_json` |
+| `mae-state-server` | (Future) State server for multi-client editing | `tokio`, `serde_json` |
 | `mae` | Binary crate — CLI entry point, config loading, event loops | `clap`, `tokio` |
 
 ## Architecture Principles
@@ -59,6 +60,25 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 5. **Module boundaries enable distributed ownership.** Each crate has a clear responsibility. No 10k+ line files. This is a direct response to Emacs's bus-factor problem (top 5 contributors = 50.8% of all commits, critical subsystems maintained by single individuals).
 
 6. **Runtime redefinability is sacred.** Users must be able to redefine any function while the editor is running. This is the property that makes Emacs irreplaceable. The Scheme layer provides `defadvice`-equivalent, live REPL, and hot reload.
+
+7. **No hardcoding — Scheme-first configurability.** Every user-visible behavior that could reasonably differ between users MUST be exposed as a configurable option via the OptionRegistry. This means:
+   - Register in `options.rs` with a `config_key` (enables `:set-save` persistence)
+   - Automatically accessible via `(set-option!)` / `(get-option)` in Scheme
+   - Automatically accessible via `:set` command at runtime
+   - Default values live in the option definition, never as magic constants in rendering code
+   - Constants that are truly fixed (buffer sizes, protocol limits) belong in the relevant module, documented with rationale
+
+   **Corollary: No ad-hoc solutions.** Never add a hardcoded workaround for a problem that should be solved architecturally. If you find yourself duplicating logic between TUI and GUI, extract to `render_common` or `text_utils`. If you find a magic number, make it an option. If you find a one-off fix for one backend, fix it properly for both.
+
+8. **Shared computation, backend-specific drawing.** All layout math, content formatting, span computation, and data preparation lives in `mae-core` (specifically `render_common/` and `text_utils`). Backend crates (`mae-renderer`, `mae-gui`) contain ONLY the code that touches platform APIs (ratatui widgets, Skia paint calls). If two renderers compute the same thing, extract it.
+
+9. **Every change must consider downstream impact.** Before implementing any change, assess:
+   - **Bug risk**: What existing behavior could break? What edge cases does this touch?
+   - **Performance impact**: Does this add work to a hot path? Is it O(1), O(n), or O(n²)?
+   - **Type safety at boundaries**: When extracting shared code, verify that type conversions (e.g., `usize` ↔ `u16`) don't silently truncate.
+   - **Regression guard**: If the change touches rendering or input handling, verify both TUI and GUI backends. If it touches options, verify the Scheme API + config.toml round-trip + `:set-save` persistence all work.
+
+10. **Multi-client safety by design.** Any state mutation must be safe for concurrent observation. The MCP server may have N connected clients. Editor state changes emit events to a broadcast channel. Clients that can't keep up are dropped (bounded queues, write timeouts). File writes use content-hash verification + advisory locks. No operation assumes single-client.
 
 ### Rendering Pipeline
 The GUI renderer uses a three-phase pipeline: `compute_layout()` produces
@@ -210,6 +230,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - **`(mae!)` block**: Declarative module selection in `init.scm`. Only declared modules load. If a kernel command's binding is in a module, the user MUST declare that module or the binding won't exist.
 - **Never duplicate** bindings between kernel and modules without a documented migration path. The current duplication between `keymaps.rs` and `keymap-doom` is acknowledged tech debt with a ROADMAP entry.
 - **Never add ad-hoc solutions**: Prefer proper architectural solutions over hardcoded workarounds. When you find yourself duplicating logic between TUI and GUI renderers, extract shared code.
+- **Every option must be Scheme-accessible**: If a behavior is configurable, it goes through OptionRegistry. No config.toml-only settings, no env-var-only settings, no compile-time-only flags for user-facing behavior.
 
 ## Emacs Lessons (Reference Data)
 
@@ -330,6 +351,36 @@ See `SECURITY.md` for the full security posture. Key points for development:
 - MCP socket (`/tmp/mae-{PID}.sock`) uses Unix permissions only — no per-client auth
 - Transcripts in `~/.local/share/mae/transcripts/` contain raw tool output (no secret scrubbing)
 - Shell blocklist is substring-based and bypassable — defense in depth, not a sandbox
+
+## Server-Client Architecture
+
+MAE's MCP server supports multiple concurrent clients over Unix domain sockets.
+Each client gets its own session with capability negotiation and state subscriptions.
+
+### Protocol
+- JSON-RPC 2.0 with Content-Length framing (LSP-compatible)
+- Session lifecycle: `initialize` → `notifications/initialized` → ready → `shutdown`
+- Heartbeat: `$/ping` returns `"pong"`, idle detection via `last_activity`
+- Backpressure: per-client bounded queues (100 events), write timeout (5s)
+
+### State Notifications
+Clients subscribe to event types via `notifications/subscribe`: `buffer_edit`,
+`cursor_move`, `diagnostics`, `mode_change`, `buffer_open`, `buffer_close`.
+Events carry version numbers for ordering. Slow clients are dropped, not blocked.
+
+### File Safety
+- Content-hash verification on save (SHA-256, catches mtime failures)
+- Advisory file locks (`.{name}.mae.lock` with PID/hostname)
+- inotify-based external change detection (existing `notify` infrastructure)
+- Git worktree isolation for multi-AI workflows
+
+### Architecture Decision Records
+ADRs live in `docs/adr/` and as KB concept nodes (`concept:adr-*`).
+See ADR-001 (protocol), ADR-002 (text sync), ADR-003 (file safety), ADR-004 (KB scaling).
+
+### Text Sync (Future)
+CRDT vs OT decision deferred. See `concept:adr-text-sync-model` in KB.
+Prototyping `diamond-types` and `automerge-rs` on separate branches.
 
 ## API Stability
 

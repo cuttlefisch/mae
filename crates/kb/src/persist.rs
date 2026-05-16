@@ -99,6 +99,14 @@ fn kind_from_str(s: &str) -> NodeKind {
 /// Create schema tables on a fresh connection. Idempotent — safe to run
 /// on every open.
 fn init_schema(conn: &Connection) -> Result<(), PersistError> {
+    // Enable WAL mode for concurrent readers + single writer.
+    // Safe to call on every open — SQLite ignores if already in WAL mode.
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    // Retry on SQLITE_BUSY for up to 5 seconds before failing.
+    conn.pragma_update(None, "busy_timeout", "5000")?;
+    // NORMAL synchronous is safe with WAL (data integrity guaranteed on crash).
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS nodes (
@@ -891,6 +899,26 @@ mod tests {
         assert_eq!(n, 1);
         let node = kb.get("n1").unwrap();
         assert!(node.properties.is_empty());
+    }
+
+    /// Verify WAL mode is enabled after init_schema.
+    #[test]
+    fn wal_mode_enabled() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("wal.db");
+        let kb = sample_kb();
+        kb.save_to_sqlite(&path).unwrap();
+
+        let conn = Connection::open(&path).unwrap();
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal", "journal_mode should be WAL");
+
+        let busy: i32 = conn
+            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+            .unwrap();
+        assert_eq!(busy, 5000, "busy_timeout should be 5000ms");
     }
 
     /// A database from a future MAE version should return FutureSchema error.
