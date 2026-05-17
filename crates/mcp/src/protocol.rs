@@ -1,4 +1,8 @@
 //! MCP (Model Context Protocol) JSON-RPC types.
+//!
+//! @ai-caution: Sync message types (`SyncStateVector`, `SyncUpdate`,
+//! `AwarenessState`) are planned for `mae-sync` integration (ADR-006).
+//! The existing message types remain stable — sync methods are additive.
 
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +72,43 @@ impl McpError {
     pub fn internal_error(message: String) -> Self {
         McpError {
             code: -32603,
+            message,
+        }
+    }
+
+    // Application-level error codes (MCP/JSON-RPC -32000 range)
+
+    pub fn backpressure(message: String) -> Self {
+        McpError {
+            code: -32000,
+            message,
+        }
+    }
+
+    pub fn editor_busy(message: String) -> Self {
+        McpError {
+            code: -32001,
+            message,
+        }
+    }
+
+    pub fn tool_not_found(message: String) -> Self {
+        McpError {
+            code: -32002,
+            message,
+        }
+    }
+
+    pub fn invalid_session(message: String) -> Self {
+        McpError {
+            code: -32003,
+            message,
+        }
+    }
+
+    pub fn session_expired(message: String) -> Self {
+        McpError {
+            code: -32004,
             message,
         }
     }

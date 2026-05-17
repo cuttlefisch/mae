@@ -2,6 +2,11 @@
 //!
 //! Each connected MCP client gets a `ClientSession` that tracks
 //! its lifecycle, capabilities, and subscriptions.
+//!
+//! @ai-caution: Sync methods (`sync/state_vector`, `sync/apply_update`,
+//! `sync/awareness`) are planned for the `mae-sync` crate integration.
+//! Do not remove `handle_request` match arms or session fields without
+//! checking the sync roadmap (ADR-006).
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,6 +36,16 @@ pub struct ClientSession {
     pub connected_at: Instant,
     /// Last activity timestamp (updated on every message).
     pub last_activity: Instant,
+    /// Total messages received from this client.
+    pub messages_received: u64,
+    /// Total messages sent to this client.
+    pub messages_sent: u64,
+    /// Total tool calls dispatched for this client.
+    pub tool_calls: u64,
+    /// Total events delivered to this client.
+    pub events_delivered: u64,
+    /// Total events dropped due to backpressure.
+    pub events_dropped: u64,
 }
 
 impl ClientSession {
@@ -43,6 +58,11 @@ impl ClientSession {
             subscriptions: HashSet::new(),
             connected_at: now,
             last_activity: now,
+            messages_received: 0,
+            messages_sent: 0,
+            tool_calls: 0,
+            events_delivered: 0,
+            events_dropped: 0,
         }
     }
 

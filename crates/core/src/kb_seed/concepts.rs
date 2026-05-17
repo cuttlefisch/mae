@@ -421,7 +421,11 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:scheme-api|Scheme API]] — ~50 functions for buffer/window/command/keymap access\n\
 - [[concept:ai-modes|AI Agent vs Chat]] — when to use each AI interface\n\
 - [[concept:prompt-tiers|Prompt Tiers]] — model-aware prompt selection (full vs compact)\n\
-- [[concept:display-policy|Display Policy]] — how buffers are placed in windows (4 actions, O(1) dispatch)
+- [[concept:display-policy|Display Policy]] — how buffers are placed in windows (4 actions, O(1) dispatch)\n\
+- [[concept:sync-engine|Sync Engine]] — yrs (Yjs Rust) CRDT for collaborative state\n\
+- [[concept:collaborative-state|Collaborative State]] — vision: text + visual + KB sync\n\
+- [[concept:adr-text-sync|ADR-002: Text Sync]] — decision: yrs/YATA (accepted)\n\
+- [[concept:adr-kb-crdt|ADR-005: KB CRDT]] — KB nodes as yrs documents
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -1325,3 +1329,84 @@ for the canonical three-file pattern.\n\n\
 For a more complex example with module-owned keymaps, see `modules/file-tree/`.\n\n\
 See also: [[concept:modules]], [[concept:flags]], [[concept:design-philosophy]], \
 [[concept:package-system]], [[concept:scheme-api]], [[index]]\n";
+
+pub(super) const CONCEPT_SYNC_ENGINE: &str = "\
+The **Sync Engine** is MAE's collaborative state layer, built on \
+yrs (the Rust port of Yjs, using the YATA algorithm). Crate: `yrs` on crates.io.\n\n\
+## Why yrs\n\
+- Handles text (`YText`), structured documents (`YMap`, `YArray`), and \
+  knowledge base nodes in a single framework\n\
+- Built-in `UndoManager` with per-user stacks\n\
+- Awareness protocol for cursor/selection sharing\n\
+- Proven at scale: Notion (200M+ users), Excalidraw, TLDraw\n\
+- YATA algorithm: O(n) space, optimized for sequential typing\n\n\
+## Dual Structure\n\
+yrs `YText` is the source of truth for collaborative state. ropey remains \
+the rendering engine (efficient line indexing via `Rope::line()`). A bridge \
+rebuilds the rope from YText on remote changes (~1ms for 10K lines).\n\n\
+## Document Types\n\
+| Type | yrs Representation | Use Case |\n\
+|------|-------------------|----------|\n\
+| Text buffer | `YText` | Code editing |\n\
+| Visual element | `YMap { position, style, children }` | Design system |\n\
+| KB node | `YMap { title: YText, body: YText, tags: YArray }` | Knowledge base |\n\n\
+See also: [[concept:collaborative-state]], [[concept:adr-text-sync]], [[concept:adr-kb-crdt]]\n";
+
+pub(super) const CONCEPT_COLLABORATIVE_STATE: &str = "\
+MAE is a **collaborative state engine** where AI and humans interact via text \
+OR visual interfaces, backed by a federated knowledge base. The sync layer \
+(powered by [[concept:sync-engine|yrs]]) is the universal substrate for ALL state:\n\n\
+- **Editor buffers** — text and code (YText)\n\
+- **Visual documents** — design components, scene graphs (YMap/YArray)\n\
+- **Knowledge base nodes** — CRDT-synced across instances for offline editing\n\n\
+## Requirements\n\
+1. Real-time multi-user collaboration (text AND visual content)\n\
+2. AI agents as collaborative peers (sequential tool calls → yrs transactions)\n\
+3. Non-textual documents: scene graphs, component trees, design tokens\n\
+4. KB nodes as CRDT documents — offline editing, conflict-free merge, P2P federation\n\
+5. Sustainable maintenance for a small team (~1000 lines MAE-specific sync code)\n\
+6. Performance: 100+ concurrent clients, 100K+ element documents\n\n\
+## Transport\n\
+JSON-RPC 2.0 over Unix sockets (extend existing MCP protocol). Upgrade path: \
+msgpack wire format, then TCP for multi-machine. See [[concept:adr-text-sync]].\n\n\
+See also: [[concept:sync-engine]], [[concept:knowledge-base]], [[concept:ai-as-peer]]\n";
+
+pub(super) const CONCEPT_ADR_TEXT_SYNC: &str = "\
+**ADR-002: Text Synchronization Model** — Status: **Accepted (yrs/YATA)**\n\n\
+## Decision\n\
+Use yrs (Yjs Rust port) as the sync engine for all collaborative state. \
+Dual structure: yrs YText + ropey mirror for rendering.\n\n\
+## Key Rationale\n\
+- MAE needs to sync structured documents (visual elements, KB nodes), not just text\n\
+- yrs provides YText, YMap, YArray — handles all content types\n\
+- Built-in UndoManager eliminates custom undo work\n\
+- Yjs ecosystem is the de-facto standard (Notion, Excalidraw, TLDraw)\n\n\
+## Alternatives Rejected\n\
+| Library | Why Not |\n\
+|---------|--------|\n\
+| automerge-rs | Performance cliff >100K ops, no built-in undo |\n\
+| diamond-types | Text-only, bus factor = 1 |\n\
+| Custom OT | Combinatorial explosion for visual operations |\n\n\
+Full ADR: `docs/adr/002-text-sync-model.md`\n\n\
+See also: [[concept:sync-engine]], [[concept:collaborative-state]], [[concept:adr-kb-crdt]]\n";
+
+pub(super) const CONCEPT_ADR_KB_CRDT: &str = "\
+**ADR-005: KB Nodes as CRDT Documents** — Status: **Accepted**\n\n\
+## Decision\n\
+Each KB node becomes a yrs document with schema:\n\
+```\n\
+YMap { id, title: YText, body: YText, tags: YArray, links: YArray, meta: YMap }\n\
+```\n\n\
+SQLite remains the persistence backend — yrs document bytes stored as BLOBs. \
+FTS5 indexes materialized text from `YText::to_string()`.\n\n\
+## Benefits\n\
+- **Offline editing**: Edit KB nodes without connectivity, merge on reconnect\n\
+- **P2P federation**: Exchange yrs state vectors between MAE instances\n\
+- **AI attribution**: Each transaction carries a client ID\n\
+- **Per-user undo**: yrs UndoManager provides this automatically\n\n\
+## Migration Path\n\
+1. Phase A: SQLite only (current)\n\
+2. Phase B: Optional `crdt_doc BLOB` column, new nodes get yrs docs\n\
+3. Phase C: All nodes have yrs docs, SQLite is read cache + FTS index\n\n\
+Full ADR: `docs/adr/005-kb-crdt.md`\n\n\
+See also: [[concept:sync-engine]], [[concept:knowledge-base]], [[concept:collaborative-state]]\n";

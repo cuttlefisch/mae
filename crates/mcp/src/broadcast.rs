@@ -147,6 +147,12 @@ impl Default for EventBroadcaster {
     }
 }
 
+/// Thread-safe shared reference to the event broadcaster.
+///
+/// Uses `std::sync::Mutex` (not tokio) — all operations (`broadcast`,
+/// `subscribe`, `unsubscribe`) are synchronous and sub-microsecond.
+pub type SharedBroadcaster = std::sync::Arc<std::sync::Mutex<EventBroadcaster>>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +247,49 @@ mod tests {
         bc.broadcast(&event);
         bc.broadcast(&event);
         assert_eq!(bc.current_seq(), 4); // 1 + 3 broadcasts
+    }
+
+    #[tokio::test]
+    async fn sync_update_event_delivered() {
+        let mut bc = EventBroadcaster::new();
+        let mut rx = bc.subscribe(1, vec!["sync_update".to_string()]);
+
+        let event = EditorEvent::SyncUpdate {
+            buffer_name: "test.rs".to_string(),
+            update_base64: "AQIDBA==".to_string(),
+        };
+        bc.broadcast(&event);
+
+        let received = rx.recv().await.unwrap();
+        match received {
+            EditorEvent::SyncUpdate {
+                buffer_name,
+                update_base64,
+            } => {
+                assert_eq!(buffer_name, "test.rs");
+                assert_eq!(update_base64, "AQIDBA==");
+            }
+            _ => panic!("expected SyncUpdate"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_update_filtered_by_subscription() {
+        let mut bc = EventBroadcaster::new();
+        // Subscribe to buffer_edit only — should NOT receive sync_update.
+        let mut rx_filtered = bc.subscribe(1, vec!["buffer_edit".to_string()]);
+        // Subscribe to wildcard — should receive sync_update.
+        let mut rx_wildcard = bc.subscribe(2, vec!["*".to_string()]);
+
+        let event = EditorEvent::SyncUpdate {
+            buffer_name: "foo.rs".to_string(),
+            update_base64: "dGVzdA==".to_string(),
+        };
+        bc.broadcast(&event);
+
+        // Filtered client should NOT receive it.
+        assert!(rx_filtered.try_recv().is_err());
+        // Wildcard client should receive it.
+        assert!(rx_wildcard.recv().await.is_some());
     }
 }

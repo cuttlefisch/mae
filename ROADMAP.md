@@ -52,7 +52,24 @@
   - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
   - *Tier 3* (100+ users, 500K+ nodes): PostgreSQL + pgvector, write sharding by namespace, event sourcing for real-time sync. ~3 months.
   - Key bottlenecks: SQLite single-writer ceiling (~50 writes/sec), FTS5 index size at scale (~400MB at 100K nodes), network latency for RAG workflows (5-10 KB queries per AI turn × 30 concurrent agents = ~600 node fetches/sec peak).
-- [ ] **CRDT/OT collaborative editing**: Per-user cursors, per-user undo stacks, conflict resolution for concurrent AI and human edits. Prerequisite: state server.
+- [ ] **CRDT collaborative editing (yrs/YATA)**: Sync engine chosen: yrs (Yjs Rust port). Per-user cursors via Awareness protocol, per-user undo via yrs UndoManager, conflict-free merge for concurrent AI and human edits. Dual structure: yrs YText + ropey mirror. See ADR-002 (accepted), ADR-005 (KB CRDT), ADR-006 (collaborative state engine).
+  - Phase A: `mae-sync` crate (yrs dependency, document schemas, ropey bridge)
+  - Phase B: Buffer integration (sync_doc field, local edits → yrs transactions)
+  - Phase C: MCP sync methods (state_vector, apply_update, awareness)
+  - Phase D: KB nodes as yrs documents (offline editing, P2P federation)
+
+### KB Enterprise Readiness & Hardening
+
+- [x] **Change management**: `node_changelog` table with full audit trail (create/update/delete, old/new values, timestamps, author, reason). Schema v6 migration.
+- [x] **Incremental sync**: `sync_to_sqlite()` — only writes changed nodes, records all mutations in changelog.
+- [x] **Structured timestamps**: `created_at` / `updated_at` INTEGER columns on `nodes`. Enables `ORDER BY updated_at` without JSON parsing.
+- [x] **Changelog query API**: `node_history()`, `changes_since()` for auditing and time-travel.
+- [ ] **Point-in-time restore**: `kb_restore` command + MCP tool to revert a node to any prior state from changelog.
+- [ ] **Node blame**: Per-change author tracking. Requires session identity propagation from MCP client → KB write path.
+- [ ] **Changelog pruning**: Configurable retention policy (default: 90 days). `kb-changelog-prune` command.
+- [ ] **KB backup/export**: `kb-export` dumps full KB + changelog to portable format (SQLite file or JSON). `kb-import` restores.
+- [ ] **Conflict detection**: When multi-client writes land on same node, detect via version counter and surface conflict to user (not silent last-write-wins).
+- [ ] **KB replication**: Read replicas for high-read-throughput scenarios (AI agents doing 600+ node fetches/sec). WAL mode enables this natively for same-host.
 
 ### Near-term: Other
 - [ ] PDF preview (GUI inline rendering via `hayro` pure-Rust rasterizer + midnight mode)

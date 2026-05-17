@@ -1,8 +1,9 @@
 # ADR-002: Text Synchronization Model
 
-**Status**: Deferred
-**Date**: 2026-05-16
-**KB Source**: `concept:adr-text-sync-model`
+**Status**: Accepted (yrs/YATA)
+**Date**: 2026-05-17 (updated)
+**Superseded by**: ADR-006 (Collaborative State Engine)
+**KB Source**: `concept:adr-text-sync`
 
 ## Context
 
@@ -62,32 +63,50 @@ MAE would need a wrapper layer or dual data structure.
 
 ## Decision
 
-**Deferred** until the RPC layer (ADR-001) is proven and stable.
+**Accepted: yrs (Yjs Rust port, YATA algorithm)** with dual-structure
+(yrs YText + ropey mirror for rendering).
 
 ### Rationale
 
-1. Multi-client MCP is prerequisite infrastructure — without reliable connections,
-   sync is meaningless.
-2. None of the Rust CRDT libraries integrate with ropey natively, requiring
-   significant wrapper work.
-3. The current single-writer model (editor thread processes all mutations)
-   is correct for the near-term multi-client scenario where AI agents call
-   tools sequentially through MCP.
+1. Multi-client MCP is now proven and stable (ADR-001 complete).
+2. MAE's vision extends beyond text to visual documents (scene graphs,
+   component trees) — this eliminates text-only CRDTs (diamond-types, cola)
+   and makes custom OT intractable (combinatorial transform explosion).
+3. yrs provides YText, YMap, YArray — handles text AND structured content
+   in a single sync framework.
+4. Built-in `UndoManager` with per-user stacks eliminates custom undo work.
+5. Yjs ecosystem is the de-facto standard for collaborative apps (Notion,
+   Excalidraw, TLDraw, Huly — 200M+ users combined).
+6. Dual structure (yrs + ropey) preserves rendering performance while
+   adding CRDT sync. Bridge overhead is ~1ms per remote edit.
 
-### Next Steps
+### Why NOT the other options
 
-- Prototype `diamond-types` on a branch (plain text collaborative editing)
-- Prototype `automerge-rs` on a branch (rich text with formatting)
-- Evaluate ropey wrapper approaches
-- Benchmark memory overhead at document scale (10K-100K lines)
+| Library | Eliminated because |
+|---------|-------------------|
+| automerge-rs | Performance cliff at >100K ops, no built-in undo, 2-3x memory |
+| diamond-types | Text-only, cannot represent visual content, bus factor = 1 |
+| cola | Text positions only, sole maintainer, immature |
+| Custom OT | Transform functions explode for visual operations |
+
+### Implementation Plan
+
+- **Phase A**: `mae-sync` crate with yrs dependency, document schemas
+- **Phase B**: Buffer integration (dual yrs YText + ropey)
+- **Phase C**: MCP protocol extended with `sync/*` methods
+- **Phase D**: KB nodes as yrs documents (see ADR-005)
 
 ## Consequences
 
-- Collaborative editing (multiple cursors in same buffer) is not available
-  until this decision is made.
-- Multi-client MCP still works — clients read/write buffers through tool
-  calls, with the editor thread serializing all mutations.
-- File-level contention is handled by ADR-003 (file safety).
+- Collaborative editing becomes possible once `mae-sync` crate is implemented.
+- Dual structure adds ~200 lines of bridge code (yrs YText → ropey rebuild).
+- KB nodes gain offline editing and P2P federation (see ADR-005).
+- Visual documents (scene graphs, design components) use the same sync
+  infrastructure as text buffers.
+- yrs document format is a long-term commitment — acceptable because Yjs
+  is the most widely deployed CRDT format in production.
+- File-level contention (ADR-003) remains relevant for non-collaborative
+  single-writer scenarios.
 
 ## References
 

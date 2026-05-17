@@ -39,6 +39,7 @@ pub(crate) async fn run_terminal_loop(
     permission_policy: &mae_ai::PermissionPolicy,
     app_config: &config::Config,
     mcp_client_mgr: &ai_event_handler::McpClientMgrRef,
+    sync_broadcaster: &mae_mcp::broadcast::SharedBroadcaster,
 ) -> io::Result<()> {
     let mut renderer = TerminalRenderer::new()?;
     let mut event_stream = EventStream::new();
@@ -419,6 +420,8 @@ pub(crate) async fn run_terminal_loop(
                 // Frame slot arrived — mark dirty so the render section fires.
                 tui_dirty = true;
                 render_pending = false;
+                // Drain sync updates on frame tick (~16ms max latency).
+                crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster);
             }
             _ = syntax_reparse_timer => {
                 // Debounce expired — drain pending reparses.
@@ -623,6 +626,8 @@ pub(crate) async fn run_terminal_loop(
                     editor.input_lock = mae_core::InputLock::None;
                     last_mcp_activity = None;
                 }
+                // Drain sync updates immediately after MCP-driven edits.
+                crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster);
             }
         }
     }

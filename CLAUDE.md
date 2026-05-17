@@ -42,6 +42,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links | `rusqlite`, `tree-sitter`, `tree-sitter-org` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
 | `mae-mcp` | MCP server — Unix socket, JSON-RPC, multi-client, stdio shim | `tokio`, `serde_json` |
+| `mae-sync` | (Planned) Collaborative state — yrs CRDT, ropey bridge, awareness | `yrs`, `serde` |
 | `mae-state-server` | (Future) State server for multi-client editing | `tokio`, `serde_json` |
 | `mae` | Binary crate — CLI entry point, config loading, event loops | `clap`, `tokio` |
 
@@ -79,6 +80,8 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
    - **Regression guard**: If the change touches rendering or input handling, verify both TUI and GUI backends. If it touches options, verify the Scheme API + config.toml round-trip + `:set-save` persistence all work.
 
 10. **Multi-client safety by design.** Any state mutation must be safe for concurrent observation. The MCP server may have N connected clients. Editor state changes emit events to a broadcast channel. Clients that can't keep up are dropped (bounded queues, write timeouts). File writes use content-hash verification + advisory locks. No operation assumes single-client.
+
+11. **CRDT-first sync (yrs/YATA).** All collaborative state flows through yrs (Yjs Rust port). Text buffers use `YText`, visual documents use `YMap`/`YArray`, KB nodes are yrs documents. The ropey rope is a read-only rendering mirror rebuilt from yrs on remote changes. Local edits generate yrs transactions (attributed, undoable via per-user `UndoManager`). This is the universal substrate — no separate sync mechanism for different content types. See ADR-002, ADR-005, ADR-006.
 
 ### Rendering Pipeline
 The GUI renderer uses a three-phase pipeline: `compute_layout()` produces
@@ -376,11 +379,20 @@ Events carry version numbers for ordering. Slow clients are dropped, not blocked
 
 ### Architecture Decision Records
 ADRs live in `docs/adr/` and as KB concept nodes (`concept:adr-*`).
-See ADR-001 (protocol), ADR-002 (text sync), ADR-003 (file safety), ADR-004 (KB scaling).
+See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine).
 
-### Text Sync (Future)
-CRDT vs OT decision deferred. See `concept:adr-text-sync-model` in KB.
-Prototyping `diamond-types` and `automerge-rs` on separate branches.
+### Sync Engine (yrs — Accepted)
+Collaborative state uses **yrs** (Yjs Rust port, YATA algorithm). Decision rationale:
+- Handles text (`YText`), visual documents (`YMap`/`YArray`), and KB nodes
+- Built-in `UndoManager` with per-user stacks
+- Proven at scale: Notion (200M+ users), Excalidraw, TLDraw
+- Dual structure: yrs is source of truth, ropey is rendering mirror
+
+Transport remains JSON-RPC 2.0 (extend current MCP). Planned upgrade path:
+msgpack wire format (Content-Type negotiation), then TCP for multi-machine.
+
+Future `mae-sync` crate will wrap yrs with MAE-specific document schemas
+and provide the ropey bridge (~200 lines). See ADR-006 for full architecture.
 
 ## API Stability
 

@@ -61,13 +61,19 @@ pub struct McpToolResult {
 pub struct McpServer {
     socket_path: PathBuf,
     tool_tx: mpsc::Sender<McpToolRequest>,
+    broadcaster: broadcast::SharedBroadcaster,
 }
 
 impl McpServer {
-    pub fn new(socket_path: impl Into<PathBuf>, tool_tx: mpsc::Sender<McpToolRequest>) -> Self {
+    pub fn new(
+        socket_path: impl Into<PathBuf>,
+        tool_tx: mpsc::Sender<McpToolRequest>,
+        broadcaster: broadcast::SharedBroadcaster,
+    ) -> Self {
         McpServer {
             socket_path: socket_path.into(),
             tool_tx,
+            broadcaster,
         }
     }
 
@@ -102,9 +108,10 @@ impl McpServer {
 
                     let tool_tx = self.tool_tx.clone();
                     let tool_defs = Arc::clone(&tool_defs);
+                    let broadcaster = Arc::clone(&self.broadcaster);
 
                     tokio::spawn(async move {
-                        handle_client(stream, tool_tx, &tool_defs, session).await;
+                        handle_client(stream, tool_tx, &tool_defs, session, broadcaster).await;
                         info!(session = session_id, "MCP client session ended");
                     });
                 }
@@ -132,63 +139,115 @@ impl Drop for McpServer {
 // ---------------------------------------------------------------------------
 
 /// Handle a single client connection in its own task.
+///
+/// Uses `tokio::select!` to simultaneously read requests AND push events
+/// from the broadcaster. Clients must subscribe (via `notifications/subscribe`)
+/// to receive push notifications.
 async fn handle_client(
     stream: tokio::net::UnixStream,
     tool_tx: mpsc::Sender<McpToolRequest>,
     tool_definitions: &[ToolInfo],
     mut session: ClientSession,
+    broadcaster: broadcast::SharedBroadcaster,
 ) {
     let (reader, writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let mut writer = writer;
     let write_timeout = std::time::Duration::from_secs(5);
 
+    // Subscribe with empty subs — receives nothing until client opts in.
+    let mut event_rx = {
+        let mut bc = broadcaster.lock().unwrap();
+        bc.subscribe(session.id, vec![])
+    };
+
     loop {
-        let msg = match read_message(&mut reader).await {
-            Ok(Some(msg)) => msg,
-            Ok(None) => {
-                debug!(session = session.id, "MCP client disconnected (EOF)");
-                break;
-            }
-            Err(e) => {
-                error!(session = session.id, error = %e, "MCP read error");
-                break;
-            }
-        };
+        tokio::select! {
+            biased;
 
-        session.touch();
-        session.messages_received += 1;
+            msg = read_message(&mut reader) => {
+                let msg = match msg {
+                    Ok(Some(msg)) => msg,
+                    Ok(None) => {
+                        debug!(session = session.id, "MCP client disconnected (EOF)");
+                        break;
+                    }
+                    Err(e) => {
+                        error!(session = session.id, error = %e, "MCP read error");
+                        break;
+                    }
+                };
 
-        let response = handle_request(&msg, tool_definitions, &tool_tx, &mut session).await;
-        let body = match serde_json::to_vec(&response) {
-            Ok(b) => b,
-            Err(e) => {
-                error!(session = session.id, error = %e, "failed to serialize response");
-                continue;
+                session.touch();
+                session.messages_received += 1;
+
+                let response = handle_request(
+                    &msg, tool_definitions, &tool_tx, &mut session, &broadcaster,
+                ).await;
+                let body = match serde_json::to_vec(&response) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        error!(session = session.id, error = %e, "failed to serialize response");
+                        continue;
+                    }
+                };
+
+                // Content-Length framed write with timeout.
+                let write_result = tokio::time::timeout(write_timeout, async {
+                    let header = format!("Content-Length: {}\r\n\r\n", body.len());
+                    writer.write_all(header.as_bytes()).await?;
+                    writer.write_all(&body).await?;
+                    writer.flush().await
+                })
+                .await;
+
+                match write_result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        error!(session = session.id, error = %e, "write error; closing client");
+                        break;
+                    }
+                    Err(_) => {
+                        warn!(session = session.id, "write timeout; closing slow client");
+                        break;
+                    }
+                }
             }
-        };
-
-        // Content-Length framed write with timeout.
-        let write_result = tokio::time::timeout(write_timeout, async {
-            let header = format!("Content-Length: {}\r\n\r\n", body.len());
-            writer.write_all(header.as_bytes()).await?;
-            writer.write_all(&body).await?;
-            writer.flush().await
-        })
-        .await;
-
-        match write_result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                error!(session = session.id, error = %e, "write error; closing client");
-                break;
-            }
-            Err(_) => {
-                warn!(session = session.id, "write timeout; closing slow client");
-                break;
+            Some(event) = event_rx.recv() => {
+                if write_notification(&mut writer, &event, write_timeout).await.is_err() {
+                    break;
+                }
+                session.events_delivered += 1;
             }
         }
     }
+
+    // Unsubscribe on disconnect.
+    broadcaster.lock().unwrap().unsubscribe(session.id);
+}
+
+/// Write a JSON-RPC notification (no `id` field) with Content-Length framing.
+async fn write_notification(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    event: &broadcast::EditorEvent,
+    timeout: std::time::Duration,
+) -> Result<(), std::io::Error> {
+    let method = format!("notifications/{}", event.event_type());
+    let notification = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": event,
+    });
+    let body = serde_json::to_vec(&notification)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    tokio::time::timeout(timeout, async {
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        writer.write_all(header.as_bytes()).await?;
+        writer.write_all(&body).await?;
+        writer.flush().await
+    })
+    .await
+    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "notification write timeout"))?
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +344,7 @@ async fn handle_request(
     tool_definitions: &[ToolInfo],
     tool_tx: &mpsc::Sender<McpToolRequest>,
     session: &mut ClientSession,
+    broadcaster: &broadcast::SharedBroadcaster,
 ) -> JsonRpcResponse {
     let request: JsonRpcRequest = match serde_json::from_str(msg) {
         Ok(r) => r,
@@ -357,6 +417,12 @@ async fn handle_request(
                             session.subscriptions.insert(s.to_string());
                         }
                     }
+                    // Update broadcaster so the event channel filters correctly.
+                    let subs: Vec<String> = session.subscriptions.iter().cloned().collect();
+                    broadcaster
+                        .lock()
+                        .unwrap()
+                        .update_subscriptions(session.id, subs);
                     debug!(
                         session = session.id,
                         subscriptions = ?session.subscriptions,
@@ -500,6 +566,11 @@ async fn handle_request(
 mod tests {
     use super::*;
 
+    /// Create a dummy `SharedBroadcaster` for unit tests.
+    fn dummy_broadcaster() -> broadcast::SharedBroadcaster {
+        std::sync::Arc::new(std::sync::Mutex::new(broadcast::EventBroadcaster::new()))
+    }
+
     #[tokio::test]
     async fn read_message_line_based() {
         let data = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"test\"}\n";
@@ -537,9 +608,10 @@ mod tests {
     async fn handle_request_initialize_extracts_client_info() {
         let (tx, _rx) = mpsc::channel(1);
         let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
         let msg = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"test-client","version":"0.1"}}}"#;
 
-        let resp = handle_request(msg, &[], &tx, &mut session).await;
+        let resp = handle_request(msg, &[], &tx, &mut session, &bc).await;
         assert!(resp.result.is_some());
         assert_eq!(session.client_info.as_ref().unwrap().name, "test-client");
     }
@@ -548,9 +620,10 @@ mod tests {
     async fn handle_request_ping() {
         let (tx, _rx) = mpsc::channel(1);
         let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
         let msg = r#"{"jsonrpc":"2.0","id":2,"method":"$/ping"}"#;
 
-        let resp = handle_request(msg, &[], &tx, &mut session).await;
+        let resp = handle_request(msg, &[], &tx, &mut session, &bc).await;
         assert!(resp.result.is_some());
     }
 
@@ -558,9 +631,10 @@ mod tests {
     async fn handle_request_subscribe() {
         let (tx, _rx) = mpsc::channel(1);
         let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
         let msg = r#"{"jsonrpc":"2.0","id":3,"method":"notifications/subscribe","params":{"types":["buffer_edit","diagnostics"]}}"#;
 
-        let resp = handle_request(msg, &[], &tx, &mut session).await;
+        let resp = handle_request(msg, &[], &tx, &mut session, &bc).await;
         assert!(resp.result.is_some());
         assert!(session.subscriptions.contains("buffer_edit"));
         assert!(session.subscriptions.contains("diagnostics"));
@@ -570,6 +644,7 @@ mod tests {
     async fn handle_request_tools_list() {
         let (tx, _rx) = mpsc::channel(1);
         let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
         let tools = vec![ToolInfo {
             name: "test_tool".to_string(),
             description: "A test tool".to_string(),
@@ -577,7 +652,7 @@ mod tests {
         }];
         let msg = r#"{"jsonrpc":"2.0","id":4,"method":"tools/list"}"#;
 
-        let resp = handle_request(msg, &tools, &tx, &mut session).await;
+        let resp = handle_request(msg, &tools, &tx, &mut session, &bc).await;
         let result = resp.result.unwrap();
         let tools_arr = result["tools"].as_array().unwrap();
         assert_eq!(tools_arr.len(), 1);
@@ -724,7 +799,7 @@ mod tests {
 
         // Set up the server with a mock tool handler.
         let (tool_tx, mut tool_rx) = mpsc::channel::<McpToolRequest>(16);
-        let server = McpServer::new(&socket_path, tool_tx);
+        let server = McpServer::new(&socket_path, tool_tx, dummy_broadcaster());
         let tools = vec![ToolInfo {
             name: "echo".to_string(),
             description: "Echo tool".to_string(),
@@ -855,7 +930,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
 
         let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
-        let server = McpServer::new(&socket_path, tool_tx);
+        let server = McpServer::new(&socket_path, tool_tx, dummy_broadcaster());
 
         tokio::spawn(async move {
             server.run(vec![]).await;
@@ -906,7 +981,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
 
         let (tool_tx, mut tool_rx) = mpsc::channel::<McpToolRequest>(16);
-        let server = McpServer::new(&socket_path, tool_tx);
+        let server = McpServer::new(&socket_path, tool_tx, dummy_broadcaster());
         let tools = vec![ToolInfo {
             name: "test_tool".to_string(),
             description: "Test".to_string(),
@@ -1013,11 +1088,12 @@ mod tests {
     async fn handle_request_resync() {
         let (tx, _rx) = mpsc::channel(1);
         let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
         session.subscriptions.insert("buffer_edit".to_string());
         session.subscriptions.insert("mode_change".to_string());
 
         let msg = r#"{"jsonrpc":"2.0","id":10,"method":"$/resync"}"#;
-        let resp = handle_request(msg, &[], &tx, &mut session).await;
+        let resp = handle_request(msg, &[], &tx, &mut session, &bc).await;
         let result = resp.result.unwrap();
 
         assert_eq!(result["session_id"], session.id);
@@ -1032,7 +1108,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
 
         let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
-        let server = McpServer::new(&socket_path, tool_tx);
+        let server = McpServer::new(&socket_path, tool_tx, dummy_broadcaster());
 
         tokio::spawn(async move {
             server.run(vec![]).await;
@@ -1060,6 +1136,381 @@ mod tests {
         assert_eq!(resp.result.unwrap(), "pong");
 
         drop(alive_client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    // -----------------------------------------------------------------------
+    // Push notification integration tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: read a Content-Length framed message from a stream.
+    /// Returns the parsed JSON. Panics on timeout.
+    async fn read_framed_message(
+        stream: &mut tokio::net::UnixStream,
+        timeout_ms: u64,
+    ) -> Option<serde_json::Value> {
+        use tokio::io::AsyncReadExt;
+
+        let result = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
+            let mut header_buf = Vec::new();
+            let mut byte = [0u8; 1];
+            loop {
+                stream.read_exact(&mut byte).await.ok()?;
+                header_buf.push(byte[0]);
+                if header_buf.len() >= 4 && &header_buf[header_buf.len() - 4..] == b"\r\n\r\n" {
+                    break;
+                }
+            }
+            let header = String::from_utf8(header_buf).ok()?;
+            let content_length: usize = header
+                .lines()
+                .find_map(|line| line.strip_prefix("Content-Length: "))
+                .and_then(|v| v.trim().parse().ok())?;
+            let mut body = vec![0u8; content_length];
+            stream.read_exact(&mut body).await.ok()?;
+            serde_json::from_slice(&body).ok()
+        })
+        .await;
+
+        result.unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn push_notification_after_subscribe() {
+        let socket_path = format!("/tmp/mae-test-push-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let bc = dummy_broadcaster();
+        let server = McpServer::new(&socket_path, tool_tx, bc.clone());
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+
+        // Initialize.
+        send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "push-test"}}
+            }),
+        )
+        .await;
+
+        // Subscribe to sync_update.
+        send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "notifications/subscribe",
+                "params": {"types": ["sync_update"]}
+            }),
+        )
+        .await;
+
+        // Broadcast a sync update via the shared broadcaster.
+        {
+            let locked = bc.lock().unwrap();
+            locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
+                buffer_name: "test.rs".to_string(),
+                update_base64: "AQIDBA==".to_string(),
+            });
+        }
+
+        // Client should receive the push notification.
+        let notification = read_framed_message(&mut client, 1000).await;
+        assert!(notification.is_some(), "should have received notification");
+        let notif = notification.unwrap();
+        // JSON-RPC notification: no "id" field.
+        assert!(
+            notif.get("id").is_none(),
+            "notification should have no id field"
+        );
+        assert_eq!(notif["jsonrpc"], "2.0");
+        assert_eq!(notif["method"], "notifications/sync_update");
+        assert_eq!(notif["params"]["data"]["buffer_name"], "test.rs");
+        assert_eq!(notif["params"]["data"]["update_base64"], "AQIDBA==");
+
+        drop(client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn push_notification_not_sent_before_subscribe() {
+        let socket_path = format!("/tmp/mae-test-nosub-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let bc = dummy_broadcaster();
+        let server = McpServer::new(&socket_path, tool_tx, bc.clone());
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+
+        // Initialize but do NOT subscribe.
+        send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "nosub-test"}}
+            }),
+        )
+        .await;
+
+        // Broadcast an event.
+        {
+            let locked = bc.lock().unwrap();
+            locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
+                buffer_name: "test.rs".to_string(),
+                update_base64: "dGVzdA==".to_string(),
+            });
+        }
+
+        // Try to read — should timeout (no notification expected).
+        let msg = read_framed_message(&mut client, 200).await;
+        assert!(
+            msg.is_none(),
+            "should NOT have received notification without subscribing"
+        );
+
+        // Ping should still work.
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "$/ping"}),
+        )
+        .await;
+        assert_eq!(resp.result.unwrap(), "pong");
+
+        drop(client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn two_clients_one_subscribed_one_not() {
+        let socket_path = format!("/tmp/mae-test-2cli-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let bc = dummy_broadcaster();
+        let server = McpServer::new(&socket_path, tool_tx, bc.clone());
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Client A: subscribes to sync_update.
+        let mut client_a = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        send_and_recv(
+            &mut client_a,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "client-a"}}
+            }),
+        )
+        .await;
+        send_and_recv(
+            &mut client_a,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "notifications/subscribe",
+                "params": {"types": ["sync_update"]}
+            }),
+        )
+        .await;
+
+        // Client B: does NOT subscribe.
+        let mut client_b = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        send_and_recv(
+            &mut client_b,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "client-b"}}
+            }),
+        )
+        .await;
+
+        // Broadcast.
+        {
+            let locked = bc.lock().unwrap();
+            locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
+                buffer_name: "shared.rs".to_string(),
+                update_base64: "AAAA".to_string(),
+            });
+        }
+
+        // Client A should receive notification.
+        let notif = read_framed_message(&mut client_a, 1000).await;
+        assert!(notif.is_some(), "client A should receive notification");
+        assert_eq!(notif.unwrap()["method"], "notifications/sync_update");
+
+        // Client B should NOT receive notification.
+        let no_notif = read_framed_message(&mut client_b, 200).await;
+        assert!(
+            no_notif.is_none(),
+            "client B should NOT receive notification"
+        );
+
+        // Client B can still ping.
+        let resp = send_and_recv(
+            &mut client_b,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "$/ping"}),
+        )
+        .await;
+        assert_eq!(resp.result.unwrap(), "pong");
+
+        drop(client_a);
+        drop(client_b);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn push_notification_survives_client_disconnect() {
+        let socket_path = format!("/tmp/mae-test-surv-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let bc = dummy_broadcaster();
+        let server = McpServer::new(&socket_path, tool_tx, bc.clone());
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Client A subscribes.
+        let mut client_a = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        send_and_recv(
+            &mut client_a,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "surv-a"}}
+            }),
+        )
+        .await;
+        send_and_recv(
+            &mut client_a,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "notifications/subscribe",
+                "params": {"types": ["sync_update"]}
+            }),
+        )
+        .await;
+
+        // Client B subscribes.
+        let mut client_b = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        send_and_recv(
+            &mut client_b,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "surv-b"}}
+            }),
+        )
+        .await;
+        send_and_recv(
+            &mut client_b,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "notifications/subscribe",
+                "params": {"types": ["sync_update"]}
+            }),
+        )
+        .await;
+
+        // Drop client A.
+        drop(client_a);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Broadcast after A disconnected.
+        {
+            let locked = bc.lock().unwrap();
+            locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
+                buffer_name: "after.rs".to_string(),
+                update_base64: "BBBB".to_string(),
+            });
+        }
+
+        // Client B should still receive the notification.
+        let notif = read_framed_message(&mut client_b, 1000).await;
+        assert!(
+            notif.is_some(),
+            "client B should receive notification after A disconnected"
+        );
+        assert_eq!(notif.unwrap()["params"]["data"]["buffer_name"], "after.rs");
+
+        drop(client_b);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn backpressure_drops_events_gracefully() {
+        let socket_path = format!("/tmp/mae-test-bp-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let bc = dummy_broadcaster();
+        let server = McpServer::new(&socket_path, tool_tx, bc.clone());
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "bp-test"}}
+            }),
+        )
+        .await;
+        send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "notifications/subscribe",
+                "params": {"types": ["sync_update"]}
+            }),
+        )
+        .await;
+
+        // Blast 200 events (queue capacity is 100).
+        {
+            let locked = bc.lock().unwrap();
+            for i in 0..200 {
+                locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
+                    buffer_name: format!("file-{}.rs", i),
+                    update_base64: "AA==".to_string(),
+                });
+            }
+        }
+
+        // Read as many as we can (up to 100, queue capacity).
+        let mut received = 0;
+        while read_framed_message(&mut client, 200).await.is_some() {
+            received += 1;
+        }
+        assert!(received > 0, "should have received some events");
+        assert!(
+            received <= 100,
+            "should not exceed queue capacity, got {}",
+            received
+        );
+
+        // Server should still be operational.
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "$/ping"}),
+        )
+        .await;
+        assert_eq!(resp.result.unwrap(), "pong");
+
+        drop(client);
         let _ = std::fs::remove_file(&socket_path);
     }
 }

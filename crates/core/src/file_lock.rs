@@ -176,6 +176,82 @@ mod tests {
     }
 
     #[test]
+    fn lock_contention_different_pid() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+        // Use our parent PID — guaranteed to be a live process we can signal.
+        let parent_pid = unsafe { libc::getppid() } as u32;
+        let fake_lock = LockInfo {
+            pid: parent_pid,
+            hostname: "other-host".to_string(),
+            timestamp: 0,
+        };
+        let lpath = lock_path(&file);
+        std::fs::write(&lpath, serde_json::to_string(&fake_lock).unwrap()).unwrap();
+        // Should fail to acquire (parent PID is alive and not our PID)
+        let result = acquire_lock(&file);
+        assert!(result.is_err());
+        let info = result.unwrap_err();
+        assert_eq!(info.pid, parent_pid);
+        // Clean up
+        let _ = std::fs::remove_file(&lpath);
+    }
+
+    #[test]
+    fn lock_release_only_own() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+        // Use parent PID — guaranteed alive and not our PID
+        let parent_pid = unsafe { libc::getppid() } as u32;
+        let fake_lock = LockInfo {
+            pid: parent_pid,
+            hostname: "other".to_string(),
+            timestamp: 0,
+        };
+        let lpath = lock_path(&file);
+        std::fs::write(&lpath, serde_json::to_string(&fake_lock).unwrap()).unwrap();
+        // release_lock should NOT remove it (not our PID)
+        release_lock(&file);
+        assert!(lpath.exists(), "Lock file should persist (not our PID)");
+        // Clean up
+        let _ = std::fs::remove_file(&lpath);
+    }
+
+    #[test]
+    fn lock_survives_concurrent_check() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+        acquire_lock(&file).unwrap();
+        // Multiple threads call check_lock simultaneously
+        let handles: Vec<_> = (0..10)
+            .map(|_| {
+                let f = file.clone();
+                std::thread::spawn(move || check_lock(&f))
+            })
+            .collect();
+        for h in handles {
+            let result = h.join().unwrap();
+            assert!(result.is_none(), "Our own lock should not be reported");
+        }
+        release_lock(&file);
+    }
+
+    #[test]
+    fn lock_path_special_chars() {
+        let p = lock_path(Path::new("/home/user/my project/hello world.rs"));
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/my project/.hello world.rs.mae.lock")
+        );
+        // Unicode
+        let p2 = lock_path(Path::new("/home/user/src/日本語.rs"));
+        assert_eq!(p2, PathBuf::from("/home/user/src/.日本語.rs.mae.lock"));
+    }
+
+    #[test]
     fn content_hash_on_buffer() {
         let tmp = TempDir::new().unwrap();
         let file = tmp.path().join("hash_test.txt");

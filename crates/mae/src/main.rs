@@ -11,6 +11,7 @@ mod lsp_bridge;
 pub mod pkg;
 mod shell_keys;
 mod shell_lifecycle;
+mod sync_broadcast;
 mod terminal_loop;
 mod watchdog;
 
@@ -454,6 +455,7 @@ fn main() -> io::Result<()> {
         all_tools,
         permission_policy,
         mcp_client_mgr,
+        sync_broadcaster,
     ) = rt.block_on(async {
         let (ai_event_rx, ai_event_tx, ai_command_tx) = setup_ai(&editor);
         info!(
@@ -534,6 +536,8 @@ fn main() -> io::Result<()> {
         cleanup_stale_mcp_sockets();
         let mcp_socket_path = format!("/tmp/mae-{}.sock", std::process::id());
         let (mcp_tool_tx, mcp_tool_rx) = tokio::sync::mpsc::channel::<mae_mcp::McpToolRequest>(16);
+        let sync_broadcaster: mae_mcp::broadcast::SharedBroadcaster =
+            std::sync::Arc::new(std::sync::Mutex::new(mae_mcp::broadcast::EventBroadcaster::new()));
         {
             let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = all_tools
                 .iter()
@@ -543,7 +547,7 @@ fn main() -> io::Result<()> {
                     input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
                 })
                 .collect();
-            let server = mae_mcp::McpServer::new(&mcp_socket_path, mcp_tool_tx);
+            let server = mae_mcp::McpServer::new(&mcp_socket_path, mcp_tool_tx, sync_broadcaster.clone());
             tokio::spawn(server.run(mcp_tools));
             info!(socket = %mcp_socket_path, "MCP server started");
         }
@@ -561,6 +565,7 @@ fn main() -> io::Result<()> {
             all_tools,
             permission_policy,
             mcp_client_mgr,
+            sync_broadcaster,
         )
     });
 
@@ -620,6 +625,7 @@ fn main() -> io::Result<()> {
                 permission_policy,
                 app_config,
                 mcp_client_mgr,
+                sync_broadcaster,
             );
         }
     }
@@ -641,6 +647,7 @@ fn main() -> io::Result<()> {
         &permission_policy,
         &app_config,
         &mcp_client_mgr,
+        &sync_broadcaster,
     ))?;
 
     let _ = std::fs::remove_file(&mcp_socket_path);
@@ -678,6 +685,7 @@ fn run_gui(
     permission_policy: mae_ai::PermissionPolicy,
     app_config: config::Config,
     mcp_client_mgr: ai_event_handler::McpClientMgrRef,
+    sync_broadcaster: mae_mcp::broadcast::SharedBroadcaster,
 ) -> io::Result<()> {
     use gui_event::MaeEvent;
     use std::sync::atomic::AtomicBool;
@@ -754,6 +762,7 @@ fn run_gui(
         mcp_socket_path,
         app_config,
         mcp_client_mgr,
+        sync_broadcaster,
         ctrl_held: false,
         alt_held: false,
         shift_held: false,
@@ -892,6 +901,7 @@ struct GuiApp {
     mcp_socket_path: String,
     app_config: config::Config,
     mcp_client_mgr: ai_event_handler::McpClientMgrRef,
+    sync_broadcaster: mae_mcp::broadcast::SharedBroadcaster,
 
     // Input state
     ctrl_held: bool,
@@ -1108,6 +1118,8 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.editor.input_lock = mae_core::InputLock::None;
                     self.last_mcp_activity = None;
                 }
+                // Drain sync updates immediately after MCP-driven edits.
+                sync_broadcast::drain_and_broadcast(&mut self.editor, &self.sync_broadcaster);
                 self.dirty = true;
             }
             MaeEvent::ShellTick => {
@@ -1160,6 +1172,8 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.editor.idle_work();
                     // Don't set dirty — idle work shouldn't trigger redraws.
                 }
+                // Drain sync updates on idle tick (~100ms max latency for keyboard edits).
+                sync_broadcast::drain_and_broadcast(&mut self.editor, &self.sync_broadcaster);
             }
         }
     }

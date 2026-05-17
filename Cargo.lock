@@ -2093,6 +2093,7 @@ dependencies = [
  "mae-renderer",
  "mae-scheme",
  "mae-shell",
+ "mae-sync",
  "semver",
  "serde",
  "serde_json",

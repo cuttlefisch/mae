@@ -844,6 +844,36 @@ fn static_nodes() -> Vec<Node> {
             GUIDE_EXTENSION_AUTHORING,
         )
         .with_tags(["modules", "guide", "extensibility"]),
+        Node::new(
+            "concept:sync-engine",
+            "Concept: Sync Engine (yrs)",
+            NodeKind::Concept,
+            CONCEPT_SYNC_ENGINE,
+        )
+        .with_tags(["architecture", "sync", "crdt"])
+        .with_aliases(["yrs", "yjs", "crdt", "collaboration"]),
+        Node::new(
+            "concept:collaborative-state",
+            "Concept: Collaborative State Engine",
+            NodeKind::Concept,
+            CONCEPT_COLLABORATIVE_STATE,
+        )
+        .with_tags(["architecture", "sync", "vision"])
+        .with_aliases(["collab", "multiplayer", "real-time"]),
+        Node::new(
+            "concept:adr-text-sync",
+            "ADR-002: Text Sync (Accepted)",
+            NodeKind::Concept,
+            CONCEPT_ADR_TEXT_SYNC,
+        )
+        .with_tags(["adr", "sync", "architecture"]),
+        Node::new(
+            "concept:adr-kb-crdt",
+            "ADR-005: KB as CRDT",
+            NodeKind::Concept,
+            CONCEPT_ADR_KB_CRDT,
+        )
+        .with_tags(["adr", "kb", "sync", "architecture"]),
     ]
 }
 
@@ -893,6 +923,10 @@ mod tests {
             "concept:kb-workflows",
             "concept:kb-vs-alternatives",
             "concept:dailies",
+            "concept:sync-engine",
+            "concept:collaborative-state",
+            "concept:adr-text-sync",
+            "concept:adr-kb-crdt",
             "guide:extension-authoring",
             "lesson:kb-import-roam",
             "key:leader-keys",

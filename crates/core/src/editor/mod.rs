@@ -58,7 +58,8 @@ pub use marks::Mark;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use crate::buffer::Buffer;
 
@@ -1049,6 +1050,9 @@ pub struct Editor {
     /// Pending package management commands (sync, upgrade, doctor).
     /// Drained by the binary crate in the event loop.
     pub pending_pkg_commands: Vec<String>,
+    /// Paths for which this editor instance holds advisory file locks.
+    /// Locks are acquired on file open and released on buffer close or exit.
+    pub locked_files: HashSet<PathBuf>,
 }
 
 impl Default for Editor {
@@ -1344,6 +1348,7 @@ impl Editor {
             pending_module_reloads: Vec::new(),
             pending_pkg_commands: Vec::new(),
             pending_git_diff: None,
+            locked_files: HashSet::new(),
         }
     }
 
