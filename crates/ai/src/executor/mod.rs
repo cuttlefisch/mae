@@ -10,6 +10,7 @@ mod permission;
 pub mod sandbox;
 pub(crate) mod self_test;
 mod shell_exec;
+mod sync_exec;
 mod tool_dispatch;
 
 #[cfg(test)]

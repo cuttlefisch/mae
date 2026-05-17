@@ -2112,6 +2112,7 @@ dependencies = [
  "chrono",
  "glob",
  "mae-core",
+ "mae-sync",
  "reqwest",
  "serde",
  "serde_json",

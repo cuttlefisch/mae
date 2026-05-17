@@ -404,7 +404,7 @@ async fn handle_request(
             JsonRpcResponse::success(id, serde_json::json!({ "tools": tools }))
         }
         // --- Sync protocol methods ---
-        "sync/enable" | "sync/state_vector" | "sync/update" => {
+        "sync/enable" | "sync/state_vector" | "sync/update" | "sync/full_state" => {
             let params = request.params.unwrap_or(serde_json::Value::Null);
             let (reply_tx, reply_rx) = oneshot::channel();
             let req = McpToolRequest {
