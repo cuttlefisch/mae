@@ -6,6 +6,24 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- CI code-map job — check freshness instead of auto-push ([5e7686e](https://github.com/cuttlefisch/mae/commit/5e7686e066c002db0c9b5757e2b3614e8d579e5e))
+- Run code-map freshness check on PRs too, not just main pushes ([1ea3dc7](https://github.com/cuttlefisch/mae/commit/1ea3dc762d736d068d8586ea096a01b1dcf16fc2))
+- Remove dead code-map auto-push from release workflow ([9445297](https://github.com/cuttlefisch/mae/commit/9445297be8bdbc864c735331be9303f4c642ce64))
+
+### Refactor
+
+- Extract badges job to own workflow (main-push only) ([5521533](https://github.com/cuttlefisch/mae/commit/5521533562bda62965cab5b9fa35804c782c319f))
+
+## [0.10.0] - 2026-05-15
+
+### Miscellaneous
+
+- Bump version to 0.10.0 ([2d94d0e](https://github.com/cuttlefisch/mae/commit/2d94d0e12d22bcf111e9496b5e3222fc2d770e35))
+
+## [0.9.0] - 2026-05-14
+
+### Bug Fixes
+
 - Resolve splash-art image paths relative to module dir ([71f2fe1](https://github.com/cuttlefisch/mae/commit/71f2fe1d597a40ade3e1d385a9e08bc1ca7f3c0f))
 - Splash screen polish — centering, unicode width, mode guard ([87f10fb](https://github.com/cuttlefisch/mae/commit/87f10fb67084299e03a78b425077075123a0e7ae))
 - Add missing splash options + image_natural_size method ([f11d48f](https://github.com/cuttlefisch/mae/commit/f11d48fa9d0a5c0a019e33af7a46db17ab49abbd))
@@ -22,12 +40,15 @@ All notable changes to this project will be documented in this file.
 - MCP client, tool search, model exam, verifier agent + fix shell buffer corruption ([8ac8803](https://github.com/cuttlefisch/mae/commit/8ac8803d1ae356401f51ea6618f072cad065f7cb))
 - Model exam persistence, docs refresh, CI fix ([496ef35](https://github.com/cuttlefisch/mae/commit/496ef35771248b46f79b4c79b24053bc37f0332b))
 - Unified test system (sandbox+grading) + LSP readiness probe ([bc201e9](https://github.com/cuttlefisch/mae/commit/bc201e9abe70b7ce337b03cec4c67857e9f2defe))
+- KB node creation UX — org-roam parity (SPC n c, SPC n i) ([7d4a0f3](https://github.com/cuttlefisch/mae/commit/7d4a0f37c242e78f0906b2eb5479f60659fd6e58))
+- Replaceable window policy + buffer type audit (Doom real-buffer-p parity) ([eb751b9](https://github.com/cuttlefisch/mae/commit/eb751b909b86f259f1ca7b5264595c83194e9dfc))
 
 ### Miscellaneous
 
 - Update Cargo.lock after main backmerge ([d9c8279](https://github.com/cuttlefisch/mae/commit/d9c827951e6eb42413570cfdb179c099c8d6cf5d))
 - Regenerate code map after project detection changes ([057a07c](https://github.com/cuttlefisch/mae/commit/057a07cb77bd2a50724ba0ba7720282451ff51ba))
 - Pre-release polish — docs, fragility markers, module READMEs ([511da23](https://github.com/cuttlefisch/mae/commit/511da23e3718537c17d3d5d5640b749dc3a06cf7))
+- Bump version to 0.9.0 ([048337f](https://github.com/cuttlefisch/mae/commit/048337f6d76cae70ef9558d64ad30dbd25b63c00))
 
 ## [0.8.3] - 2026-05-13
 

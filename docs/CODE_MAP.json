@@ -2889,6 +2889,18 @@
       "doc": "Insert org-style link to a KB node at cursor (SPC n i)"
     },
     {
+      "name": "capture-finalize",
+      "doc": "Save note and return from capture (C-c C-c)"
+    },
+    {
+      "name": "capture-abort",
+      "doc": "Abort capture, delete note (C-c C-k)"
+    },
+    {
+      "name": "kb-insert-link",
+      "doc": "Insert org-style link to a KB node at cursor (SPC n i)"
+    },
+    {
       "name": "kb-instances",
       "doc": "Show all registered KB federation instances (SPC n I)"
     },

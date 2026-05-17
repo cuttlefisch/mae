@@ -149,86 +149,19 @@ jobs:
   code-map:
     name: code-map freshness
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Regenerate code-map if stale
+      - name: Check code-map freshness
         run: |
           make code-map
           if git diff --quiet docs/CODE_MAP.md docs/CODE_MAP.json; then
-            echo "Code map is up to date."
+            echo "✅ Code map is up to date."
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add docs/CODE_MAP.md docs/CODE_MAP.json
-            git commit -m "docs: auto-update code-map [skip ci]"
-            git push
+            echo "❌ Code map is stale. Run 'make code-map' and commit before merging."
+            git diff --stat docs/CODE_MAP.md docs/CODE_MAP.json
+            exit 1
           fi
-
-  badges:
-    name: update badges
-    runs-on: ubuntu-latest
-    needs: [check]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Count tests
-        id: tests
-        run: |
-          OUTPUT=$(cargo test --workspace --exclude mae-gui --exclude mae-test-fixtures 2>&1)
-          TOTAL=$(echo "$OUTPUT" | grep -oP '\d+ passed' | awk '{s+=$1} END {print s}')
-          FORMATTED=$(printf "%'d" "$TOTAL")
-          echo "count=$FORMATTED" >> $GITHUB_OUTPUT
-
-      - name: Count lines of code
-        id: loc
-        run: |
-          cargo install tokei --locked 2>/dev/null || true
-          JSON=$(tokei crates/ modules/ scheme/ -t Rust,Scheme,TOML -o json)
-          CODE=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['Total']['code'])")
-          echo "count=~$((CODE / 1000))k" >> $GITHUB_OUTPUT
-
-      - name: Validate badge config
-        run: |
-          if [ -z "${{ secrets.MAE_BADGE_TOKEN }}" ]; then
-            echo "::warning::MAE_BADGE_TOKEN secret is not set — skipping badge updates"
-            echo "skip=true" >> $GITHUB_OUTPUT
-          fi
-          if [ -z "${{ vars.MAE_BADGE_GIST }}" ]; then
-            echo "::warning::MAE_BADGE_GIST variable is not set — skipping badge updates"
-            echo "skip=true" >> $GITHUB_OUTPUT
-          fi
-        id: badge_check
-
-      - name: Update test badge
-        if: steps.badge_check.outputs.skip != 'true'
-        continue-on-error: true
-        uses: schneegans/dynamic-badges-action@v1.7.0
-        with:
-          auth: ${{ secrets.MAE_BADGE_TOKEN }}
-          gistID: ${{ vars.MAE_BADGE_GIST }}
-          filename: mae-tests.json
-          label: tests
-          message: "${{ steps.tests.outputs.count }} passing"
-          color: brightgreen
-
-      - name: Update LOC badge
-        if: steps.badge_check.outputs.skip != 'true'
-        continue-on-error: true
-        uses: schneegans/dynamic-badges-action@v1.7.0
-        with:
-          auth: ${{ secrets.MAE_BADGE_TOKEN }}
-          gistID: ${{ vars.MAE_BADGE_GIST }}
-          filename: mae-loc.json
-          label: lines of code
-          message: "${{ steps.loc.outputs.count }}"
-          color: informational
