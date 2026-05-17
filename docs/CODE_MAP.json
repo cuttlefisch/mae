@@ -12,7 +12,8 @@
         "mae-mcp",
         "mae-renderer",
         "mae-scheme",
-        "mae-shell"
+        "mae-shell",
+        "mae-sync"
       ],
       "public_items": [
         {
@@ -24,7 +25,8 @@
     "mae-ai": {
       "path": "crates/ai/src/lib.rs",
       "dependencies": [
-        "mae-core"
+        "mae-core",
+        "mae-sync"
       ],
       "public_items": [
         {
@@ -193,7 +195,8 @@
         "mae-lookup",
         "mae-make",
         "mae-snippets",
-        "mae-spell"
+        "mae-spell",
+        "mae-sync"
       ],
       "public_items": [
         {
@@ -266,6 +269,10 @@
         },
         {
           "name": "file_browser",
+          "kind": "mod"
+        },
+        {
+          "name": "file_lock",
           "kind": "mod"
         },
         {
@@ -358,6 +365,10 @@
         },
         {
           "name": "table",
+          "kind": "mod"
+        },
+        {
+          "name": "text_utils",
           "kind": "mod"
         },
         {
@@ -671,6 +682,10 @@
       "dependencies": [],
       "public_items": [
         {
+          "name": "broadcast",
+          "kind": "mod"
+        },
+        {
           "name": "client",
           "kind": "mod"
         },
@@ -680,6 +695,10 @@
         },
         {
           "name": "protocol",
+          "kind": "mod"
+        },
+        {
+          "name": "session",
           "kind": "mod"
         },
         {
@@ -693,6 +712,18 @@
         {
           "name": "McpServer",
           "kind": "struct"
+        },
+        {
+          "name": "write_framed",
+          "kind": "fn"
+        },
+        {
+          "name": "read_message",
+          "kind": "fn"
+        },
+        {
+          "name": "handle_request",
+          "kind": "fn"
         }
       ]
     },
@@ -768,6 +799,36 @@
         {
           "name": "checker",
           "kind": "mod"
+        }
+      ]
+    },
+    "mae-state-server": {
+      "path": "crates/state-server/src/main.rs",
+      "dependencies": [
+        "mae-mcp",
+        "mae-sync"
+      ],
+      "public_items": []
+    },
+    "mae-sync": {
+      "path": "crates/sync/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "encoding",
+          "kind": "mod"
+        },
+        {
+          "name": "kb",
+          "kind": "mod"
+        },
+        {
+          "name": "text",
+          "kind": "mod"
+        },
+        {
+          "name": "SyncError",
+          "kind": "enum"
         }
       ]
     }
@@ -907,6 +968,10 @@
     },
     {
       "name": "undefine-key!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "set-group-name",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -2875,18 +2940,6 @@
     {
       "name": "kb-audit",
       "doc": "Run KB audit report (SPC n H a)"
-    },
-    {
-      "name": "capture-finalize",
-      "doc": "Save note and return from capture (C-c C-c)"
-    },
-    {
-      "name": "capture-abort",
-      "doc": "Abort capture, delete note (C-c C-k)"
-    },
-    {
-      "name": "kb-insert-link",
-      "doc": "Insert org-style link to a KB node at cursor (SPC n i)"
     },
     {
       "name": "capture-finalize",

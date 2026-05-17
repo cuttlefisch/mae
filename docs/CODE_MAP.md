@@ -16,7 +16,9 @@ graph TD
     mae --> mae_renderer
     mae --> mae_scheme
     mae --> mae_shell
+    mae --> mae_sync
     mae_ai --> mae_core
+    mae_ai --> mae_sync
     mae_babel[mae-babel]
     mae_core --> mae_babel
     mae_core --> mae_export
@@ -26,6 +28,7 @@ graph TD
     mae_core --> mae_make
     mae_core --> mae_snippets
     mae_core --> mae_spell
+    mae_core --> mae_sync
     mae_dap --> mae_core
     mae_export --> mae_babel
     mae_format[mae-format]
@@ -43,6 +46,9 @@ graph TD
     mae_shell[mae-shell]
     mae_snippets[mae-snippets]
     mae_spell[mae-spell]
+    mae_state_server --> mae_mcp
+    mae_state_server --> mae_sync
+    mae_sync[mae-sync]
 ```
 
 ## mae
@@ -128,6 +134,7 @@ Source: `crates/core/src/lib.rs`
 | `editor` | mod |
 | `event_record` | mod |
 | `file_browser` | mod |
+| `file_lock` | mod |
 | `file_picker` | mod |
 | `file_tree` | mod |
 | `git_status` | mod |
@@ -151,6 +158,7 @@ Source: `crates/core/src/lib.rs`
 | `swap` | mod |
 | `syntax` | mod |
 | `table` | mod |
+| `text_utils` | mod |
 | `theme` | mod |
 | `visual_buffer` | mod |
 | `window` | mod |
@@ -276,12 +284,17 @@ Source: `crates/mcp/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `broadcast` | mod |
 | `client` | mod |
 | `client_mgr` | mod |
 | `protocol` | mod |
+| `session` | mod |
 | `McpToolRequest` | struct |
 | `McpToolResult` | struct |
 | `McpServer` | struct |
+| `write_framed` | fn |
+| `read_message` | fn |
+| `handle_request` | fn |
 
 ## mae-renderer
 
@@ -328,6 +341,21 @@ Source: `crates/spell/src/lib.rs`
 |------|------|
 | `checker` | mod |
 
+## mae-state-server
+
+Source: `crates/state-server/src/main.rs`
+
+## mae-sync
+
+Source: `crates/sync/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `encoding` | mod |
+| `kb` | mod |
+| `text` | mod |
+| `SyncError` | enum |
+
 ## Scheme API
 
 ### Primitives (Rust -> Scheme)
@@ -368,6 +396,7 @@ Source: `crates/spell/src/lib.rs`
 | `buffer-redo` | `crates/scheme/src/runtime.rs` |
 | `switch-to-buffer` | `crates/scheme/src/runtime.rs` |
 | `undefine-key!` | `crates/scheme/src/runtime.rs` |
+| `set-group-name` | `crates/scheme/src/runtime.rs` |
 | `read-file` | `crates/scheme/src/runtime.rs` |
 | `file-exists?` | `crates/scheme/src/runtime.rs` |
 | `list-directory` | `crates/scheme/src/runtime.rs` |

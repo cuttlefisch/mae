@@ -87,7 +87,7 @@ jobs:
         run: cargo test --package mae-core --lib -- content_hash file_lock --test-threads=1
         timeout-minutes: 3
       - name: State server tests
-        run: cargo test --package mae-state-server --lib -- --test-threads=1
+        run: cargo test --package mae-state-server -- --test-threads=1
         timeout-minutes: 3
       - name: State server check-config
         run: cargo run --package mae-state-server -- --check-config
