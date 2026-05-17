@@ -214,10 +214,10 @@ async fn handle_client(
                 }
             }
             Some(event) = event_rx.recv() => {
-                if write_notification(&mut writer, &event, write_timeout).await.is_err() {
+                session.events_delivered += 1;
+                if write_notification(&mut writer, &event, session.events_delivered, write_timeout).await.is_err() {
                     break;
                 }
-                session.events_delivered += 1;
             }
         }
     }
@@ -227,16 +227,18 @@ async fn handle_client(
 }
 
 /// Write a JSON-RPC notification (no `id` field) with Content-Length framing.
+/// Includes a per-client `seq` number for event ordering.
 async fn write_notification(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
     event: &broadcast::EditorEvent,
+    seq: u64,
     timeout: std::time::Duration,
 ) -> Result<(), std::io::Error> {
     let method = format!("notifications/{}", event.event_type());
     let notification = serde_json::json!({
         "jsonrpc": "2.0",
         "method": method,
-        "params": event,
+        "params": { "seq": seq, "event": event },
     });
     let body = serde_json::to_vec(&notification)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -1231,8 +1233,12 @@ mod tests {
         );
         assert_eq!(notif["jsonrpc"], "2.0");
         assert_eq!(notif["method"], "notifications/sync_update");
-        assert_eq!(notif["params"]["data"]["buffer_name"], "test.rs");
-        assert_eq!(notif["params"]["data"]["update_base64"], "AQIDBA==");
+        assert!(notif["params"]["seq"].as_u64().unwrap() > 0);
+        assert_eq!(notif["params"]["event"]["data"]["buffer_name"], "test.rs");
+        assert_eq!(
+            notif["params"]["event"]["data"]["update_base64"],
+            "AQIDBA=="
+        );
 
         drop(client);
         let _ = std::fs::remove_file(&socket_path);
@@ -1441,7 +1447,10 @@ mod tests {
             notif.is_some(),
             "client B should receive notification after A disconnected"
         );
-        assert_eq!(notif.unwrap()["params"]["data"]["buffer_name"], "after.rs");
+        assert_eq!(
+            notif.unwrap()["params"]["event"]["data"]["buffer_name"],
+            "after.rs"
+        );
 
         drop(client_b);
         let _ = std::fs::remove_file(&socket_path);

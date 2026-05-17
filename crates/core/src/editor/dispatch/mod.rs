@@ -501,6 +501,15 @@ impl Editor {
         if idx >= self.buffers.len() {
             return;
         }
+        // Warn if sync updates are being dropped — the broadcaster drains
+        // every ~16-100ms, so this should be rare in practice.
+        if !self.buffers[idx].pending_sync_updates.is_empty() {
+            tracing::warn!(
+                buffer = %self.buffers[idx].name,
+                pending = self.buffers[idx].pending_sync_updates.len(),
+                "dropping pending sync updates on buffer close"
+            );
+        }
         self.lsp_notify_did_close_for_buffer(idx);
         self.buffers.remove(idx);
         self.notify_buffer_removed(idx);

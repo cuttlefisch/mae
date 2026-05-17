@@ -551,14 +551,9 @@ impl Buffer {
 
     /// Replace the entire rope content (used by `:recover` from swap file).
     pub fn replace_rope(&mut self, rope: Rope) {
-        if let Some(sync) = &self.sync_doc {
-            let client_id = sync.doc().client_id();
-            let content = rope.to_string();
-            self.sync_doc = Some(mae_sync::text::TextSync::with_client_id(
-                &content, client_id,
-            ));
-        }
         self.rope = rope;
+        // Rebuild sync doc and queue broadcast if enabled.
+        self.sync_rebuild_from_rope();
         self.generation += 1;
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -613,6 +608,8 @@ impl Buffer {
         let content = fs::read_to_string(&path)?;
         self.content_hash = Some(compute_content_hash(&content));
         self.rope = Rope::from_str(&content);
+        // Rebuild sync doc if enabled — keeps yrs in sync with rope.
+        self.sync_rebuild_from_rope();
         self.modified = false;
         self.changed_lines.clear();
         self.file_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
@@ -634,10 +631,8 @@ impl Buffer {
     /// like *Messages*. Clears undo history.
     pub fn replace_contents(&mut self, text: &str) {
         self.rope = Rope::from_str(text);
-        if let Some(sync) = &self.sync_doc {
-            let client_id = sync.doc().client_id();
-            self.sync_doc = Some(mae_sync::text::TextSync::with_client_id(text, client_id));
-        }
+        // Rebuild sync doc and queue broadcast if enabled.
+        self.sync_rebuild_from_rope();
         self.undo_stack.clear();
         self.redo_stack.clear();
     }
@@ -909,8 +904,14 @@ impl Buffer {
         }
     }
 
-    /// Rebuild sync_doc from current rope state (used after undo/redo).
-    /// Generates a full-state update for broadcast.
+    /// Rebuild sync_doc from current rope state (used after undo/redo,
+    /// reload_from_disk, replace_rope, replace_contents).
+    ///
+    /// Creates a fresh yrs Doc, which discards CRDT history (vector clock,
+    /// tombstones). This is safe for single-client and pull-based sync, but
+    /// may cause duplicate/lost content with concurrent multi-client edits.
+    /// TODO: compute rope diff and apply as incremental yrs edits for true
+    /// CRDT-safe undo (requires per-client UndoManager — Phase E).
     fn sync_rebuild_from_rope(&mut self) {
         if let Some(sync) = &self.sync_doc {
             let client_id = sync.doc().client_id();

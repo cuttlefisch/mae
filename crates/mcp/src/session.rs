@@ -31,6 +31,9 @@ pub struct ClientSession {
     /// Whether the client has completed the initialize handshake.
     pub initialized: bool,
     /// Event types this client has subscribed to.
+    /// Note: this is an informational copy for `$/resync`/`$/health` responses.
+    /// The EventBroadcaster holds the authoritative subscription list for
+    /// actual event delivery. Both are updated in `notifications/subscribe`.
     pub subscriptions: HashSet<String>,
     /// When this client connected.
     pub connected_at: Instant,
