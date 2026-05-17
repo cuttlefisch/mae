@@ -41,9 +41,9 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links | `rusqlite`, `tree-sitter`, `tree-sitter-org` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
-| `mae-mcp` | MCP server — Unix socket, JSON-RPC, multi-client, stdio shim | `tokio`, `serde_json` |
-| `mae-sync` | (Planned) Collaborative state — yrs CRDT, ropey bridge, awareness | `yrs`, `serde` |
-| `mae-state-server` | (Future) State server for multi-client editing | `tokio`, `serde_json` |
+| `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O | `tokio`, `serde_json` |
+| `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers | `yrs`, `serde`, `base64` |
+| `mae-state-server` | Standalone collab state server — TCP sync, WAL persistence, per-doc locking | `mae-mcp`, `mae-sync`, `rusqlite`, `tokio` |
 | `mae` | Binary crate — CLI entry point, config loading, event loops | `clap`, `tokio` |
 
 ## Architecture Principles
@@ -388,11 +388,42 @@ Collaborative state uses **yrs** (Yjs Rust port, YATA algorithm). Decision ratio
 - Proven at scale: Notion (200M+ users), Excalidraw, TLDraw
 - Dual structure: yrs is source of truth, ropey is rendering mirror
 
-Transport remains JSON-RPC 2.0 (extend current MCP). Planned upgrade path:
-msgpack wire format (Content-Type negotiation), then TCP for multi-machine.
+Transport: JSON-RPC 2.0 with Content-Length framing over TCP (port 9473) and Unix sockets.
+Planned upgrade path: msgpack wire format (Content-Type negotiation).
 
-Future `mae-sync` crate will wrap yrs with MAE-specific document schemas
-and provide the ropey bridge (~200 lines). See ADR-006 for full architecture.
+`mae-sync` wraps yrs with MAE-specific document schemas and provides the
+ropey bridge. See ADR-006 for full architecture.
+
+### State Server (`mae-state-server`)
+
+Standalone binary for multi-machine collaborative editing. Manages CRDT
+documents over TCP with WAL-based SQLite persistence.
+
+**Usage:**
+```bash
+mae-state-server                    # listen on 127.0.0.1:9473
+mae-state-server --bind 0.0.0.0:9473 --unix-socket /tmp/mae-collab.sock
+mae-state-server --check-config     # validate configuration
+mae-state-server doctor             # run diagnostics
+```
+
+**Architecture:**
+- Per-document locking (`RwLock<HashMap<String, Arc<Mutex<DocEntry>>>>`)
+- WAL-first persistence: append to SQLite WAL before in-memory apply
+- Compaction: periodic snapshot + WAL trim (configurable threshold, default 500)
+- Recovery: load snapshot + replay WAL tail on startup
+- Transport-generic I/O: `mae_mcp::{read_message, write_framed, handle_request}`
+
+**Config:** `~/.config/mae/state-server.toml` (TOML, XDG-compliant)
+
+**Sync protocol methods:** `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`, `docs/list`, `docs/content`
+
+**Security (v1):** No authentication. TCP is open. For trusted LAN use only.
+Auth roadmap: PSK → SSH key exchange → OAuth/OIDC (via `initialize` params extension).
+
+**Systemd:** `assets/mae-state-server.service` (user unit)
+
+**Build:** `make build-state-server`, `make install-state-server`
 
 ## API Stability
 

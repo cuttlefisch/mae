@@ -1,0 +1,41 @@
+# Docker Compose for state-server network E2E tests.
+#
+# Usage:
+#   docker compose -f docker-compose.test-network.yml run --rm --build test
+#
+# Starts a mae-state-server, runs E2E tests against it, tears down.
+
+services:
+  state-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    command: ["cargo", "run", "--release", "--package", "mae-state-server", "--", "--bind", "0.0.0.0:9473"]
+    ports:
+      - "9473"
+    healthcheck:
+      test: ["CMD-SHELL", "echo '{}' | timeout 2 nc -w1 localhost 9473 || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    networks:
+      - mae-test
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    depends_on:
+      state-server:
+        condition: service_healthy
+    environment:
+      MAE_STATE_SERVER: "state-server:9473"
+    command: ["cargo", "test", "--package", "mae-state-server", "--test", "network_e2e", "--", "--test-threads=1"]
+    networks:
+      - mae-test
+
+networks:
+  mae-test:
+    driver: bridge

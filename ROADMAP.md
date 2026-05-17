@@ -46,17 +46,20 @@
 ### Near-term: Server-Client Architecture
 
 - [ ] **Multi-AI file contention protocol**: When multiple AI-assisted editors (MAE, VS Code + Copilot, Cursor, aider) operate on the same project simultaneously, file writes race, LSP state goes stale, and undo histories diverge. Short-term: git worktree isolation (each agent in its own worktree, merge at commit time). Medium-term: advisory file locks (`.mae.lock`), inotify coordination to detect external changes and pause AI operations. Long-term: canonical state server (see below).
-- [ ] **State server extraction** (`mae-state-server` crate): Extract Editor state into an RPC server process. Thin renderer clients own only local UI state (viewport, scroll, selection). Enables multi-window, multi-user, and headless AI-only sessions. Extend existing MCP JSON-RPC protocol with `editor_state_snapshot`, `editor_apply_command`, `editor_subscribe` methods.
+- [x] **State server v1** (`mae-state-server` binary): Standalone CRDT sync server over TCP (port 9473). Per-document locking, WAL-first SQLite persistence, periodic compaction, transport-generic I/O (reuses `mae_mcp` primitives). Sync protocol: `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`. No auth (trusted LAN only).
+- [ ] **State server v2** (Phase E): Storage backends (Postgres, S3+Postgres), auth tiers (PSK → SSH → OAuth/OIDC), LRU document eviction, update compression (msgpack), multi-process sharding.
 - [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
   - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
   - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
   - *Tier 3* (100+ users, 500K+ nodes): PostgreSQL + pgvector, write sharding by namespace, event sourcing for real-time sync. ~3 months.
   - Key bottlenecks: SQLite single-writer ceiling (~50 writes/sec), FTS5 index size at scale (~400MB at 100K nodes), network latency for RAG workflows (5-10 KB queries per AI turn × 30 concurrent agents = ~600 node fetches/sec peak).
-- [ ] **CRDT collaborative editing (yrs/YATA)**: Sync engine chosen: yrs (Yjs Rust port). Per-user cursors via Awareness protocol, per-user undo via yrs UndoManager, conflict-free merge for concurrent AI and human edits. Dual structure: yrs YText + ropey mirror. See ADR-002 (accepted), ADR-005 (KB CRDT), ADR-006 (collaborative state engine).
-  - Phase A: `mae-sync` crate (yrs dependency, document schemas, ropey bridge)
-  - Phase B: Buffer integration (sync_doc field, local edits → yrs transactions)
-  - Phase C: MCP sync methods (state_vector, apply_update, awareness)
-  - Phase D: KB nodes as yrs documents (offline editing, P2P federation)
+- [x] **CRDT collaborative editing (yrs/YATA)**: Sync engine: yrs (Yjs Rust port). Per-user cursors via Awareness protocol, per-user undo via yrs UndoManager, conflict-free merge for concurrent AI and human edits. Dual structure: yrs YText + ropey mirror. See ADR-002, ADR-005, ADR-006.
+  - Phase A: `mae-sync` crate (yrs dependency, document schemas, ropey bridge) ✅
+  - Phase B: Buffer integration (sync_doc field, local edits → yrs transactions) ✅
+  - Phase C: MCP sync methods (state_vector, apply_update) ✅
+  - Phase D: Push-based sync event broadcasting ✅
+  - Phase E (state-server): TCP transport, WAL persistence, per-doc locking ✅
+  - Phase F: Awareness protocol, per-user undo, multi-machine sync
 
 ### KB Enterprise Readiness & Hardening
 

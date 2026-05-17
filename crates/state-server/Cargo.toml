@@ -1,0 +1,27 @@
+[package]
+name = "mae-state-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "MAE collaborative state server — CRDT sync over TCP"
+
+[dependencies]
+mae-mcp = { path = "../mcp" }
+mae-sync = { path = "../sync" }
+tokio = { version = "1", features = ["full", "signal"] }
+rusqlite = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.1"
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "6"
+async-trait = "0.1"
+
+[[bin]]
+name = "mae-state-server"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"

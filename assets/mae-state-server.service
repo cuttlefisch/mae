@@ -1,0 +1,23 @@
+[Unit]
+Description=MAE Collaborative State Server
+Documentation=https://github.com/cuttlefisch/mae
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/mae-state-server start
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/mae/state-server
+PrivateTmp=yes
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

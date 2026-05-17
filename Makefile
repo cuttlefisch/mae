@@ -44,7 +44,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check
+.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-completions docker-network-test
 
 # Default target: release build
 all: build
@@ -228,6 +228,35 @@ doctor:
 ## clean: remove all build artefacts
 clean:
 	$(CARGO) clean
+
+## build-state-server: build the collaborative state server
+build-state-server:
+	$(CARGO) build --release --package mae-state-server
+
+## install-state-server: build + install mae-state-server to PREFIX
+install-state-server: build-state-server
+	@mkdir -p $(PREFIX)
+	@install -m 755 $(TARGET_DIR)/release/mae-state-server $(PREFIX)/mae-state-server
+	@echo "Installed mae-state-server -> $(PREFIX)/mae-state-server"
+
+## install-completions: install shell completions for mae-state-server
+install-completions:
+	@if [ -d /usr/share/bash-completion/completions ]; then \
+		install -m 644 crates/state-server/completions/mae-state-server.bash /usr/share/bash-completion/completions/mae-state-server; \
+		echo "Installed bash completions"; \
+	fi
+	@if [ -d /usr/share/zsh/site-functions ]; then \
+		install -m 644 crates/state-server/completions/mae-state-server.zsh /usr/share/zsh/site-functions/_mae-state-server; \
+		echo "Installed zsh completions"; \
+	fi
+	@if [ -d /usr/share/fish/vendor_completions.d ]; then \
+		install -m 644 crates/state-server/completions/mae-state-server.fish /usr/share/fish/vendor_completions.d/mae-state-server.fish; \
+		echo "Installed fish completions"; \
+	fi
+
+## docker-network-test: run state-server network E2E tests in Docker
+docker-network-test:
+	docker compose -f docker-compose.test-network.yml run --rm --build test
 
 ## docker-ci: run full CI pipeline in a container (no local toolchain needed)
 docker-ci:

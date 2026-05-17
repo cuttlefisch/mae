@@ -37,6 +37,8 @@ COPY crates/kb/Cargo.toml crates/kb/Cargo.toml
 COPY crates/mae/Cargo.toml crates/mae/Cargo.toml
 COPY crates/shell/Cargo.toml crates/shell/Cargo.toml
 COPY crates/mcp/Cargo.toml crates/mcp/Cargo.toml
+COPY crates/sync/Cargo.toml crates/sync/Cargo.toml
+COPY crates/state-server/Cargo.toml crates/state-server/Cargo.toml
 COPY test_fixtures/Cargo.toml test_fixtures/Cargo.toml
 
 # Create dummy source files so cargo can resolve the dependency graph
@@ -52,6 +54,8 @@ RUN mkdir -p crates/core/src && echo "" > crates/core/src/lib.rs && \
     mkdir -p crates/shell/src && echo "" > crates/shell/src/lib.rs && \
     mkdir -p crates/mcp/src && echo "" > crates/mcp/src/lib.rs && \
     echo "fn main() {}" > crates/mcp/src/shim.rs && \
+    mkdir -p crates/sync/src && echo "" > crates/sync/src/lib.rs && \
+    mkdir -p crates/state-server/src && echo "fn main() {}" > crates/state-server/src/main.rs && \
     mkdir -p test_fixtures/src && echo "" > test_fixtures/src/lib.rs
 
 # Build dependencies only (will fail on our dummy sources, but deps get cached)
@@ -99,6 +103,7 @@ RUN mkdir -p /home/mae/.config/mae /home/mae/.local/share/mae /home/mae/.local/s
 
 COPY --from=builder /mae/target/release/mae /usr/local/bin/mae
 COPY --from=builder /mae/target/release/mae-mcp-shim /usr/local/bin/mae-mcp-shim
+COPY --from=builder /mae/target/release/mae-state-server /usr/local/bin/mae-state-server
 
 # OCI labels
 LABEL org.opencontainers.image.source="https://github.com/cuttlefisch/mae"

@@ -19,6 +19,7 @@ members = [
     "crates/lookup",
     "crates/spell",
     "crates/sync",
+    "crates/state-server",
 ]
 exclude = ["tools/code-map"]
 resolver = "2"
