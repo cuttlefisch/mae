@@ -1,7 +1,7 @@
 //! MCP (Model Context Protocol) JSON-RPC types.
 //!
-//! @ai-caution: Sync message types (`SyncStateVector`, `SyncUpdate`,
-//! `AwarenessState`) are planned for `mae-sync` integration (ADR-006).
+//! @ai-caution: Sync message types are handled by `sync_exec.rs`.
+//! Awareness types (`AwarenessState`) are planned for a future phase.
 //! The existing message types remain stable — sync methods are additive.
 
 use serde::{Deserialize, Serialize};

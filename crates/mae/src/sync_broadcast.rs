@@ -15,7 +15,7 @@ pub fn drain_and_broadcast(editor: &mut Editor, broadcaster: &SharedBroadcaster)
         }
         let updates: Vec<Vec<u8>> = buf.pending_sync_updates.drain(..).collect();
         let buffer_name = buf.name.clone();
-        let bc = broadcaster.lock().unwrap();
+        let mut bc = broadcaster.lock().unwrap();
         for update in updates {
             let event = EditorEvent::SyncUpdate {
                 buffer_name: buffer_name.clone(),

@@ -3,8 +3,9 @@
 //! Each connected MCP client gets a `ClientSession` that tracks
 //! its lifecycle, capabilities, and subscriptions.
 //!
-//! @ai-caution: Sync methods (`sync/state_vector`, `sync/apply_update`,
-//! `sync/awareness`) are planned for the `mae-sync` crate integration.
+//! @ai-caution: Sync methods (`sync/state_vector`, `sync/update`,
+//! `sync/full_state`, `sync/enable`) are implemented in `sync_exec.rs`.
+//! Awareness/presence (`sync/awareness`) is a future phase (not yet started).
 //! Do not remove `handle_request` match arms or session fields without
 //! checking the sync roadmap (ADR-006).
 

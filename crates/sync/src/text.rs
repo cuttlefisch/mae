@@ -7,13 +7,15 @@ use yrs::{
 
 use crate::SyncError;
 
+/// The yrs text field name used in all documents.
+const TEXT_NAME: &str = "content";
+
 /// Collaborative text document backed by yrs with a ropey rendering mirror.
 ///
 /// Local edits update both YText (source of truth) and Rope (for rendering).
 /// Remote updates are applied to YText, then the Rope is rebuilt.
 pub struct TextSync {
     doc: Doc,
-    text_name: String,
     rope: Rope,
 }
 
@@ -22,52 +24,40 @@ impl TextSync {
     pub fn new(content: &str) -> Self {
         let doc = Doc::new();
         {
-            let text = doc.get_or_insert_text("content");
+            let text = doc.get_or_insert_text(TEXT_NAME);
             let mut txn = doc.transact_mut();
             text.insert(&mut txn, 0, content);
         }
         let rope = Rope::from_str(content);
-        Self {
-            doc,
-            text_name: "content".to_string(),
-            rope,
-        }
+        Self { doc, rope }
     }
 
     /// Create with a specific client ID (for testing deterministic merges).
     pub fn with_client_id(content: &str, client_id: u64) -> Self {
         let doc = Doc::with_client_id(client_id);
         {
-            let text = doc.get_or_insert_text("content");
+            let text = doc.get_or_insert_text(TEXT_NAME);
             let mut txn = doc.transact_mut();
             text.insert(&mut txn, 0, content);
         }
         let rope = Rope::from_str(content);
-        Self {
-            doc,
-            text_name: "content".to_string(),
-            rope,
-        }
+        Self { doc, rope }
     }
 
     /// Create from an existing yrs document.
-    pub fn from_doc(doc: Doc, text_name: &str) -> Self {
+    pub fn from_doc(doc: Doc) -> Self {
         let content = {
-            let text = doc.get_or_insert_text(text_name);
+            let text = doc.get_or_insert_text(TEXT_NAME);
             let txn = doc.transact();
             text.get_string(&txn)
         };
         let rope = Rope::from_str(&content);
-        Self {
-            doc,
-            text_name: text_name.to_string(),
-            rope,
-        }
+        Self { doc, rope }
     }
 
     /// Apply a local insert at char offset. Returns encoded update for broadcast.
     pub fn insert(&mut self, offset: u32, text: &str) -> Vec<u8> {
-        let ytext = self.doc.get_or_insert_text(&*self.text_name);
+        let ytext = self.doc.get_or_insert_text(TEXT_NAME);
         let update = {
             let mut txn = self.doc.transact_mut();
             ytext.insert(&mut txn, offset, text);
@@ -79,7 +69,7 @@ impl TextSync {
 
     /// Apply a local delete (char offset + length). Returns encoded update for broadcast.
     pub fn delete(&mut self, offset: u32, len: u32) -> Vec<u8> {
-        let ytext = self.doc.get_or_insert_text(&*self.text_name);
+        let ytext = self.doc.get_or_insert_text(TEXT_NAME);
         let update = {
             let mut txn = self.doc.transact_mut();
             ytext.remove_range(&mut txn, offset, len);
@@ -115,7 +105,7 @@ impl TextSync {
     }
 
     /// Load from encoded full state.
-    pub fn from_state(state: &[u8], text_name: &str) -> Result<Self, SyncError> {
+    pub fn from_state(state: &[u8]) -> Result<Self, SyncError> {
         let doc = Doc::new();
         let update =
             yrs::Update::decode_v1(state).map_err(|e| SyncError::Encoding(e.to_string()))?;
@@ -125,16 +115,12 @@ impl TextSync {
                 .map_err(|e| SyncError::Encoding(e.to_string()))?;
         }
         let content = {
-            let text = doc.get_or_insert_text(text_name);
+            let text = doc.get_or_insert_text(TEXT_NAME);
             let txn = doc.transact();
             text.get_string(&txn)
         };
         let rope = Rope::from_str(&content);
-        Ok(Self {
-            doc,
-            text_name: text_name.to_string(),
-            rope,
-        })
+        Ok(Self { doc, rope })
     }
 
     /// Get the rope (for rendering).
@@ -144,7 +130,7 @@ impl TextSync {
 
     /// Get text content as string.
     pub fn content(&self) -> String {
-        let text = self.doc.get_or_insert_text(&*self.text_name);
+        let text = self.doc.get_or_insert_text(TEXT_NAME);
         let txn = self.doc.transact();
         text.get_string(&txn)
     }
@@ -156,7 +142,7 @@ impl TextSync {
 
     /// Rebuild rope from YText (called after remote updates).
     fn rebuild_rope(&mut self) {
-        let text = self.doc.get_or_insert_text(&*self.text_name);
+        let text = self.doc.get_or_insert_text(TEXT_NAME);
         let txn = self.doc.transact();
         let content = text.get_string(&txn);
         self.rope = Rope::from_str(&content);
@@ -268,7 +254,7 @@ mod tests {
         let ts = TextSync::new(&lines);
 
         let state = ts.encode_state();
-        let ts2 = TextSync::from_state(&state, "content").unwrap();
+        let ts2 = TextSync::from_state(&state).unwrap();
         assert_eq!(ts.content(), ts2.content());
         assert_eq!(ts.rope().len_lines(), ts2.rope().len_lines());
     }

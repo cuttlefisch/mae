@@ -161,6 +161,8 @@ async fn handle_client(
         bc.subscribe(session.id, vec![])
     };
 
+    let mut consecutive_write_failures: u32 = 0;
+
     loop {
         tokio::select! {
             biased;
@@ -214,9 +216,21 @@ async fn handle_client(
                 }
             }
             Some(event) = event_rx.recv() => {
-                session.events_delivered += 1;
-                if write_notification(&mut writer, &event, session.events_delivered, write_timeout).await.is_err() {
-                    break;
+                if write_notification(&mut writer, &event, session.events_delivered + 1, write_timeout).await.is_err() {
+                    consecutive_write_failures += 1;
+                    session.events_dropped += 1;
+                    warn!(
+                        session = session.id,
+                        failures = consecutive_write_failures,
+                        "notification write failed ({consecutive_write_failures}/3)"
+                    );
+                    if consecutive_write_failures >= 3 {
+                        warn!(session = session.id, "disconnecting client after 3 consecutive write failures");
+                        break;
+                    }
+                } else {
+                    consecutive_write_failures = 0;
+                    session.events_delivered += 1;
                 }
             }
         }
@@ -226,10 +240,26 @@ async fn handle_client(
     broadcaster.lock().unwrap().unsubscribe(session.id);
 }
 
+/// Write Content-Length framed bytes to any async writer with a timeout.
+pub async fn write_framed<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    body: &[u8],
+    timeout: std::time::Duration,
+) -> Result<(), std::io::Error> {
+    tokio::time::timeout(timeout, async {
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        writer.write_all(header.as_bytes()).await?;
+        writer.write_all(body).await?;
+        writer.flush().await
+    })
+    .await
+    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "write timeout"))?
+}
+
 /// Write a JSON-RPC notification (no `id` field) with Content-Length framing.
 /// Includes a per-client `seq` number for event ordering.
-async fn write_notification(
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
+async fn write_notification<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
     event: &broadcast::EditorEvent,
     seq: u64,
     timeout: std::time::Duration,
@@ -242,14 +272,7 @@ async fn write_notification(
     });
     let body = serde_json::to_vec(&notification)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    tokio::time::timeout(timeout, async {
-        let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        writer.write_all(header.as_bytes()).await?;
-        writer.write_all(&body).await?;
-        writer.flush().await
-    })
-    .await
-    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "notification write timeout"))?
+    write_framed(writer, &body, timeout).await
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +287,7 @@ async fn write_notification(
 /// - Otherwise, reads a single line (legacy line-based framing).
 ///
 /// Returns `Ok(None)` on clean EOF.
-async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
+pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
 ) -> Result<Option<String>, std::io::Error> {
     // Peek at the buffer to determine framing mode.
@@ -341,7 +364,11 @@ async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
 // ---------------------------------------------------------------------------
 
 /// Process a single JSON-RPC request, updating session state as needed.
-async fn handle_request(
+///
+/// Handles protocol methods (initialize, ping, subscribe, health, etc.)
+/// and dispatches tool calls and sync methods via the `tool_tx` channel.
+/// Reusable by any server (editor MCP, state-server) that needs JSON-RPC dispatch.
+pub async fn handle_request(
     msg: &str,
     tool_definitions: &[ToolInfo],
     tool_tx: &mpsc::Sender<McpToolRequest>,
@@ -760,7 +787,7 @@ mod tests {
         stream: &mut tokio::net::UnixStream,
         msg: &serde_json::Value,
     ) -> JsonRpcResponse {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::AsyncWriteExt;
 
         let payload = serde_json::to_string(msg).unwrap();
         stream
@@ -769,29 +796,10 @@ mod tests {
             .unwrap();
         stream.flush().await.unwrap();
 
-        // Read Content-Length framed response.
-        let mut header_buf = Vec::new();
-        let mut byte = [0u8; 1];
-        // Read until we hit \r\n\r\n.
-        loop {
-            stream.read_exact(&mut byte).await.unwrap();
-            header_buf.push(byte[0]);
-            if header_buf.len() >= 4 && &header_buf[header_buf.len() - 4..] == b"\r\n\r\n" {
-                break;
-            }
-        }
-        let header = String::from_utf8(header_buf).unwrap();
-        let content_length: usize = header
-            .lines()
-            .find_map(|line| line.strip_prefix("Content-Length: "))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-
-        let mut body = vec![0u8; content_length];
-        stream.read_exact(&mut body).await.unwrap();
-        serde_json::from_slice(&body).unwrap()
+        let value = read_framed_message(stream, 5000)
+            .await
+            .expect("expected response from server");
+        serde_json::from_value(value).unwrap()
     }
 
     #[tokio::test]
@@ -1215,7 +1223,7 @@ mod tests {
 
         // Broadcast a sync update via the shared broadcaster.
         {
-            let locked = bc.lock().unwrap();
+            let mut locked = bc.lock().unwrap();
             locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
                 buffer_name: "test.rs".to_string(),
                 update_base64: "AQIDBA==".to_string(),
@@ -1272,7 +1280,7 @@ mod tests {
 
         // Broadcast an event.
         {
-            let locked = bc.lock().unwrap();
+            let mut locked = bc.lock().unwrap();
             locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
                 buffer_name: "test.rs".to_string(),
                 update_base64: "dGVzdA==".to_string(),
@@ -1344,7 +1352,7 @@ mod tests {
 
         // Broadcast.
         {
-            let locked = bc.lock().unwrap();
+            let mut locked = bc.lock().unwrap();
             locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
                 buffer_name: "shared.rs".to_string(),
                 update_base64: "AAAA".to_string(),
@@ -1434,7 +1442,7 @@ mod tests {
 
         // Broadcast after A disconnected.
         {
-            let locked = bc.lock().unwrap();
+            let mut locked = bc.lock().unwrap();
             locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
                 buffer_name: "after.rs".to_string(),
                 update_base64: "BBBB".to_string(),
@@ -1490,7 +1498,7 @@ mod tests {
 
         // Blast 200 events (queue capacity is 100).
         {
-            let locked = bc.lock().unwrap();
+            let mut locked = bc.lock().unwrap();
             for i in 0..200 {
                 locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
                     buffer_name: format!("file-{}.rs", i),
@@ -1520,6 +1528,217 @@ mod tests {
         assert_eq!(resp.result.unwrap(), "pong");
 
         drop(client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    // -----------------------------------------------------------------------
+    // TCP transport tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: connect to a TCP address, send JSON-RPC, read Content-Length response.
+    async fn tcp_send_and_recv(
+        stream: &mut tokio::net::TcpStream,
+        msg: &serde_json::Value,
+    ) -> JsonRpcResponse {
+        use tokio::io::AsyncWriteExt;
+
+        let payload = serde_json::to_string(msg).unwrap();
+        stream
+            .write_all(format!("{}\n", payload).as_bytes())
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+
+        let value = tcp_read_framed(stream, 5000)
+            .await
+            .expect("expected response from TCP server");
+        serde_json::from_value(value).unwrap()
+    }
+
+    /// Helper: read Content-Length framed message from TcpStream.
+    async fn tcp_read_framed(
+        stream: &mut tokio::net::TcpStream,
+        timeout_ms: u64,
+    ) -> Option<serde_json::Value> {
+        use tokio::io::AsyncReadExt;
+
+        let result = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
+            let mut header_buf = Vec::new();
+            let mut byte = [0u8; 1];
+            loop {
+                stream.read_exact(&mut byte).await.ok()?;
+                header_buf.push(byte[0]);
+                if header_buf.len() >= 4 && &header_buf[header_buf.len() - 4..] == b"\r\n\r\n" {
+                    break;
+                }
+            }
+            let header = String::from_utf8(header_buf).ok()?;
+            let content_length: usize = header
+                .lines()
+                .find_map(|line| line.strip_prefix("Content-Length: "))
+                .and_then(|v| v.trim().parse().ok())?;
+            let mut body = vec![0u8; content_length];
+            stream.read_exact(&mut body).await.ok()?;
+            serde_json::from_slice(&body).ok()
+        })
+        .await;
+
+        result.unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn tcp_read_message_works() {
+        // Verify read_message works with TCP streams (via BufReader over &[u8])
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"test"}"#;
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        let data = format!("{}{}", header, body);
+        let mut reader = BufReader::new(data.as_bytes());
+        let msg = read_message(&mut reader).await.unwrap().unwrap();
+        assert!(msg.contains("test"));
+    }
+
+    #[tokio::test]
+    async fn tcp_write_framed_works() {
+        // Verify write_framed works with any AsyncWrite
+        let mut buf = Vec::new();
+        let body = b"hello";
+        write_framed(&mut buf, body, std::time::Duration::from_secs(5))
+            .await
+            .unwrap();
+        let expected = "Content-Length: 5\r\n\r\nhello".to_string();
+        assert_eq!(String::from_utf8(buf).unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn tcp_single_client_initialize() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let bc = dummy_broadcaster();
+        let tool_defs: Vec<ToolInfo> = vec![];
+        let bc_clone = bc.clone();
+
+        // Spawn a mini-server that accepts one TCP client.
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let session = ClientSession::new();
+            let (reader, writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut writer = writer;
+            let mut session = session;
+            let write_timeout = std::time::Duration::from_secs(5);
+
+            // Simple request-response loop (no event push for this test).
+            while let Ok(Some(msg)) = read_message(&mut reader).await {
+                let response =
+                    handle_request(&msg, &tool_defs, &tool_tx, &mut session, &bc_clone).await;
+                let body = serde_json::to_vec(&response).unwrap();
+                if write_framed(&mut writer, &body, write_timeout)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        // Connect as a TCP client.
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+
+        // Initialize
+        let resp = tcp_send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "tcp-test", "version": "0.1"}}
+            }),
+        )
+        .await;
+        assert!(
+            resp.error.is_none(),
+            "TCP initialize failed: {:?}",
+            resp.error
+        );
+        let result = resp.result.unwrap();
+        assert_eq!(result["serverInfo"]["name"], "mae-editor");
+
+        // Ping
+        let resp = tcp_send_and_recv(
+            &mut client,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "$/ping"}),
+        )
+        .await;
+        assert_eq!(resp.result.unwrap(), "pong");
+    }
+
+    #[tokio::test]
+    async fn tcp_and_unix_coexist() {
+        use tokio::net::TcpListener;
+
+        let socket_path = format!("/tmp/mae-test-coexist-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        // TCP listener
+        let tcp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let tcp_addr = tcp_listener.local_addr().unwrap();
+
+        // Unix server
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let bc = dummy_broadcaster();
+        let unix_server = McpServer::new(&socket_path, tool_tx.clone(), bc.clone());
+
+        tokio::spawn(async move {
+            unix_server.run(vec![]).await;
+        });
+
+        // TCP server task
+        let tool_tx2 = tool_tx.clone();
+        let bc2 = bc.clone();
+        tokio::spawn(async move {
+            let (stream, _) = tcp_listener.accept().await.unwrap();
+            let session = ClientSession::new();
+            let tool_defs: Vec<ToolInfo> = vec![];
+            let (reader, writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut writer = writer;
+            let mut session = session;
+            let timeout = std::time::Duration::from_secs(5);
+
+            while let Ok(Some(msg)) = read_message(&mut reader).await {
+                let response =
+                    handle_request(&msg, &tool_defs, &tool_tx2, &mut session, &bc2).await;
+                let body = serde_json::to_vec(&response).unwrap();
+                if write_framed(&mut writer, &body, timeout).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Both transports should work concurrently.
+        let mut unix_client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut tcp_client = tokio::net::TcpStream::connect(tcp_addr).await.unwrap();
+
+        let unix_resp = send_and_recv(
+            &mut unix_client,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "$/ping"}),
+        )
+        .await;
+        assert_eq!(unix_resp.result.unwrap(), "pong");
+
+        let tcp_resp = tcp_send_and_recv(
+            &mut tcp_client,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "$/ping"}),
+        )
+        .await;
+        assert_eq!(tcp_resp.result.unwrap(), "pong");
+
+        drop(unix_client);
+        drop(tcp_client);
         let _ = std::fs::remove_file(&socket_path);
     }
 }

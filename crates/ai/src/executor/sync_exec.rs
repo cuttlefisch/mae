@@ -37,8 +37,9 @@ fn execute_sync_enable(editor: &mut Editor, args: &Value) -> Result<String, Stri
 
     let buf = &mut editor.buffers[idx];
 
-    // Idempotent: if already enabled, return existing state
-    if buf.sync_doc.is_none() {
+    // Idempotent: if already enabled, return existing state with `already_enabled` flag
+    let already_enabled = buf.sync_doc.is_some();
+    if !already_enabled {
         buf.enable_sync(client_id);
     }
 
@@ -47,6 +48,7 @@ fn execute_sync_enable(editor: &mut Editor, args: &Value) -> Result<String, Stri
 
     Ok(serde_json::json!({
         "enabled": true,
+        "already_enabled": already_enabled,
         "buffer": buf.name.clone(),
         "state": state_b64,
     })
@@ -161,7 +163,9 @@ mod tests {
         let p1: Value = serde_json::from_str(&r1).unwrap();
         let p2: Value = serde_json::from_str(&r2).unwrap();
         assert_eq!(p1["enabled"], true);
+        assert_eq!(p1["already_enabled"], false);
         assert_eq!(p2["enabled"], true);
+        assert_eq!(p2["already_enabled"], true);
     }
 
     #[test]
@@ -235,7 +239,7 @@ mod tests {
         // Verify it's decodable
         let state_b64 = parsed["state"].as_str().unwrap();
         let bytes = mae_sync::encoding::base64_to_update(state_b64).unwrap();
-        let reconstructed = mae_sync::text::TextSync::from_state(&bytes, "content").unwrap();
+        let reconstructed = mae_sync::text::TextSync::from_state(&bytes).unwrap();
         assert!(reconstructed.content().contains('Z'));
     }
 
@@ -261,7 +265,7 @@ mod tests {
 
         // Client B creates local doc and applies state
         let bytes = mae_sync::encoding::base64_to_update(state_b64).unwrap();
-        let client_b = mae_sync::text::TextSync::from_state(&bytes, "content").unwrap();
+        let client_b = mae_sync::text::TextSync::from_state(&bytes).unwrap();
 
         // Both should have the same content
         let editor_content: String = editor.buffers[0].rope().to_string();

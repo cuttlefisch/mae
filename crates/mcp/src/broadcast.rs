@@ -44,6 +44,8 @@ pub enum EditorEvent {
     #[serde(rename = "buffer_close")]
     BufferClosed { buffer_idx: usize },
     /// A collaborative sync update was generated (yrs encoded, base64).
+    /// Uses `buffer_name` (not `buffer_idx`) for cross-session stability —
+    /// buffer indices can change on reconnect, but names are persistent.
     #[serde(rename = "sync_update")]
     SyncUpdate {
         buffer_name: String,
@@ -111,22 +113,33 @@ impl EventBroadcaster {
 
     /// Broadcast an event to all subscribed clients.
     /// Uses `try_send` — if a client's queue is full, the event is dropped
-    /// for that client (backpressure).
-    pub fn broadcast(&self, event: &EditorEvent) {
+    /// for that client (backpressure). Dead channels (closed receivers) are
+    /// automatically cleaned up.
+    pub fn broadcast(&mut self, event: &EditorEvent) {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         let event_type = event.event_type();
         debug!(seq = seq, event_type = event_type, "broadcasting event");
+        let mut closed: Vec<u64> = Vec::new();
         for (session_id, (subs, tx)) in &self.clients {
             if subs.iter().any(|s| s == event_type || s == "*") {
-                if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(event.clone()) {
-                    warn!(
-                        session_id = session_id,
-                        event_type = event_type,
-                        "client event queue full; dropping event"
-                    );
+                match tx.try_send(event.clone()) {
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        warn!(
+                            session_id = session_id,
+                            event_type = event_type,
+                            "client event queue full; dropping event"
+                        );
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        debug!(session_id = session_id, "removing closed client channel");
+                        closed.push(*session_id);
+                    }
+                    Ok(()) => {}
                 }
-                // Closed channels are silently ignored — cleanup happens on disconnect.
             }
+        }
+        for id in closed {
+            self.clients.remove(&id);
         }
     }
 
@@ -166,7 +179,7 @@ mod tests {
             buffer_idx: 0,
             version: 1,
         };
-        bc.broadcast(&event);
+        bc.broadcast(&event); // bc is already mut
 
         let received = rx.recv().await.unwrap();
         assert!(matches!(
