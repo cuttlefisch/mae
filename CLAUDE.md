@@ -409,14 +409,28 @@ mae-state-server doctor             # run diagnostics
 
 **Architecture:**
 - Per-document locking (`RwLock<HashMap<String, Arc<Mutex<DocEntry>>>>`)
+- SQLite connection pool: FNV-1a hash-sharded (default 4 shards, WAL mode)
 - WAL-first persistence: append to SQLite WAL before in-memory apply
-- Compaction: periodic snapshot + WAL trim (configurable threshold, default 500)
+- Compaction: background task every `compaction_interval_secs` (default 60s)
+- Idle eviction: docs unused for `idle_eviction_secs` (default 300s) are compacted + removed
 - Recovery: load snapshot + replay WAL tail on startup
+- Save protocol: SHA-256 content-hash via `docs/save_intent` + `docs/save_committed`
+- Event sequence tracking: `wal_seq` on SyncUpdate for gap detection + `sync/resync`
 - Transport-generic I/O: `mae_mcp::{read_message, write_framed, handle_request}`
 
 **Config:** `~/.config/mae/state-server.toml` (TOML, XDG-compliant)
 
-**Sync protocol methods:** `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`, `docs/list`, `docs/content`
+**Sync protocol methods:** `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`, `sync/resync`, `docs/list`, `docs/content`, `docs/stats`, `docs/save_intent`, `docs/save_committed`, `$/debug`
+
+**Editor commands (SPC C prefix, doom keymap):**
+- `collab-start` (SPC C s), `collab-connect` (SPC C c), `collab-disconnect` (SPC C d)
+- `collab-status` (SPC C i), `collab-share` (SPC C S), `collab-sync` (SPC C y), `collab-doctor` (SPC C D)
+
+**AI tools:** `collab_status`, `collab_connect`, `collab_share`, `collab_doctor`
+
+**Scheme API:** `(collab-status)` → alist, `(collab-synced-buffers)` → list
+
+**Options:** `collab_server_address`, `collab_auto_connect`, `collab_auto_share`, `collab_reconnect_interval`, `collab_user_name`
 
 **Security (v1):** No authentication. TCP is open. For trusted LAN use only.
 Auth roadmap: PSK → SSH key exchange → OAuth/OIDC (via `initialize` params extension).
@@ -431,8 +445,8 @@ These APIs are intended to remain stable through v1.0:
 
 - **Scheme API:** ~50 functions + ~25 variables (see `:help concept:scheme-api`)
 - **Hooks:** 18 hook points (see `:help concept:hooks`)
-- **MCP tools:** 130+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug)
-- **Config options:** 83+ registered, persistable via `:set-save`
+- **MCP tools:** 130+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
+- **Config options:** 88+ registered, persistable via `:set-save`
 
 ## Related Resources
 

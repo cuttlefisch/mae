@@ -355,6 +355,7 @@ Source: `crates/sync/src/lib.rs`
 | `kb` | mod |
 | `text` | mod |
 | `SyncError` | enum |
+| `DocAddress` | enum |
 
 ## Scheme API
 
@@ -459,8 +460,10 @@ Source: `crates/sync/src/lib.rs`
 | `get-option` | `crates/scheme/src/runtime.rs` |
 | `command-exists?` | `crates/scheme/src/runtime.rs` |
 | `keymap-bindings` | `crates/scheme/src/runtime.rs` |
+| `collab-status` | `crates/scheme/src/runtime.rs` |
+| `collab-synced-buffers` | `crates/scheme/src/runtime.rs` |
 
-## Commands (489 built-in)
+## Commands (496 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -948,6 +951,13 @@ Source: `crates/sync/src/lib.rs`
 | `record-start` | Start event recording for debugging |
 | `record-stop` | Stop event recording |
 | `record-save` | Save recorded events to JSON file (:record-save <path>) |
+| `collab-start` | Start local state server |
+| `collab-connect` | Connect to collaborative state server |
+| `collab-disconnect` | Disconnect from state server |
+| `collab-status` | Show collaborative editing status |
+| `collab-share` | Share current buffer for collaboration |
+| `collab-sync` | Force sync current buffer |
+| `collab-doctor` | Run collaborative editing diagnostics |
 | `move-down` | Move cursor down |
 | `move-down` | Move down |
 | `zzz` | Last |

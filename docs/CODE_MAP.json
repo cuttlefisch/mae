@@ -829,6 +829,10 @@
         {
           "name": "SyncError",
           "kind": "enum"
+        },
+        {
+          "name": "DocAddress",
+          "kind": "enum"
         }
       ]
     }
@@ -1220,6 +1224,14 @@
     },
     {
       "name": "keymap-bindings",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "collab-status",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "collab-synced-buffers",
       "source": "crates/scheme/src/runtime.rs"
     }
   ],
@@ -3160,6 +3172,34 @@
     {
       "name": "record-save",
       "doc": "Save recorded events to JSON file (:record-save <path>)"
+    },
+    {
+      "name": "collab-start",
+      "doc": "Start local state server"
+    },
+    {
+      "name": "collab-connect",
+      "doc": "Connect to collaborative state server"
+    },
+    {
+      "name": "collab-disconnect",
+      "doc": "Disconnect from state server"
+    },
+    {
+      "name": "collab-status",
+      "doc": "Show collaborative editing status"
+    },
+    {
+      "name": "collab-share",
+      "doc": "Share current buffer for collaboration"
+    },
+    {
+      "name": "collab-sync",
+      "doc": "Force sync current buffer"
+    },
+    {
+      "name": "collab-doctor",
+      "doc": "Run collaborative editing diagnostics"
     },
     {
       "name": "move-down",

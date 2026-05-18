@@ -133,6 +133,60 @@ Requirements driving this decision:
 | Dual buffer (yrs + ropey) | YES — can drop ropey later |
 | KB nodes as yrs docs | COMMITTED — acceptable (Yjs is de-facto standard) |
 
+## Implementation Notes (v0.11.0)
+
+### Document Addressing
+
+Documents are identified by a `DocAddress` enum (`crates/sync/src/lib.rs`):
+
+```rust
+pub enum DocAddress {
+    File { project_hash: String, rel_path: String },  // file:{hash}/{path}
+    KbNode { node_id: String },                        // kb:{id}
+    Shared { name: String },                           // shared:{name}
+}
+```
+
+### SQLite Connection Pool (fixes B1 bottleneck)
+
+`SqlitePool` (`crates/state-server/src/storage.rs`) uses FNV-1a hash sharding
+across N connections (default 4). All shards open the same WAL-mode database.
+Reduces p99 write latency from ~50ms to ~12ms at 10 concurrent clients.
+
+### CRDT-Safe Reconciliation (fixes B2)
+
+`TextSync::reconcile_to()` (`crates/sync/src/text.rs`) computes a character-level
+LCS diff (via `similar` crate) between current yrs content and a target string,
+then applies insert/delete operations as yrs transactions. Preserves CRDT vector
+clocks and tombstones — safe for multi-client undo.
+
+### Event Sequence Tracking (fixes B3)
+
+`EditorEvent::SyncUpdate` carries a `wal_seq: u64` field for gap detection.
+Server handler `sync/resync` method returns diff from a given WAL sequence point.
+Clients detect gaps via monotonic sequence and auto-trigger resync.
+
+### Save Protocol
+
+Content-hash verification (SHA-256) via `docs/save_intent` + `docs/save_committed`.
+`DocStore::check_save_intent()` returns `SaveOk` or `SaveConflict` based on
+whether the document has pending changes since the client's last known state.
+
+### Background Compaction + Idle Eviction (fixes B4)
+
+Tokio background task runs every `compaction_interval_secs` (default 60s):
+- Compacts all in-memory documents (WAL → snapshot)
+- Evicts docs idle for `idle_eviction_secs` (default 300s)
+
+### Editor UX
+
+- 7 commands under `SPC C` prefix (doom keymap): start, connect, disconnect, status, share, sync, doctor
+- Status bar segment (priority 4): connection state with peer count
+- 4 AI tools: `collab_status`, `collab_connect`, `collab_share`, `collab_doctor`
+- 5 options: `collab_server_address`, `collab_auto_connect`, `collab_auto_share`, `collab_reconnect_interval`, `collab_user_name`
+- Scheme API: `(collab-status)`, `(collab-synced-buffers)`
+- `$/debug` method: server internals (uptime, connections, per-doc stats)
+
 ## References
 
 - ADR-001: Server-Client Protocol
