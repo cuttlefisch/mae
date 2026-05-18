@@ -576,6 +576,12 @@ impl Editor {
                 self.record_edit_with_count("dedent-line", count);
             }
 
+            // Fill paragraph
+            "fill-paragraph" => {
+                self.fill_paragraph();
+                self.record_edit("fill-paragraph");
+            }
+
             // Case change
             "toggle-case" => {
                 for _ in 0..n {

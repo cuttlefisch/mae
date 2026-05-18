@@ -117,7 +117,16 @@
 ;; (set-option! "ai-tier" "ReadOnly")
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; 6. Shell
+;; 6. Collaborative Editing
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; Connect to a collaborative state server for multi-user editing.
+;; See :help concept:collab-architecture for details.
+;; (set-option! "collab-server-address" "127.0.0.1:9473")
+;; (set-option! "collab-auto-connect" "true")
+;; (set-option! "collab-user-name" "alice")
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; 7. Shell
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; The embedded shell (SPC o s) runs your $SHELL inside the editor.
 ;; Exit shell-insert mode with the configured exit sequence (default:
@@ -129,7 +138,7 @@
 ;;   (shell-read-output BUF-IDX)    — read recent shell output
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; 7. Hooks
+;; 8. Hooks
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; Available hooks:
 ;;   before-save, after-save, buffer-open, buffer-close,
@@ -152,7 +161,7 @@
 ;; (add-hook! "mode-change" "on-mode-change")
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; 8. Custom commands
+;; 9. Custom commands
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ;; Insert a timestamp at the cursor.

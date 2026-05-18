@@ -1,6 +1,6 @@
 //! Debug panel view state — navigation and expansion state for the `*Debug*` buffer.
 //!
-//! Mirrors `help_view.rs`: the panel is a read-only buffer populated from
+//! Mirrors `kb_view.rs`: the panel is a read-only buffer populated from
 //! `DebugState`, with interactive navigation (j/k to move, Enter to
 //! select/expand, q to close). `DebugView` tracks which line the cursor
 //! is on, which variables are expanded, and lazy-loaded child variables.

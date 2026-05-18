@@ -3,18 +3,15 @@
 use crate::buffer::Buffer;
 use crate::syntax::HighlightSpan;
 
-/// Compute highlight spans for a Help buffer: heading detection,
-/// inline markdown/org style spans, and link spans from the HelpView.
-pub fn compute_help_spans(buf: &Buffer) -> Vec<HighlightSpan> {
-    let mut spans: Vec<HighlightSpan> = Vec::new();
-
-    // Heading spans from leading `*` or `#` chars in rope lines.
-    // Also detect metadata lines (kind · id, tags:) for dimmed rendering.
+/// Compute heading spans from leading `*` or `#` chars in a buffer's rope lines.
+/// Shared between KB view rendering and org-mode edit-mode rendering.
+pub fn compute_org_heading_spans(buf: &Buffer) -> Vec<HighlightSpan> {
+    let mut spans = Vec::new();
     let rope = buf.rope();
     for line_idx in 0..buf.line_count() {
         let line = rope.line(line_idx);
         let first_char = line.chars().next().unwrap_or(' ');
-        let (prefix_count, is_heading) = if first_char == '*' {
+        let (_prefix_count, is_heading) = if first_char == '*' {
             let c = line.chars().take_while(|&ch| ch == '*').count();
             (c, c > 0 && line.len_chars() > c && line.char(c) == ' ')
         } else if first_char == '#' {
@@ -23,6 +20,9 @@ pub fn compute_help_spans(buf: &Buffer) -> Vec<HighlightSpan> {
         } else {
             (0, false)
         };
+        if !is_heading {
+            continue;
+        }
         let line_start = rope.line_to_char(line_idx);
         let line_len = line.len_chars();
         let text_len = if line_idx + 1 < buf.line_count() {
@@ -30,26 +30,48 @@ pub fn compute_help_spans(buf: &Buffer) -> Vec<HighlightSpan> {
         } else {
             line_len
         };
-        if is_heading && prefix_count > 0 {
+        let byte_start = rope.char_to_byte(line_start);
+        let byte_end = rope.char_to_byte(line_start + text_len);
+        spans.push(HighlightSpan {
+            byte_start,
+            byte_end,
+            theme_key: "markup.heading",
+        });
+    }
+    spans
+}
+
+/// Compute highlight spans for a KB buffer: heading detection,
+/// inline markdown/org style spans, and link spans from the KbView.
+pub fn compute_kb_spans(buf: &Buffer) -> Vec<HighlightSpan> {
+    let mut spans: Vec<HighlightSpan> = Vec::new();
+
+    // Heading + metadata spans
+    spans.extend(compute_org_heading_spans(buf));
+
+    // Dim metadata lines (kind · id, tags:) in the KB header area
+    let rope = buf.rope();
+    for line_idx in 1..=3.min(buf.line_count().saturating_sub(1)) {
+        let line = rope.line(line_idx);
+        let line_start = rope.line_to_char(line_idx);
+        let line_len = line.len_chars();
+        let text_len = if line_idx + 1 < buf.line_count() {
+            line_len.saturating_sub(1)
+        } else {
+            line_len
+        };
+        if text_len == 0 {
+            continue;
+        }
+        let line_str: String = line.chars().take(40).collect();
+        if line_str.contains(" · ") || line_str.starts_with("tags:") {
             let byte_start = rope.char_to_byte(line_start);
             let byte_end = rope.char_to_byte(line_start + text_len);
             spans.push(HighlightSpan {
                 byte_start,
                 byte_end,
-                theme_key: "markup.heading",
+                theme_key: "comment",
             });
-        } else if line_idx > 0 && line_idx <= 3 && text_len > 0 {
-            // Dim metadata lines (line 2: kind · id, line 3: tags:)
-            let line_str: String = line.chars().take(40).collect();
-            if line_str.contains(" · ") || line_str.starts_with("tags:") {
-                let byte_start = rope.char_to_byte(line_start);
-                let byte_end = rope.char_to_byte(line_start + text_len);
-                spans.push(HighlightSpan {
-                    byte_start,
-                    byte_end,
-                    theme_key: "comment",
-                });
-            }
         }
     }
 
@@ -66,7 +88,7 @@ pub fn compute_help_spans(buf: &Buffer) -> Vec<HighlightSpan> {
     spans.extend(code_block_language_spans(&source_text));
 
     // Link spans from help view.
-    if let Some(view) = buf.help_view() {
+    if let Some(view) = buf.kb_view() {
         for (i, link) in view.rendered_links.iter().enumerate() {
             let is_focused_link = view.focused_link == Some(i);
             let is_broken = view.broken_links.contains(&i);
@@ -137,18 +159,18 @@ mod tests {
 
     #[test]
     fn help_spans_empty_buffer() {
-        let buf = Buffer::new_help("index");
-        let spans = compute_help_spans(&buf);
+        let buf = Buffer::new_kb("index");
+        let spans = compute_kb_spans(&buf);
         assert!(spans.is_empty());
     }
 
     #[test]
     fn help_spans_code_block_highlighting() {
-        let mut buf = Buffer::new_help("test");
+        let mut buf = Buffer::new_kb("test");
         buf.read_only = false;
         buf.insert_text_at(0, "# Example\n\n```rust\nfn hello() {}\n```\n");
         buf.read_only = true;
-        let spans = compute_help_spans(&buf);
+        let spans = compute_kb_spans(&buf);
         assert!(
             spans.iter().any(|s| s.theme_key == "keyword"),
             "help code block should have keyword spans, got: {:?}",
@@ -158,11 +180,11 @@ mod tests {
 
     #[test]
     fn help_spans_detect_heading() {
-        let mut buf = Buffer::new_help("index");
+        let mut buf = Buffer::new_kb("index");
         buf.read_only = false;
         buf.insert_text_at(0, "* Heading\nBody text\n");
         buf.read_only = true;
-        let spans = compute_help_spans(&buf);
+        let spans = compute_kb_spans(&buf);
         assert!(
             spans.iter().any(|s| s.theme_key == "markup.heading"),
             "should detect heading span"

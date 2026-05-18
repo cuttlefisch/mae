@@ -5,10 +5,10 @@ use crate::tool_impls::{
     execute_command_list, execute_create_file, execute_cursor_info, execute_debug_state,
     execute_editor_restore_state, execute_editor_save_state, execute_editor_state,
     execute_file_read, execute_get_option, execute_image_info, execute_image_list,
-    execute_list_buffers, execute_list_modules, execute_open_file, execute_pkg_command,
-    execute_project_files, execute_project_info, execute_project_search, execute_read_messages,
-    execute_rename_file, execute_set_option, execute_switch_buffer, execute_switch_project,
-    execute_syntax_tree, execute_window_layout,
+    execute_keymap_query, execute_list_buffers, execute_list_modules, execute_open_file,
+    execute_pkg_command, execute_project_files, execute_project_info, execute_project_search,
+    execute_read_messages, execute_rename_file, execute_set_option, execute_switch_buffer,
+    execute_switch_project, execute_syntax_tree, execute_window_layout,
 };
 use crate::types::ToolCall;
 
@@ -163,6 +163,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
                 _ => Err("target_format must be 'org' or 'markdown'".into()),
             }
         }
+        "keymap_query" => execute_keymap_query(editor, &call.arguments),
         _ => return None,
     };
     Some(result)

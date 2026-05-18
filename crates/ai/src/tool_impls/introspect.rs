@@ -14,6 +14,41 @@ pub fn execute_introspect(editor: &Editor, args: &serde_json::Value) -> Result<S
 
     let mut result = serde_json::Map::new();
 
+    // Always include version for diagnostic context
+    if section == "all" || section == "version" {
+        result.insert(
+            "version".into(),
+            json!({
+                "mae": env!("CARGO_PKG_VERSION"),
+                "build_profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+            }),
+        );
+    }
+    if section == "all" || section == "modules" {
+        let loaded: Vec<&str> = editor
+            .active_modules
+            .iter()
+            .filter(|m| m.status == "loaded")
+            .map(|m| m.name.as_str())
+            .collect();
+        let failed: Vec<&str> = editor
+            .active_modules
+            .iter()
+            .filter(|m| m.status != "loaded")
+            .map(|m| m.name.as_str())
+            .collect();
+        result.insert(
+            "modules".into(),
+            json!({
+                "total": editor.active_modules.len(),
+                "loaded_count": loaded.len(),
+                "loaded": loaded,
+                "failed_count": failed.len(),
+                "failed": failed,
+            }),
+        );
+    }
+
     if section == "all" || section == "threads" {
         result.insert("threads".into(), build_threads_section());
     }
@@ -37,6 +72,9 @@ pub fn execute_introspect(editor: &Editor, args: &serde_json::Value) -> Result<S
     }
     if section == "all" || section == "lsp" {
         result.insert("lsp".into(), build_lsp_section(editor));
+    }
+    if section == "all" || section == "collaboration" {
+        result.insert("collaboration".into(), build_collaboration_section(editor));
     }
     if section == "frame" {
         result.insert("frame".into(), build_frame_section(editor));
@@ -251,10 +289,15 @@ fn build_kb_section(editor: &Editor) -> serde_json::Value {
         "watcher_stats": {
             "events_upserted": ws.events_upserted,
             "events_removed": ws.events_removed,
-            "events_skipped": ws.events_skipped,
+            "suppressed_debounce": ws.suppressed_debounce,
+            "suppressed_timebox": ws.suppressed_timebox,
+            "events_suppressed": ws.events_suppressed,
+            "reimports_total": ws.reimports_total,
             "errors": ws.errors,
             "last_drain_us": ws.last_drain_us,
             "last_drain_event_count": ws.last_drain_event_count,
+            "drain_us_sum": ws.drain_us_sum,
+            "drain_count": ws.drain_count,
         },
         "search_latency_us": editor.perf_stats.kb_search_latency_us,
         "option_overrides": option_overrides,
@@ -325,6 +368,17 @@ fn build_ai_section(editor: &Editor) -> serde_json::Value {
     })
 }
 
+fn build_collaboration_section(editor: &Editor) -> serde_json::Value {
+    let collab_status = editor.collab_status.as_str();
+    let collab_server = editor.collab_server_address.clone();
+    json!({
+        "collab_status": collab_status,
+        "collab_server": collab_server,
+        "synced_buffers": editor.collab_synced_docs,
+        "pending_collab_intent": editor.pending_collab_intent.is_some(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,5 +424,29 @@ mod tests {
         assert_eq!(lsp["any_starting"], true);
         let servers = lsp["servers"].as_array().unwrap();
         assert_eq!(servers.len(), 2);
+    }
+
+    #[test]
+    fn introspect_collaboration_section() {
+        let editor = Editor::new();
+        let result = execute_introspect(&editor, &json!({"section": "collaboration"})).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let collab = &val["collaboration"];
+        assert_eq!(collab["collab_status"], "off");
+        assert!(collab["collab_server"].as_str().is_some());
+        assert_eq!(collab["synced_buffers"], 0);
+        assert_eq!(collab["pending_collab_intent"], false);
+    }
+
+    #[test]
+    fn introspect_all_includes_collaboration() {
+        let editor = Editor::new();
+        let result = execute_introspect(&editor, &json!({})).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(
+            val.get("collaboration").is_some(),
+            "all sections should include collaboration"
+        );
+        assert_eq!(val["collaboration"]["collab_status"], "off");
     }
 }

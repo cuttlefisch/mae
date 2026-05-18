@@ -12,7 +12,8 @@
         "mae-mcp",
         "mae-renderer",
         "mae-scheme",
-        "mae-shell"
+        "mae-shell",
+        "mae-sync"
       ],
       "public_items": [
         {
@@ -24,7 +25,8 @@
     "mae-ai": {
       "path": "crates/ai/src/lib.rs",
       "dependencies": [
-        "mae-core"
+        "mae-core",
+        "mae-sync"
       ],
       "public_items": [
         {
@@ -193,7 +195,8 @@
         "mae-lookup",
         "mae-make",
         "mae-snippets",
-        "mae-spell"
+        "mae-spell",
+        "mae-sync"
       ],
       "public_items": [
         {
@@ -269,6 +272,10 @@
           "kind": "mod"
         },
         {
+          "name": "file_lock",
+          "kind": "mod"
+        },
+        {
           "name": "file_picker",
           "kind": "mod"
         },
@@ -289,10 +296,6 @@
           "kind": "mod"
         },
         {
-          "name": "help_view",
-          "kind": "mod"
-        },
-        {
           "name": "hooks",
           "kind": "mod"
         },
@@ -306,6 +309,10 @@
         },
         {
           "name": "kb_seed",
+          "kind": "mod"
+        },
+        {
+          "name": "kb_view",
           "kind": "mod"
         },
         {
@@ -358,6 +365,10 @@
         },
         {
           "name": "table",
+          "kind": "mod"
+        },
+        {
+          "name": "text_utils",
           "kind": "mod"
         },
         {
@@ -540,8 +551,14 @@
     },
     "mae-kb": {
       "path": "crates/kb/src/lib.rs",
-      "dependencies": [],
+      "dependencies": [
+        "mae-sync"
+      ],
       "public_items": [
+        {
+          "name": "activity",
+          "kind": "mod"
+        },
         {
           "name": "federation",
           "kind": "mod"
@@ -584,6 +601,10 @@
         },
         {
           "name": "BrokenLink",
+          "kind": "struct"
+        },
+        {
+          "name": "StaleNode",
           "kind": "struct"
         },
         {
@@ -663,6 +684,10 @@
       "dependencies": [],
       "public_items": [
         {
+          "name": "broadcast",
+          "kind": "mod"
+        },
+        {
           "name": "client",
           "kind": "mod"
         },
@@ -672,6 +697,10 @@
         },
         {
           "name": "protocol",
+          "kind": "mod"
+        },
+        {
+          "name": "session",
           "kind": "mod"
         },
         {
@@ -685,6 +714,18 @@
         {
           "name": "McpServer",
           "kind": "struct"
+        },
+        {
+          "name": "write_framed",
+          "kind": "fn"
+        },
+        {
+          "name": "read_message",
+          "kind": "fn"
+        },
+        {
+          "name": "handle_request",
+          "kind": "fn"
         }
       ]
     },
@@ -760,6 +801,40 @@
         {
           "name": "checker",
           "kind": "mod"
+        }
+      ]
+    },
+    "mae-state-server": {
+      "path": "crates/state-server/src/main.rs",
+      "dependencies": [
+        "mae-mcp",
+        "mae-sync"
+      ],
+      "public_items": []
+    },
+    "mae-sync": {
+      "path": "crates/sync/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "encoding",
+          "kind": "mod"
+        },
+        {
+          "name": "kb",
+          "kind": "mod"
+        },
+        {
+          "name": "text",
+          "kind": "mod"
+        },
+        {
+          "name": "SyncError",
+          "kind": "enum"
+        },
+        {
+          "name": "DocAddress",
+          "kind": "enum"
         }
       ]
     }
@@ -899,6 +974,10 @@
     },
     {
       "name": "undefine-key!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "set-group-name",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -1147,6 +1226,14 @@
     },
     {
       "name": "keymap-bindings",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "collab-status",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "collab-synced-buffers",
       "source": "crates/scheme/src/runtime.rs"
     }
   ],
@@ -1595,6 +1682,22 @@
     {
       "name": "window-shrink",
       "doc": "Decrease window size (SPC w -)"
+    },
+    {
+      "name": "window-grow-width",
+      "doc": "Increase window width (SPC w >)"
+    },
+    {
+      "name": "window-shrink-width",
+      "doc": "Decrease window width (SPC w <)"
+    },
+    {
+      "name": "window-grow-height",
+      "doc": "Increase window height (SPC w +)"
+    },
+    {
+      "name": "window-shrink-height",
+      "doc": "Decrease window height (SPC w -)"
     },
     {
       "name": "window-balance",
@@ -2645,6 +2748,10 @@
       "doc": "Show KB health report (orphans, broken links, namespace counts)"
     },
     {
+      "name": "kb-cleanup-orphans",
+      "doc": "Remove orphan user notes with no links (SPC n C)"
+    },
+    {
       "name": "describe-display-policy",
       "doc": "Show the active display policy rules (how buffers are placed in windows)"
     },
@@ -2838,7 +2945,31 @@
     },
     {
       "name": "kb-delete",
-      "doc": "Delete a KB node by ID (SPC n d)"
+      "doc": "Delete a KB node by ID (SPC n D)"
+    },
+    {
+      "name": "daily-goto-today",
+      "doc": "Open today's daily note with chain-fill (SPC n d t)"
+    },
+    {
+      "name": "daily-goto-yesterday",
+      "doc": "Open yesterday's daily note (SPC n d y)"
+    },
+    {
+      "name": "daily-goto-date",
+      "doc": "Open daily note for a date (SPC n d d)"
+    },
+    {
+      "name": "daily-prev",
+      "doc": "Navigate to previous daily note (SPC n d p)"
+    },
+    {
+      "name": "daily-next",
+      "doc": "Navigate to next daily note (SPC n d n)"
+    },
+    {
+      "name": "kb-audit",
+      "doc": "Run KB audit report (SPC n H a)"
     },
     {
       "name": "capture-finalize",
@@ -2882,7 +3013,7 @@
     },
     {
       "name": "help-close",
-      "doc": "Close help buffer"
+      "doc": "Close KB viewer"
     },
     {
       "name": "help-search",
@@ -2890,7 +3021,7 @@
     },
     {
       "name": "help-reopen",
-      "doc": "Reopen the last-closed help buffer"
+      "doc": "Reopen the last-closed KB viewer"
     },
     {
       "name": "kb-view",
@@ -2906,11 +3037,11 @@
     },
     {
       "name": "help-close-all-folds",
-      "doc": "Fold all headings in help buffer (zM)"
+      "doc": "Fold all headings in KB viewer (zM)"
     },
     {
       "name": "help-open-all-folds",
-      "doc": "Unfold all headings in help buffer (zR)"
+      "doc": "Unfold all headings in KB viewer (zR)"
     },
     {
       "name": "help-edit",
@@ -3059,6 +3190,34 @@
     {
       "name": "record-save",
       "doc": "Save recorded events to JSON file (:record-save <path>)"
+    },
+    {
+      "name": "collab-start",
+      "doc": "Start local state server"
+    },
+    {
+      "name": "collab-connect",
+      "doc": "Connect to collaborative state server"
+    },
+    {
+      "name": "collab-disconnect",
+      "doc": "Disconnect from state server"
+    },
+    {
+      "name": "collab-status",
+      "doc": "Show collaborative editing status"
+    },
+    {
+      "name": "collab-share",
+      "doc": "Share current buffer for collaboration"
+    },
+    {
+      "name": "collab-sync",
+      "doc": "Force sync current buffer"
+    },
+    {
+      "name": "collab-doctor",
+      "doc": "Run collaborative editing diagnostics"
     },
     {
       "name": "move-down",

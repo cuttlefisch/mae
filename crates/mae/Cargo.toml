@@ -19,6 +19,7 @@ mae-dap = { path = "../dap" }
 mae-shell = { path = "../shell" }
 mae-kb = { path = "../kb" }
 mae-mcp = { path = "../mcp" }
+mae-sync = { path = "../sync" }
 mae-gui = { path = "../gui", optional = true }
 winit = { version = "0.30", optional = true }
 crossterm = { version = "0.29", features = ["event-stream"] }

@@ -468,7 +468,7 @@ pub(crate) fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
     spans
 }
 
-/// Compute inline org-style spans for non-tree-sitter contexts (help buffers,
+/// Compute inline org-style spans for non-tree-sitter contexts (KB buffers,
 /// conversation buffers). Detects *bold*, /italic/, =code=, ~verbatim~ --
 /// intentionally excludes headings to avoid triggering `line_heading_scale()`.
 pub fn compute_org_style_spans(source: &str) -> Vec<HighlightSpan> {
@@ -533,7 +533,7 @@ pub fn compute_org_style_spans(source: &str) -> Vec<HighlightSpan> {
     spans
 }
 
-/// Compute inline markdown-style spans for non-tree-sitter contexts (help buffers,
+/// Compute inline markdown-style spans for non-tree-sitter contexts (KB buffers,
 /// conversation buffers). Detects **bold**, `code`, and *italic* -- intentionally
 /// excludes headings to avoid triggering `line_heading_scale()` in layout.
 pub fn compute_markdown_style_spans(source: &str) -> Vec<HighlightSpan> {

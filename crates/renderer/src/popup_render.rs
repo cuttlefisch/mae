@@ -1,19 +1,24 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion,
 //! hover popup, code action menu.
 
+use mae_core::text_utils::centered_popup_dims;
 use mae_core::Editor;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::theme_convert::ts;
 
-/// Centered popup rect (70% × 60% of the area, clamped).
-fn centered_popup_rect(area: Rect) -> Rect {
-    let w = (area.width * 70 / 100).max(40).min(area.width);
-    let h = (area.height * 60 / 100).max(10).min(area.height);
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    Rect::new(x, y, w, h)
+/// Centered popup rect using the shared layout computation and editor options.
+fn centered_popup_rect(area: Rect, editor: &Editor) -> Rect {
+    let (w, h, x, y) = centered_popup_dims(
+        area.width as usize,
+        area.height as usize,
+        editor.popup_width_pct,
+        editor.popup_height_pct,
+        40,
+        10,
+    );
+    Rect::new(area.x + x as u16, area.y + y as u16, w as u16, h as u16)
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +123,7 @@ pub(crate) fn render_file_picker(frame: &mut Frame, area: Rect, editor: &Editor)
         None => return,
     };
 
-    let popup_area = centered_popup_rect(area);
+    let popup_area = centered_popup_rect(area, editor);
 
     let clear = ratatui::widgets::Clear;
     frame.render_widget(clear, popup_area);
@@ -211,7 +216,7 @@ pub(crate) fn render_file_browser(frame: &mut Frame, area: Rect, editor: &Editor
         None => return,
     };
 
-    let popup_area = centered_popup_rect(area);
+    let popup_area = centered_popup_rect(area, editor);
 
     frame.render_widget(ratatui::widgets::Clear, popup_area);
 
@@ -300,7 +305,7 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         None => return,
     };
 
-    let popup_area = centered_popup_rect(area);
+    let popup_area = centered_popup_rect(area, editor);
 
     frame.render_widget(ratatui::widgets::Clear, popup_area);
 

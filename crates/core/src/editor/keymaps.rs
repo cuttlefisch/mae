@@ -119,6 +119,7 @@ impl Editor {
         normal.bind(parse_key_seq("J"), "join-lines");
         normal.bind(parse_key_seq(">>"), "indent-line");
         normal.bind(parse_key_seq("<<"), "dedent-line");
+        normal.bind(parse_key_seq_spaced("M-q"), "fill-paragraph");
         // Case change
         normal.bind(parse_key_seq("~"), "toggle-case");
         normal.bind(parse_key_seq_spaced("g U U"), "uppercase-line");
@@ -179,6 +180,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC b n"), "next-buffer");
         normal.bind(parse_key_seq_spaced("SPC b p"), "prev-buffer");
         normal.bind(parse_key_seq_spaced("SPC b l"), "alternate-file");
+        normal.bind(parse_key_seq_spaced("SPC b a"), "alternate-file");
         normal.bind(parse_key_seq_spaced("SPC b m"), "view-messages");
         normal.bind(parse_key_seq_spaced("SPC b N"), "new-buffer");
         normal.bind(parse_key_seq_spaced("SPC b D"), "force-kill-buffer");
@@ -217,6 +219,8 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("C-w +"), "window-grow");
         normal.bind(parse_key_seq_spaced("C-w -"), "window-shrink");
         normal.bind(parse_key_seq_spaced("C-w ="), "window-balance");
+        normal.bind(parse_key_seq_spaced("C-w >"), "window-grow-width");
+        normal.bind(parse_key_seq_spaced("C-w <"), "window-shrink-width");
         // +ai
         normal.bind(parse_key_seq_spaced("SPC a a"), "open-ai-agent");
         normal.bind(parse_key_seq_spaced("SPC a p"), "ai-prompt");
@@ -309,17 +313,26 @@ impl Editor {
         // SPC o a / SPC o A — moved to modules/agenda/autoloads.scm
         // +register — moved to modules/registers/autoloads.scm
         // +notes (KB shortcuts)
+        // +dailies
+        normal.bind(parse_key_seq_spaced("SPC n d t"), "daily-goto-today");
+        normal.bind(parse_key_seq_spaced("SPC n d y"), "daily-goto-yesterday");
+        normal.bind(parse_key_seq_spaced("SPC n d d"), "daily-goto-date");
+        normal.bind(parse_key_seq_spaced("SPC n d p"), "daily-prev");
+        normal.bind(parse_key_seq_spaced("SPC n d n"), "daily-next");
         normal.bind(parse_key_seq_spaced("SPC n f"), "kb-find");
         normal.bind(parse_key_seq_spaced("SPC n v"), "kb-view");
         normal.bind(parse_key_seq_spaced("SPC n e"), "kb-edit-source");
         normal.bind(parse_key_seq_spaced("SPC n c"), "kb-create");
-        normal.bind(parse_key_seq_spaced("SPC n d"), "kb-delete");
+        normal.bind(parse_key_seq_spaced("SPC n D"), "kb-delete");
         normal.bind(parse_key_seq_spaced("SPC n r"), "kb-register");
         normal.bind(parse_key_seq_spaced("SPC n R"), "kb-reimport");
         normal.bind(parse_key_seq_spaced("SPC n i"), "kb-insert-link");
-        // Capture mode (org-roam parity)
+        // Capture mode (org-roam parity) — leader alternatives for discoverability
         normal.bind(parse_key_seq_spaced("C-c C-c"), "capture-finalize");
         normal.bind(parse_key_seq_spaced("C-c C-k"), "capture-abort");
+        normal.bind(parse_key_seq_spaced("SPC n s"), "capture-finalize");
+        normal.bind(parse_key_seq_spaced("SPC n k"), "capture-abort");
+        normal.bind(parse_key_seq_spaced("SPC n C"), "kb-cleanup-orphans");
         normal.bind(parse_key_seq_spaced("SPC n I"), "kb-instances");
         normal.bind(parse_key_seq_spaced("SPC n h"), "kb-health");
         // +code (LSP shortcuts)
@@ -351,6 +364,7 @@ impl Editor {
         normal.set_group_name(parse_key_seq_spaced("SPC p"), "+project");
         normal.set_group_name(parse_key_seq_spaced("SPC g"), "+git");
         normal.set_group_name(parse_key_seq_spaced("SPC n"), "+notes");
+        normal.set_group_name(parse_key_seq_spaced("SPC n d"), "+dailies");
         normal.set_group_name(parse_key_seq_spaced("SPC o"), "+open");
         normal.set_group_name(parse_key_seq_spaced("SPC l"), "+lsp");
         normal.set_group_name(parse_key_seq_spaced("SPC r"), "+register");
@@ -665,15 +679,48 @@ mod tests {
     #[test]
     fn help_buffer_uses_help_keymap() {
         let mut ed = Editor::new();
-        // Create a help buffer and focus it
+        // Create a KB buffer and focus it
         let mut buf = crate::buffer::Buffer::new();
-        buf.kind = crate::buffer::BufferKind::Help;
+        buf.kind = crate::buffer::BufferKind::Kb;
         buf.name = "*Help*".to_string();
         ed.buffers.push(buf);
         let help_idx = ed.buffers.len() - 1;
         ed.window_mgr.focused_window_mut().buffer_idx = help_idx;
         let names = ed.current_keymap_names();
         assert_eq!(names, Some(("help", Some("normal"))));
+    }
+
+    #[test]
+    fn dailies_bindings_registered() {
+        let ed = Editor::new();
+        let normal = ed.keymaps.get("normal").unwrap();
+        let entries = normal.which_key_entries(&parse_key_seq_spaced("SPC n d"), &ed.commands);
+        assert!(
+            entries.iter().any(|e| e.label.contains("today")),
+            "dailies bindings should include 'today'"
+        );
+        assert_eq!(entries.len(), 5, "should have 5 dailies bindings");
+    }
+
+    #[test]
+    fn spc_sub_prefixes_have_which_key_group_names() {
+        // Verify sub-prefixes (like SPC n d) also have group names
+        use crate::keymap::parse_key_seq_spaced;
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
+        let spc_n = parse_key_seq_spaced("SPC n");
+        let entries = normal.which_key_entries(&spc_n, &editor.commands);
+        let d_entry = entries.iter().find(|e| {
+            use crate::keymap::Key;
+            matches!(e.key.key, Key::Char('d'))
+        });
+        assert!(d_entry.is_some(), "SPC n should have a 'd' entry");
+        let d = d_entry.unwrap();
+        assert!(d.is_group, "SPC n d should be a group");
+        assert_eq!(
+            d.label, "+dailies",
+            "SPC n d group should be labeled +dailies"
+        );
     }
 
     #[test]
@@ -707,9 +754,9 @@ mod tests {
     #[test]
     fn buffer_keys_entries_returns_entries() {
         let mut ed = Editor::new();
-        // Create a help buffer and focus it (help keymap is still in kernel)
+        // Create a KB buffer and focus it (help keymap is still in kernel)
         let mut buf = crate::buffer::Buffer::new();
-        buf.kind = crate::buffer::BufferKind::Help;
+        buf.kind = crate::buffer::BufferKind::Kb;
         buf.name = "*Help*".to_string();
         ed.buffers.push(buf);
         let idx = ed.buffers.len() - 1;

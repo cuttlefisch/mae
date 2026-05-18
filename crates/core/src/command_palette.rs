@@ -28,7 +28,7 @@ pub enum PalettePurpose {
     Execute,
     Describe,
     SetTheme,
-    HelpSearch,
+    KbSearch,
     SwitchBuffer,
     SetSplashArt,
     RecentFile,
@@ -40,6 +40,7 @@ pub enum PalettePurpose {
     KbFindOrCreate,
     KbInsertLink,
     MiniDialog,
+    CollabJoin,
 }
 
 impl PalettePurpose {
@@ -49,7 +50,7 @@ impl PalettePurpose {
             Self::Execute => "Commands",
             Self::Describe => "Describe Command",
             Self::SetTheme => "Themes",
-            Self::HelpSearch => "Help Topics",
+            Self::KbSearch => "MAE Help",
             Self::SwitchBuffer => "Buffers",
             Self::SetSplashArt => "Splash Art",
             Self::RecentFile => "Recent Files",
@@ -61,6 +62,7 @@ impl PalettePurpose {
             Self::KbFindOrCreate => "Find or Create",
             Self::KbInsertLink => "Insert Link",
             Self::MiniDialog => "Dialog",
+            Self::CollabJoin => "Join Document",
         }
     }
 }
@@ -123,6 +125,7 @@ pub enum MiniDialogContext {
     RevertBuffer {
         buf_idx: usize,
     },
+    DailyGotoDate,
 }
 
 /// State for a multi-field mini-dialog (edit-link, rename, etc.)
@@ -230,7 +233,7 @@ impl CommandPalette {
     }
 
     /// Help search palette: entries are KB node ids + titles, Enter opens
-    /// the selected node in the help buffer. Used by `SPC h s`.
+    /// the selected node in the KB buffer. Used by `SPC h s`.
     pub fn for_help_search(nodes: &[(String, String)]) -> Self {
         let mut entries: Vec<PaletteEntry> = nodes
             .iter()
@@ -246,7 +249,7 @@ impl CommandPalette {
             entries,
             filtered,
             selected: 0,
-            purpose: PalettePurpose::HelpSearch,
+            purpose: PalettePurpose::KbSearch,
             query_selected: false,
         }
     }
@@ -351,6 +354,11 @@ impl CommandPalette {
             purpose: PalettePurpose::SetSplashArt,
             query_selected: false,
         }
+    }
+
+    /// Collab join palette: server documents to join. Used by `SPC C j`.
+    pub fn for_collab_join(names: &[&str]) -> Self {
+        Self::with_name_list(names, PalettePurpose::CollabJoin)
     }
 
     fn with_name_list(names: &[&str], purpose: PalettePurpose) -> Self {
@@ -493,7 +501,7 @@ mod tests {
             PalettePurpose::Execute,
             PalettePurpose::Describe,
             PalettePurpose::SetTheme,
-            PalettePurpose::HelpSearch,
+            PalettePurpose::KbSearch,
             PalettePurpose::SwitchBuffer,
             PalettePurpose::SetSplashArt,
             PalettePurpose::RecentFile,
@@ -505,6 +513,7 @@ mod tests {
             PalettePurpose::KbFindOrCreate,
             PalettePurpose::KbInsertLink,
             PalettePurpose::MiniDialog,
+            PalettePurpose::CollabJoin,
         ];
         for p in &purposes {
             assert!(!p.label().is_empty(), "{:?} has empty label", p);

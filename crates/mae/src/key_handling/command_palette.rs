@@ -50,7 +50,7 @@ pub(super) fn handle_command_palette_mode(
                     editor.set_theme_by_name(&theme);
                     crate::config::persist_editor_preference("theme", &theme);
                 }
-                (Some(node_id), PalettePurpose::HelpSearch)
+                (Some(node_id), PalettePurpose::KbSearch)
                 | (Some(node_id), PalettePurpose::KbFindOrCreate) => {
                     editor.open_help_at(&node_id);
                 }
@@ -125,6 +125,8 @@ pub(super) fn handle_command_palette_mode(
                     let display = if doc.is_empty() { node_id.clone() } else { doc };
                     let link = format!("[[{}|{}]]", node_id, display);
                     editor.insert_at_cursor(&link);
+                    // Record link for activity tracking.
+                    editor.kb_record_link(&node_id);
                     editor.set_status(format!("Inserted link to {}", display));
                 }
                 (None, PalettePurpose::SwitchProject) => {
@@ -134,6 +136,11 @@ pub(super) fn handle_command_palette_mode(
                     } else {
                         editor.set_status("No project selected");
                     }
+                }
+                (Some(doc_name), PalettePurpose::CollabJoin) => {
+                    editor.pending_collab_intent =
+                        Some(mae_core::CollabIntent::JoinDoc { doc_id: doc_name });
+                    editor.set_status("Joining document...");
                 }
                 (_, PalettePurpose::MiniDialog) => {
                     // Handled by handle_mini_dialog — should not reach here
@@ -443,6 +450,14 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             if !tag.is_empty() {
                 editor.set_status(format!("Agenda filter: :{tag}:"));
                 // Agenda refresh with tag filter — handled by M8
+            }
+        }
+        MiniDialogContext::DailyGotoDate => {
+            let date_str = dialog.fields[0].value.trim().to_string();
+            if !date_str.is_empty() {
+                if let Err(e) = editor.kb_goto_daily_date(&date_str) {
+                    editor.set_status(format!("Daily: {}", e));
+                }
             }
         }
         MiniDialogContext::RevertBuffer { buf_idx } => {

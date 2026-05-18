@@ -69,6 +69,8 @@ struct SharedState {
     pending_switch_buffer: Option<usize>,
     /// Key removals: (keymap_name, key_string)
     pending_key_removals: Vec<(String, String)>,
+    /// Group name assignments: (keymap_name, prefix_key_string, label)
+    pending_group_names: Vec<(String, String, String)>,
 
     // --- Package infrastructure ---
     /// Features that have been `provide`d.
@@ -546,6 +548,19 @@ impl SchemeRuntime {
             s.lock().unwrap().pending_key_removals.push((map, key));
             SteelVal::Void
         });
+
+        // (set-group-name MAP PREFIX LABEL) — set which-key group label
+        let s = shared.clone();
+        engine.register_fn(
+            "set-group-name",
+            move |map: String, prefix: String, label: String| {
+                s.lock()
+                    .unwrap()
+                    .pending_group_names
+                    .push((map, prefix, label));
+                SteelVal::Void
+            },
+        );
 
         // --- File I/O (no editor state needed) ---
 
@@ -1596,6 +1611,46 @@ impl SchemeRuntime {
                     })
                     .unwrap_or(SteelVal::ListV(vec![].into()))
             });
+
+        // (collab-status) — returns an alist with current collaboration state.
+        // Returns: ((status . "off") (server . "127.0.0.1:9473") (synced-docs . 0) (peer-count . 0))
+        let collab_status_str = editor.collab_status.as_str().to_string();
+        let collab_server_addr = editor.collab_server_address.clone();
+        let collab_synced_docs = editor.collab_synced_docs;
+        self.engine
+            .register_fn("collab-status", move || -> SteelVal {
+                let make_pair = |k: &str, v: SteelVal| -> SteelVal {
+                    SteelVal::ListV(vec![SteelVal::StringV(k.into()), v].into())
+                };
+                SteelVal::ListV(
+                    vec![
+                        make_pair(
+                            "status",
+                            SteelVal::StringV(collab_status_str.clone().into()),
+                        ),
+                        make_pair(
+                            "server",
+                            SteelVal::StringV(collab_server_addr.clone().into()),
+                        ),
+                        make_pair("synced-docs", SteelVal::IntV(collab_synced_docs as isize)),
+                        make_pair("peer-count", SteelVal::IntV(0)),
+                    ]
+                    .into(),
+                )
+            });
+
+        // (collab-synced-buffers) — returns a list of synced buffer names.
+        let synced_names: Vec<String> = editor.collab_synced_buffers.iter().cloned().collect();
+        self.engine
+            .register_fn("collab-synced-buffers", move || -> SteelVal {
+                SteelVal::ListV(
+                    synced_names
+                        .iter()
+                        .map(|n| SteelVal::StringV(n.clone().into()))
+                        .collect::<Vec<_>>()
+                        .into(),
+                )
+            });
     }
 
     /// Apply accumulated config changes to the editor.
@@ -1916,6 +1971,19 @@ impl SchemeRuntime {
                 let seq = parse_key_seq_spaced(&key_str);
                 if !seq.is_empty() {
                     keymap.unbind(&seq);
+                }
+            }
+        }
+
+        // (set-group-name MAP PREFIX LABEL)
+        // @ai-caution: [scheme-api] set-group-name must drain in apply_to_editor alongside keymap_bindings.
+        for (map_name, prefix_str, label) in state.pending_group_names.drain(..) {
+            if let Some(keymap) = editor.keymaps.get_mut(&map_name) {
+                let seq = parse_key_seq_spaced(&prefix_str);
+                if !seq.is_empty() {
+                    keymap.set_group_name(seq, &label);
+                    debug!(keymap = %map_name, prefix = %prefix_str, label = %label,
+                           "applying scheme group name");
                 }
             }
         }
@@ -3058,6 +3126,42 @@ mod tests {
                 .unwrap()
                 .lookup(&parse_key_seq("Q")),
             mae_core::LookupResult::None
+        );
+    }
+
+    #[test]
+    fn set_group_name_works() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        // Add some bindings under SPC z prefix
+        rt.eval(r#"(define-key "normal" "SPC z a" "quit")"#)
+            .unwrap();
+        rt.eval(r#"(define-key "normal" "SPC z b" "save")"#)
+            .unwrap();
+        rt.eval(r#"(set-group-name "normal" "SPC z" "+test-group")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        let normal = editor.keymaps.get("normal").unwrap();
+        let spc = mae_core::parse_key_seq_spaced("SPC");
+        let entries = normal.which_key_entries(&spc, &editor.commands);
+        let z_entry = entries
+            .iter()
+            .find(|e| matches!(e.key.key, mae_core::Key::Char('z')));
+        assert!(z_entry.is_some(), "SPC should have a 'z' group");
+        assert_eq!(z_entry.unwrap().label, "+test-group");
+    }
+
+    #[test]
+    fn runtime_define_key_updates_keymap() {
+        let mut rt = new_runtime();
+        let mut ed = Editor::new();
+        rt.eval(r#"(define-key "normal" "SPC z z" "quit")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut ed);
+        let normal = ed.keymaps.get("normal").unwrap();
+        assert_eq!(
+            normal.lookup(&mae_core::parse_key_seq_spaced("SPC z z")),
+            mae_core::LookupResult::Exact("quit")
         );
     }
 

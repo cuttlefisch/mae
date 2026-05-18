@@ -41,7 +41,9 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links | `rusqlite`, `tree-sitter`, `tree-sitter-org` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
-| `mae-mcp` | MCP server — Unix socket, JSON-RPC, stdio shim | `tokio`, `serde_json` |
+| `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O | `tokio`, `serde_json` |
+| `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers | `yrs`, `serde`, `base64` |
+| `mae-state-server` | Standalone collab state server — TCP sync, WAL persistence, per-doc locking | `mae-mcp`, `mae-sync`, `rusqlite`, `tokio` |
 | `mae` | Binary crate — CLI entry point, config loading, event loops | `clap`, `tokio` |
 
 ## Architecture Principles
@@ -59,6 +61,27 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 5. **Module boundaries enable distributed ownership.** Each crate has a clear responsibility. No 10k+ line files. This is a direct response to Emacs's bus-factor problem (top 5 contributors = 50.8% of all commits, critical subsystems maintained by single individuals).
 
 6. **Runtime redefinability is sacred.** Users must be able to redefine any function while the editor is running. This is the property that makes Emacs irreplaceable. The Scheme layer provides `defadvice`-equivalent, live REPL, and hot reload.
+
+7. **No hardcoding — Scheme-first configurability.** Every user-visible behavior that could reasonably differ between users MUST be exposed as a configurable option via the OptionRegistry. This means:
+   - Register in `options.rs` with a `config_key` (enables `:set-save` persistence)
+   - Automatically accessible via `(set-option!)` / `(get-option)` in Scheme
+   - Automatically accessible via `:set` command at runtime
+   - Default values live in the option definition, never as magic constants in rendering code
+   - Constants that are truly fixed (buffer sizes, protocol limits) belong in the relevant module, documented with rationale
+
+   **Corollary: No ad-hoc solutions.** Never add a hardcoded workaround for a problem that should be solved architecturally. If you find yourself duplicating logic between TUI and GUI, extract to `render_common` or `text_utils`. If you find a magic number, make it an option. If you find a one-off fix for one backend, fix it properly for both.
+
+8. **Shared computation, backend-specific drawing.** All layout math, content formatting, span computation, and data preparation lives in `mae-core` (specifically `render_common/` and `text_utils`). Backend crates (`mae-renderer`, `mae-gui`) contain ONLY the code that touches platform APIs (ratatui widgets, Skia paint calls). If two renderers compute the same thing, extract it.
+
+9. **Every change must consider downstream impact.** Before implementing any change, assess:
+   - **Bug risk**: What existing behavior could break? What edge cases does this touch?
+   - **Performance impact**: Does this add work to a hot path? Is it O(1), O(n), or O(n²)?
+   - **Type safety at boundaries**: When extracting shared code, verify that type conversions (e.g., `usize` ↔ `u16`) don't silently truncate.
+   - **Regression guard**: If the change touches rendering or input handling, verify both TUI and GUI backends. If it touches options, verify the Scheme API + config.toml round-trip + `:set-save` persistence all work.
+
+10. **Multi-client safety by design.** Any state mutation must be safe for concurrent observation. The MCP server may have N connected clients. Editor state changes emit events to a broadcast channel. Clients that can't keep up are dropped (bounded queues, write timeouts). File writes use content-hash verification + advisory locks. No operation assumes single-client.
+
+11. **CRDT-first sync (yrs/YATA).** All collaborative state flows through yrs (Yjs Rust port). Text buffers use `YText`, visual documents use `YMap`/`YArray`, KB nodes are yrs documents. The ropey rope is a read-only rendering mirror rebuilt from yrs on remote changes. Local edits generate yrs transactions (attributed, undoable via per-user `UndoManager`). This is the universal substrate — no separate sync mechanism for different content types. See ADR-002, ADR-005, ADR-006. Local undo/redo uses `reconcile_to()` (character-level LCS diff) to generate CRDT-safe deltas instead of full-state replacements.
 
 ### Rendering Pipeline
 The GUI renderer uses a three-phase pipeline: `compute_layout()` produces
@@ -107,7 +130,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - DAP client: protocol types, breakpoints, step/continue, AI debug tools ✅
 - Tree-sitter syntax highlighting: 13 languages, structural selection ✅
 - Gutter rendering: breakpoints, execution line, diagnostic severity markers ✅
-- Knowledge base: in-memory graph, SQLite persistence, org-mode parser, help system, AI KB tools ✅
+- Knowledge base: in-memory graph, SQLite persistence, org-mode parser, manual + user KB, AI KB tools ✅
 - LSP AI tools: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_workspace_symbol`, `lsp_document_symbols` ✅
 - Debug panel UI complete ✅
 
@@ -200,6 +223,17 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - **GPL-3.0-or-later:** Copyleft ensures the project stays open. No FSF copyright assignment — contributions are owned by their authors.
 
 - **Terminal-first:** ratatui/crossterm for initial development. GPU rendering (Skia) is now the primary target.
+
+## Keybinding Architecture
+
+- **Kernel keymaps** (`keymaps.rs`): vi-modal primitives only (hjkl, operators, text objects, Escape, `:`). Currently also has SPC leader bindings as a transitional default — these are migrating to keymap flavor modules.
+- **Keymap flavor modules** (`modules/keymap-doom/`, future `keymap-emacs/`, `keymap-minimal/`): define the full SPC leader tree. Selected via `keymap_flavor` option (default: "doom").
+- **Feature modules** (dailies, git-status, etc.): add bindings ONLY for module-specific commands not covered by the keymap flavor.
+- **Scheme API**: `(define-key MAP KEY CMD)` and `(set-group-name MAP PREFIX LABEL)` are the canonical binding APIs. Both work at init time and REPL time (runtime redefinable).
+- **`(mae!)` block**: Declarative module selection in `init.scm`. Only declared modules load. If a kernel command's binding is in a module, the user MUST declare that module or the binding won't exist.
+- **Never duplicate** bindings between kernel and modules without a documented migration path. The current duplication between `keymaps.rs` and `keymap-doom` is acknowledged tech debt with a ROADMAP entry.
+- **Never add ad-hoc solutions**: Prefer proper architectural solutions over hardcoded workarounds. When you find yourself duplicating logic between TUI and GUI renderers, extract shared code.
+- **Every option must be Scheme-accessible**: If a behavior is configurable, it goes through OptionRegistry. No config.toml-only settings, no env-var-only settings, no compile-time-only flags for user-facing behavior.
 
 ## Emacs Lessons (Reference Data)
 
@@ -321,14 +355,98 @@ See `SECURITY.md` for the full security posture. Key points for development:
 - Transcripts in `~/.local/share/mae/transcripts/` contain raw tool output (no secret scrubbing)
 - Shell blocklist is substring-based and bypassable — defense in depth, not a sandbox
 
+## Server-Client Architecture
+
+MAE's MCP server supports multiple concurrent clients over Unix domain sockets.
+Each client gets its own session with capability negotiation and state subscriptions.
+
+### Protocol
+- JSON-RPC 2.0 with Content-Length framing (LSP-compatible)
+- Session lifecycle: `initialize` → `notifications/initialized` → ready → `shutdown`
+- Heartbeat: `$/ping` returns `"pong"`, idle detection via `last_activity`
+- Backpressure: per-client bounded queues (100 events), write timeout (5s)
+
+### State Notifications
+Clients subscribe to event types via `notifications/subscribe`: `buffer_edit`,
+`cursor_move`, `diagnostics`, `mode_change`, `buffer_open`, `buffer_close`.
+Events carry version numbers for ordering. Slow clients are dropped, not blocked.
+
+### File Safety
+- Content-hash verification on save (SHA-256, catches mtime failures)
+- Advisory file locks (`.{name}.mae.lock` with PID/hostname)
+- inotify-based external change detection (existing `notify` infrastructure)
+- Git worktree isolation for multi-AI workflows
+
+### Architecture Decision Records
+ADRs live in `docs/adr/` and as KB concept nodes (`concept:adr-*`).
+See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine).
+
+### Sync Engine (yrs — Accepted)
+Collaborative state uses **yrs** (Yjs Rust port, YATA algorithm). Decision rationale:
+- Handles text (`YText`), visual documents (`YMap`/`YArray`), and KB nodes
+- Built-in `UndoManager` with per-user stacks
+- Proven at scale: Notion (200M+ users), Excalidraw, TLDraw
+- Dual structure: yrs is source of truth, ropey is rendering mirror
+
+Transport: JSON-RPC 2.0 with Content-Length framing over TCP (port 9473) and Unix sockets.
+Planned upgrade path: msgpack wire format (Content-Type negotiation).
+
+`mae-sync` wraps yrs with MAE-specific document schemas and provides the
+ropey bridge. See ADR-006 for full architecture.
+
+### State Server (`mae-state-server`)
+
+Standalone binary for multi-machine collaborative editing. Manages CRDT
+documents over TCP with WAL-based SQLite persistence.
+
+**Usage:**
+```bash
+mae-state-server                    # listen on 127.0.0.1:9473
+mae-state-server --bind 0.0.0.0:9473 --unix-socket /tmp/mae-collab.sock
+mae-state-server --check-config     # validate configuration
+mae-state-server doctor             # run diagnostics
+```
+
+**Architecture:**
+- Per-document locking (`RwLock<HashMap<String, Arc<Mutex<DocEntry>>>>`)
+- SQLite connection pool: FNV-1a hash-sharded (default 4 shards, WAL mode)
+- WAL-first persistence: append to SQLite WAL before in-memory apply
+- Compaction: background task every `compaction_interval_secs` (default 60s)
+- Idle eviction: docs unused for `idle_eviction_secs` (default 300s) are compacted + removed
+- Recovery: load snapshot + replay WAL tail on startup
+- Save protocol: SHA-256 content-hash via `docs/save_intent` + `docs/save_committed`
+- Event sequence tracking: `wal_seq` on SyncUpdate for gap detection + `sync/resync`
+- Transport-generic I/O: `mae_mcp::{read_message, write_framed, handle_request}`
+
+**Config:** `~/.config/mae/state-server.toml` (TOML, XDG-compliant)
+
+**Sync protocol methods:** `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`, `sync/resync`, `sync/share`, `docs/list`, `docs/content`, `docs/stats`, `docs/save_intent`, `docs/save_committed`, `docs/delete`, `$/debug`
+
+**Editor commands (SPC C prefix, doom keymap):**
+- `collab-start` (SPC C s), `collab-connect` (SPC C c), `collab-disconnect` (SPC C d)
+- `collab-status` (SPC C i), `collab-share` (SPC C S), `collab-sync` (SPC C y), `collab-doctor` (SPC C D)
+
+**AI tools:** `collab_status`, `collab_connect`, `collab_share`, `collab_doctor`
+
+**Scheme API:** `(collab-status)` → alist, `(collab-synced-buffers)` → list
+
+**Options:** `collab_server_address`, `collab_auto_connect`, `collab_auto_share`, `collab_reconnect_interval`, `collab_user_name`
+
+**Security (v1):** No authentication. TCP is open. For trusted LAN use only.
+Auth roadmap: PSK → SSH key exchange → OAuth/OIDC (via `initialize` params extension).
+
+**Systemd:** `assets/mae-state-server.service` (user unit)
+
+**Build:** `make build-state-server`, `make install-state-server`
+
 ## API Stability
 
 These APIs are intended to remain stable through v1.0:
 
 - **Scheme API:** ~50 functions + ~25 variables (see `:help concept:scheme-api`)
 - **Hooks:** 18 hook points (see `:help concept:hooks`)
-- **MCP tools:** 130+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug)
-- **Config options:** 83+ registered, persistable via `:set-save`
+- **MCP tools:** 130+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
+- **Config options:** 88+ registered, persistable via `:set-save`
 
 ## Related Resources
 

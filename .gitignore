@@ -16,6 +16,9 @@ README.org
 .mae/
 **/.mae/
 
+# MAE advisory file locks (multi-editor contention)
+*.mae.lock
+
 # Test artifacts
 test_sandbox/
 

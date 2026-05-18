@@ -347,7 +347,7 @@ fn json_field_exists(val: &serde_json::Value, field: &str) -> bool {
 
 fn truncate(s: &str, max: usize) -> &str {
     if s.len() > max {
-        &s[..max]
+        &s[..s.floor_char_boundary(max)]
     } else {
         s
     }

@@ -573,9 +573,35 @@ impl Renderer for GuiRenderer {
                 (editor.which_key_entries_for_current_keymap(), None)
             };
 
-            let entry_cols = (cols / 25).max(1);
-            let entry_rows = entries.len().div_ceil(entry_cols);
-            let popup_height = (entry_rows + 2).min(rows / 2).max(3);
+            let separator = editor
+                .get_option("which-key-separator")
+                .map(|(v, _)| v)
+                .unwrap_or_else(|| " ".to_string());
+            let max_desc: usize = editor
+                .get_option("which-key-max-desc-length")
+                .and_then(|(v, _)| v.parse().ok())
+                .unwrap_or(40);
+            let sep_width = mae_core::text_utils::display_width(&separator);
+            let inner_width = cols.saturating_sub(2);
+            let (_col_w, num_cols) = mae_core::text_utils::which_key_column_layout(
+                &entries,
+                inner_width,
+                sep_width,
+                max_desc,
+            );
+            let entry_rows = entries.len().div_ceil(num_cols);
+            let max_pct: usize = editor
+                .get_option("which-key-max-height-pct")
+                .and_then(|(v, _)| v.parse().ok())
+                .unwrap_or(mae_core::text_utils::WK_MAX_HEIGHT_PCT_DEFAULT)
+                .clamp(
+                    mae_core::text_utils::WK_MAX_HEIGHT_PCT_MIN,
+                    mae_core::text_utils::WK_MAX_HEIGHT_PCT_MAX,
+                );
+            let max_h = rows * max_pct / 100;
+            let popup_height = (entry_rows + 2)
+                .min(max_h)
+                .max(mae_core::text_utils::WK_MIN_HEIGHT);
 
             let win_height = rows.saturating_sub(popup_height);
             render_window_area(

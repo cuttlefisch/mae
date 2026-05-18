@@ -1,3 +1,4 @@
+mod collab;
 mod dap;
 mod edit;
 mod file;
@@ -146,6 +147,9 @@ impl Editor {
         }
         if let Some(v) = self.dispatch_file_tree(name) {
             self.mark_full_redraw();
+            return v;
+        }
+        if let Some(v) = self.dispatch_collab(name) {
             return v;
         }
 
@@ -501,6 +505,15 @@ impl Editor {
         if idx >= self.buffers.len() {
             return;
         }
+        // Warn if sync updates are being dropped — the broadcaster drains
+        // every ~16-100ms, so this should be rare in practice.
+        if !self.buffers[idx].pending_sync_updates.is_empty() {
+            tracing::warn!(
+                buffer = %self.buffers[idx].name,
+                pending = self.buffers[idx].pending_sync_updates.len(),
+                "dropping pending sync updates on buffer close"
+            );
+        }
         self.lsp_notify_did_close_for_buffer(idx);
         self.buffers.remove(idx);
         self.notify_buffer_removed(idx);
@@ -534,10 +547,10 @@ impl Editor {
         let area = self.default_area();
         self.window_mgr.focus_direction(dir, area);
         self.sync_mode_to_buffer();
-        // Refresh help buffer on focus (picks up node edits from other windows).
+        // Refresh KB buffer on focus (picks up node edits from other windows).
         let idx = self.active_buffer_idx();
-        if self.buffers[idx].kind == crate::buffer::BufferKind::Help {
-            self.help_populate_buffer(idx);
+        if self.buffers[idx].kind == crate::buffer::BufferKind::Kb {
+            self.kb_populate_buffer(idx);
         }
         // When focusing a conversation output buffer, jump cursor to the last line
         // so the user sees the most recent content (not stranded at row 0).

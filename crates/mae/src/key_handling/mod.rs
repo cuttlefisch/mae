@@ -191,7 +191,7 @@ pub fn handle_key(
     // --- Splash screen navigation intercept ---
     // When the splash is visible, j/k/Up/Down navigate, Enter selects,
     // and any other key dismisses the splash (by inserting into scratch).
-    if editor.mode == Mode::Normal && is_splash_visible(editor) {
+    if editor.mode == Mode::Normal && is_splash_visible(editor) && pending_keys.is_empty() {
         debug!(key_code = ?key.code, splash_selection = editor.splash_selection, "splash intercept");
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
@@ -220,6 +220,31 @@ pub fn handle_key(
             _ => {
                 // Any other key dismisses splash and falls through to normal handling.
             }
+        }
+    }
+
+    // --- Which-key scroll intercept ---
+    // When the which-key popup is visible, C-j/C-k/C-n/C-p scroll it.
+    if editor.mode == Mode::Normal && !editor.which_key_prefix.is_empty() {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match (key.code, ctrl) {
+            (KeyCode::Char('j'), true) | (KeyCode::Char('n'), true) | (KeyCode::Down, _) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_add(1);
+                return;
+            }
+            (KeyCode::Char('k'), true) | (KeyCode::Char('p'), true) | (KeyCode::Up, _) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_sub(1);
+                return;
+            }
+            (KeyCode::Char('d'), true) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_add(5);
+                return;
+            }
+            (KeyCode::Char('u'), true) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_sub(5);
+                return;
+            }
+            _ => {} // fall through to normal dispatch
         }
     }
 

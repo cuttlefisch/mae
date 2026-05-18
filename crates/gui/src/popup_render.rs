@@ -1,46 +1,15 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion.
 
+use mae_core::text_utils::{
+    centered_popup_dims, display_width, format_keypress, truncate_end, truncate_start,
+    which_key_column_layout, WK_BREADCRUMB_SEP, WK_DOC_MIN_WIDTH,
+};
 use mae_core::Editor;
 use skia_safe::Color4f;
-use unicode_width::UnicodeWidthChar;
 
 use crate::canvas::{CellRect, SkiaCanvas};
 use crate::layout::FrameLayout;
 use crate::theme;
-
-/// Truncate `s` from the start, keeping the last `max_cols - 1` display columns
-/// and prepending '…'. Safe for multi-byte / wide characters.
-fn truncate_start(s: &str, max_cols: usize) -> String {
-    let target = max_cols.saturating_sub(1);
-    let mut cols = 0;
-    let mut start = s.len();
-    for (i, ch) in s.char_indices().rev() {
-        let w = ch.width().unwrap_or(1);
-        if cols + w > target {
-            break;
-        }
-        cols += w;
-        start = i;
-    }
-    format!("…{}", &s[start..])
-}
-
-/// Truncate `s` from the end, keeping the first `max_cols - 1` display columns
-/// and appending '…'. Safe for multi-byte / wide characters.
-fn truncate_end(s: &str, max_cols: usize) -> String {
-    let target = max_cols.saturating_sub(1);
-    let mut cols = 0;
-    for (byte_idx, ch) in s.char_indices() {
-        let w = ch.width().unwrap_or(1);
-        if cols + w > target {
-            let mut result = s[..byte_idx].to_string();
-            result.push('…');
-            return result;
-        }
-        cols += w;
-    }
-    s.to_string()
-}
 
 /// Centered popup rect using editor-configured percentages.
 pub fn centered_popup_rect_from(
@@ -49,14 +18,12 @@ pub fn centered_popup_rect_from(
     width_pct: usize,
     height_pct: usize,
 ) -> CellRect {
-    let w = (area_width * width_pct / 100).max(40).min(area_width);
-    let h = (area_height * height_pct / 100).max(10).min(area_height);
-    let x = (area_width.saturating_sub(w)) / 2;
-    let y = (area_height.saturating_sub(h)) / 2;
+    let (w, h, x, y) = centered_popup_dims(area_width, area_height, width_pct, height_pct, 40, 10);
     CellRect::new(y, x, w, h)
 }
 
-/// Centered popup rect (70% x 60% of the area, clamped).
+/// Centered popup rect using default 70%×60% (used by tests).
+#[cfg(test)]
 pub fn centered_popup_rect(area_width: usize, area_height: usize) -> CellRect {
     centered_popup_rect_from(area_width, area_height, 70, 60)
 }
@@ -180,7 +147,8 @@ pub fn render_file_picker(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize,
         None => return,
     };
 
-    let popup = centered_popup_rect(cols, rows);
+    let popup =
+        centered_popup_rect_from(cols, rows, editor.popup_width_pct, editor.popup_height_pct);
     let text_fg = theme::ts_fg(editor, "ui.text");
     let selection_bg = theme::ts_bg(editor, "ui.selection");
     let selection_fg = theme::ts_fg(editor, "ui.selection");
@@ -253,7 +221,7 @@ pub fn render_file_picker(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize,
 
         let fg = if is_selected { selection_fg } else { text_fg };
         let max_w = inner.width.saturating_sub(1);
-        let display = if unicode_width::UnicodeWidthStr::width(path.as_str()) > max_w {
+        let display = if display_width(path) > max_w {
             truncate_start(path, max_w)
         } else {
             path.clone()
@@ -272,7 +240,8 @@ pub fn render_file_browser(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize
         None => return,
     };
 
-    let popup = centered_popup_rect(cols, rows);
+    let popup =
+        centered_popup_rect_from(cols, rows, editor.popup_width_pct, editor.popup_height_pct);
     let text_fg = theme::ts_fg(editor, "ui.text");
     let selection_fg = theme::ts_fg(editor, "ui.selection");
     let selection_bg = theme::ts_bg(editor, "ui.selection");
@@ -334,7 +303,7 @@ pub fn render_file_browser(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize
 
         let mut name = entry.display();
         let max_w = inner.width.saturating_sub(1);
-        if unicode_width::UnicodeWidthStr::width(name.as_str()) > max_w {
+        if display_width(&name) > max_w {
             name = truncate_start(&name, max_w);
         }
         canvas.draw_text_at(row, inner.col, &name, fg);
@@ -357,7 +326,8 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         None => return,
     };
 
-    let popup = centered_popup_rect(cols, rows);
+    let popup =
+        centered_popup_rect_from(cols, rows, editor.popup_width_pct, editor.popup_height_pct);
     let text_fg = theme::ts_fg(editor, "ui.text");
     let selection_fg = theme::ts_fg(editor, "ui.selection");
     let selection_bg = theme::ts_bg(editor, "ui.selection");
@@ -473,8 +443,7 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         let fg = if is_selected { selection_fg } else { text_fg };
         let dfg = if is_selected { selection_fg } else { doc_fg };
 
-        let name_display = if unicode_width::UnicodeWidthStr::width(entry.name.as_str()) > name_col
-        {
+        let name_display = if display_width(&entry.name) > name_col {
             if full_width_name {
                 // For paths, show the end (most distinctive part)
                 truncate_start(&entry.name, name_col)
@@ -489,14 +458,12 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
 
         if !full_width_name {
             let available_for_doc = inner.width.saturating_sub(name_col + 3);
-            let doc_display = if unicode_width::UnicodeWidthStr::width(entry.doc.as_str())
-                > available_for_doc
-                && available_for_doc > 1
-            {
-                truncate_end(&entry.doc, available_for_doc)
-            } else {
-                entry.doc.clone()
-            };
+            let doc_display =
+                if display_width(&entry.doc) > available_for_doc && available_for_doc > 1 {
+                    truncate_end(&entry.doc, available_for_doc)
+                } else {
+                    entry.doc.clone()
+                };
             canvas.draw_text_at(row, inner.col + 1 + name_col + 2, &doc_display, dfg);
         }
     }
@@ -504,6 +471,8 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
 
 // ---------------------------------------------------------------------------
 // Which-key popup
+// @ai-caution: [which-key] Mirror of TUI which_key_render.rs layout logic. Changes here
+// MUST be reflected in the TUI renderer.
 // ---------------------------------------------------------------------------
 
 pub fn render_which_key_popup(
@@ -519,7 +488,28 @@ pub fn render_which_key_popup(
     let group_fg = theme::ts_fg(editor, "ui.popup.group");
     let key_fg = theme::ts_fg(editor, "ui.popup.key");
     let text_fg = theme::ts_fg(editor, "ui.popup.text");
+    // Doc color: try ui.popup.doc, fallback to dimmed text color
+    let doc_fg = {
+        let style = editor.theme.style("ui.popup.doc");
+        if style.fg.is_some() {
+            theme::ts_fg(editor, "ui.popup.doc")
+        } else {
+            // Dim the text color by reducing alpha
+            let mut dimmed = text_fg;
+            dimmed.a *= 0.6;
+            dimmed
+        }
+    };
     let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
+
+    let separator = editor
+        .get_option("which-key-separator")
+        .map(|(v, _)| v)
+        .unwrap_or_else(|| " ".to_string());
+    let max_desc: usize = editor
+        .get_option("which-key-max-desc-length")
+        .and_then(|(v, _)| v.parse().ok())
+        .unwrap_or(40);
 
     canvas.draw_rect_fill(row_start, 0, cols, height, bg);
     let title = if let Some(t) = title_override {
@@ -530,7 +520,7 @@ pub fn render_which_key_popup(
             .iter()
             .map(format_keypress)
             .collect::<Vec<_>>()
-            .join(" > ");
+            .join(WK_BREADCRUMB_SEP);
         format!(" {} ", breadcrumb)
     };
     draw_border_titled(canvas, row_start, 0, cols, height, border_fg, &title);
@@ -540,14 +530,48 @@ pub fn render_which_key_popup(
     let inner_width = cols.saturating_sub(2);
     let inner_height = height.saturating_sub(2);
 
-    let col_width = 30_usize;
-    let num_cols = (inner_width / col_width).max(1);
+    let sep_width = display_width(&separator);
+    let (col_width, num_cols) = which_key_column_layout(entries, inner_width, sep_width, max_desc);
+
+    // Total rows needed for all entries
+    let total_rows = entries.len().div_ceil(num_cols);
+
+    // Clamp scroll offset so it can't go past the last page
+    let max_scroll = total_rows.saturating_sub(inner_height);
+    let scroll = editor.which_key_scroll.min(max_scroll);
+
+    let skip_entries = scroll * num_cols;
+    let show_above = scroll > 0;
+    let show_below = total_rows > scroll + inner_height;
+
+    let effective_max_rows = if show_above && show_below {
+        inner_height.saturating_sub(2)
+    } else if show_above || show_below {
+        inner_height.saturating_sub(1)
+    } else {
+        inner_height
+    };
 
     let mut row = 0;
-    let mut col = 0;
 
-    for entry in entries {
-        if row >= inner_height {
+    // "above" indicator
+    if show_above {
+        let above_count = skip_entries;
+        canvas.draw_text_at(
+            inner_row,
+            inner_col,
+            &format!("\u{2191} +{} above", above_count),
+            doc_fg,
+        );
+        row += 1;
+    }
+
+    let visible_entries = &entries[skip_entries..];
+    let mut col = 0;
+    let mut displayed = 0;
+
+    for entry in visible_entries.iter() {
+        if row >= effective_max_rows + if show_above { 1 } else { 0 } {
             break;
         }
 
@@ -558,51 +582,60 @@ pub fn render_which_key_popup(
             (key_fg, text_fg)
         };
 
-        let max_label = col_width.saturating_sub(key_str.len() + 2);
-        let label = if entry.label.len() > max_label {
-            format!("{}..", &entry.label[..max_label.saturating_sub(2)])
+        let key_w = display_width(&key_str);
+        let max_label = col_width.saturating_sub(key_w + sep_width + 1);
+        let label_w = display_width(&entry.label);
+        let label = if label_w > max_label {
+            truncate_end(&entry.label, max_label)
         } else {
             entry.label.clone()
         };
+        let actual_label_w = display_width(&label);
 
         let x = inner_col + col * col_width;
         canvas.draw_text_at(inner_row + row, x, &key_str, kfg);
-        canvas.draw_text_at(inner_row + row, x + key_str.len() + 1, &label, lfg);
+        let sep_x = x + key_w;
+        canvas.draw_text_at(inner_row + row, sep_x, &separator, text_fg);
+        let label_x = sep_x + sep_width;
+        canvas.draw_text_at(inner_row + row, label_x, &label, lfg);
+
+        // Doc string display for leaf entries
+        if !entry.is_group {
+            if let Some(ref doc) = entry.doc {
+                let used = key_w + sep_width + actual_label_w;
+                let remaining = col_width.saturating_sub(used + 2);
+                if remaining > WK_DOC_MIN_WIDTH {
+                    let trunc = truncate_end(doc, remaining);
+                    let doc_x = label_x + actual_label_w + 1;
+                    canvas.draw_text_at(inner_row + row, doc_x, &trunc, doc_fg);
+                }
+            }
+        }
 
         col += 1;
+        displayed += 1;
         if col >= num_cols {
             col = 0;
             row += 1;
         }
     }
+
+    // "below" indicator
+    if show_below {
+        let below_count = entries.len() - skip_entries - displayed;
+        if below_count > 0 {
+            let indicator_row = inner_row + inner_height.saturating_sub(1);
+            canvas.draw_text_at(
+                indicator_row,
+                inner_col,
+                &format!("\u{2193} +{} below", below_count),
+                doc_fg,
+            );
+        }
+    }
 }
 
-fn format_keypress(kp: &mae_core::KeyPress) -> String {
-    let mut s = String::new();
-    if kp.ctrl {
-        s.push_str("C-");
-    }
-    if kp.alt {
-        s.push_str("M-");
-    }
-    match &kp.key {
-        mae_core::Key::Char(' ') => s.push_str("SPC"),
-        mae_core::Key::Char(c) => s.push(*c),
-        mae_core::Key::Escape => s.push_str("Esc"),
-        mae_core::Key::Enter => s.push_str("Enter"),
-        mae_core::Key::Tab => s.push_str("Tab"),
-        mae_core::Key::Backspace => s.push_str("BS"),
-        mae_core::Key::Up => s.push_str("Up"),
-        mae_core::Key::Down => s.push_str("Down"),
-        mae_core::Key::Left => s.push_str("Left"),
-        mae_core::Key::Right => s.push_str("Right"),
-        mae_core::Key::F(n) => {
-            s.push_str(&format!("F{}", n));
-        }
-        _ => s.push('?'),
-    }
-    s
-}
+// format_keypress is now shared via mae_core::text_utils::format_keypress
 
 // ---------------------------------------------------------------------------
 // Hover popup

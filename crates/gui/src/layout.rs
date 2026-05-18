@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate::buffer_render;
 use crate::gutter;
-use mae_core::wrap::{char_width, find_wrap_break, leading_indent_len};
+use mae_core::wrap::{char_width, content_indent_len, find_wrap_break};
 use mae_core::{Buffer, Editor, HighlightSpan, Window};
 
 /// Layout information for an inline image on a line.
@@ -526,7 +526,7 @@ pub fn compute_layout(
         if wrap {
             let full_chars = full_chars.to_vec();
             let indent_len = if editor.break_indent {
-                leading_indent_len(&full_chars)
+                content_indent_len(&full_chars)
             } else {
                 0
             };

@@ -131,8 +131,24 @@ impl super::Editor {
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
+            "kb_activity_tracking" => self.kb_activity_tracking.to_string(),
+            "kb_activity_decay" => self.kb_activity_decay.to_string(),
+            "kb_dailies_dir" => self
+                .kb_dailies_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            "kb_daily_chain_gap_max" => self.kb_daily_chain_gap_max.to_string(),
             "format_on_save" => self.format_on_save.to_string(),
             "spell_enabled" => self.spell_enabled.to_string(),
+            "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
+            "collab_server_address" => self.collab_server_address.clone(),
+            "collab_auto_connect" => self.collab_auto_connect.to_string(),
+            "collab_auto_share" => self.collab_auto_share.to_string(),
+            "collab_reconnect_interval" => self.collab_reconnect_interval.to_string(),
+            "collab_user_name" => self.collab_user_name.clone(),
+            "collab_write_timeout_ms" => self.collab_write_timeout_ms.to_string(),
+            "fill_column" => self.fill_column.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -511,11 +527,67 @@ impl super::Editor {
                     self.kb_notes_dir = Some(std::path::PathBuf::from(expanded));
                 }
             }
+            "kb_activity_tracking" => {
+                self.kb_activity_tracking = parse_option_bool(value)?;
+            }
+            "kb_activity_decay" => {
+                let v: f64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_activity_decay = v.clamp(0.0001, 1.0);
+            }
+            "kb_dailies_dir" => {
+                if value.is_empty() {
+                    self.kb_dailies_dir = None;
+                } else {
+                    let expanded = crate::file_picker::expand_tilde(value);
+                    self.kb_dailies_dir = Some(std::path::PathBuf::from(expanded));
+                }
+            }
+            "kb_daily_chain_gap_max" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_daily_chain_gap_max = v.clamp(1, 365);
+            }
             "format_on_save" => {
                 self.format_on_save = parse_option_bool(value)?;
             }
             "spell_enabled" => {
                 self.spell_enabled = parse_option_bool(value)?;
+            }
+            "file_tree_focus_on_open" => {
+                self.file_tree_focus_on_open = parse_option_bool(value)?;
+            }
+            "collab_server_address" => {
+                self.collab_server_address = value.to_string();
+            }
+            "collab_auto_connect" => {
+                self.collab_auto_connect = parse_option_bool(value)?;
+            }
+            "collab_auto_share" => {
+                self.collab_auto_share = parse_option_bool(value)?;
+            }
+            "collab_reconnect_interval" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.collab_reconnect_interval = v.clamp(1, 300);
+            }
+            "collab_user_name" => {
+                self.collab_user_name = value.to_string();
+            }
+            "collab_write_timeout_ms" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.collab_write_timeout_ms = v.clamp(500, 60_000);
+            }
+            "fill_column" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.fill_column = v.clamp(20, 200);
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -818,7 +890,8 @@ impl super::Editor {
     }
 
     pub fn show_kb_health_report(&mut self) {
-        let report = self.kb.health_report();
+        let mut report = self.kb.health_report();
+        report.stale_nodes = self.kb.detect_stale_nodes();
         let mut lines = Vec::new();
         lines.push("KB Health Report".to_string());
         lines.push("================".to_string());
@@ -909,6 +982,49 @@ impl super::Editor {
                 }
             }
         }
+        lines.push(String::new());
+
+        // Stale nodes (source file deleted).
+        lines.push(format!("Stale Nodes ({})", report.stale_nodes.len()));
+        lines.push("-------------------".to_string());
+        if report.stale_nodes.is_empty() {
+            lines.push("  (none)".to_string());
+        } else {
+            for s in &report.stale_nodes {
+                lines.push(format!(
+                    "  {} — {} (was: {})",
+                    s.id,
+                    s.title,
+                    s.source_file.display()
+                ));
+            }
+        }
+        lines.push(String::new());
+
+        // Watcher performance metrics.
+        let ws = &self.kb_watcher_stats;
+        lines.push("Watcher Metrics".to_string());
+        lines.push("---------------".to_string());
+        lines.push(format!("  Reimports total:     {}", ws.reimports_total));
+        lines.push(format!("  Events upserted:     {}", ws.events_upserted));
+        lines.push(format!("  Events removed:      {}", ws.events_removed));
+        lines.push(format!("  Suppressed debounce: {}", ws.suppressed_debounce));
+        lines.push(format!("  Suppressed timebox:  {}", ws.suppressed_timebox));
+        lines.push(format!(
+            "  Suppressed write-guard: {}",
+            ws.events_suppressed
+        ));
+        lines.push(format!("  Errors:              {}", ws.errors));
+        let avg_ms = if ws.drain_count > 0 {
+            format!(
+                "{:.1}ms",
+                ws.drain_us_sum as f64 / ws.drain_count as f64 / 1000.0
+            )
+        } else {
+            "n/a".to_string()
+        };
+        lines.push(format!("  Avg reimport time:   {}", avg_ms));
+        lines.push(format!("  Total drain cycles:  {}", ws.drain_count));
 
         let content = lines.join("\n");
         let mut buf = crate::buffer::Buffer::new();

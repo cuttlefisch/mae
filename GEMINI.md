@@ -77,6 +77,15 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 - **GPL-3.0-or-later:** Copyleft ensures the project stays open.
 - **Terminal-first:** ratatui/crossterm for initial development. GUI via winit + Skia.
 
+## Keybinding Architecture
+
+- **Kernel keymaps** (`keymaps.rs`): vi-modal primitives (hjkl, operators, text objects, Escape, `:`). Currently also has SPC leader bindings as a transitional default — migrating to keymap flavor modules.
+- **Keymap flavor modules** (`modules/keymap-doom/`, future `keymap-emacs/`, `keymap-minimal/`): define the full SPC leader tree. Selected via `keymap_flavor` option (default: "doom").
+- **Feature modules** (dailies, git-status, etc.): add bindings ONLY for module-specific commands not covered by the keymap flavor.
+- **Scheme API**: `(define-key MAP KEY CMD)` and `(set-group-name MAP PREFIX LABEL)` are the canonical binding APIs. Both work at init time and REPL time.
+- **`(mae!)` block**: Declarative module selection in `init.scm`. Only declared modules load.
+- **Never duplicate** bindings between kernel and modules without a documented migration path.
+
 ## Development Status
 
 **v0.9.0-dev** — 3,059+ tests, all 11 phases complete.

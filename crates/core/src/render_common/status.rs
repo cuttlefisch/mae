@@ -5,7 +5,9 @@
 //! left/right text.  The backend only needs to draw the resulting strings.
 
 use crate::buffer_mode::BufferMode;
-use crate::{Buffer, BufferKind, Editor, InputLock, LspServerStatus, Mode, VisualType, Window};
+use crate::{
+    Buffer, BufferKind, CollabStatus, Editor, InputLock, LspServerStatus, Mode, VisualType, Window,
+};
 
 #[cfg(test)]
 use crate::LspServerInfo;
@@ -191,6 +193,12 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         segments.push(Segment::new(lsp_status, 4));
     }
 
+    // Priority 4: collab status.
+    let collab_str = format_collab_status(editor);
+    if !collab_str.is_empty() {
+        segments.push(Segment::new(collab_str, 4));
+    }
+
     // Priority 5: visual selection count (only in visual mode).
     if matches!(editor.mode, Mode::Visual(_)) {
         let (lines, chars) = editor.visual_selection_size();
@@ -218,7 +226,7 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
     // Priority 3.5: capture mode indicator.
     if editor.capture_state.is_some() {
         segments.push(Segment::new(
-            " [Capture: C-c C-c finish | C-c C-k abort]".to_string(),
+            " [Capture: SPC n s finish | SPC n k abort | C-c C-c/C-k]".to_string(),
             3,
         ));
     }
@@ -505,6 +513,23 @@ pub fn format_lsp_status(editor: &Editor) -> String {
         " LSP:✓".to_string()
     } else {
         String::new()
+    }
+}
+
+pub fn format_collab_status(editor: &Editor) -> String {
+    match &editor.collab_status {
+        CollabStatus::Off => String::new(),
+        CollabStatus::Connecting => " [C:\u{2026}]".to_string(),
+        CollabStatus::Connected { peer_count } => {
+            let buf_name = &editor.buffers[editor.window_mgr.focused_window().buffer_idx].name;
+            if editor.collab_synced_buffers.contains(buf_name) {
+                format!(" [C:{}|synced]", peer_count)
+            } else {
+                format!(" [C:{}]", peer_count)
+            }
+        }
+        CollabStatus::Reconnecting => " [C:\u{27f3}]".to_string(),
+        CollabStatus::Disconnected => " [C:\u{2717}]".to_string(),
     }
 }
 

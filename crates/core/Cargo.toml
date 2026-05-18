@@ -14,6 +14,7 @@ mae-lookup = { path = "../lookup" }
 mae-make = { path = "../make" }
 mae-snippets = { path = "../snippets" }
 mae-spell = { path = "../spell" }
+mae-sync = { path = "../sync" }
 ropey = "1"
 unicode-width = "0.2"
 unicode-segmentation = "1.12"
@@ -35,6 +36,8 @@ tree-sitter-json = "0.24"
 tree-sitter-bash = "0.25"
 tree-sitter-scheme = "0.24"
 tree-sitter-yaml = "0.7"
+hostname = "0.4"
+sha2 = "0.10"
 sysinfo = "0.39"
 libc = "0.2"
 imagesize = "0.14"

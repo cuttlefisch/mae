@@ -5,13 +5,13 @@ mod command;
 mod dap_ops;
 mod debug_panel_ops;
 mod diagnostics;
-mod dispatch;
+pub mod dispatch;
 mod edit_ops;
 pub(crate) mod ex_parse;
 mod file_ops;
 mod git_ops;
 mod heading_ops;
-mod help_ops;
+pub(crate) mod help_ops;
 mod hook_ops;
 mod jumps;
 pub(crate) mod kb_ops;
@@ -40,8 +40,72 @@ mod visual;
 
 pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
+pub use help_ops::is_builtin_node;
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
 pub use kb_ops::KbWatcherStats;
+
+/// Default TCP address for the collaborative state server.
+pub const DEFAULT_COLLAB_ADDRESS: &str = "127.0.0.1:9473";
+/// Default TCP port for the collaborative state server.
+pub const DEFAULT_COLLAB_PORT: u16 = 9473;
+
+/// Collaborative editing connection status.
+/// Surfaced in the status bar via `format_collab_status()`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CollabStatus {
+    /// No collaborative session configured or active.
+    #[default]
+    Off,
+    /// Establishing initial connection to the state server.
+    Connecting,
+    /// Connected to the state server with `peer_count` other editors.
+    Connected { peer_count: usize },
+    /// Lost connection, attempting to re-establish.
+    Reconnecting,
+    /// Disconnected from the state server (not retrying).
+    Disconnected,
+}
+
+impl CollabStatus {
+    /// Short string label for this status (used by AI tools, Scheme API, introspect).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CollabStatus::Off => "off",
+            CollabStatus::Connecting => "connecting",
+            CollabStatus::Connected { .. } => "connected",
+            CollabStatus::Reconnecting => "reconnecting",
+            CollabStatus::Disconnected => "disconnected",
+        }
+    }
+}
+
+/// Intent signals from the editor core to the binary event loop.
+///
+/// The binary drains `editor.pending_collab_intent` each tick, similar to
+/// `pending_lsp_requests` and `pending_dap_intents`.
+#[derive(Debug, Clone)]
+pub enum CollabIntent {
+    /// Start a local state server process.
+    StartServer,
+    /// Connect to a remote state server.
+    Connect { address: String },
+    /// Disconnect from the current server.
+    Disconnect,
+    /// Show the *Collab Status* diagnostic buffer.
+    ShowStatus,
+    /// Share the named buffer for collaborative editing.
+    ShareBuffer { buffer_name: String },
+    /// Force sync the named buffer.
+    ForceSync { buffer_name: String },
+    /// Run connectivity diagnostics.
+    Doctor,
+    /// List shared documents on the server (opens *Collab Docs* buffer).
+    ListDocs,
+    /// List docs, then open a palette picker for joining.
+    ListDocsForJoin,
+    /// Join a shared document by name (create buffer from server state).
+    JoinDoc { doc_id: String },
+}
 
 /// State for an active note capture session (org-roam parity).
 /// Set when `kb_create_note_from_title` creates a note; cleared by
@@ -58,7 +122,8 @@ pub use marks::Mark;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use crate::buffer::Buffer;
 
@@ -397,6 +462,8 @@ pub struct Editor {
     pub keymaps: HashMap<String, Keymap>,
     /// Current which-key prefix being accumulated. Empty = no popup.
     pub which_key_prefix: Vec<KeyPress>,
+    /// Scroll offset (in rows) for the which-key popup. Reset when prefix changes.
+    pub which_key_scroll: usize,
     /// In-editor message log (*Messages* buffer equivalent).
     /// Shared with the tracing layer via MessageLogHandle.
     pub message_log: MessageLog,
@@ -590,8 +657,8 @@ pub struct Editor {
     pub last_macro_register: Option<char>,
     /// Recursion depth guard during macro replay (max 10).
     pub macro_replay_depth: usize,
-    /// Knowledge base: backing store for the help system and the
-    /// AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
+    /// Knowledge base: backing store for the manual and user notes,
+    /// plus the AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
     /// hand-authored concept nodes on startup.
     pub kb: mae_kb::KnowledgeBase,
     /// KB federation: registry of external KB instances (org-roam dirs etc.).
@@ -624,6 +691,17 @@ pub struct Editor {
     /// Append guidance on revisit to steer away from manual graph traversal loops.
     /// Cleared when a new AI conversation starts.
     pub kb_ai_visited_ids: std::collections::HashSet<String>,
+    /// Paths currently being written by MAE itself (activity tracking, chain-fill).
+    /// Watcher events for these paths are suppressed to prevent cascading reimports.
+    pub kb_write_guard: std::collections::HashSet<std::path::PathBuf>,
+    /// KB option: enable activity tracking (last-accessed/modified/linked timestamps).
+    pub kb_activity_tracking: bool,
+    /// KB option: decay rate for activity scoring.
+    pub kb_activity_decay: f64,
+    /// KB option: dailies directory (explicit setting or derived from kb_notes_dir/daily).
+    pub kb_dailies_dir: Option<std::path::PathBuf>,
+    /// KB option: max days to walk backwards when chain-filling dailies (default 90).
+    pub kb_daily_chain_gap_max: usize,
 
     /// Override for config dir (test isolation — prevents clobbering ~/.config/mae).
     pub config_dir_override: Option<std::path::PathBuf>,
@@ -660,7 +738,7 @@ pub struct Editor {
     pub spell_enabled: bool,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
-    pub last_help_state: Option<crate::help_view::HelpView>,
+    pub last_kb_state: Option<crate::kb_view::KbView>,
     /// Which ASCII art to show on the splash screen. Default is "bat".
     pub splash_art: Option<String>,
     /// Custom splash arts registered via `(register-splash-art! ...)`.
@@ -752,6 +830,8 @@ pub struct Editor {
     pub break_indent: bool,
     /// String prefix for continuation lines (neovim showbreak). Default "↪ ".
     pub show_break: String,
+    /// Column at which fill-paragraph wraps text (Emacs fill-column).
+    pub fill_column: usize,
     /// Toggle: hide *bold* and /italic/ markers in Org-mode.
     pub org_hide_emphasis_markers: bool,
     /// Pending agent setup request from `:agent-setup <name>` or `:agent-list`.
@@ -791,6 +871,8 @@ pub struct Editor {
     pub conversation_pair: Option<ConversationPair>,
     /// Window ID of the file tree sidebar, if open. Used to track and close it.
     pub file_tree_window_id: Option<crate::window::WindowId>,
+    /// Whether to auto-focus the file tree window when it opens.
+    pub file_tree_focus_on_open: bool,
     /// Pending file tree action (rename/create). The command-line submit
     /// path checks this after the user types a new name.
     /// NOTE: Mostly replaced by MiniDialog — retained only for backward compat
@@ -885,7 +967,7 @@ pub struct Editor {
     pub heading_scale_h3: f32,
     /// Show link labels instead of raw markup (Emacs org-link-descriptive). Default true.
     pub link_descriptive: bool,
-    /// Apply inline bold/italic/code styling in conversation/help buffers. Default true.
+    /// Apply inline bold/italic/code styling in conversation and KB buffers. Default true.
     pub render_markup: bool,
     /// Show hover info in a floating popup (true) or status bar (false). Default true.
     pub lsp_hover_popup: bool,
@@ -1034,6 +1116,29 @@ pub struct Editor {
     /// Pending package management commands (sync, upgrade, doctor).
     /// Drained by the binary crate in the event loop.
     pub pending_pkg_commands: Vec<String>,
+    /// Paths for which this editor instance holds advisory file locks.
+    /// Locks are acquired on file open and released on buffer close or exit.
+    pub locked_files: HashSet<PathBuf>,
+    /// Current collaborative editing connection status.
+    pub collab_status: CollabStatus,
+    /// Number of documents currently synced via the collaborative state server.
+    pub collab_synced_docs: usize,
+    /// Set of buffer names currently synced via the collaborative state server.
+    pub collab_synced_buffers: HashSet<String>,
+    /// Pending collaborative editing intent for the binary event loop to drain.
+    pub pending_collab_intent: Option<CollabIntent>,
+    /// TCP address of the collaborative state server.
+    pub collab_server_address: String,
+    /// Automatically connect to the state server on startup.
+    pub collab_auto_connect: bool,
+    /// Automatically share new buffers when connected.
+    pub collab_auto_share: bool,
+    /// Seconds between automatic reconnection attempts.
+    pub collab_reconnect_interval: u64,
+    /// Display name for collaborative edits.
+    pub collab_user_name: String,
+    /// Write timeout for peer connections, in milliseconds.
+    pub collab_write_timeout_ms: u64,
 }
 
 impl Default for Editor {
@@ -1060,6 +1165,7 @@ impl Editor {
             commands,
             keymaps,
             which_key_prefix: Vec::new(),
+            which_key_scroll: 0,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             theme: default_theme(),
             debug_state: None,
@@ -1137,7 +1243,7 @@ impl Editor {
             macro_log: Vec::new(),
             last_macro_register: None,
             macro_replay_depth: 0,
-            last_help_state: None,
+            last_kb_state: None,
             splash_art: Some("bat".to_string()),
             custom_splash_arts: Vec::new(),
             splash_image_width: 25,
@@ -1166,6 +1272,11 @@ impl Editor {
             kb_notes_dir: None,
             capture_state: None,
             kb_ai_visited_ids: std::collections::HashSet::new(),
+            kb_write_guard: std::collections::HashSet::new(),
+            kb_activity_tracking: true,
+            kb_activity_decay: 0.01,
+            kb_dailies_dir: None,
+            kb_daily_chain_gap_max: 90,
             config_dir_override: None,
             data_dir_override: None,
             babel_confirm: true,
@@ -1206,6 +1317,7 @@ impl Editor {
             word_wrap: false,
             break_indent: true,
             show_break: "↪ ".to_string(),
+            fill_column: 80,
             org_hide_emphasis_markers: false,
             pending_agent_setup: None,
             input_lock: InputLock::None,
@@ -1220,6 +1332,7 @@ impl Editor {
             ai_target_window_id: None,
             conversation_pair: None,
             file_tree_window_id: None,
+            file_tree_focus_on_open: true,
             file_tree_action: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
@@ -1322,6 +1435,17 @@ impl Editor {
             pending_module_reloads: Vec::new(),
             pending_pkg_commands: Vec::new(),
             pending_git_diff: None,
+            locked_files: HashSet::new(),
+            collab_status: CollabStatus::Off,
+            collab_synced_docs: 0,
+            collab_synced_buffers: HashSet::new(),
+            pending_collab_intent: None,
+            collab_server_address: DEFAULT_COLLAB_ADDRESS.to_string(),
+            collab_auto_connect: false,
+            collab_auto_share: false,
+            collab_reconnect_interval: 5,
+            collab_user_name: String::new(),
+            collab_write_timeout_ms: 5000,
         }
     }
 
@@ -1390,6 +1514,58 @@ impl Editor {
         self.keymaps.get(name)
     }
 
+    /// Look up a key binding by key string (e.g. "SPC n d t").
+    /// Returns (command_name, keymap_name) if found.
+    pub fn lookup_key_binding(&self, key_str: &str) -> Option<(String, String)> {
+        let seq = crate::keymap::parse_key_seq_spaced(key_str);
+        if seq.is_empty() {
+            return None;
+        }
+        for (name, km) in &self.keymaps {
+            for (bound_seq, cmd) in km.bindings() {
+                if *bound_seq == seq {
+                    return Some((cmd.clone(), name.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Query keybindings across all keymaps with optional filters.
+    /// Returns vec of (key_display, command, keymap_name).
+    pub fn query_keybindings(
+        &self,
+        keymap_filter: Option<&str>,
+        command_filter: Option<&str>,
+        prefix_filter: Option<&str>,
+    ) -> Vec<(String, String, String)> {
+        let prefix_seq = prefix_filter.map(crate::keymap::parse_key_seq_spaced);
+        let mut results = Vec::new();
+        for (name, km) in &self.keymaps {
+            if let Some(filter) = keymap_filter {
+                if name != filter {
+                    continue;
+                }
+            }
+            for (seq, cmd) in km.bindings() {
+                if let Some(ref cmd_filter) = command_filter {
+                    if !cmd.contains(cmd_filter) {
+                        continue;
+                    }
+                }
+                if let Some(ref prefix) = prefix_seq {
+                    if seq.len() < prefix.len() || &seq[..prefix.len()] != prefix.as_slice() {
+                        continue;
+                    }
+                }
+                let key_display = crate::keymap::format_key_seq(seq);
+                results.push((key_display, cmd.clone(), name.clone()));
+            }
+        }
+        results.sort_by(|a, b| a.2.cmp(&b.2).then(a.0.cmp(&b.0)));
+        results
+    }
+
     /// Merge which-key entries from the overlay keymap and its parent.
     fn merged_which_key_entries(&self, prefix: &[KeyPress]) -> Vec<WhichKeyEntry> {
         let Some((primary, fallback)) = self.current_keymap_names() else {
@@ -1416,14 +1592,61 @@ impl Editor {
     }
 
     /// Get which-key entries for the current keymap, merging overlay + parent.
+    /// Applies the `which-key-sort-order` option: groups first, then sorted.
     pub fn which_key_entries_for_current_keymap(&self) -> Vec<WhichKeyEntry> {
-        self.merged_which_key_entries(&self.which_key_prefix)
+        let mut entries = self.merged_which_key_entries(&self.which_key_prefix);
+        self.sort_which_key_entries(&mut entries);
+        entries
     }
 
     /// Get all top-level bindings for the current buffer's keymap + parent.
     /// Used by `show-buffer-keys` (`?`) to show a full keybind reference.
     pub fn buffer_keys_entries(&self) -> Vec<WhichKeyEntry> {
-        self.merged_which_key_entries(&[])
+        let mut entries = self.merged_which_key_entries(&[]);
+        self.sort_which_key_entries(&mut entries);
+        entries
+    }
+
+    /// Sort which-key entries: groups first (sorted by key), then leaves
+    /// sorted by the chosen field (`key`, `desc`, or `none`).
+    fn sort_which_key_entries(&self, entries: &mut [WhichKeyEntry]) {
+        let order = self
+            .get_option("which-key-sort-order")
+            .map(|(v, _)| v)
+            .unwrap_or_else(|| "key".to_string());
+        match order.as_str() {
+            "desc" => {
+                entries.sort_by(|a, b| {
+                    b.is_group
+                        .cmp(&a.is_group)
+                        .then_with(|| a.label.to_lowercase().cmp(&b.label.to_lowercase()))
+                });
+            }
+            "none" => {} // insertion order
+            _ => {
+                // "key" (default): groups first, then alphabetical by key
+                entries.sort_by(|a, b| {
+                    b.is_group.cmp(&a.is_group).then_with(|| {
+                        let ak = crate::text_utils::format_keypress(&a.key);
+                        let bk = crate::text_utils::format_keypress(&b.key);
+                        ak.cmp(&bk)
+                    })
+                });
+            }
+        }
+    }
+
+    /// Set the which-key prefix and reset scroll to top.
+    /// Use this instead of assigning `which_key_prefix` directly.
+    pub fn set_which_key_prefix(&mut self, prefix: Vec<KeyPress>) {
+        self.which_key_prefix = prefix;
+        self.which_key_scroll = 0;
+    }
+
+    /// Clear the which-key prefix and reset scroll.
+    pub fn clear_which_key_prefix(&mut self) {
+        self.which_key_prefix.clear();
+        self.which_key_scroll = 0;
     }
 
     // -- Redraw level methods (Emacs tiered redisplay pattern) ----------------
@@ -1986,38 +2209,51 @@ impl Editor {
         self.buffers.len() - 1
     }
 
-    /// Find or create the `*Help*` buffer and navigate it to `node_id`.
+    /// Find or create the appropriate KB buffer (`*Help*` for builtins,
+    /// `*KB*` for user/federated nodes) and navigate it to `node_id`.
     /// Returns the buffer index. Does NOT switch focus — callers decide.
-    pub fn ensure_help_buffer_idx(&mut self, node_id: &str) -> usize {
+    pub fn ensure_kb_buffer_idx(&mut self, node_id: &str) -> usize {
+        use crate::buffer::buffer_names;
+        use crate::editor::help_ops::is_builtin_node;
+
+        let target_name = if is_builtin_node(node_id) {
+            buffer_names::HELP
+        } else {
+            buffer_names::KB
+        };
+
+        // Look for an existing buffer with the right name
         if let Some(idx) = self
             .buffers
             .iter()
-            .position(|b| b.kind == crate::buffer::BufferKind::Help)
+            .position(|b| b.kind == crate::buffer::BufferKind::Kb && b.name == target_name)
         {
-            if let Some(view) = self.buffers[idx].help_view_mut() {
-                let v: &mut crate::help_view::HelpView = view;
+            if let Some(view) = self.buffers[idx].kb_view_mut() {
+                let v: &mut crate::kb_view::KbView = view;
                 v.navigate_to(node_id.to_string());
             }
             return idx;
         }
-        self.buffers.push(Buffer::new_help(node_id));
+        let mut buf = Buffer::new_kb(node_id);
+        buf.name = target_name.to_string();
+        self.buffers.push(buf);
         self.buffers.len() - 1
     }
 
-    /// Mutable view onto the help buffer's HelpView, if any help buffer exists.
-    pub fn help_view_mut(&mut self) -> Option<&mut crate::help_view::HelpView> {
+    /// Mutable view onto the KB buffer's KbView, if any KB buffer exists.
+    pub fn kb_view_mut(&mut self) -> Option<&mut crate::kb_view::KbView> {
         self.buffers
             .iter_mut()
-            .find(|b| b.kind == crate::buffer::BufferKind::Help)
-            .and_then(|b| b.help_view_mut())
+            .find(|b| b.kind == crate::buffer::BufferKind::Kb)
+            .and_then(|b| b.kb_view_mut())
     }
 
-    /// Immutable view onto the help buffer's HelpView, if any help buffer exists.
-    pub fn help_view(&self) -> Option<&crate::help_view::HelpView> {
+    /// Immutable view onto the KB buffer's KbView, if any KB buffer exists.
+    pub fn kb_view(&self) -> Option<&crate::kb_view::KbView> {
         self.buffers
             .iter()
-            .find(|b| b.kind == crate::buffer::BufferKind::Help)
-            .and_then(|b| b.help_view())
+            .find(|b| b.kind == crate::buffer::BufferKind::Kb)
+            .and_then(|b| b.kb_view())
     }
 
     /// Switch the focused window to the buffer at the given index.

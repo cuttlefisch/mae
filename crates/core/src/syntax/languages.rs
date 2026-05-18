@@ -278,7 +278,7 @@ pub(crate) fn compute_spans(language: Language, source: &str) -> Vec<HighlightSp
 }
 
 /// Compute syntax spans for a single language + source without caching.
-/// Used by help buffers and other contexts needing one-shot highlighting
+/// Used by KB buffers and other contexts needing one-shot highlighting
 /// of embedded code blocks.
 pub fn compute_spans_standalone(language: Language, source: &str) -> Vec<HighlightSpan> {
     if language == Language::Org {

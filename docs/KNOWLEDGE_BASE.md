@@ -1,6 +1,6 @@
 # Knowledge Base
 
-MAE's knowledge base is a typed graph of nodes with bidirectional links. It serves as both the built-in help system and a personal knowledge graph (org-roam equivalent).
+MAE's knowledge base is a typed graph of nodes with bidirectional links. It serves as both the built-in MAE manual and a personal knowledge graph (org-roam equivalent).
 
 ## Architecture
 
@@ -45,7 +45,7 @@ MAE's knowledge base is a typed graph of nodes with bidirectional links. It serv
 
 ## Federation
 
-Federation lets you register external org directories as searchable KB instances alongside MAE's built-in help.
+Federation lets you register external org directories as searchable KB instances alongside MAE's built-in manual.
 
 ### Design Principle
 
@@ -134,7 +134,7 @@ Registered 'MyNotes': 2,342 nodes, 4,891 links
 
 ## AI Integration
 
-The AI agent uses the same tools as the help system:
+The AI agent uses the same tools as the manual and KB:
 
 | Tool | Description |
 |------|-------------|

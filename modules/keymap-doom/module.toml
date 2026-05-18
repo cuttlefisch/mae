@@ -1,0 +1,9 @@
+[module]
+name = "keymap-doom"
+version = "0.1.0"
+description = "Doom Emacs-style keybindings — SPC leader key, vi motions, operator-pending"
+mae_version = ">=0.9.0"
+category = "keymap"
+
+[entry]
+autoloads = "autoloads.scm"

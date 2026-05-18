@@ -18,7 +18,7 @@ pub struct Command {
 impl Command {
     /// Compact label for which-key popups. Strips the trailing `(...)`
     /// key hint since the key is already displayed in the popup entry itself.
-    /// Full `doc` is preserved for help buffers and `describe-command`.
+    /// Full `doc` is preserved for KB buffers and `describe-command`.
     pub fn which_key_label(&self) -> &str {
         if self.doc.ends_with(')') {
             if let Some(i) = self.doc.rfind(" (") {
@@ -324,6 +324,10 @@ impl CommandRegistry {
         reg.register_builtin("join-lines", "Join current line with next line (J)");
         reg.register_builtin("indent-line", "Indent current line by 4 spaces (>>)");
         reg.register_builtin("dedent-line", "Dedent current line by up to 4 spaces (<<)");
+        reg.register_builtin(
+            "fill-paragraph",
+            "Hard-wrap current paragraph at fill-column (M-q)",
+        );
         // Case change
         reg.register_builtin("toggle-case", "Toggle case of char under cursor (~)");
         reg.register_builtin("uppercase-line", "Uppercase current line (gUU)");
@@ -393,6 +397,10 @@ impl CommandRegistry {
         reg.register_builtin("focus-down", "Focus window below");
         reg.register_builtin("window-grow", "Increase window size (SPC w +)");
         reg.register_builtin("window-shrink", "Decrease window size (SPC w -)");
+        reg.register_builtin("window-grow-width", "Increase window width (SPC w >)");
+        reg.register_builtin("window-shrink-width", "Decrease window width (SPC w <)");
+        reg.register_builtin("window-grow-height", "Increase window height (SPC w +)");
+        reg.register_builtin("window-shrink-height", "Decrease window height (SPC w -)");
         reg.register_builtin("window-balance", "Balance all window sizes (SPC w =)");
         reg.register_builtin("window-maximize", "Maximize current window (SPC w m)");
         reg.register_builtin("window-move-left", "Move window left (SPC w H)");
@@ -957,6 +965,10 @@ impl CommandRegistry {
             "Show KB health report (orphans, broken links, namespace counts)",
         );
         reg.register_builtin(
+            "kb-cleanup-orphans",
+            "Remove orphan user notes with no links (SPC n C)",
+        );
+        reg.register_builtin(
             "describe-display-policy",
             "Show the active display policy rules (how buffers are placed in windows)",
         );
@@ -1080,7 +1092,19 @@ impl CommandRegistry {
             "kb-create",
             "Find or create a note — type title, auto-generates ID (SPC n c)",
         );
-        reg.register_builtin("kb-delete", "Delete a KB node by ID (SPC n d)");
+        reg.register_builtin("kb-delete", "Delete a KB node by ID (SPC n D)");
+        reg.register_builtin(
+            "daily-goto-today",
+            "Open today's daily note with chain-fill (SPC n d t)",
+        );
+        reg.register_builtin(
+            "daily-goto-yesterday",
+            "Open yesterday's daily note (SPC n d y)",
+        );
+        reg.register_builtin("daily-goto-date", "Open daily note for a date (SPC n d d)");
+        reg.register_builtin("daily-prev", "Navigate to previous daily note (SPC n d p)");
+        reg.register_builtin("daily-next", "Navigate to next daily note (SPC n d n)");
+        reg.register_builtin("kb-audit", "Run KB audit report (SPC n H a)");
         reg.register_builtin(
             "capture-finalize",
             "Save note and return from capture (C-c C-c)",
@@ -1111,9 +1135,9 @@ impl CommandRegistry {
             "help-prev-link",
             "Focus the previous link in the current help page",
         );
-        reg.register_builtin("help-close", "Close help buffer");
+        reg.register_builtin("help-close", "Close KB viewer");
         reg.register_builtin("help-search", "Search help topics");
-        reg.register_builtin("help-reopen", "Reopen the last-closed help buffer");
+        reg.register_builtin("help-reopen", "Reopen the last-closed KB viewer");
         reg.register_builtin(
             "kb-view",
             "Return to rendered KB view from source editing (SPC n v)",
@@ -1128,11 +1152,11 @@ impl CommandRegistry {
         );
         reg.register_builtin(
             "help-close-all-folds",
-            "Fold all headings in help buffer (zM)",
+            "Fold all headings in KB viewer (zM)",
         );
         reg.register_builtin(
             "help-open-all-folds",
-            "Unfold all headings in help buffer (zR)",
+            "Unfold all headings in KB viewer (zR)",
         );
         reg.register_builtin(
             "help-edit",
@@ -1269,6 +1293,20 @@ impl CommandRegistry {
             "record-save",
             "Save recorded events to JSON file (:record-save <path>)",
         );
+
+        // Collaboration
+        reg.register_builtin("collab-start", "Start local state server");
+        reg.register_builtin("collab-connect", "Connect to collaborative state server");
+        reg.register_builtin("collab-disconnect", "Disconnect from state server");
+        reg.register_builtin("collab-status", "Show collaborative editing status");
+        reg.register_builtin("collab-share", "Share current buffer for collaboration");
+        reg.register_builtin("collab-sync", "Force sync current buffer");
+        reg.register_builtin("collab-doctor", "Run collaborative editing diagnostics");
+        reg.register_builtin(
+            "collab-list",
+            "List shared documents on the state server (SPC C l)",
+        );
+        reg.register_builtin("collab-join", "Join a shared document (SPC C j)");
 
         reg
     }

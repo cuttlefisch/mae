@@ -29,7 +29,7 @@ org_hide_emphasis_markers = false
 # Show link labels instead of raw markup (Emacs org-link-descriptive)
 link_descriptive = true
 
-# Apply inline bold/italic/code styling in conversation and help buffers
+# Apply inline bold/italic/code styling in conversation and KB buffers
 render_markup = true
 
 # Show FPS/frame-timing overlay in the status bar
@@ -103,6 +103,22 @@ editor = "claude"
 # Directories and files to include in the agenda view.
 # Use :agenda-add <path> / :agenda-remove <path> to manage.
 # agenda_files = ["~/org", "~/work/notes"]
+
+[collaboration]
+# State server address for collaborative editing
+# server_address = "127.0.0.1:9473"
+
+# Automatically connect to state server on startup
+# auto_connect = false
+
+# Automatically share new file buffers when connected
+# auto_share = false
+
+# Seconds between reconnection attempts
+# reconnect_interval_secs = 5
+
+# Display name for collaborative edits (shown to peers)
+# user_name = ""
 
 [agents]
 # Auto-write .mcp.json to project root on first shell spawn

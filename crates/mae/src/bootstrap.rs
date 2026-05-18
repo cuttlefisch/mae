@@ -992,7 +992,7 @@ pub fn load_modules(
 
     // Use declared modules from (mae! ...) if present; otherwise enable all.
     let declared = scheme.declared_modules();
-    let enabled: HashMap<String, Vec<String>> = if declared.is_empty() {
+    let mut enabled: HashMap<String, Vec<String>> = if declared.is_empty() {
         // No mae! block — enable all discovered modules (backward compat).
         all_modules
             .iter()
@@ -1001,6 +1001,17 @@ pub fn load_modules(
     } else {
         declared
     };
+
+    // keymap-doom is the default keymap and must always load unless the user
+    // explicitly declared a different keymap-* module.
+    let has_keymap_module = enabled.keys().any(|k| k.starts_with("keymap-"));
+    if !has_keymap_module {
+        let doom_available = all_modules.iter().any(|(_, m)| m.name() == "keymap-doom");
+        if doom_available {
+            info!("auto-enabling keymap-doom (default keymap — add to mae! block to suppress)");
+            enabled.insert("keymap-doom".to_string(), vec![]);
+        }
+    }
 
     let resolved = match resolve_load_order(&all_modules, &enabled) {
         Ok(r) => r,

@@ -22,7 +22,7 @@ pub fn enrich_spans_with_markup(
 /// — the caller should delegate to their dedicated render function.
 pub fn highlight_spans_for_buffer(buf: &Buffer) -> Option<Vec<HighlightSpan>> {
     match buf.kind {
-        crate::buffer::BufferKind::Help => Some(super::help::compute_help_spans(buf)),
+        crate::buffer::BufferKind::Kb => Some(super::kb::compute_kb_spans(buf)),
         crate::buffer::BufferKind::GitStatus => {
             Some(super::git_status::compute_git_status_spans(buf))
         }
@@ -33,6 +33,18 @@ pub fn highlight_spans_for_buffer(buf: &Buffer) -> Option<Vec<HighlightSpan>> {
         ),
         crate::buffer::BufferKind::Diff => Some(crate::diff::diff_highlight_spans(buf.rope())),
         crate::buffer::BufferKind::Agenda => Some(super::agenda::compute_agenda_spans(buf)),
+        crate::buffer::BufferKind::Text => {
+            // Org files get heading scale even in edit mode
+            let is_org = buf
+                .file_path()
+                .map(|p| p.extension().is_some_and(|ext| ext == "org"))
+                .unwrap_or(false);
+            if is_org {
+                Some(super::kb::compute_org_heading_spans(buf))
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -45,7 +57,7 @@ mod tests {
     #[test]
     fn highlight_spans_help_returns_some() {
         let mut buf = Buffer::new();
-        buf.kind = BufferKind::Help;
+        buf.kind = BufferKind::Kb;
         assert!(highlight_spans_for_buffer(&buf).is_some());
     }
 

@@ -1,4 +1,5 @@
 mod ai_exec;
+mod collab_exec;
 mod core_exec;
 mod dap_exec;
 pub(crate) mod grading;
@@ -10,6 +11,7 @@ mod permission;
 pub mod sandbox;
 pub(crate) mod self_test;
 mod shell_exec;
+mod sync_exec;
 mod tool_dispatch;
 
 #[cfg(test)]

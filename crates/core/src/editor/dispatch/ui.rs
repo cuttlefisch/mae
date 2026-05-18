@@ -175,6 +175,7 @@ impl Editor {
                     .kb
                     .list_ids(None)
                     .iter()
+                    .filter(|id| crate::editor::help_ops::is_builtin_node(id))
                     .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
                     .collect();
                 self.command_palette = Some(
@@ -404,6 +405,14 @@ For full setup guide: :help ai-setup";
             "kb-health" => {
                 self.show_kb_health_report();
             }
+            "kb-cleanup-orphans" => {
+                let count = self.kb_cleanup_orphans();
+                if count == 0 {
+                    self.set_status("No orphan user notes to remove");
+                } else {
+                    self.set_status(format!("Removed {} orphan note(s)", count));
+                }
+            }
             "describe-bindings" => {
                 self.show_bindings_report();
             }
@@ -608,6 +617,19 @@ For full setup guide: :help ai-setup";
             "capture-finalize" => {
                 if let Some(cap) = self.capture_state.take() {
                     self.dispatch_builtin("save");
+                    // Remove hidden KB buffer seeded for this node
+                    if let Some(hi) = self
+                        .buffers
+                        .iter()
+                        .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
+                    {
+                        self.buffers.remove(hi);
+                        for win in self.window_mgr.iter_windows_mut() {
+                            if win.buffer_idx > hi {
+                                win.buffer_idx = win.buffer_idx.saturating_sub(1);
+                            }
+                        }
+                    }
                     let ret = cap
                         .return_buffer_idx
                         .min(self.buffers.len().saturating_sub(1));
@@ -621,6 +643,19 @@ For full setup guide: :help ai-setup";
                 if let Some(cap) = self.capture_state.take() {
                     // Force-kill the capture buffer (no save prompt)
                     self.dispatch_builtin("force-kill-buffer");
+                    // Remove hidden KB buffer seeded for this node
+                    if let Some(hi) = self
+                        .buffers
+                        .iter()
+                        .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
+                    {
+                        self.buffers.remove(hi);
+                        for win in self.window_mgr.iter_windows_mut() {
+                            if win.buffer_idx > hi {
+                                win.buffer_idx = win.buffer_idx.saturating_sub(1);
+                            }
+                        }
+                    }
                     // Delete the file from disk
                     if let Some(ref path) = cap.file_path {
                         let _ = std::fs::remove_file(path);
@@ -638,6 +673,38 @@ For full setup guide: :help ai-setup";
                 } else {
                     self.set_status("No active capture");
                 }
+            }
+            "daily-goto-today" => {
+                if let Err(e) = self.kb_goto_daily_today() {
+                    self.set_status(format!("Daily: {}", e));
+                }
+            }
+            "daily-goto-yesterday" => {
+                if let Err(e) = self.kb_goto_daily_yesterday() {
+                    self.set_status(format!("Daily: {}", e));
+                }
+            }
+            "daily-goto-date" => {
+                self.mini_dialog = Some(crate::command_palette::MiniDialogState::single_input(
+                    "Date (YYYY-MM-DD):",
+                    "",
+                    "",
+                    crate::command_palette::MiniDialogContext::DailyGotoDate,
+                ));
+                self.set_mode(crate::Mode::Command);
+            }
+            "daily-prev" => {
+                if let Err(e) = self.kb_daily_prev() {
+                    self.set_status(format!("Daily: {}", e));
+                }
+            }
+            "daily-next" => {
+                if let Err(e) = self.kb_daily_next() {
+                    self.set_status(format!("Daily: {}", e));
+                }
+            }
+            "kb-audit" => {
+                self.show_kb_audit_report();
             }
             "ai-save" => {
                 self.set_status("Usage: :ai-save <path>");

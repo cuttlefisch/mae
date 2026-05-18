@@ -24,8 +24,32 @@
 
 ## Known Bugs
 
+### Pre-existing
+
 - [ ] **AI output buffer cursor invisible in GUI**: After AI responds, the cursor in the `*ai*` conversation output buffer is not visible. Root cause: buffer type / layout metadata mismatch — the conversation buffer doesn't provide the same state that the cursor renderer expects. Low priority (output buffer is read-only, navigation still works).
 - [ ] **Theme load failure is silent in headless mode**: If config.toml requests a nonexistent theme, `set_theme_by_name()` shows a status bar message but keeps the current theme. In CI/headless mode the user gets zero feedback. Should log to stderr or return non-zero exit from `--check-config`.
+
+### Collaborative Editing (v0.11.0)
+
+- [x] **One-directional sync**: cli1→cli2 works but cli2→cli1 does not. Root cause: `biased` tokio::select starved TCP reads. Fix: remove `biased;` from connected select loop.
+- [x] **First `SPC C j` unresponsive from Dashboard**: Join only works after a `SPC C D`/`SPC C i` round-trip. Root cause: splash screen intercept swallows `j` during multi-key sequences. Fix: add `pending_keys.is_empty()` guard.
+- [x] **Syntax highlighting differs on join**: Joiner sees wrong colors (purple bullets, green title). Root cause: `set_language` without `invalidate()` leaves no tree-sitter parse tree. Fix: call `syntax.invalidate(idx)` after join.
+- [ ] **Undo broadcasts full buffer to peers**: Undo on one client inserts entire buffer contents at point on other clients. Root cause: yrs UndoManager transaction likely generates a full-text update rather than a delta. Needs investigation of undo → yrs transaction → sync update pipeline.
+- [ ] **`:w` fails on non-sharer clients**: Save works only for the client that originally opened and shared the file. Other clients (including those that outlive the sharer) get errors. Root cause: `file_path` not properly resolved on join, or save protocol assumes original sharer identity.
+- [ ] **Sharer quit doesn't notify peers or stop sharing**: When the client that triggered the share disconnects, peers are not notified and the shared document lingers. Need graceful disconnect protocol: server detects client drop → notifies remaining peers → optionally promotes new owner or marks doc read-only.
+- [ ] **Client disconnect lifecycle undefined**: No documented or tested behavior for: client crash, network drop, graceful quit, last-client-leaves. Must define and implement industry-standard behavior (cf. VS Code Live Share, Google Docs). Document in `docs/COLLABORATION.md`.
+- [ ] **Collab e2e test harness missing**: No integration tests exercise the full multi-client flow (server + N clients, share, join, edit, sync, disconnect). Need a test harness that spawns `mae-state-server` + simulated clients over TCP, asserts bidirectional sync, undo correctness, save, and disconnect behavior.
+
+### Org-Mode Rendering
+
+- [ ] **Org rendering broken in editing buffers**: Checklists, `#+TITLE`, properties drawer dimming, and other structural org elements don't render correctly in dailies editing buffers. May be a tree-sitter parse issue or a span computation bug in `compute_org_spans()` vs `compute_org_style_spans()` fallback.
+- [ ] **KB node edit mode lacks rich formatting**: When editing a KB node, headers are not scaled/colored — rendering falls back to plain text instead of applying org-mode visual treatment.
+- [x] **Word-wrap indentation for list items**: `content_indent_len()` now detects list markers (`- `, `+ `, `* `, `1. `) and indents wrap continuations past the marker. Both GUI and TUI.
+- [x] **`fill-paragraph` / `M-q`**: Hard-wrap at `fill_column` (default 80), respects list-item hanging indent. `fill-region` for visual selection is TODO.
+
+### Line Numbers & Wrapping
+
+- [x] **Relative line numbers with word-wrap**: GUI now uses buffer-row distance for relative numbers in wrapped mode, not display-row distance (which inflated counts by including continuation rows).
 
 ---
 
@@ -43,7 +67,53 @@
 - [x] Babel edit-special: `SPC m '` opens src block in dedicated buffer with language mode
 - [x] Babel edit-commit: `SPC m '` in edit buffer writes body back to source
 
-### Near-term
+### Near-term: Server-Client Architecture
+
+- [ ] **Multi-AI file contention protocol**: When multiple AI-assisted editors (MAE, VS Code + Copilot, Cursor, aider) operate on the same project simultaneously, file writes race, LSP state goes stale, and undo histories diverge. Short-term: git worktree isolation (each agent in its own worktree, merge at commit time). Medium-term: advisory file locks (`.mae.lock`), inotify coordination to detect external changes and pause AI operations. Long-term: canonical state server (see below).
+- [x] **State server v1** (`mae-state-server` binary): Standalone CRDT sync server over TCP (port 9473). Per-document locking, WAL-first SQLite persistence, periodic compaction, transport-generic I/O (reuses `mae_mcp` primitives). Sync protocol: `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`. No auth (trusted LAN only).
+- [x] **State server v1.5** (scalability + UX): Sharded SQLite pool (4 shards), save protocol (SHA-256 content-hash), event sequence tracking (wal_seq), background compaction + idle eviction. Editor: 7 commands (SPC C prefix), 4 AI tools, status bar segment, 5 options, doctor integration, audit_configuration collab section. New methods: `sync/resync`, `docs/stats`, `docs/save_intent`, `docs/save_committed`, `$/debug`.
+- [x] **Client ID echo filtering**: Server `broadcast_except()` skips the originating session on `sync/update`. Eliminates wasted bandwidth/CPU from self-echo and prevents share duplication race.
+- [ ] **Collab stub audit** (v0.11.0 correctness): Systematic review completed. Known gaps:
+  - `docs/save_committed` handler is a no-op stub (handler.rs:381)
+  - `track_client_connect()` / `track_client_disconnect()` are `#[allow(dead_code)]` (doc_store.rs:287-303)
+  - `DocAddress` enum defined but never used in collab protocol (sync/lib.rs:39-50)
+  - `SaveIntentResult` returned by server but never consumed by editor
+  - `save_intent` never called from the editor save path
+  - No `docs/metadata` endpoint (would provide save_epoch, connected_clients)
+  - Per-doc `connected_clients` counter never incremented/decremented (always 0)
+  - `save_epoch` tracking doesn't exist yet
+  - No `peer_joined` / `peer_left` events in `EditorEvent` enum
+  - `WalEntry::client_id` stored but never read for audit/attribution
+  - `StorageError::Io` variant reserved but unused (pluggable backends)
+- [ ] **State server v2** (Phase F): Awareness protocol (cursor sharing), per-user undo, auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync.
+- [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
+  - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
+  - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
+  - *Tier 3* (100+ users, 500K+ nodes): PostgreSQL + pgvector, write sharding by namespace, event sourcing for real-time sync. ~3 months.
+  - Key bottlenecks: SQLite single-writer ceiling (~50 writes/sec), FTS5 index size at scale (~400MB at 100K nodes), network latency for RAG workflows (5-10 KB queries per AI turn × 30 concurrent agents = ~600 node fetches/sec peak).
+- [x] **CRDT collaborative editing (yrs/YATA)**: Sync engine: yrs (Yjs Rust port). Per-user cursors via Awareness protocol, per-user undo via yrs UndoManager, conflict-free merge for concurrent AI and human edits. Dual structure: yrs YText + ropey mirror. See ADR-002, ADR-005, ADR-006.
+  - Phase A: `mae-sync` crate (yrs dependency, document schemas, ropey bridge) ✅
+  - Phase B: Buffer integration (sync_doc field, local edits → yrs transactions) ✅
+  - Phase C: MCP sync methods (state_vector, apply_update) ✅
+  - Phase D: Push-based sync event broadcasting ✅
+  - Phase E (state-server): TCP transport, WAL persistence, per-doc locking ✅
+  - Phase F: Awareness protocol, per-user undo, multi-machine sync
+
+### KB Enterprise Readiness & Hardening
+
+- [x] **Change management**: `node_changelog` table with full audit trail (create/update/delete, old/new values, timestamps, author, reason). Schema v6 migration.
+- [x] **Incremental sync**: `sync_to_sqlite()` — only writes changed nodes, records all mutations in changelog.
+- [x] **Structured timestamps**: `created_at` / `updated_at` INTEGER columns on `nodes`. Enables `ORDER BY updated_at` without JSON parsing.
+- [x] **Changelog query API**: `node_history()`, `changes_since()` for auditing and time-travel.
+- [ ] **Point-in-time restore**: `kb_restore` command + MCP tool to revert a node to any prior state from changelog.
+- [ ] **Node blame**: Per-change author tracking. Requires session identity propagation from MCP client → KB write path.
+- [ ] **Changelog pruning**: Configurable retention policy (default: 90 days). `kb-changelog-prune` command.
+- [ ] **KB backup/export**: `kb-export` dumps full KB + changelog to portable format (SQLite file or JSON). `kb-import` restores.
+- [ ] **Conflict detection**: When multi-client writes land on same node, detect via version counter and surface conflict to user (not silent last-write-wins).
+- [ ] **KB replication**: Read replicas for high-read-throughput scenarios (AI agents doing 600+ node fetches/sec). WAL mode enables this natively for same-host.
+
+### Near-term: Other
+- [ ] **Version compatibility policy**: Semver enforcement on upgrade — protocol version negotiation in state-server (`initialize` params), config schema migration on major bumps, `make install-upgrade` blocking on incompatible major versions (currently warns only). Prerequisite for v1.0.
 - [ ] PDF preview (GUI inline rendering via `hayro` pure-Rust rasterizer + midnight mode)
 - [ ] Semantic code search (vector embeddings)
 - [x] Org ↔ Markdown bidirectional conversion (`:markdown-to-org`, `:org-to-markdown`)
@@ -100,11 +170,32 @@
 - [ ] Free AI-assisted setup (Gemini free tier for first-run guidance)
 - [ ] Step-through command execution (inspect AI tool call stdin/stdout)
 
+### Keymap Architecture Migration
+
+> **Goal**: Kernel provides only vi-modal primitives. All leader-key (SPC) bindings move to keymap flavor modules.
+>
+> 1. Trim `keymaps.rs` to minimal vi: Escape, hjkl, operators, text objects, `:`, search
+> 2. Make `keymap-doom` the sole source of the SPC tree
+> 3. Ship `keymap-emacs` and `keymap-minimal` flavor modules
+> 4. Auto-load the selected `keymap_flavor` module regardless of `(mae!)` declarations
+> 5. Expose `(clear-keymap-prefix)` for users who want to override, not just extend
+> 6. Group names (`set-group-name`) should come from the keymap flavor module, not the kernel
+
 ### Architecture Debt (v0.9.1+)
 
 - [ ] **Editor struct field extraction**: ~100+ fields accumulating (Emacs buffer.c trajectory). Extract into named sub-structs: `LspContext` (7 fields), `DapContext` (3+ fields), `ModuleContext` (4 fields), `RenderContext` (5+ fields). Keeps LOC flat, improves cohesion.
 - [ ] **dispatch/ui.rs split**: At 1,141 lines, "UI" dispatch is a semantic dumping ground (config, themes, terminal, help, registers, options, toggles, projects, AI). Split into dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs, dispatch/help.rs.
 - [ ] **Custom theme filesystem loading**: Only bundled themes work. No user theme search path (~/.config/mae/themes/). Emacs, Vim, Helix all support this.
+- [ ] **Binding ownership audit**: Every kernel-dispatched command should have a kernel default binding. Module bindings are for module-specific commands or user-facing overrides only.
+- [ ] **Ad-hoc solution review**: Thorough code review for hardcoded values, duplicated logic between TUI/GUI, and workarounds that should be proper abstractions — in prep for server-client architecture.
+- [ ] **Which-key idle delay**: Wire `which-key-idle-delay` option to event loop timer (default 0ms = immediate).
+- [ ] **Which-key floating popup mode**: Option to render which-key as a centered floating popup (like find-file/command-palette) instead of docked to bottom. Controlled by a `which-key-display` option (`docked` | `floating`).
+- [ ] **Scheme configurability audit**: Audit ALL OptionRegistry entries for missing `config_key` (prevents `:set-save` persistence). Verify every option round-trips through config.toml. Document full option surface in `:help concept:options` KB node.
+- [ ] **Performance regression testing**: Build a benchmark suite (`criterion` in `benches/` or `make bench`). Key metrics: startup time, frame render time (TUI + GUI at 50/500/5000 lines), which-key popup open latency, KB search at 100/1K/10K nodes, AI tool dispatch round-trip, memory usage under sustained editing. Integrate with CI to catch regressions per-PR.
+- [ ] **KB search scoping**: Allow per-project KB search that excludes MAE internal nodes (scheme:*, cmd:*, option:*). Add `kb_search_scope` option: `"all"` (default), `"user"` (exclude internal), `"project"` (only project-registered KBs). AI tools respect scope; `:help` always searches all.
+- [ ] **KB node visibility**: Add `visibility` property to nodes: `public` (default), `internal` (MAE system nodes), `private` (user personal notes). Internal nodes hidden from user-facing search unless explicitly queried with `:help` or `kb_get` by ID.
+- [ ] **Per-workspace KB isolation**: When multiple projects are open, `kb_search` defaults to the active project's registered KB instances. Cross-project search available via `kb_search --all` or `(kb-search-all query)` Scheme API.
+- [ ] **KB tangle pipeline**: `make docs-tangle` extracts ADR markdown from KB concept nodes. CI job validates freshness (same as code-map pattern). Enables KB as single source of truth for architecture docs.
 
 ---
 
@@ -194,6 +285,9 @@
 - KB documentation: `concept:kb-federation`, `concept:kb-workflows`, `concept:kb-vs-alternatives`
 - Tutorial: `lesson:kb-import-roam` (Lesson 13)
 - Self-test categories: `modules`, `federation`
+- Session detach/resume (tmux-style): persist editor state, reconnect from another terminal
+- Shared P2P sessions with focus handoff: collaborative cursor, presence indicators
+- Granular KB connection/search configuration: users can select/deselect which KB instances are active by default, run scoped queries across a subset of KBs, AI tool parity (e.g. `kb_search` accepts optional `instances` filter param)
 
 </details>
 

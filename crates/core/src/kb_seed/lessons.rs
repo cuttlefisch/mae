@@ -14,7 +14,8 @@ Work through these lessons to learn the essentials.\n\n\
 9. [[lesson:help|Help System]] — navigating the knowledge base\n\
 10. [[lesson:leader|Leader Keys]] — SPC-based command groups\n\
 11. [[lesson:debugging|Debugging]] — DAP, breakpoints, stepping, inspect\n\
-12. [[lesson:observability|Observability]] — watchdog, event recording, introspect\n\n\
+12. [[lesson:observability|Observability]] — watchdog, event recording, introspect\n\
+13. [[lesson:collab-setup|Collaborative Editing]] — share buffers in real-time\n\n\
 Navigate with **Tab** to move between links, **Enter** to follow.\n\
 **C-o** goes back, **C-i** goes forward.\n\n\
 See also: [[index|Help Index]]\n";
@@ -484,3 +485,102 @@ Removes from registry and frees memory. Your org files are untouched.\n\n\
 **Prev:** [[lesson:observability|Lesson 12]]  |  \
 **Index:** [[tutor:index|Tutorial]]\n\n\
 See also: [[concept:kb-federation]], [[concept:kb-workflows]], [[concept:kb-vs-alternatives]]\n";
+
+pub(super) const LESSON_COLLAB_SETUP: &str = "\
+## Setting Up Collaborative Editing\n\n\
+This lesson walks you through enabling real-time collaborative editing in MAE, \
+from installing the state server to sharing your first buffer with a peer.\n\n\
+### Step 1 — Install the state server\n\n\
+Build and install `mae-state-server` from source:\n\
+```bash\n\
+cargo install --path crates/state-server\n\
+# or use the Makefile shortcut:\n\
+make install-state-server\n\
+```\n\n\
+Verify it is on your PATH:\n\
+```bash\n\
+mae-state-server --version\n\
+```\n\n\
+### Step 2 — Start the server\n\n\
+For local (loopback) use:\n\
+```bash\n\
+mae-state-server\n\
+# Listening on 127.0.0.1:9473\n\
+```\n\n\
+For multi-machine use, bind to all interfaces:\n\
+```bash\n\
+mae-state-server --bind 0.0.0.0:9473\n\
+```\n\n\
+Or press `SPC C s` inside MAE to start a local server automatically.\n\n\
+### Step 3 — Configure MAE to use the server\n\n\
+In your Scheme REPL (`:eval`) or `init.scm`:\n\
+```scheme\n\
+(set-option! \"collab-server-address\" \"127.0.0.1:9473\")\n\
+```\n\n\
+For remote servers, replace `127.0.0.1:9473` with `host:port`.\n\n\
+### Step 4 — Connect\n\n\
+Either enable auto-connect so MAE connects on every startup:\n\
+```scheme\n\
+(set-option! \"collab-auto-connect\" \"true\")\n\
+```\n\n\
+Or connect manually: `SPC C c` (`:collab-connect`).\n\n\
+### Step 5 — Share a buffer\n\n\
+Open a file you want to collaborate on, then press `SPC C S` \
+(`:collab-share`). The buffer is now visible to all connected peers.\n\n\
+### Step 5b — Discover and join shared documents\n\n\
+- `SPC C l` (`:collab-list`) — list all documents shared on the server.\n\
+- `SPC C j` (`:collab-join`) — open a picker to select and join a shared document.\n\
+- `:collab-join <name>` — join a specific document by name.\n\n\
+### Step 6 — Verify the connection\n\n\
+- `SPC C i` (`:collab-status`) — shows server address, connected peers, \
+  and shared document list.\n\
+- `mae doctor` (from the terminal) — checks server process health, \
+  port availability, and WAL integrity.\n\n\
+### Step 7 — AI tools for collaboration\n\n\
+The AI agent has direct access to collaboration state via four tools:\n\n\
+| Tool | Description |\n\
+|------|-------------|\n\
+| `collab_status` | Report connection state and peer list |\n\
+| `collab_connect` | Connect to (or reconnect to) the configured server |\n\
+| `collab_share` | Share a named buffer with connected peers |\n\
+| `collab_doctor` | Run diagnostics: reachability, WAL, peer count |\n\n\
+Ask the AI: \"connect to the collab server and share this buffer\" to \
+have it set everything up for you.\n\n\
+### Systemd User Service\n\n\
+Install and enable the state server as a systemd user service:\n\
+```bash\n\
+make install-service\n\
+systemctl --user enable --now mae-state-server\n\
+journalctl --user -u mae-state-server -f  # view logs\n\
+```\n\n\
+### Client-Frame Workflow\n\n\
+Use `mae --connect` to open a frame that auto-connects to the server \
+(like `emacsclient -c`):\n\
+```bash\n\
+mae --connect              # connects to 127.0.0.1:9473\n\
+mae --connect 10.0.0.5:9473  # connects to a remote server\n\
+```\n\n\
+Add a sway/i3 keybind for instant connected frames:\n\
+```\n\
+bindsym $mod+Shift+e exec mae --connect\n\
+```\n\n\
+### Network & Firewall\n\n\
+For multi-machine collaboration, bind to all interfaces:\n\
+```bash\n\
+mae-state-server --bind 0.0.0.0:9473\n\
+```\n\n\
+Open the firewall port:\n\
+- Fedora: `sudo firewall-cmd --add-port=9473/tcp --permanent && sudo firewall-cmd --reload`\n\
+- Ubuntu: `sudo ufw allow 9473/tcp`\n\n\
+**Security warning:** v1 has no authentication. Never expose to the public internet. \
+Use a VPN (Tailscale/WireGuard) for untrusted networks.\n\n\
+### Troubleshooting\n\n\
+- **Connection refused** — check `mae-state-server` is running: `ss -tlnp | grep 9473`\n\
+- **No peers visible** — ensure all clients use the same `collab-server-address`\n\
+- **Stale state after restart** — run `:collab-doctor` to inspect WAL health; \
+  the server recovers from WAL automatically on restart\n\
+- **Permission denied on port** — use a port above 1024 (default 9473 is fine)\n\
+- **Firewall blocking** — run `mae doctor` for firewall diagnostics\n\n\
+**Index:** [[tutor:index|Tutorial]]\n\n\
+See also: [[concept:collab-architecture]], [[concept:collab-workflows]], \
+[[concept:sync-engine]], [[index]]\n";
