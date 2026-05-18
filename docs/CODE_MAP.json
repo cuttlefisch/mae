@@ -296,10 +296,6 @@
           "kind": "mod"
         },
         {
-          "name": "help_view",
-          "kind": "mod"
-        },
-        {
           "name": "hooks",
           "kind": "mod"
         },
@@ -313,6 +309,10 @@
         },
         {
           "name": "kb_seed",
+          "kind": "mod"
+        },
+        {
+          "name": "kb_view",
           "kind": "mod"
         },
         {
@@ -1684,6 +1684,22 @@
       "doc": "Decrease window size (SPC w -)"
     },
     {
+      "name": "window-grow-width",
+      "doc": "Increase window width (SPC w >)"
+    },
+    {
+      "name": "window-shrink-width",
+      "doc": "Decrease window width (SPC w <)"
+    },
+    {
+      "name": "window-grow-height",
+      "doc": "Increase window height (SPC w +)"
+    },
+    {
+      "name": "window-shrink-height",
+      "doc": "Decrease window height (SPC w -)"
+    },
+    {
       "name": "window-balance",
       "doc": "Balance all window sizes (SPC w =)"
     },
@@ -2997,7 +3013,7 @@
     },
     {
       "name": "help-close",
-      "doc": "Close help buffer"
+      "doc": "Close KB viewer"
     },
     {
       "name": "help-search",
@@ -3005,7 +3021,7 @@
     },
     {
       "name": "help-reopen",
-      "doc": "Reopen the last-closed help buffer"
+      "doc": "Reopen the last-closed KB viewer"
     },
     {
       "name": "kb-view",
@@ -3021,11 +3037,11 @@
     },
     {
       "name": "help-close-all-folds",
-      "doc": "Fold all headings in help buffer (zM)"
+      "doc": "Fold all headings in KB viewer (zM)"
     },
     {
       "name": "help-open-all-folds",
-      "doc": "Unfold all headings in help buffer (zR)"
+      "doc": "Unfold all headings in KB viewer (zR)"
     },
     {
       "name": "help-edit",

@@ -140,11 +140,11 @@ Source: `crates/core/src/lib.rs`
 | `git_status` | mod |
 | `grapheme` | mod |
 | `heading` | mod |
-| `help_view` | mod |
 | `hooks` | mod |
 | `image_meta` | mod |
 | `input` | mod |
 | `kb_seed` | mod |
+| `kb_view` | mod |
 | `keymap` | mod |
 | `link_detect` | mod |
 | `lock_stats` | mod |
@@ -463,7 +463,7 @@ Source: `crates/sync/src/lib.rs`
 | `collab-status` | `crates/scheme/src/runtime.rs` |
 | `collab-synced-buffers` | `crates/scheme/src/runtime.rs` |
 
-## Commands (496 built-in)
+## Commands (500 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -578,6 +578,10 @@ Source: `crates/sync/src/lib.rs`
 | `focus-down` | Focus window below |
 | `window-grow` | Increase window size (SPC w +) |
 | `window-shrink` | Decrease window size (SPC w -) |
+| `window-grow-width` | Increase window width (SPC w >) |
+| `window-shrink-width` | Decrease window width (SPC w <) |
+| `window-grow-height` | Increase window height (SPC w +) |
+| `window-shrink-height` | Decrease window height (SPC w -) |
 | `window-balance` | Balance all window sizes (SPC w =) |
 | `window-maximize` | Maximize current window (SPC w m) |
 | `window-move-left` | Move window left (SPC w H) |
@@ -906,14 +910,14 @@ Source: `crates/sync/src/lib.rs`
 | `help-forward` | Navigate forward in help history (C-i) |
 | `help-next-link` | Focus the next link in the current help page |
 | `help-prev-link` | Focus the previous link in the current help page |
-| `help-close` | Close help buffer |
+| `help-close` | Close KB viewer |
 | `help-search` | Search help topics |
-| `help-reopen` | Reopen the last-closed help buffer |
+| `help-reopen` | Reopen the last-closed KB viewer |
 | `kb-view` | Return to rendered KB view from source editing (SPC n v) |
 | `help-cycle` | Fold/unfold heading at cursor, or next link if not on heading (Tab) |
 | `help-global-cycle` | Cycle global visibility: OVERVIEW → CONTENTS → SHOW ALL (S-Tab) |
-| `help-close-all-folds` | Fold all headings in help buffer (zM) |
-| `help-open-all-folds` | Unfold all headings in help buffer (zR) |
+| `help-close-all-folds` | Fold all headings in KB viewer (zM) |
+| `help-open-all-folds` | Unfold all headings in KB viewer (zR) |
 | `help-edit` | Edit a user help topic in ~/.config/mae/help/ (:help-edit <topic>) |
 | `terminal` | Open a terminal emulator buffer (:terminal) |
 | `terminal-here` | Open terminal in current buffer's file directory (SPC o T) |
