@@ -93,17 +93,23 @@ jobs:
         run: cargo run --package mae-state-server -- --check-config
         timeout-minutes: 1
 
-  gui-build:
-    name: gui / build
+  gui:
+    name: gui / build + test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - name: Install GUI dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libfreetype6-dev
       - uses: Swatinem/rust-cache@v2
       - name: Build GUI binary
         run: cargo build --release --features gui --package mae
+      - name: GUI unit tests
+        run: cargo test --package mae-gui
+      - name: GUI clippy
+        run: cargo clippy --package mae-gui --all-targets -- -D warnings
 
   container-smoke:
     name: container / smoke

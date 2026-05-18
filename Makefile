@@ -13,6 +13,7 @@
 #   make clean        — remove build artefacts
 #   make uninstall    — remove installed binary
 #   make build-tui    — terminal-only build (no skia dependency)
+#   make test-tui     — run tests without GUI (no skia dependency)
 #   make install-tui  — terminal-only install
 #   make setup-hooks  — configure git to use .githooks/ (pre-commit fmt check)
 #
@@ -44,7 +45,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-completions docker-network-test
+.PHONY: all build build-tui dev install install-tui uninstall run test test-tui check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-completions docker-network-test
 
 # Default target: release build
 all: build
@@ -124,23 +125,24 @@ uninstall:
 run:
 	$(CARGO) run $(FEAT_FLAG) -- $(ARGS)
 
-## test: run all workspace tests
+## test: run all workspace tests (including GUI)
 test:
+	$(CARGO) test --workspace
+
+## test-tui: run workspace tests without GUI (no skia deps required)
+test-tui:
 	$(CARGO) test --workspace --exclude mae-gui
-	$(CARGO) test -p mae $(FEAT_FLAG)
 
 ## check: fast type-check without producing a binary
 check:
 	$(CARGO) check $(FEAT_FLAG)
 
-## verify: check + test + GUI check — single command for development validation
+## verify: check + test — single command for development validation
 verify:
-	@echo "=== Check (workspace) ==="
-	$(CARGO) check --workspace --exclude mae-gui
-	@echo "=== Check (GUI) ==="
-	$(CARGO) check --package mae-gui
+	@echo "=== Check (workspace + GUI) ==="
+	$(CARGO) check $(FEAT_FLAG)
 	@echo "=== Test ==="
-	$(CARGO) test --workspace --exclude mae-gui 2>&1 | tee /dev/stderr | grep "^test result:" | awk -F'[; ]' 'BEGIN{p=0;f=0} {p+=$$4;f+=$$7} END{printf "\n=== %d passed, %d failed ===\n",p,f}'
+	$(CARGO) test --workspace 2>&1 | tee /dev/stderr | grep "^test result:" | awk -F'[; ]' 'BEGIN{p=0;f=0} {p+=$$4;f+=$$7} END{printf "\n=== %d passed, %d failed ===\n",p,f}'
 
 ## fmt: format all Rust sources in place
 fmt:
