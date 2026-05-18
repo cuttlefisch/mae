@@ -35,7 +35,7 @@ graph TD
     mae_gui --> mae_core
     mae_gui --> mae_renderer
     mae_gui --> mae_shell
-    mae_kb[mae-kb]
+    mae_kb --> mae_sync
     mae_lookup[mae-lookup]
     mae_lsp[mae-lsp]
     mae_make[mae-make]

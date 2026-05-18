@@ -551,7 +551,9 @@
     },
     "mae-kb": {
       "path": "crates/kb/src/lib.rs",
-      "dependencies": [],
+      "dependencies": [
+        "mae-sync"
+      ],
       "public_items": [
         {
           "name": "activity",
