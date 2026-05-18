@@ -1052,6 +1052,17 @@ impl Editor {
                         return true;
                     }
                 }
+                // collab-join with a doc name argument: join directly.
+                if command == "collab-join" {
+                    if let Some(doc_name) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                        self.pending_collab_intent = Some(super::CollabIntent::JoinDoc {
+                            doc_id: doc_name.to_string(),
+                        });
+                        self.set_status(format!("Joining: {}...", doc_name));
+                        return true;
+                    }
+                    // No arg: open palette picker (falls through to dispatch_builtin)
+                }
                 // Final fallback: dispatch any registered builtin command by
                 // name. This lets `:debug-stop`, `:debug-continue`, etc. work
                 // without explicit `:`-arms, and is the foundation for making

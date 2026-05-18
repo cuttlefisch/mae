@@ -6,9 +6,9 @@
 [![Lines of Code](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/cuttlefisch/6f6375e4dc527a9953e6898124329f4c/raw/mae-loc.json)](#)
 [![Built with AI](https://img.shields.io/badge/Built%20with-Claude%20+%20Gemini%20+%20DeepSeek-blueviolet.svg)](https://github.com/cuttlefisch/mae)
 
-An AI-native lisp machine editor. The human and the AI are peer actors calling
-the same Scheme primitives. Built on a Rust core with an embedded R7RS-small
-runtime.
+An AI-native lisp machine IDE — a programmable development environment where the
+human and the AI are peer actors calling the same Scheme primitives. Built on a
+Rust core with an embedded R7RS-small runtime. GUI + terminal.
 
 <p align="center">
   <img src="assets/mae-screenshot.png" alt="MAE dashboard screenshot" width="700">
@@ -19,8 +19,15 @@ runtime.
 - **AI as peer actor** — 450+ editor commands exposed as AI tools. The AI calls
   the same `dispatch_builtin()` as your keybindings. No shadow API, no simulated
   keystrokes.
-- **Multi-provider** — Claude, OpenAI, Gemini, and DeepSeek. Provider-aware
-  prompt tuning. Tiered prompt system (Full/Compact) with per-model guardrails.
+- **Collaborative editing** — Real-time multi-user editing via CRDT state server
+  (yrs/YATA). Share buffers across editors on the same LAN. AI agents and humans
+  sync the same document. WAL-backed persistence, automatic reconnection.
+- **Org-mode babel** — Execute code blocks in 12 languages, noweb expansion,
+  `:tangle` directive, `:var` cross-references, safety policies. Export to
+  HTML and Markdown with TOC, syntax highlighting, tag filtering.
+- **Runtime redefinability** — Embedded R7RS Scheme (Steel). Redefine any
+  function while running. 45+ primitives, 18 hook points, `init.scm` is a
+  real program.
 - **Full vi modal editing** — Motions, operators, text objects, count prefix,
   dot repeat, macros, registers, marks, surround, visual block mode, multi-cursor.
 - **LSP first-class** — Go-to-definition, references, hover, completion, rename,
@@ -29,21 +36,17 @@ runtime.
 - **DAP first-class** — Multi-language debugging (Python, Rust, C/C++).
   Breakpoints (conditional, logpoint), watch expressions, exception breakpoints.
   AI can set breakpoints and inspect variables.
-- **Org-mode babel** — Execute code blocks in 12 languages, noweb expansion,
-  `:tangle` directive, `:var` cross-references, safety policies. Export to
-  HTML and Markdown with TOC, syntax highlighting, tag filtering.
-- **Embedded terminal** — Full VT100/VT500 via `alacritty_terminal`. AI can
-  observe output and send input. `Ctrl-\ Ctrl-n` exits to normal mode.
+- **Multi-provider AI** — Claude, OpenAI, Gemini, and DeepSeek. Provider-aware
+  prompt tuning. Tiered prompt system (Full/Compact) with per-model guardrails.
 - **Knowledge base** — SQLite + FTS5 graph store. 200+ help nodes, bidirectional
   links, org-mode parser, federated instances. Same docs the AI reads.
-- **Runtime redefinability** — Embedded R7RS Scheme (Steel). Redefine any
-  function while running. 45+ primitives, 18 hook points, `init.scm` is a
-  real program.
 - **Tree-sitter** — 13 languages with structural parse trees. AI can query
   syntax trees for code reasoning.
 - **GUI + Terminal** — winit + Skia 2D hardware-accelerated GUI, ratatui
   terminal fallback. Inline images (PNG/JPG/SVG), variable-height rendering,
   inertial scrolling. Desktop launcher for freedesktop environments.
+- **Embedded terminal** — Full VT100/VT500 via `alacritty_terminal`. AI can
+  observe output and send input. `Ctrl-\ Ctrl-n` exits to normal mode.
 
 ## Architecture
 
@@ -96,6 +99,8 @@ mae (binary)
  ├── mae-shell       Terminal emulator (alacritty_terminal), PTY management
  ├── mae-kb          Knowledge base — graph store, org-mode parser, FTS5 search, federation
  ├── mae-mcp         MCP server — Unix socket, JSON-RPC, stdio shim
+ ├── mae-sync        Collaborative sync — yrs CRDT, ropey bridge, encoding helpers
+ ├── mae-state-server  Standalone collab state server — TCP sync, WAL persistence
  ├── mae-babel       Org-babel executor — 12 languages, persistent sessions, language backends
  ├── mae-export      Org/Markdown export — HTML, Markdown, TOC, syntax highlighting
  ├── mae-snippets    YASnippet-style templates — tab-stops, mirrors, transforms
@@ -344,7 +349,8 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, KB federation |
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
 | 11. Module System | ✅ Complete | 19 modules (Doom model), `mae pkg` CLI, flags, live reload |
-| **Next** | 🔧 In progress | PDF preview, semantic code search. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) |
+| 12. Collaborative Editing | 🔧 In progress | CRDT state server, multi-peer sync, WAL persistence |
+| **Next** | 🔧 In progress | Awareness protocol, PDF preview, semantic search. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) |
 
 ## Design Lineage
 

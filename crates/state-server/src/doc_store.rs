@@ -207,6 +207,19 @@ impl DocStore {
         Ok(())
     }
 
+    /// Delete a document from memory and storage.
+    pub async fn delete_doc(&self, doc_name: &str) -> Result<(), StorageError> {
+        // Remove from in-memory map.
+        {
+            let mut docs = self.docs.write().await;
+            docs.remove(doc_name);
+        }
+        // Remove from persistent storage.
+        self.storage.delete_document(doc_name).await?;
+        info!(doc = doc_name, "document deleted");
+        Ok(())
+    }
+
     /// List all in-memory documents.
     pub async fn document_names(&self) -> Vec<String> {
         let docs = self.docs.read().await;

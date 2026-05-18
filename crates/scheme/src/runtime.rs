@@ -1640,11 +1640,16 @@ impl SchemeRuntime {
             });
 
         // (collab-synced-buffers) — returns a list of synced buffer names.
-        // Currently a placeholder that returns an empty list; will enumerate
-        // actual synced buffer names once per-buffer tracking is added.
+        let synced_names: Vec<String> = editor.collab_synced_buffers.iter().cloned().collect();
         self.engine
-            .register_fn("collab-synced-buffers", || -> SteelVal {
-                SteelVal::ListV(vec![].into())
+            .register_fn("collab-synced-buffers", move || -> SteelVal {
+                SteelVal::ListV(
+                    synced_names
+                        .iter()
+                        .map(|n| SteelVal::StringV(n.clone().into()))
+                        .collect::<Vec<_>>()
+                        .into(),
+                )
             });
     }
 

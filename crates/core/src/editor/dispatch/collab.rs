@@ -57,6 +57,18 @@ impl Editor {
                 self.set_status("Running collab diagnostics...");
                 Some(true)
             }
+            "collab-list" => {
+                self.pending_collab_intent = Some(CollabIntent::ListDocs);
+                self.set_status("Listing shared documents...");
+                Some(true)
+            }
+            "collab-join" => {
+                // No-arg dispatch (SPC C j): fetch doc list and open picker palette.
+                // :collab-join <name> is handled in command.rs before reaching here.
+                self.pending_collab_intent = Some(CollabIntent::ListDocsForJoin);
+                self.set_status("Fetching document list...");
+                Some(true)
+            }
             _ => None,
         }
     }

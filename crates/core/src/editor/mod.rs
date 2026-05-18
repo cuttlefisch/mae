@@ -99,6 +99,12 @@ pub enum CollabIntent {
     ForceSync { buffer_name: String },
     /// Run connectivity diagnostics.
     Doctor,
+    /// List shared documents on the server (opens *Collab Docs* buffer).
+    ListDocs,
+    /// List docs, then open a palette picker for joining.
+    ListDocsForJoin,
+    /// Join a shared document by name (create buffer from server state).
+    JoinDoc { doc_id: String },
 }
 
 /// State for an active note capture session (org-roam parity).
@@ -1115,6 +1121,8 @@ pub struct Editor {
     pub collab_status: CollabStatus,
     /// Number of documents currently synced via the collaborative state server.
     pub collab_synced_docs: usize,
+    /// Set of buffer names currently synced via the collaborative state server.
+    pub collab_synced_buffers: HashSet<String>,
     /// Pending collaborative editing intent for the binary event loop to drain.
     pub pending_collab_intent: Option<CollabIntent>,
     /// TCP address of the collaborative state server.
@@ -1427,6 +1435,7 @@ impl Editor {
             locked_files: HashSet::new(),
             collab_status: CollabStatus::Off,
             collab_synced_docs: 0,
+            collab_synced_buffers: HashSet::new(),
             pending_collab_intent: None,
             collab_server_address: DEFAULT_COLLAB_ADDRESS.to_string(),
             collab_auto_connect: false,

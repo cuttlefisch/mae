@@ -526,7 +526,11 @@ Either enable auto-connect so MAE connects on every startup:\n\
 Or connect manually: `SPC C c` (`:collab-connect`).\n\n\
 ### Step 5 — Share a buffer\n\n\
 Open a file you want to collaborate on, then press `SPC C S` \
-(`:collab-share-buffer`). The buffer is now visible to all connected peers.\n\n\
+(`:collab-share`). The buffer is now visible to all connected peers.\n\n\
+### Step 5b — Discover and join shared documents\n\n\
+- `SPC C l` (`:collab-list`) — list all documents shared on the server.\n\
+- `SPC C j` (`:collab-join`) — open a picker to select and join a shared document.\n\
+- `:collab-join <name>` — join a specific document by name.\n\n\
 ### Step 6 — Verify the connection\n\n\
 - `SPC C i` (`:collab-status`) — shows server address, connected peers, \
   and shared document list.\n\

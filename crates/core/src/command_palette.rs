@@ -40,6 +40,7 @@ pub enum PalettePurpose {
     KbFindOrCreate,
     KbInsertLink,
     MiniDialog,
+    CollabJoin,
 }
 
 impl PalettePurpose {
@@ -61,6 +62,7 @@ impl PalettePurpose {
             Self::KbFindOrCreate => "Find or Create",
             Self::KbInsertLink => "Insert Link",
             Self::MiniDialog => "Dialog",
+            Self::CollabJoin => "Join Document",
         }
     }
 }
@@ -354,6 +356,11 @@ impl CommandPalette {
         }
     }
 
+    /// Collab join palette: server documents to join. Used by `SPC C j`.
+    pub fn for_collab_join(names: &[&str]) -> Self {
+        Self::with_name_list(names, PalettePurpose::CollabJoin)
+    }
+
     fn with_name_list(names: &[&str], purpose: PalettePurpose) -> Self {
         let entries: Vec<PaletteEntry> = names
             .iter()
@@ -506,6 +513,7 @@ mod tests {
             PalettePurpose::KbFindOrCreate,
             PalettePurpose::KbInsertLink,
             PalettePurpose::MiniDialog,
+            PalettePurpose::CollabJoin,
         ];
         for p in &purposes {
             assert!(!p.label().is_empty(), "{:?} has empty label", p);

@@ -146,6 +146,45 @@ impl EventBroadcaster {
         }
     }
 
+    /// Broadcast an event to all subscribed clients except the specified session.
+    /// Used for echo filtering — the sender of a sync/update should not receive
+    /// its own update back from the server.
+    pub fn broadcast_except(&mut self, event: &EditorEvent, exclude_session: u64) {
+        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+        let event_type = event.event_type();
+        debug!(
+            seq = seq,
+            event_type = event_type,
+            exclude = exclude_session,
+            "broadcasting event (with exclusion)"
+        );
+        let mut closed: Vec<u64> = Vec::new();
+        for (session_id, (subs, tx)) in &self.clients {
+            if *session_id == exclude_session {
+                continue;
+            }
+            if subs.iter().any(|s| s == event_type || s == "*") {
+                match tx.try_send(event.clone()) {
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        warn!(
+                            session_id = session_id,
+                            event_type = event_type,
+                            "client event queue full; dropping event"
+                        );
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        debug!(session_id = session_id, "removing closed client channel");
+                        closed.push(*session_id);
+                    }
+                    Ok(()) => {}
+                }
+            }
+        }
+        for id in closed {
+            self.clients.remove(&id);
+        }
+    }
+
     /// Number of currently subscribed clients.
     pub fn client_count(&self) -> usize {
         self.clients.len()
@@ -289,6 +328,25 @@ mod tests {
             }
             _ => panic!("expected SyncUpdate"),
         }
+    }
+
+    #[tokio::test]
+    async fn broadcast_except_skips_excluded_session() {
+        let mut bc = EventBroadcaster::new();
+        let mut rx1 = bc.subscribe(1, vec!["sync_update".to_string()]);
+        let mut rx2 = bc.subscribe(2, vec!["sync_update".to_string()]);
+
+        let event = EditorEvent::SyncUpdate {
+            buffer_name: "test.rs".to_string(),
+            update_base64: "AQIDBA==".to_string(),
+            wal_seq: 1,
+        };
+        bc.broadcast_except(&event, 1); // exclude session 1
+
+        // Session 1 (excluded) should NOT receive it.
+        assert!(rx1.try_recv().is_err());
+        // Session 2 should receive it.
+        assert!(rx2.recv().await.is_some());
     }
 
     #[tokio::test]

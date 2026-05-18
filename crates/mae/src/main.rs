@@ -1200,7 +1200,11 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.last_mcp_activity = None;
                 }
                 // Drain sync updates immediately after MCP-driven edits.
-                sync_broadcast::drain_and_broadcast(&mut self.editor, &self.sync_broadcaster);
+                sync_broadcast::drain_and_broadcast(
+                    &mut self.editor,
+                    &self.sync_broadcaster,
+                    Some(&self.collab_command_tx),
+                );
                 self.dirty = true;
             }
             MaeEvent::ShellTick => {
@@ -1258,7 +1262,11 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     // Don't set dirty — idle work shouldn't trigger redraws.
                 }
                 // Drain sync updates on idle tick (~100ms max latency for keyboard edits).
-                sync_broadcast::drain_and_broadcast(&mut self.editor, &self.sync_broadcaster);
+                sync_broadcast::drain_and_broadcast(
+                    &mut self.editor,
+                    &self.sync_broadcaster,
+                    Some(&self.collab_command_tx),
+                );
             }
         }
     }

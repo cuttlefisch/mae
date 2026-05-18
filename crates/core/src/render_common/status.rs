@@ -520,7 +520,14 @@ pub fn format_collab_status(editor: &Editor) -> String {
     match &editor.collab_status {
         CollabStatus::Off => String::new(),
         CollabStatus::Connecting => " [C:\u{2026}]".to_string(),
-        CollabStatus::Connected { peer_count } => format!(" [C:{}]", peer_count),
+        CollabStatus::Connected { peer_count } => {
+            let buf_name = &editor.buffers[editor.window_mgr.focused_window().buffer_idx].name;
+            if editor.collab_synced_buffers.contains(buf_name) {
+                format!(" [C:{}|synced]", peer_count)
+            } else {
+                format!(" [C:{}]", peer_count)
+            }
+        }
         CollabStatus::Reconnecting => " [C:\u{27f3}]".to_string(),
         CollabStatus::Disconnected => " [C:\u{2717}]".to_string(),
     }

@@ -137,6 +137,11 @@ pub(super) fn handle_command_palette_mode(
                         editor.set_status("No project selected");
                     }
                 }
+                (Some(doc_name), PalettePurpose::CollabJoin) => {
+                    editor.pending_collab_intent =
+                        Some(mae_core::CollabIntent::JoinDoc { doc_id: doc_name });
+                    editor.set_status("Joining document...");
+                }
                 (_, PalettePurpose::MiniDialog) => {
                     // Handled by handle_mini_dialog — should not reach here
                 }

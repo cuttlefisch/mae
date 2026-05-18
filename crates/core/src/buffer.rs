@@ -878,6 +878,21 @@ impl Buffer {
         ));
     }
 
+    /// Load sync state from encoded bytes (join/resync path).
+    ///
+    /// Creates the sync doc directly from the server's full state bytes via
+    /// `TextSync::from_state()` — no merge with existing content, preventing
+    /// the duplication bug that occurs when `enable_sync()` + `apply_sync_update()`
+    /// are used on a buffer that already has content.
+    pub fn load_sync_state(&mut self, state_bytes: &[u8]) -> Result<(), mae_sync::SyncError> {
+        let sync = mae_sync::text::TextSync::from_state(state_bytes)?;
+        self.rope = sync.rope().clone();
+        self.sync_doc = Some(sync);
+        self.pending_sync_updates.clear();
+        self.bump_generation();
+        Ok(())
+    }
+
     /// Disable sync, returning the final encoded state for persistence.
     pub fn disable_sync(&mut self) -> Option<Vec<u8>> {
         self.sync_doc.take().map(|s| s.encode_state())

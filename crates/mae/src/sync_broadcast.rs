@@ -1,28 +1,47 @@
-//! Drain pending sync updates from buffers and broadcast to MCP clients.
+//! Drain pending sync updates from buffers and broadcast to MCP clients
+//! and optionally forward to the collaborative state server.
 
 use mae_core::Editor;
 use mae_mcp::broadcast::{EditorEvent, SharedBroadcaster};
 
 /// Drain all pending yrs sync updates from editor buffers and broadcast
-/// them to subscribed MCP clients.
+/// them to subscribed MCP clients. If `collab_tx` is provided and the
+/// buffer is tracked in `collab_synced_buffers`, also forward updates to
+/// the state server (fixes B5: local edits never reaching the server).
 ///
 /// This is a no-op if no buffers have sync enabled or no updates are pending.
 /// Called on `IdleTick` (~100ms) and after `McpToolRequest` completion.
-pub fn drain_and_broadcast(editor: &mut Editor, broadcaster: &SharedBroadcaster) {
+pub fn drain_and_broadcast(
+    editor: &mut Editor,
+    broadcaster: &SharedBroadcaster,
+    collab_tx: Option<&tokio::sync::mpsc::Sender<crate::collab_bridge::CollabCommand>>,
+) {
     for buf in &mut editor.buffers {
         if buf.pending_sync_updates.is_empty() {
             continue;
         }
         let updates: Vec<Vec<u8>> = buf.pending_sync_updates.drain(..).collect();
         let buffer_name = buf.name.clone();
+        let is_collab_synced = editor.collab_synced_buffers.contains(&buffer_name);
         let mut bc = broadcaster.lock().unwrap();
         for update in updates {
+            let update_b64 = mae_sync::encoding::update_to_base64(&update);
             let event = EditorEvent::SyncUpdate {
                 buffer_name: buffer_name.clone(),
-                update_base64: mae_sync::encoding::update_to_base64(&update),
+                update_base64: update_b64.clone(),
                 wal_seq: 0,
             };
             bc.broadcast(&event);
+
+            // Forward to state server if this buffer is collaboratively synced.
+            if is_collab_synced {
+                if let Some(tx) = collab_tx {
+                    let _ = tx.try_send(crate::collab_bridge::CollabCommand::SendUpdate {
+                        doc_id: buffer_name.clone(),
+                        update_base64: update_b64,
+                    });
+                }
+            }
         }
     }
 }
@@ -43,7 +62,7 @@ mod tests {
         let mut editor = Editor::default();
         editor.buffers.push(Buffer::new());
         let bc = test_broadcaster();
-        drain_and_broadcast(&mut editor, &bc);
+        drain_and_broadcast(&mut editor, &bc, None);
         assert!(editor.buffers[0].pending_sync_updates.is_empty());
     }
 
@@ -65,7 +84,7 @@ mod tests {
             .unwrap()
             .subscribe(99, vec!["sync_update".to_string()]);
 
-        drain_and_broadcast(&mut editor, &bc);
+        drain_and_broadcast(&mut editor, &bc, None);
 
         assert!(editor.buffers[0].pending_sync_updates.is_empty());
         let event = rx.recv().await.unwrap();
@@ -98,7 +117,7 @@ mod tests {
         let bc = test_broadcaster();
         let mut rx = bc.lock().unwrap().subscribe(1, vec!["*".to_string()]);
 
-        drain_and_broadcast(&mut editor, &bc);
+        drain_and_broadcast(&mut editor, &bc, None);
 
         assert!(editor.buffers[0].pending_sync_updates.is_empty());
         assert!(editor.buffers[1].pending_sync_updates.is_empty());
@@ -111,6 +130,31 @@ mod tests {
         }
         assert!(names.contains(&"a.rs".to_string()));
         assert!(names.contains(&"b.rs".to_string()));
+    }
+
+    #[tokio::test]
+    async fn drain_forwards_to_collab_when_synced() {
+        let mut editor = Editor::default();
+        let mut buf = Buffer::new();
+        buf.name = "collab.rs".to_string();
+        buf.insert_text_at(0, "hello");
+        buf.enable_sync(1);
+        buf.insert_text_at(5, " world");
+        editor.buffers.push(buf);
+        editor.collab_synced_buffers.insert("collab.rs".to_string());
+
+        let bc = test_broadcaster();
+        let (collab_tx, mut collab_rx) =
+            tokio::sync::mpsc::channel::<crate::collab_bridge::CollabCommand>(8);
+
+        drain_and_broadcast(&mut editor, &bc, Some(&collab_tx));
+
+        // Should have forwarded to collab channel.
+        let cmd = collab_rx.try_recv().unwrap();
+        assert!(matches!(
+            cmd,
+            crate::collab_bridge::CollabCommand::SendUpdate { .. }
+        ));
     }
 
     #[test]
@@ -140,7 +184,7 @@ mod tests {
             .unwrap()
             .subscribe(1, vec!["sync_update".to_string()]);
 
-        drain_and_broadcast(&mut editor, &bc);
+        drain_and_broadcast(&mut editor, &bc, None);
 
         let mut count = 0;
         while rx.try_recv().is_ok() {

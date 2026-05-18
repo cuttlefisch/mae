@@ -1298,6 +1298,11 @@ impl CommandRegistry {
         reg.register_builtin("collab-share", "Share current buffer for collaboration");
         reg.register_builtin("collab-sync", "Force sync current buffer");
         reg.register_builtin("collab-doctor", "Run collaborative editing diagnostics");
+        reg.register_builtin(
+            "collab-list",
+            "List shared documents on the state server (SPC C l)",
+        );
+        reg.register_builtin("collab-join", "Join a shared document (SPC C j)");
 
         reg
     }

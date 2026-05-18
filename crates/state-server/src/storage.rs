@@ -75,6 +75,9 @@ pub trait StorageBackend: Send + Sync {
 
     /// List all known documents.
     async fn list_documents(&self) -> Result<Vec<String>, StorageError>;
+
+    /// Delete all data for a document (snapshot + WAL entries).
+    async fn delete_document(&self, doc_name: &str) -> Result<(), StorageError>;
 }
 
 /// Sharded SQLite connection pool.
@@ -302,6 +305,14 @@ impl StorageBackend for SqliteBackend {
             .query_map([], |row| row.get(0))?
             .collect::<Result<_, _>>()?;
         Ok(names)
+    }
+
+    async fn delete_document(&self, doc_name: &str) -> Result<(), StorageError> {
+        let conn = self.pool.shard_for(doc_name).lock().unwrap();
+        conn.execute("DELETE FROM snapshots WHERE doc_name = ?1", [doc_name])?;
+        conn.execute("DELETE FROM wal WHERE doc_name = ?1", [doc_name])?;
+        info!(doc = doc_name, "deleted document from storage");
+        Ok(())
     }
 }
 

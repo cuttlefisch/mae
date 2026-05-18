@@ -424,7 +424,7 @@ pub(crate) async fn run_terminal_loop(
                 tui_dirty = true;
                 render_pending = false;
                 // Drain sync updates on frame tick (~16ms max latency).
-                crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster);
+                crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster, Some(collab_command_tx));
             }
             _ = syntax_reparse_timer => {
                 // Debounce expired — drain pending reparses.
@@ -630,7 +630,7 @@ pub(crate) async fn run_terminal_loop(
                     last_mcp_activity = None;
                 }
                 // Drain sync updates immediately after MCP-driven edits.
-                crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster);
+                crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster, Some(collab_command_tx));
             }
             Some(collab_event) = collab_event_rx.recv() => {
                 tui_dirty = true;

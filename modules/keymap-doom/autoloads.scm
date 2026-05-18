@@ -206,6 +206,8 @@
 (define-key "normal" "SPC C S" "collab-share")
 (define-key "normal" "SPC C y" "collab-sync")
 (define-key "normal" "SPC C D" "collab-doctor")
+(define-key "normal" "SPC C l" "collab-list")
+(define-key "normal" "SPC C j" "collab-join")
 
 ;; Visual mode SPC bindings
 (define-key "visual" "SPC s n" "syntax-select-node")

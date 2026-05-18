@@ -90,13 +90,24 @@ pub async fn handle_client<R, W>(
                 session.messages_received += 1;
 
                 // Check if this is a sync/* method we handle differently.
-                let response = if is_doc_method(&msg) {
-                    handle_doc_request(&msg, &doc_store, &broadcaster, start_time).await
+                let mut response = if is_doc_method(&msg) {
+                    handle_doc_request(&msg, &doc_store, &broadcaster, start_time, session_id).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
                     ).await
                 };
+
+                // Augment initialize response with connection count so
+                // clients can report peer count accurately.
+                if msg.contains("\"initialize\"") {
+                    if let Some(ref mut result) = response.result {
+                        if let Some(info) = result.get_mut("serverInfo") {
+                            let count = broadcaster.lock().unwrap().client_count();
+                            info["connections"] = serde_json::json!(count);
+                        }
+                    }
+                }
 
                 let body = match serde_json::to_vec(&response) {
                     Ok(b) => b,
@@ -157,6 +168,7 @@ fn is_doc_method(msg: &str) -> bool {
         || msg.contains("\"docs/stats\"")
         || msg.contains("\"docs/save_intent\"")
         || msg.contains("\"docs/save_committed\"")
+        || msg.contains("\"docs/delete\"")
         || msg.contains("\"$/debug\"")
 }
 
@@ -166,6 +178,7 @@ async fn handle_doc_request(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     start_time: std::time::Instant,
+    session_id: u64,
 ) -> JsonRpcResponse {
     let request: JsonRpcRequest = match serde_json::from_str(msg) {
         Ok(r) => r,
@@ -222,14 +235,17 @@ async fn handle_doc_request(
                 .await
             {
                 Ok(result) => {
-                    // Broadcast to other subscribers.
+                    // Broadcast to other subscribers (skip sender to avoid echo).
                     {
                         let mut bc = broadcaster.lock().unwrap();
-                        bc.broadcast(&EditorEvent::SyncUpdate {
-                            buffer_name: doc_name.clone(),
-                            update_base64: update_to_base64(&result.update),
-                            wal_seq: result.wal_seq,
-                        });
+                        bc.broadcast_except(
+                            &EditorEvent::SyncUpdate {
+                                buffer_name: doc_name.clone(),
+                                update_base64: update_to_base64(&result.update),
+                                wal_seq: result.wal_seq,
+                            },
+                            session_id,
+                        );
                     }
                     JsonRpcResponse::success(
                         id,
@@ -369,6 +385,17 @@ async fn handle_doc_request(
                 id,
                 serde_json::json!({ "doc": doc_name, "committed": true }),
             )
+        }
+
+        "docs/delete" => {
+            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            match doc_store.delete_doc(&doc_name).await {
+                Ok(()) => JsonRpcResponse::success(
+                    id,
+                    serde_json::json!({ "doc": doc_name, "deleted": true }),
+                ),
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+            }
         }
 
         "$/debug" => {
@@ -526,7 +553,7 @@ mod tests {
             "params": { "doc": "test", "update": update_b64 }
         });
         let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
         assert!(resp.error.is_none(), "sync/update failed: {:?}", resp.error);
         assert!(resp.result.unwrap()["wal_seq"].as_u64().unwrap() > 0);
 
@@ -536,7 +563,7 @@ mod tests {
             "params": { "doc": "test" }
         });
         let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
         assert_eq!(resp.result.unwrap()["content"], "hello");
     }
 
@@ -550,7 +577,7 @@ mod tests {
             "params": { "doc": "test" }
         });
         let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
         assert!(resp.error.is_none());
         let sv = resp.result.unwrap()["sv"].as_str().unwrap().to_string();
         assert!(!sv.is_empty());
@@ -566,7 +593,7 @@ mod tests {
             "params": { "doc": "test" }
         });
         let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
         assert!(resp.error.is_none());
     }
 
@@ -585,7 +612,7 @@ mod tests {
             "jsonrpc": "2.0", "id": 1, "method": "docs/list"
         });
         let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
         let docs = resp.result.unwrap()["documents"]
             .as_array()
             .unwrap()
@@ -602,7 +629,7 @@ mod tests {
             "jsonrpc": "2.0", "id": 1, "method": "$/debug"
         });
         let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
         assert!(resp.error.is_none(), "$/debug failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert!(
