@@ -64,3 +64,58 @@ impl Editor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::{CollabIntent, Editor};
+
+    #[test]
+    fn dispatch_collab_connect_sets_intent() {
+        let mut editor = Editor::new();
+        let result = editor.dispatch_collab("collab-connect");
+        assert_eq!(result, Some(true));
+        match editor.pending_collab_intent {
+            Some(CollabIntent::Connect { ref address }) => {
+                assert_eq!(address, "127.0.0.1:9473");
+            }
+            other => panic!("expected Connect intent, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_collab_start_sets_intent() {
+        let mut editor = Editor::new();
+        let result = editor.dispatch_collab("collab-start");
+        assert_eq!(result, Some(true));
+        assert!(
+            matches!(
+                editor.pending_collab_intent,
+                Some(CollabIntent::StartServer)
+            ),
+            "expected StartServer, got: {:?}",
+            editor.pending_collab_intent
+        );
+    }
+
+    #[test]
+    fn dispatch_collab_unknown_returns_none() {
+        let mut editor = Editor::new();
+        let result = editor.dispatch_collab("unknown-command");
+        assert_eq!(result, None);
+        assert!(editor.pending_collab_intent.is_none());
+    }
+
+    #[test]
+    fn dispatch_collab_share_uses_active_buffer() {
+        let mut editor = Editor::new();
+        let expected_name = editor.active_buffer().name.clone();
+        let result = editor.dispatch_collab("collab-share");
+        assert_eq!(result, Some(true));
+        match editor.pending_collab_intent {
+            Some(CollabIntent::ShareBuffer { ref buffer_name }) => {
+                assert_eq!(buffer_name, &expected_name);
+            }
+            other => panic!("expected ShareBuffer intent, got: {other:?}"),
+        }
+    }
+}

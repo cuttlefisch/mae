@@ -484,3 +484,69 @@ Removes from registry and frees memory. Your org files are untouched.\n\n\
 **Prev:** [[lesson:observability|Lesson 12]]  |  \
 **Index:** [[tutor:index|Tutorial]]\n\n\
 See also: [[concept:kb-federation]], [[concept:kb-workflows]], [[concept:kb-vs-alternatives]]\n";
+
+pub(super) const LESSON_COLLAB_SETUP: &str = "\
+## Setting Up Collaborative Editing\n\n\
+This lesson walks you through enabling real-time collaborative editing in MAE, \
+from installing the state server to sharing your first buffer with a peer.\n\n\
+### Step 1 — Install the state server\n\n\
+Build and install `mae-state-server` from source:\n\
+```bash\n\
+cargo install --path crates/state-server\n\
+# or use the Makefile shortcut:\n\
+make install-state-server\n\
+```\n\n\
+Verify it is on your PATH:\n\
+```bash\n\
+mae-state-server --version\n\
+```\n\n\
+### Step 2 — Start the server\n\n\
+For local (loopback) use:\n\
+```bash\n\
+mae-state-server\n\
+# Listening on 127.0.0.1:9473\n\
+```\n\n\
+For multi-machine use, bind to all interfaces:\n\
+```bash\n\
+mae-state-server --bind 0.0.0.0:9473\n\
+```\n\n\
+Or press `SPC C s` inside MAE to start a local server automatically.\n\n\
+### Step 3 — Configure MAE to use the server\n\n\
+In your Scheme REPL (`:eval`) or `init.scm`:\n\
+```scheme\n\
+(set-option! \"collab-server-address\" \"127.0.0.1:9473\")\n\
+```\n\n\
+For remote servers, replace `127.0.0.1:9473` with `host:port`.\n\n\
+### Step 4 — Connect\n\n\
+Either enable auto-connect so MAE connects on every startup:\n\
+```scheme\n\
+(set-option! \"collab-auto-connect\" \"true\")\n\
+```\n\n\
+Or connect manually: `SPC C c` (`:collab-connect`).\n\n\
+### Step 5 — Share a buffer\n\n\
+Open a file you want to collaborate on, then press `SPC C S` \
+(`:collab-share-buffer`). The buffer is now visible to all connected peers.\n\n\
+### Step 6 — Verify the connection\n\n\
+- `SPC C i` (`:collab-status`) — shows server address, connected peers, \
+  and shared document list.\n\
+- `mae doctor` (from the terminal) — checks server process health, \
+  port availability, and WAL integrity.\n\n\
+### Step 7 — AI tools for collaboration\n\n\
+The AI agent has direct access to collaboration state via four tools:\n\n\
+| Tool | Description |\n\
+|------|-------------|\n\
+| `collab_status` | Report connection state and peer list |\n\
+| `collab_connect` | Connect to (or reconnect to) the configured server |\n\
+| `collab_share` | Share a named buffer with connected peers |\n\
+| `collab_doctor` | Run diagnostics: reachability, WAL, peer count |\n\n\
+Ask the AI: \"connect to the collab server and share this buffer\" to \
+have it set everything up for you.\n\n\
+### Troubleshooting\n\n\
+- **Connection refused** — check `mae-state-server` is running: `ss -tlnp | grep 9473`\n\
+- **No peers visible** — ensure all clients use the same `collab-server-address`\n\
+- **Stale state after restart** — run `:collab-doctor` to inspect WAL health; \
+  the server recovers from WAL automatically on restart\n\
+- **Permission denied on port** — use a port above 1024 (default 9473 is fine)\n\n\
+**Index:** [[tutor:index|Tutorial]]\n\n\
+See also: [[concept:collab-architecture]], [[concept:collab-workflows]], \
+[[concept:sync-engine]], [[index]]\n";

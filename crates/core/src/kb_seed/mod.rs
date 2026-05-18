@@ -314,6 +314,13 @@ fn tutor_nodes() -> Vec<Node> {
             LESSON_KB_IMPORT,
         )
         .with_tags(["tutorial", "kb", "federation", "org-roam"]),
+        Node::new(
+            "lesson:collab-setup",
+            "Setting Up Collaborative Editing",
+            NodeKind::Concept,
+            LESSON_COLLAB_SETUP,
+        )
+        .with_tags(["tutorial", "collaboration", "state-server", "sync"]),
     ]
 }
 
@@ -874,6 +881,22 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_ADR_KB_CRDT,
         )
         .with_tags(["adr", "kb", "sync", "architecture"]),
+        Node::new(
+            "concept:collab-architecture",
+            "Collaborative Editing Architecture",
+            NodeKind::Concept,
+            CONCEPT_COLLAB_ARCHITECTURE,
+        )
+        .with_tags(["architecture", "sync", "collaboration"])
+        .with_aliases(["collab", "real-time", "state-server", "multiplayer"]),
+        Node::new(
+            "concept:collab-workflows",
+            "Collaborative Editing Workflows",
+            NodeKind::Concept,
+            CONCEPT_COLLAB_WORKFLOWS,
+        )
+        .with_tags(["workflow", "sync", "collaboration"])
+        .with_aliases(["collab workflows", "loopback", "multi-user"]),
     ]
 }
 
@@ -927,8 +950,11 @@ mod tests {
             "concept:collaborative-state",
             "concept:adr-text-sync",
             "concept:adr-kb-crdt",
+            "concept:collab-architecture",
+            "concept:collab-workflows",
             "guide:extension-authoring",
             "lesson:kb-import-roam",
+            "lesson:collab-setup",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);

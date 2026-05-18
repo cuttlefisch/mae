@@ -424,4 +424,22 @@ mod tests {
             assert_eq!(doc.content(), expected, "Doc {i} diverged from doc 0");
         }
     }
+
+    #[test]
+    fn reconcile_to_empty() {
+        let mut ts = TextSync::new("hello");
+        let update = ts.reconcile_to("");
+        assert!(!update.is_empty());
+        assert_eq!(ts.content(), "");
+        assert_eq!(ts.rope().len_chars(), 0);
+    }
+
+    #[test]
+    fn reconcile_from_empty() {
+        let mut ts = TextSync::new("");
+        let update = ts.reconcile_to("world");
+        assert!(!update.is_empty());
+        assert_eq!(ts.content(), "world");
+        assert_eq!(ts.rope().to_string(), "world");
+    }
 }

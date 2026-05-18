@@ -1611,6 +1611,51 @@ impl SchemeRuntime {
                     })
                     .unwrap_or(SteelVal::ListV(vec![].into()))
             });
+
+        // (collab-status) — returns an alist with current collaboration state.
+        // Returns: ((status . "off") (server . "127.0.0.1:9473") (synced-docs . 0) (peer-count . 0))
+        let collab_status_str = match &editor.collab_status {
+            mae_core::CollabStatus::Off => "off",
+            mae_core::CollabStatus::Connecting => "connecting",
+            mae_core::CollabStatus::Connected { .. } => "connected",
+            mae_core::CollabStatus::Reconnecting => "reconnecting",
+            mae_core::CollabStatus::Disconnected => "disconnected",
+        }
+        .to_string();
+        let collab_server_addr = editor
+            .get_option("collab_server_address")
+            .map(|(v, _)| v)
+            .unwrap_or_else(|| "127.0.0.1:9473".to_string());
+        let collab_synced_docs = editor.collab_synced_docs;
+        self.engine
+            .register_fn("collab-status", move || -> SteelVal {
+                let make_pair = |k: &str, v: SteelVal| -> SteelVal {
+                    SteelVal::ListV(vec![SteelVal::StringV(k.into()), v].into())
+                };
+                SteelVal::ListV(
+                    vec![
+                        make_pair(
+                            "status",
+                            SteelVal::StringV(collab_status_str.clone().into()),
+                        ),
+                        make_pair(
+                            "server",
+                            SteelVal::StringV(collab_server_addr.clone().into()),
+                        ),
+                        make_pair("synced-docs", SteelVal::IntV(collab_synced_docs as isize)),
+                        make_pair("peer-count", SteelVal::IntV(0)),
+                    ]
+                    .into(),
+                )
+            });
+
+        // (collab-synced-buffers) — returns a list of synced buffer names.
+        // Currently a placeholder that returns an empty list; will enumerate
+        // actual synced buffer names once per-buffer tracking is added.
+        self.engine
+            .register_fn("collab-synced-buffers", || -> SteelVal {
+                SteelVal::ListV(vec![].into())
+            });
     }
 
     /// Apply accumulated config changes to the editor.

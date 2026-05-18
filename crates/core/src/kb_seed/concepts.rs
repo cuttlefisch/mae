@@ -1410,3 +1410,104 @@ FTS5 indexes materialized text from `YText::to_string()`.\n\n\
 3. Phase C: All nodes have yrs docs, SQLite is read cache + FTS index\n\n\
 Full ADR: `docs/adr/005-kb-crdt.md`\n\n\
 See also: [[concept:sync-engine]], [[concept:knowledge-base]], [[concept:collaborative-state]]\n";
+
+pub(super) const CONCEPT_COLLAB_ARCHITECTURE: &str = "\
+**Collaborative Editing Architecture** describes how MAE synchronises editor \
+state across multiple clients — from solo AI agents on a single machine to \
+multi-user sessions over a LAN or the internet.\n\n\
+## Document Addressing\n\
+Every collaborative document is identified by a URI with one of three namespaces:\n\
+| Namespace | Example | Meaning |\n\
+|-----------|---------|--------|\n\
+| `file:` | `file:///home/user/project/main.rs` | Local or remote file buffer |\n\
+| `kb:` | `kb://default/concept:collab-architecture` | Knowledge-base node |\n\
+| `shared:` | `shared://session-id/scratchpad` | Anonymous shared document |\n\n\
+## Data Flow\n\
+```\n\
+Local editor\n\
+  └─ user/AI edit → yrs transaction (YText insert/delete)\n\
+       └─ mae-sync encodes update bytes\n\
+            └─ TCP framed write → state server (sync/update)\n\
+                 └─ server applies to doc store, WAL flush\n\
+                      └─ broadcast diff → connected peers\n\
+                           └─ peer decodes → ropey mirror rebuild → redraw\n\
+```\n\n\
+## Save Protocol\n\
+File saves use content-hash verification (SHA-256) to guard against silent \
+mtime failures. Before writing, MAE reads the current on-disk bytes, computes \
+their SHA-256, and compares it with the last-known hash. If they differ an \
+external modification warning is raised. After writing, the new hash is \
+stored as the baseline. Advisory lock files (`.{name}.mae.lock`) prevent \
+simultaneous writes from two editor instances.\n\n\
+## State Server Role\n\
+The `mae-state-server` binary is a **document hub**, not a source of truth. \
+Documents are authoritative at the client; the server:\n\
+- Holds the latest merged CRDT state (yrs doc bytes)\n\
+- Appends every `sync/update` to a SQLite WAL before applying to memory\n\
+- Broadcasts diffs to all connected peers (bounded queues, write timeout 5 s)\n\
+- Compacts WAL into a snapshot once the WAL exceeds the configured threshold (default 500 entries)\n\
+- Recovers by loading the latest snapshot then replaying the WAL tail on restart\n\n\
+## Three Workflow Tiers\n\
+| Tier | Server | Use case |\n\
+|------|--------|----------|\n\
+| **Solo** | none | Single user, no collaboration needed |\n\
+| **Loopback** | `127.0.0.1:9473` | Multiple MAE instances or AI agents on one machine |\n\
+| **Collaborative** | remote host | Multi-user editing across machines |\n\n\
+In solo mode the sync layer is still active locally — edits are yrs \
+transactions — but no TCP connection is opened. This means switching from \
+solo to loopback requires only `(set-option! \"collab-server-address\" \"127.0.0.1:9473\")` \
+and a reconnect; no data migration is needed.\n\n\
+See also: [[concept:sync-engine]], [[concept:collab-workflows]], \
+[[concept:collaborative-state]], [[concept:adr-text-sync]], [[index]]\n";
+
+pub(super) const CONCEPT_COLLAB_WORKFLOWS: &str = "\
+**Collaborative Editing Workflows** — practical recipes for the three tiers \
+of MAE collaboration.\n\n\
+## Solo Mode\n\
+No state server is required. MAE operates entirely locally. All edits are \
+still yrs transactions, which means:\n\
+- Full undo/redo with per-user attribution\n\
+- Zero configuration changes needed\n\
+- Instant upgrade path to loopback or collaborative mode\n\n\
+## Loopback Mode (Local Multi-Agent)\n\
+Run `mae-state-server` on the same machine to coordinate multiple MAE \
+instances or AI agents on the same project.\n\n\
+```bash\n\
+mae-state-server                      # listens on 127.0.0.1:9473\n\
+```\n\n\
+Then in each MAE instance:\n\
+```scheme\n\
+(set-option! \"collab-server-address\" \"127.0.0.1:9473\")\n\
+(set-option! \"collab-auto-connect\" \"true\")\n\
+```\n\n\
+Or interactively: `SPC C s` to start a local server, `SPC C c` to connect.\n\n\
+## Collaborative Mode (Multi-User)\n\
+Point all clients at a shared server:\n\
+```scheme\n\
+(set-option! \"collab-server-address\" \"192.168.1.10:9473\")\n\
+```\n\n\
+The server can be started with:\n\
+```bash\n\
+mae-state-server --bind 0.0.0.0:9473\n\
+```\n\n\
+> **Security (v1):** No authentication. Restrict access to a trusted LAN \n\
+> or VPN. Do not expose the state server port to the public internet.\n\n\
+## Commands\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `SPC C s` | `:collab-start-server` | Start a local state server |\n\
+| `SPC C c` | `:collab-connect` | Connect to configured server |\n\
+| `SPC C d` | `:collab-disconnect` | Disconnect from server |\n\
+| `SPC C S` | `:collab-share-buffer` | Share current buffer with peers |\n\
+| `SPC C i` | `:collab-status` | Show connection + peer status |\n\n\
+## Configuration Options\n\
+| Option | Default | Description |\n\
+|--------|---------|-------------|\n\
+| `collab-server-address` | `\"\"` | Server host:port (empty = solo mode) |\n\
+| `collab-auto-connect` | `\"false\"` | Connect on startup if address is set |\n\n\
+## Diagnostics\n\
+- `:collab-doctor` — comprehensive diagnostic: server reachability, WAL health, peer list\n\
+- `:collab-status` — live connection state, document list, peer cursors\n\
+- `mae doctor` (CLI) — checks state-server process, port binding, WAL integrity\n\n\
+See also: [[concept:collab-architecture]], [[lesson:collab-setup]], \
+[[concept:sync-engine]], [[index]]\n";

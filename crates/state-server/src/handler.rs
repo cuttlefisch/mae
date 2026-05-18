@@ -27,6 +27,7 @@ pub async fn handle_client<R, W>(
     mut writer: W,
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
+    start_time: std::time::Instant,
 ) where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -90,7 +91,7 @@ pub async fn handle_client<R, W>(
 
                 // Check if this is a sync/* method we handle differently.
                 let response = if is_doc_method(&msg) {
-                    handle_doc_request(&msg, &doc_store, &broadcaster).await
+                    handle_doc_request(&msg, &doc_store, &broadcaster, start_time).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
@@ -163,7 +164,8 @@ fn is_doc_method(msg: &str) -> bool {
 async fn handle_doc_request(
     msg: &str,
     doc_store: &DocStore,
-    _broadcaster: &SharedBroadcaster,
+    broadcaster: &SharedBroadcaster,
+    start_time: std::time::Instant,
 ) -> JsonRpcResponse {
     let request: JsonRpcRequest = match serde_json::from_str(msg) {
         Ok(r) => r,
@@ -222,7 +224,7 @@ async fn handle_doc_request(
                 Ok(result) => {
                     // Broadcast to other subscribers.
                     {
-                        let mut bc = _broadcaster.lock().unwrap();
+                        let mut bc = broadcaster.lock().unwrap();
                         bc.broadcast(&EditorEvent::SyncUpdate {
                             buffer_name: doc_name.clone(),
                             update_base64: update_to_base64(&result.update),
@@ -380,12 +382,16 @@ async fn handle_doc_request(
                     );
                 }
             }
+            let uptime_secs = start_time.elapsed().as_secs();
+            let connection_count = broadcaster.lock().unwrap().client_count();
             JsonRpcResponse::success(
                 id,
                 serde_json::json!({
                     "documents": names.len(),
                     "doc_stats": doc_stats,
                     "version": env!("CARGO_PKG_VERSION"),
+                    "uptime_secs": uptime_secs,
+                    "connection_count": connection_count,
                 }),
             )
         }
@@ -519,7 +525,8 @@ mod tests {
             "jsonrpc": "2.0", "id": 1, "method": "sync/update",
             "params": { "doc": "test", "update": update_b64 }
         });
-        let resp = handle_doc_request(&msg.to_string(), &store, &bc).await;
+        let resp =
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
         assert!(resp.error.is_none(), "sync/update failed: {:?}", resp.error);
         assert!(resp.result.unwrap()["wal_seq"].as_u64().unwrap() > 0);
 
@@ -528,7 +535,8 @@ mod tests {
             "jsonrpc": "2.0", "id": 2, "method": "docs/content",
             "params": { "doc": "test" }
         });
-        let resp = handle_doc_request(&msg.to_string(), &store, &bc).await;
+        let resp =
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
         assert_eq!(resp.result.unwrap()["content"], "hello");
     }
 
@@ -541,7 +549,8 @@ mod tests {
             "jsonrpc": "2.0", "id": 1, "method": "sync/state_vector",
             "params": { "doc": "test" }
         });
-        let resp = handle_doc_request(&msg.to_string(), &store, &bc).await;
+        let resp =
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
         assert!(resp.error.is_none());
         let sv = resp.result.unwrap()["sv"].as_str().unwrap().to_string();
         assert!(!sv.is_empty());
@@ -556,7 +565,8 @@ mod tests {
             "jsonrpc": "2.0", "id": 1, "method": "sync/full_state",
             "params": { "doc": "test" }
         });
-        let resp = handle_doc_request(&msg.to_string(), &store, &bc).await;
+        let resp =
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
         assert!(resp.error.is_none());
     }
 
@@ -574,12 +584,48 @@ mod tests {
         let msg = serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": "docs/list"
         });
-        let resp = handle_doc_request(&msg.to_string(), &store, &bc).await;
+        let resp =
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
         let docs = resp.result.unwrap()["documents"]
             .as_array()
             .unwrap()
             .clone();
         assert_eq!(docs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn debug_method_returns_uptime_and_connections() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "$/debug"
+        });
+        let resp =
+            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now()).await;
+        assert!(resp.error.is_none(), "$/debug failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert!(
+            result.get("uptime_secs").is_some(),
+            "should include uptime_secs"
+        );
+        assert!(
+            result.get("connection_count").is_some(),
+            "should include connection_count"
+        );
+        assert!(result.get("version").is_some(), "should include version");
+        assert!(
+            result.get("documents").is_some(),
+            "should include document count"
+        );
+        assert!(
+            result.get("doc_stats").is_some(),
+            "should include doc_stats"
+        );
+        // Uptime should be a small non-negative integer for a just-started server.
+        assert!(result["uptime_secs"].as_u64().is_some());
+        // No clients connected in this test.
+        assert_eq!(result["connection_count"].as_u64().unwrap(), 0);
     }
 
     #[tokio::test]
@@ -597,7 +643,14 @@ mod tests {
         let store_clone = Arc::clone(&store);
         let bc_clone = Arc::clone(&bc);
         tokio::spawn(async move {
-            handle_client(server_reader, server_write, store_clone, bc_clone).await;
+            handle_client(
+                server_reader,
+                server_write,
+                store_clone,
+                bc_clone,
+                std::time::Instant::now(),
+            )
+            .await;
         });
 
         // Client side.

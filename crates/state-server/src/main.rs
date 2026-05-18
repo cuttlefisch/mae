@@ -202,6 +202,8 @@ async fn run_server(start_args: cli::StartArgs) {
         }
     };
 
+    let server_start_time = std::time::Instant::now();
+
     info!(
         bind = %config.bind,
         data_dir = %data_dir.display(),
@@ -240,7 +242,8 @@ async fn run_server(start_args: cli::StartArgs) {
                         let store = Arc::clone(&store);
                         let bc = Arc::clone(&bc);
                         tokio::spawn(async move {
-                            handler::handle_client(reader, writer, store, bc).await;
+                            handler::handle_client(reader, writer, store, bc, server_start_time)
+                                .await;
                         });
                     }
                     Err(e) => error!(error = %e, "Unix accept error"),
@@ -307,7 +310,7 @@ async fn run_server(start_args: cli::StartArgs) {
                         let store = Arc::clone(&doc_store);
                         let bc = Arc::clone(&broadcaster);
                         tokio::spawn(async move {
-                            handler::handle_client(reader, writer, store, bc).await;
+                            handler::handle_client(reader, writer, store, bc, server_start_time).await;
                         });
                     }
                     Err(e) => error!(error = %e, "TCP accept error"),

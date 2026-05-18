@@ -269,3 +269,217 @@ async fn tcp_docs_list() {
     let result = resp.result.unwrap();
     assert!(result["documents"].is_array());
 }
+
+#[tokio::test]
+async fn tcp_docs_stats() {
+    require_env!();
+
+    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+    let doc_name = format!("stats-{}", std::process::id());
+
+    let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+    send_recv(
+        &mut client,
+        &serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"clientInfo": {"name": "stats-test"}}
+        }),
+    )
+    .await;
+
+    // Create the document with an update.
+    let mut ts = TextSync::with_client_id("", 1);
+    let update = ts.insert(0, "stats document content");
+    let update_b64 = update_to_base64(&update);
+
+    send_recv(
+        &mut client,
+        &serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "sync/update",
+            "params": { "doc": doc_name, "update": update_b64 }
+        }),
+    )
+    .await;
+
+    // Request stats for that document.
+    let resp = send_recv(
+        &mut client,
+        &serde_json::json!({
+            "jsonrpc": "2.0", "id": 3, "method": "docs/stats",
+            "params": { "doc": doc_name }
+        }),
+    )
+    .await;
+    assert!(
+        resp.error.is_none(),
+        "docs/stats returned error: {:?}",
+        resp.error
+    );
+    let result = resp.result.unwrap();
+    assert!(
+        result["wal_seq"].as_u64().is_some(),
+        "expected wal_seq field, got: {result}"
+    );
+    assert!(
+        result["content_length"].as_u64().is_some(),
+        "expected content_length field, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn tcp_save_intent_ok() {
+    require_env!();
+
+    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+
+    let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+    send_recv(
+        &mut client,
+        &serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"clientInfo": {"name": "save-intent-test"}}
+        }),
+    )
+    .await;
+
+    // Create the document.
+    let mut ts = TextSync::with_client_id("", 1);
+    let update = ts.insert(0, "save intent test content");
+    let update_b64 = update_to_base64(&update);
+
+    send_recv(
+        &mut client,
+        &serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "sync/update",
+            "params": { "doc": "save-test-doc", "update": update_b64 }
+        }),
+    )
+    .await;
+
+    // Read back content so we can compute a hash.
+    let resp = send_recv(
+        &mut client,
+        &serde_json::json!({
+            "jsonrpc": "2.0", "id": 3, "method": "docs/content",
+            "params": { "doc": "save-test-doc" }
+        }),
+    )
+    .await;
+    let content = resp.result.unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Use content string as a simple hash (protocol allows any opaque string).
+    let hash = format!("{:x}", content.len());
+
+    // Send save_intent.
+    let resp = send_recv(
+        &mut client,
+        &serde_json::json!({
+            "jsonrpc": "2.0", "id": 4, "method": "docs/save_intent",
+            "params": { "doc": "save-test-doc", "content_hash": hash }
+        }),
+    )
+    .await;
+    assert!(
+        resp.error.is_none(),
+        "docs/save_intent returned error: {:?}",
+        resp.error
+    );
+}
+
+#[tokio::test]
+async fn tcp_resync_protocol() {
+    require_env!();
+
+    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+    let doc_name = format!("resync-{}", std::process::id());
+
+    let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+    send_recv(
+        &mut client,
+        &serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"clientInfo": {"name": "resync-test"}}
+        }),
+    )
+    .await;
+
+    // Send an update to create the document.
+    let mut ts = TextSync::with_client_id("", 1);
+    let update = ts.insert(0, "resync content");
+    send_recv(
+        &mut client,
+        &serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "sync/update",
+            "params": { "doc": doc_name, "update": update_to_base64(&update) }
+        }),
+    )
+    .await;
+
+    // Request a full resync.
+    let resp = send_recv(
+        &mut client,
+        &serde_json::json!({
+            "jsonrpc": "2.0", "id": 3, "method": "sync/resync",
+            "params": { "doc": doc_name }
+        }),
+    )
+    .await;
+    assert!(
+        resp.error.is_none(),
+        "sync/resync returned error: {:?}",
+        resp.error
+    );
+    let result = resp.result.unwrap();
+    assert!(
+        result["state"].as_str().is_some(),
+        "expected base64 state field, got: {result}"
+    );
+    assert!(
+        result["sv"].as_str().is_some(),
+        "expected base64 sv field, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn tcp_debug_endpoint() {
+    require_env!();
+
+    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+
+    let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+    send_recv(
+        &mut client,
+        &serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"clientInfo": {"name": "debug-endpoint-test"}}
+        }),
+    )
+    .await;
+
+    let resp = send_recv(
+        &mut client,
+        &serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "$/debug"}),
+    )
+    .await;
+    assert!(
+        resp.error.is_none(),
+        "$/debug returned error: {:?}",
+        resp.error
+    );
+    let result = resp.result.unwrap();
+    assert!(
+        result["documents"].is_array() || result["documents"].is_object(),
+        "expected documents field, got: {result}"
+    );
+    assert!(
+        result["doc_stats"].is_object() || result["doc_stats"].is_array(),
+        "expected doc_stats field, got: {result}"
+    );
+    assert!(
+        result["version"].as_str().is_some(),
+        "expected version field, got: {result}"
+    );
+}

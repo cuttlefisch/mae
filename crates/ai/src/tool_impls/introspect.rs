@@ -73,6 +73,9 @@ pub fn execute_introspect(editor: &Editor, args: &serde_json::Value) -> Result<S
     if section == "all" || section == "lsp" {
         result.insert("lsp".into(), build_lsp_section(editor));
     }
+    if section == "all" || section == "collaboration" {
+        result.insert("collaboration".into(), build_collaboration_section(editor));
+    }
     if section == "frame" {
         result.insert("frame".into(), build_frame_section(editor));
     }
@@ -365,6 +368,26 @@ fn build_ai_section(editor: &Editor) -> serde_json::Value {
     })
 }
 
+fn build_collaboration_section(editor: &Editor) -> serde_json::Value {
+    let collab_status = match &editor.collab_status {
+        mae_core::CollabStatus::Off => "off",
+        mae_core::CollabStatus::Connecting => "connecting",
+        mae_core::CollabStatus::Connected { .. } => "connected",
+        mae_core::CollabStatus::Reconnecting => "reconnecting",
+        mae_core::CollabStatus::Disconnected => "disconnected",
+    };
+    let collab_server = editor
+        .get_option("collab_server_address")
+        .map(|(v, _)| v)
+        .unwrap_or_else(|| "127.0.0.1:9473".to_string());
+    json!({
+        "collab_status": collab_status,
+        "collab_server": collab_server,
+        "synced_buffers": editor.collab_synced_docs,
+        "pending_collab_intent": editor.pending_collab_intent.is_some(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,5 +433,29 @@ mod tests {
         assert_eq!(lsp["any_starting"], true);
         let servers = lsp["servers"].as_array().unwrap();
         assert_eq!(servers.len(), 2);
+    }
+
+    #[test]
+    fn introspect_collaboration_section() {
+        let editor = Editor::new();
+        let result = execute_introspect(&editor, &json!({"section": "collaboration"})).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let collab = &val["collaboration"];
+        assert_eq!(collab["collab_status"], "off");
+        assert!(collab["collab_server"].as_str().is_some());
+        assert_eq!(collab["synced_buffers"], 0);
+        assert_eq!(collab["pending_collab_intent"], false);
+    }
+
+    #[test]
+    fn introspect_all_includes_collaboration() {
+        let editor = Editor::new();
+        let result = execute_introspect(&editor, &json!({})).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(
+            val.get("collaboration").is_some(),
+            "all sections should include collaboration"
+        );
+        assert_eq!(val["collaboration"]["collab_status"], "off");
     }
 }
