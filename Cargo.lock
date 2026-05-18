@@ -2209,6 +2209,7 @@ dependencies = [
 name = "mae-kb"
 version = "0.10.1"
 dependencies = [
+ "mae-sync",
  "notify",
  "rusqlite",
  "serde",

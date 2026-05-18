@@ -32,7 +32,7 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 use tracing::{debug, info};
 
-const SCHEMA_VERSION: i32 = 6;
+const SCHEMA_VERSION: i32 = 7;
 
 /// Error type wrapping rusqlite and serde errors for the persistence layer.
 #[derive(Debug)]
@@ -132,7 +132,8 @@ fn init_schema(conn: &Connection) -> Result<(), PersistError> {
             aliases_json    TEXT NOT NULL DEFAULT '[]',
             properties_json TEXT NOT NULL DEFAULT '{}',
             created_at      INTEGER,
-            updated_at      INTEGER
+            updated_at      INTEGER,
+            crdt_doc        BLOB
         );
         CREATE TABLE IF NOT EXISTS links (
             src     TEXT NOT NULL,
@@ -205,6 +206,9 @@ fn check_schema_version(conn: &Connection) -> Result<(), PersistError> {
     }
     if found < 6 {
         migrate_v5_to_v6(conn)?;
+    }
+    if found < 7 {
+        migrate_v6_to_v7(conn)?;
     }
     Ok(())
 }
@@ -344,6 +348,21 @@ fn migrate_v5_to_v6(conn: &Connection) -> Result<(), PersistError> {
         "UPDATE nodes SET updated_at = strftime('%s', 'now') WHERE updated_at IS NULL",
         [],
     )?;
+    tx.pragma_update(None, "user_version", 6)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn migrate_v6_to_v7(conn: &Connection) -> Result<(), PersistError> {
+    info!(
+        from = 6,
+        to = 7,
+        "KB schema migration — adding crdt_doc BLOB column"
+    );
+    let tx = conn.unchecked_transaction()?;
+    if !has_column(conn, "nodes", "crdt_doc")? {
+        tx.execute("ALTER TABLE nodes ADD COLUMN crdt_doc BLOB", [])?;
+    }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
     Ok(())
@@ -368,7 +387,7 @@ impl KnowledgeBase {
         let mut node_count: usize = 0;
         {
             let mut ins_node = tx.prepare(
-                "INSERT INTO nodes (id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json, properties_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO nodes (id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json, properties_json, created_at, updated_at, crdt_doc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )?;
             let mut ins_link =
                 tx.prepare("INSERT OR IGNORE INTO links (src, dst, display) VALUES (?, ?, ?)")?;
@@ -402,6 +421,7 @@ impl KnowledgeBase {
                     &properties_json,
                     now,
                     now,
+                    &node.crdt_doc,
                 ])?;
                 ins_fts.execute(params![
                     &node.id,
@@ -439,15 +459,24 @@ impl KnowledgeBase {
         check_schema_version(&conn)?;
         init_schema(&conn)?; // no-op if already initialized
         *self = KnowledgeBase::new();
-        // Check if optional columns exist (pre-v4/v5 databases may not have them).
+        // Check if optional columns exist (pre-v4/v5/v7 databases may not have them).
         let has_aliases = has_column(&conn, "nodes", "aliases_json")?;
         let has_properties = has_column(&conn, "nodes", "properties_json")?;
-        let query_str = match (has_aliases, has_properties) {
-            (true, true) => "SELECT id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json, properties_json FROM nodes ORDER BY id",
-            (true, false) => "SELECT id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json FROM nodes ORDER BY id",
-            _ => "SELECT id, title, kind, body, tags_json, todo_state, priority, source, source_version FROM nodes ORDER BY id",
-        };
-        let mut stmt = conn.prepare(query_str)?;
+        let has_crdt = has_column(&conn, "nodes", "crdt_doc")?;
+        let base_cols =
+            "id, title, kind, body, tags_json, todo_state, priority, source, source_version";
+        let mut cols = base_cols.to_string();
+        if has_aliases {
+            cols.push_str(", aliases_json");
+        }
+        if has_properties {
+            cols.push_str(", properties_json");
+        }
+        if has_crdt {
+            cols.push_str(", crdt_doc");
+        }
+        let query_str = format!("SELECT {cols} FROM nodes ORDER BY id");
+        let mut stmt = conn.prepare(&query_str)?;
         let rows = stmt.query_map([], |row| {
             let id: String = row.get(0)?;
             let title: String = row.get(1)?;
@@ -458,16 +487,22 @@ impl KnowledgeBase {
             let priority_str: Option<String> = row.get(6)?;
             let source_str: Option<String> = row.get(7)?;
             let source_version: Option<u32> = row.get(8)?;
+            let mut col_idx = 9;
             let aliases_json: String = if has_aliases {
-                row.get(9)?
+                let v = row.get(col_idx)?;
+                col_idx += 1;
+                v
             } else {
                 "[]".to_string()
             };
             let properties_json: String = if has_properties {
-                row.get(10)?
+                let v = row.get(col_idx)?;
+                col_idx += 1;
+                v
             } else {
                 "{}".to_string()
             };
+            let crdt_doc: Option<Vec<u8>> = if has_crdt { row.get(col_idx)? } else { None };
             Ok((
                 id,
                 title,
@@ -480,6 +515,7 @@ impl KnowledgeBase {
                 source_version,
                 aliases_json,
                 properties_json,
+                crdt_doc,
             ))
         })?;
         let mut count = 0;
@@ -496,6 +532,7 @@ impl KnowledgeBase {
                 source_version,
                 aliases_json,
                 properties_json,
+                crdt_doc,
             ) = row?;
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
             let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
@@ -516,6 +553,7 @@ impl KnowledgeBase {
             node.todo_state = todo_state;
             node.priority = priority;
             node.source = source;
+            node.crdt_doc = crdt_doc;
             node.source_version = source_version;
             self.insert(node);
             count += 1;
@@ -637,8 +675,8 @@ impl KnowledgeBase {
                 if old_title != &node.title || old_body != &node.body || old_tags != &tags_json {
                     // UPDATE
                     tx.execute(
-                        "UPDATE nodes SET title=?, kind=?, body=?, tags_json=?, todo_state=?, priority=?, source=?, source_version=?, aliases_json=?, properties_json=?, updated_at=? WHERE id=?",
-                        params![&node.title, kind_to_str(node.kind), &node.body, &tags_json, &node.todo_state, &pri_str, &source_str, &node.source_version, &aliases_json, &properties_json, now, &node.id],
+                        "UPDATE nodes SET title=?, kind=?, body=?, tags_json=?, todo_state=?, priority=?, source=?, source_version=?, aliases_json=?, properties_json=?, updated_at=?, crdt_doc=? WHERE id=?",
+                        params![&node.title, kind_to_str(node.kind), &node.body, &tags_json, &node.todo_state, &pri_str, &source_str, &node.source_version, &aliases_json, &properties_json, now, &node.crdt_doc, &node.id],
                     )?;
                     // Record changelog
                     tx.execute(
@@ -665,8 +703,8 @@ impl KnowledgeBase {
             } else {
                 // New node — INSERT
                 tx.execute(
-                    "INSERT INTO nodes (id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json, properties_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![&node.id, &node.title, kind_to_str(node.kind), &node.body, &tags_json, &node.todo_state, &pri_str, &source_str, &node.source_version, &aliases_json, &properties_json, now, now],
+                    "INSERT INTO nodes (id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json, properties_json, created_at, updated_at, crdt_doc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    params![&node.id, &node.title, kind_to_str(node.kind), &node.body, &tags_json, &node.todo_state, &pri_str, &source_str, &node.source_version, &aliases_json, &properties_json, now, now, &node.crdt_doc],
                 )?;
                 // Record changelog
                 tx.execute(
@@ -1553,5 +1591,122 @@ mod tests {
         // Verify timestamps were backfilled
         let has_ts: bool = has_column(&conn, "nodes", "created_at").unwrap();
         assert!(has_ts, "created_at column should exist");
+    }
+
+    #[test]
+    fn migrate_v6_to_v7_adds_crdt_column() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("v6.db");
+        // Create a v6 database (no crdt_doc column)
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS nodes (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL,
+                    body TEXT NOT NULL, tags_json TEXT NOT NULL DEFAULT '[]',
+                    todo_state TEXT, priority TEXT, source TEXT, source_version INTEGER,
+                    aliases_json TEXT NOT NULL DEFAULT '[]',
+                    properties_json TEXT NOT NULL DEFAULT '{}',
+                    created_at INTEGER, updated_at INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS links (src TEXT NOT NULL, dst TEXT NOT NULL, display TEXT, PRIMARY KEY (src, dst));
+                CREATE TABLE IF NOT EXISTS node_tags (node_id TEXT NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (node_id, tag));
+                CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id UNINDEXED, title, body, tags, aliases, tokenize='porter unicode61');
+                CREATE TABLE IF NOT EXISTS node_changelog (
+                    rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+                    node_id TEXT NOT NULL, operation TEXT NOT NULL,
+                    old_title TEXT, old_body TEXT, old_tags_json TEXT,
+                    new_title TEXT, new_body TEXT, new_tags_json TEXT,
+                    timestamp INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                    author TEXT, reason TEXT
+                );
+            "#,
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 6).unwrap();
+            conn.execute(
+                "INSERT INTO nodes (id, title, kind, body, tags_json) VALUES ('n1', 'Test', 'note', 'body', '[]')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let mut kb = KnowledgeBase::new();
+        let n = kb.load_from_sqlite(&path).unwrap();
+        assert_eq!(n, 1);
+
+        // Verify crdt_doc column exists after migration
+        let conn = Connection::open(&path).unwrap();
+        assert!(
+            has_column(&conn, "nodes", "crdt_doc").unwrap(),
+            "crdt_doc column should exist after v6→v7 migration"
+        );
+
+        // Node loaded without crdt_doc should have None
+        let node = kb.get("n1").unwrap();
+        assert!(node.crdt_doc.is_none());
+    }
+
+    #[test]
+    fn crdt_doc_roundtrip_via_save_load() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("crdt.db");
+
+        let mut kb = sample_kb();
+        // Create a CRDT doc for one node
+        if let Some(node) = kb.get_mut("concept:buffer") {
+            let doc = mae_sync::kb::KbNodeDoc::new(&node.id, &node.title, &node.body, &node.tags);
+            node.crdt_doc = Some(doc.encode());
+        }
+
+        kb.save_to_sqlite(&path).unwrap();
+
+        let mut kb2 = KnowledgeBase::new();
+        kb2.load_from_sqlite(&path).unwrap();
+
+        let node = kb2.get("concept:buffer").unwrap();
+        assert!(
+            node.crdt_doc.is_some(),
+            "crdt_doc should survive save/load roundtrip"
+        );
+
+        // Verify the CRDT doc can be decoded
+        let doc = mae_sync::kb::KbNodeDoc::from_bytes(node.crdt_doc.as_ref().unwrap()).unwrap();
+        assert_eq!(doc.id(), "concept:buffer");
+        assert_eq!(doc.title(), node.title);
+    }
+
+    #[test]
+    fn node_to_crdt_doc_conversion() {
+        let node = Node::new("test:node", "Test Title", NodeKind::Note, "Test body text")
+            .with_tags(["tag1", "tag2"]);
+
+        let doc = node.to_crdt_doc().unwrap();
+        assert_eq!(doc.id(), "test:node");
+        assert_eq!(doc.title(), "Test Title");
+        assert_eq!(doc.body(), "Test body text");
+        assert_eq!(doc.tags(), vec!["tag1", "tag2"]);
+    }
+
+    #[test]
+    fn apply_crdt_doc_updates_node_fields() {
+        let mut node = Node::new("test:node", "Old", NodeKind::Note, "old body");
+        assert!(node.crdt_doc.is_none());
+
+        let mut doc = mae_sync::kb::KbNodeDoc::new(
+            "test:node",
+            "New Title",
+            "new body",
+            &["newtag".to_string()],
+        );
+        doc.add_tag("extra");
+
+        node.apply_crdt_doc(&doc);
+        assert_eq!(node.title, "New Title");
+        assert_eq!(node.body, "new body");
+        assert_eq!(node.tags, vec!["newtag", "extra"]);
+        assert!(node.crdt_doc.is_some());
     }
 }

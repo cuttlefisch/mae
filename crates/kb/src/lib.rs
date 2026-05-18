@@ -105,6 +105,11 @@ pub struct Node {
     /// Not serialized — ephemeral, populated during ingest.
     #[serde(skip)]
     pub source_file: Option<std::path::PathBuf>,
+    /// Encoded yrs CRDT document bytes (for collaborative KB editing).
+    /// When present, this is the authoritative representation; `title`/`body`/`tags`
+    /// are materialized from the CRDT content for FTS5 and display.
+    #[serde(skip)]
+    pub crdt_doc: Option<Vec<u8>>,
 }
 
 impl Node {
@@ -127,6 +132,7 @@ impl Node {
             aliases: Vec::new(),
             properties: HashMap::new(),
             source_file: None,
+            crdt_doc: None,
         }
     }
 
@@ -164,6 +170,32 @@ impl Node {
     pub fn with_source_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.source_file = Some(path.into());
         self
+    }
+
+    /// Create a `KbNodeDoc` from this node's content.
+    ///
+    /// If the node already has CRDT bytes (`crdt_doc`), restores from those.
+    /// Otherwise creates a fresh yrs document from the text fields.
+    pub fn to_crdt_doc(&self) -> Result<mae_sync::kb::KbNodeDoc, mae_sync::SyncError> {
+        if let Some(ref bytes) = self.crdt_doc {
+            mae_sync::kb::KbNodeDoc::from_bytes(bytes)
+        } else {
+            Ok(mae_sync::kb::KbNodeDoc::new(
+                &self.id,
+                &self.title,
+                &self.body,
+                &self.tags,
+            ))
+        }
+    }
+
+    /// Update this node's text fields from a `KbNodeDoc`, and store the
+    /// encoded CRDT bytes for persistence.
+    pub fn apply_crdt_doc(&mut self, doc: &mae_sync::kb::KbNodeDoc) {
+        self.title = doc.title();
+        self.body = doc.body();
+        self.tags = doc.tags();
+        self.crdt_doc = Some(doc.encode());
     }
 
     /// Extract all `[[link]]` and `[[link|display]]` targets from the body.
