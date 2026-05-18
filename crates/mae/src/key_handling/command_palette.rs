@@ -50,7 +50,7 @@ pub(super) fn handle_command_palette_mode(
                     editor.set_theme_by_name(&theme);
                     crate::config::persist_editor_preference("theme", &theme);
                 }
-                (Some(node_id), PalettePurpose::HelpSearch)
+                (Some(node_id), PalettePurpose::KbSearch)
                 | (Some(node_id), PalettePurpose::KbFindOrCreate) => {
                     editor.open_help_at(&node_id);
                 }

@@ -1,14 +1,31 @@
-//! Help-buffer operations — commands that manipulate the *Help* buffer
-//! and its underlying KB navigation state.
+//! KB-buffer operations — commands that manipulate *Help*/*KB* buffers
+//! and their underlying KB navigation state.
 //!
 //! The dispatch layer calls these as part of `dispatch_builtin`; the AI
 //! agent calls the KB directly via its `kb_*` tools (no need for these
 //! view-layer helpers).
 
 use crate::buffer::BufferKind;
-use crate::help_view::HelpLinkSpan;
+use crate::kb_view::KbLinkSpan;
 
 use super::Editor;
+
+/// Returns true if the node ID belongs to the built-in MAE manual
+/// (commands, concepts, lessons, scheme API, options, keys, modules, tutorials).
+/// User-created nodes (dailies, federated, personal) return false.
+pub fn is_builtin_node(id: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "cmd:",
+        "concept:",
+        "lesson:",
+        "scheme:",
+        "option:",
+        "key:",
+        "module:",
+        "tutorial:",
+    ];
+    id == "index" || PREFIXES.iter().any(|p| id.starts_with(p))
+}
 
 fn node_kind_label(kind: mae_kb::NodeKind) -> &'static str {
     mae_kb::persist::kind_to_str(kind)
@@ -16,13 +33,13 @@ fn node_kind_label(kind: mae_kb::NodeKind) -> &'static str {
 
 /// Render a KB node into plain text and extract link byte ranges.
 /// Returns `(rendered_text, link_spans)`.
-fn render_help_node(
+fn render_kb_node(
     kb: &mae_kb::KnowledgeBase,
     node_id: &str,
     resolve_title: impl Fn(&str) -> Option<String>,
-) -> (String, Vec<HelpLinkSpan>) {
+) -> (String, Vec<KbLinkSpan>) {
     let mut out = String::new();
-    let mut links: Vec<HelpLinkSpan> = Vec::new();
+    let mut links: Vec<KbLinkSpan> = Vec::new();
 
     let Some(node) = kb.get(node_id) else {
         out.push_str(&format!("(no such KB node: {})\n", node_id));
@@ -32,7 +49,17 @@ fn render_help_node(
     // Header — # prefix gives h1 scale in GUI heading renderer
     out.push_str(&format!("# {}", node.title));
     out.push('\n');
-    out.push_str(&format!("{} · {}\n", node_kind_label(node.kind), node.id));
+    let content_label = if is_builtin_node(node_id) {
+        "MAE Manual"
+    } else {
+        "Knowledge Base"
+    };
+    out.push_str(&format!(
+        "{} · {} · {}\n",
+        content_label,
+        node_kind_label(node.kind),
+        node.id
+    ));
     if !node.tags.is_empty() {
         out.push_str(&format!("tags: {}\n", node.tags.join(", ")));
     }
@@ -78,7 +105,7 @@ fn render_help_node(
             let link_start = out.len();
             out.push_str(target);
             let link_end = out.len();
-            links.push(HelpLinkSpan {
+            links.push(KbLinkSpan {
                 byte_start: link_start,
                 byte_end: link_end,
                 target: target.clone(),
@@ -94,7 +121,7 @@ fn render_help_node(
             let link_start = out.len();
             out.push_str(src);
             let link_end = out.len();
-            links.push(HelpLinkSpan {
+            links.push(KbLinkSpan {
                 byte_start: link_start,
                 byte_end: link_end,
                 target: src.clone(),
@@ -113,7 +140,7 @@ fn render_help_node(
 
 /// Render a single body line, stripping `[[target|display]]` markers and
 /// recording link spans.
-fn render_body_line(line: &str, out: &mut String, links: &mut Vec<HelpLinkSpan>) {
+fn render_body_line(line: &str, out: &mut String, links: &mut Vec<KbLinkSpan>) {
     let bytes = line.as_bytes();
     let mut cursor = 0usize;
     let mut i = 0usize;
@@ -135,7 +162,7 @@ fn render_body_line(line: &str, out: &mut String, links: &mut Vec<HelpLinkSpan>)
                     let link_start = out.len();
                     out.push_str(display);
                     let link_end = out.len();
-                    links.push(HelpLinkSpan {
+                    links.push(KbLinkSpan {
                         byte_start: link_start,
                         byte_end: link_end,
                         target: target.to_string(),
@@ -262,18 +289,18 @@ impl Editor {
         self.kb_record_access(&target);
 
         let prev_idx = self.active_buffer_idx();
-        let idx = self.ensure_help_buffer_idx(&target);
+        let idx = self.ensure_kb_buffer_idx(&target);
         if idx != prev_idx {
             self.alternate_buffer_idx = Some(prev_idx);
         }
-        self.help_populate_buffer(idx);
+        self.kb_populate_buffer(idx);
         self.display_buffer(idx);
     }
 
-    /// Render the current KB node into the help buffer's rope and store
+    /// Render the current KB node into the KB buffer's rope and store
     /// link spans. Called on every navigation (open, follow link, back/forward).
-    pub fn help_populate_buffer(&mut self, buf_idx: usize) {
-        let node_id = match self.buffers[buf_idx].help_view() {
+    pub fn kb_populate_buffer(&mut self, buf_idx: usize) {
+        let node_id = match self.buffers[buf_idx].kb_view() {
             Some(v) => v.current.clone(),
             None => return,
         };
@@ -315,7 +342,7 @@ impl Editor {
                         let link_start = out.len();
                         out.push_str(target);
                         let link_end = out.len();
-                        links.push(HelpLinkSpan {
+                        links.push(KbLinkSpan {
                             byte_start: link_start,
                             byte_end: link_end,
                             target: target.clone(),
@@ -333,7 +360,7 @@ impl Editor {
                         let link_start = out.len();
                         out.push_str(src);
                         let link_end = out.len();
-                        links.push(HelpLinkSpan {
+                        links.push(KbLinkSpan {
                             byte_start: link_start,
                             byte_end: link_end,
                             target: src.clone(),
@@ -350,7 +377,7 @@ impl Editor {
                 let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb);
                 let local = &self.kb;
                 let federated = &self.kb_instances;
-                render_help_node(kb, &node_id, |id| {
+                render_kb_node(kb, &node_id, |id| {
                     local.get(id).map(|n| n.title.clone()).or_else(|| {
                         federated
                             .values()
@@ -362,7 +389,7 @@ impl Editor {
             let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb);
             let local = &self.kb;
             let federated = &self.kb_instances;
-            render_help_node(kb, &node_id, |id| {
+            render_kb_node(kb, &node_id, |id| {
                 local.get(id).map(|n| n.title.clone()).or_else(|| {
                     federated
                         .values()
@@ -381,17 +408,17 @@ impl Editor {
                 broken.insert(i);
             }
         }
-        if let Some(view) = self.buffers[buf_idx].help_view_mut() {
+        if let Some(view) = self.buffers[buf_idx].kb_view_mut() {
             view.rendered_links = link_spans;
             view.broken_links = broken;
         }
     }
 
-    /// Navigable link targets from the rendered help buffer, in document
-    /// order. Backed by `HelpView.rendered_links` (populated by
-    /// `help_populate_buffer`). This replaces the old KB-neighbor lookup.
-    pub fn help_navigable_links(&self) -> Vec<String> {
-        match self.help_view() {
+    /// Navigable link targets from the rendered KB buffer, in document
+    /// order. Backed by `KbView.rendered_links` (populated by
+    /// `kb_populate_buffer`). This replaces the old KB-neighbor lookup.
+    pub fn kb_navigable_links(&self) -> Vec<String> {
+        match self.kb_view() {
             Some(view) => view
                 .rendered_links
                 .iter()
@@ -406,7 +433,7 @@ impl Editor {
     pub fn help_follow_link(&mut self) {
         // If no link is explicitly focused, check if cursor is on a link.
         let cursor_byte = self.help_cursor_byte_offset();
-        if let Some(view) = self.help_view_mut() {
+        if let Some(view) = self.kb_view_mut() {
             if view.focused_link.is_none() {
                 // Find link under cursor.
                 if let Some(idx) = view
@@ -419,7 +446,7 @@ impl Editor {
             }
         }
         let (target, buf_idx) = {
-            let Some(view) = self.help_view() else {
+            let Some(view) = self.kb_view() else {
                 self.set_status("Not in a help buffer");
                 return;
             };
@@ -446,28 +473,28 @@ impl Editor {
                     return;
                 }
             }
-            let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Help) else {
+            let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Kb) else {
                 return;
             };
             (target, buf_idx)
         };
-        if let Some(view) = self.help_view_mut() {
+        if let Some(view) = self.kb_view_mut() {
             view.navigate_to(target);
         }
-        self.help_populate_buffer(buf_idx);
+        self.kb_populate_buffer(buf_idx);
         self.window_mgr.focused_window_mut().cursor_row = 0;
         self.window_mgr.focused_window_mut().cursor_col = 0;
     }
 
     pub fn help_back(&mut self) {
-        let went_back = if let Some(view) = self.help_view_mut() {
+        let went_back = if let Some(view) = self.kb_view_mut() {
             view.go_back()
         } else {
             false
         };
         if went_back {
-            if let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
-                self.help_populate_buffer(buf_idx);
+            if let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Kb) {
+                self.kb_populate_buffer(buf_idx);
                 self.window_mgr.focused_window_mut().cursor_row = 0;
                 self.window_mgr.focused_window_mut().cursor_col = 0;
             }
@@ -478,14 +505,14 @@ impl Editor {
     }
 
     pub fn help_forward(&mut self) {
-        let went_fwd = if let Some(view) = self.help_view_mut() {
+        let went_fwd = if let Some(view) = self.kb_view_mut() {
             view.go_forward()
         } else {
             false
         };
         if went_fwd {
-            if let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
-                self.help_populate_buffer(buf_idx);
+            if let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Kb) {
+                self.kb_populate_buffer(buf_idx);
                 self.window_mgr.focused_window_mut().cursor_row = 0;
                 self.window_mgr.focused_window_mut().cursor_col = 0;
             }
@@ -497,7 +524,7 @@ impl Editor {
 
     pub fn help_next_link(&mut self) {
         let cursor_byte = self.help_cursor_byte_offset();
-        if let Some(view) = self.help_view_mut() {
+        if let Some(view) = self.kb_view_mut() {
             view.focus_next_link(cursor_byte);
         }
         self.help_move_cursor_to_focused_link();
@@ -505,7 +532,7 @@ impl Editor {
 
     pub fn help_prev_link(&mut self) {
         let cursor_byte = self.help_cursor_byte_offset();
-        if let Some(view) = self.help_view_mut() {
+        if let Some(view) = self.kb_view_mut() {
             view.focus_prev_link(cursor_byte);
         }
         self.help_move_cursor_to_focused_link();
@@ -514,7 +541,7 @@ impl Editor {
     /// Move the cursor to the start of the currently focused link so the
     /// viewport scrolls to show it and the user sees where they landed.
     fn help_move_cursor_to_focused_link(&mut self) {
-        let byte_start = match self.help_view() {
+        let byte_start = match self.kb_view() {
             Some(view) => match view.focused_link {
                 Some(idx) => match view.rendered_links.get(idx) {
                     Some(link) => link.byte_start,
@@ -524,7 +551,7 @@ impl Editor {
             },
             None => return,
         };
-        let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Help) else {
+        let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Kb) else {
             return;
         };
         let rope = self.buffers[buf_idx].rope();
@@ -536,12 +563,12 @@ impl Editor {
         win.cursor_col = col;
     }
 
-    /// Compute the byte offset in the help buffer's rope corresponding to the cursor position.
+    /// Compute the byte offset in the KB buffer's rope corresponding to the cursor position.
     fn help_cursor_byte_offset(&self) -> usize {
         let buf_idx = self
             .buffers
             .iter()
-            .position(|b| b.kind == BufferKind::Help)
+            .position(|b| b.kind == BufferKind::Kb)
             .unwrap_or_else(|| self.active_buffer_idx());
         let buf = &self.buffers[buf_idx];
         let win = self.window_mgr.focused_window();
@@ -556,18 +583,18 @@ impl Editor {
     /// Close the *Help* buffer if one exists, switching to the alternate
     /// buffer (or scratch). Saves the view state for `help-reopen`.
     pub fn help_close(&mut self) {
-        let help_idx = self.buffers.iter().position(|b| b.kind == BufferKind::Help);
+        let help_idx = self.buffers.iter().position(|b| b.kind == BufferKind::Kb);
         let Some(help_idx) = help_idx else {
             return;
         };
         // Save state for reopen.
-        self.last_help_state = self.buffers[help_idx].help_view().cloned();
+        self.last_kb_state = self.buffers[help_idx].kb_view().cloned();
         // Pick a sensible destination: alternate if set (and not the
-        // help buffer itself), otherwise the first non-help buffer.
+        // KB buffer itself), otherwise the first non-KB buffer.
         let dest_idx = self
             .alternate_buffer_idx
             .filter(|&i| i != help_idx && i < self.buffers.len())
-            .or_else(|| self.buffers.iter().position(|b| b.kind != BufferKind::Help))
+            .or_else(|| self.buffers.iter().position(|b| b.kind != BufferKind::Kb))
             .unwrap_or(0);
         // Retarget any window focused on help before we remove it.
         for win in self.window_mgr.iter_windows_mut() {
@@ -587,11 +614,11 @@ impl Editor {
         }
     }
 
-    /// Jump from the current help buffer node to its source `.org` file.
+    /// Jump from the current KB buffer node to its source `.org` file.
     /// Works for federated nodes that have `source_file` stamped during ingest.
     pub fn help_edit_source(&mut self) {
         // Get current help node ID
-        let node_id = match self.help_view() {
+        let node_id = match self.kb_view() {
             Some(view) => view.current.clone(),
             None => {
                 self.set_status("Not in a help buffer");
@@ -618,11 +645,11 @@ impl Editor {
     }
 
     /// Return to the rendered KB view from source editing.
-    /// If a help buffer exists, switch to it. Otherwise, reopen the last one.
+    /// If a KB buffer exists, switch to it. Otherwise, reopen the last one.
     pub fn help_return_to_view(&mut self) {
-        if let Some(idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+        if let Some(idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Kb) {
             // Refresh the help content before showing it
-            self.help_populate_buffer(idx);
+            self.kb_populate_buffer(idx);
             // Replace focused window directly (not via display_policy which may split)
             let win = self.window_mgr.focused_window_mut();
             win.buffer_idx = idx;
@@ -630,28 +657,28 @@ impl Editor {
             win.cursor_col = 0;
             self.sync_mode_to_buffer();
             self.mark_full_redraw();
-        } else if self.last_help_state.is_some() {
+        } else if self.last_kb_state.is_some() {
             self.help_reopen();
         } else {
             self.set_status("No KB view to return to");
         }
     }
 
-    /// Re-render the help buffer if it exists and the underlying KB node has changed.
+    /// Re-render the KB buffer if it exists and the underlying KB node has changed.
     /// Called after save, focus-in, or KB reimport.
     pub fn refresh_help_if_stale(&mut self) {
-        let help_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+        let help_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Kb) {
             Some(idx) => idx,
             None => return,
         };
         // Always repopulate — the KB may have changed.
-        // help_populate_buffer is cheap (string formatting, no I/O).
-        self.help_populate_buffer(help_idx);
+        // kb_populate_buffer is cheap (string formatting, no I/O).
+        self.kb_populate_buffer(help_idx);
     }
 
     // --- Help buffer heading folding (Fix 4) ---
 
-    /// Heading level for a help buffer line (language-agnostic: both `*` and `#`).
+    /// Heading level for a KB buffer line (language-agnostic: both `*` and `#`).
     fn help_heading_level_at(&self, buf_idx: usize, row: usize) -> u8 {
         let rope = self.buffers[buf_idx].rope();
         if row >= rope.len_lines() {
@@ -678,7 +705,7 @@ impl Editor {
 
     /// Tab on a heading → fold/unfold subtree. Not on heading → next link.
     pub fn help_heading_cycle(&mut self) {
-        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Kb) {
             Some(i) => i,
             None => return,
         };
@@ -699,7 +726,7 @@ impl Editor {
 
     /// Global visibility cycle: OVERVIEW → CONTENTS → SHOW ALL.
     pub fn help_heading_global_cycle(&mut self) {
-        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Kb) {
             Some(i) => i,
             None => return,
         };
@@ -734,9 +761,9 @@ impl Editor {
         }
     }
 
-    /// Close all folds in help buffer (zM).
+    /// Close all folds in KB buffer (zM).
     pub fn help_close_all_folds(&mut self) {
-        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Kb) {
             Some(i) => i,
             None => return,
         };
@@ -754,9 +781,9 @@ impl Editor {
         self.set_status("All folds closed");
     }
 
-    /// Open all folds in help buffer (zR).
+    /// Open all folds in KB buffer (zR).
     pub fn help_open_all_folds(&mut self) {
-        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Kb) {
             Some(i) => i,
             None => return,
         };
@@ -764,19 +791,19 @@ impl Editor {
         self.set_status("All folds opened");
     }
 
-    /// Reopen the last-closed help buffer at exactly the node and
+    /// Reopen the last-closed KB buffer at exactly the node and
     /// navigation state where the user left off.
     pub fn help_reopen(&mut self) {
-        let Some(saved) = self.last_help_state.take() else {
+        let Some(saved) = self.last_kb_state.take() else {
             self.set_status("No previous help session");
             return;
         };
         let node_id = saved.current.clone();
         let prev_idx = self.active_buffer_idx();
-        let idx = self.ensure_help_buffer_idx(&node_id);
+        let idx = self.ensure_kb_buffer_idx(&node_id);
         // Restore full navigation state (back/forward stacks, focused link).
-        self.buffers[idx].view = crate::buffer_view::BufferView::Help(Box::new(saved));
-        self.help_populate_buffer(idx);
+        self.buffers[idx].view = crate::buffer_view::BufferView::Kb(Box::new(saved));
+        self.kb_populate_buffer(idx);
         if idx != prev_idx {
             self.alternate_buffer_idx = Some(prev_idx);
         }
@@ -792,15 +819,15 @@ mod tests {
     fn open_help_at_creates_buffer() {
         let mut e = Editor::new();
         e.open_help_at("index");
-        assert_eq!(e.active_buffer().kind, BufferKind::Help);
-        assert_eq!(e.help_view().unwrap().current, "index");
+        assert_eq!(e.active_buffer().kind, BufferKind::Kb);
+        assert_eq!(e.kb_view().unwrap().current, "index");
     }
 
     #[test]
     fn open_help_at_missing_falls_back_to_index() {
         let mut e = Editor::new();
         e.open_help_at("nonexistent:thing");
-        assert_eq!(e.help_view().unwrap().current, "index");
+        assert_eq!(e.kb_view().unwrap().current, "index");
         assert!(e.status_msg.contains("No help node"));
     }
 
@@ -812,12 +839,12 @@ mod tests {
         let helps = e
             .buffers
             .iter()
-            .filter(|b| b.kind == BufferKind::Help)
+            .filter(|b| b.kind == BufferKind::Kb)
             .count();
         assert_eq!(helps, 1);
-        assert_eq!(e.help_view().unwrap().current, "concept:buffer");
+        assert_eq!(e.kb_view().unwrap().current, "concept:buffer");
         // back_stack should show the previous node.
-        assert_eq!(e.help_view().unwrap().back_stack, vec!["index"]);
+        assert_eq!(e.kb_view().unwrap().back_stack, vec!["index"]);
     }
 
     #[test]
@@ -826,12 +853,12 @@ mod tests {
         e.open_help_at("index");
         e.help_next_link(); // focus first link
         let focused_target = {
-            let links = e.help_navigable_links();
-            let v = e.help_view().unwrap();
+            let links = e.kb_navigable_links();
+            let v = e.kb_view().unwrap();
             links[v.focused_link.unwrap()].clone()
         };
         e.help_follow_link();
-        assert_eq!(e.help_view().unwrap().current, focused_target);
+        assert_eq!(e.kb_view().unwrap().current, focused_target);
     }
 
     #[test]
@@ -840,9 +867,9 @@ mod tests {
         e.open_help_at("index");
         e.open_help_at("concept:buffer");
         e.help_back();
-        assert_eq!(e.help_view().unwrap().current, "index");
+        assert_eq!(e.kb_view().unwrap().current, "index");
         e.help_forward();
-        assert_eq!(e.help_view().unwrap().current, "concept:buffer");
+        assert_eq!(e.kb_view().unwrap().current, "concept:buffer");
     }
 
     #[test]
@@ -851,7 +878,7 @@ mod tests {
         e.open_help_at("index");
         assert_eq!(e.buffers.len(), 2);
         e.help_close();
-        assert!(e.buffers.iter().all(|b| b.kind != BufferKind::Help));
+        assert!(e.buffers.iter().all(|b| b.kind != BufferKind::Kb));
         assert_eq!(e.active_buffer_idx(), 0);
     }
 
@@ -859,16 +886,16 @@ mod tests {
     fn help_next_prev_link_wraps() {
         let mut e = Editor::new();
         e.open_help_at("index");
-        let count = e.help_navigable_links().len();
+        let count = e.kb_navigable_links().len();
         assert!(count > 0);
         e.help_next_link();
-        assert_eq!(e.help_view().unwrap().focused_link, Some(0));
+        assert_eq!(e.kb_view().unwrap().focused_link, Some(0));
         e.help_prev_link();
-        assert_eq!(e.help_view().unwrap().focused_link, Some(count - 1));
+        assert_eq!(e.kb_view().unwrap().focused_link, Some(count - 1));
     }
 
     #[test]
-    fn help_navigable_links_includes_backlinks() {
+    fn kb_navigable_links_includes_backlinks() {
         let e = {
             let mut e = Editor::new();
             e.open_help_at("index");
@@ -879,7 +906,7 @@ mod tests {
         assert!(!outgoing.is_empty(), "index must have outgoing links");
         assert!(!incoming.is_empty(), "index must have incoming links");
 
-        let nav = e.help_navigable_links();
+        let nav = e.kb_navigable_links();
         // Every outgoing neighbor appears somewhere in nav links.
         for target in &outgoing {
             assert!(
@@ -898,19 +925,19 @@ mod tests {
     fn help_follow_link_works_for_backlink_focus() {
         let mut e = Editor::new();
         e.open_help_at("concept:buffer");
-        let nav = e.help_navigable_links();
+        let nav = e.kb_navigable_links();
         if nav.len() > 1 {
             let last_idx = nav.len() - 1;
-            if let Some(view) = e.help_view_mut() {
+            if let Some(view) = e.kb_view_mut() {
                 view.focused_link = Some(last_idx);
             }
             let expected = nav[last_idx].clone();
             e.help_follow_link();
-            assert_eq!(e.help_view().unwrap().current, expected);
+            assert_eq!(e.kb_view().unwrap().current, expected);
         }
     }
 
-    // --- WU5: rope-backed help buffer tests ---
+    // --- WU5: rope-backed KB buffer tests ---
 
     #[test]
     fn help_buffer_is_read_only() {
@@ -945,7 +972,7 @@ mod tests {
     fn help_buffer_link_spans_have_valid_byte_ranges() {
         let mut e = Editor::new();
         e.open_help_at("index");
-        let view = e.help_view().unwrap();
+        let view = e.kb_view().unwrap();
         let text: String = e.buffers[e.active_buffer_idx()].rope().chars().collect();
         assert!(!view.rendered_links.is_empty(), "index should have links");
         for link in &view.rendered_links {
@@ -1003,7 +1030,7 @@ mod tests {
         assert!(text_after.contains("concept:buffer"));
     }
 
-    // --- WU6: reopen last help buffer ---
+    // --- WU6: reopen last KB buffer ---
 
     #[test]
     fn help_close_saves_state_for_reopen() {
@@ -1011,15 +1038,9 @@ mod tests {
         e.open_help_at("index");
         e.open_help_at("concept:buffer");
         e.help_close();
-        assert!(e.last_help_state.is_some());
-        assert_eq!(
-            e.last_help_state.as_ref().unwrap().current,
-            "concept:buffer"
-        );
-        assert_eq!(
-            e.last_help_state.as_ref().unwrap().back_stack,
-            vec!["index"]
-        );
+        assert!(e.last_kb_state.is_some());
+        assert_eq!(e.last_kb_state.as_ref().unwrap().current, "concept:buffer");
+        assert_eq!(e.last_kb_state.as_ref().unwrap().back_stack, vec!["index"]);
     }
 
     #[test]
@@ -1029,9 +1050,9 @@ mod tests {
         e.open_help_at("concept:buffer");
         e.help_close();
         e.help_reopen();
-        assert_eq!(e.help_view().unwrap().current, "concept:buffer");
-        assert_eq!(e.help_view().unwrap().back_stack, vec!["index"]);
-        assert_eq!(e.active_buffer().kind, BufferKind::Help);
+        assert_eq!(e.kb_view().unwrap().current, "concept:buffer");
+        assert_eq!(e.kb_view().unwrap().back_stack, vec!["index"]);
+        assert_eq!(e.active_buffer().kind, BufferKind::Kb);
     }
 
     #[test]
@@ -1140,10 +1161,10 @@ mod tests {
         e.open_help_at("index");
         // Switch away from help
         e.display_buffer(0);
-        assert_ne!(e.active_buffer().kind, BufferKind::Help);
+        assert_ne!(e.active_buffer().kind, BufferKind::Kb);
         // kb-view should return
         e.help_return_to_view();
-        assert_eq!(e.active_buffer().kind, BufferKind::Help);
+        assert_eq!(e.active_buffer().kind, BufferKind::Kb);
     }
 
     #[test]
@@ -1151,10 +1172,10 @@ mod tests {
         let mut e = Editor::new();
         e.open_help_at("concept:buffer");
         e.help_close();
-        assert!(e.buffers.iter().all(|b| b.kind != BufferKind::Help));
+        assert!(e.buffers.iter().all(|b| b.kind != BufferKind::Kb));
         e.help_return_to_view();
-        assert_eq!(e.active_buffer().kind, BufferKind::Help);
-        assert_eq!(e.help_view().unwrap().current, "concept:buffer");
+        assert_eq!(e.active_buffer().kind, BufferKind::Kb);
+        assert_eq!(e.kb_view().unwrap().current, "concept:buffer");
     }
 
     #[test]
@@ -1236,7 +1257,7 @@ mod tests {
         );
         e.kb.insert(node);
         e.open_help_at("user:broken-link-test");
-        let view = e.help_view().unwrap();
+        let view = e.kb_view().unwrap();
         assert!(
             !view.broken_links.is_empty(),
             "should detect broken link to nonexistent:target"
@@ -1247,7 +1268,7 @@ mod tests {
     fn help_valid_links_not_broken() {
         let mut e = Editor::new();
         e.open_help_at("index");
-        let view = e.help_view().unwrap();
+        let view = e.kb_view().unwrap();
         // The index node links to real nodes — none should be broken
         let valid_count = view
             .rendered_links
@@ -1273,7 +1294,7 @@ mod tests {
         // Focus the link and follow it — should work since concept:buffer exists
         e.help_next_link();
         e.help_follow_link();
-        assert_eq!(e.help_view().unwrap().current, "concept:buffer");
+        assert_eq!(e.kb_view().unwrap().current, "concept:buffer");
     }
 
     // --- KB UX: hint footer (Fix 6) ---

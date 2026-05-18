@@ -1119,11 +1119,11 @@ mod tests {
 
     #[test]
     fn help_buffer_heading_scale_with_markup_spans() {
-        // Simulate help buffer with markup.heading spans generated from `*` prefix lines.
+        // Simulate KB buffer with markup.heading spans generated from `*` prefix lines.
         let mut buf = mae_core::Buffer::new();
         buf.insert_text_at(0, "* Welcome\nSome text\n** Details\n");
 
-        // Build heading spans the same way lib.rs does for help buffers.
+        // Build heading spans the same way lib.rs does for KB buffers.
         let rope = buf.rope();
         let mut spans: Vec<HighlightSpan> = Vec::new();
         for line_idx in 0..buf.line_count() {

@@ -475,7 +475,7 @@ mod tests {
         let special = [
             BufferKind::Conversation,
             BufferKind::Messages,
-            BufferKind::Help,
+            BufferKind::Kb,
             BufferKind::Shell,
             BufferKind::Debug,
             BufferKind::Dashboard,

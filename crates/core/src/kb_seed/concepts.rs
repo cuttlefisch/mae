@@ -274,7 +274,7 @@ See also: [[concept:buffer]], [[concept:mode]], [[concept:keymap-inheritance]]\n
 pub(super) const CONCEPT_BUFFER_VIEW: &str = "\
 The **BufferView** enum (`buffer_view.rs`) stores mode-specific state on `Buffer`. \
 Variants: `Conversation`, `Help`, `Debug`, `GitStatus`, `Visual`, `FileTree`, `None`.\n\n\
-Accessor methods: `buf.conversation()`, `buf.help_view()`, `buf.git_status_view()`, etc. \
+Accessor methods: `buf.conversation()`, `buf.kb_view()`, `buf.git_status_view()`, etc. \
 Each returns `Option<&T>` (or `Option<&mut T>` for the `_mut` variant).\n\n\
 This replaced 6 `Option<T>` fields that were always mutually exclusive.\n\n\
 See also: [[concept:buffer]], [[concept:buffer-mode]]\n";
@@ -326,7 +326,7 @@ for Emacs's 29 `display-buffer-*` functions and regex alist.\n\n\
 ### The Problem\n\
 Five direct `focused_window_mut().buffer_idx` calls (help, messages, debug, git-status, \
 file-tree) had zero conversation awareness. If the AI agent called `help_open` while \
-focused on the tiny AI input pane, the help buffer got crammed in and the conversation \
+focused on the tiny AI input pane, the KB buffer got crammed in and the conversation \
 layout was destroyed.\n\n\
 ### The 4 Actions (vs Emacs's 29)\n\
 - **ReplaceFocused** — replace the focused window, but fall through to AvoidConversation \
@@ -441,7 +441,7 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 ## Getting around
 - **Enter** on a link follows it.
 - **C-o** goes back, **C-i** goes forward (history, like vim jumps).
-- **q** closes the help buffer.
+- **q** closes the KB viewer.
 ";
 
 pub(super) const CONCEPT_BUFFER: &str = "A **buffer** is the unit of editable content in MAE.\n\
@@ -522,7 +522,7 @@ See also: [[concept:knowledge-base]], [[concept:command]], [[concept:agent-boots
 
 pub(super) const CONCEPT_KB: &str = "\
 MAE's **knowledge base** is a typed graph of nodes with bidirectional \
-link markers. It serves as both the built-in help system and a personal \
+link markers. It serves as both the built-in manual and a personal \
 knowledge graph (org-roam-equivalent).\n\n\
 ## Graph model\n\
 - Typed nodes with bidirectional links (`id|display` syntax).\n\

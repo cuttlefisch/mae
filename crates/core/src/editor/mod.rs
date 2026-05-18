@@ -11,7 +11,7 @@ pub(crate) mod ex_parse;
 mod file_ops;
 mod git_ops;
 mod heading_ops;
-mod help_ops;
+pub(crate) mod help_ops;
 mod hook_ops;
 mod jumps;
 pub(crate) mod kb_ops;
@@ -40,8 +40,14 @@ mod visual;
 
 pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
+pub use help_ops::is_builtin_node;
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
 pub use kb_ops::KbWatcherStats;
+
+/// Default TCP address for the collaborative state server.
+pub const DEFAULT_COLLAB_ADDRESS: &str = "127.0.0.1:9473";
+/// Default TCP port for the collaborative state server.
+pub const DEFAULT_COLLAB_PORT: u16 = 9473;
 
 /// Collaborative editing connection status.
 /// Surfaced in the status bar via `format_collab_status()`.
@@ -58,6 +64,19 @@ pub enum CollabStatus {
     Reconnecting,
     /// Disconnected from the state server (not retrying).
     Disconnected,
+}
+
+impl CollabStatus {
+    /// Short string label for this status (used by AI tools, Scheme API, introspect).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CollabStatus::Off => "off",
+            CollabStatus::Connecting => "connecting",
+            CollabStatus::Connected { .. } => "connected",
+            CollabStatus::Reconnecting => "reconnecting",
+            CollabStatus::Disconnected => "disconnected",
+        }
+    }
 }
 
 /// Intent signals from the editor core to the binary event loop.
@@ -632,8 +651,8 @@ pub struct Editor {
     pub last_macro_register: Option<char>,
     /// Recursion depth guard during macro replay (max 10).
     pub macro_replay_depth: usize,
-    /// Knowledge base: backing store for the help system and the
-    /// AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
+    /// Knowledge base: backing store for the manual and user notes,
+    /// plus the AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
     /// hand-authored concept nodes on startup.
     pub kb: mae_kb::KnowledgeBase,
     /// KB federation: registry of external KB instances (org-roam dirs etc.).
@@ -713,7 +732,7 @@ pub struct Editor {
     pub spell_enabled: bool,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
-    pub last_help_state: Option<crate::help_view::HelpView>,
+    pub last_kb_state: Option<crate::kb_view::KbView>,
     /// Which ASCII art to show on the splash screen. Default is "bat".
     pub splash_art: Option<String>,
     /// Custom splash arts registered via `(register-splash-art! ...)`.
@@ -940,7 +959,7 @@ pub struct Editor {
     pub heading_scale_h3: f32,
     /// Show link labels instead of raw markup (Emacs org-link-descriptive). Default true.
     pub link_descriptive: bool,
-    /// Apply inline bold/italic/code styling in conversation/help buffers. Default true.
+    /// Apply inline bold/italic/code styling in conversation and KB buffers. Default true.
     pub render_markup: bool,
     /// Show hover info in a floating popup (true) or status bar (false). Default true.
     pub lsp_hover_popup: bool,
@@ -1098,6 +1117,18 @@ pub struct Editor {
     pub collab_synced_docs: usize,
     /// Pending collaborative editing intent for the binary event loop to drain.
     pub pending_collab_intent: Option<CollabIntent>,
+    /// TCP address of the collaborative state server.
+    pub collab_server_address: String,
+    /// Automatically connect to the state server on startup.
+    pub collab_auto_connect: bool,
+    /// Automatically share new buffers when connected.
+    pub collab_auto_share: bool,
+    /// Seconds between automatic reconnection attempts.
+    pub collab_reconnect_interval: u64,
+    /// Display name for collaborative edits.
+    pub collab_user_name: String,
+    /// Write timeout for peer connections, in milliseconds.
+    pub collab_write_timeout_ms: u64,
 }
 
 impl Default for Editor {
@@ -1202,7 +1233,7 @@ impl Editor {
             macro_log: Vec::new(),
             last_macro_register: None,
             macro_replay_depth: 0,
-            last_help_state: None,
+            last_kb_state: None,
             splash_art: Some("bat".to_string()),
             custom_splash_arts: Vec::new(),
             splash_image_width: 25,
@@ -1397,6 +1428,12 @@ impl Editor {
             collab_status: CollabStatus::Off,
             collab_synced_docs: 0,
             pending_collab_intent: None,
+            collab_server_address: DEFAULT_COLLAB_ADDRESS.to_string(),
+            collab_auto_connect: false,
+            collab_auto_share: false,
+            collab_reconnect_interval: 5,
+            collab_user_name: String::new(),
+            collab_write_timeout_ms: 5000,
         }
     }
 
@@ -2160,38 +2197,51 @@ impl Editor {
         self.buffers.len() - 1
     }
 
-    /// Find or create the `*Help*` buffer and navigate it to `node_id`.
+    /// Find or create the appropriate KB buffer (`*Help*` for builtins,
+    /// `*KB*` for user/federated nodes) and navigate it to `node_id`.
     /// Returns the buffer index. Does NOT switch focus — callers decide.
-    pub fn ensure_help_buffer_idx(&mut self, node_id: &str) -> usize {
+    pub fn ensure_kb_buffer_idx(&mut self, node_id: &str) -> usize {
+        use crate::buffer::buffer_names;
+        use crate::editor::help_ops::is_builtin_node;
+
+        let target_name = if is_builtin_node(node_id) {
+            buffer_names::HELP
+        } else {
+            buffer_names::KB
+        };
+
+        // Look for an existing buffer with the right name
         if let Some(idx) = self
             .buffers
             .iter()
-            .position(|b| b.kind == crate::buffer::BufferKind::Help)
+            .position(|b| b.kind == crate::buffer::BufferKind::Kb && b.name == target_name)
         {
-            if let Some(view) = self.buffers[idx].help_view_mut() {
-                let v: &mut crate::help_view::HelpView = view;
+            if let Some(view) = self.buffers[idx].kb_view_mut() {
+                let v: &mut crate::kb_view::KbView = view;
                 v.navigate_to(node_id.to_string());
             }
             return idx;
         }
-        self.buffers.push(Buffer::new_help(node_id));
+        let mut buf = Buffer::new_kb(node_id);
+        buf.name = target_name.to_string();
+        self.buffers.push(buf);
         self.buffers.len() - 1
     }
 
-    /// Mutable view onto the help buffer's HelpView, if any help buffer exists.
-    pub fn help_view_mut(&mut self) -> Option<&mut crate::help_view::HelpView> {
+    /// Mutable view onto the KB buffer's KbView, if any KB buffer exists.
+    pub fn kb_view_mut(&mut self) -> Option<&mut crate::kb_view::KbView> {
         self.buffers
             .iter_mut()
-            .find(|b| b.kind == crate::buffer::BufferKind::Help)
-            .and_then(|b| b.help_view_mut())
+            .find(|b| b.kind == crate::buffer::BufferKind::Kb)
+            .and_then(|b| b.kb_view_mut())
     }
 
-    /// Immutable view onto the help buffer's HelpView, if any help buffer exists.
-    pub fn help_view(&self) -> Option<&crate::help_view::HelpView> {
+    /// Immutable view onto the KB buffer's KbView, if any KB buffer exists.
+    pub fn kb_view(&self) -> Option<&crate::kb_view::KbView> {
         self.buffers
             .iter()
-            .find(|b| b.kind == crate::buffer::BufferKind::Help)
-            .and_then(|b| b.help_view())
+            .find(|b| b.kind == crate::buffer::BufferKind::Kb)
+            .and_then(|b| b.kb_view())
     }
 
     /// Switch the focused window to the buffer at the given index.

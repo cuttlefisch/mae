@@ -1,4 +1,4 @@
-//! Help window rendering — now thin since help buffers use the normal
+//! KB window rendering — now thin since KB buffers use the normal
 //! buffer_render path with rope-backed content. Only test utilities remain.
 
 #[cfg(test)]

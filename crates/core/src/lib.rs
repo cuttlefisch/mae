@@ -29,11 +29,11 @@ pub mod file_tree;
 pub mod git_status;
 pub mod grapheme;
 pub mod heading;
-pub mod help_view;
 pub mod hooks;
 pub mod image_meta;
 pub mod input;
 pub mod kb_seed;
+pub mod kb_view;
 pub mod keymap;
 pub mod link_detect;
 pub mod lock_stats;
@@ -81,17 +81,18 @@ pub use debug::{
 };
 pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
-    BlameEntry, BlameOverlay, CaptureState, CodeActionItem, CodeActionMenu, CollabIntent,
-    CollabStatus, CompletionItem, Diagnostic, DiagnosticSeverity, DiagnosticStore,
+    is_builtin_node, BlameEntry, BlameOverlay, CaptureState, CodeActionItem, CodeActionMenu,
+    CollabIntent, CollabStatus, CompletionItem, Diagnostic, DiagnosticSeverity, DiagnosticStore,
     DocumentHighlightRange, EditRecord, Editor, HighlightKind, HoverPopup, InputLock, LspLocation,
     LspRange, LspServerInfo, LspServerStatus, PeekReferenceLocation, PeekReferencesState,
     PeekState, SignatureHelpInfo, SignatureHelpState, SymbolOutlineEntry, SymbolOutlineState,
+    DEFAULT_COLLAB_ADDRESS, DEFAULT_COLLAB_PORT,
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;
-pub use help_view::{HelpLinkSpan, HelpView};
 pub use hooks::HookRegistry;
 pub use input::{InputEvent, MouseButton};
+pub use kb_view::{KbLinkSpan, KbView};
 pub use keymap::{
     parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, LookupResult, WhichKeyEntry,
 };

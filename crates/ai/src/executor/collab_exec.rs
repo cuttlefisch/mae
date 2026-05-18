@@ -17,21 +17,12 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
 }
 
 fn execute_collab_status(editor: &Editor) -> Result<String, String> {
-    let status_str = match editor.collab_status {
-        CollabStatus::Off => "off",
-        CollabStatus::Connecting => "connecting",
-        CollabStatus::Connected { .. } => "connected",
-        CollabStatus::Reconnecting => "reconnecting",
-        CollabStatus::Disconnected => "disconnected",
-    };
+    let status_str = editor.collab_status.as_str();
     let peer_count = match editor.collab_status {
         CollabStatus::Connected { peer_count } => peer_count,
         _ => 0,
     };
-    let address = editor
-        .get_option("collab_server_address")
-        .map(|(v, _)| v)
-        .unwrap_or_else(|| "127.0.0.1:9473".to_string());
+    let address = editor.collab_server_address.clone();
     Ok(serde_json::json!({
         "status": status_str,
         "peer_count": peer_count,
@@ -45,8 +36,8 @@ fn execute_collab_connect(editor: &mut Editor, args: &Value) -> Result<String, S
     let address = args
         .get("address")
         .and_then(|v| v.as_str())
-        .unwrap_or("127.0.0.1:9473")
-        .to_string();
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| editor.collab_server_address.clone());
     editor.pending_collab_intent = Some(CollabIntent::Connect {
         address: address.clone(),
     });
@@ -81,11 +72,61 @@ fn execute_collab_share(editor: &mut Editor, args: &Value) -> Result<String, Str
 }
 
 fn execute_collab_doctor(editor: &mut Editor) -> Result<String, String> {
+    // Return inline diagnostics for AI consumption (structured data, no intent buffer).
+    // Also queue intent so the human gets a *Collab Doctor* buffer.
     editor.pending_collab_intent = Some(CollabIntent::Doctor);
-    editor.set_status("Running collab diagnostics...");
+
+    let status_str = editor.collab_status.as_str();
+    let connected = matches!(editor.collab_status, CollabStatus::Connected { .. });
+    let peer_count = match editor.collab_status {
+        CollabStatus::Connected { peer_count } => peer_count,
+        _ => 0,
+    };
+    let address = editor.collab_server_address.clone();
+
+    let mut checks = Vec::new();
+    if connected {
+        checks.push(serde_json::json!({
+            "check": "connection_status",
+            "passed": true,
+            "detail": format!("{} ({})", status_str, address),
+        }));
+    } else {
+        checks.push(serde_json::json!({
+            "check": "server_reachable",
+            "passed": false,
+            "detail": format!("Cannot reach {}", address),
+            "remediation": {
+                "start_server": "systemctl --user start mae-state-server",
+                "check_listening": "ss -tlnp | grep 9473",
+                "firewalld": "sudo firewall-cmd --add-port=9473/tcp --permanent && sudo firewall-cmd --reload",
+                "ufw": "sudo ufw allow 9473/tcp",
+                "test_connectivity": format!("nc -zv {} {}", address.split(':').next().unwrap_or("127.0.0.1"), address.split(':').next_back().unwrap_or("9473")),
+            }
+        }));
+    }
+    checks.push(serde_json::json!({
+        "check": "peer_count",
+        "passed": true,
+        "detail": format!("{} peers", peer_count),
+    }));
+    checks.push(serde_json::json!({
+        "check": "synced_docs",
+        "passed": true,
+        "detail": format!("{} documents", editor.collab_synced_docs),
+    }));
+    checks.push(serde_json::json!({
+        "check": "authentication",
+        "passed": false,
+        "detail": "No authentication configured (trusted LAN mode)",
+    }));
+
     Ok(serde_json::json!({
-        "action": "doctor",
-        "message": "Collab diagnostics intent queued.",
+        "status": status_str,
+        "connected": connected,
+        "address": address,
+        "checks": checks,
+        "all_passed": connected,
     })
     .to_string())
 }

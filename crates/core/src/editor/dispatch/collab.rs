@@ -18,10 +18,7 @@ impl Editor {
                 Some(true)
             }
             "collab-connect" => {
-                let addr = self
-                    .get_option("collab_server_address")
-                    .map(|(v, _)| v)
-                    .unwrap_or_else(|| "127.0.0.1:9473".to_string());
+                let addr = self.collab_server_address.clone();
                 self.pending_collab_intent = Some(CollabIntent::Connect {
                     address: addr.clone(),
                 });

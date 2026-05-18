@@ -1,6 +1,7 @@
 mod agents;
 mod ai_event_handler;
 mod bootstrap;
+mod collab_bridge;
 mod config;
 mod dap_bridge;
 mod doctor;
@@ -83,7 +84,9 @@ fn main() -> io::Result<()> {
         println!("  --init-config [--force] Write a commented template and run wizard");
         println!("  --print-config-path     Print the config file path and exit");
         println!("  --print-config-template Print the default commented template to stdout");
-        println!("  --gui                   Launch with GUI backend (winit + skia)");
+        println!("  --gui                   Launch with GUI backend (default when available)");
+        println!("  --no-gui, --tui, -nw    Force terminal mode (like emacs -nw)");
+        println!("  --connect [ADDR]        Connect to state server (like emacsclient -c)");
         println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
         println!("  --setup-agents [DIR]    Write .mcp.json & agent settings for discovery");
         println!("  --check-config          Validate init.scm + config.toml and exit (for CI)");
@@ -233,11 +236,32 @@ fn main() -> io::Result<()> {
     // --clean / -q: skip user config, init.scm, history, and project detection (like emacs -q)
     let clean_mode = args.iter().any(|a| a == "--clean" || a == "-q");
 
-    // Find the first positional argument (not a flag).
-    let file_arg = args.iter().skip(1).find(|a| !a.starts_with('-'));
+    // --connect [ADDR]: connect to collab server on startup (emacsclient -c equivalent)
+    let connect_addr: Option<String> = {
+        let pos = args.iter().position(|a| a == "--connect");
+        if let Some(i) = pos {
+            let addr = args
+                .get(i + 1)
+                .filter(|a| !a.starts_with('-'))
+                .cloned()
+                .unwrap_or_else(|| mae_core::DEFAULT_COLLAB_ADDRESS.to_string());
+            Some(addr)
+        } else {
+            None
+        }
+    };
+
+    // Find the first positional argument (not a flag), skipping --connect's address arg.
+    let connect_pos = args.iter().position(|a| a == "--connect");
+    let file_arg = args
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(i, a)| !a.starts_with('-') && connect_pos.is_none_or(|ci| *i != ci + 1))
+        .map(|(_, a)| a.as_str());
 
     let mut editor = if let Some(path) = file_arg {
-        match Buffer::from_file(std::path::Path::new(path)) {
+        match Buffer::from_file(std::path::Path::new(&path)) {
             Ok(buf) => {
                 info!(path, "opened file from CLI argument");
                 let mut ed = Editor::with_buffer(buf);
@@ -336,6 +360,30 @@ fn main() -> io::Result<()> {
         editor.gui_icon_font_family = icon_family.clone();
     }
 
+    // Apply collaboration settings from config → OptionRegistry.
+    if let Some(ref addr) = app_config.collaboration.server_address {
+        let _ = editor.set_option("collab_server_address", addr);
+    }
+    if let Some(auto) = app_config.collaboration.auto_connect {
+        let _ = editor.set_option("collab_auto_connect", &auto.to_string());
+    }
+    if let Some(auto) = app_config.collaboration.auto_share {
+        let _ = editor.set_option("collab_auto_share", &auto.to_string());
+    }
+    if let Some(secs) = app_config.collaboration.reconnect_interval_secs {
+        let _ = editor.set_option("collab_reconnect_interval", &secs.to_string());
+    }
+    if let Some(ref name) = app_config.collaboration.user_name {
+        let _ = editor.set_option("collab_user_name", name);
+    }
+
+    // --connect overrides collab options: auto-connect to the given address.
+    if let Some(ref addr) = connect_addr {
+        let _ = editor.set_option("collab_server_address", addr);
+        let _ = editor.set_option("collab_auto_connect", "true");
+        info!(address = %addr, "CLI --connect: auto-connect enabled");
+    }
+
     // Apply performance thresholds from config.
     if let Some(v) = app_config.performance.large_file_lines {
         editor.large_file_lines = v;
@@ -430,7 +478,12 @@ fn main() -> io::Result<()> {
         info!("debug-init mode enabled");
     }
 
-    let use_gui = args.iter().any(|a| a == "--gui");
+    // GUI is the default when compiled with the gui feature (like emacs).
+    // --no-gui / --tui / -nw forces terminal mode (like emacs -nw).
+    let force_tui = args
+        .iter()
+        .any(|a| a == "--no-gui" || a == "--tui" || a == "-nw");
+    let use_gui = cfg!(feature = "gui") && !force_tui;
 
     // Build the tokio runtime manually. The GUI path needs the event loop
     // on the main thread (winit requirement) with tokio on a background
@@ -630,25 +683,36 @@ fn main() -> io::Result<()> {
         }
     }
 
+    // Set up collab bridge channels (no runtime needed yet).
+    let (mut collab_event_rx, collab_command_tx, collab_spawn) =
+        collab_bridge::setup_collab_channels(&editor);
+
     // Terminal path: run the async event loop on the main thread.
-    rt.block_on(run_terminal_loop(
-        &mut editor,
-        &mut scheme,
-        &mut ai_event_rx,
-        &ai_event_tx,
-        &ai_command_tx,
-        &mut lsp_event_rx,
-        &lsp_command_tx,
-        &mut dap_event_rx,
-        &dap_command_tx,
-        &mut mcp_tool_rx,
-        &mcp_socket_path,
-        &all_tools,
-        &permission_policy,
-        &app_config,
-        &mcp_client_mgr,
-        &sync_broadcaster,
-    ))?;
+    // Spawn collab task inside block_on where tokio runtime is active.
+    rt.block_on(async {
+        collab_bridge::spawn_collab_task(collab_spawn);
+        run_terminal_loop(
+            &mut editor,
+            &mut scheme,
+            &mut ai_event_rx,
+            &ai_event_tx,
+            &ai_command_tx,
+            &mut lsp_event_rx,
+            &lsp_command_tx,
+            &mut dap_event_rx,
+            &dap_command_tx,
+            &mut mcp_tool_rx,
+            &mut collab_event_rx,
+            &collab_command_tx,
+            &mcp_socket_path,
+            &all_tools,
+            &permission_policy,
+            &app_config,
+            &mcp_client_mgr,
+            &sync_broadcaster,
+        )
+        .await
+    })?;
 
     let _ = std::fs::remove_file(&mcp_socket_path);
     info!("mae exited cleanly");
@@ -718,6 +782,10 @@ fn run_gui(
         .map_err(|e| io::Error::other(e.to_string()))?;
     let proxy = event_loop.create_proxy();
 
+    // Set up collab bridge channels (no runtime needed yet — task spawned in bridge_task).
+    let (collab_event_rx, collab_command_tx, collab_spawn) =
+        collab_bridge::setup_collab_channels(&editor);
+
     // Shared atomics so the bridge task only sends ticks when relevant.
     let shell_active = Arc::new(AtomicBool::new(false));
     let mcp_active = Arc::new(AtomicBool::new(false));
@@ -726,15 +794,21 @@ fn run_gui(
     let shell_active_bg = shell_active.clone();
     let mcp_active_bg = mcp_active.clone();
     std::thread::spawn(move || {
-        rt.block_on(bridge_task(
-            proxy,
-            ai_event_rx,
-            lsp_event_rx,
-            dap_event_rx,
-            mcp_tool_rx,
-            shell_active_bg,
-            mcp_active_bg,
-        ));
+        rt.block_on(async {
+            // Spawn collab task inside the tokio runtime.
+            collab_bridge::spawn_collab_task(collab_spawn);
+            bridge_task(
+                proxy,
+                ai_event_rx,
+                lsp_event_rx,
+                dap_event_rx,
+                mcp_tool_rx,
+                collab_event_rx,
+                shell_active_bg,
+                mcp_active_bg,
+            )
+            .await;
+        });
     });
 
     info!("entering GUI event loop (run_app + EventLoopProxy)");
@@ -759,6 +833,7 @@ fn run_gui(
         permission_policy,
         lsp_command_tx,
         dap_command_tx,
+        collab_command_tx,
         mcp_socket_path,
         app_config,
         mcp_client_mgr,
@@ -806,6 +881,7 @@ async fn bridge_task(
     mut lsp_rx: tokio::sync::mpsc::Receiver<mae_lsp::LspTaskEvent>,
     mut dap_rx: tokio::sync::mpsc::Receiver<mae_dap::DapTaskEvent>,
     mut mcp_rx: tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
+    mut collab_rx: tokio::sync::mpsc::Receiver<collab_bridge::CollabEvent>,
     shell_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     mcp_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
@@ -839,6 +915,9 @@ async fn bridge_task(
             }
             Some(ev) = mcp_rx.recv() => {
                 if proxy.send_event(MaeEvent::McpToolRequest(ev)).is_err() { break; }
+            }
+            Some(ev) = collab_rx.recv() => {
+                if proxy.send_event(MaeEvent::CollabEvent(ev)).is_err() { break; }
             }
             _ = shell_interval.tick() => {
                 if shell_active.load(Relaxed) {
@@ -896,6 +975,7 @@ struct GuiApp {
     // Command senders (main thread → background tokio thread)
     lsp_command_tx: tokio::sync::mpsc::Sender<LspCommand>,
     dap_command_tx: tokio::sync::mpsc::Sender<DapCommand>,
+    collab_command_tx: tokio::sync::mpsc::Sender<collab_bridge::CollabCommand>,
 
     // Config
     mcp_socket_path: String,
@@ -945,6 +1025,7 @@ impl GuiApp {
     fn drain_intents_and_lifecycle(&mut self) {
         lsp_bridge::drain_lsp_intents(&mut self.editor, &self.lsp_command_tx);
         dap_bridge::drain_dap_intents(&mut self.editor, &self.dap_command_tx);
+        collab_bridge::drain_collab_intents(&mut self.editor, &self.collab_command_tx);
 
         shell_lifecycle::drain_agent_setup(&mut self.editor);
         shell_lifecycle::spawn_pending_shells(
@@ -1166,6 +1247,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 }
                 // Autosave check (piggybacks on 30s health tick).
                 self.editor.try_autosave();
+            }
+            MaeEvent::CollabEvent(collab_event) => {
+                collab_bridge::handle_collab_event(&mut self.editor, collab_event);
+                self.dirty = true;
             }
             MaeEvent::IdleTick => {
                 if self.last_input_time.elapsed() > std::time::Duration::from_millis(100) {

@@ -28,7 +28,7 @@ pub enum PalettePurpose {
     Execute,
     Describe,
     SetTheme,
-    HelpSearch,
+    KbSearch,
     SwitchBuffer,
     SetSplashArt,
     RecentFile,
@@ -49,7 +49,7 @@ impl PalettePurpose {
             Self::Execute => "Commands",
             Self::Describe => "Describe Command",
             Self::SetTheme => "Themes",
-            Self::HelpSearch => "Help Topics",
+            Self::KbSearch => "MAE Help",
             Self::SwitchBuffer => "Buffers",
             Self::SetSplashArt => "Splash Art",
             Self::RecentFile => "Recent Files",
@@ -231,7 +231,7 @@ impl CommandPalette {
     }
 
     /// Help search palette: entries are KB node ids + titles, Enter opens
-    /// the selected node in the help buffer. Used by `SPC h s`.
+    /// the selected node in the KB buffer. Used by `SPC h s`.
     pub fn for_help_search(nodes: &[(String, String)]) -> Self {
         let mut entries: Vec<PaletteEntry> = nodes
             .iter()
@@ -247,7 +247,7 @@ impl CommandPalette {
             entries,
             filtered,
             selected: 0,
-            purpose: PalettePurpose::HelpSearch,
+            purpose: PalettePurpose::KbSearch,
             query_selected: false,
         }
     }
@@ -494,7 +494,7 @@ mod tests {
             PalettePurpose::Execute,
             PalettePurpose::Describe,
             PalettePurpose::SetTheme,
-            PalettePurpose::HelpSearch,
+            PalettePurpose::KbSearch,
             PalettePurpose::SwitchBuffer,
             PalettePurpose::SetSplashArt,
             PalettePurpose::RecentFile,

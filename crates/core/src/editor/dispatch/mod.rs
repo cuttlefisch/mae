@@ -547,10 +547,10 @@ impl Editor {
         let area = self.default_area();
         self.window_mgr.focus_direction(dir, area);
         self.sync_mode_to_buffer();
-        // Refresh help buffer on focus (picks up node edits from other windows).
+        // Refresh KB buffer on focus (picks up node edits from other windows).
         let idx = self.active_buffer_idx();
-        if self.buffers[idx].kind == crate::buffer::BufferKind::Help {
-            self.help_populate_buffer(idx);
+        if self.buffers[idx].kind == crate::buffer::BufferKind::Kb {
+            self.kb_populate_buffer(idx);
         }
         // When focusing a conversation output buffer, jump cursor to the last line
         // so the user sees the most recent content (not stranded at row 0).

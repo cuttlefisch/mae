@@ -214,7 +214,7 @@ fn effective_markup_flavor_render_markup_off() {
 fn effective_markup_flavor_help_buffer() {
     use crate::syntax::MarkupFlavor;
     let mut ed = Editor::new();
-    ed.buffers[0].kind = crate::buffer::BufferKind::Help;
+    ed.buffers[0].kind = crate::buffer::BufferKind::Kb;
     assert_eq!(ed.effective_markup_flavor(0), MarkupFlavor::Markdown);
 }
 

@@ -274,7 +274,7 @@ fn dashboard_default_stays_on_split() {
 
     // Create a Help buffer and display it (Help uses ReuseOrSplit)
     let mut help_buf = Buffer::new();
-    help_buf.kind = crate::BufferKind::Help;
+    help_buf.kind = crate::BufferKind::Kb;
     help_buf.name = "[help]".into();
     editor.buffers.push(help_buf);
     let help_idx = editor.buffers.len() - 1;
@@ -307,7 +307,7 @@ fn dashboard_dismissed_when_option_set() {
 
     // Create a Help buffer and display it
     let mut help_buf = Buffer::new();
-    help_buf.kind = crate::BufferKind::Help;
+    help_buf.kind = crate::BufferKind::Kb;
     help_buf.name = "[help]".into();
     editor.buffers.push(help_buf);
     let help_idx = editor.buffers.len() - 1;
@@ -330,7 +330,7 @@ fn dashboard_dismissed_when_option_set() {
         "Dashboard should be replaced when option is set"
     );
 
-    // The window should now show the help buffer
+    // The window should now show the KB buffer
     let has_help_win = editor
         .window_mgr
         .iter_windows()

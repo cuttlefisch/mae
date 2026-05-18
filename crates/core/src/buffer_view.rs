@@ -8,7 +8,7 @@ use crate::conversation::Conversation;
 use crate::debug_view::DebugView;
 use crate::file_tree::FileTree;
 use crate::git_status::GitStatusView;
-use crate::help_view::HelpView;
+use crate::kb_view::KbView;
 use crate::visual_buffer::VisualBuffer;
 
 #[derive(Debug)]
@@ -17,8 +17,8 @@ pub enum BufferView {
     None,
     /// AI conversation state.
     Conversation(Box<Conversation>),
-    /// Help buffer navigation state.
-    Help(Box<HelpView>),
+    /// KB buffer navigation state.
+    Kb(Box<KbView>),
     /// DAP debug panel state.
     Debug(Box<DebugView>),
     /// Git status porcelain state.
@@ -46,16 +46,16 @@ impl BufferView {
         }
     }
 
-    pub fn help_view(&self) -> Option<&HelpView> {
+    pub fn kb_view(&self) -> Option<&KbView> {
         match self {
-            BufferView::Help(h) => Some(h),
+            BufferView::Kb(h) => Some(h),
             _ => None,
         }
     }
 
-    pub fn help_view_mut(&mut self) -> Option<&mut HelpView> {
+    pub fn kb_view_mut(&mut self) -> Option<&mut KbView> {
         match self {
-            BufferView::Help(h) => Some(h),
+            BufferView::Kb(h) => Some(h),
             _ => None,
         }
     }
@@ -139,18 +139,18 @@ mod tests {
     fn buffer_view_accessors() {
         let conv = BufferView::Conversation(Box::default());
         assert!(conv.conversation().is_some());
-        assert!(conv.help_view().is_none());
+        assert!(conv.kb_view().is_none());
         assert!(conv.debug_view().is_none());
         assert!(conv.git_status().is_none());
         assert!(conv.visual().is_none());
         assert!(conv.file_tree().is_none());
 
-        let help = BufferView::Help(Box::new(HelpView::new("index".to_string())));
-        assert!(help.help_view().is_some());
+        let help = BufferView::Kb(Box::new(KbView::new("index".to_string())));
+        assert!(help.kb_view().is_some());
         assert!(help.conversation().is_none());
 
         let none = BufferView::None;
         assert!(none.conversation().is_none());
-        assert!(none.help_view().is_none());
+        assert!(none.kb_view().is_none());
     }
 }

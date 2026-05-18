@@ -1,29 +1,29 @@
 //! Help-buffer view state: navigation history over the knowledge base.
 //!
-//! A help buffer is a live window onto a KB node. When the user follows
+//! A KB buffer is a live window onto a KB node. When the user follows
 //! a link, the current node is pushed onto `back_stack` and the new node
 //! becomes `current`. `C-o` / `C-i` walk the stack — the same pattern
 //! Emacs `*Help*` and browsers use.
 //!
-//! Rendering pulls the node body from the KB on each frame; `HelpView`
+//! Rendering pulls the node body from the KB on each frame; `KbView`
 //! stores only pointers, never body text. This keeps the view in sync
 //! when KB content is regenerated (e.g. after loading new commands).
 
-/// Cursor position within the help buffer, measured in "interactive link
+/// Cursor position within the KB buffer, measured in "interactive link
 /// index". `None` means no link is currently focused — `Enter` is a no-op.
 pub type LinkIdx = usize;
 
 /// A navigable link embedded in the rendered help text (byte range in the rope).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HelpLinkSpan {
+pub struct KbLinkSpan {
     pub byte_start: usize,
     pub byte_end: usize,
     pub target: String,
 }
 
-/// Navigation state for a help buffer.
+/// Navigation state for a KB buffer.
 #[derive(Debug, Clone)]
-pub struct HelpView {
+pub struct KbView {
     /// Id of the KB node currently displayed.
     pub current: String,
     /// Previously visited node ids (most recent last). `C-o` pops from here.
@@ -35,15 +35,15 @@ pub struct HelpView {
     /// Which link is currently focused (0-indexed into the node's link list).
     /// `None` if the node has no links.
     pub focused_link: Option<LinkIdx>,
-    /// Link spans in the rendered rope text. Populated by `help_populate_buffer`.
-    pub rendered_links: Vec<HelpLinkSpan>,
+    /// Link spans in the rendered rope text. Populated by `kb_populate_buffer`.
+    pub rendered_links: Vec<KbLinkSpan>,
     /// Indices into `rendered_links` that point to broken/unresolvable targets.
     pub broken_links: std::collections::HashSet<usize>,
 }
 
-impl HelpView {
+impl KbView {
     pub fn new(start: impl Into<String>) -> Self {
-        HelpView {
+        KbView {
             current: start.into(),
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn new_view_has_empty_stacks() {
-        let v = HelpView::new("index");
+        let v = KbView::new("index");
         assert_eq!(v.current, "index");
         assert!(v.back_stack.is_empty());
         assert!(v.forward_stack.is_empty());
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn navigate_pushes_back() {
-        let mut v = HelpView::new("a");
+        let mut v = KbView::new("a");
         v.navigate_to("b");
         assert_eq!(v.current, "b");
         assert_eq!(v.back_stack, vec!["a"]);
@@ -182,14 +182,14 @@ mod tests {
 
     #[test]
     fn navigate_to_same_is_noop() {
-        let mut v = HelpView::new("a");
+        let mut v = KbView::new("a");
         v.navigate_to("a");
         assert!(v.back_stack.is_empty());
     }
 
     #[test]
     fn navigate_clears_forward_stack() {
-        let mut v = HelpView::new("a");
+        let mut v = KbView::new("a");
         v.navigate_to("b");
         v.go_back();
         assert!(!v.forward_stack.is_empty());
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn back_and_forward_round_trip() {
-        let mut v = HelpView::new("a");
+        let mut v = KbView::new("a");
         v.navigate_to("b");
         v.navigate_to("c");
         assert!(v.go_back());
@@ -216,19 +216,19 @@ mod tests {
 
     #[test]
     fn focus_link_wraps() {
-        let mut v = HelpView::new("a");
+        let mut v = KbView::new("a");
         v.rendered_links = vec![
-            HelpLinkSpan {
+            KbLinkSpan {
                 byte_start: 10,
                 byte_end: 20,
                 target: "a".into(),
             },
-            HelpLinkSpan {
+            KbLinkSpan {
                 byte_start: 30,
                 byte_end: 40,
                 target: "b".into(),
             },
-            HelpLinkSpan {
+            KbLinkSpan {
                 byte_start: 50,
                 byte_end: 60,
                 target: "c".into(),
@@ -253,19 +253,19 @@ mod tests {
 
     #[test]
     fn focus_link_cursor_aware() {
-        let mut v = HelpView::new("a");
+        let mut v = KbView::new("a");
         v.rendered_links = vec![
-            HelpLinkSpan {
+            KbLinkSpan {
                 byte_start: 10,
                 byte_end: 20,
                 target: "a".into(),
             },
-            HelpLinkSpan {
+            KbLinkSpan {
                 byte_start: 100,
                 byte_end: 110,
                 target: "b".into(),
             },
-            HelpLinkSpan {
+            KbLinkSpan {
                 byte_start: 200,
                 byte_end: 210,
                 target: "c".into(),
@@ -282,14 +282,14 @@ mod tests {
 
     #[test]
     fn focus_link_resets_when_cursor_moves_away() {
-        let mut v = HelpView::new("a");
+        let mut v = KbView::new("a");
         v.rendered_links = vec![
-            HelpLinkSpan {
+            KbLinkSpan {
                 byte_start: 10,
                 byte_end: 20,
                 target: "a".into(),
             },
-            HelpLinkSpan {
+            KbLinkSpan {
                 byte_start: 100,
                 byte_end: 110,
                 target: "b".into(),
@@ -305,14 +305,14 @@ mod tests {
 
     #[test]
     fn focus_link_with_no_links_is_none() {
-        let mut v = HelpView::new("a");
+        let mut v = KbView::new("a");
         v.focus_next_link(0);
         assert_eq!(v.focused_link, None);
     }
 
     #[test]
     fn scroll_saturates() {
-        let mut v = HelpView::new("a");
+        let mut v = KbView::new("a");
         v.scroll_up(5);
         assert_eq!(v.scroll, 0);
         v.scroll_down(10);
@@ -323,8 +323,8 @@ mod tests {
 
     #[test]
     fn navigation_resets_scroll_and_focus() {
-        let mut v = HelpView::new("a");
-        v.rendered_links = vec![HelpLinkSpan {
+        let mut v = KbView::new("a");
+        v.rendered_links = vec![KbLinkSpan {
             byte_start: 10,
             byte_end: 20,
             target: "x".into(),

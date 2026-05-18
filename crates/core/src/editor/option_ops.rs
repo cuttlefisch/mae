@@ -142,6 +142,12 @@ impl super::Editor {
             "format_on_save" => self.format_on_save.to_string(),
             "spell_enabled" => self.spell_enabled.to_string(),
             "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
+            "collab_server_address" => self.collab_server_address.clone(),
+            "collab_auto_connect" => self.collab_auto_connect.to_string(),
+            "collab_auto_share" => self.collab_auto_share.to_string(),
+            "collab_reconnect_interval" => self.collab_reconnect_interval.to_string(),
+            "collab_user_name" => self.collab_user_name.clone(),
+            "collab_write_timeout_ms" => self.collab_write_timeout_ms.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -551,6 +557,30 @@ impl super::Editor {
             }
             "file_tree_focus_on_open" => {
                 self.file_tree_focus_on_open = parse_option_bool(value)?;
+            }
+            "collab_server_address" => {
+                self.collab_server_address = value.to_string();
+            }
+            "collab_auto_connect" => {
+                self.collab_auto_connect = parse_option_bool(value)?;
+            }
+            "collab_auto_share" => {
+                self.collab_auto_share = parse_option_bool(value)?;
+            }
+            "collab_reconnect_interval" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.collab_reconnect_interval = v.clamp(1, 300);
+            }
+            "collab_user_name" => {
+                self.collab_user_name = value.to_string();
+            }
+            "collab_write_timeout_ms" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.collab_write_timeout_ms = v.clamp(500, 60_000);
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }

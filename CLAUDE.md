@@ -130,7 +130,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - DAP client: protocol types, breakpoints, step/continue, AI debug tools ✅
 - Tree-sitter syntax highlighting: 13 languages, structural selection ✅
 - Gutter rendering: breakpoints, execution line, diagnostic severity markers ✅
-- Knowledge base: in-memory graph, SQLite persistence, org-mode parser, help system, AI KB tools ✅
+- Knowledge base: in-memory graph, SQLite persistence, org-mode parser, manual + user KB, AI KB tools ✅
 - LSP AI tools: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_workspace_symbol`, `lsp_document_symbols` ✅
 - Debug panel UI complete ✅
 

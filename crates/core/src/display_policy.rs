@@ -66,7 +66,7 @@ impl DisplayPolicy {
             // AI diffs avoid conversation
             BufferKind::Diff => DisplayAction::AvoidConversation,
             // Reuse existing help window, or 50% vsplit
-            BufferKind::Help => DisplayAction::ReuseOrSplit {
+            BufferKind::Kb => DisplayAction::ReuseOrSplit {
                 direction: SplitDirection::Vertical,
                 ratio: 0.5,
             },
@@ -129,7 +129,7 @@ impl DisplayPolicy {
         let kinds = [
             BufferKind::Text,
             BufferKind::Diff,
-            BufferKind::Help,
+            BufferKind::Kb,
             BufferKind::Messages,
             BufferKind::Shell,
             BufferKind::Debug,
@@ -230,7 +230,7 @@ pub fn parse_buffer_kind(s: &str) -> Option<BufferKind> {
         "conversation" => Some(BufferKind::Conversation),
         "preview" => Some(BufferKind::Preview),
         "messages" => Some(BufferKind::Messages),
-        "help" => Some(BufferKind::Help),
+        "help" | "kb" => Some(BufferKind::Kb),
         "shell" => Some(BufferKind::Shell),
         "debug" => Some(BufferKind::Debug),
         "dashboard" => Some(BufferKind::Dashboard),
@@ -258,7 +258,7 @@ mod tests {
             BufferKind::Conversation,
             BufferKind::Preview,
             BufferKind::Messages,
-            BufferKind::Help,
+            BufferKind::Kb,
             BufferKind::Shell,
             BufferKind::Debug,
             BufferKind::Dashboard,
@@ -280,7 +280,7 @@ mod tests {
     fn action_for_correct() {
         let policy = DisplayPolicy::default();
         assert!(matches!(
-            policy.action_for(BufferKind::Help),
+            policy.action_for(BufferKind::Kb),
             DisplayAction::ReuseOrSplit { .. }
         ));
         assert_eq!(
@@ -296,9 +296,9 @@ mod tests {
     #[test]
     fn override_replaces_default() {
         let mut policy = DisplayPolicy::default();
-        policy.set_override(BufferKind::Help, DisplayAction::ReplaceFocused);
+        policy.set_override(BufferKind::Kb, DisplayAction::ReplaceFocused);
         assert_eq!(
-            policy.action_for(BufferKind::Help),
+            policy.action_for(BufferKind::Kb),
             DisplayAction::ReplaceFocused
         );
         // Other kinds unchanged.
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn parse_buffer_kind_works() {
         assert_eq!(parse_buffer_kind("text"), Some(BufferKind::Text));
-        assert_eq!(parse_buffer_kind("Help"), Some(BufferKind::Help));
+        assert_eq!(parse_buffer_kind("Help"), Some(BufferKind::Kb));
         assert_eq!(parse_buffer_kind("git-status"), Some(BufferKind::GitStatus));
         assert_eq!(parse_buffer_kind("nonsense"), None);
     }
@@ -343,7 +343,7 @@ mod tests {
         let policy = DisplayPolicy::default();
         let report = policy.format_report();
         assert!(report.contains("Text"));
-        assert!(report.contains("Help"));
+        assert!(report.contains("Kb"));
         assert!(report.contains("Conversation"));
         assert!(report.contains("Hidden"));
     }

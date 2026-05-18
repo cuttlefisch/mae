@@ -40,6 +40,8 @@ pub struct Config {
     pub performance: PerformanceSection,
     #[serde(default)]
     pub org: OrgSection,
+    #[serde(default)]
+    pub collaboration: CollaborationSection,
 }
 
 /// Current config schema version. Bump when config.toml format changes.
@@ -155,6 +157,20 @@ pub struct PerformanceSection {
     pub degrade_threshold_line_length: Option<usize>,
     pub display_region_debounce_ms: Option<u64>,
     pub syntax_reparse_debounce_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CollaborationSection {
+    /// State server address (e.g. "127.0.0.1:9473").
+    pub server_address: Option<String>,
+    /// Automatically connect to the state server on startup.
+    pub auto_connect: Option<bool>,
+    /// Automatically share new file buffers when connected.
+    pub auto_share: Option<bool>,
+    /// Seconds between reconnection attempts (default: 5).
+    pub reconnect_interval_secs: Option<u64>,
+    /// Display name for collaborative edits (shown to peers).
+    pub user_name: Option<String>,
 }
 
 fn default_true() -> bool {

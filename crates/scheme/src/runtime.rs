@@ -1614,18 +1614,8 @@ impl SchemeRuntime {
 
         // (collab-status) — returns an alist with current collaboration state.
         // Returns: ((status . "off") (server . "127.0.0.1:9473") (synced-docs . 0) (peer-count . 0))
-        let collab_status_str = match &editor.collab_status {
-            mae_core::CollabStatus::Off => "off",
-            mae_core::CollabStatus::Connecting => "connecting",
-            mae_core::CollabStatus::Connected { .. } => "connected",
-            mae_core::CollabStatus::Reconnecting => "reconnecting",
-            mae_core::CollabStatus::Disconnected => "disconnected",
-        }
-        .to_string();
-        let collab_server_addr = editor
-            .get_option("collab_server_address")
-            .map(|(v, _)| v)
-            .unwrap_or_else(|| "127.0.0.1:9473".to_string());
+        let collab_status_str = editor.collab_status.as_str().to_string();
+        let collab_server_addr = editor.collab_server_address.clone();
         let collab_synced_docs = editor.collab_synced_docs;
         self.engine
             .register_fn("collab-status", move || -> SteelVal {

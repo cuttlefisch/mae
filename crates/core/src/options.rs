@@ -214,7 +214,7 @@ impl OptionRegistry {
                     "Show link labels instead of raw markup (Emacs org-link-descriptive). When true, [label](url) and [[target][label]] display as styled labels.",
                     OptionKind::Bool, "true", Some("editor.link_descriptive"), &[]),
                 opt!("render_markup", &["render-markup"],
-                    "Apply inline styling (bold/italic/code) in conversation and help buffers (both markdown and org syntax)",
+                    "Apply inline styling (bold/italic/code) in conversation and KB buffers (both markdown and org syntax)",
                     OptionKind::Bool, "true", Some("editor.render_markup"), &[]),
                 opt!("scrolloff", &["scroll-off", "so"],
                     "Minimum lines of context above/below cursor during scrolling",
@@ -382,6 +382,9 @@ impl OptionRegistry {
                 opt!("collab_user_name", &["collab-user-name"],
                     "Display name used to attribute collaborative edits",
                     OptionKind::String, "", Some("collaboration.user_name"), &[]),
+                opt!("collab_write_timeout_ms", &["collab-write-timeout-ms"],
+                    "Peer write timeout in milliseconds",
+                    OptionKind::Int, "5000", Some("collaboration.write_timeout_ms"), &[]),
             ],
         }
     }

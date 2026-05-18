@@ -460,10 +460,10 @@ impl Editor {
             // Open the file for editing
             self.open_file(&path);
 
-            // Seed help buffer (hidden) so SPC n v can toggle to rendered view later.
+            // Seed KB buffer (hidden) so SPC n v can toggle to rendered view later.
             // Do NOT call open_help_at() — that would display it and create a split.
-            let help_idx = self.ensure_help_buffer_idx(&id);
-            self.help_populate_buffer(help_idx);
+            let help_idx = self.ensure_kb_buffer_idx(&id);
+            self.kb_populate_buffer(help_idx);
 
             // Enter capture mode (C-c C-c to finalize, C-c C-k to abort)
             self.capture_state = Some(super::CaptureState {
@@ -1206,26 +1206,50 @@ impl Editor {
             let prev_date_str = mae_kb::activity::format_date(py, pm, pd);
             let link_line = format!("Previous: [[id:{}][{}]]", prev_id, prev_date_str);
 
-            // Check if the daily already has a Previous: line
+            // Insert "Previous:" link on chain[i] pointing to chain[i+1]
             if let Some(path) = self.kb_daily_path(cy, cm, cd) {
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    if content.contains("Previous:") {
-                        continue; // Already linked
+                    if !content.contains("Previous:") {
+                        let mut lines: Vec<&str> = content.lines().collect();
+                        let insert_pos = lines
+                            .iter()
+                            .position(|l| l.starts_with("#+title:"))
+                            .map(|i| i + 1)
+                            .unwrap_or(lines.len());
+                        lines.insert(insert_pos, &link_line);
+                        let updated = lines.join("\n") + "\n";
+                        self.kb_write_guard.insert(path.clone());
+                        if std::fs::write(&path, &updated).is_ok() {
+                            self.kb_reimport_file(&path);
+                            self.kb_watcher_stats.reimports_total += 1;
+                            result.links_inserted += 1;
+                        }
                     }
-                    // Insert after the title line
-                    let mut lines: Vec<&str> = content.lines().collect();
-                    let insert_pos = lines
-                        .iter()
-                        .position(|l| l.starts_with("#+title:"))
-                        .map(|i| i + 1)
-                        .unwrap_or(lines.len());
-                    lines.insert(insert_pos, &link_line);
-                    let updated = lines.join("\n") + "\n";
-                    self.kb_write_guard.insert(path.clone());
-                    if std::fs::write(&path, &updated).is_ok() {
-                        self.kb_reimport_file(&path);
-                        self.kb_watcher_stats.reimports_total += 1;
-                        result.links_inserted += 1;
+                }
+            }
+
+            // Insert symmetric "Next:" link on chain[i+1] pointing to chain[i]
+            let next_id = Self::kb_daily_id(cy, cm, cd);
+            let next_date_str = mae_kb::activity::format_date(cy, cm, cd);
+            let next_link_line = format!("Next: [[id:{}][{}]]", next_id, next_date_str);
+
+            if let Some(prev_path) = self.kb_daily_path(py, pm, pd) {
+                if let Ok(content) = std::fs::read_to_string(&prev_path) {
+                    if !content.contains("Next:") {
+                        let mut lines: Vec<&str> = content.lines().collect();
+                        let insert_pos = lines
+                            .iter()
+                            .position(|l| l.starts_with("#+title:"))
+                            .map(|i| i + 1)
+                            .unwrap_or(lines.len());
+                        lines.insert(insert_pos, &next_link_line);
+                        let updated = lines.join("\n") + "\n";
+                        self.kb_write_guard.insert(prev_path.clone());
+                        if std::fs::write(&prev_path, &updated).is_ok() {
+                            self.kb_reimport_file(&prev_path);
+                            self.kb_watcher_stats.reimports_total += 1;
+                            result.links_inserted += 1;
+                        }
                     }
                 }
             }

@@ -76,6 +76,7 @@
 - [ ] **KB replication**: Read replicas for high-read-throughput scenarios (AI agents doing 600+ node fetches/sec). WAL mode enables this natively for same-host.
 
 ### Near-term: Other
+- [ ] **Version compatibility policy**: Semver enforcement on upgrade — protocol version negotiation in state-server (`initialize` params), config schema migration on major bumps, `make install-upgrade` blocking on incompatible major versions (currently warns only). Prerequisite for v1.0.
 - [ ] PDF preview (GUI inline rendering via `hayro` pure-Rust rasterizer + midnight mode)
 - [ ] Semantic code search (vector embeddings)
 - [x] Org ↔ Markdown bidirectional conversion (`:markdown-to-org`, `:org-to-markdown`)
@@ -247,6 +248,9 @@
 - KB documentation: `concept:kb-federation`, `concept:kb-workflows`, `concept:kb-vs-alternatives`
 - Tutorial: `lesson:kb-import-roam` (Lesson 13)
 - Self-test categories: `modules`, `federation`
+- Session detach/resume (tmux-style): persist editor state, reconnect from another terminal
+- Shared P2P sessions with focus handoff: collaborative cursor, presence indicators
+- Granular KB connection/search configuration: users can select/deselect which KB instances are active by default, run scoped queries across a subset of KBs, AI tool parity (e.g. `kb_search` accepts optional `instances` filter param)
 
 </details>
 

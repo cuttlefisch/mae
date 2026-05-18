@@ -14,7 +14,8 @@ Work through these lessons to learn the essentials.\n\n\
 9. [[lesson:help|Help System]] — navigating the knowledge base\n\
 10. [[lesson:leader|Leader Keys]] — SPC-based command groups\n\
 11. [[lesson:debugging|Debugging]] — DAP, breakpoints, stepping, inspect\n\
-12. [[lesson:observability|Observability]] — watchdog, event recording, introspect\n\n\
+12. [[lesson:observability|Observability]] — watchdog, event recording, introspect\n\
+13. [[lesson:collab-setup|Collaborative Editing]] — share buffers in real-time\n\n\
 Navigate with **Tab** to move between links, **Enter** to follow.\n\
 **C-o** goes back, **C-i** goes forward.\n\n\
 See also: [[index|Help Index]]\n";
@@ -541,12 +542,41 @@ The AI agent has direct access to collaboration state via four tools:\n\n\
 | `collab_doctor` | Run diagnostics: reachability, WAL, peer count |\n\n\
 Ask the AI: \"connect to the collab server and share this buffer\" to \
 have it set everything up for you.\n\n\
+### Systemd User Service\n\n\
+Install and enable the state server as a systemd user service:\n\
+```bash\n\
+make install-service\n\
+systemctl --user enable --now mae-state-server\n\
+journalctl --user -u mae-state-server -f  # view logs\n\
+```\n\n\
+### Client-Frame Workflow\n\n\
+Use `mae --connect` to open a frame that auto-connects to the server \
+(like `emacsclient -c`):\n\
+```bash\n\
+mae --connect              # connects to 127.0.0.1:9473\n\
+mae --connect 10.0.0.5:9473  # connects to a remote server\n\
+```\n\n\
+Add a sway/i3 keybind for instant connected frames:\n\
+```\n\
+bindsym $mod+Shift+e exec mae --connect\n\
+```\n\n\
+### Network & Firewall\n\n\
+For multi-machine collaboration, bind to all interfaces:\n\
+```bash\n\
+mae-state-server --bind 0.0.0.0:9473\n\
+```\n\n\
+Open the firewall port:\n\
+- Fedora: `sudo firewall-cmd --add-port=9473/tcp --permanent && sudo firewall-cmd --reload`\n\
+- Ubuntu: `sudo ufw allow 9473/tcp`\n\n\
+**Security warning:** v1 has no authentication. Never expose to the public internet. \
+Use a VPN (Tailscale/WireGuard) for untrusted networks.\n\n\
 ### Troubleshooting\n\n\
 - **Connection refused** — check `mae-state-server` is running: `ss -tlnp | grep 9473`\n\
 - **No peers visible** — ensure all clients use the same `collab-server-address`\n\
 - **Stale state after restart** — run `:collab-doctor` to inspect WAL health; \
   the server recovers from WAL automatically on restart\n\
-- **Permission denied on port** — use a port above 1024 (default 9473 is fine)\n\n\
+- **Permission denied on port** — use a port above 1024 (default 9473 is fine)\n\
+- **Firewall blocking** — run `mae doctor` for firewall diagnostics\n\n\
 **Index:** [[tutor:index|Tutorial]]\n\n\
 See also: [[concept:collab-architecture]], [[concept:collab-workflows]], \
 [[concept:sync-engine]], [[index]]\n";

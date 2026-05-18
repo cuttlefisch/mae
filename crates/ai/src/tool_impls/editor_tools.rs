@@ -887,7 +887,7 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
     let display_policy: std::collections::HashMap<String, String> = [
         mae_core::BufferKind::Text,
         mae_core::BufferKind::Diff,
-        mae_core::BufferKind::Help,
+        mae_core::BufferKind::Kb,
         mae_core::BufferKind::Messages,
         mae_core::BufferKind::Shell,
         mae_core::BufferKind::Debug,
@@ -925,23 +925,11 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         .collect();
 
     // Collaboration
-    let collab_addr = editor
-        .get_option("collab_server_address")
-        .map(|(v, _)| v.to_string())
-        .unwrap_or_else(|| "127.0.0.1:9473".to_string());
-    let collab_auto = editor
-        .get_option("collab_auto_connect")
-        .map(|(v, _)| v == "true")
-        .unwrap_or(false);
+    let collab_addr = editor.collab_server_address.clone();
+    let collab_auto = editor.collab_auto_connect;
     let collab_configured =
         collab_auto || !matches!(editor.collab_status, mae_core::CollabStatus::Off);
-    let collab_status_str = match &editor.collab_status {
-        mae_core::CollabStatus::Off => "off",
-        mae_core::CollabStatus::Connecting => "connecting",
-        mae_core::CollabStatus::Connected { .. } => "connected",
-        mae_core::CollabStatus::Reconnecting => "reconnecting",
-        mae_core::CollabStatus::Disconnected => "disconnected",
-    };
+    let collab_status_str = editor.collab_status.as_str();
     let state_server_found = on_path("mae-state-server");
     if collab_auto && !state_server_found {
         issues.push(

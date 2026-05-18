@@ -3,6 +3,17 @@
 //! Extracted here so both `mae-kb` (KB search fallback) and `mae-core`
 //! (file picker, command palette) can use it without circular deps.
 
+/// Normalize separator characters: space and underscore become hyphen.
+/// This allows `"kb daily"` to match `"kb-daily"` and `"window_groups"`.
+fn normalize_sep(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            ' ' | '_' => '-',
+            o => o,
+        })
+        .collect()
+}
+
 /// Tiered fuzzy scoring for a query against a candidate string.
 ///
 /// Returns `None` if the query is not a subsequence of the candidate.
@@ -17,8 +28,8 @@ pub fn score_match(path: &str, query: &[char]) -> Option<i64> {
         return Some(0);
     }
 
-    let path_lower = path.to_lowercase();
-    let query_str: String = query.iter().collect();
+    let path_lower = normalize_sep(&path.to_lowercase());
+    let query_str: String = normalize_sep(&query.iter().collect::<String>());
     let path_len = path.len() as i64;
 
     // ---- Tier 1: exact equality ----
@@ -60,13 +71,20 @@ pub fn score_match(path: &str, query: &[char]) -> Option<i64> {
     }
 
     let path_chars: Vec<char> = path_lower.chars().collect();
+    let query_chars: Vec<char> = query
+        .iter()
+        .map(|&c| match c {
+            ' ' | '_' => '-',
+            o => o,
+        })
+        .collect();
     let mut qi = 0;
     let mut score: i64 = 0;
     let mut last_match_pos: Option<usize> = None;
     let mut first_match_pos: Option<usize> = None;
 
     for (pi, &pc) in path_chars.iter().enumerate() {
-        if qi < query.len() && pc == query[qi] {
+        if qi < query_chars.len() && pc == query_chars[qi] {
             if first_match_pos.is_none() {
                 first_match_pos = Some(pi);
             }
@@ -92,7 +110,7 @@ pub fn score_match(path: &str, query: &[char]) -> Option<i64> {
         }
     }
 
-    if qi < query.len() {
+    if qi < query_chars.len() {
         return None;
     }
 
@@ -143,5 +161,32 @@ mod tests {
     #[test]
     fn empty_query() {
         assert_eq!(score_match("anything", &[]), Some(0));
+    }
+
+    #[test]
+    fn separator_space_matches_hyphen() {
+        let q: Vec<char> = "kb daily".chars().collect();
+        assert!(
+            score_match("kb-daily", &q).is_some(),
+            "space should match hyphen"
+        );
+    }
+
+    #[test]
+    fn separator_space_matches_in_namespaced_id() {
+        let q: Vec<char> = "window groups".chars().collect();
+        assert!(
+            score_match("concept:window-groups", &q).is_some(),
+            "space should match hyphen in namespaced ID"
+        );
+    }
+
+    #[test]
+    fn separator_underscore_matches_hyphen() {
+        let q: Vec<char> = "kb_daily".chars().collect();
+        assert!(
+            score_match("kb-daily", &q).is_some(),
+            "underscore should match hyphen"
+        );
     }
 }

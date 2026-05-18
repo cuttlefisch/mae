@@ -337,7 +337,7 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 2. Scheme Runtime | ✅ Complete | Steel R7RS-small, config loading, `define-key`, REPL |
 | 3. AI Integration | ✅ Complete | Multi-provider tool-calling, conversation, permissions |
 | 4. LSP + DAP + Syntax | ✅ Complete | Full LSP client, DAP client, 13-language tree-sitter |
-| 5. Knowledge Base | ✅ Complete | SQLite graph, org parser, FTS5, help system, federation |
+| 5. Knowledge Base | ✅ Complete | SQLite graph, org parser, FTS5, manual, federation |
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload |
 | 7. Documentation | ✅ Complete | Tutor (13 lessons), `:describe-configuration`, `--check-config` |
 | 8. GUI Backend | ✅ Complete | winit + Skia, inline images, variable-height, inertial scroll |

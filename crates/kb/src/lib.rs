@@ -5,7 +5,7 @@
 //!
 //! The knowledge base is the shared data model for:
 //!
-//! 1. The built-in help system (command, concept, and keybinding docs).
+//! 1. The built-in manual (command, concept, and keybinding docs).
 //! 2. User-authored notes (org-roam-style bidirectional links).
 //! 3. An AI-facing query surface — the agent is a *peer actor* that can
 //!    read the same nodes the human reads via `:help`.
@@ -74,7 +74,7 @@ pub struct Node {
     /// Stable identifier — e.g. `"cmd:delete-line"`, `"concept:buffer"`,
     /// `"index"`. Slugs use `:` as namespace separator by convention.
     pub id: String,
-    /// Human-readable title shown at the top of the help buffer.
+    /// Human-readable title shown at the top of the KB buffer.
     pub title: String,
     pub kind: NodeKind,
     /// Markdown body. May contain `[[link]]` markers that the renderer

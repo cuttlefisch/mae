@@ -1,7 +1,7 @@
 //! Shared git status rendering logic — theme key mapping for semantic line types.
 //!
 //! `compute_git_status_spans()` produces `HighlightSpan`s consumed by both the
-//! GUI and TUI renderers, following the same pattern as `compute_help_spans()`.
+//! GUI and TUI renderers, following the same pattern as `compute_kb_spans()`.
 
 use crate::buffer::Buffer;
 use crate::git_status::{DiffLineType, GitLineKind, GitSection};
@@ -39,7 +39,7 @@ pub fn git_line_theme_key(kind: &GitLineKind) -> &'static str {
 /// Compute highlight spans for a GitStatus buffer by iterating `lines`.
 /// Each non-blank line gets a full-line span with the theme key from
 /// `git_line_theme_key()`. This is the git-status equivalent of
-/// `compute_help_spans()`.
+/// `compute_kb_spans()`.
 pub fn compute_git_status_spans(buf: &Buffer) -> Vec<HighlightSpan> {
     let view = match buf.git_status_view() {
         Some(v) => v,

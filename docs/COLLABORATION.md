@@ -59,7 +59,17 @@ mae-state-server
 mae
 ```
 
-In each MAE instance:
+In each MAE instance, configure via `config.toml` (recommended):
+
+```toml
+# In ~/.config/mae/config.toml:
+[collaboration]
+server_address = "127.0.0.1:9473"
+auto_connect = true
+user_name = "alice"
+```
+
+Or via Scheme (runtime):
 
 ```scheme
 (set-option! "collab-server-address" "127.0.0.1:9473")
@@ -73,15 +83,20 @@ Or use the interactive commands: `SPC C s` (start server), `SPC C c` (connect).
 ```bash
 # Server machine
 mae-state-server --bind 0.0.0.0:9473
+```
 
-# Each client (in init.scm or via :eval)
-(set-option! "collab-server-address" "192.168.1.10:9473")
-(set-option! "collab-auto-connect" "true")
+Each client (`config.toml` or `init.scm`):
+
+```toml
+[collaboration]
+server_address = "192.168.1.10:9473"
+auto_connect = true
+user_name = "bob"
 ```
 
 > **Security note (v1):** There is no authentication. Restrict access via
 > firewall or VPN. Do not expose the state server to the public internet.
-> See [Security](#7-security) below.
+> See [Security](#8-security) below.
 
 ---
 
@@ -167,13 +182,28 @@ mae-state-server doctor
 
 ### Systemd (user unit)
 
-A unit file is provided at `assets/mae-state-server.service`. Install it:
+A unit file is provided at `assets/mae-state-server.service`. The recommended
+way to install it is:
+
+```bash
+make install-service
+# Builds binary, installs unit file, runs daemon-reload
+```
+
+Then enable and start:
+
+```bash
+systemctl --user enable --now mae-state-server
+systemctl --user status mae-state-server
+journalctl --user -u mae-state-server -f   # logs
+```
+
+Manual installation (without make):
 
 ```bash
 cp assets/mae-state-server.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now mae-state-server
-systemctl --user status mae-state-server
 ```
 
 ### Build and Install
@@ -182,16 +212,118 @@ systemctl --user status mae-state-server
 # Build binary
 make build-state-server
 
-# Install to ~/.cargo/bin
+# Install to ~/.local/bin
 make install-state-server
 
 # Or directly
 cargo install --path crates/state-server
 ```
 
+### Client-Frame Workflow
+
+Once the service is running, use `mae --connect` to open a new editor frame
+that auto-connects to the state server — similar to `emacsclient -c`:
+
+```bash
+mae --connect                    # GUI, auto-connects to 127.0.0.1:9473
+mae --connect 10.0.0.5:9473     # GUI, connects to remote server
+mae --connect -nw                # terminal mode + auto-connect
+```
+
+Desktop launcher: `mae-connect.desktop` is installed by `make install`. It
+shows up as "MAE (Connected)" in application launchers.
+
+Add a sway/i3 keybind for instant connected frames:
+
+```
+bindsym $mod+Shift+e exec mae --connect
+```
+
 ---
 
-## 5. Commands Reference
+## 5. Network Setup
+
+### Binding to All Interfaces
+
+By default, `mae-state-server` listens on `127.0.0.1:9473` (loopback only).
+For multi-machine collaboration, bind to all interfaces:
+
+```bash
+mae-state-server --bind 0.0.0.0:9473
+```
+
+Or in `~/.config/mae/state-server.toml`:
+
+```toml
+bind = "0.0.0.0:9473"
+```
+
+Or via a systemd override:
+
+```bash
+systemctl --user edit mae-state-server
+# Add:
+# [Service]
+# ExecStart=
+# ExecStart=%h/.local/bin/mae-state-server --bind 0.0.0.0:9473
+```
+
+### Firewall Rules
+
+The state server binary runs as a user service (no sudo). Only firewall
+changes need root privileges.
+
+**firewalld (Fedora/RHEL/CentOS):**
+
+```bash
+sudo firewall-cmd --add-port=9473/tcp --permanent
+sudo firewall-cmd --reload
+```
+
+**ufw (Ubuntu/Debian):**
+
+```bash
+sudo ufw allow 9473/tcp
+```
+
+**nftables (direct):**
+
+```bash
+sudo nft add rule inet filter input tcp dport 9473 accept
+```
+
+**iptables (legacy):**
+
+```bash
+sudo iptables -A INPUT -p tcp --dport 9473 -j ACCEPT
+```
+
+### Security Warnings
+
+> **v1 has no authentication.** Any client that can reach the port can read
+> and write all shared documents. Do not expose to the public internet.
+
+Recommendations:
+- **Local only**: Use the default `127.0.0.1` binding (no firewall needed).
+- **Trusted LAN**: Bind to `0.0.0.0` with firewall rules limiting source IPs.
+- **Untrusted networks**: Use [Tailscale](https://tailscale.com) or
+  [WireGuard](https://www.wireguard.com) — both create encrypted tunnels
+  that make the state server appear on a private IP. No firewall rules needed.
+- **Never** bind to `0.0.0.0` on a machine with a public IP without a VPN.
+
+### Connectivity Check
+
+From a client machine:
+
+```bash
+nc -zv <server-host> 9473
+```
+
+From inside MAE: `SPC C D` (`:collab-doctor`) or `mae doctor` from the CLI.
+
+---
+
+## 6. Commands Reference
 
 ### Editor Commands
 
@@ -240,7 +372,7 @@ integrators building non-MAE clients:
 
 ---
 
-## 6. Debugging and Troubleshooting
+## 7. Debugging and Troubleshooting
 
 ### Quick Checks
 
@@ -296,7 +428,7 @@ document.
 
 ---
 
-## 7. Security
+## 8. Security
 
 **v1 posture: no authentication.** The TCP port is open to any client that can
 reach it. Planned upgrade path:

@@ -369,17 +369,8 @@ fn build_ai_section(editor: &Editor) -> serde_json::Value {
 }
 
 fn build_collaboration_section(editor: &Editor) -> serde_json::Value {
-    let collab_status = match &editor.collab_status {
-        mae_core::CollabStatus::Off => "off",
-        mae_core::CollabStatus::Connecting => "connecting",
-        mae_core::CollabStatus::Connected { .. } => "connected",
-        mae_core::CollabStatus::Reconnecting => "reconnecting",
-        mae_core::CollabStatus::Disconnected => "disconnected",
-    };
-    let collab_server = editor
-        .get_option("collab_server_address")
-        .map(|(v, _)| v)
-        .unwrap_or_else(|| "127.0.0.1:9473".to_string());
+    let collab_status = editor.collab_status.as_str();
+    let collab_server = editor.collab_server_address.clone();
     json!({
         "collab_status": collab_status,
         "collab_server": collab_server,

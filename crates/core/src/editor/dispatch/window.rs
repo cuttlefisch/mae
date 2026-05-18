@@ -102,6 +102,18 @@ impl Editor {
             "window-shrink" => {
                 self.window_mgr.adjust_ratio(Direction::Left, 0.05);
             }
+            "window-grow-width" => {
+                self.window_mgr.adjust_ratio(Direction::Right, 0.05);
+            }
+            "window-shrink-width" => {
+                self.window_mgr.adjust_ratio(Direction::Left, 0.05);
+            }
+            "window-grow-height" => {
+                self.window_mgr.adjust_ratio(Direction::Down, 0.05);
+            }
+            "window-shrink-height" => {
+                self.window_mgr.adjust_ratio(Direction::Up, 0.05);
+            }
             "window-balance" => {
                 self.window_mgr.balance();
             }

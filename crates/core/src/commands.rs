@@ -18,7 +18,7 @@ pub struct Command {
 impl Command {
     /// Compact label for which-key popups. Strips the trailing `(...)`
     /// key hint since the key is already displayed in the popup entry itself.
-    /// Full `doc` is preserved for help buffers and `describe-command`.
+    /// Full `doc` is preserved for KB buffers and `describe-command`.
     pub fn which_key_label(&self) -> &str {
         if self.doc.ends_with(')') {
             if let Some(i) = self.doc.rfind(" (") {
@@ -393,6 +393,10 @@ impl CommandRegistry {
         reg.register_builtin("focus-down", "Focus window below");
         reg.register_builtin("window-grow", "Increase window size (SPC w +)");
         reg.register_builtin("window-shrink", "Decrease window size (SPC w -)");
+        reg.register_builtin("window-grow-width", "Increase window width (SPC w >)");
+        reg.register_builtin("window-shrink-width", "Decrease window width (SPC w <)");
+        reg.register_builtin("window-grow-height", "Increase window height (SPC w +)");
+        reg.register_builtin("window-shrink-height", "Decrease window height (SPC w -)");
         reg.register_builtin("window-balance", "Balance all window sizes (SPC w =)");
         reg.register_builtin("window-maximize", "Maximize current window (SPC w m)");
         reg.register_builtin("window-move-left", "Move window left (SPC w H)");
@@ -1127,9 +1131,9 @@ impl CommandRegistry {
             "help-prev-link",
             "Focus the previous link in the current help page",
         );
-        reg.register_builtin("help-close", "Close help buffer");
+        reg.register_builtin("help-close", "Close KB viewer");
         reg.register_builtin("help-search", "Search help topics");
-        reg.register_builtin("help-reopen", "Reopen the last-closed help buffer");
+        reg.register_builtin("help-reopen", "Reopen the last-closed KB viewer");
         reg.register_builtin(
             "kb-view",
             "Return to rendered KB view from source editing (SPC n v)",
@@ -1144,11 +1148,11 @@ impl CommandRegistry {
         );
         reg.register_builtin(
             "help-close-all-folds",
-            "Fold all headings in help buffer (zM)",
+            "Fold all headings in KB viewer (zM)",
         );
         reg.register_builtin(
             "help-open-all-folds",
-            "Unfold all headings in help buffer (zR)",
+            "Unfold all headings in KB viewer (zR)",
         );
         reg.register_builtin(
             "help-edit",

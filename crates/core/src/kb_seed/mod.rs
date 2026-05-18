@@ -1,4 +1,4 @@
-//! Seed the knowledge base with built-in help content.
+//! Seed the knowledge base with built-in manual content.
 //!
 //! The KB is MAE's answer to Emacs's built-in `*Help*` and its Info
 //! manuals. Two sources feed it:
@@ -12,7 +12,7 @@
 //!
 //! The hand-authored nodes live in `themes/…`-style static strings here
 //! rather than on disk. Phase 5 will add a persistent store; until then,
-//! regenerating the KB on every startup keeps help docs and commands in
+//! regenerating the KB on every startup keeps manual entries and commands in
 //! lockstep with the code that ships.
 
 mod concepts;

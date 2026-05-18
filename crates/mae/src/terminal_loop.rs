@@ -34,6 +34,8 @@ pub(crate) async fn run_terminal_loop(
     dap_event_rx: &mut tokio::sync::mpsc::Receiver<mae_dap::DapTaskEvent>,
     dap_command_tx: &tokio::sync::mpsc::Sender<DapCommand>,
     mcp_tool_rx: &mut tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
+    collab_event_rx: &mut tokio::sync::mpsc::Receiver<crate::collab_bridge::CollabEvent>,
+    collab_command_tx: &tokio::sync::mpsc::Sender<crate::collab_bridge::CollabCommand>,
     mcp_socket_path: &str,
     all_tools: &[mae_ai::ToolDefinition],
     permission_policy: &mae_ai::PermissionPolicy,
@@ -327,6 +329,7 @@ pub(crate) async fn run_terminal_loop(
         trace!("drain_intents_and_lifecycle enter");
         drain_lsp_intents(editor, lsp_command_tx);
         drain_dap_intents(editor, dap_command_tx);
+        crate::collab_bridge::drain_collab_intents(editor, collab_command_tx);
 
         shell_lifecycle::drain_agent_setup(editor);
         shell_lifecycle::spawn_pending_shells(
@@ -628,6 +631,10 @@ pub(crate) async fn run_terminal_loop(
                 }
                 // Drain sync updates immediately after MCP-driven edits.
                 crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster);
+            }
+            Some(collab_event) = collab_event_rx.recv() => {
+                tui_dirty = true;
+                crate::collab_bridge::handle_collab_event(editor, collab_event);
             }
         }
     }

@@ -175,6 +175,7 @@ impl Editor {
                     .kb
                     .list_ids(None)
                     .iter()
+                    .filter(|id| crate::editor::help_ops::is_builtin_node(id))
                     .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
                     .collect();
                 self.command_palette = Some(
@@ -616,11 +617,11 @@ For full setup guide: :help ai-setup";
             "capture-finalize" => {
                 if let Some(cap) = self.capture_state.take() {
                     self.dispatch_builtin("save");
-                    // Remove hidden help buffer seeded for this node
+                    // Remove hidden KB buffer seeded for this node
                     if let Some(hi) = self
                         .buffers
                         .iter()
-                        .position(|b| b.help_view().is_some_and(|hv| hv.current == cap.node_id))
+                        .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
                     {
                         self.buffers.remove(hi);
                         for win in self.window_mgr.iter_windows_mut() {
@@ -642,11 +643,11 @@ For full setup guide: :help ai-setup";
                 if let Some(cap) = self.capture_state.take() {
                     // Force-kill the capture buffer (no save prompt)
                     self.dispatch_builtin("force-kill-buffer");
-                    // Remove hidden help buffer seeded for this node
+                    // Remove hidden KB buffer seeded for this node
                     if let Some(hi) = self
                         .buffers
                         .iter()
-                        .position(|b| b.help_view().is_some_and(|hv| hv.current == cap.node_id))
+                        .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
                     {
                         self.buffers.remove(hi);
                         for win in self.window_mgr.iter_windows_mut() {

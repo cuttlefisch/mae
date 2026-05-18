@@ -45,7 +45,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test test-tui check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-completions docker-network-test
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-service install-completions docker-network-test
 
 # Default target: release build
 all: build
@@ -71,7 +71,8 @@ install: build
 	@echo "Installed $(SHIM_BINARY) -> $(PREFIX)/$(SHIM_BINARY)"
 	@mkdir -p $(DATADIR)/applications
 	@sed 's|Exec=mae|Exec=$(PREFIX)/$(BINARY)|' $(DESKTOP_FILE) > $(DATADIR)/applications/mae.desktop
-	@echo "Installed desktop entry -> $(DATADIR)/applications/mae.desktop"
+	@sed 's|Exec=mae --connect|Exec=$(PREFIX)/$(BINARY) --connect|' assets/mae-connect.desktop > $(DATADIR)/applications/mae-connect.desktop
+	@echo "Installed desktop entries -> $(DATADIR)/applications/mae*.desktop"
 	@mkdir -p $(DATADIR)/icons/hicolor/scalable/apps
 	@install -m 644 $(ICON_FILE) $(DATADIR)/icons/hicolor/scalable/apps/mae.svg
 	@echo "Installed icon -> $(DATADIR)/icons/hicolor/scalable/apps/mae.svg"
@@ -89,8 +90,8 @@ install: build
 	@echo ""
 	@echo "Next steps:"
 	@echo "  mae --init-config    # generate config + init.scm + run first-time wizard"
-	@echo "  mae --gui file.rs    # launch with GUI"
-	@echo "  mae file.rs          # launch in terminal"
+	@echo "  mae file.rs          # launch with GUI (default)"
+	@echo "  mae -nw file.rs      # launch in terminal"
 	@case ":$$PATH:" in *":$(PREFIX):"*) ;; *) \
 		echo ""; \
 		echo "  Warning: $(PREFIX) is not on your PATH. Add to your shell profile:"; \
@@ -105,18 +106,91 @@ install-tui: build-tui
 	@echo "Installed $(BINARY) -> $(PREFIX)/$(BINARY) (terminal-only)"
 	@echo "Installed $(SHIM_BINARY) -> $(PREFIX)/$(SHIM_BINARY)"
 
-## uninstall: remove installed binary, desktop entry, and icon
+## install-upgrade: rebuild all components, stop services, replace binaries, restart
+install-upgrade:
+	@set -e; \
+	OLD_V=$$($(PREFIX)/$(BINARY) --version 2>/dev/null || echo "(not installed)"); \
+	OLD_SV=$$($(PREFIX)/mae-state-server --version 2>/dev/null || echo "(not installed)"); \
+	echo "=== MAE Upgrade ==="; \
+	echo "Current: $$OLD_V"; \
+	echo "Current state-server: $$OLD_SV"; \
+	echo ""; \
+	RESTART_SERVER=0; \
+	if systemctl --user is-active mae-state-server >/dev/null 2>&1; then \
+		echo "Stopping mae-state-server..."; \
+		systemctl --user stop mae-state-server; \
+		RESTART_SERVER=1; \
+	fi; \
+	if [ -f $(PREFIX)/$(BINARY) ]; then \
+		cp $(PREFIX)/$(BINARY) $(PREFIX)/$(BINARY).bak; \
+		echo "Backed up $(BINARY) -> $(BINARY).bak"; \
+	fi; \
+	if [ -f $(PREFIX)/mae-state-server ]; then \
+		cp $(PREFIX)/mae-state-server $(PREFIX)/mae-state-server.bak; \
+		echo "Backed up mae-state-server -> mae-state-server.bak"; \
+	fi; \
+	echo ""; \
+	echo "Building..."; \
+	$(MAKE) build build-state-server; \
+	echo ""; \
+	echo "Installing..."; \
+	$(MAKE) install install-service; \
+	NEW_V=$$($(PREFIX)/$(BINARY) --version 2>/dev/null || echo "unknown"); \
+	NEW_SV=$$($(PREFIX)/mae-state-server --version 2>/dev/null || echo "unknown"); \
+	OLD_MAJOR=$$(echo "$$OLD_V" | sed 's/mae //' | cut -d. -f1); \
+	NEW_MAJOR=$$(echo "$$NEW_V" | sed 's/mae //' | cut -d. -f1); \
+	if [ -n "$$OLD_MAJOR" ] && [ -n "$$NEW_MAJOR" ] && [ "$$OLD_MAJOR" != "$$NEW_MAJOR" ] 2>/dev/null; then \
+		echo ""; \
+		echo "WARNING: MAJOR VERSION CHANGE ($$OLD_MAJOR -> $$NEW_MAJOR)"; \
+		echo "  Config or protocol changes may require manual migration."; \
+		echo "  Check CHANGELOG.md for breaking changes."; \
+	fi; \
+	if [ "$$RESTART_SERVER" = "1" ]; then \
+		echo "Restarting mae-state-server..."; \
+		if systemctl --user start mae-state-server; then \
+			echo "  mae-state-server restarted successfully"; \
+		else \
+			echo ""; \
+			echo "WARNING: Failed to restart mae-state-server. Start manually:"; \
+			echo "  systemctl --user start mae-state-server"; \
+		fi; \
+	elif systemctl --user is-enabled mae-state-server >/dev/null 2>&1; then \
+		echo ""; \
+		echo "Note: mae-state-server is enabled but was not running."; \
+		echo "  Start it with: systemctl --user start mae-state-server"; \
+	fi; \
+	echo ""; \
+	echo "=== Upgrade Complete ==="; \
+	echo "  $$OLD_V -> $$NEW_V"; \
+	echo "  $$OLD_SV -> $$NEW_SV"
+
+## install-all: install editor + state server + systemd service
+install-all: install install-service
+	@echo ""
+	@echo "Full install complete."
+	@echo "  mae                      — launch editor"
+	@echo "  mae --connect            — launch connected to state server"
+	@echo "  systemctl --user enable --now mae-state-server"
+
+## uninstall: remove installed binaries, desktop entries, icon, and systemd service
 uninstall:
 	@rm -f $(PREFIX)/$(BINARY)
 	@rm -f $(PREFIX)/$(SHIM_BINARY)
+	@rm -f $(PREFIX)/mae-state-server
 	@rm -f $(DATADIR)/applications/mae.desktop
+	@rm -f $(DATADIR)/applications/mae-connect.desktop
 	@rm -f $(DATADIR)/icons/hicolor/scalable/apps/mae.svg
 	@echo "Removed $(PREFIX)/$(BINARY)"
 	@echo "Removed $(PREFIX)/$(SHIM_BINARY)"
-	@echo "Removed $(DATADIR)/applications/mae.desktop"
+	@echo "Removed $(PREFIX)/mae-state-server"
+	@echo "Removed $(DATADIR)/applications/mae*.desktop"
 	@echo "Removed $(DATADIR)/icons/hicolor/scalable/apps/mae.svg"
 	@rm -rf $(DATADIR)/mae/modules
 	@echo "Removed $(DATADIR)/mae/modules/"
+	@systemctl --user disable --now mae-state-server 2>/dev/null || true
+	@rm -f $(HOME)/.config/systemd/user/mae-state-server.service
+	@systemctl --user daemon-reload 2>/dev/null || true
+	@echo "Removed mae-state-server systemd service"
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
 		update-desktop-database $(DATADIR)/applications 2>/dev/null || true; \
 	fi
@@ -240,6 +314,22 @@ install-state-server: build-state-server
 	@mkdir -p $(PREFIX)
 	@install -m 755 $(TARGET_DIR)/release/mae-state-server $(PREFIX)/mae-state-server
 	@echo "Installed mae-state-server -> $(PREFIX)/mae-state-server"
+
+## install-service: install state-server systemd user unit
+install-service: install-state-server
+	@mkdir -p $(HOME)/.config/systemd/user
+	@install -m 644 assets/mae-state-server.service $(HOME)/.config/systemd/user/mae-state-server.service
+	@systemctl --user daemon-reload 2>/dev/null || true
+	@echo ""
+	@echo "Installed mae-state-server.service -> ~/.config/systemd/user/"
+	@echo "Binary: $(PREFIX)/mae-state-server"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  systemctl --user enable --now mae-state-server   # start + auto-start on login"
+	@echo "  journalctl --user -u mae-state-server -f         # view logs"
+	@echo ""
+	@echo "Sway/i3 keybind (add to config):"
+	@echo '  bindsym $$mod+Shift+e exec mae --connect'
 
 ## install-completions: install shell completions for mae-state-server
 install-completions:

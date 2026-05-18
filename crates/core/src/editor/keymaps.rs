@@ -218,6 +218,8 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("C-w +"), "window-grow");
         normal.bind(parse_key_seq_spaced("C-w -"), "window-shrink");
         normal.bind(parse_key_seq_spaced("C-w ="), "window-balance");
+        normal.bind(parse_key_seq_spaced("C-w >"), "window-grow-width");
+        normal.bind(parse_key_seq_spaced("C-w <"), "window-shrink-width");
         // +ai
         normal.bind(parse_key_seq_spaced("SPC a a"), "open-ai-agent");
         normal.bind(parse_key_seq_spaced("SPC a p"), "ai-prompt");
@@ -676,9 +678,9 @@ mod tests {
     #[test]
     fn help_buffer_uses_help_keymap() {
         let mut ed = Editor::new();
-        // Create a help buffer and focus it
+        // Create a KB buffer and focus it
         let mut buf = crate::buffer::Buffer::new();
-        buf.kind = crate::buffer::BufferKind::Help;
+        buf.kind = crate::buffer::BufferKind::Kb;
         buf.name = "*Help*".to_string();
         ed.buffers.push(buf);
         let help_idx = ed.buffers.len() - 1;
@@ -751,9 +753,9 @@ mod tests {
     #[test]
     fn buffer_keys_entries_returns_entries() {
         let mut ed = Editor::new();
-        // Create a help buffer and focus it (help keymap is still in kernel)
+        // Create a KB buffer and focus it (help keymap is still in kernel)
         let mut buf = crate::buffer::Buffer::new();
-        buf.kind = crate::buffer::BufferKind::Help;
+        buf.kind = crate::buffer::BufferKind::Kb;
         buf.name = "*Help*".to_string();
         ed.buffers.push(buf);
         let idx = ed.buffers.len() - 1;

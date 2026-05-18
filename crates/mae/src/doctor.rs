@@ -248,37 +248,14 @@ pub fn run_doctor() -> i32 {
         Err(_) => println!("  {} MAE_STATE_SERVER env: not set", YELLOW_WARN),
     }
 
-    // Read collab options from config.toml if present.
-    // These options live in `[collaboration]` section of config.toml
-    // and default via the OptionRegistry.
-    let collab_addr = config_path
-        .exists()
-        .then(|| {
-            std::fs::read_to_string(&config_path)
-                .ok()
-                .and_then(|s| s.parse::<toml::Value>().ok())
-                .and_then(|t| {
-                    t.get("collaboration")
-                        .and_then(|c| c.get("server_address"))
-                        .and_then(|v| v.as_str().map(String::from))
-                })
-        })
-        .flatten()
-        .unwrap_or_else(|| "127.0.0.1:9473".to_string());
-    let collab_auto = config_path
-        .exists()
-        .then(|| {
-            std::fs::read_to_string(&config_path)
-                .ok()
-                .and_then(|s| s.parse::<toml::Value>().ok())
-                .and_then(|t| {
-                    t.get("collaboration")
-                        .and_then(|c| c.get("auto_connect"))
-                        .and_then(|v| v.as_bool())
-                })
-        })
-        .flatten()
-        .unwrap_or(false);
+    // Read collab options from the parsed config (uses load_config which is
+    // already called at startup; here we re-parse for doctor's standalone context).
+    let (doctor_cfg, _) = config::load_config();
+    let collab_addr = doctor_cfg
+        .collaboration
+        .server_address
+        .unwrap_or_else(|| mae_core::DEFAULT_COLLAB_ADDRESS.to_string());
+    let collab_auto = doctor_cfg.collaboration.auto_connect.unwrap_or(false);
     println!("  {} collab_server_address: {}", GREEN_CHECK, collab_addr);
     println!(
         "  {} collab_auto_connect: {}",
@@ -289,6 +266,86 @@ pub fn run_doctor() -> i32 {
         },
         collab_auto
     );
+
+    // Systemd service status
+    let systemd_active = Command::new("systemctl")
+        .args(["--user", "is-active", "mae-state-server"])
+        .output()
+        .ok()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if systemd_active {
+        println!("  {} systemd user service: active", GREEN_CHECK);
+    } else {
+        println!(
+            "  {} systemd user service: inactive — systemctl --user enable --now mae-state-server",
+            YELLOW_WARN
+        );
+    }
+
+    // TCP reachability
+    let tcp_reachable = std::net::TcpStream::connect_timeout(
+        &collab_addr.parse().unwrap_or_else(|_| {
+            std::net::SocketAddr::from(([127, 0, 0, 1], mae_core::DEFAULT_COLLAB_PORT))
+        }),
+        std::time::Duration::from_secs(2),
+    )
+    .is_ok();
+    if tcp_reachable {
+        println!("  {} TCP reachable: {}", GREEN_CHECK, collab_addr);
+    } else {
+        println!(
+            "  {} TCP unreachable: {} — is mae-state-server listening?",
+            RED_CROSS, collab_addr
+        );
+        errors += 1;
+        println!("    Try: ss -tlnp | grep 9473");
+    }
+
+    // Firewall check (when bound to non-loopback)
+    let is_loopback = collab_addr.starts_with("127.") || collab_addr.starts_with("localhost");
+    if !is_loopback {
+        if check_binary("firewall-cmd").is_some() {
+            let port_open = Command::new("firewall-cmd")
+                .args(["--query-port=9473/tcp"])
+                .output()
+                .ok()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if port_open {
+                println!("  {} firewalld: port 9473/tcp open", GREEN_CHECK);
+            } else {
+                println!(
+                    "  {} firewalld: port 9473/tcp not open — sudo firewall-cmd --add-port=9473/tcp --permanent && sudo firewall-cmd --reload",
+                    YELLOW_WARN
+                );
+                warnings += 1;
+            }
+        } else if check_binary("ufw").is_some() {
+            let ufw_open = Command::new("ufw")
+                .args(["status"])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.contains("9473"))
+                .unwrap_or(false);
+            if ufw_open {
+                println!("  {} ufw: port 9473 open", GREEN_CHECK);
+            } else {
+                println!(
+                    "  {} ufw: port 9473 not open — sudo ufw allow 9473/tcp",
+                    YELLOW_WARN
+                );
+                warnings += 1;
+            }
+        }
+
+        println!(
+            "  {} No authentication in v1 — restrict to trusted networks or use VPN",
+            YELLOW_WARN
+        );
+        warnings += 1;
+    }
 
     // --- Summary ---
     println!();

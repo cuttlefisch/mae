@@ -1,3 +1,13 @@
+# Installation (recommended):
+#   make install-service
+#
+# Manual installation:
+#   cp mae-state-server.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now mae-state-server
+#
+# Logs: journalctl --user -u mae-state-server -f
+
 [Unit]
 Description=MAE Collaborative State Server
 Documentation=https://github.com/cuttlefisch/mae
@@ -13,7 +23,7 @@ RestartSec=5
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.local/share/mae/state-server
+ReadWritePaths=%h/.local/share/mae/state-server %h/.config/mae
 PrivateTmp=yes
 
 # Resource limits

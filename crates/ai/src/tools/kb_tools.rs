@@ -29,7 +29,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "kb_search".into(),
-            description: "Case-insensitive search over KB node titles, ids, bodies, tags, and aliases. Returns ids in relevance order (title/id/alias matches before body matches). Falls back to fuzzy scoring when no substring matches are found. Empty query returns all ids.".into(),
+            description: "Search all knowledge base nodes (MAE manual + user + federated). Case-insensitive over titles, ids, bodies, tags, and aliases. Returns ids in relevance order. Falls back to fuzzy scoring when no substring matches are found. Empty query returns all ids.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -124,7 +124,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "help_open".into(),
-            description: "Returns help content for the agent's context without opening a visible buffer. Use this to look up KB documentation for your own reasoning. To show help to the user, suggest they run `:help <topic>`. Falls back to the `index` node if the id isn't found.".into(),
+            description: "Look up MAE manual content for your own reasoning (searches builtin nodes first, falls back to user KB). Does not open a visible buffer. To show help to the user, suggest `:help <topic>`. Falls back to the `index` node if the id isn't found.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -269,7 +269,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         // --- KB CRUD tools ---
         ToolDefinition {
             name: "kb_create".into(),
-            description: "Create a new node in the local knowledge base. Cannot overwrite seed (built-in help) nodes.".into(),
+            description: "Create a new node in the local knowledge base. Cannot overwrite MAE manual (builtin) nodes.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -312,7 +312,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "kb_update".into(),
-            description: "Update fields on an existing KB node. Cannot modify seed (built-in help) nodes. Only provided fields are changed.".into(),
+            description: "Update fields on an existing KB node. Cannot modify MAE manual (builtin) nodes. Only provided fields are changed.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -355,7 +355,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "kb_delete".into(),
-            description: "Delete a node from the local knowledge base. Cannot delete seed (built-in help) nodes.".into(),
+            description: "Delete a node from the local knowledge base. Cannot delete MAE manual (builtin) nodes.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(

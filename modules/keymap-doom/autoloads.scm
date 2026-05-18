@@ -74,6 +74,8 @@
 (define-key "normal" "SPC w l" "focus-right")
 (define-key "normal" "SPC w +" "window-grow")
 (define-key "normal" "SPC w -" "window-shrink")
+(define-key "normal" "SPC w >" "window-grow-width")
+(define-key "normal" "SPC w <" "window-shrink-width")
 (define-key "normal" "SPC w =" "window-balance")
 (define-key "normal" "SPC w m" "window-maximize")
 (define-key "normal" "SPC w H" "window-move-left")

@@ -19,7 +19,7 @@ use crate::conversation::Conversation;
 use crate::debug_view::DebugView;
 use crate::file_tree::FileTree;
 use crate::git_status::GitStatusView;
-use crate::help_view::HelpView;
+use crate::kb_view::KbView;
 use crate::visual_buffer::VisualBuffer;
 use crate::window::Window;
 
@@ -28,6 +28,7 @@ pub mod buffer_names {
     pub const AGENDA: &str = "*Agenda*";
     pub const GIT_STATUS: &str = "*git-status*";
     pub const HELP: &str = "*Help*";
+    pub const KB: &str = "*KB*";
     pub const MESSAGES: &str = "*Messages*";
     pub const CHANGES: &str = "*Changes*";
     pub const SCRATCH: &str = "[scratch]";
@@ -46,8 +47,8 @@ pub enum BufferKind {
     Preview,
     /// In-editor log viewer (*Messages* buffer). Read-only, live view.
     Messages,
-    /// Knowledge-base viewer (`*Help*`). Body rendered live from the KB.
-    Help,
+    /// Knowledge-base viewer (`*Help*` / `*KB*`). Body rendered live from the KB.
+    Kb,
     /// Terminal emulator buffer. Rendering is driven by an external
     /// `ShellTerminal` (lives in `mae` binary, not in core).
     Shell,
@@ -443,14 +444,14 @@ impl Buffer {
         }
     }
 
-    /// Create a help buffer viewing a KB node.
-    /// Word-wrap is enabled by default — help text is prose.
-    pub fn new_help(start_node_id: impl Into<String>) -> Self {
+    /// Create a KB buffer viewing a KB node.
+    /// Word-wrap is enabled by default — KB text is prose.
+    pub fn new_kb(start_node_id: impl Into<String>) -> Self {
         Buffer {
             name: String::from("*Help*"),
-            kind: BufferKind::Help,
+            kind: BufferKind::Kb,
             read_only: true,
-            view: BufferView::Help(Box::new(HelpView::new(start_node_id.into()))),
+            view: BufferView::Kb(Box::new(KbView::new(start_node_id.into()))),
             local_options: BufferLocalOptions {
                 word_wrap: Some(true),
                 ..Default::default()
@@ -1358,12 +1359,12 @@ impl Buffer {
         self.view.conversation_mut()
     }
 
-    pub fn help_view(&self) -> Option<&HelpView> {
-        self.view.help_view()
+    pub fn kb_view(&self) -> Option<&KbView> {
+        self.view.kb_view()
     }
 
-    pub fn help_view_mut(&mut self) -> Option<&mut HelpView> {
-        self.view.help_view_mut()
+    pub fn kb_view_mut(&mut self) -> Option<&mut KbView> {
+        self.view.kb_view_mut()
     }
 
     pub fn debug_view(&self) -> Option<&DebugView> {
@@ -1951,7 +1952,7 @@ mod tests {
         let conv = Buffer::new_conversation("conv");
         assert_eq!(conv.local_options.word_wrap, Some(true));
 
-        let help = Buffer::new_help("test");
+        let help = Buffer::new_kb("test");
         assert_eq!(help.local_options.word_wrap, Some(true));
 
         let msgs = Buffer::new_messages();
