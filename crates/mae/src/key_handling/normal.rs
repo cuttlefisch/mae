@@ -19,8 +19,17 @@ pub(super) fn handle_keymap_mode(
         }
     }
 
+    // C-c in normal mode: cancel pending operation (like Esc) rather than
+    // hard-killing the editor. Users can bind C-c to "quit" via Scheme if
+    // they want the old behavior.
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        editor.running = false;
+        if !pending_keys.is_empty() {
+            pending_keys.clear();
+            editor.clear_which_key_prefix();
+            editor.set_status("");
+        }
+        // Cancel any in-progress AI operation
+        editor.ai_cancel_requested = true;
         return;
     }
 
@@ -219,12 +228,12 @@ pub(super) fn handle_describe_key_await(
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
 ) {
-    // Ctrl-C is always a hard exit.
+    // Ctrl-C cancels describe-key (same as Esc).
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         editor.awaiting_key_description = false;
         pending_keys.clear();
         editor.clear_which_key_prefix();
-        editor.running = false;
+        editor.set_status("describe-key cancelled");
         return;
     }
     if key.code == KeyCode::Esc {

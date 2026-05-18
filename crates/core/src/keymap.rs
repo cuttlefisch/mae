@@ -833,6 +833,52 @@ mod tests {
     }
 
     #[test]
+    fn which_key_uppercase_group_coexists_with_lowercase() {
+        use crate::commands::CommandRegistry;
+
+        let mut km = Keymap::new("normal");
+        // Lowercase: SPC c → +code (LSP)
+        km.bind(parse_key_seq_spaced("SPC c d"), "lsp-goto-definition");
+        km.set_group_name(parse_key_seq_spaced("SPC c"), "+code");
+        // Uppercase: SPC C → +collaboration
+        km.bind(parse_key_seq_spaced("SPC C s"), "collab-start");
+        km.bind(parse_key_seq_spaced("SPC C c"), "collab-connect");
+        km.set_group_name(parse_key_seq_spaced("SPC C"), "+collaboration");
+
+        let mut reg = CommandRegistry::with_builtins();
+        reg.register_builtin("lsp-goto-definition", "Go to definition");
+        reg.register_builtin("collab-start", "Start server");
+        reg.register_builtin("collab-connect", "Connect");
+
+        let entries = km.which_key_entries(&parse_key_seq("SPC"), &reg);
+
+        let labels: Vec<(&str, bool)> = entries
+            .iter()
+            .map(|e| (e.label.as_str(), e.is_group))
+            .collect();
+        assert!(
+            labels.contains(&("+code", true)),
+            "Should have +code group, got: {:?}",
+            labels
+        );
+        assert!(
+            labels.contains(&("+collaboration", true)),
+            "Should have +collaboration group, got: {:?}",
+            labels
+        );
+        assert!(
+            labels.len() >= 2,
+            "Should have at least 2 groups, got: {:?}",
+            labels
+        );
+
+        // Verify the keys are distinct
+        let keys: Vec<&Key> = entries.iter().map(|e| &e.key.key).collect();
+        assert!(keys.contains(&&Key::Char('c')), "Should have lowercase c");
+        assert!(keys.contains(&&Key::Char('C')), "Should have uppercase C");
+    }
+
+    #[test]
     fn lookup_prefix_only_returns_prefix() {
         let mut km = Keymap::new("normal");
         km.bind(parse_key_seq("dd"), "delete-line");

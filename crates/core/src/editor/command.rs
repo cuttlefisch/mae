@@ -1107,12 +1107,22 @@ impl Editor {
                             self.set_status("No write since last change (add ! to override)");
                             return true;
                         }
-                    } else if !force && self.active_buffer().modified {
-                        self.set_status("No write since last change (add ! to override)");
-                        return true;
+                        self.on_quit();
+                        self.running = false;
+                    } else {
+                        // :q without ! — close current window if multiple exist
+                        if !force && self.active_buffer().modified {
+                            self.set_status("No write since last change (add ! to override)");
+                            return true;
+                        }
+                        if self.window_mgr.window_count() > 1 {
+                            // Close focused window, don't exit the editor
+                            self.dispatch_builtin("close-window");
+                        } else {
+                            self.on_quit();
+                            self.running = false;
+                        }
                     }
-                    self.on_quit();
-                    self.running = false;
                 }
             }
         }
