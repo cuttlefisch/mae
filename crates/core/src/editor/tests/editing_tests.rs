@@ -150,6 +150,59 @@ fn lowercase_line() {
 }
 
 #[test]
+fn fill_paragraph_basic() {
+    let text = "This is a very long line that should be wrapped at the fill column so it fits within eighty columns properly.";
+    let mut editor = editor_with_text(text);
+    editor.fill_column = 40;
+    editor.dispatch_builtin("fill-paragraph");
+    let result = editor.buffers[0].text();
+    // Every line should be <= 40 chars
+    for line in result.lines() {
+        assert!(
+            line.len() <= 40,
+            "Line too long: {:?} ({})",
+            line,
+            line.len()
+        );
+    }
+    // Content should be preserved (modulo whitespace)
+    let words_before: Vec<&str> = text.split_whitespace().collect();
+    let words_after: Vec<&str> = result.split_whitespace().collect();
+    assert_eq!(words_before, words_after);
+}
+
+#[test]
+fn fill_paragraph_preserves_list_indent() {
+    let text = "  - This is a list item with a very long description that spans many words.\n";
+    let mut editor = editor_with_text(text);
+    editor.fill_column = 40;
+    editor.dispatch_builtin("fill-paragraph");
+    let result = editor.buffers[0].text();
+    let lines: Vec<&str> = result.lines().collect();
+    assert!(lines.len() >= 2, "Should wrap into multiple lines");
+    assert!(lines[0].starts_with("  - "), "First line keeps list marker");
+    if lines.len() > 1 {
+        assert!(
+            lines[1].starts_with("    "),
+            "Continuation indented past marker"
+        );
+    }
+}
+
+#[test]
+fn fill_paragraph_undo() {
+    let text = "short line one\nshort line two\nshort line three\n";
+    let mut editor = editor_with_text(text);
+    editor.fill_column = 80;
+    editor.dispatch_builtin("fill-paragraph");
+    // Should join lines
+    let filled = editor.buffers[0].text();
+    assert!(filled.lines().count() <= 2);
+    editor.dispatch_builtin("undo");
+    assert_eq!(editor.buffers[0].text(), text);
+}
+
+#[test]
 fn alternate_file_switches() {
     let mut editor = Editor::new();
     editor.buffers.push(Buffer::new());

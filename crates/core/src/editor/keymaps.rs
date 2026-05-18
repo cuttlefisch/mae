@@ -119,6 +119,7 @@ impl Editor {
         normal.bind(parse_key_seq("J"), "join-lines");
         normal.bind(parse_key_seq(">>"), "indent-line");
         normal.bind(parse_key_seq("<<"), "dedent-line");
+        normal.bind(parse_key_seq_spaced("M-q"), "fill-paragraph");
         // Case change
         normal.bind(parse_key_seq("~"), "toggle-case");
         normal.bind(parse_key_seq_spaced("g U U"), "uppercase-line");

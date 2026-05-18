@@ -4,7 +4,7 @@
 use mae_core::render_common::gutter::{
     self as gutter_common, collect_breakpoints, collect_line_severities, gutter_width,
 };
-use mae_core::wrap::{find_wrap_break, leading_indent_len};
+use mae_core::wrap::{content_indent_len, find_wrap_break};
 use mae_core::{Editor, HighlightSpan, Mode, Window};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -435,7 +435,7 @@ pub(crate) fn render_buffer(
             if wrap {
                 // Word wrap with word-boundary breaks + breakindent.
                 let indent_len = if editor.break_indent {
-                    leading_indent_len(&full_chars)
+                    content_indent_len(&full_chars)
                 } else {
                     0
                 };
@@ -528,7 +528,7 @@ pub(crate) fn render_buffer(
             let full_chars: Vec<char> = full_display.chars().collect();
             let full_count = full_chars.len();
             let indent_len = if editor.break_indent {
-                leading_indent_len(&full_chars)
+                content_indent_len(&full_chars)
             } else {
                 0
             };

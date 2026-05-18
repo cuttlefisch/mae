@@ -81,7 +81,7 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 10. **Multi-client safety by design.** Any state mutation must be safe for concurrent observation. The MCP server may have N connected clients. Editor state changes emit events to a broadcast channel. Clients that can't keep up are dropped (bounded queues, write timeouts). File writes use content-hash verification + advisory locks. No operation assumes single-client.
 
-11. **CRDT-first sync (yrs/YATA).** All collaborative state flows through yrs (Yjs Rust port). Text buffers use `YText`, visual documents use `YMap`/`YArray`, KB nodes are yrs documents. The ropey rope is a read-only rendering mirror rebuilt from yrs on remote changes. Local edits generate yrs transactions (attributed, undoable via per-user `UndoManager`). This is the universal substrate — no separate sync mechanism for different content types. See ADR-002, ADR-005, ADR-006.
+11. **CRDT-first sync (yrs/YATA).** All collaborative state flows through yrs (Yjs Rust port). Text buffers use `YText`, visual documents use `YMap`/`YArray`, KB nodes are yrs documents. The ropey rope is a read-only rendering mirror rebuilt from yrs on remote changes. Local edits generate yrs transactions (attributed, undoable via per-user `UndoManager`). This is the universal substrate — no separate sync mechanism for different content types. See ADR-002, ADR-005, ADR-006. Local undo/redo uses `reconcile_to()` (character-level LCS diff) to generate CRDT-safe deltas instead of full-state replacements.
 
 ### Rendering Pipeline
 The GUI renderer uses a three-phase pipeline: `compute_layout()` produces
@@ -420,7 +420,7 @@ mae-state-server doctor             # run diagnostics
 
 **Config:** `~/.config/mae/state-server.toml` (TOML, XDG-compliant)
 
-**Sync protocol methods:** `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`, `sync/resync`, `docs/list`, `docs/content`, `docs/stats`, `docs/save_intent`, `docs/save_committed`, `$/debug`
+**Sync protocol methods:** `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`, `sync/resync`, `sync/share`, `docs/list`, `docs/content`, `docs/stats`, `docs/save_intent`, `docs/save_committed`, `docs/delete`, `$/debug`
 
 **Editor commands (SPC C prefix, doom keymap):**
 - `collab-start` (SPC C s), `collab-connect` (SPC C c), `collab-disconnect` (SPC C d)

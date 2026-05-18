@@ -830,6 +830,8 @@ pub struct Editor {
     pub break_indent: bool,
     /// String prefix for continuation lines (neovim showbreak). Default "↪ ".
     pub show_break: String,
+    /// Column at which fill-paragraph wraps text (Emacs fill-column).
+    pub fill_column: usize,
     /// Toggle: hide *bold* and /italic/ markers in Org-mode.
     pub org_hide_emphasis_markers: bool,
     /// Pending agent setup request from `:agent-setup <name>` or `:agent-list`.
@@ -1315,6 +1317,7 @@ impl Editor {
             word_wrap: false,
             break_indent: true,
             show_break: "↪ ".to_string(),
+            fill_column: 80,
             org_hide_emphasis_markers: false,
             pending_agent_setup: None,
             input_lock: InputLock::None,

@@ -20,6 +20,10 @@ dirs = "6"
 async-trait = "0.1"
 sha2 = "0.10"
 
+[lib]
+name = "mae_state_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "mae-state-server"
 path = "src/main.rs"

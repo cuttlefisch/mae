@@ -80,6 +80,151 @@ impl Editor {
         self.buffers[idx].end_undo_group();
     }
 
+    /// Fill (hard-wrap) the current paragraph at `fill_column`.
+    /// Joins paragraph lines, then re-wraps at the fill column, preserving
+    /// list-item hanging indent (Emacs `fill-paragraph` / `M-q`).
+    pub(crate) fn fill_paragraph(&mut self) {
+        let idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line_count = self.buffers[idx].line_count();
+        let fill_col = self.fill_column;
+
+        // Find paragraph boundaries: contiguous non-blank lines sharing the
+        // same leading indent pattern. A blank line or heading/directive breaks.
+        let is_blank = |r: usize| -> bool {
+            let t = self.buffers[idx].line_text(r);
+            t.trim().is_empty()
+        };
+        let is_boundary = |r: usize| -> bool {
+            let t = self.buffers[idx].line_text(r);
+            let trimmed = t.trim();
+            trimmed.is_empty()
+                || trimmed.starts_with("#+")
+                || trimmed.starts_with("* ")
+                || trimmed.starts_with("** ")
+        };
+
+        if is_blank(row) {
+            return;
+        }
+
+        // Scan backward.
+        let mut para_start = row;
+        while para_start > 0 && !is_boundary(para_start - 1) {
+            para_start -= 1;
+        }
+        // Scan forward.
+        let mut para_end = row; // inclusive
+        while para_end + 1 < line_count && !is_boundary(para_end + 1) {
+            para_end += 1;
+        }
+
+        // Determine indent from first line (detect list markers).
+        let first_line = self.buffers[idx].line_text(para_start);
+        let first_chars: Vec<char> = first_line
+            .chars()
+            .filter(|c| *c != '\n' && *c != '\r')
+            .collect();
+        let content_indent = crate::wrap::content_indent_len(&first_chars);
+        let leading_ws: usize = first_chars
+            .iter()
+            .take_while(|c| **c == ' ' || **c == '\t')
+            .count();
+
+        // Collect paragraph text: first line keeps its full prefix, continuation
+        // lines are stripped of leading whitespace.
+        let mut words = String::new();
+        for r in para_start..=para_end {
+            let text = self.buffers[idx].line_text(r);
+            let trimmed = text.trim_end_matches('\n').trim_end_matches('\r');
+            if r == para_start {
+                words.push_str(trimmed);
+            } else {
+                let stripped = trimmed.trim_start();
+                if !words.is_empty() && !stripped.is_empty() {
+                    words.push(' ');
+                }
+                words.push_str(stripped);
+            }
+        }
+
+        // Re-wrap at fill_column with hanging indent.
+        let _prefix_first = &" ".repeat(leading_ws);
+        let prefix_cont = &" ".repeat(content_indent);
+        let first_line_width = fill_col.saturating_sub(leading_ws);
+        let cont_line_width = fill_col.saturating_sub(content_indent);
+
+        // Split into words and reflow.
+        let content_start = if content_indent > leading_ws {
+            // First line has a list marker — keep it
+            content_indent.min(words.len())
+        } else {
+            leading_ws.min(words.len())
+        };
+
+        let first_prefix_text = &words[..content_start];
+        let body = &words[content_start..];
+        let body_words: Vec<&str> = body.split_whitespace().collect();
+
+        let mut result = String::new();
+        let mut current_line = String::from(first_prefix_text);
+        let mut is_first_line = true;
+
+        for word in &body_words {
+            let avail = if is_first_line {
+                first_line_width
+            } else {
+                cont_line_width
+            };
+            let line_content_len = if is_first_line {
+                current_line.len() - leading_ws
+            } else {
+                current_line.len() - content_indent
+            };
+
+            if line_content_len > 0 && line_content_len + 1 + word.len() > avail {
+                result.push_str(&current_line);
+                result.push('\n');
+                current_line = format!("{}{}", prefix_cont, word);
+                is_first_line = false;
+            } else {
+                if line_content_len > 0 {
+                    current_line.push(' ');
+                }
+                current_line.push_str(word);
+            }
+        }
+        if !current_line.is_empty() || body_words.is_empty() {
+            result.push_str(&current_line);
+        }
+        // Don't add trailing newline — the buffer already has one after the paragraph.
+
+        // Replace the paragraph range in the buffer.
+        let start_char = self.buffers[idx].rope().line_to_char(para_start);
+        let end_char = if para_end + 1 < line_count {
+            self.buffers[idx].rope().line_to_char(para_end + 1)
+        } else {
+            self.buffers[idx].rope().len_chars()
+        };
+        // Include the newline after the last paragraph line if it exists.
+        let replacement = if para_end + 1 < line_count {
+            format!("{}\n", result)
+        } else {
+            result
+        };
+
+        self.buffers[idx].begin_undo_group();
+        self.buffers[idx].delete_range(start_char, end_char);
+        self.buffers[idx].insert_text_at(start_char, &replacement);
+        self.buffers[idx].end_undo_group();
+
+        // Move cursor to start of paragraph.
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = para_start;
+        win.cursor_col = 0;
+        win.clamp_cursor(&self.buffers[idx]);
+    }
+
     /// Toggle the case of the character under the cursor and advance.
     pub(crate) fn toggle_case_at_cursor(&mut self) {
         let idx = self.active_buffer_idx();

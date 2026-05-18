@@ -148,6 +148,7 @@ impl super::Editor {
             "collab_reconnect_interval" => self.collab_reconnect_interval.to_string(),
             "collab_user_name" => self.collab_user_name.clone(),
             "collab_write_timeout_ms" => self.collab_write_timeout_ms.to_string(),
+            "fill_column" => self.fill_column.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -581,6 +582,12 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.collab_write_timeout_ms = v.clamp(500, 60_000);
+            }
+            "fill_column" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.fill_column = v.clamp(20, 200);
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }

@@ -452,6 +452,42 @@ permissions. Use it for intra-machine IPC where tighter isolation is needed.
 
 ---
 
+## 9. Data Lifecycle
+
+### Disconnect Behavior
+
+| Scenario | What happens |
+|----------|-------------|
+| Graceful quit (`:q`) | TCP close → server broadcasts `peer_left` → doc persists |
+| Client crash | TCP keepalive timeout → same as graceful |
+| Network drop | Write timeout (5s) → server drops client → `peer_left` |
+| Last client leaves | Doc stays in memory + WAL. Idle timer starts. Evicted after `idle_eviction_secs`. |
+
+### Reconnection
+
+1. Client connects to state server
+2. Sends `sync/diff` with local state vector
+3. Server returns missing updates
+4. Client applies updates → rebuilds rope → status bar shows diff count
+5. Client decides when to `:w` (local file may be stale)
+
+### Save Behavior for Joiners
+
+- Joiners always get a `file_path` set (even if the file doesn't exist yet)
+- `:w` creates parent directories if needed
+- Each client writes their own local copy independently
+- `docs/save_committed` notifies peers ("saved by alice" in status bar)
+
+### Git Workflow
+
+CRDT and git are complementary:
+- CRDT handles real-time character-level sync
+- Git handles version history and branching
+- Each client commits to their own worktree
+- Conflicts are rare because CRDT already converged content
+
+---
+
 ## See Also
 
 - `docs/adr/002-text-sync-model.md` — text sync decision (ADR-002)

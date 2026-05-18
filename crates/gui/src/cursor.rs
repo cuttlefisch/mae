@@ -131,7 +131,7 @@ pub fn compute_cursor_position(
 
                     let indent_len = if editor.break_indent && row_off > 0 {
                         let chars: Vec<char> = display_line_text.chars().collect();
-                        mae_core::wrap::leading_indent_len(&chars)
+                        mae_core::wrap::content_indent_len(&chars)
                     } else {
                         0
                     };

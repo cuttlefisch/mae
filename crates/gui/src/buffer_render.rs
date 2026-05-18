@@ -4,7 +4,7 @@
 //! The `syntax_spans` parameter MUST match the spans used by `compute_layout()`
 //! for the same frame. See `crates/gui/src/RENDERING.md` for invariants.
 
-use mae_core::wrap::{char_width, leading_indent_len};
+use mae_core::wrap::{char_width, content_indent_len};
 use mae_core::{Editor, HighlightSpan, Mode, Window};
 use skia_safe::Color4f;
 
@@ -432,7 +432,7 @@ pub fn render_buffer_content(
         if is_wrap_cont {
             // Wrap continuation segment: draw showbreak prefix + chunk.
             let indent_len = if editor.break_indent {
-                leading_indent_len(&full_chars)
+                content_indent_len(&full_chars)
             } else {
                 0
             };
@@ -479,7 +479,9 @@ pub fn render_buffer_content(
             );
         } else if wrap {
             // First segment of a wrapped line.
-            let rel_offset = cursor_display_row.map(|cdr| display_idx.abs_diff(cdr));
+            // Use buffer-row distance for relative numbers (not display_idx which
+            // includes wrap continuation rows and would inflate the count).
+            let rel_offset = Some(line_idx.abs_diff(win.cursor_row));
             gutter::render_gutter_line_at_y(
                 canvas,
                 editor,

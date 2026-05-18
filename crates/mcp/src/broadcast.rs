@@ -54,6 +54,20 @@ pub enum EditorEvent {
         #[serde(default)]
         wal_seq: u64,
     },
+    /// A peer joined a collaborative session.
+    #[serde(rename = "peer_joined")]
+    PeerJoined { session_id: u64, peer_count: usize },
+    /// A peer left a collaborative session.
+    #[serde(rename = "peer_left")]
+    PeerLeft { session_id: u64, peer_count: usize },
+    /// A peer completed a file save (docs/save_committed).
+    #[serde(rename = "save_committed")]
+    SaveCommitted {
+        doc: String,
+        saved_by: String,
+        save_epoch: u64,
+        content_hash: String,
+    },
 }
 
 impl EditorEvent {
@@ -67,6 +81,9 @@ impl EditorEvent {
             EditorEvent::BufferOpened { .. } => "buffer_open",
             EditorEvent::BufferClosed { .. } => "buffer_close",
             EditorEvent::SyncUpdate { .. } => "sync_update",
+            EditorEvent::PeerJoined { .. } => "peer_joined",
+            EditorEvent::PeerLeft { .. } => "peer_left",
+            EditorEvent::SaveCommitted { .. } => "save_committed",
         }
     }
 }

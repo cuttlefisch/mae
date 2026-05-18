@@ -95,6 +95,30 @@ impl DocAddress {
     }
 }
 
+/// Save policy derived from `DocAddress` type.
+///
+/// Determines how `:w` behaves for collaborative documents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavePolicy {
+    /// Each client writes to their own `{project_root}/{rel_path}`.
+    LocalFirst,
+    /// KB owner client persists CRDT to SQLite.
+    ServerAuthoritative,
+    /// `:w` prompts for file path (scratch buffer).
+    Ephemeral,
+}
+
+impl DocAddress {
+    /// Derive the save policy for this document type.
+    pub fn save_policy(&self) -> SavePolicy {
+        match self {
+            DocAddress::File { .. } => SavePolicy::LocalFirst,
+            DocAddress::KbNode { .. } => SavePolicy::ServerAuthoritative,
+            DocAddress::Shared { .. } => SavePolicy::Ephemeral,
+        }
+    }
+}
+
 impl fmt::Display for DocAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_doc_name())

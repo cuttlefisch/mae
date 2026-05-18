@@ -385,6 +385,9 @@ impl OptionRegistry {
                 opt!("collab_write_timeout_ms", &["collab-write-timeout-ms"],
                     "Peer write timeout in milliseconds",
                     OptionKind::Int, "5000", Some("collaboration.write_timeout_ms"), &[]),
+                opt!("fill_column", &["fill-column"],
+                    "Column at which fill-paragraph wraps text (Emacs fill-column)",
+                    OptionKind::Int, "80", Some("editor.fill_column"), &[]),
             ],
         }
     }

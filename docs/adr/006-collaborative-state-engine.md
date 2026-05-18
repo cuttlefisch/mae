@@ -171,6 +171,11 @@ Clients detect gaps via monotonic sequence and auto-trigger resync.
 Content-hash verification (SHA-256) via `docs/save_intent` + `docs/save_committed`.
 `DocStore::check_save_intent()` returns `SaveOk` or `SaveConflict` based on
 whether the document has pending changes since the client's last known state.
+DocAddress variants determine save policies: `File` (LocalFirst — each client
+writes own copy), `KbNode` (ServerAuthoritative — CRDT materialized to SQLite),
+`Shared` (Ephemeral — `:w` prompts for path). `save_intent` now returns
+`save_epoch` (monotonic per-doc). `docs/save_committed` broadcasts to peers
+and records metadata (saved_by, content_hash). See ADR-007 for full protocol.
 
 ### Background Compaction + Idle Eviction (fixes B4)
 
@@ -180,6 +185,7 @@ Tokio background task runs every `compaction_interval_secs` (default 60s):
 
 ### Editor UX
 
+- Disconnect lifecycle: server tracks per-session docs, broadcasts `peer_left` on disconnect, `peer_joined` on connect. `connected_clients` counter wired.
 - 7 commands under `SPC C` prefix (doom keymap): start, connect, disconnect, status, share, sync, doctor
 - Status bar segment (priority 4): connection state with peer count
 - 4 AI tools: `collab_status`, `collab_connect`, `collab_share`, `collab_doctor`

@@ -6,6 +6,7 @@
 //! delegated to `mae_mcp::handle_request`. Sync methods are handled locally
 //! by dispatching to the DocStore.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use mae_mcp::broadcast::{EditorEvent, SharedBroadcaster};
@@ -38,6 +39,9 @@ pub async fn handle_client<R, W>(
     let mut session = ClientSession::new();
     let session_id = session.id;
     info!(session = session_id, "state-server client connected");
+
+    // Track which docs this session has interacted with for disconnect cleanup.
+    let mut session_docs: HashSet<String> = HashSet::new();
 
     // Create a dummy tool channel — the state server has no editor tools,
     // but handle_request needs one for the type signature.
@@ -91,7 +95,7 @@ pub async fn handle_client<R, W>(
 
                 // Check if this is a sync/* method we handle differently.
                 let mut response = if is_doc_method(&msg) {
-                    handle_doc_request(&msg, &doc_store, &broadcaster, start_time, session_id).await
+                    handle_doc_request(&msg, &doc_store, &broadcaster, start_time, session_id, &mut session_docs).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
@@ -103,8 +107,18 @@ pub async fn handle_client<R, W>(
                 if msg.contains("\"initialize\"") {
                     if let Some(ref mut result) = response.result {
                         if let Some(info) = result.get_mut("serverInfo") {
-                            let count = broadcaster.lock().unwrap().client_count();
+                            let mut bc = broadcaster.lock().unwrap();
+                            let count = bc.client_count().saturating_sub(1);
                             info["connections"] = serde_json::json!(count);
+                            // Notify existing clients about the new peer.
+                            let peer_count = bc.client_count();
+                            bc.broadcast_except(
+                                &EditorEvent::PeerJoined {
+                                    session_id,
+                                    peer_count,
+                                },
+                                session_id,
+                            );
                         }
                     }
                 }
@@ -150,9 +164,31 @@ pub async fn handle_client<R, W>(
         }
     }
 
-    // Unsubscribe on disconnect.
-    broadcaster.lock().unwrap().unsubscribe(session_id);
-    info!(session = session_id, "state-server client session ended");
+    // Track client disconnect for all docs this session touched.
+    for doc_name in &session_docs {
+        if let Err(e) = doc_store.track_client_disconnect(doc_name).await {
+            warn!(session = session_id, doc = %doc_name, error = %e, "disconnect tracking failed");
+        }
+    }
+
+    // Broadcast PeerLeft to remaining clients.
+    {
+        let mut bc = broadcaster.lock().unwrap();
+        let remaining = bc.client_count().saturating_sub(1); // exclude this session (about to unsubscribe)
+        bc.broadcast_except(
+            &EditorEvent::PeerLeft {
+                session_id,
+                peer_count: remaining,
+            },
+            session_id,
+        );
+        bc.unsubscribe(session_id);
+    }
+    info!(
+        session = session_id,
+        docs_touched = session_docs.len(),
+        "state-server client session ended"
+    );
 }
 
 /// Check if a raw JSON message is a doc-level sync method.
@@ -169,6 +205,7 @@ fn is_doc_method(msg: &str) -> bool {
         || msg.contains("\"docs/save_intent\"")
         || msg.contains("\"docs/save_committed\"")
         || msg.contains("\"docs/delete\"")
+        || msg.contains("\"sync/share\"")
         || msg.contains("\"$/debug\"")
 }
 
@@ -179,6 +216,7 @@ async fn handle_doc_request(
     broadcaster: &SharedBroadcaster,
     start_time: std::time::Instant,
     session_id: u64,
+    session_docs: &mut HashSet<String>,
 ) -> JsonRpcResponse {
     let request: JsonRpcRequest = match serde_json::from_str(msg) {
         Ok(r) => r,
@@ -210,6 +248,11 @@ async fn handle_doc_request(
 
         "sync/update" => {
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            // Track this doc for disconnect cleanup.
+            if session_docs.insert(doc_name.clone()) {
+                // First interaction — track client connect.
+                let _ = doc_store.track_client_connect(&doc_name).await;
+            }
             let update_b64 = match params["update"].as_str() {
                 Some(s) => s,
                 None => {
@@ -261,6 +304,10 @@ async fn handle_doc_request(
 
         "sync/full_state" => {
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            // Track this doc for disconnect cleanup (joiners use full_state).
+            if session_docs.insert(doc_name.clone()) {
+                let _ = doc_store.track_client_connect(&doc_name).await;
+            }
             match doc_store.encode_state(&doc_name).await {
                 Ok(state) => {
                     let state_b64 = update_to_base64(&state);
@@ -378,13 +425,85 @@ async fn handle_doc_request(
         }
 
         "docs/save_committed" => {
-            // Acknowledge that a save completed. Currently a no-op stub —
-            // can be extended to update metadata, trigger hooks, etc.
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            let saved_by = params["saved_by"].as_str().unwrap_or("unknown").to_string();
+            let save_epoch = params["save_epoch"].as_u64().unwrap_or(0);
+            let content_hash = params["content_hash"].as_str().unwrap_or("").to_string();
+
+            // Record save metadata on the document.
+            if let Err(e) = doc_store.record_save(&doc_name, &saved_by).await {
+                warn!(doc = %doc_name, error = %e, "failed to record save");
+            }
+
+            // Broadcast save_committed to peers (excluding the saver).
+            {
+                let mut bc = broadcaster.lock().unwrap();
+                bc.broadcast_except(
+                    &EditorEvent::SaveCommitted {
+                        doc: doc_name.clone(),
+                        saved_by: saved_by.clone(),
+                        save_epoch,
+                        content_hash,
+                    },
+                    session_id,
+                );
+            }
+
             JsonRpcResponse::success(
                 id,
                 serde_json::json!({ "doc": doc_name, "committed": true }),
             )
+        }
+
+        "sync/share" => {
+            // Atomic share: delete old doc (memory + WAL) then create fresh from update.
+            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            // Track this doc for disconnect cleanup.
+            if session_docs.insert(doc_name.clone()) {
+                let _ = doc_store.track_client_connect(&doc_name).await;
+            }
+            let update_b64 = match params["update"].as_str() {
+                Some(s) => s,
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'update' field".to_string()),
+                    );
+                }
+            };
+            let update_bytes = match base64_to_update(update_b64) {
+                Ok(b) => b,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error(format!("invalid base64: {e}")),
+                    );
+                }
+            };
+
+            // Delete old doc (ignore errors — may not exist yet).
+            let _ = doc_store.delete_doc(&doc_name).await;
+            match doc_store.apply_update(&doc_name, &update_bytes, None).await {
+                Ok(result) => {
+                    // Broadcast to all OTHER subscribers (not the sharer).
+                    {
+                        let mut bc = broadcaster.lock().unwrap();
+                        bc.broadcast_except(
+                            &EditorEvent::SyncUpdate {
+                                buffer_name: doc_name.clone(),
+                                update_base64: update_to_base64(&result.update),
+                                wal_seq: result.wal_seq,
+                            },
+                            session_id,
+                        );
+                    }
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({ "doc": doc_name, "wal_seq": result.wal_seq }),
+                    )
+                }
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+            }
         }
 
         "docs/delete" => {
@@ -552,8 +671,15 @@ mod tests {
             "jsonrpc": "2.0", "id": 1, "method": "sync/update",
             "params": { "doc": "test", "update": update_b64 }
         });
-        let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
         assert!(resp.error.is_none(), "sync/update failed: {:?}", resp.error);
         assert!(resp.result.unwrap()["wal_seq"].as_u64().unwrap() > 0);
 
@@ -562,8 +688,15 @@ mod tests {
             "jsonrpc": "2.0", "id": 2, "method": "docs/content",
             "params": { "doc": "test" }
         });
-        let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
         assert_eq!(resp.result.unwrap()["content"], "hello");
     }
 
@@ -576,8 +709,15 @@ mod tests {
             "jsonrpc": "2.0", "id": 1, "method": "sync/state_vector",
             "params": { "doc": "test" }
         });
-        let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
         assert!(resp.error.is_none());
         let sv = resp.result.unwrap()["sv"].as_str().unwrap().to_string();
         assert!(!sv.is_empty());
@@ -592,8 +732,15 @@ mod tests {
             "jsonrpc": "2.0", "id": 1, "method": "sync/full_state",
             "params": { "doc": "test" }
         });
-        let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
         assert!(resp.error.is_none());
     }
 
@@ -611,8 +758,15 @@ mod tests {
         let msg = serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": "docs/list"
         });
-        let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
         let docs = resp.result.unwrap()["documents"]
             .as_array()
             .unwrap()
@@ -628,8 +782,15 @@ mod tests {
         let msg = serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": "$/debug"
         });
-        let resp =
-            handle_doc_request(&msg.to_string(), &store, &bc, std::time::Instant::now(), 0).await;
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
         assert!(resp.error.is_none(), "$/debug failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert!(

@@ -44,6 +44,17 @@ impl TextSync {
         Self { doc, rope }
     }
 
+    /// Create an empty relay document. No content is inserted — the Doc starts
+    /// with an empty state vector. Used by the state server, which only relays
+    /// updates from clients and should not contribute its own operations.
+    pub fn empty_relay() -> Self {
+        let doc = Doc::new();
+        // Do NOT insert anything — the server is a passive relay.
+        // The first client to share will provide the initial content.
+        let rope = Rope::from_str("");
+        Self { doc, rope }
+    }
+
     /// Create from an existing yrs document.
     pub fn from_doc(doc: Doc) -> Self {
         let content = {
@@ -107,6 +118,31 @@ impl TextSync {
     /// Load from encoded full state.
     pub fn from_state(state: &[u8]) -> Result<Self, SyncError> {
         let doc = Doc::new();
+        let update =
+            yrs::Update::decode_v1(state).map_err(|e| SyncError::Encoding(e.to_string()))?;
+        {
+            let mut txn = doc.transact_mut();
+            txn.apply_update(update)
+                .map_err(|e| SyncError::Encoding(e.to_string()))?;
+        }
+        let content = {
+            let text = doc.get_or_insert_text(TEXT_NAME);
+            let txn = doc.transact();
+            text.get_string(&txn)
+        };
+        let rope = Rope::from_str(&content);
+        Ok(Self { doc, rope })
+    }
+
+    /// Load from encoded full state with a specific client ID.
+    /// Use this instead of `from_state()` when the caller needs a deterministic
+    /// client ID (e.g., editor clients that generate local edits).
+    pub fn from_state_with_client_id(state: &[u8], client_id: u64) -> Result<Self, SyncError> {
+        let options = yrs::Options {
+            client_id,
+            ..Default::default()
+        };
+        let doc = Doc::with_options(options);
         let update =
             yrs::Update::decode_v1(state).map_err(|e| SyncError::Encoding(e.to_string()))?;
         {

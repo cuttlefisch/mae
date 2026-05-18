@@ -24,8 +24,32 @@
 
 ## Known Bugs
 
+### Pre-existing
+
 - [ ] **AI output buffer cursor invisible in GUI**: After AI responds, the cursor in the `*ai*` conversation output buffer is not visible. Root cause: buffer type / layout metadata mismatch — the conversation buffer doesn't provide the same state that the cursor renderer expects. Low priority (output buffer is read-only, navigation still works).
 - [ ] **Theme load failure is silent in headless mode**: If config.toml requests a nonexistent theme, `set_theme_by_name()` shows a status bar message but keeps the current theme. In CI/headless mode the user gets zero feedback. Should log to stderr or return non-zero exit from `--check-config`.
+
+### Collaborative Editing (v0.11.0)
+
+- [x] **One-directional sync**: cli1→cli2 works but cli2→cli1 does not. Root cause: `biased` tokio::select starved TCP reads. Fix: remove `biased;` from connected select loop.
+- [x] **First `SPC C j` unresponsive from Dashboard**: Join only works after a `SPC C D`/`SPC C i` round-trip. Root cause: splash screen intercept swallows `j` during multi-key sequences. Fix: add `pending_keys.is_empty()` guard.
+- [x] **Syntax highlighting differs on join**: Joiner sees wrong colors (purple bullets, green title). Root cause: `set_language` without `invalidate()` leaves no tree-sitter parse tree. Fix: call `syntax.invalidate(idx)` after join.
+- [ ] **Undo broadcasts full buffer to peers**: Undo on one client inserts entire buffer contents at point on other clients. Root cause: yrs UndoManager transaction likely generates a full-text update rather than a delta. Needs investigation of undo → yrs transaction → sync update pipeline.
+- [ ] **`:w` fails on non-sharer clients**: Save works only for the client that originally opened and shared the file. Other clients (including those that outlive the sharer) get errors. Root cause: `file_path` not properly resolved on join, or save protocol assumes original sharer identity.
+- [ ] **Sharer quit doesn't notify peers or stop sharing**: When the client that triggered the share disconnects, peers are not notified and the shared document lingers. Need graceful disconnect protocol: server detects client drop → notifies remaining peers → optionally promotes new owner or marks doc read-only.
+- [ ] **Client disconnect lifecycle undefined**: No documented or tested behavior for: client crash, network drop, graceful quit, last-client-leaves. Must define and implement industry-standard behavior (cf. VS Code Live Share, Google Docs). Document in `docs/COLLABORATION.md`.
+- [ ] **Collab e2e test harness missing**: No integration tests exercise the full multi-client flow (server + N clients, share, join, edit, sync, disconnect). Need a test harness that spawns `mae-state-server` + simulated clients over TCP, asserts bidirectional sync, undo correctness, save, and disconnect behavior.
+
+### Org-Mode Rendering
+
+- [ ] **Org rendering broken in editing buffers**: Checklists, `#+TITLE`, properties drawer dimming, and other structural org elements don't render correctly in dailies editing buffers. May be a tree-sitter parse issue or a span computation bug in `compute_org_spans()` vs `compute_org_style_spans()` fallback.
+- [ ] **KB node edit mode lacks rich formatting**: When editing a KB node, headers are not scaled/colored — rendering falls back to plain text instead of applying org-mode visual treatment.
+- [x] **Word-wrap indentation for list items**: `content_indent_len()` now detects list markers (`- `, `+ `, `* `, `1. `) and indents wrap continuations past the marker. Both GUI and TUI.
+- [x] **`fill-paragraph` / `M-q`**: Hard-wrap at `fill_column` (default 80), respects list-item hanging indent. `fill-region` for visual selection is TODO.
+
+### Line Numbers & Wrapping
+
+- [x] **Relative line numbers with word-wrap**: GUI now uses buffer-row distance for relative numbers in wrapped mode, not display-row distance (which inflated counts by including continuation rows).
 
 ---
 
@@ -49,6 +73,18 @@
 - [x] **State server v1** (`mae-state-server` binary): Standalone CRDT sync server over TCP (port 9473). Per-document locking, WAL-first SQLite persistence, periodic compaction, transport-generic I/O (reuses `mae_mcp` primitives). Sync protocol: `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`. No auth (trusted LAN only).
 - [x] **State server v1.5** (scalability + UX): Sharded SQLite pool (4 shards), save protocol (SHA-256 content-hash), event sequence tracking (wal_seq), background compaction + idle eviction. Editor: 7 commands (SPC C prefix), 4 AI tools, status bar segment, 5 options, doctor integration, audit_configuration collab section. New methods: `sync/resync`, `docs/stats`, `docs/save_intent`, `docs/save_committed`, `$/debug`.
 - [x] **Client ID echo filtering**: Server `broadcast_except()` skips the originating session on `sync/update`. Eliminates wasted bandwidth/CPU from self-echo and prevents share duplication race.
+- [ ] **Collab stub audit** (v0.11.0 correctness): Systematic review completed. Known gaps:
+  - `docs/save_committed` handler is a no-op stub (handler.rs:381)
+  - `track_client_connect()` / `track_client_disconnect()` are `#[allow(dead_code)]` (doc_store.rs:287-303)
+  - `DocAddress` enum defined but never used in collab protocol (sync/lib.rs:39-50)
+  - `SaveIntentResult` returned by server but never consumed by editor
+  - `save_intent` never called from the editor save path
+  - No `docs/metadata` endpoint (would provide save_epoch, connected_clients)
+  - Per-doc `connected_clients` counter never incremented/decremented (always 0)
+  - `save_epoch` tracking doesn't exist yet
+  - No `peer_joined` / `peer_left` events in `EditorEvent` enum
+  - `WalEntry::client_id` stored but never read for audit/attribution
+  - `StorageError::Io` variant reserved but unused (pluggable backends)
 - [ ] **State server v2** (Phase F): Awareness protocol (cursor sharing), per-user undo, auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync.
 - [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
   - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.

@@ -87,6 +87,15 @@ pub enum CollabEvent {
         doc_id: String,
         state_bytes: Vec<u8>,
     },
+    /// Peer count changed (peer joined or left).
+    PeerCountChanged {
+        peer_count: usize,
+    },
+    /// A peer saved a shared document.
+    PeerSaved {
+        doc: String,
+        saved_by: String,
+    },
 }
 
 // --- Intent drain (called every tick) ---
@@ -108,7 +117,12 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             // Enable sync on the buffer if not already enabled, then encode state.
             let idx = editor.find_buffer_by_name(&buffer_name);
             if let Some(idx) = idx {
+                // Compute DocAddress from file_path + project root.
+                let project_root = editor.active_project_root().map(|p| p.to_path_buf());
                 let buf = &mut editor.buffers[idx];
+                if buf.doc_address.is_none() {
+                    buf.doc_address = compute_doc_address(buf, project_root.as_deref());
+                }
                 if buf.sync_doc.is_none() {
                     // Use PID + buffer index as a deterministic client ID.
                     let client_id = (std::process::id() as u64) << 16 | (idx as u64);
@@ -122,8 +136,15 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
                     .as_ref()
                     .map(|s| s.encode_state())
                     .unwrap_or_default();
+                // Use DocAddress-based doc_name for cross-session stability,
+                // falling back to buffer name for unnamed/scratch buffers.
+                let doc_id = buf
+                    .doc_address
+                    .as_ref()
+                    .map(|a| a.to_doc_name())
+                    .unwrap_or_else(|| buffer_name.clone());
                 CollabCommand::ShareBuffer {
-                    doc_id: buffer_name,
+                    doc_id,
                     state_bytes,
                 }
             } else {
@@ -145,6 +166,45 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             kind,
             "collab command channel full or closed — intent dropped"
         );
+    }
+}
+
+/// Compute a `DocAddress` from a buffer's file path and project root.
+fn compute_doc_address(
+    buf: &mae_core::Buffer,
+    project_root: Option<&std::path::Path>,
+) -> Option<mae_sync::DocAddress> {
+    if let Some(fp) = buf.file_path() {
+        let rel_path = if let Some(root) = project_root {
+            fp.strip_prefix(root)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| fp.to_string_lossy().to_string())
+        } else {
+            fp.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| fp.to_string_lossy().to_string())
+        };
+        // FNV-1a hash of project root for stable short identifier.
+        let project_hash = if let Some(root) = project_root {
+            let bytes = root.to_string_lossy();
+            let mut h: u64 = 0xcbf29ce484222325;
+            for b in bytes.as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            format!("{h:012x}")
+        } else {
+            "no-project".to_string()
+        };
+        Some(mae_sync::DocAddress::File {
+            project_hash,
+            rel_path,
+        })
+    } else {
+        // No file path — treat as shared scratch buffer.
+        Some(mae_sync::DocAddress::Shared {
+            name: buf.name.clone(),
+        })
     }
 }
 
@@ -200,13 +260,15 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             if let Some(idx) = editor.find_buffer_by_name(&doc_id) {
                 match editor.buffers[idx].apply_sync_update(&update_bytes) {
                     Ok(()) => {
-                        debug!(doc = %doc_id, "applied remote sync update");
+                        debug!(doc = %doc_id, update_bytes = update_bytes.len(), "applied remote sync update");
                         editor.mark_full_redraw();
                     }
                     Err(e) => {
                         warn!(doc = %doc_id, error = %e, "failed to apply remote sync update");
                     }
                 }
+            } else {
+                warn!(doc = %doc_id, "remote update for unknown buffer — name mismatch?");
             }
         }
         CollabEvent::StatusReport { lines } => {
@@ -304,30 +366,58 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             doc_id,
             state_bytes,
         } => {
+            // Parse DocAddress from doc_id for structured addressing.
+            let doc_addr = mae_sync::DocAddress::parse(&doc_id);
+            // Use a display-friendly name for the buffer.
+            let buf_name = match &doc_addr {
+                Some(mae_sync::DocAddress::File { rel_path, .. }) => rel_path.clone(),
+                _ => doc_id.clone(),
+            };
             // Find or create buffer, load sync state directly (no merge).
-            let idx = editor.find_or_create_buffer(&doc_id, || {
+            let idx = editor.find_or_create_buffer(&buf_name, || {
                 let mut buf = mae_core::Buffer::new();
-                buf.name = doc_id.clone();
+                buf.name = buf_name.clone();
                 buf.kind = mae_core::BufferKind::Text;
                 buf
             });
             // Snapshot project root before mutable borrow of buffer.
             let project_root = editor.active_project_root().map(|p| p.to_path_buf());
+            // Deterministic client ID: PID << 16 | buffer index.
+            let client_id = (std::process::id() as u64) << 16 | (idx as u64);
             let load_ok = {
                 let buf = &mut editor.buffers[idx];
-                match buf.load_sync_state(&state_bytes) {
+                match buf.load_sync_state(&state_bytes, client_id) {
                     Ok(()) => {
-                        // Try to resolve doc_id as a file path for :w support.
+                        // Set doc_address for save policy resolution.
+                        buf.doc_address = doc_addr.clone();
+                        // Resolve file_path from DocAddress or doc_id.
+                        // Always set file_path — file may not exist yet (created on :w).
                         if buf.file_path().is_none() {
-                            let candidate = std::path::PathBuf::from(&doc_id);
-                            if candidate.exists() {
-                                buf.set_file_path(candidate.canonicalize().unwrap_or(candidate));
-                            } else if let Some(root) = &project_root {
-                                let rooted = root.join(&doc_id);
-                                if rooted.exists() {
-                                    buf.set_file_path(rooted.canonicalize().unwrap_or(rooted));
+                            let rel = match &doc_addr {
+                                Some(mae_sync::DocAddress::File { rel_path, .. }) => {
+                                    rel_path.clone()
                                 }
-                            }
+                                _ => doc_id.clone(),
+                            };
+                            // Try project_root/rel_path first, then CWD/rel_path.
+                            let resolved = if let Some(root) = &project_root {
+                                let rooted = root.join(&rel);
+                                if rooted.exists() {
+                                    rooted.canonicalize().unwrap_or(rooted)
+                                } else {
+                                    rooted // set even if doesn't exist
+                                }
+                            } else if let Ok(cwd) = std::env::current_dir() {
+                                let cwd_path = cwd.join(&rel);
+                                if cwd_path.exists() {
+                                    cwd_path.canonicalize().unwrap_or(cwd_path)
+                                } else {
+                                    cwd_path // set even if doesn't exist
+                                }
+                            } else {
+                                std::path::PathBuf::from(&rel)
+                            };
+                            buf.set_file_path(resolved);
                         }
                         Ok(())
                     }
@@ -336,6 +426,22 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             };
             match load_ok {
                 Ok(()) => {
+                    // Detect language from doc_id for syntax highlighting.
+                    {
+                        let content = editor.buffers[idx].text();
+                        let path_hint = std::path::Path::new(&doc_id);
+                        if let Some(lang) =
+                            mae_core::syntax::language_for_buffer(path_hint, &content)
+                        {
+                            editor.syntax.set_language(idx, lang);
+                            editor.buffers[idx]
+                                .local_options
+                                .apply_defaults(&lang.default_local_options());
+                            // Force tree-sitter reparse so the full structural
+                            // parser (compute_org_spans) runs on the joined buffer.
+                            editor.syntax.invalidate(idx);
+                        }
+                    }
                     editor.collab_synced_buffers.insert(doc_id.clone());
                     editor.collab_synced_docs = editor.collab_synced_buffers.len();
                     editor.switch_to_buffer(idx);
@@ -346,6 +452,21 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     editor.set_status(format!("Failed to join {}: {}", doc_id, e));
                 }
             }
+        }
+        CollabEvent::PeerCountChanged { peer_count } => {
+            if let CollabStatus::Connected { .. } = editor.collab_status {
+                editor.collab_status = CollabStatus::Connected { peer_count };
+                editor.set_status(format!("Peer count: {}", peer_count));
+                editor.mark_full_redraw();
+            }
+        }
+        CollabEvent::PeerSaved { doc, saved_by } => {
+            editor.set_status(format!("[{}] saved by {}", doc, saved_by));
+            // Mark the local buffer clean if we have it (content matches what was saved).
+            if let Some(idx) = editor.find_buffer_by_name(&doc) {
+                editor.buffers[idx].modified = false;
+            }
+            editor.mark_full_redraw();
         }
     }
 }
@@ -423,6 +544,7 @@ enum PendingResponseKind {
     JoinDoc { doc_id: String },
     ShareBuffer { doc_id: String },
     ForceSync { doc_id: String },
+    SyncUpdate { doc_id: String },
     Subscribe,
 }
 
@@ -474,8 +596,6 @@ async fn run_collab_task(
             let buf_reader = reader.as_mut().unwrap();
 
             tokio::select! {
-                biased;
-
                 Some(cmd) = cmd_rx.recv() => {
                     match cmd {
                         CollabCommand::Disconnect => {
@@ -505,24 +625,14 @@ async fn run_collab_task(
                         }
                         CollabCommand::ShareBuffer { doc_id, state_bytes } => {
                             if let Some(ref mut w) = writer {
-                                // Delete stale server doc first (fire-and-forget) to prevent
-                                // content duplication from old WAL entries.
-                                let delete_req = serde_json::json!({
-                                    "jsonrpc": "2.0",
-                                    "id": serde_json::Value::Null,
-                                    "method": "docs/delete",
-                                    "params": { "doc": doc_id }
-                                });
-                                let delete_body = serde_json::to_vec(&delete_req).unwrap();
-                                let _ = write_framed(w, &delete_body, write_timeout).await;
-
+                                // Atomic share: server deletes old doc + applies update in one step.
                                 let update_b64 = mae_sync::encoding::update_to_base64(&state_bytes);
                                 let req_id = next_request_id;
                                 next_request_id += 1;
                                 let req = serde_json::json!({
                                     "jsonrpc": "2.0",
                                     "id": req_id,
-                                    "method": "sync/update",
+                                    "method": "sync/share",
                                     "params": {
                                         "doc": doc_id,
                                         "update": update_b64,
@@ -560,9 +670,11 @@ async fn run_collab_task(
                         }
                         CollabCommand::SendUpdate { doc_id, update_base64 } => {
                             if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
                                 let req = serde_json::json!({
                                     "jsonrpc": "2.0",
-                                    "id": serde_json::Value::Null,
+                                    "id": req_id,
                                     "method": "sync/update",
                                     "params": {
                                         "doc": doc_id,
@@ -570,8 +682,9 @@ async fn run_collab_task(
                                     }
                                 });
                                 let body = serde_json::to_vec(&req).unwrap();
-                                // Fire-and-forget for local edit forwarding.
-                                let _ = write_framed(w, &body, write_timeout).await;
+                                if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    pending_responses.insert(req_id, PendingResponseKind::SyncUpdate { doc_id });
+                                }
                             }
                         }
                         CollabCommand::ListDocs { for_join } => {
@@ -737,6 +850,7 @@ async fn handle_incoming_message(
         match method {
             // B3 fix: server sends "notifications/sync_update" with nested event data.
             "notifications/sync_update" => {
+                debug!("received sync_update notification from server");
                 if let Some(params) = val.get("params") {
                     // Server format: {"params": {"seq": N, "event": {"type": "sync_update", "data": {"buffer_name": "...", "update_base64": "..."}}}}
                     // The "data" key comes from serde's #[serde(tag = "type", content = "data")] on EditorEvent.
@@ -786,6 +900,45 @@ async fn handle_incoming_message(
                             })
                             .await;
                     }
+                }
+            }
+            "notifications/peer_joined" => {
+                if let Some(params) = val.get("params") {
+                    let event = params.get("event").unwrap_or(params);
+                    let data = event.get("data").unwrap_or(event);
+                    let peer_count =
+                        data.get("peer_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    let _ = evt_tx
+                        .send(CollabEvent::PeerCountChanged { peer_count })
+                        .await;
+                }
+            }
+            "notifications/peer_left" => {
+                if let Some(params) = val.get("params") {
+                    let event = params.get("event").unwrap_or(params);
+                    let data = event.get("data").unwrap_or(event);
+                    let peer_count =
+                        data.get("peer_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    let _ = evt_tx
+                        .send(CollabEvent::PeerCountChanged { peer_count })
+                        .await;
+                }
+            }
+            "notifications/save_committed" => {
+                if let Some(params) = val.get("params") {
+                    let event = params.get("event").unwrap_or(params);
+                    let data = event.get("data").unwrap_or(event);
+                    let doc = data
+                        .get("doc")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let saved_by = data
+                        .get("saved_by")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("peer")
+                        .to_string();
+                    let _ = evt_tx.send(CollabEvent::PeerSaved { doc, saved_by }).await;
                 }
             }
             _ => {
@@ -886,6 +1039,11 @@ async fn handle_response(
                             .await;
                     }
                 }
+            }
+        }
+        PendingResponseKind::SyncUpdate { doc_id } => {
+            if let Some(err) = val.get("error") {
+                warn!(doc = %doc_id, error = ?err, "server rejected sync update");
             }
         }
         PendingResponseKind::Subscribe => {
@@ -1242,7 +1400,8 @@ mod tests {
                 doc_id,
                 state_bytes,
             } => {
-                assert_eq!(doc_id, buf_name);
+                // Buffer with no file_path gets DocAddress::Shared, serialized as "shared:{name}".
+                assert_eq!(doc_id, format!("shared:{}", buf_name));
                 assert!(
                     !state_bytes.is_empty(),
                     "state bytes should be non-empty after enable_sync"
@@ -1522,5 +1681,127 @@ mod tests {
         assert!(shared.contains(&"test.rs".to_string()));
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, CollabEvent::BufferShared { doc_id } if doc_id == "test.rs"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 2 regression: join must set language AND invalidate syntax cache
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn buffer_joined_sets_language_and_invalidates_syntax() {
+        let mut editor = Editor::new();
+
+        // Create a sync doc with org content, then encode its state bytes.
+        let org_content = "#+TITLE: Test\n\n- bullet one\n- bullet two\n";
+        let sync = mae_sync::text::TextSync::with_client_id(org_content, 1);
+        let state_bytes = sync.encode_state();
+
+        // Feed a BufferJoined event with an org doc_id.
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::BufferJoined {
+                doc_id: "daily.org".to_string(),
+                state_bytes,
+            },
+        );
+
+        let idx = editor
+            .find_buffer_by_name("daily.org")
+            .expect("joined buffer should exist");
+
+        // Language should be detected as Org.
+        let lang = editor.syntax.language_of(idx);
+        assert_eq!(
+            lang,
+            Some(mae_core::syntax::Language::Org),
+            "joined .org buffer should have Org language set"
+        );
+
+        // The syntax cache should be invalidated (no stale spans/tree).
+        assert!(
+            !editor
+                .syntax
+                .has_cached_spans(idx, editor.buffers[idx].generation),
+            "syntax cache should be invalidated after join (no stale spans)"
+        );
+
+        // Buffer content should match the shared org content.
+        assert!(editor.buffers[idx].text().contains("bullet one"));
+    }
+
+    #[test]
+    fn buffer_joined_non_org_gets_no_language() {
+        let mut editor = Editor::new();
+
+        let content = "just plain text\n";
+        let sync = mae_sync::text::TextSync::with_client_id(content, 1);
+        let state_bytes = sync.encode_state();
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::BufferJoined {
+                doc_id: "notes.txt".to_string(),
+                state_bytes,
+            },
+        );
+
+        let idx = editor
+            .find_buffer_by_name("notes.txt")
+            .expect("joined buffer should exist");
+
+        // .txt files don't have a tree-sitter grammar, so no language set.
+        assert_eq!(editor.syntax.language_of(idx), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 1 regression: unbiased select ensures server messages are processed
+    // -----------------------------------------------------------------------
+    // NOTE: The actual `run_collab_task` loop requires a real TCP connection,
+    // so we can't unit-test it directly. Instead we verify the architectural
+    // property: `handle_incoming_message` correctly processes a notification
+    // even when called after a burst of commands. This test ensures the
+    // message-handling path itself works; the `biased` removal ensures it
+    // actually gets called.
+
+    #[tokio::test]
+    async fn server_notification_processed_after_command_burst() {
+        let (tx, mut rx) = mpsc::channel(32);
+        let mut pending = std::collections::HashMap::new();
+        let mut shared = Vec::new();
+
+        // Simulate N sync_update notifications arriving in quick succession
+        // (as would happen when they pile up during biased starvation).
+        for i in 0..5 {
+            let msg = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/sync_update",
+                "params": {
+                    "seq": i,
+                    "event": {
+                        "type": "sync_update",
+                        "data": {
+                            "buffer_name": format!("file{}.rs", i),
+                            "update_base64": "AQIDBA==",
+                            "wal_seq": i
+                        }
+                    }
+                }
+            });
+            handle_incoming_message(&msg.to_string(), &tx, &mut pending, &mut shared).await;
+        }
+
+        // All 5 should have produced RemoteUpdate events.
+        let mut received = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let CollabEvent::RemoteUpdate { doc_id, .. } = event {
+                received.push(doc_id);
+            }
+        }
+        assert_eq!(
+            received.len(),
+            5,
+            "all queued server notifications must be processed; got {:?}",
+            received
+        );
     }
 }

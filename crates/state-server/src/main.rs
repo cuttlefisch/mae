@@ -11,9 +11,8 @@
 
 mod cli;
 mod config;
-mod doc_store;
-mod handler;
-mod storage;
+
+use mae_state_server::{doc_store, handler, storage};
 
 use std::sync::Arc;
 

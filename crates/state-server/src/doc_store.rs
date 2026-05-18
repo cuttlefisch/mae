@@ -26,6 +26,10 @@ struct DocEntry {
     last_activity: std::time::Instant,
     /// Number of clients currently connected to this document.
     connected_clients: u32,
+    /// Monotonically increasing save epoch. Incremented on each save_intent.
+    save_epoch: u64,
+    /// User who last saved this document.
+    last_saved_by: Option<String>,
 }
 
 /// Statistics for a single document.
@@ -43,7 +47,10 @@ pub struct DocStats {
 #[serde(tag = "status")]
 pub enum SaveIntentResult {
     #[serde(rename = "ok")]
-    Ok { server_hash: String },
+    Ok {
+        server_hash: String,
+        save_epoch: u64,
+    },
     #[serde(rename = "conflict")]
     Conflict { server_hash: String },
 }
@@ -95,7 +102,7 @@ impl DocStore {
                     TextSync::from_state(&snapshot)
                         .map_err(|e| StorageError::Sqlite(format!("bad snapshot: {e}")))?
                 } else {
-                    TextSync::new("")
+                    TextSync::empty_relay()
                 };
 
                 let mut last_id = 0u64;
@@ -114,7 +121,7 @@ impl DocStore {
             }
             None => {
                 debug!(doc = doc_name, "new document created");
-                (TextSync::new(""), 0)
+                (TextSync::empty_relay(), 0)
             }
         };
 
@@ -124,6 +131,8 @@ impl DocStore {
             update_count: 0,
             last_activity: std::time::Instant::now(),
             connected_clients: 0,
+            save_epoch: 0,
+            last_saved_by: None,
         }));
         docs.insert(doc_name.to_string(), Arc::clone(&entry));
         Ok(entry)
@@ -246,6 +255,7 @@ impl DocStore {
     }
 
     /// Compute SHA-256 content hash for a document.
+    #[allow(dead_code)] // Public API for future docs/metadata endpoint
     pub async fn content_hash(&self, doc_name: &str) -> Result<String, StorageError> {
         let entry = self.get_or_create(doc_name).await?;
         let doc = entry.lock().await;
@@ -257,17 +267,36 @@ impl DocStore {
 
     /// Check if a client's expected hash matches the server's current content hash.
     /// Used before a save-to-disk operation to prevent overwriting concurrent edits.
+    /// On success, increments save_epoch and returns it.
     pub async fn check_save_intent(
         &self,
         doc_name: &str,
         expected_hash: &str,
     ) -> Result<SaveIntentResult, StorageError> {
-        let server_hash = self.content_hash(doc_name).await?;
+        let entry = self.get_or_create(doc_name).await?;
+        let mut doc = entry.lock().await;
+        let content = doc.sync.content();
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        let server_hash = format!("{:x}", hasher.finalize());
         if server_hash == expected_hash {
-            Ok(SaveIntentResult::Ok { server_hash })
+            doc.save_epoch += 1;
+            Ok(SaveIntentResult::Ok {
+                server_hash,
+                save_epoch: doc.save_epoch,
+            })
         } else {
             Ok(SaveIntentResult::Conflict { server_hash })
         }
+    }
+
+    /// Record a completed save. Updates metadata for tracking.
+    pub async fn record_save(&self, doc_name: &str, saved_by: &str) -> Result<(), StorageError> {
+        let entry = self.get_or_create(doc_name).await?;
+        let mut doc = entry.lock().await;
+        doc.last_saved_by = Some(saved_by.to_string());
+        doc.last_activity = std::time::Instant::now();
+        Ok(())
     }
 
     /// Get statistics for a document.
@@ -284,7 +313,6 @@ impl DocStore {
     }
 
     /// Track a client connecting to a document.
-    #[allow(dead_code)]
     pub async fn track_client_connect(&self, doc_name: &str) -> Result<(), StorageError> {
         let entry = self.get_or_create(doc_name).await?;
         let mut doc = entry.lock().await;
@@ -294,7 +322,6 @@ impl DocStore {
     }
 
     /// Track a client disconnecting from a document.
-    #[allow(dead_code)]
     pub async fn track_client_disconnect(&self, doc_name: &str) -> Result<(), StorageError> {
         let entry = self.get_or_create(doc_name).await?;
         let mut doc = entry.lock().await;

@@ -324,6 +324,10 @@ impl CommandRegistry {
         reg.register_builtin("join-lines", "Join current line with next line (J)");
         reg.register_builtin("indent-line", "Indent current line by 4 spaces (>>)");
         reg.register_builtin("dedent-line", "Dedent current line by up to 4 spaces (<<)");
+        reg.register_builtin(
+            "fill-paragraph",
+            "Hard-wrap current paragraph at fill-column (M-q)",
+        );
         // Case change
         reg.register_builtin("toggle-case", "Toggle case of char under cursor (~)");
         reg.register_builtin("uppercase-line", "Uppercase current line (gUU)");
