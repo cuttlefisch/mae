@@ -1227,6 +1227,7 @@ mod tests {
             locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
                 buffer_name: "test.rs".to_string(),
                 update_base64: "AQIDBA==".to_string(),
+                wal_seq: 0,
             });
         }
 
@@ -1284,6 +1285,7 @@ mod tests {
             locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
                 buffer_name: "test.rs".to_string(),
                 update_base64: "dGVzdA==".to_string(),
+                wal_seq: 0,
             });
         }
 
@@ -1356,6 +1358,7 @@ mod tests {
             locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
                 buffer_name: "shared.rs".to_string(),
                 update_base64: "AAAA".to_string(),
+                wal_seq: 0,
             });
         }
 
@@ -1446,6 +1449,7 @@ mod tests {
             locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
                 buffer_name: "after.rs".to_string(),
                 update_base64: "BBBB".to_string(),
+                wal_seq: 0,
             });
         }
 
@@ -1503,6 +1507,7 @@ mod tests {
                 locked.broadcast(&broadcast::EditorEvent::SyncUpdate {
                     buffer_name: format!("file-{}.rs", i),
                     update_base64: "AA==".to_string(),
+                    wal_seq: 0,
                 });
             }
         }

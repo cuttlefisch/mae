@@ -18,6 +18,7 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 async-trait = "0.1"
+sha2 = "0.10"
 
 [[bin]]
 name = "mae-state-server"
@@ -25,3 +26,4 @@ path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = "3"
+sha2 = "0.10"

@@ -466,6 +466,9 @@ fn dispatch_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, String>
     if let Some(result) = super::sync_exec::dispatch(editor, call) {
         return result;
     }
+    if let Some(result) = super::collab_exec::dispatch(editor, call) {
+        return result;
+    }
 
     // Perf tools (kept separate since they are cross-cutting)
     match call.name.as_str() {

@@ -77,48 +77,55 @@ pub trait StorageBackend: Send + Sync {
     async fn list_documents(&self) -> Result<Vec<String>, StorageError>;
 }
 
-/// SQLite-backed storage using WAL journal mode.
-pub struct SqliteBackend {
-    /// We use a std::sync::Mutex because rusqlite::Connection is !Send.
-    /// All operations are synchronous and fast (sub-ms for WAL append).
-    conn: std::sync::Mutex<Connection>,
+/// Sharded SQLite connection pool.
+///
+/// Multiple connections in WAL mode to the same file allow concurrent reads
+/// across different documents. Documents are assigned to shards via FNV-1a hash.
+pub struct SqlitePool {
+    shards: Vec<std::sync::Mutex<Connection>>,
 }
 
-impl SqliteBackend {
-    /// Open or create the SQLite database at the given path.
-    pub fn open(path: &Path) -> Result<Self, StorageError> {
-        let conn = Connection::open(path)?;
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;
-             PRAGMA busy_timeout=5000;
+impl SqlitePool {
+    /// Open `shard_count` connections in WAL mode to the same file.
+    pub fn open(path: &Path, shard_count: usize) -> Result<Self, StorageError> {
+        let count = shard_count.max(1);
+        let mut shards = Vec::with_capacity(count);
+        for i in 0..count {
+            let conn = Connection::open(path)?;
+            conn.execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA synchronous=NORMAL;
+                 PRAGMA busy_timeout=5000;",
+            )?;
+            // Only the first connection creates tables (idempotent via IF NOT EXISTS).
+            if i == 0 {
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS wal (
+                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                         doc_name TEXT NOT NULL,
+                         update_bytes BLOB NOT NULL,
+                         client_id INTEGER,
+                         created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                     );
+                     CREATE INDEX IF NOT EXISTS idx_wal_doc ON wal(doc_name, id);
 
-             CREATE TABLE IF NOT EXISTS wal (
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 doc_name TEXT NOT NULL,
-                 update_bytes BLOB NOT NULL,
-                 client_id INTEGER,
-                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
-             );
-             CREATE INDEX IF NOT EXISTS idx_wal_doc ON wal(doc_name, id);
-
-             CREATE TABLE IF NOT EXISTS snapshots (
-                 doc_name TEXT PRIMARY KEY,
-                 state BLOB NOT NULL,
-                 wal_id INTEGER NOT NULL,
-                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-             );",
-        )?;
-
-        info!(path = %path.display(), "SQLite storage opened");
-        Ok(SqliteBackend {
-            conn: std::sync::Mutex::new(conn),
-        })
+                     CREATE TABLE IF NOT EXISTS snapshots (
+                         doc_name TEXT PRIMARY KEY,
+                         state BLOB NOT NULL,
+                         wal_id INTEGER NOT NULL,
+                         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                     );",
+                )?;
+            }
+            shards.push(std::sync::Mutex::new(conn));
+        }
+        Ok(SqlitePool { shards })
     }
 
-    /// Open an in-memory database (for testing).
-    #[allow(dead_code)]
-    pub fn open_memory() -> Result<Self, StorageError> {
+    /// Open an in-memory pool (for tests). shard_count is forced to 1
+    /// because in-memory databases cannot share state across connections.
+    pub fn open_memory(shard_count: usize) -> Result<Self, StorageError> {
+        let _ = shard_count; // in-memory must be 1
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(
             "CREATE TABLE wal (
@@ -137,9 +144,69 @@ impl SqliteBackend {
                  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
              );",
         )?;
-        Ok(SqliteBackend {
-            conn: std::sync::Mutex::new(conn),
+        Ok(SqlitePool {
+            shards: vec![std::sync::Mutex::new(conn)],
         })
+    }
+
+    /// Select the shard for a given document name (FNV-1a hash).
+    fn shard_for(&self, doc_name: &str) -> &std::sync::Mutex<Connection> {
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for byte in doc_name.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        &self.shards[hash as usize % self.shards.len()]
+    }
+
+    /// Primary shard (index 0) — used for schema operations and cross-doc queries.
+    pub fn primary(&self) -> &std::sync::Mutex<Connection> {
+        &self.shards[0]
+    }
+}
+
+/// SQLite-backed storage using WAL journal mode with connection pooling.
+pub struct SqliteBackend {
+    pool: SqlitePool,
+}
+
+impl SqliteBackend {
+    /// Open or create the SQLite database at the given path (default 4 shards).
+    pub fn open(path: &Path) -> Result<Self, StorageError> {
+        Self::open_with_pool_size(path, 4)
+    }
+
+    /// Open with a specific pool size.
+    pub fn open_with_pool_size(path: &Path, pool_size: usize) -> Result<Self, StorageError> {
+        let pool = SqlitePool::open(path, pool_size)?;
+        info!(path = %path.display(), shards = pool.shards.len(), "SQLite storage opened");
+        Ok(SqliteBackend { pool })
+    }
+
+    /// Open an in-memory database (for testing).
+    #[allow(dead_code)]
+    pub fn open_memory() -> Result<Self, StorageError> {
+        let pool = SqlitePool::open_memory(1)?;
+        Ok(SqliteBackend { pool })
+    }
+
+    /// Query WAL entries with sequence ID > `since_seq` for a document.
+    #[allow(dead_code)]
+    pub fn wal_entries_since(
+        &self,
+        doc_name: &str,
+        since_seq: u64,
+    ) -> Result<Vec<(u64, Vec<u8>)>, StorageError> {
+        let conn = self.pool.shard_for(doc_name).lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, update_bytes FROM wal WHERE doc_name = ?1 AND id > ?2 ORDER BY id",
+        )?;
+        let entries: Vec<(u64, Vec<u8>)> = stmt
+            .query_map(rusqlite::params![doc_name, since_seq as i64], |row| {
+                Ok((row.get::<_, i64>(0)? as u64, row.get(1)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(entries)
     }
 }
 
@@ -151,7 +218,7 @@ impl StorageBackend for SqliteBackend {
         update: &[u8],
         client_id: Option<u64>,
     ) -> Result<u64, StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.shard_for(doc_name).lock().unwrap();
         conn.execute(
             "INSERT INTO wal (doc_name, update_bytes, client_id) VALUES (?1, ?2, ?3)",
             rusqlite::params![doc_name, update, client_id.map(|id| id as i64)],
@@ -162,7 +229,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn load_document(&self, doc_name: &str) -> Result<Option<DocumentState>, StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.shard_for(doc_name).lock().unwrap();
 
         // Load snapshot if exists.
         let snapshot: Option<(Vec<u8>, i64)> = conn
@@ -208,7 +275,7 @@ impl StorageBackend for SqliteBackend {
         state: &[u8],
         up_to_wal_id: u64,
     ) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.shard_for(doc_name).lock().unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO snapshots (doc_name, state, wal_id, updated_at)
              VALUES (?1, ?2, ?3, datetime('now'))",
@@ -223,7 +290,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn list_documents(&self) -> Result<Vec<String>, StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.primary().lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT DISTINCT doc_name FROM (
                  SELECT doc_name FROM wal

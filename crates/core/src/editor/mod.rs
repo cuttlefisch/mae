@@ -5,7 +5,7 @@ mod command;
 mod dap_ops;
 mod debug_panel_ops;
 mod diagnostics;
-mod dispatch;
+pub mod dispatch;
 mod edit_ops;
 pub(crate) mod ex_parse;
 mod file_ops;
@@ -42,6 +42,45 @@ pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
 pub use kb_ops::KbWatcherStats;
+
+/// Collaborative editing connection status.
+/// Surfaced in the status bar via `format_collab_status()`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CollabStatus {
+    /// No collaborative session configured or active.
+    #[default]
+    Off,
+    /// Establishing initial connection to the state server.
+    Connecting,
+    /// Connected to the state server with `peer_count` other editors.
+    Connected { peer_count: usize },
+    /// Lost connection, attempting to re-establish.
+    Reconnecting,
+    /// Disconnected from the state server (not retrying).
+    Disconnected,
+}
+
+/// Intent signals from the editor core to the binary event loop.
+///
+/// The binary drains `editor.pending_collab_intent` each tick, similar to
+/// `pending_lsp_requests` and `pending_dap_intents`.
+#[derive(Debug, Clone)]
+pub enum CollabIntent {
+    /// Start a local state server process.
+    StartServer,
+    /// Connect to a remote state server.
+    Connect { address: String },
+    /// Disconnect from the current server.
+    Disconnect,
+    /// Show the *Collab Status* diagnostic buffer.
+    ShowStatus,
+    /// Share the named buffer for collaborative editing.
+    ShareBuffer { buffer_name: String },
+    /// Force sync the named buffer.
+    ForceSync { buffer_name: String },
+    /// Run connectivity diagnostics.
+    Doctor,
+}
 
 /// State for an active note capture session (org-roam parity).
 /// Set when `kb_create_note_from_title` creates a note; cleared by
@@ -1053,6 +1092,12 @@ pub struct Editor {
     /// Paths for which this editor instance holds advisory file locks.
     /// Locks are acquired on file open and released on buffer close or exit.
     pub locked_files: HashSet<PathBuf>,
+    /// Current collaborative editing connection status.
+    pub collab_status: CollabStatus,
+    /// Number of documents currently synced via the collaborative state server.
+    pub collab_synced_docs: usize,
+    /// Pending collaborative editing intent for the binary event loop to drain.
+    pub pending_collab_intent: Option<CollabIntent>,
 }
 
 impl Default for Editor {
@@ -1349,6 +1394,9 @@ impl Editor {
             pending_pkg_commands: Vec::new(),
             pending_git_diff: None,
             locked_files: HashSet::new(),
+            collab_status: CollabStatus::Off,
+            collab_synced_docs: 0,
+            pending_collab_intent: None,
         }
     }
 

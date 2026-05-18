@@ -233,6 +233,63 @@ pub fn run_doctor() -> i32 {
         }
     }
 
+    // --- Collaborative Editing ---
+    section("Collaborative Editing");
+
+    if check_binary("mae-state-server").is_some() {
+        println!("  {} state-server binary: found", GREEN_CHECK);
+    } else {
+        println!("  {} state-server binary: not found", YELLOW_WARN);
+        warnings += 1;
+    }
+
+    match std::env::var("MAE_STATE_SERVER") {
+        Ok(val) => println!("  {} MAE_STATE_SERVER env: {}", GREEN_CHECK, val),
+        Err(_) => println!("  {} MAE_STATE_SERVER env: not set", YELLOW_WARN),
+    }
+
+    // Read collab options from config.toml if present.
+    // These options live in `[collaboration]` section of config.toml
+    // and default via the OptionRegistry.
+    let collab_addr = config_path
+        .exists()
+        .then(|| {
+            std::fs::read_to_string(&config_path)
+                .ok()
+                .and_then(|s| s.parse::<toml::Value>().ok())
+                .and_then(|t| {
+                    t.get("collaboration")
+                        .and_then(|c| c.get("server_address"))
+                        .and_then(|v| v.as_str().map(String::from))
+                })
+        })
+        .flatten()
+        .unwrap_or_else(|| "127.0.0.1:9473".to_string());
+    let collab_auto = config_path
+        .exists()
+        .then(|| {
+            std::fs::read_to_string(&config_path)
+                .ok()
+                .and_then(|s| s.parse::<toml::Value>().ok())
+                .and_then(|t| {
+                    t.get("collaboration")
+                        .and_then(|c| c.get("auto_connect"))
+                        .and_then(|v| v.as_bool())
+                })
+        })
+        .flatten()
+        .unwrap_or(false);
+    println!("  {} collab_server_address: {}", GREEN_CHECK, collab_addr);
+    println!(
+        "  {} collab_auto_connect: {}",
+        if collab_auto {
+            GREEN_CHECK
+        } else {
+            YELLOW_WARN
+        },
+        collab_auto
+    );
+
     // --- Summary ---
     println!();
     if errors > 0 {

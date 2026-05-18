@@ -140,6 +140,52 @@ impl TextSync {
         &self.doc
     }
 
+    /// Reconcile the document to a target string via minimal CRDT operations.
+    ///
+    /// Computes a character-level diff between the current content and `target`,
+    /// then applies insert/delete operations through yrs transactions. Returns
+    /// the encoded update bytes for broadcast (empty if no change).
+    pub fn reconcile_to(&mut self, target: &str) -> Vec<u8> {
+        use similar::{ChangeTag, TextDiff};
+
+        let current = self.content();
+        if current == target {
+            return Vec::new();
+        }
+
+        let target_str = target.to_string();
+        let diff = TextDiff::from_chars(&current, &target_str);
+        let ytext = self.doc.get_or_insert_text(TEXT_NAME);
+
+        let update = {
+            let mut txn = self.doc.transact_mut();
+            let mut offset: u32 = 0;
+
+            for change in diff.iter_all_changes() {
+                match change.tag() {
+                    ChangeTag::Equal => {
+                        offset += change.value().chars().count() as u32;
+                    }
+                    ChangeTag::Delete => {
+                        let len = change.value().chars().count() as u32;
+                        ytext.remove_range(&mut txn, offset, len);
+                        // offset stays the same after delete
+                    }
+                    ChangeTag::Insert => {
+                        let text = change.value();
+                        ytext.insert(&mut txn, offset, text);
+                        offset += text.chars().count() as u32;
+                    }
+                }
+            }
+
+            txn.encode_update_v1()
+        };
+
+        self.rebuild_rope();
+        update
+    }
+
     /// Rebuild rope from YText (called after remote updates).
     fn rebuild_rope(&mut self) {
         let text = self.doc.get_or_insert_text(TEXT_NAME);
@@ -281,6 +327,44 @@ mod tests {
         // Apply diff to B
         doc_b.apply_update(&diff).unwrap();
         assert_eq!(doc_b.content(), "hello world!");
+    }
+
+    #[test]
+    fn reconcile_to_basic() {
+        let mut ts = TextSync::new("hello world");
+        let update = ts.reconcile_to("hello rust");
+        assert!(!update.is_empty());
+        assert_eq!(ts.content(), "hello rust");
+        assert_eq!(ts.rope().to_string(), "hello rust");
+    }
+
+    #[test]
+    fn reconcile_to_noop() {
+        let mut ts = TextSync::new("no change");
+        let update = ts.reconcile_to("no change");
+        assert!(update.is_empty());
+        assert_eq!(ts.content(), "no change");
+    }
+
+    #[test]
+    fn reconcile_preserves_crdt_history() {
+        // Reconcile on doc A, then apply the update on doc B — both converge.
+        let mut doc_a = TextSync::with_client_id("hello world", 1);
+        let mut doc_b = TextSync::with_client_id("", 2);
+
+        // Sync initial state.
+        let state = doc_a.encode_state();
+        doc_b.apply_update(&state).unwrap();
+        assert_eq!(doc_b.content(), "hello world");
+
+        // Reconcile A to new content.
+        let update = doc_a.reconcile_to("hello rust world!");
+        assert!(!update.is_empty());
+        assert_eq!(doc_a.content(), "hello rust world!");
+
+        // Apply to B.
+        doc_b.apply_update(&update).unwrap();
+        assert_eq!(doc_b.content(), "hello rust world!");
     }
 
     #[test]

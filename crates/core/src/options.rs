@@ -366,6 +366,22 @@ impl OptionRegistry {
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",
                     OptionKind::Bool, "true", Some("editor.file_tree_focus_on_open"), &[]),
+                // --- Collaboration ---
+                opt!("collab_server_address", &["collab-server-address"],
+                    "TCP address of the collaborative state server",
+                    OptionKind::String, "127.0.0.1:9473", Some("collaboration.server_address"), &[]),
+                opt!("collab_auto_connect", &["collab-auto-connect"],
+                    "Automatically connect to the state server on startup",
+                    OptionKind::Bool, "false", Some("collaboration.auto_connect"), &[]),
+                opt!("collab_auto_share", &["collab-auto-share"],
+                    "Automatically share new buffers when connected to the state server",
+                    OptionKind::Bool, "false", Some("collaboration.auto_share"), &[]),
+                opt!("collab_reconnect_interval", &["collab-reconnect-interval"],
+                    "Seconds between automatic reconnection attempts to the state server",
+                    OptionKind::Int, "5", Some("collaboration.reconnect_interval_secs"), &[]),
+                opt!("collab_user_name", &["collab-user-name"],
+                    "Display name used to attribute collaborative edits",
+                    OptionKind::String, "", Some("collaboration.user_name"), &[]),
             ],
         }
     }

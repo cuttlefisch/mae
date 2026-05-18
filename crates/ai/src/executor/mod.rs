@@ -1,4 +1,5 @@
 mod ai_exec;
+mod collab_exec;
 mod core_exec;
 mod dap_exec;
 pub(crate) mod grading;

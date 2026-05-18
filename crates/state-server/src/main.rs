@@ -21,7 +21,7 @@ use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
 use storage::StorageBackend;
 use tokio::io::BufReader;
 use tokio::net::TcpListener;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[tokio::main]
 async fn main() {
@@ -244,6 +244,40 @@ async fn run_server(start_args: cli::StartArgs) {
                         });
                     }
                     Err(e) => error!(error = %e, "Unix accept error"),
+                }
+            }
+        });
+    }
+
+    // Spawn background compaction + eviction task.
+    {
+        let compact_interval = config.sync.compaction_interval_secs;
+        let eviction_secs = config.sync.idle_eviction_secs;
+        let store = Arc::clone(&doc_store);
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(compact_interval.max(10)));
+            interval.tick().await; // skip first immediate tick
+            loop {
+                interval.tick().await;
+
+                // Compact all in-memory documents.
+                let names = store.document_names().await;
+                for name in &names {
+                    if let Err(e) = store.compact_doc(name).await {
+                        warn!(doc = %name, error = %e, "background compaction failed");
+                    }
+                }
+                if !names.is_empty() {
+                    debug!(count = names.len(), "background compaction complete");
+                }
+
+                // Evict idle documents.
+                if eviction_secs > 0 {
+                    let evicted = store.evict_idle(eviction_secs).await;
+                    if !evicted.is_empty() {
+                        debug!(count = evicted.len(), "idle eviction complete");
+                    }
                 }
             }
         });

@@ -1,5 +1,6 @@
 mod ai_tools;
 mod categories;
+mod collab_tools;
 mod core_tools;
 mod dap_tools;
 mod kb_tools;
@@ -105,6 +106,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
     tools.extend(kb_tools::kb_tool_definitions());
     tools.extend(shell_tools::shell_tool_definitions());
     tools.extend(web_tools::web_tool_definitions());
+    tools.extend(collab_tools::collab_tool_definitions());
     tools
 }
 

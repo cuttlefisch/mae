@@ -924,6 +924,31 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         })
         .collect();
 
+    // Collaboration
+    let collab_addr = editor
+        .get_option("collab_server_address")
+        .map(|(v, _)| v.to_string())
+        .unwrap_or_else(|| "127.0.0.1:9473".to_string());
+    let collab_auto = editor
+        .get_option("collab_auto_connect")
+        .map(|(v, _)| v == "true")
+        .unwrap_or(false);
+    let collab_configured =
+        collab_auto || !matches!(editor.collab_status, mae_core::CollabStatus::Off);
+    let collab_status_str = match &editor.collab_status {
+        mae_core::CollabStatus::Off => "off",
+        mae_core::CollabStatus::Connecting => "connecting",
+        mae_core::CollabStatus::Connected { .. } => "connected",
+        mae_core::CollabStatus::Reconnecting => "reconnecting",
+        mae_core::CollabStatus::Disconnected => "disconnected",
+    };
+    let state_server_found = on_path("mae-state-server");
+    if collab_auto && !state_server_found {
+        issues.push(
+            "collab_auto_connect is true but mae-state-server binary not found on PATH".to_string(),
+        );
+    }
+
     let report = serde_json::json!({
         "ai_agent": {
             "command": ai_cmd,
@@ -938,6 +963,14 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         },
         "lsp_servers": lsp_json,
         "dap_adapters": dap_json,
+        "collaboration": {
+            "configured": collab_configured,
+            "server_address": collab_addr,
+            "auto_connect": collab_auto,
+            "status": collab_status_str,
+            "synced_docs": editor.collab_synced_docs,
+            "state_server_binary_found": state_server_found,
+        },
         "init_files": init_files,
         "modules": modules_json,
         "options_modified": options_modified,
@@ -1031,9 +1064,17 @@ mod tests {
         assert!(json.get("ai_chat").is_some());
         assert!(json.get("lsp_servers").is_some());
         assert!(json.get("dap_adapters").is_some());
+        assert!(json.get("collaboration").is_some());
         assert!(json.get("init_files").is_some());
         assert!(json.get("options_modified").is_some());
         assert!(json.get("issues").is_some());
+        // Verify collaboration section structure
+        let collab = &json["collaboration"];
+        assert!(collab.get("configured").is_some());
+        assert!(collab.get("server_address").is_some());
+        assert!(collab.get("auto_connect").is_some());
+        assert!(collab.get("status").is_some());
+        assert!(collab.get("synced_docs").is_some());
     }
 
     #[test]

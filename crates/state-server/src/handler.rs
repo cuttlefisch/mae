@@ -150,8 +150,13 @@ fn is_doc_method(msg: &str) -> bool {
         || msg.contains("\"sync/update\"")
         || msg.contains("\"sync/full_state\"")
         || msg.contains("\"sync/diff\"")
+        || msg.contains("\"sync/resync\"")
         || msg.contains("\"docs/list\"")
         || msg.contains("\"docs/content\"")
+        || msg.contains("\"docs/stats\"")
+        || msg.contains("\"docs/save_intent\"")
+        || msg.contains("\"docs/save_committed\"")
+        || msg.contains("\"$/debug\"")
 }
 
 /// Handle document-level methods directly (without editor tool dispatch).
@@ -221,6 +226,7 @@ async fn handle_doc_request(
                         bc.broadcast(&EditorEvent::SyncUpdate {
                             buffer_name: doc_name.clone(),
                             update_base64: update_to_base64(&result.update),
+                            wal_seq: result.wal_seq,
                         });
                     }
                     JsonRpcResponse::success(
@@ -303,6 +309,87 @@ async fn handle_doc_request(
             }
         }
 
+        "sync/resync" => {
+            // Full resync: returns full state + state vector for a document.
+            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            match doc_store.encode_state(&doc_name).await {
+                Ok(state) => {
+                    let sv = doc_store.state_vector(&doc_name).await.unwrap_or_default();
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({
+                            "doc": doc_name,
+                            "state": update_to_base64(&state),
+                            "sv": update_to_base64(&sv),
+                        }),
+                    )
+                }
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+            }
+        }
+
+        "docs/stats" => {
+            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            match doc_store.doc_stats(&doc_name).await {
+                Ok(stats) => JsonRpcResponse::success(
+                    id,
+                    serde_json::json!({ "doc": doc_name, "stats": stats }),
+                ),
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+            }
+        }
+
+        "docs/save_intent" => {
+            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            let expected_hash = match params["expected_hash"].as_str() {
+                Some(h) => h,
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'expected_hash' field".to_string()),
+                    );
+                }
+            };
+            match doc_store.check_save_intent(&doc_name, expected_hash).await {
+                Ok(result) => JsonRpcResponse::success(
+                    id,
+                    serde_json::json!({ "doc": doc_name, "result": result }),
+                ),
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+            }
+        }
+
+        "docs/save_committed" => {
+            // Acknowledge that a save completed. Currently a no-op stub —
+            // can be extended to update metadata, trigger hooks, etc.
+            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            JsonRpcResponse::success(
+                id,
+                serde_json::json!({ "doc": doc_name, "committed": true }),
+            )
+        }
+
+        "$/debug" => {
+            let names = doc_store.document_names().await;
+            let mut doc_stats = serde_json::Map::new();
+            for name in &names {
+                if let Ok(stats) = doc_store.doc_stats(name).await {
+                    doc_stats.insert(
+                        name.clone(),
+                        serde_json::to_value(&stats).unwrap_or_default(),
+                    );
+                }
+            }
+            JsonRpcResponse::success(
+                id,
+                serde_json::json!({
+                    "documents": names.len(),
+                    "doc_stats": doc_stats,
+                    "version": env!("CARGO_PKG_VERSION"),
+                }),
+            )
+        }
+
         other => JsonRpcResponse::error(
             id,
             McpError::method_not_found(format!("Unknown method: {other}")),
@@ -358,6 +445,7 @@ async fn handle_sync_tool(
                     bc.broadcast(&EditorEvent::SyncUpdate {
                         buffer_name: doc.clone(),
                         update_base64: update_to_base64(&result.update),
+                        wal_seq: result.wal_seq,
                     });
                     McpToolResult {
                         success: true,

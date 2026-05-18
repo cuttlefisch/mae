@@ -195,6 +195,16 @@
 (define-key "normal" "SPC SPC" "command-palette")
 (define-key "normal" "SPC :" "enter-command-mode")
 
+;; +collaboration
+(set-group-name "normal" "SPC C" "collaboration")
+(define-key "normal" "SPC C s" "collab-start")
+(define-key "normal" "SPC C c" "collab-connect")
+(define-key "normal" "SPC C d" "collab-disconnect")
+(define-key "normal" "SPC C i" "collab-status")
+(define-key "normal" "SPC C S" "collab-share")
+(define-key "normal" "SPC C y" "collab-sync")
+(define-key "normal" "SPC C D" "collab-doctor")
+
 ;; Visual mode SPC bindings
 (define-key "visual" "SPC s n" "syntax-select-node")
 (define-key "visual" "SPC s e" "syntax-expand-selection")

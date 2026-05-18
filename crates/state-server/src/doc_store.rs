@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use mae_sync::encoding::validate_update;
 use mae_sync::text::TextSync;
+use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
@@ -21,6 +22,30 @@ struct DocEntry {
     wal_seq: u64,
     /// Updates since last compaction.
     update_count: u64,
+    /// Timestamp of last activity (update/read).
+    last_activity: std::time::Instant,
+    /// Number of clients currently connected to this document.
+    connected_clients: u32,
+}
+
+/// Statistics for a single document.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DocStats {
+    pub wal_seq: u64,
+    pub update_count: u64,
+    pub content_length: usize,
+    pub idle_secs: u64,
+    pub connected_clients: u32,
+}
+
+/// Result of a save intent check.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "status")]
+pub enum SaveIntentResult {
+    #[serde(rename = "ok")]
+    Ok { server_hash: String },
+    #[serde(rename = "conflict")]
+    Conflict { server_hash: String },
 }
 
 /// Thread-safe document store with per-document locking.
@@ -97,6 +122,8 @@ impl DocStore {
             sync,
             wal_seq,
             update_count: 0,
+            last_activity: std::time::Instant::now(),
+            connected_clients: 0,
         }));
         docs.insert(doc_name.to_string(), Arc::clone(&entry));
         Ok(entry)
@@ -126,6 +153,7 @@ impl DocStore {
                 .map_err(|e| StorageError::Sqlite(format!("apply failed: {e}")))?;
             doc.wal_seq = wal_id;
             doc.update_count += 1;
+            doc.last_activity = std::time::Instant::now();
             doc.update_count >= self.compact_threshold
         };
 
@@ -162,16 +190,7 @@ impl DocStore {
 
     /// Compact a document: snapshot + WAL trim.
     async fn compact(&self, doc_name: &str) -> Result<(), StorageError> {
-        let entry = self.get_or_create(doc_name).await?;
-        let (state, wal_seq) = {
-            let mut doc = entry.lock().await;
-            let state = doc.sync.encode_state();
-            let seq = doc.wal_seq;
-            doc.update_count = 0;
-            (state, seq)
-        };
-        self.storage.compact(doc_name, &state, wal_seq).await?;
-        Ok(())
+        self.compact_doc(doc_name).await
     }
 
     /// Compact all documents (e.g. on shutdown).
@@ -211,6 +230,129 @@ impl DocStore {
         let doc = entry.lock().await;
         mae_sync::encoding::encode_diff(doc.sync.doc(), remote_sv)
             .map_err(|e| StorageError::Sqlite(format!("diff encoding: {e}")))
+    }
+
+    /// Compute SHA-256 content hash for a document.
+    pub async fn content_hash(&self, doc_name: &str) -> Result<String, StorageError> {
+        let entry = self.get_or_create(doc_name).await?;
+        let doc = entry.lock().await;
+        let content = doc.sync.content();
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        Ok(format!("{:x}", hasher.finalize()))
+    }
+
+    /// Check if a client's expected hash matches the server's current content hash.
+    /// Used before a save-to-disk operation to prevent overwriting concurrent edits.
+    pub async fn check_save_intent(
+        &self,
+        doc_name: &str,
+        expected_hash: &str,
+    ) -> Result<SaveIntentResult, StorageError> {
+        let server_hash = self.content_hash(doc_name).await?;
+        if server_hash == expected_hash {
+            Ok(SaveIntentResult::Ok { server_hash })
+        } else {
+            Ok(SaveIntentResult::Conflict { server_hash })
+        }
+    }
+
+    /// Get statistics for a document.
+    pub async fn doc_stats(&self, doc_name: &str) -> Result<DocStats, StorageError> {
+        let entry = self.get_or_create(doc_name).await?;
+        let doc = entry.lock().await;
+        Ok(DocStats {
+            wal_seq: doc.wal_seq,
+            update_count: doc.update_count,
+            content_length: doc.sync.content().len(),
+            idle_secs: doc.last_activity.elapsed().as_secs(),
+            connected_clients: doc.connected_clients,
+        })
+    }
+
+    /// Track a client connecting to a document.
+    #[allow(dead_code)]
+    pub async fn track_client_connect(&self, doc_name: &str) -> Result<(), StorageError> {
+        let entry = self.get_or_create(doc_name).await?;
+        let mut doc = entry.lock().await;
+        doc.connected_clients += 1;
+        doc.last_activity = std::time::Instant::now();
+        Ok(())
+    }
+
+    /// Track a client disconnecting from a document.
+    #[allow(dead_code)]
+    pub async fn track_client_disconnect(&self, doc_name: &str) -> Result<(), StorageError> {
+        let entry = self.get_or_create(doc_name).await?;
+        let mut doc = entry.lock().await;
+        doc.connected_clients = doc.connected_clients.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Evict idle documents with no connected clients.
+    /// Returns the names of evicted documents.
+    pub async fn evict_idle(&self, max_idle_secs: u64) -> Vec<String> {
+        let mut to_evict = Vec::new();
+
+        // First pass: identify candidates (read lock).
+        {
+            let docs = self.docs.read().await;
+            for (name, entry) in docs.iter() {
+                let doc = entry.lock().await;
+                if doc.connected_clients == 0
+                    && doc.last_activity.elapsed().as_secs() >= max_idle_secs
+                {
+                    to_evict.push(name.clone());
+                }
+            }
+        }
+
+        if to_evict.is_empty() {
+            return Vec::new();
+        }
+
+        // Compact before eviction, then remove.
+        for name in &to_evict {
+            if let Err(e) = self.compact_doc(name).await {
+                warn!(doc = %name, error = %e, "compaction before eviction failed");
+            }
+        }
+
+        let mut docs = self.docs.write().await;
+        let mut evicted = Vec::new();
+        for name in &to_evict {
+            // Re-check under write lock — a client may have connected.
+            if let Some(entry) = docs.get(name) {
+                let doc = entry.lock().await;
+                if doc.connected_clients == 0
+                    && doc.last_activity.elapsed().as_secs() >= max_idle_secs
+                {
+                    drop(doc);
+                    docs.remove(name);
+                    evicted.push(name.clone());
+                }
+            }
+        }
+
+        if !evicted.is_empty() {
+            info!(count = evicted.len(), "evicted idle documents");
+        }
+
+        evicted
+    }
+
+    /// Compact a single document (public interface for background tasks).
+    pub async fn compact_doc(&self, doc_name: &str) -> Result<(), StorageError> {
+        let entry = self.get_or_create(doc_name).await?;
+        let (state, wal_seq) = {
+            let mut doc = entry.lock().await;
+            let state = doc.sync.encode_state();
+            let seq = doc.wal_seq;
+            doc.update_count = 0;
+            (state, seq)
+        };
+        self.storage.compact(doc_name, &state, wal_seq).await?;
+        Ok(())
     }
 }
 

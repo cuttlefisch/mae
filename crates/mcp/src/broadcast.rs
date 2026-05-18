@@ -50,6 +50,9 @@ pub enum EditorEvent {
     SyncUpdate {
         buffer_name: String,
         update_base64: String,
+        /// WAL sequence ID for this update (0 if not persisted).
+        #[serde(default)]
+        wal_seq: u64,
     },
 }
 
@@ -270,6 +273,7 @@ mod tests {
         let event = EditorEvent::SyncUpdate {
             buffer_name: "test.rs".to_string(),
             update_base64: "AQIDBA==".to_string(),
+            wal_seq: 0,
         };
         bc.broadcast(&event);
 
@@ -278,6 +282,7 @@ mod tests {
             EditorEvent::SyncUpdate {
                 buffer_name,
                 update_base64,
+                ..
             } => {
                 assert_eq!(buffer_name, "test.rs");
                 assert_eq!(update_base64, "AQIDBA==");
@@ -297,6 +302,7 @@ mod tests {
         let event = EditorEvent::SyncUpdate {
             buffer_name: "foo.rs".to_string(),
             update_base64: "dGVzdA==".to_string(),
+            wal_seq: 0,
         };
         bc.broadcast(&event);
 

@@ -60,6 +60,10 @@ pub struct SyncConfig {
     pub heartbeat_interval_secs: u64,
     /// Maximum concurrent documents in memory.
     pub max_documents: usize,
+    /// Idle eviction timeout in seconds (0 = disabled).
+    pub idle_eviction_secs: u64,
+    /// Background compaction interval in seconds.
+    pub compaction_interval_secs: u64,
 }
 
 impl Default for SyncConfig {
@@ -67,6 +71,8 @@ impl Default for SyncConfig {
         SyncConfig {
             heartbeat_interval_secs: 30,
             max_documents: 1000,
+            idle_eviction_secs: 300,
+            compaction_interval_secs: 60,
         }
     }
 }

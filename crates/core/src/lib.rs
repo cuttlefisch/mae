@@ -81,11 +81,11 @@ pub use debug::{
 };
 pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
-    BlameEntry, BlameOverlay, CaptureState, CodeActionItem, CodeActionMenu, CompletionItem,
-    Diagnostic, DiagnosticSeverity, DiagnosticStore, DocumentHighlightRange, EditRecord, Editor,
-    HighlightKind, HoverPopup, InputLock, LspLocation, LspRange, LspServerInfo, LspServerStatus,
-    PeekReferenceLocation, PeekReferencesState, PeekState, SignatureHelpInfo, SignatureHelpState,
-    SymbolOutlineEntry, SymbolOutlineState,
+    BlameEntry, BlameOverlay, CaptureState, CodeActionItem, CodeActionMenu, CollabIntent,
+    CollabStatus, CompletionItem, Diagnostic, DiagnosticSeverity, DiagnosticStore,
+    DocumentHighlightRange, EditRecord, Editor, HighlightKind, HoverPopup, InputLock, LspLocation,
+    LspRange, LspServerInfo, LspServerStatus, PeekReferenceLocation, PeekReferencesState,
+    PeekState, SignatureHelpInfo, SignatureHelpState, SymbolOutlineEntry, SymbolOutlineState,
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;

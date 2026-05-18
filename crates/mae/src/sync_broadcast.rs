@@ -20,6 +20,7 @@ pub fn drain_and_broadcast(editor: &mut Editor, broadcaster: &SharedBroadcaster)
             let event = EditorEvent::SyncUpdate {
                 buffer_name: buffer_name.clone(),
                 update_base64: mae_sync::encoding::update_to_base64(&update),
+                wal_seq: 0,
             };
             bc.broadcast(&event);
         }

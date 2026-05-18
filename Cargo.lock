@@ -2077,7 +2077,7 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "crossterm",
  "dirs",
@@ -2107,7 +2107,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2124,11 +2124,11 @@ dependencies = [
 
 [[package]]
 name = "mae-babel"
-version = "0.9.0"
+version = "0.10.1"
 
 [[package]]
 name = "mae-core"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "hostname",
  "imagesize",
@@ -2171,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "mae-dap"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "mae-core",
  "serde",
@@ -2182,18 +2182,18 @@ dependencies = [
 
 [[package]]
 name = "mae-export"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "mae-babel",
 ]
 
 [[package]]
 name = "mae-format"
-version = "0.9.0"
+version = "0.10.1"
 
 [[package]]
 name = "mae-gui"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -2207,7 +2207,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "notify",
  "rusqlite",
@@ -2221,14 +2221,14 @@ dependencies = [
 
 [[package]]
 name = "mae-lookup"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-lsp"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2238,14 +2238,14 @@ dependencies = [
 
 [[package]]
 name = "mae-make"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-mcp"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -2268,7 +2268,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "mae-core",
  "steel-core",
@@ -2277,7 +2277,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
@@ -2286,15 +2286,15 @@ dependencies = [
 
 [[package]]
 name = "mae-snippets"
-version = "0.9.0"
+version = "0.10.1"
 
 [[package]]
 name = "mae-spell"
-version = "0.9.0"
+version = "0.10.1"
 
 [[package]]
 name = "mae-state-server"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "async-trait",
  "dirs",
@@ -2303,6 +2303,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "toml",
@@ -2312,13 +2313,14 @@ dependencies = [
 
 [[package]]
 name = "mae-sync"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "base64",
  "rand 0.8.6",
  "ropey",
  "serde",
  "serde_json",
+ "similar",
  "tracing",
  "yrs",
 ]
@@ -4047,6 +4049,12 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "siphasher"

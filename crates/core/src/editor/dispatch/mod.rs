@@ -1,3 +1,4 @@
+mod collab;
 mod dap;
 mod edit;
 mod file;
@@ -146,6 +147,9 @@ impl Editor {
         }
         if let Some(v) = self.dispatch_file_tree(name) {
             self.mark_full_redraw();
+            return v;
+        }
+        if let Some(v) = self.dispatch_collab(name) {
             return v;
         }
 
