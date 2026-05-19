@@ -2130,6 +2130,15 @@ impl Editor {
         self.buffers.iter().position(|b| b.name == name)
     }
 
+    /// Find a buffer by its collaborative document ID.
+    /// Falls back to `find_buffer_by_name` if no buffer has a matching `collab_doc_id`.
+    pub fn find_buffer_by_collab_doc_id(&self, doc_id: &str) -> Option<usize> {
+        self.buffers
+            .iter()
+            .position(|b| b.collab_doc_id.as_deref() == Some(doc_id))
+            .or_else(|| self.find_buffer_by_name(doc_id))
+    }
+
     /// Find a buffer by name, or create it with the provided closure.
     /// Returns the buffer index.
     pub fn find_or_create_buffer(&mut self, name: &str, create: impl FnOnce() -> Buffer) -> usize {
@@ -2698,6 +2707,8 @@ impl Editor {
         }
         let prev_idx = self.active_buffer_idx();
         self.save_mode_to_buffer();
+        // Save the current window's view state before switching.
+        self.window_mgr.focused_window_mut().save_view_state();
         self.display_buffer(buf_idx);
         // Find the window now showing buf_idx and focus it.
         let win_id = self
@@ -2708,6 +2719,10 @@ impl Editor {
         if let Some(id) = win_id {
             self.window_mgr.set_focused(id);
         }
+        // Restore view state for the new buffer (scroll position, cursor).
+        self.window_mgr
+            .focused_window_mut()
+            .restore_view_state(buf_idx);
         // No forced fallback: if display_buffer() routed the buffer via
         // switch_to_buffer_non_conversation (e.g. split_root for agent
         // shells), the buffer is already placed in a new window that may

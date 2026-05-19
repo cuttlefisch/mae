@@ -304,6 +304,18 @@ impl Editor {
                 }
                 self.set_mode(mode);
             }
+            "enter-insert-mode-bol" => {
+                let idx = self.active_buffer_idx();
+                use crate::buffer_mode::BufferMode;
+                let mode = self.buffers[idx].kind.insert_mode();
+                if mode == Mode::Insert {
+                    self.window_mgr
+                        .focused_window_mut()
+                        .move_to_first_non_blank(&self.buffers[idx]);
+                    self.buffers[idx].begin_undo_group();
+                }
+                self.set_mode(mode);
+            }
             "enter-normal-mode" => {
                 self.insert_mode_oneshot_normal = false;
                 if matches!(self.mode, Mode::Visual(_)) {

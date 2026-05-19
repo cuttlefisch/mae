@@ -304,3 +304,15 @@ fn shell_escape_empty_shows_usage() {
     editor.execute_command("!");
     assert!(editor.status_msg.contains("Usage"));
 }
+
+#[test]
+fn shift_i_enters_insert_at_first_non_blank() {
+    let mut editor = ed_with_text("    hello world");
+    // Start cursor in the middle of the line
+    editor.window_mgr.focused_window_mut().cursor_col = 8;
+    assert_eq!(editor.mode, Mode::Normal);
+    editor.dispatch_builtin("enter-insert-mode-bol");
+    assert_eq!(editor.mode, Mode::Insert);
+    // Cursor should be at first non-blank (column 4)
+    assert_eq!(editor.window_mgr.focused_window().cursor_col, 4);
+}

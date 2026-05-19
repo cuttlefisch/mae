@@ -378,7 +378,85 @@ impl DocStore {
             info!(count = evicted.len(), "evicted idle documents");
         }
 
+        // BUG B fix: delete evicted docs from storage so recovery doesn't reload them.
+        drop(docs); // release write lock before async storage calls
+        for name in &evicted {
+            if let Err(e) = self.storage.delete_document(name).await {
+                warn!(doc = %name, error = %e, "storage delete after eviction failed");
+            }
+        }
+
         evicted
+    }
+
+    /// Encode full state and state vector atomically (single lock acquisition).
+    /// Used by `sync/resync` to satisfy INV-2 (state vector consistency).
+    pub async fn encode_state_and_sv(
+        &self,
+        doc_name: &str,
+    ) -> Result<(Vec<u8>, Vec<u8>), StorageError> {
+        let entry = self.get_or_create(doc_name).await?;
+        let doc = entry.lock().await;
+        let state = doc.sync.encode_state();
+        let sv = doc.sync.state_vector();
+        Ok((state, sv))
+    }
+
+    /// Encode diff and state vector atomically (single lock acquisition).
+    /// Used by `sync/diff` to satisfy INV-2 (state vector consistency).
+    pub async fn encode_diff_and_sv(
+        &self,
+        doc_name: &str,
+        remote_sv: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>), StorageError> {
+        let entry = self.get_or_create(doc_name).await?;
+        let doc = entry.lock().await;
+        let diff = mae_sync::encoding::encode_diff(doc.sync.doc(), remote_sv)
+            .map_err(|e| StorageError::Sqlite(format!("diff encoding: {e}")))?;
+        let sv = doc.sync.state_vector();
+        Ok((diff, sv))
+    }
+
+    /// Atomically share a document: delete old, create new, apply update, set connected_clients=1.
+    /// Used by `sync/share` to satisfy INV-5 (connected_clients accuracy).
+    pub async fn share_doc(
+        &self,
+        doc_name: &str,
+        update: &[u8],
+    ) -> Result<ApplyResult, StorageError> {
+        // Validate before touching anything.
+        validate_update(update)
+            .map_err(|e| StorageError::Sqlite(format!("invalid update: {e}")))?;
+
+        // Delete old doc from storage (ignore not-found).
+        let _ = self.storage.delete_document(doc_name).await;
+
+        // Remove old in-memory entry.
+        {
+            let mut docs = self.docs.write().await;
+            docs.remove(doc_name);
+        }
+
+        // WAL append first (durability).
+        let wal_id = self.storage.wal_append(doc_name, update, None).await?;
+
+        // Create new doc, apply update, set connected_clients=1.
+        let entry = self.get_or_create(doc_name).await?;
+        {
+            let mut doc = entry.lock().await;
+            doc.sync
+                .apply_update(update)
+                .map_err(|e| StorageError::Sqlite(format!("apply failed: {e}")))?;
+            doc.wal_seq = wal_id;
+            doc.update_count = 1;
+            doc.last_activity = std::time::Instant::now();
+            doc.connected_clients = 1; // BUG D fix: sharer is connected
+        }
+
+        Ok(ApplyResult {
+            update: update.to_vec(),
+            wal_seq: wal_id,
+        })
     }
 
     /// Compact a single document (public interface for background tasks).
@@ -489,6 +567,180 @@ mod tests {
 
         store.compact_all().await.unwrap();
         // No error — success.
+    }
+
+    #[tokio::test]
+    async fn apply_update_persists_to_wal() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = DocStore::new(backend.clone(), 500);
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "hello");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+
+        // WAL should have an entry.
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+        assert!(!state.wal_tail.is_empty(), "WAL should have entries");
+    }
+
+    #[tokio::test]
+    async fn get_or_create_loads_from_storage() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+
+        // Phase 1: create doc, persist, then evict from memory.
+        {
+            let store = DocStore::new(backend.clone(), 500);
+            let mut ts = TextSync::with_client_id("", 1);
+            let update = ts.insert(0, "persisted content");
+            store.apply_update("doc1", &update, Some(1)).await.unwrap();
+            store.compact_doc("doc1").await.unwrap();
+        }
+
+        // Phase 2: new store instance loads from storage.
+        {
+            let store = DocStore::new(backend.clone(), 500);
+            let content = store.content("doc1").await.unwrap();
+            assert_eq!(content, "persisted content");
+        }
+    }
+
+    #[tokio::test]
+    async fn evict_idle_deletes_from_storage() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = DocStore::new(backend.clone(), 500);
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "evict me");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+
+        // Evict with 0 idle threshold (immediate).
+        let evicted = store.evict_idle(0).await;
+        assert_eq!(evicted, vec!["doc1"]);
+
+        // BUG B regression: storage should also be cleared.
+        let docs = backend.list_documents().await.unwrap();
+        assert!(
+            docs.is_empty(),
+            "storage should be empty after eviction, got: {:?}",
+            docs
+        );
+    }
+
+    #[tokio::test]
+    async fn evict_skips_active_docs() {
+        let store = test_store();
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "active doc");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+
+        // Mark as having a connected client.
+        store.track_client_connect("doc1").await.unwrap();
+
+        let evicted = store.evict_idle(0).await;
+        assert!(evicted.is_empty(), "active docs should not be evicted");
+    }
+
+    #[tokio::test]
+    async fn compact_creates_snapshot_trims_wal() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = DocStore::new(backend.clone(), 500);
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "compact me");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+
+        store.compact_doc("doc1").await.unwrap();
+
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+        assert!(
+            state.snapshot.is_some(),
+            "snapshot should exist after compaction"
+        );
+        assert!(
+            state.wal_tail.is_empty(),
+            "WAL should be trimmed after compaction"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_loads_all_docs() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+
+        // Create 3 docs, compact them (so they have snapshots).
+        {
+            let store = DocStore::new(backend.clone(), 500);
+            let mut ts = TextSync::with_client_id("", 1);
+            for name in &["alpha", "beta", "gamma"] {
+                let update = ts.insert(0, name);
+                store.apply_update(name, &update, Some(1)).await.unwrap();
+                store.compact_doc(name).await.unwrap();
+            }
+        }
+
+        // New store should find all docs in storage.
+        let docs = backend.list_documents().await.unwrap();
+        assert_eq!(docs.len(), 3, "all 3 docs should be in storage");
+    }
+
+    #[tokio::test]
+    async fn encode_state_and_sv_consistent() {
+        let store = test_store();
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "consistent");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+
+        // Atomic: both from same lock.
+        let (state, sv) = store.encode_state_and_sv("doc1").await.unwrap();
+        assert!(!state.is_empty());
+        assert!(!sv.is_empty());
+
+        // Verify they describe the same doc state: applying state to empty doc
+        // should produce a doc whose sv matches.
+        let ts2 = TextSync::from_state(&state).unwrap();
+        assert_eq!(ts2.content(), "consistent");
+    }
+
+    #[tokio::test]
+    async fn share_doc_atomic() {
+        let store = test_store();
+
+        // Create an initial doc.
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "old content");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+
+        // Share replaces with new content.
+        let ts2 = TextSync::new("new content");
+        let new_state = ts2.encode_state();
+        let result = store.share_doc("doc1", &new_state).await.unwrap();
+        assert!(result.wal_seq > 0);
+
+        // Content should be new, not concatenated.
+        let content = store.content("doc1").await.unwrap();
+        assert_eq!(content, "new content");
+
+        // connected_clients should be 1 (BUG D regression).
+        let stats = store.doc_stats("doc1").await.unwrap();
+        assert_eq!(stats.connected_clients, 1);
+    }
+
+    #[tokio::test]
+    async fn client_disconnect_decrements_count() {
+        let store = test_store();
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "test");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+
+        store.track_client_connect("doc1").await.unwrap();
+        let stats = store.doc_stats("doc1").await.unwrap();
+        assert_eq!(stats.connected_clients, 1);
+
+        store.track_client_disconnect("doc1").await.unwrap();
+        let stats = store.doc_stats("doc1").await.unwrap();
+        assert_eq!(stats.connected_clients, 0);
     }
 
     #[tokio::test]

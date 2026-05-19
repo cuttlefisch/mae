@@ -521,8 +521,13 @@ pub fn format_collab_status(editor: &Editor) -> String {
         CollabStatus::Off => String::new(),
         CollabStatus::Connecting => " [C:\u{2026}]".to_string(),
         CollabStatus::Connected { peer_count } => {
-            let buf_name = &editor.buffers[editor.window_mgr.focused_window().buffer_idx].name;
-            if editor.collab_synced_buffers.contains(buf_name) {
+            let buf = &editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+            let is_synced = buf
+                .collab_doc_id
+                .as_ref()
+                .is_some_and(|id| editor.collab_synced_buffers.contains(id))
+                || editor.collab_synced_buffers.contains(&buf.name);
+            if is_synced {
                 format!(" [C:{}|synced]", peer_count)
             } else {
                 format!(" [C:{}]", peer_count)

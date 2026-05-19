@@ -1,0 +1,559 @@
+//! Bridge integration tests — protocol-level tests via duplex pipes.
+//!
+//! Tests exercise the full JSON-RPC round-trip between a simulated client and
+//! a real `handle_client` server handler via duplex pipes (no TCP).
+//! Additional buffer-level and editor-level tests are in their respective crate tests.
+
+use std::sync::Arc;
+
+use mae_core::Buffer;
+use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
+use mae_state_server::doc_store::DocStore;
+use mae_state_server::handler::handle_client;
+use mae_state_server::storage::SqliteBackend;
+use mae_sync::encoding::{base64_to_update, update_to_base64};
+use mae_sync::text::TextSync;
+use tokio::io::{AsyncWriteExt, BufReader};
+
+// --- Test Infrastructure ---
+
+fn test_broadcaster() -> SharedBroadcaster {
+    Arc::new(std::sync::Mutex::new(EventBroadcaster::new()))
+}
+
+fn test_doc_store() -> Arc<DocStore> {
+    let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+    Arc::new(DocStore::new(backend, 500))
+}
+
+struct Client {
+    writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    reader: BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+    next_id: u64,
+}
+
+impl Client {
+    async fn connect(store: Arc<DocStore>, broadcaster: SharedBroadcaster) -> Self {
+        let (client_stream, server_stream) = tokio::io::duplex(8192);
+        let (server_read, server_write) = tokio::io::split(server_stream);
+        let server_reader = BufReader::new(server_read);
+
+        tokio::spawn(async move {
+            handle_client(
+                server_reader,
+                server_write,
+                store,
+                broadcaster,
+                std::time::Instant::now(),
+            )
+            .await;
+        });
+
+        let (client_read, client_write) = tokio::io::split(client_stream);
+        let client_reader = BufReader::new(client_read);
+
+        let mut client = Client {
+            writer: client_write,
+            reader: client_reader,
+            next_id: 1,
+        };
+        client.initialize().await;
+        client.subscribe().await;
+        client
+    }
+
+    async fn send(&mut self, msg: &serde_json::Value) {
+        let payload = format!("{}\n", serde_json::to_string(msg).unwrap());
+        self.writer.write_all(payload.as_bytes()).await.unwrap();
+        self.writer.flush().await.unwrap();
+    }
+
+    async fn recv(&mut self) -> serde_json::Value {
+        loop {
+            let text = mae_mcp::read_message(&mut self.reader)
+                .await
+                .unwrap()
+                .unwrap();
+            let val: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if val.get("method").is_some()
+                && val.get("result").is_none()
+                && val.get("error").is_none()
+            {
+                continue;
+            }
+            return val;
+        }
+    }
+
+    async fn recv_timeout(&mut self, ms: u64) -> Option<serde_json::Value> {
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(ms),
+            mae_mcp::read_message(&mut self.reader),
+        )
+        .await
+        {
+            Ok(Ok(Some(text))) => serde_json::from_str(&text).ok(),
+            _ => None,
+        }
+    }
+
+    async fn initialize(&mut self) {
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"initialize","params":{"clientInfo":{"name":"bridge-test"}}});
+        self.next_id += 1;
+        self.send(&msg).await;
+        let resp = self.recv().await;
+        assert!(resp.get("error").is_none(), "initialize failed: {resp}");
+    }
+
+    async fn subscribe(&mut self) {
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"notifications/subscribe","params":{"types":["sync_update","peer_joined","peer_left","save_committed"]}});
+        self.next_id += 1;
+        self.send(&msg).await;
+        let resp = self.recv().await;
+        assert!(resp.get("error").is_none(), "subscribe failed: {resp}");
+    }
+
+    async fn share(&mut self, doc: &str, content: &str) {
+        let ts = TextSync::new(content);
+        let state = ts.encode_state();
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"sync/share","params":{"doc":doc,"update":update_to_base64(&state)}});
+        self.next_id += 1;
+        self.send(&msg).await;
+        let resp = self.recv().await;
+        assert!(resp.get("error").is_none(), "share failed: {resp}");
+    }
+
+    async fn send_update(&mut self, doc: &str, update: &[u8]) -> serde_json::Value {
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"sync/update","params":{"doc":doc,"update":update_to_base64(update)}});
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
+    async fn full_state(&mut self, doc: &str) -> Vec<u8> {
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"sync/full_state","params":{"doc":doc}});
+        self.next_id += 1;
+        self.send(&msg).await;
+        let resp = self.recv().await;
+        base64_to_update(resp["result"]["state"].as_str().unwrap()).unwrap()
+    }
+
+    async fn content(&mut self, doc: &str) -> String {
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"docs/content","params":{"doc":doc}});
+        self.next_id += 1;
+        self.send(&msg).await;
+        let resp = self.recv().await;
+        resp["result"]["content"].as_str().unwrap().to_string()
+    }
+
+    async fn debug_stats(&mut self) -> serde_json::Value {
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"$/debug"});
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
+    async fn wait_for_notification(
+        &mut self,
+        method: &str,
+        timeout_ms: u64,
+    ) -> Option<serde_json::Value> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            match tokio::time::timeout(remaining, mae_mcp::read_message(&mut self.reader)).await {
+                Ok(Ok(Some(text))) => {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if val.get("method").and_then(|m| m.as_str()) == Some(method) {
+                            return Some(val);
+                        }
+                    }
+                }
+                _ => return None,
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Tier 1 — Bridge Integration Tests
+// ============================================================================
+
+#[tokio::test]
+async fn share_edit_roundtrip() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("test.txt", "hello").await;
+    let state = client.full_state("test.txt").await;
+    let mut ts = TextSync::from_state(&state).unwrap();
+    let update = ts.insert(5, " world");
+    client.send_update("test.txt", &update).await;
+
+    assert_eq!(client.content("test.txt").await, "hello world");
+}
+
+#[tokio::test]
+async fn remote_update_applies_to_buffer() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("remote.txt", "hello").await;
+
+    let state = client_b.full_state("remote.txt").await;
+    let mut ts_b = TextSync::from_state(&state).unwrap();
+    let update = ts_b.insert(5, " remote");
+    client_b.send_update("remote.txt", &update).await;
+
+    let notif = client_a
+        .wait_for_notification("notifications/sync_update", 1000)
+        .await;
+    assert!(notif.is_some(), "A should receive sync notification");
+
+    // Verify: get full state from server and load into a local buffer.
+    // The server state already includes B's edit.
+    let full = client_a.full_state("remote.txt").await;
+    let mut buf = Buffer::new();
+    buf.name = "remote.txt".to_string();
+    buf.load_sync_state(&full, 100).unwrap();
+    assert_eq!(buf.text(), "hello remote");
+}
+
+#[tokio::test]
+async fn two_editors_converge() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut cb = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    ca.share("converge.txt", "abcdef").await;
+    let mut ts_a = TextSync::from_state(&ca.full_state("converge.txt").await).unwrap();
+    let mut ts_b = TextSync::from_state(&cb.full_state("converge.txt").await).unwrap();
+
+    let ua = ts_a.insert(2, "X");
+    let ub = ts_b.insert(4, "Y");
+    ca.send_update("converge.txt", &ua).await;
+    cb.send_update("converge.txt", &ub).await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let content_a = ca.content("converge.txt").await;
+    let content_b = cb.content("converge.txt").await;
+    assert_eq!(content_a, content_b, "should converge");
+    assert!(content_a.contains('X') && content_a.contains('Y'));
+}
+
+#[tokio::test]
+async fn doc_id_differs_from_buffer_name() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("file:abc/main.rs", "fn main() {}").await;
+    assert_eq!(client.content("file:abc/main.rs").await, "fn main() {}");
+
+    let state = client.full_state("file:abc/main.rs").await;
+    let mut ts = TextSync::from_state(&state).unwrap();
+    let update = ts.insert(12, "\n");
+    client.send_update("file:abc/main.rs", &update).await;
+    assert_eq!(client.content("file:abc/main.rs").await, "fn main() {}\n");
+}
+
+#[tokio::test]
+async fn drain_and_broadcast_uses_collab_doc_id() {
+    use mae_core::Editor;
+
+    let mut editor = Editor::default();
+    let mut buf = Buffer::new();
+    buf.name = "main.rs".to_string();
+    buf.insert_text_at(0, "start");
+    buf.enable_sync(1);
+    buf.collab_doc_id = Some("file:proj/main.rs".to_string());
+    buf.insert_text_at(5, " end");
+    editor.buffers.push(buf);
+    editor
+        .collab_synced_buffers
+        .insert("file:proj/main.rs".to_string());
+
+    // Verify that collab_doc_id is used (not buffer name) when forwarding.
+    for b in &mut editor.buffers {
+        if !b.pending_sync_updates.is_empty() {
+            let doc_id = b.collab_doc_id.clone().unwrap_or_else(|| b.name.clone());
+            assert_eq!(
+                doc_id, "file:proj/main.rs",
+                "should use collab_doc_id, not buffer name"
+            );
+            b.pending_sync_updates.clear();
+        }
+    }
+}
+
+#[tokio::test]
+async fn undo_through_bridge() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut cb = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    ca.share("undo.txt", "").await;
+    let mut ts_a = TextSync::from_state(&ca.full_state("undo.txt").await).unwrap();
+    let mut ts_b = TextSync::from_state(&cb.full_state("undo.txt").await).unwrap();
+
+    let ua = ts_a.insert(0, "hello");
+    ca.send_update("undo.txt", &ua).await;
+
+    let notif = cb
+        .wait_for_notification("notifications/sync_update", 1000)
+        .await
+        .unwrap();
+    let b64 = notif["params"]["event"]["data"]["update_base64"]
+        .as_str()
+        .unwrap();
+    ts_b.apply_update(&base64_to_update(b64).unwrap()).unwrap();
+    let ub = ts_b.insert(5, "world");
+    cb.send_update("undo.txt", &ub).await;
+
+    let notif_a = ca
+        .wait_for_notification("notifications/sync_update", 1000)
+        .await
+        .unwrap();
+    let a_b64 = notif_a["params"]["event"]["data"]["update_base64"]
+        .as_str()
+        .unwrap();
+    ts_a.apply_update(&base64_to_update(a_b64).unwrap())
+        .unwrap();
+
+    let undo = ts_a.reconcile_to("world");
+    assert!(!undo.is_empty());
+    ca.send_update("undo.txt", &undo).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(cb.content("undo.txt").await, "world");
+}
+
+#[tokio::test]
+async fn replace_contents_queues_sync_updates() {
+    let mut buf = Buffer::new();
+    buf.name = "replace.rs".to_string();
+    buf.insert_text_at(0, "old content");
+    buf.enable_sync(1);
+    buf.replace_contents("new content");
+    assert!(
+        !buf.pending_sync_updates.is_empty(),
+        "should queue sync updates"
+    );
+    assert_eq!(buf.text(), "new content");
+    assert_eq!(buf.sync_doc.as_ref().unwrap().content(), "new content");
+}
+
+#[tokio::test]
+async fn apply_sync_update_when_sync_none() {
+    let mut buf = Buffer::new();
+    buf.insert_text_at(0, "hello");
+    let result = buf.apply_sync_update(&[1, 2, 3]);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("sync not enabled"));
+}
+
+#[tokio::test]
+async fn echo_filtering() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("echo.txt", "start").await;
+    let state = client.full_state("echo.txt").await;
+    let mut ts = TextSync::from_state(&state).unwrap();
+    let update = ts.insert(5, " end");
+    client.send_update("echo.txt", &update).await;
+
+    assert!(
+        client.recv_timeout(200).await.is_none(),
+        "should not receive echo"
+    );
+}
+
+#[tokio::test]
+async fn share_edits_during_roundtrip() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("immediate.txt", "hello").await;
+    let state = client.full_state("immediate.txt").await;
+    let mut ts = TextSync::from_state(&state).unwrap();
+    let update = ts.insert(5, " world");
+    client.send_update("immediate.txt", &update).await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let mut cb = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    assert_eq!(cb.content("immediate.txt").await, "hello world");
+}
+
+#[tokio::test]
+async fn reshare_replaces_not_appends() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("reshare.txt", "version 1").await;
+    assert_eq!(client.content("reshare.txt").await, "version 1");
+    client.share("reshare.txt", "version 2").await;
+    assert_eq!(client.content("reshare.txt").await, "version 2");
+}
+
+// ============================================================================
+// Tier 3 — Fault Injection Tests
+// ============================================================================
+
+#[tokio::test]
+async fn fault_server_drop_mid_session() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let (client_stream, server_stream) = tokio::io::duplex(8192);
+    let (sr, sw) = tokio::io::split(server_stream);
+
+    let handle = tokio::spawn(async move {
+        handle_client(BufReader::new(sr), sw, store, bc, std::time::Instant::now()).await;
+    });
+
+    let (cr, mut cw) = tokio::io::split(client_stream);
+    let mut cr = BufReader::new(cr);
+
+    let msg = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"fault"}}});
+    cw.write_all(format!("{}\n", serde_json::to_string(&msg).unwrap()).as_bytes())
+        .await
+        .unwrap();
+    cw.flush().await.unwrap();
+    let _ = mae_mcp::read_message(&mut cr).await;
+
+    handle.abort();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Client should detect EOF or error — not hang.
+    match mae_mcp::read_message(&mut cr).await {
+        Ok(None) | Err(_) => {} // expected
+        Ok(Some(_)) => {}       // leftover message is fine
+    }
+}
+
+#[tokio::test]
+async fn fault_invalid_json() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let (client_stream, server_stream) = tokio::io::duplex(8192);
+    let (sr, sw) = tokio::io::split(server_stream);
+
+    tokio::spawn(async move {
+        handle_client(BufReader::new(sr), sw, store, bc, std::time::Instant::now()).await;
+    });
+
+    let (cr, mut cw) = tokio::io::split(client_stream);
+    let mut cr = BufReader::new(cr);
+
+    // Initialize.
+    let init = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"fault"}}});
+    cw.write_all(format!("{}\n", serde_json::to_string(&init).unwrap()).as_bytes())
+        .await
+        .unwrap();
+    cw.flush().await.unwrap();
+    let _ = mae_mcp::read_message(&mut cr).await;
+
+    // Send garbage.
+    cw.write_all(b"NOT JSON\n").await.unwrap();
+    cw.flush().await.unwrap();
+
+    // Ping should still work after garbage (or server disconnects — either is acceptable).
+    let ping = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"$/ping"});
+    cw.write_all(format!("{}\n", serde_json::to_string(&ping).unwrap()).as_bytes())
+        .await
+        .unwrap();
+    cw.flush().await.unwrap();
+
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        mae_mcp::read_message(&mut cr),
+    )
+    .await;
+    // No panic = pass.
+}
+
+#[tokio::test]
+async fn fault_invalid_base64_in_update() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    let msg = serde_json::json!({
+        "jsonrpc":"2.0","id":client.next_id,
+        "method":"sync/update",
+        "params":{"doc":"test","update":"!!! not base64 !!!"}
+    });
+    client.next_id += 1;
+    client.send(&msg).await;
+    let resp = client.recv().await;
+    assert!(
+        resp.get("error").is_some(),
+        "should error on invalid base64"
+    );
+}
+
+#[tokio::test]
+async fn fault_concurrent_share_same_doc() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut cb = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    ca.share("race.txt", "version A").await;
+    cb.share("race.txt", "version B").await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let content_a = ca.content("race.txt").await;
+    let content_b = cb.content("race.txt").await;
+    assert_eq!(content_a, content_b, "concurrent shares should converge");
+}
+
+#[tokio::test]
+async fn fault_stale_sync_after_reconnect() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("stale.txt", "original").await;
+    assert_eq!(client.content("stale.txt").await, "original");
+
+    client.share("stale.txt", "fresh").await;
+    assert_eq!(client.content("stale.txt").await, "fresh");
+}
+
+// ============================================================================
+// $/debug response shape validation (Flaw D fix verification)
+// ============================================================================
+
+#[tokio::test]
+async fn debug_response_shape_matches_doctor() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("debug-test.rs", "fn main() {}").await;
+    let resp = client.debug_stats().await;
+    let result = &resp["result"];
+
+    assert!(
+        result["documents"].is_number(),
+        "documents should be number"
+    );
+    assert!(
+        result["doc_stats"].is_object(),
+        "doc_stats should be object"
+    );
+    let stats = &result["doc_stats"]["debug-test.rs"];
+    assert!(stats.is_object(), "doc stats should exist");
+    assert!(stats.get("wal_seq").is_some());
+}

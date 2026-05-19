@@ -3,7 +3,7 @@
 
 use mae_core::Editor;
 use mae_mcp::broadcast::{EditorEvent, SharedBroadcaster};
-use tracing::debug;
+use tracing::{debug, trace, warn};
 
 /// Drain all pending yrs sync updates from editor buffers and broadcast
 /// them to subscribed MCP clients. If `collab_tx` is provided and the
@@ -23,7 +23,13 @@ pub fn drain_and_broadcast(
         }
         let updates: Vec<Vec<u8>> = buf.pending_sync_updates.drain(..).collect();
         let buffer_name = buf.name.clone();
-        let is_collab_synced = editor.collab_synced_buffers.contains(&buffer_name);
+        trace!(buffer = %buffer_name, update_count = updates.len(), "draining sync updates");
+        // Use collab_doc_id for server communication (may differ from buffer name).
+        let doc_id = buf
+            .collab_doc_id
+            .clone()
+            .unwrap_or_else(|| buffer_name.clone());
+        let is_collab_synced = editor.collab_synced_buffers.contains(&doc_id);
         let mut bc = broadcaster.lock().unwrap();
         for update in updates {
             let update_b64 = mae_sync::encoding::update_to_base64(&update);
@@ -35,13 +41,25 @@ pub fn drain_and_broadcast(
             bc.broadcast(&event);
 
             // Forward to state server if this buffer is collaboratively synced.
+            trace!(
+                buffer = %buffer_name,
+                doc = %doc_id,
+                update_bytes = update_b64.len(),
+                is_collab_synced,
+                "sync update broadcast"
+            );
             if is_collab_synced {
                 if let Some(tx) = collab_tx {
-                    debug!(doc = %buffer_name, update_bytes = update_b64.len(), "forwarding sync update to server");
-                    let _ = tx.try_send(crate::collab_bridge::CollabCommand::SendUpdate {
-                        doc_id: buffer_name.clone(),
-                        update_base64: update_b64,
-                    });
+                    debug!(doc = %doc_id, update_bytes = update_b64.len(), "forwarding sync update to server");
+                    if tx
+                        .try_send(crate::collab_bridge::CollabCommand::SendUpdate {
+                            doc_id: doc_id.clone(),
+                            update_base64: update_b64,
+                        })
+                        .is_err()
+                    {
+                        warn!(doc = %doc_id, "collab command channel full — sync update dropped");
+                    }
                 }
             }
         }

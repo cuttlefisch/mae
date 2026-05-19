@@ -805,12 +805,25 @@
       ]
     },
     "mae-state-server": {
-      "path": "crates/state-server/src/main.rs",
+      "path": "crates/state-server/src/lib.rs",
       "dependencies": [
         "mae-mcp",
         "mae-sync"
       ],
-      "public_items": []
+      "public_items": [
+        {
+          "name": "doc_store",
+          "kind": "mod"
+        },
+        {
+          "name": "handler",
+          "kind": "mod"
+        },
+        {
+          "name": "storage",
+          "kind": "mod"
+        }
+      ]
     },
     "mae-sync": {
       "path": "crates/sync/src/lib.rs",
@@ -834,6 +847,10 @@
         },
         {
           "name": "DocAddress",
+          "kind": "enum"
+        },
+        {
+          "name": "SavePolicy",
           "kind": "enum"
         }
       ]
@@ -1528,6 +1545,10 @@
       "doc": "Dedent current line by up to 4 spaces (<<)"
     },
     {
+      "name": "fill-paragraph",
+      "doc": "Hard-wrap current paragraph at fill-column (M-q)"
+    },
+    {
       "name": "toggle-case",
       "doc": "Toggle case of char under cursor (~)"
     },
@@ -1610,6 +1631,10 @@
     {
       "name": "enter-insert-mode-eol",
       "doc": "Enter insert mode at end of line"
+    },
+    {
+      "name": "enter-insert-mode-bol",
+      "doc": "Enter insert mode at first non-blank (I)"
     },
     {
       "name": "enter-normal-mode",
@@ -3218,6 +3243,14 @@
     {
       "name": "collab-doctor",
       "doc": "Run collaborative editing diagnostics"
+    },
+    {
+      "name": "collab-list",
+      "doc": "List shared documents on the state server (SPC C l)"
+    },
+    {
+      "name": "collab-join",
+      "doc": "Join a shared document (SPC C j)"
     },
     {
       "name": "move-down",

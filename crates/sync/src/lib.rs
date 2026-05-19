@@ -119,6 +119,102 @@ impl DocAddress {
     }
 }
 
+/// Per-client clock comparison result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClockStatus {
+    /// Both sides have the same clock for this client_id.
+    Aligned,
+    /// Local is ahead of remote by the given number of operations.
+    Ahead(u32),
+    /// Local is behind remote by the given number of operations.
+    Behind(u32),
+    /// Only exists on one side.
+    LocalOnly,
+    /// Only exists on remote side.
+    RemoteOnly,
+}
+
+/// Diagnosis of sync state between two state vectors.
+#[derive(Debug, Clone)]
+pub struct SyncDiagnosis {
+    /// Per-client_id comparison.
+    pub clocks: Vec<(u64, ClockStatus)>,
+    /// Overall status.
+    pub status: SyncOverallStatus,
+}
+
+/// Summary of sync state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncOverallStatus {
+    Aligned,
+    Diverged,
+}
+
+/// Compare two yrs state vectors (v1-encoded) and produce a per-client diagnosis.
+///
+/// Used by `collab-doctor` to report sync health.
+pub fn compare_state_vectors(
+    local_sv: &[u8],
+    remote_sv: &[u8],
+) -> Result<SyncDiagnosis, SyncError> {
+    use yrs::{updates::decoder::Decode, StateVector};
+
+    let local = StateVector::decode_v1(local_sv)
+        .map_err(|e| SyncError::Encoding(format!("local sv decode: {e}")))?;
+    let remote = StateVector::decode_v1(remote_sv)
+        .map_err(|e| SyncError::Encoding(format!("remote sv decode: {e}")))?;
+
+    let mut all_ids: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    for (&cid, _) in local.iter() {
+        all_ids.insert(cid);
+    }
+    for (&cid, _) in remote.iter() {
+        all_ids.insert(cid);
+    }
+
+    let mut clocks = Vec::new();
+    let mut all_aligned = true;
+
+    for cid in all_ids {
+        let l_present = local.contains_client(&cid);
+        let r_present = remote.contains_client(&cid);
+        let status = match (l_present, r_present) {
+            (true, true) => {
+                let lv = local.get(&cid);
+                let rv = remote.get(&cid);
+                if lv == rv {
+                    ClockStatus::Aligned
+                } else if lv > rv {
+                    all_aligned = false;
+                    ClockStatus::Ahead(lv - rv)
+                } else {
+                    all_aligned = false;
+                    ClockStatus::Behind(rv - lv)
+                }
+            }
+            (true, false) => {
+                all_aligned = false;
+                ClockStatus::LocalOnly
+            }
+            (false, true) => {
+                all_aligned = false;
+                ClockStatus::RemoteOnly
+            }
+            (false, false) => unreachable!(),
+        };
+        clocks.push((cid, status));
+    }
+
+    Ok(SyncDiagnosis {
+        clocks,
+        status: if all_aligned {
+            SyncOverallStatus::Aligned
+        } else {
+            SyncOverallStatus::Diverged
+        },
+    })
+}
+
 impl fmt::Display for DocAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_doc_name())
@@ -173,6 +269,49 @@ mod tests {
         assert!(DocAddress::parse("file:hash/").is_none()); // empty path
         assert!(DocAddress::parse("kb:").is_none());
         assert!(DocAddress::parse("shared:").is_none());
+    }
+
+    #[test]
+    fn compare_state_vectors_aligned() {
+        use yrs::{updates::encoder::Encode, ReadTxn, Text, Transact};
+        let doc = yrs::Doc::with_client_id(1);
+        let text = doc.get_or_insert_text("t");
+        {
+            let mut txn = doc.transact_mut();
+            text.insert(&mut txn, 0, "hello");
+        }
+        let sv = {
+            let txn = doc.transact();
+            txn.state_vector().encode_v1()
+        };
+        // Same sv on both sides → aligned.
+        let diag = compare_state_vectors(&sv, &sv).unwrap();
+        assert_eq!(diag.status, SyncOverallStatus::Aligned);
+        assert!(!diag.clocks.is_empty());
+    }
+
+    #[test]
+    fn compare_state_vectors_diverged() {
+        use yrs::{updates::encoder::Encode, ReadTxn, Text, Transact};
+        let doc_a = yrs::Doc::with_client_id(1);
+        let doc_b = yrs::Doc::with_client_id(2);
+        let text_a = doc_a.get_or_insert_text("t");
+        let text_b = doc_b.get_or_insert_text("t");
+        {
+            let mut txn = doc_a.transact_mut();
+            text_a.insert(&mut txn, 0, "aaa");
+        }
+        {
+            let mut txn = doc_b.transact_mut();
+            text_b.insert(&mut txn, 0, "bbb");
+        }
+        let sv_a = doc_a.transact().state_vector().encode_v1();
+        let sv_b = doc_b.transact().state_vector().encode_v1();
+
+        let diag = compare_state_vectors(&sv_a, &sv_b).unwrap();
+        assert_eq!(diag.status, SyncOverallStatus::Diverged);
+        // Should have entries for both client IDs.
+        assert!(diag.clocks.len() >= 2);
     }
 
     #[test]

@@ -375,6 +375,10 @@ impl CommandRegistry {
         reg.register_builtin("enter-insert-mode", "Enter insert mode");
         reg.register_builtin("enter-insert-mode-after", "Enter insert mode after cursor");
         reg.register_builtin("enter-insert-mode-eol", "Enter insert mode at end of line");
+        reg.register_builtin(
+            "enter-insert-mode-bol",
+            "Enter insert mode at first non-blank (I)",
+        );
         reg.register_builtin("enter-normal-mode", "Return to normal mode");
         reg.register_builtin("enter-command-mode", "Enter command-line mode");
 

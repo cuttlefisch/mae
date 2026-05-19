@@ -27,7 +27,10 @@ pub enum CollabCommand {
         doc_id: String,
     },
     ShowStatus,
-    Doctor,
+    Doctor {
+        /// Per-buffer sync info: (doc_id, pending_update_count).
+        synced_info: Vec<(String, usize)>,
+    },
     StartServer,
     /// Send a yrs update to the state server for a synced buffer.
     SendUpdate {
@@ -57,6 +60,11 @@ pub enum CollabEvent {
     RemoteUpdate {
         doc_id: String,
         update_bytes: Vec<u8>,
+    },
+    /// Share failed on server — must roll back synced state.
+    ShareFailed {
+        doc_id: String,
+        message: String,
     },
     StatusReport {
         lines: Vec<String>,
@@ -143,6 +151,13 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
                     .as_ref()
                     .map(|a| a.to_doc_name())
                     .unwrap_or_else(|| buffer_name.clone());
+                // Store doc_id on buffer so remote updates can find it.
+                buf.collab_doc_id = Some(doc_id.clone());
+                // BUG A fix: immediately track as synced so edits during the
+                // server round-trip are forwarded via drain_and_broadcast().
+                editor.collab_synced_buffers.insert(doc_id.clone());
+                editor.collab_synced_docs = editor.collab_synced_buffers.len();
+                debug!(doc = %doc_id, "share: immediately tracked as synced");
                 CollabCommand::ShareBuffer {
                     doc_id,
                     state_bytes,
@@ -154,7 +169,21 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         CollabIntent::ForceSync { buffer_name } => CollabCommand::ForceSync {
             doc_id: buffer_name,
         },
-        CollabIntent::Doctor => CollabCommand::Doctor,
+        CollabIntent::Doctor => {
+            // Collect per-buffer sync info for the doctor report.
+            let synced_info: Vec<(String, usize)> = editor
+                .collab_synced_buffers
+                .iter()
+                .map(|doc_id| {
+                    let pending = editor
+                        .find_buffer_by_collab_doc_id(doc_id)
+                        .map(|idx| editor.buffers[idx].pending_sync_updates.len())
+                        .unwrap_or(0);
+                    (doc_id.clone(), pending)
+                })
+                .collect();
+            CollabCommand::Doctor { synced_info }
+        }
         CollabIntent::ListDocs => CollabCommand::ListDocs { for_join: false },
         CollabIntent::ListDocsForJoin => CollabCommand::ListDocs { for_join: true },
         CollabIntent::JoinDoc { doc_id } => CollabCommand::JoinDoc { doc_id },
@@ -215,7 +244,7 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::ShareBuffer { .. } => "share-buffer",
         CollabCommand::ForceSync { .. } => "force-sync",
         CollabCommand::ShowStatus => "show-status",
-        CollabCommand::Doctor => "doctor",
+        CollabCommand::Doctor { .. } => "doctor",
         CollabCommand::StartServer => "start-server",
         CollabCommand::SendUpdate { .. } => "send-update",
         CollabCommand::ListDocs { .. } => "list-docs",
@@ -241,12 +270,14 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             info!(reason = %reason, "collab disconnected");
             editor.collab_status = CollabStatus::Disconnected;
             editor.set_status(format!("Collab disconnected: {}", reason));
-            // Clear sync state on all synced buffers to prevent stale docs
-            // from causing content duplication on reconnect.
-            for buf_name in &editor.collab_synced_buffers.clone() {
-                if let Some(idx) = editor.find_buffer_by_name(buf_name) {
-                    editor.buffers[idx].sync_doc = None;
-                    editor.buffers[idx].pending_sync_updates.clear();
+            // Clear sync state on ALL buffers that have collab state, not just
+            // those tracked in collab_synced_buffers. This handles buffers whose
+            // collab_doc_id was already cleared by ShareFailed (Flaw C fix).
+            for buf in &mut editor.buffers {
+                if buf.collab_doc_id.is_some() {
+                    buf.sync_doc = None;
+                    buf.pending_sync_updates.clear();
+                    buf.collab_doc_id = None;
                 }
             }
             editor.collab_synced_docs = 0;
@@ -257,7 +288,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             doc_id,
             update_bytes,
         } => {
-            if let Some(idx) = editor.find_buffer_by_name(&doc_id) {
+            if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
                 match editor.buffers[idx].apply_sync_update(&update_bytes) {
                     Ok(()) => {
                         debug!(doc = %doc_id, update_bytes = update_bytes.len(), "applied remote sync update");
@@ -272,6 +303,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             }
         }
         CollabEvent::StatusReport { lines } => {
+            debug!(line_count = lines.len(), "status report received");
             let content = lines.join("\n");
             let idx = editor.find_or_create_buffer("*Collab Status*", || {
                 let mut buf = mae_core::Buffer::new();
@@ -284,6 +316,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             editor.mark_full_redraw();
         }
         CollabEvent::DoctorReport { lines } => {
+            debug!(line_count = lines.len(), "doctor report received");
             let content = lines.join("\n");
             let idx = editor.find_or_create_buffer("*Collab Doctor*", || {
                 let mut buf = mae_core::Buffer::new();
@@ -311,7 +344,9 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             editor.mark_full_redraw();
         }
         CollabEvent::BufferShared { doc_id } => {
-            info!(doc = %doc_id, "buffer shared");
+            info!(doc = %doc_id, "buffer shared (server confirmed)");
+            // Doc was already added optimistically in drain_collab_intents (BUG A fix).
+            // This insert is idempotent — ensures consistency if event ordering varies.
             editor.collab_synced_buffers.insert(doc_id.clone());
             editor.collab_synced_docs = editor.collab_synced_buffers.len();
             editor.set_status(format!("Shared: {}", doc_id));
@@ -321,6 +356,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             documents,
             for_join,
         } => {
+            debug!(count = documents.len(), for_join, "doc list received");
             if for_join {
                 // Open a palette picker with the document names.
                 if documents.is_empty() {
@@ -366,6 +402,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             doc_id,
             state_bytes,
         } => {
+            debug!(doc = %doc_id, state_bytes = state_bytes.len(), "buffer joined");
             // Parse DocAddress from doc_id for structured addressing.
             let doc_addr = mae_sync::DocAddress::parse(&doc_id);
             // Use a display-friendly name for the buffer.
@@ -424,6 +461,8 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     Err(e) => Err(e),
                 }
             };
+            // Store doc_id on buffer so remote updates can find it.
+            editor.buffers[idx].collab_doc_id = Some(doc_id.clone());
             match load_ok {
                 Ok(()) => {
                     // Detect language from doc_id for syntax highlighting.
@@ -453,7 +492,20 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 }
             }
         }
+        CollabEvent::ShareFailed { doc_id, message } => {
+            warn!(doc = %doc_id, error = %message, "share failed — rolling back synced state");
+            // Remove from synced set (was optimistically added in drain_collab_intents).
+            editor.collab_synced_buffers.remove(&doc_id);
+            editor.collab_synced_docs = editor.collab_synced_buffers.len();
+            // Clear collab_doc_id on the buffer so it doesn't receive stale updates.
+            if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
+                editor.buffers[idx].collab_doc_id = None;
+            }
+            editor.set_status(format!("Share failed: {}", message));
+            editor.mark_full_redraw();
+        }
         CollabEvent::PeerCountChanged { peer_count } => {
+            debug!(peer_count, "peer count changed");
             if let CollabStatus::Connected { .. } = editor.collab_status {
                 editor.collab_status = CollabStatus::Connected { peer_count };
                 editor.set_status(format!("Peer count: {}", peer_count));
@@ -461,9 +513,10 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             }
         }
         CollabEvent::PeerSaved { doc, saved_by } => {
+            debug!(doc = %doc, saved_by = %saved_by, "peer saved");
             editor.set_status(format!("[{}] saved by {}", doc, saved_by));
             // Mark the local buffer clean if we have it (content matches what was saved).
-            if let Some(idx) = editor.find_buffer_by_name(&doc) {
+            if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc) {
                 editor.buffers[idx].modified = false;
             }
             editor.mark_full_redraw();
@@ -539,7 +592,7 @@ pub(crate) fn spawn_collab_task(spawn: CollabSpawn) {
 
 /// Kinds of pending request-response correlations.
 #[derive(Debug)]
-enum PendingResponseKind {
+pub(crate) enum PendingResponseKind {
     ListDocs { for_join: bool },
     JoinDoc { doc_id: String },
     ShareBuffer { doc_id: String },
@@ -616,11 +669,27 @@ async fn run_collab_task(
                             );
                             let _ = evt_tx.send(CollabEvent::StatusReport { lines }).await;
                         }
-                        CollabCommand::Doctor => {
-                            let lines = build_doctor_lines(
-                                target_address.as_deref().unwrap_or("?"),
-                                true,
-                            );
+                        CollabCommand::Doctor { synced_info } => {
+                            let addr = target_address.as_deref().unwrap_or("?").to_string();
+                            let mut ctx = DoctorContext {
+                                address: addr,
+                                connected: true,
+                                server_debug: None,
+                                ping_latency_ms: None,
+                                synced_info,
+                            };
+                            // Gather $/ping latency + $/debug from server.
+                            if let Some(ref mut w) = writer {
+                                gather_doctor_context(
+                                    w,
+                                    reader.as_mut().unwrap(),
+                                    &mut next_request_id,
+                                    write_timeout,
+                                    &mut ctx,
+                                )
+                                .await;
+                            }
+                            let lines = build_doctor_lines(&ctx);
                             let _ = evt_tx.send(CollabEvent::DoctorReport { lines }).await;
                         }
                         CollabCommand::ShareBuffer { doc_id, state_bytes } => {
@@ -825,7 +894,7 @@ async fn run_collab_task(
 
 /// Handle an incoming JSON-RPC message from the server.
 /// Dispatches to response handler or notification handler based on content.
-async fn handle_incoming_message(
+pub(crate) async fn handle_incoming_message(
     text: &str,
     evt_tx: &mpsc::Sender<CollabEvent>,
     pending_responses: &mut std::collections::HashMap<u64, PendingResponseKind>,
@@ -850,7 +919,6 @@ async fn handle_incoming_message(
         match method {
             // B3 fix: server sends "notifications/sync_update" with nested event data.
             "notifications/sync_update" => {
-                debug!("received sync_update notification from server");
                 if let Some(params) = val.get("params") {
                     // Server format: {"params": {"seq": N, "event": {"type": "sync_update", "data": {"buffer_name": "...", "update_base64": "..."}}}}
                     // The "data" key comes from serde's #[serde(tag = "type", content = "data")] on EditorEvent.
@@ -867,6 +935,7 @@ async fn handle_incoming_message(
                             .get("update_base64")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
+                        debug!(doc = %buffer_name, update_bytes = update_b64.len(), "received sync_update");
                         if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
                             let _ = evt_tx
                                 .send(CollabEvent::RemoteUpdate {
@@ -908,6 +977,7 @@ async fn handle_incoming_message(
                     let data = event.get("data").unwrap_or(event);
                     let peer_count =
                         data.get("peer_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    debug!(peer_count, "received peer_joined notification");
                     let _ = evt_tx
                         .send(CollabEvent::PeerCountChanged { peer_count })
                         .await;
@@ -919,6 +989,7 @@ async fn handle_incoming_message(
                     let data = event.get("data").unwrap_or(event);
                     let peer_count =
                         data.get("peer_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    debug!(peer_count, "received peer_left notification");
                     let _ = evt_tx
                         .send(CollabEvent::PeerCountChanged { peer_count })
                         .await;
@@ -938,6 +1009,7 @@ async fn handle_incoming_message(
                         .and_then(|v| v.as_str())
                         .unwrap_or("peer")
                         .to_string();
+                    debug!(doc = %doc, saved_by = %saved_by, "received save_committed notification");
                     let _ = evt_tx.send(CollabEvent::PeerSaved { doc, saved_by }).await;
                 }
             }
@@ -960,9 +1032,16 @@ async fn handle_response(
     match kind {
         PendingResponseKind::ShareBuffer { doc_id } => {
             if val.get("error").is_some() {
+                let err_msg = val
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown error")
+                    .to_string();
                 let _ = evt_tx
-                    .send(CollabEvent::Error {
-                        message: format!("Failed to share {}", doc_id),
+                    .send(CollabEvent::ShareFailed {
+                        doc_id,
+                        message: err_msg,
                     })
                     .await;
             } else {
@@ -1053,8 +1132,8 @@ async fn handle_response(
 }
 
 /// Send `notifications/subscribe` to opt into sync_update events (B4 fix).
-async fn send_subscribe(
-    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+async fn send_subscribe<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
     next_id: &mut u64,
     pending: &mut std::collections::HashMap<u64, PendingResponseKind>,
     timeout: std::time::Duration,
@@ -1068,7 +1147,7 @@ async fn send_subscribe(
         "id": req_id,
         "method": "notifications/subscribe",
         "params": {
-            "types": ["sync_update"]
+            "types": ["sync_update", "peer_joined", "peer_left", "save_committed"]
         }
     });
     let body = serde_json::to_vec(&req).unwrap();
@@ -1206,9 +1285,18 @@ async fn handle_disconnected_cmd(
             );
             let _ = evt_tx.send(CollabEvent::StatusReport { lines }).await;
         }
-        CollabCommand::Doctor => {
-            let lines =
-                build_doctor_lines(target_address.as_deref().unwrap_or("not configured"), false);
+        CollabCommand::Doctor { synced_info } => {
+            let ctx = DoctorContext {
+                address: target_address
+                    .as_deref()
+                    .unwrap_or("not configured")
+                    .to_string(),
+                connected: false,
+                server_debug: None,
+                ping_latency_ms: None,
+                synced_info,
+            };
+            let lines = build_doctor_lines(&ctx);
             let _ = evt_tx.send(CollabEvent::DoctorReport { lines }).await;
         }
         CollabCommand::Disconnect => {
@@ -1318,24 +1406,144 @@ fn build_status_lines(address: &str, connected: bool, shared_docs: &[String]) ->
     lines
 }
 
-fn build_doctor_lines(address: &str, connected: bool) -> Vec<String> {
+/// Gather live server data for the doctor report ($/ping + $/debug).
+/// Populates `ctx.ping_latency_ms` and `ctx.server_debug` in-place.
+/// Each query has a 2s timeout — fields left as `None` on timeout/error.
+async fn gather_doctor_context<R, W>(
+    writer: &mut W,
+    reader: &mut R,
+    next_id: &mut u64,
+    write_timeout: std::time::Duration,
+    ctx: &mut DoctorContext,
+) where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use mae_mcp::{read_message, write_framed};
+    let gather_timeout = std::time::Duration::from_secs(2);
+
+    // $/ping — measure round-trip latency.
+    let ping_id = *next_id;
+    *next_id += 1;
+    let ping_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": ping_id,
+        "method": "$/ping",
+    });
+    let body = serde_json::to_vec(&ping_req).unwrap();
+    let ping_start = std::time::Instant::now();
+    if write_framed(writer, &body, write_timeout).await.is_ok() {
+        if let Ok(Ok(Some(_text))) =
+            tokio::time::timeout(gather_timeout, read_message(reader)).await
+        {
+            ctx.ping_latency_ms = Some(ping_start.elapsed().as_millis() as u64);
+        }
+    }
+
+    // $/debug — fetch per-doc server stats.
+    let debug_id = *next_id;
+    *next_id += 1;
+    let debug_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": debug_id,
+        "method": "$/debug",
+    });
+    let body = serde_json::to_vec(&debug_req).unwrap();
+    if write_framed(writer, &body, write_timeout).await.is_ok() {
+        if let Ok(Ok(Some(text))) = tokio::time::timeout(gather_timeout, read_message(reader)).await
+        {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                ctx.server_debug = val.get("result").cloned();
+            }
+        }
+    }
+}
+
+/// Context gathered for the doctor report — pre-fetched data from server queries.
+pub(crate) struct DoctorContext {
+    pub(crate) address: String,
+    pub(crate) connected: bool,
+    /// Per-doc stats from $/debug response, if available.
+    pub(crate) server_debug: Option<serde_json::Value>,
+    /// Round-trip latency in ms from $/ping.
+    pub(crate) ping_latency_ms: Option<u64>,
+    /// Per-buffer sync info: (doc_id, pending_update_count).
+    pub(crate) synced_info: Vec<(String, usize)>,
+}
+
+pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
     let mut lines = Vec::new();
     lines.push("Collab Doctor".to_string());
     lines.push(String::from_utf8(vec![b'='; 20]).unwrap());
-    if connected {
-        lines.push(format!("\u{2713} State server reachable ({})", address));
+    if ctx.connected {
+        lines.push(format!("\u{2713} State server reachable ({})", ctx.address));
         lines.push("\u{2713} Protocol: JSON-RPC 2.0 (Content-Length framing)".to_string());
         lines.push(format!(
             "\u{2713} Client version: {}",
             env!("CARGO_PKG_VERSION")
         ));
+
+        // Latency
+        match ctx.ping_latency_ms {
+            Some(ms) => lines.push(format!("\u{2713} Ping: {}ms", ms)),
+            None => lines.push("\u{26a0} Ping: timeout".to_string()),
+        }
+
+        // Per-doc server stats from $/debug
+        // Server returns: {"documents": N, "doc_stats": {"name": {stats...}}}
+        if let Some(ref debug_val) = ctx.server_debug {
+            if let Some(stats_map) = debug_val.get("doc_stats").and_then(|d| d.as_object()) {
+                lines.push(String::new());
+                lines.push(format!("Server Documents ({}):", stats_map.len()));
+                for (name, stats) in stats_map {
+                    let wal_seq = stats.get("wal_seq").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let updates = stats
+                        .get("update_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let clients = stats
+                        .get("connected_clients")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let idle = stats.get("idle_secs").and_then(|v| v.as_u64());
+                    let mut info = format!(
+                        "  {} — wal:{} updates:{} clients:{}",
+                        name, wal_seq, updates, clients
+                    );
+                    if let Some(s) = idle {
+                        info.push_str(&format!(" idle:{}s", s));
+                    }
+                    lines.push(info);
+                }
+            }
+        }
+
+        // Synced buffers
+        if !ctx.synced_info.is_empty() {
+            lines.push(String::new());
+            lines.push(format!("Synced Buffers ({}):", ctx.synced_info.len()));
+            for (doc_id, pending) in &ctx.synced_info {
+                let status = if *pending > 0 {
+                    format!("{} pending", pending)
+                } else {
+                    "up-to-date".to_string()
+                };
+                lines.push(format!("  {} — {}", doc_id, status));
+            }
+        }
     } else {
-        lines.push(format!("\u{2717} State server not reachable ({})", address));
+        lines.push(format!(
+            "\u{2717} State server not reachable ({})",
+            ctx.address
+        ));
         lines.push(String::new());
         lines.push("Troubleshooting:".to_string());
         lines.push("  1. Is mae-state-server running?".to_string());
         lines.push("     Start: systemctl --user start mae-state-server".to_string());
-        lines.push(format!("     Or:    mae-state-server --bind {}", address));
+        lines.push(format!(
+            "     Or:    mae-state-server --bind {}",
+            ctx.address
+        ));
         lines.push("  2. Check if the port is listening:".to_string());
         lines.push("     ss -tlnp | grep 9473".to_string());
         lines.push("  3. Check firewall:".to_string());
@@ -1346,8 +1554,8 @@ fn build_doctor_lines(address: &str, connected: bool) -> Vec<String> {
         lines.push("     Ubuntu:  sudo ufw allow 9473/tcp".to_string());
         lines.push(format!(
             "  4. Test connectivity: nc -zv {} {}",
-            address.split(':').next().unwrap_or("127.0.0.1"),
-            address.split(':').next_back().unwrap_or("9473")
+            ctx.address.split(':').next().unwrap_or("127.0.0.1"),
+            ctx.address.split(':').next_back().unwrap_or("9473")
         ));
         lines.push("  5. Use SPC C s to start a local server".to_string());
     }
@@ -1552,16 +1760,101 @@ mod tests {
 
     #[test]
     fn doctor_lines_disconnected() {
-        let lines = build_doctor_lines("127.0.0.1:9473", false);
+        let ctx = DoctorContext {
+            address: "127.0.0.1:9473".to_string(),
+            connected: false,
+            server_debug: None,
+            ping_latency_ms: None,
+            synced_info: vec![],
+        };
+        let lines = build_doctor_lines(&ctx);
         assert!(lines.iter().any(|l| l.contains("\u{2717}")));
         assert!(lines.iter().any(|l| l.contains("Troubleshooting")));
     }
 
     #[test]
     fn doctor_lines_include_join_and_list() {
-        let lines = build_doctor_lines("127.0.0.1:9473", false);
+        let ctx = DoctorContext {
+            address: "127.0.0.1:9473".to_string(),
+            connected: false,
+            server_debug: None,
+            ping_latency_ms: None,
+            synced_info: vec![],
+        };
+        let lines = build_doctor_lines(&ctx);
         assert!(lines.iter().any(|l| l.contains("SPC C l")));
         assert!(lines.iter().any(|l| l.contains("SPC C j")));
+    }
+
+    #[test]
+    fn doctor_lines_show_server_stats() {
+        // Matches actual $/debug response shape: doc_stats is a map keyed by name.
+        let ctx = DoctorContext {
+            address: "127.0.0.1:9473".to_string(),
+            connected: true,
+            server_debug: Some(serde_json::json!({
+                "documents": 1,
+                "doc_stats": {
+                    "test.rs": {
+                        "wal_seq": 42,
+                        "update_count": 10,
+                        "connected_clients": 2,
+                        "idle_secs": 5
+                    }
+                }
+            })),
+            ping_latency_ms: Some(3),
+            synced_info: vec![],
+        };
+        let lines = build_doctor_lines(&ctx);
+        assert!(lines.iter().any(|l| l.contains("test.rs")));
+        assert!(lines.iter().any(|l| l.contains("wal:42")));
+        assert!(lines.iter().any(|l| l.contains("clients:2")));
+    }
+
+    #[test]
+    fn doctor_lines_show_latency() {
+        let ctx = DoctorContext {
+            address: "127.0.0.1:9473".to_string(),
+            connected: true,
+            server_debug: None,
+            ping_latency_ms: Some(7),
+            synced_info: vec![],
+        };
+        let lines = build_doctor_lines(&ctx);
+        assert!(lines.iter().any(|l| l.contains("Ping: 7ms")));
+    }
+
+    #[test]
+    fn doctor_lines_show_synced_buffers() {
+        let ctx = DoctorContext {
+            address: "127.0.0.1:9473".to_string(),
+            connected: true,
+            server_debug: None,
+            ping_latency_ms: None,
+            synced_info: vec![("doc-a".to_string(), 0), ("doc-b".to_string(), 3)],
+        };
+        let lines = build_doctor_lines(&ctx);
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("doc-a") && l.contains("up-to-date")));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("doc-b") && l.contains("3 pending")));
+    }
+
+    #[test]
+    fn doctor_lines_disconnected_no_crash() {
+        let ctx = DoctorContext {
+            address: "127.0.0.1:9473".to_string(),
+            connected: false,
+            server_debug: None,
+            ping_latency_ms: None,
+            synced_info: vec![],
+        };
+        let lines = build_doctor_lines(&ctx);
+        assert!(!lines.is_empty());
+        assert!(lines.iter().any(|l| l.contains("not reachable")));
     }
 
     #[tokio::test]
@@ -1762,6 +2055,193 @@ mod tests {
     // even when called after a burst of commands. This test ensures the
     // message-handling path itself works; the `biased` removal ensures it
     // actually gets called.
+
+    #[test]
+    fn drain_share_sets_synced_immediately() {
+        let mut editor = Editor::new();
+        let buf_name = editor.buffers[0].name.clone();
+        editor.pending_collab_intent = Some(CollabIntent::ShareBuffer {
+            buffer_name: buf_name.clone(),
+        });
+        let (tx, _rx) = mpsc::channel(8);
+        drain_collab_intents(&mut editor, &tx);
+
+        // BUG A: doc_id must be in collab_synced_buffers IMMEDIATELY.
+        let expected_doc_id = format!("shared:{}", buf_name);
+        assert!(
+            editor.collab_synced_buffers.contains(&expected_doc_id),
+            "doc_id should be in collab_synced_buffers immediately after drain"
+        );
+        assert_eq!(editor.collab_synced_docs, 1);
+    }
+
+    #[test]
+    fn share_failure_removes_from_synced() {
+        let mut editor = Editor::new();
+        // Simulate: doc was optimistically added during share.
+        editor.collab_synced_buffers.insert("test-doc".to_string());
+        editor.collab_synced_docs = 1;
+        // Also set collab_doc_id on a buffer so the rollback can clear it.
+        editor.buffers[0].collab_doc_id = Some("test-doc".to_string());
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::ShareFailed {
+                doc_id: "test-doc".to_string(),
+                message: "server error".to_string(),
+            },
+        );
+
+        assert!(!editor.collab_synced_buffers.contains("test-doc"));
+        assert_eq!(editor.collab_synced_docs, 0);
+        assert!(editor.buffers[0].collab_doc_id.is_none());
+    }
+
+    #[test]
+    fn handle_disconnect_clears_sync_state() {
+        let mut editor = Editor::new();
+        editor.collab_status = CollabStatus::Connected { peer_count: 1 };
+        // Set up a buffer as if it were synced.
+        let buf = &mut editor.buffers[0];
+        buf.collab_doc_id = Some("test-doc".to_string());
+        buf.enable_sync(42);
+        buf.insert_text_at(5, "x"); // generates pending_sync_update
+        editor.collab_synced_buffers.insert("test-doc".to_string());
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::Disconnected {
+                reason: "test".to_string(),
+            },
+        );
+
+        assert!(editor.collab_synced_buffers.is_empty());
+        assert_eq!(editor.collab_synced_docs, 0);
+        // Per-buffer state should be cleared — disconnect uses find_buffer_by_name
+        // with the doc_id, which may not match buffer name. Let's check via collab_doc_id.
+        assert!(editor.buffers[0].collab_doc_id.is_none());
+        assert!(editor.buffers[0].pending_sync_updates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn share_failure_emits_share_failed() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut shared = Vec::new();
+
+        let val = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32000, "message": "storage full" }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::ShareBuffer {
+                doc_id: "fail.rs".to_string(),
+            },
+            &tx,
+            &mut shared,
+        )
+        .await;
+
+        let event = rx.try_recv().unwrap();
+        match event {
+            CollabEvent::ShareFailed { doc_id, message } => {
+                assert_eq!(doc_id, "fail.rs");
+                assert!(message.contains("storage full"));
+            }
+            other => panic!("expected ShareFailed, got {:?}", other),
+        }
+        // Should NOT be in shared_docs.
+        assert!(!shared.contains(&"fail.rs".to_string()));
+    }
+
+    #[test]
+    fn disconnect_clears_all_buffers_not_just_tracked() {
+        // Flaw C: disconnect must clear ALL buffers with collab state, not just
+        // those tracked in collab_synced_buffers. A ShareFailed might have already
+        // removed the doc_id from the set but left the buffer's collab_doc_id.
+        use mae_core::Buffer;
+        let mut editor = Editor::new();
+
+        // Buffer A: tracked in synced_buffers.
+        editor.buffers[0].name = "tracked.rs".to_string();
+        editor.buffers[0].enable_sync(1);
+        editor.buffers[0].collab_doc_id = Some("doc-tracked".to_string());
+        editor
+            .collab_synced_buffers
+            .insert("doc-tracked".to_string());
+
+        // Buffer B: has collab_doc_id but NOT in synced_buffers (e.g., ShareFailed removed it).
+        let mut buf_b = Buffer::new();
+        buf_b.name = "orphaned.rs".to_string();
+        buf_b.enable_sync(2);
+        buf_b.collab_doc_id = Some("doc-orphaned".to_string());
+        editor.buffers.push(buf_b);
+
+        editor.collab_status = CollabStatus::Connected { peer_count: 1 };
+        editor.collab_synced_docs = 1;
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::Disconnected {
+                reason: "test".to_string(),
+            },
+        );
+
+        // Both buffers should be cleaned.
+        for buf in &editor.buffers {
+            assert!(
+                buf.collab_doc_id.is_none(),
+                "buffer {} should have collab_doc_id cleared",
+                buf.name
+            );
+            assert!(
+                buf.sync_doc.is_none(),
+                "buffer {} should have sync cleared",
+                buf.name
+            );
+        }
+    }
+
+    #[test]
+    fn disconnect_after_share_failure_no_leak() {
+        // ShareFailed on one buffer, then Disconnect: remaining buffer must still be cleaned.
+        use mae_core::Buffer;
+        let mut editor = Editor::new();
+
+        editor.buffers[0].name = "good.rs".to_string();
+        editor.buffers[0].enable_sync(1);
+        editor.buffers[0].collab_doc_id = Some("doc-good".to_string());
+        editor.collab_synced_buffers.insert("doc-good".to_string());
+
+        let mut buf_bad = Buffer::new();
+        buf_bad.name = "bad.rs".to_string();
+        buf_bad.enable_sync(2);
+        buf_bad.collab_doc_id = Some("doc-bad".to_string());
+        editor.buffers.push(buf_bad);
+        editor.collab_status = CollabStatus::Connected { peer_count: 1 };
+
+        // ShareFailed clears doc-bad from the buffer.
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::ShareFailed {
+                doc_id: "doc-bad".to_string(),
+                message: "test".to_string(),
+            },
+        );
+
+        // Disconnect.
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::Disconnected {
+                reason: "test".to_string(),
+            },
+        );
+
+        for buf in &editor.buffers {
+            assert!(buf.collab_doc_id.is_none(), "buffer {} leaked", buf.name);
+        }
+    }
 
     #[tokio::test]
     async fn server_notification_processed_after_command_burst() {

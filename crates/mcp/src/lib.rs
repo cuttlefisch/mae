@@ -183,6 +183,14 @@ async fn handle_client(
                 session.touch();
                 session.messages_received += 1;
 
+                // JSON-RPC notifications have "method" but no "id" — they
+                // must not receive a response. Silently accept them.
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg) {
+                    if val.get("method").is_some() && val.get("id").is_none() {
+                        continue;
+                    }
+                }
+
                 let response = handle_request(
                     &msg, tool_definitions, &tool_tx, &mut session, &broadcaster,
                 ).await;

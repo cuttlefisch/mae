@@ -38,7 +38,20 @@
 - [ ] **`:w` fails on non-sharer clients**: Save works only for the client that originally opened and shared the file. Other clients (including those that outlive the sharer) get errors. Root cause: `file_path` not properly resolved on join, or save protocol assumes original sharer identity.
 - [ ] **Sharer quit doesn't notify peers or stop sharing**: When the client that triggered the share disconnects, peers are not notified and the shared document lingers. Need graceful disconnect protocol: server detects client drop → notifies remaining peers → optionally promotes new owner or marks doc read-only.
 - [ ] **Client disconnect lifecycle undefined**: No documented or tested behavior for: client crash, network drop, graceful quit, last-client-leaves. Must define and implement industry-standard behavior (cf. VS Code Live Share, Google Docs). Document in `docs/COLLABORATION.md`.
-- [ ] **Collab e2e test harness missing**: No integration tests exercise the full multi-client flow (server + N clients, share, join, edit, sync, disconnect). Need a test harness that spawns `mae-state-server` + simulated clients over TCP, asserts bidirectional sync, undo correctness, save, and disconnect behavior.
+- [x] **Collab e2e test harness missing**: 15 E2E tests (in-memory Client harness + 9 TCP network tests) covering share/join/edit/sync/disconnect/eviction/convergence.
+- [x] **Edits lost during share round-trip (BUG A)**: Optimistically track doc in `collab_synced_buffers` immediately, with `ShareFailed` rollback on server error.
+- [x] **Eviction doesn't delete from SQLite (BUG B)**: `evict_idle()` now deletes from storage after removing from HashMap.
+- [x] **Inconsistent snapshots in sync/resync and sync/diff (BUG C)**: Atomic `encode_state_and_sv()` and `encode_diff_and_sv()` methods under single lock.
+- [x] **sync/share loses connected_clients (BUG D)**: Atomic `share_doc()` method sets `connected_clients=1` on creation.
+- [x] **Missing subscription types (BUG E)**: `send_subscribe()` now includes `peer_joined`, `peer_left`, `save_committed`.
+
+### Deferred to v0.12+ (Collab)
+
+- [ ] **Offline edit recovery**: Preserve `sync_doc` during disconnect, reconcile on rejoin instead of full-state overwrite.
+- [ ] **Client-side gap detection**: Track `wal_seq` from notifications, trigger auto-resync on gaps.
+- [ ] **Save protocol wiring**: Call `docs/save_intent` + `docs/save_committed` from editor's `:w` for synced buffers.
+- [ ] **Awareness protocol**: Cursor/selection sharing via yrs awareness (y-websocket compatible).
+- [ ] **Heartbeat/keepalive**: Detect silent client death, clean up stale `connected_clients`.
 
 ### Org-Mode Rendering
 
@@ -196,6 +209,10 @@
 - [ ] **KB node visibility**: Add `visibility` property to nodes: `public` (default), `internal` (MAE system nodes), `private` (user personal notes). Internal nodes hidden from user-facing search unless explicitly queried with `:help` or `kb_get` by ID.
 - [ ] **Per-workspace KB isolation**: When multiple projects are open, `kb_search` defaults to the active project's registered KB instances. Cross-project search available via `kb_search --all` or `(kb-search-all query)` Scheme API.
 - [ ] **KB tangle pipeline**: `make docs-tangle` extracts ADR markdown from KB concept nodes. CI job validates freshness (same as code-map pattern). Enables KB as single source of truth for architecture docs.
+- [ ] **Checkbox toggle in KB view mode**: Allow toggling checkboxes in read-only help/KB buffers without entering edit mode. Requires refactoring view-mode to allow targeted mutations.
+- [ ] **Replace mode (R)**: Standard vim replace mode where keystrokes overwrite characters.
+- [ ] **Doc store eviction TOCTOU**: Between identifying eviction candidates (read lock) and evicting (write lock), a client could reconnect. Low probability; fix requires holding write lock during entire eviction.
+- [ ] **Unified buffer-switching strategy**: Three patterns exist (`switch_to_buffer`, `display_buffer_and_focus`, palette). Should converge on one with consistent view state management.
 
 ---
 

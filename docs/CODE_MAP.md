@@ -343,7 +343,13 @@ Source: `crates/spell/src/lib.rs`
 
 ## mae-state-server
 
-Source: `crates/state-server/src/main.rs`
+Source: `crates/state-server/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `doc_store` | mod |
+| `handler` | mod |
+| `storage` | mod |
 
 ## mae-sync
 
@@ -356,6 +362,7 @@ Source: `crates/sync/src/lib.rs`
 | `text` | mod |
 | `SyncError` | enum |
 | `DocAddress` | enum |
+| `SavePolicy` | enum |
 
 ## Scheme API
 
@@ -463,7 +470,7 @@ Source: `crates/sync/src/lib.rs`
 | `collab-status` | `crates/scheme/src/runtime.rs` |
 | `collab-synced-buffers` | `crates/scheme/src/runtime.rs` |
 
-## Commands (500 built-in)
+## Commands (504 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -539,6 +546,7 @@ Source: `crates/sync/src/lib.rs`
 | `join-lines` | Join current line with next line (J) |
 | `indent-line` | Indent current line by 4 spaces (>>) |
 | `dedent-line` | Dedent current line by up to 4 spaces (<<) |
+| `fill-paragraph` | Hard-wrap current paragraph at fill-column (M-q) |
 | `toggle-case` | Toggle case of char under cursor (~) |
 | `uppercase-line` | Uppercase current line (gUU) |
 | `lowercase-line` | Lowercase current line (guu) |
@@ -560,6 +568,7 @@ Source: `crates/sync/src/lib.rs`
 | `enter-insert-mode` | Enter insert mode |
 | `enter-insert-mode-after` | Enter insert mode after cursor |
 | `enter-insert-mode-eol` | Enter insert mode at end of line |
+| `enter-insert-mode-bol` | Enter insert mode at first non-blank (I) |
 | `enter-normal-mode` | Return to normal mode |
 | `enter-command-mode` | Enter command-line mode |
 | `save` | Save current buffer |
@@ -962,6 +971,8 @@ Source: `crates/sync/src/lib.rs`
 | `collab-share` | Share current buffer for collaboration |
 | `collab-sync` | Force sync current buffer |
 | `collab-doctor` | Run collaborative editing diagnostics |
+| `collab-list` | List shared documents on the state server (SPC C l) |
+| `collab-join` | Join a shared document (SPC C j) |
 | `move-down` | Move cursor down |
 | `move-down` | Move down |
 | `zzz` | Last |

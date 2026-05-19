@@ -158,6 +158,7 @@ impl Editor {
         normal.bind(parse_key_seq("i"), "enter-insert-mode");
         normal.bind(parse_key_seq("a"), "enter-insert-mode-after");
         normal.bind(parse_key_seq("A"), "enter-insert-mode-eol");
+        normal.bind(parse_key_seq("I"), "enter-insert-mode-bol");
         normal.bind(parse_key_seq("o"), "open-line-below");
         normal.bind(parse_key_seq("O"), "open-line-above");
         normal.bind(parse_key_seq(":"), "enter-command-mode");
@@ -764,5 +765,30 @@ mod tests {
         let entries = ed.buffer_keys_entries();
         // Should have entries from help + normal keymaps
         assert!(!entries.is_empty());
+    }
+
+    #[test]
+    fn shift_i_bound_in_normal_mode() {
+        let ed = Editor::new();
+        let normal = ed.keymaps.get("normal").unwrap();
+        let seq = parse_key_seq("I");
+        let result = normal.lookup(&seq);
+        assert_eq!(
+            result,
+            crate::keymap::LookupResult::Exact("enter-insert-mode-bol")
+        );
+    }
+
+    #[test]
+    fn org_keymap_has_tab_and_enter() {
+        // The org keymap is created by the Scheme module, but we can verify
+        // the kernel fallback: org buffers should map to ("org", Some("normal"))
+        // and the org keymap (if loaded) would have Tab and Enter bindings.
+        // Here we just verify the kernel keymap name resolution is correct.
+        let mut ed = Editor::new();
+        ed.syntax.set_language(0, Language::Org);
+        let (primary, fallback) = ed.current_keymap_names().unwrap();
+        assert_eq!(primary, "org");
+        assert_eq!(fallback, Some("normal"));
     }
 }

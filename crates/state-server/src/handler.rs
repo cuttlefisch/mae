@@ -340,10 +340,10 @@ async fn handle_doc_request(
                     );
                 }
             };
-            match doc_store.encode_diff(&doc_name, &sv_bytes).await {
-                Ok(diff) => {
+            // BUG C fix: atomic diff + sv under single lock (INV-2).
+            match doc_store.encode_diff_and_sv(&doc_name, &sv_bytes).await {
+                Ok((diff, server_sv)) => {
                     let diff_b64 = update_to_base64(&diff);
-                    let server_sv = doc_store.state_vector(&doc_name).await.unwrap_or_default();
                     let server_sv_b64 = update_to_base64(&server_sv);
                     JsonRpcResponse::success(
                         id,
@@ -376,19 +376,17 @@ async fn handle_doc_request(
 
         "sync/resync" => {
             // Full resync: returns full state + state vector for a document.
+            // BUG C fix: atomic state + sv under single lock (INV-2).
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
-            match doc_store.encode_state(&doc_name).await {
-                Ok(state) => {
-                    let sv = doc_store.state_vector(&doc_name).await.unwrap_or_default();
-                    JsonRpcResponse::success(
-                        id,
-                        serde_json::json!({
-                            "doc": doc_name,
-                            "state": update_to_base64(&state),
-                            "sv": update_to_base64(&sv),
-                        }),
-                    )
-                }
+            match doc_store.encode_state_and_sv(&doc_name).await {
+                Ok((state, sv)) => JsonRpcResponse::success(
+                    id,
+                    serde_json::json!({
+                        "doc": doc_name,
+                        "state": update_to_base64(&state),
+                        "sv": update_to_base64(&sv),
+                    }),
+                ),
                 Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
             }
         }
@@ -456,12 +454,10 @@ async fn handle_doc_request(
         }
 
         "sync/share" => {
-            // Atomic share: delete old doc (memory + WAL) then create fresh from update.
+            // BUG D fix: use atomic share_doc (delete + create + connected_clients=1).
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
             // Track this doc for disconnect cleanup.
-            if session_docs.insert(doc_name.clone()) {
-                let _ = doc_store.track_client_connect(&doc_name).await;
-            }
+            session_docs.insert(doc_name.clone());
             let update_b64 = match params["update"].as_str() {
                 Some(s) => s,
                 None => {
@@ -481,9 +477,7 @@ async fn handle_doc_request(
                 }
             };
 
-            // Delete old doc (ignore errors — may not exist yet).
-            let _ = doc_store.delete_doc(&doc_name).await;
-            match doc_store.apply_update(&doc_name, &update_bytes, None).await {
+            match doc_store.share_doc(&doc_name, &update_bytes).await {
                 Ok(result) => {
                     // Broadcast to all OTHER subscribers (not the sharer).
                     {

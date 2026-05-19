@@ -264,6 +264,8 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
         "kb_health" | "kb_register" | "kb_unregister" | "kb_reimport" | "kb_create"
         | "kb_update" | "kb_delete" => Some("federation"),
 
+        "collab_status" | "collab_connect" | "collab_share" | "collab_doctor" => Some("collab"),
+
         _ => None,
     }
 }

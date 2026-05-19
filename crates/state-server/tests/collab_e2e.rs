@@ -535,3 +535,177 @@ async fn save_committed_broadcasts_to_peers() {
         "B should receive save_committed notification"
     );
 }
+
+#[tokio::test]
+async fn sync_update_echo_filtered() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // A shares a document.
+    client_a.share("echo.txt", "start").await;
+
+    // A sends an update.
+    let state = client_a.full_state("echo.txt").await;
+    let mut ts_a = TextSync::from_state(&state).unwrap();
+    let update = ts_a.insert(5, " end");
+    client_a.send_update("echo.txt", &update).await;
+
+    // A should NOT receive its own update back (echo filtering / INV-3).
+    let notif = client_a.recv_timeout(200).await;
+    assert!(
+        notif.is_none(),
+        "sender should not receive echo of own update"
+    );
+}
+
+#[tokio::test]
+async fn share_then_immediate_edit_syncs() {
+    // BUG A regression test: edits during share round-trip must be forwarded.
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // A shares with initial content.
+    client_a.share("immediate.txt", "hello").await;
+
+    // A immediately sends an edit (simulating typing during round-trip).
+    let state = client_a.full_state("immediate.txt").await;
+    let mut ts_a = TextSync::from_state(&state).unwrap();
+    let update = ts_a.insert(5, " world");
+    client_a.send_update("immediate.txt", &update).await;
+
+    // Allow processing.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // B joins and should see both the initial content AND the edit.
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let content = client_b.content("immediate.txt").await;
+    assert_eq!(content, "hello world");
+}
+
+#[tokio::test]
+async fn eviction_removes_from_list() {
+    // BUG B regression test: evicted docs should not appear in docs/list.
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    client_a.share("evict-test.txt", "ephemeral").await;
+
+    // Disconnect A (drop).
+    drop(client_a);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Evict with 0 threshold.
+    let evicted = store.evict_idle(0).await;
+    assert!(!evicted.is_empty(), "should have evicted at least one doc");
+
+    // New client: docs/list should be empty.
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": client_b.next_id,
+        "method": "docs/list"
+    });
+    client_b.next_id += 1;
+    client_b.send(&msg).await;
+    let resp = client_b.recv().await;
+    let docs = resp["result"]["documents"].as_array().unwrap();
+    assert!(
+        docs.is_empty(),
+        "docs/list should be empty after eviction, got: {:?}",
+        docs
+    );
+}
+
+#[tokio::test]
+async fn reshare_replaces_content() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Share v1.
+    client_a.share("reshare.txt", "version 1").await;
+    let content = client_a.content("reshare.txt").await;
+    assert_eq!(content, "version 1");
+
+    // Reshare v2 (replaces, not appends).
+    client_a.share("reshare.txt", "version 2").await;
+    let content = client_a.content("reshare.txt").await;
+    assert_eq!(content, "version 2");
+}
+
+#[tokio::test]
+async fn three_client_convergence() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_c = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // A shares.
+    client_a.share("three.txt", "base").await;
+
+    // All get state.
+    let state = client_a.full_state("three.txt").await;
+    let mut ts_a = TextSync::from_state(&state).unwrap();
+    let state = client_b.full_state("three.txt").await;
+    let mut ts_b = TextSync::from_state(&state).unwrap();
+    let state = client_c.full_state("three.txt").await;
+    let mut ts_c = TextSync::from_state(&state).unwrap();
+
+    // All edit concurrently.
+    let ua = ts_a.insert(4, "A");
+    let ub = ts_b.insert(0, "B");
+    let uc = ts_c.insert(4, "C");
+
+    client_a.send_update("three.txt", &ua).await;
+    client_b.send_update("three.txt", &ub).await;
+    client_c.send_update("three.txt", &uc).await;
+
+    // Allow processing.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // All should converge to same server content.
+    let ca = client_a.content("three.txt").await;
+    let cb = client_b.content("three.txt").await;
+    let cc = client_c.content("three.txt").await;
+    assert_eq!(ca, cb, "A and B should converge");
+    assert_eq!(cb, cc, "B and C should converge");
+    assert!(ca.contains('A'), "should contain A's edit");
+    assert!(ca.contains('B'), "should contain B's edit");
+    assert!(ca.contains('C'), "should contain C's edit");
+}
+
+#[tokio::test]
+async fn large_document_sync() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Create 10K-line document.
+    let large_content: String = (0..10_000)
+        .map(|i| {
+            format!(
+                "Line {:05}: The quick brown fox jumps over the lazy dog.\n",
+                i
+            )
+        })
+        .collect();
+    client_a.share("large.txt", &large_content).await;
+
+    // B joins and gets the full content.
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let content = client_b.content("large.txt").await;
+    assert_eq!(
+        content.len(),
+        large_content.len(),
+        "content length should match"
+    );
+    assert_eq!(content, large_content, "content should match exactly");
+}

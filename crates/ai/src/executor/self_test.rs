@@ -875,6 +875,44 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
         }));
     }
 
+    if include("collab") {
+        categories.push(serde_json::json!({
+            "name": "collab",
+            "conditional": true,
+            "requires_note": "Requires running state server (mae-state-server)",
+            "tests": [
+                {
+                    "id": "collab.1",
+                    "tool": "collab_status",
+                    "args": {},
+                    "assert": "Returns status, peer_count, synced_docs, server_address",
+                    "grading": {"method": "json_field_exists", "fields": ["status"]}
+                },
+                {
+                    "id": "collab.2",
+                    "tool": "introspect",
+                    "args": {"section": "collaboration"},
+                    "assert": "Returns collab_status, collab_server, synced_buffers",
+                    "grading": {"method": "json_field_exists", "fields": ["collab_status"]}
+                },
+                {
+                    "id": "collab.3",
+                    "tool": "audit_configuration",
+                    "args": {},
+                    "assert": "Collaboration section present with configured field",
+                    "grading": {"method": "output_contains", "substring": "collab"}
+                },
+                {
+                    "id": "collab.4",
+                    "tool": "collab_doctor",
+                    "args": {},
+                    "assert": "Returns checks array or diagnostic text",
+                    "grading": {"method": "success_only"}
+                }
+            ]
+        }));
+    }
+
     if include("guidance") {
         categories.push(serde_json::json!({
             "name": "guidance",
