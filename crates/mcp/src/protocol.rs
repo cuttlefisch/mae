@@ -87,6 +87,13 @@ impl McpError {
         }
     }
 
+    pub fn invalid_request(message: String) -> Self {
+        McpError {
+            code: -32600,
+            message,
+        }
+    }
+
     pub fn internal_error(message: String) -> Self {
         McpError {
             code: -32603,

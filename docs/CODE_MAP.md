@@ -17,6 +17,7 @@ graph TD
     mae --> mae_scheme
     mae --> mae_shell
     mae --> mae_sync
+    mae --> mae_state_server
     mae_ai --> mae_core
     mae_ai --> mae_sync
     mae_babel[mae-babel]
@@ -363,6 +364,10 @@ Source: `crates/sync/src/lib.rs`
 | `SyncError` | enum |
 | `DocAddress` | enum |
 | `SavePolicy` | enum |
+| `ClockStatus` | enum |
+| `SyncDiagnosis` | struct |
+| `SyncOverallStatus` | enum |
+| `compare_state_vectors` | fn |
 
 ## Scheme API
 

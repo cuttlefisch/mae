@@ -13,7 +13,8 @@
         "mae-renderer",
         "mae-scheme",
         "mae-shell",
-        "mae-sync"
+        "mae-sync",
+        "mae-state-server"
       ],
       "public_items": [
         {
@@ -852,6 +853,22 @@
         {
           "name": "SavePolicy",
           "kind": "enum"
+        },
+        {
+          "name": "ClockStatus",
+          "kind": "enum"
+        },
+        {
+          "name": "SyncDiagnosis",
+          "kind": "struct"
+        },
+        {
+          "name": "SyncOverallStatus",
+          "kind": "enum"
+        },
+        {
+          "name": "compare_state_vectors",
+          "kind": "fn"
         }
       ]
     }

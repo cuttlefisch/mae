@@ -368,7 +368,8 @@ Each client gets its own session with capability negotiation and state subscript
 
 ### State Notifications
 Clients subscribe to event types via `notifications/subscribe`: `buffer_edit`,
-`cursor_move`, `diagnostics`, `mode_change`, `buffer_open`, `buffer_close`.
+`cursor_move`, `diagnostics`, `mode_change`, `buffer_open`, `buffer_close`,
+`sync_update`, `peer_joined`, `peer_left`, `save_committed`.
 Events carry version numbers for ordering. Slow clients are dropped, not blocked.
 
 ### File Safety

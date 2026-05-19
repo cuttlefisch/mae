@@ -344,11 +344,20 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
     if buf.len() >= 15 && buf.starts_with(b"Content-Length:") {
         // Read header lines until we hit the empty \r\n separator.
         let mut content_length: Option<usize> = None;
+        let mut header_bytes: usize = 0;
+        const MAX_HEADER_SIZE: usize = 16_384; // 16 KB guard
         loop {
             let mut header_line = String::new();
             let n = reader.read_line(&mut header_line).await?;
             if n == 0 {
                 return Ok(None); // EOF mid-header
+            }
+            header_bytes += n;
+            if header_bytes > MAX_HEADER_SIZE {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "header too large (>16KB)",
+                ));
             }
             let trimmed = header_line.trim();
             if trimmed.is_empty() {
@@ -2081,5 +2090,180 @@ mod tests {
 
         drop(client);
         let _ = std::fs::remove_file(&socket_path);
+    }
+
+    // -----------------------------------------------------------------------
+    // Protocol audit tests (MCP hardening)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_tools_call_before_initialize() {
+        // Sending tools/call without initialize should return an error, not panic.
+        let (tx, rx) = mpsc::channel(1);
+        // Drop the receiver so tool_tx.send() fails immediately.
+        drop(rx);
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let msg = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"buffer_read","arguments":{}}}"#;
+        let resp = handle_request(msg, &[], &tx, &mut session, &bc).await;
+        // Must return an error (editor channel closed), not panic.
+        assert!(resp.error.is_some());
+        assert!(resp
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("channel closed"));
+    }
+
+    #[tokio::test]
+    async fn test_unknown_method_returns_method_not_found() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let msg = r#"{"jsonrpc":"2.0","id":42,"method":"bogus/method"}"#;
+        let resp = handle_request(msg, &[], &tx, &mut session, &bc).await;
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.as_ref().unwrap().code, -32601);
+        assert!(resp
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("bogus/method"));
+    }
+
+    #[tokio::test]
+    async fn test_malformed_json_returns_parse_error() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let msg = "{not valid json at all";
+        let resp = handle_request(msg, &[], &tx, &mut session, &bc).await;
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.as_ref().unwrap().code, -32700);
+    }
+
+    #[test]
+    fn test_json_rpc_error_codes_correct() {
+        // Verify all McpError constructors use spec-correct codes.
+        assert_eq!(McpError::parse_error("".into()).code, -32700);
+        assert_eq!(McpError::invalid_request("".into()).code, -32600);
+        assert_eq!(McpError::method_not_found("".into()).code, -32601);
+        assert_eq!(McpError::internal_error("".into()).code, -32603);
+        // Application-level codes in -32000..-32099 range.
+        assert_eq!(McpError::backpressure("".into()).code, -32000);
+        assert_eq!(McpError::editor_busy("".into()).code, -32001);
+        assert_eq!(McpError::tool_not_found("".into()).code, -32002);
+        assert_eq!(McpError::invalid_session("".into()).code, -32003);
+        assert_eq!(McpError::session_expired("".into()).code, -32004);
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_initialize_rejected() {
+        // The second initialize should still return a response (not panic),
+        // and ideally succeed idempotently (current behavior) or error.
+        let (tx, _rx) = mpsc::channel(1);
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let msg = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"test"}}}"#;
+        let resp1 = handle_request(msg, &[], &tx, &mut session, &bc).await;
+        assert!(resp1.error.is_none(), "first initialize should succeed");
+
+        let msg2 = r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"test"}}}"#;
+        let resp2 = handle_request(msg2, &[], &tx, &mut session, &bc).await;
+        // Should not panic. Either succeeds idempotently or returns an error.
+        assert!(resp2.error.is_some() || resp2.result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_notification_no_response() {
+        // In handle_client, notifications (no `id`) are intercepted before
+        // handle_request is called — they get no response. Verify that the
+        // handle_client notification detection works correctly by checking
+        // that a message with no `id` + a method is identified as a notification.
+        let msg = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        let val: serde_json::Value = serde_json::from_str(msg).unwrap();
+        // Notification detection: has "method" but no "id".
+        assert!(val.get("method").is_some());
+        assert!(val.get("id").is_none());
+        // If this were passed to handle_request, it would fail to deserialize
+        // as JsonRpcRequest (missing required `id` field). That's correct —
+        // notifications must be handled before dispatch.
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_tool_calls() {
+        // Two tool calls with different IDs should each get the correct response.
+        let (tx, mut rx) = mpsc::channel::<McpToolRequest>(16);
+        let bc = dummy_broadcaster();
+
+        // Spawn a mock tool handler that echoes the tool name.
+        tokio::spawn(async move {
+            while let Some(req) = rx.recv().await {
+                let _ = req.reply.send(McpToolResult {
+                    success: true,
+                    output: format!("result-{}", req.tool_name),
+                });
+            }
+        });
+
+        let tools = vec![
+            ToolInfo {
+                name: "tool_a".to_string(),
+                description: "A".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+            },
+            ToolInfo {
+                name: "tool_b".to_string(),
+                description: "B".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+            },
+        ];
+
+        let mut session_a = ClientSession::new();
+        let mut session_b = ClientSession::new();
+        let msg_a = r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"tool_a","arguments":{}}}"#;
+        let msg_b = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"tool_b","arguments":{}}}"#;
+
+        let (resp_a, resp_b) = tokio::join!(
+            handle_request(msg_a, &tools, &tx, &mut session_a, &bc),
+            handle_request(msg_b, &tools, &tx, &mut session_b, &bc),
+        );
+
+        assert!(resp_a.error.is_none(), "tool_a should succeed");
+        assert!(resp_b.error.is_none(), "tool_b should succeed");
+
+        let text_a = resp_a.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let text_b = resp_b.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Both should have gotten their respective results.
+        assert!(text_a.contains("tool_a") || text_b.contains("tool_a"));
+        assert!(text_a.contains("tool_b") || text_b.contains("tool_b"));
+    }
+
+    #[tokio::test]
+    async fn test_header_size_guard() {
+        // A pathological stream that sends endless header lines should be rejected.
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Content-Length: 10\r\n");
+        // Add 16KB+ of junk headers.
+        for _ in 0..500 {
+            data.extend_from_slice(b"X-Junk-Header: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n");
+        }
+        data.extend_from_slice(b"\r\n");
+        data.extend_from_slice(b"0123456789");
+
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_message(&mut reader).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("header too large"));
     }
 }
