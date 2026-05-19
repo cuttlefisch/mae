@@ -461,10 +461,11 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     Err(e) => Err(e),
                 }
             };
-            // Store doc_id on buffer so remote updates can find it.
-            editor.buffers[idx].collab_doc_id = Some(doc_id.clone());
             match load_ok {
                 Ok(()) => {
+                    // Store doc_id on buffer only after successful load — prevents
+                    // RemoteUpdate from targeting a buffer with no valid sync_doc.
+                    editor.buffers[idx].collab_doc_id = Some(doc_id.clone());
                     // Detect language from doc_id for syntax highlighting.
                     {
                         let content = editor.buffers[idx].text();
@@ -497,9 +498,11 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             // Remove from synced set (was optimistically added in drain_collab_intents).
             editor.collab_synced_buffers.remove(&doc_id);
             editor.collab_synced_docs = editor.collab_synced_buffers.len();
-            // Clear collab_doc_id on the buffer so it doesn't receive stale updates.
+            // Clear all collab state on the buffer so re-share starts fresh.
             if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
                 editor.buffers[idx].collab_doc_id = None;
+                editor.buffers[idx].sync_doc = None;
+                editor.buffers[idx].pending_sync_updates.clear();
             }
             editor.set_status(format!("Share failed: {}", message));
             editor.mark_full_redraw();
@@ -547,7 +550,7 @@ pub(crate) fn setup_collab_channels(
     mpsc::Sender<CollabCommand>,
     CollabSpawn,
 ) {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<CollabCommand>(32);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<CollabCommand>(256);
     let (evt_tx, evt_rx) = mpsc::channel::<CollabEvent>(64);
 
     let reconnect_secs = editor.collab_reconnect_interval;

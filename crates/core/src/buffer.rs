@@ -902,6 +902,9 @@ impl Buffer {
         self.rope = sync.rope().clone();
         self.sync_doc = Some(sync);
         self.pending_sync_updates.clear();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.modified = false;
         self.bump_generation();
         Ok(())
     }
@@ -2668,5 +2671,50 @@ mod tests {
         assert!(state.is_some());
         assert!(buf.sync_doc.is_none());
         // No panic = success
+    }
+
+    #[test]
+    fn load_sync_state_clears_undo_redo() {
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "first");
+        insert_str(&mut buf, &mut win, " second");
+        assert!(
+            !buf.undo_stack.is_empty(),
+            "precondition: undo stack has entries"
+        );
+
+        let ts = mae_sync::text::TextSync::new("server content");
+        let state = ts.encode_state();
+        buf.load_sync_state(&state, 99).unwrap();
+
+        assert_eq!(buf.text(), "server content");
+        assert!(
+            buf.undo_stack.is_empty(),
+            "undo stack must be cleared after load_sync_state"
+        );
+        assert!(
+            buf.redo_stack.is_empty(),
+            "redo stack must be cleared after load_sync_state"
+        );
+        assert!(
+            !buf.modified,
+            "buffer should not be modified after sync load"
+        );
+    }
+
+    #[test]
+    fn load_sync_state_replaces_existing_content() {
+        let mut buf = Buffer::new();
+        buf.rope = Rope::from_str("local content that should be replaced");
+
+        let ts = mae_sync::text::TextSync::new("server content");
+        let state = ts.encode_state();
+        buf.load_sync_state(&state, 42).unwrap();
+
+        assert_eq!(buf.text(), "server content");
+        assert!(
+            !buf.text().contains("local content"),
+            "local content must be fully replaced"
+        );
     }
 }

@@ -911,6 +911,10 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "execute-ex",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "message",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -1179,6 +1183,30 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "exit",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "write-file",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "sleep-ms",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "file-exists?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "current-milliseconds",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "goto-char",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "buffer-line",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -1260,6 +1288,14 @@
     },
     {
       "name": "keymap-bindings",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-string",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-text",
       "source": "crates/scheme/src/runtime.rs"
     },
     {

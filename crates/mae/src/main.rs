@@ -14,6 +14,7 @@ mod shell_keys;
 mod shell_lifecycle;
 mod sync_broadcast;
 mod terminal_loop;
+mod test_runner;
 mod watchdog;
 
 use std::io;
@@ -94,6 +95,9 @@ fn main() -> io::Result<()> {
         println!("  --debug-init            Verbose init file loading (show errors in *Messages*)");
         println!("  -q, --clean             Skip config, init.scm, and history (like emacs -q)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
+        println!("  --test PATH             Run Scheme tests headless (file or directory)");
+        println!("  --test-filter PATTERN   Filter tests by name pattern");
+        println!("  --test-output FORMAT    Output format: tap (default) | human");
         println!("  sync                    Materialize declared state (clone/update packages)");
         println!("  upgrade                 Fetch latest for all packages");
         println!("  purge                   Remove packages not declared in init.scm");
@@ -224,6 +228,90 @@ fn main() -> io::Result<()> {
         }
         println!("mae: config OK");
         return Ok(());
+    }
+
+    // --test PATH: headless Scheme test runner.
+    if let Some(test_pos) = args.iter().position(|a| a == "--test") {
+        let test_path = args
+            .get(test_pos + 1)
+            .filter(|a| !a.starts_with('-'))
+            .cloned()
+            .unwrap_or_else(|| {
+                eprintln!("mae: --test requires a PATH argument (file or directory)");
+                std::process::exit(2);
+            });
+
+        let test_filter = args
+            .iter()
+            .position(|a| a == "--test-filter")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str());
+
+        let test_output = args
+            .iter()
+            .position(|a| a == "--test-output")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str())
+            .unwrap_or("tap");
+
+        // Boot editor headless with Scheme runtime.
+        let mut editor = Editor::new();
+        let (app_config, _) = config::load_config();
+        if let Some(ref theme) = app_config.editor.theme {
+            editor.set_theme_by_name(theme);
+        }
+        let mut scheme = match SchemeRuntime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("mae: scheme runtime init failed: {}", e.message);
+                std::process::exit(2);
+            }
+        };
+
+        // Apply env-var overrides for collab.
+        if let Ok(addr) = std::env::var("MAE_COLLAB_SERVER") {
+            editor.collab_server_address = addr;
+        }
+        if std::env::var("MAE_COLLAB_AUTO_CONNECT").is_ok() {
+            editor.collab_auto_connect = true;
+        }
+
+        let _module_registry = load_init_file(&mut scheme, &mut editor);
+
+        // Build a minimal tokio runtime for the collab bridge.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| io::Error::other(e.to_string()))?;
+
+        let (mut collab_event_rx, collab_command_tx, collab_spawn) =
+            collab_bridge::setup_collab_channels(&editor);
+
+        let exit_code = rt.block_on(async {
+            collab_bridge::spawn_collab_task(collab_spawn);
+
+            // Give the collab bridge a moment to connect if auto-connect is set.
+            if editor.collab_auto_connect {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                // Drain initial connection events.
+                while let Ok(event) = collab_event_rx.try_recv() {
+                    collab_bridge::handle_collab_event(&mut editor, event);
+                }
+            }
+
+            test_runner::run_scheme_tests(
+                &mut editor,
+                &mut scheme,
+                &mut collab_event_rx,
+                &collab_command_tx,
+                &test_path,
+                test_filter,
+                test_output,
+            )
+            .await
+        });
+
+        std::process::exit(exit_code);
     }
 
     // First-run wizard: runs only when stdin is a TTY, no config file exists,

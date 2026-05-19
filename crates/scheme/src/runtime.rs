@@ -129,6 +129,17 @@ struct SharedState {
     /// Current module directory (set before loading each module's autoloads).
     /// Used by `register-splash-art-image!` to resolve relative paths.
     current_module_dir: Option<PathBuf>,
+
+    // --- Test framework primitives ---
+    /// Pending exit code from `(exit CODE)`.
+    pending_exit_code: Option<i32>,
+    /// Pending file writes from `(write-file PATH CONTENT)`.
+    pending_write_files: Vec<(String, String)>,
+    /// Pending sleep from `(sleep-ms N)`.
+    pending_sleep_ms: Option<u64>,
+    /// Ex-commands to dispatch via `(execute-ex CMD-STRING)`.
+    /// Routes through `execute_command()` which handles argument parsing.
+    pending_ex_commands: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -299,6 +310,15 @@ impl SchemeRuntime {
         let s = shared.clone();
         engine.register_fn("run-command", move |name: String| {
             s.lock().unwrap().pending_commands.push(name);
+            SteelVal::Void
+        });
+
+        // (execute-ex CMD-STRING) — route through ex-command parser.
+        // Handles argument splitting: (execute-ex "collab-join test.txt"),
+        // (execute-ex "saveas /path/to/file"), (execute-ex "w /path"), etc.
+        let s = shared.clone();
+        engine.register_fn("execute-ex", move |cmd: String| {
+            s.lock().unwrap().pending_ex_commands.push(cmd);
             SteelVal::Void
         });
 
@@ -1116,6 +1136,57 @@ impl SchemeRuntime {
             }
         });
 
+        // --- Test framework primitives ---
+
+        // (exit CODE) — request process exit with given code.
+        // Accumulated in SharedState; the test runner checks after each eval.
+        let s = shared.clone();
+        engine.register_fn("exit", move |code: isize| {
+            s.lock().unwrap().pending_exit_code = Some(code as i32);
+            SteelVal::Void
+        });
+
+        // (write-file PATH CONTENT) — write a string to disk.
+        // Useful for inter-container signaling in docker-based tests.
+        let s = shared.clone();
+        engine.register_fn("write-file", move |path: String, content: String| {
+            s.lock().unwrap().pending_write_files.push((path, content));
+            SteelVal::Void
+        });
+
+        // (sleep-ms N) — request a sleep of N milliseconds.
+        // Accumulated in SharedState; the test runner handles the actual sleep
+        // and drains collab/shell events during the wait.
+        let s = shared.clone();
+        engine.register_fn("sleep-ms", move |ms: isize| {
+            s.lock().unwrap().pending_sleep_ms = Some(ms.max(0) as u64);
+            SteelVal::Void
+        });
+
+        // (file-exists? PATH) — check if a file exists on disk.
+        engine.register_fn("file-exists?", move |path: String| -> bool {
+            std::path::Path::new(&path).exists()
+        });
+
+        // (current-milliseconds) — monotonic time in milliseconds.
+        engine.register_fn("current-milliseconds", move || -> isize {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as isize
+        });
+
+        // (goto-char OFFSET) — move cursor to character offset (0-indexed).
+        // Accumulated as a pending cursor operation.
+        let s = shared.clone();
+        engine.register_fn("goto-char", move |offset: isize| {
+            // Store as a special sentinel: row=usize::MAX signals char-offset mode.
+            // The apply_to_editor handler converts offset → (row, col).
+            s.lock().unwrap().pending_cursor = Some((usize::MAX, offset.max(0) as usize));
+            SteelVal::Void
+        });
+
         // Register default values for state-injected variables.
         // This prevents FreeIdentifier errors in init.scm during startup.
         engine.register_value("*buffer-name*", SteelVal::StringV("scratch".into()));
@@ -1181,6 +1252,23 @@ impl SchemeRuntime {
     pub fn drain_kb_nodes(&mut self) -> Vec<(String, String, String)> {
         let mut state = self.shared.lock().unwrap();
         std::mem::take(&mut state.pending_kb_nodes)
+    }
+
+    // --- Test framework accessors ---
+
+    /// Take the pending exit code set by `(exit CODE)`, if any.
+    pub fn take_exit_code(&mut self) -> Option<i32> {
+        self.shared.lock().unwrap().pending_exit_code.take()
+    }
+
+    /// Drain pending file writes from `(write-file PATH CONTENT)`.
+    pub fn drain_write_files(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.shared.lock().unwrap().pending_write_files)
+    }
+
+    /// Take the pending sleep request from `(sleep-ms N)`, if any.
+    pub fn take_sleep_ms(&mut self) -> Option<u64> {
+        self.shared.lock().unwrap().pending_sleep_ms.take()
     }
 
     /// Evaluate a Scheme expression and return the result as a string.
@@ -1612,6 +1700,26 @@ impl SchemeRuntime {
                     .unwrap_or(SteelVal::ListV(vec![].into()))
             });
 
+        // (buffer-string) — return full text of the active buffer (ERT naming).
+        let active_text = buf.text();
+        self.engine
+            .register_fn("buffer-string", move || -> String { active_text.clone() });
+
+        // (buffer-text NAME) — return full text of a named buffer.
+        let all_buf_texts: Vec<(String, String)> = editor
+            .buffers
+            .iter()
+            .map(|b| (b.name.clone(), b.text()))
+            .collect();
+        self.engine
+            .register_fn("buffer-text", move |name: String| -> SteelVal {
+                all_buf_texts
+                    .iter()
+                    .find(|(n, _)| n == &name || n.ends_with(&name))
+                    .map(|(_, t)| SteelVal::StringV(t.clone().into()))
+                    .unwrap_or(SteelVal::BoolV(false))
+            });
+
         // (collab-status) — returns an alist with current collaboration state.
         // Returns: ((status . "off") (server . "127.0.0.1:9473") (synced-docs . 0) (peer-count . 0))
         let collab_status_str = editor.collab_status.as_str().to_string();
@@ -1853,12 +1961,22 @@ impl SchemeRuntime {
             win.cursor_col = end.saturating_sub(line_start);
         }
 
-        // (cursor-goto ROW COL)
+        // (cursor-goto ROW COL) or (goto-char OFFSET)
         if let Some((row, col)) = state.pending_cursor.take() {
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
-            win.cursor_row = row;
-            win.cursor_col = col;
+            if row == usize::MAX {
+                // goto-char mode: col holds the char offset
+                let offset = col.min(editor.buffers[idx].rope().len_chars());
+                let rope = editor.buffers[idx].rope();
+                let new_row = rope.char_to_line(offset);
+                let line_start = rope.line_to_char(new_row);
+                win.cursor_row = new_row;
+                win.cursor_col = offset.saturating_sub(line_start);
+            } else {
+                win.cursor_row = row;
+                win.cursor_col = col;
+            }
             win.clamp_cursor(&editor.buffers[idx]);
         }
 
@@ -1992,6 +2110,9 @@ impl SchemeRuntime {
         // We drain them outside the lock since dispatch_builtin
         // may re-enter shared state.
         let commands: Vec<String> = state.pending_commands.drain(..).collect();
+
+        // (execute-ex CMD) — dispatch through ex-command parser (supports args).
+        let ex_commands: Vec<String> = state.pending_ex_commands.drain(..).collect();
 
         // (message TEXT) — append to message log
         for msg in state.pending_messages.drain(..) {
@@ -2167,6 +2288,10 @@ impl SchemeRuntime {
             editor.dispatch_builtin(&name);
         }
 
+        for cmd in ex_commands {
+            editor.execute_command(&cmd);
+        }
+
         if binding_count > 0 || cmd_count > 0 {
             info!(
                 keybindings = binding_count,
@@ -2174,6 +2299,11 @@ impl SchemeRuntime {
                 "scheme config applied to editor"
             );
         }
+
+        // Note: We do NOT call inject_editor_state here because Steel's
+        // register_value creates new binding cells. Closures captured in
+        // previous evals would still reference old cells. The test runner
+        // uses sync_scheme_state (with set!) to mutate existing cells.
     }
 
     /// Call a named Scheme function (for executing Scheme-backed commands).

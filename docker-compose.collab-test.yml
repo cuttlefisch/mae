@@ -1,0 +1,86 @@
+# Docker Compose for collab CRDT E2E tests.
+#
+# Topology: state-server + client-a + client-b + verifier
+#
+# Usage:
+#   docker compose -f docker-compose.collab-test.yml up --build --abort-on-container-exit
+#   make docker-collab-test
+
+services:
+  state-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    entrypoint: ["mae-state-server", "--bind", "0.0.0.0:9473"]
+    healthcheck:
+      test: ["CMD-SHELL", "echo '{}' | timeout 2 nc -w1 localhost 9473 || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    networks:
+      - collab-test
+
+  client-a:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    entrypoint: ["mae", "--test", "/tests/test_share.scm"]
+    volumes:
+      - workspace-a:/workspace
+      - ./tests/collab-e2e:/tests:ro
+      - ./scheme/lib:/usr/share/mae/lib:ro
+      - sync:/sync
+    environment:
+      MAE_COLLAB_SERVER: "state-server:9473"
+      MAE_COLLAB_AUTO_CONNECT: "1"
+      MAE_SKIP_WIZARD: "1"
+    depends_on:
+      state-server:
+        condition: service_healthy
+    networks:
+      - collab-test
+
+  client-b:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    entrypoint: ["mae", "--test", "/tests/test_join.scm"]
+    volumes:
+      - workspace-b:/workspace
+      - ./tests/collab-e2e:/tests:ro
+      - ./scheme/lib:/usr/share/mae/lib:ro
+      - sync:/sync
+    environment:
+      MAE_COLLAB_SERVER: "state-server:9473"
+      MAE_COLLAB_AUTO_CONNECT: "1"
+      MAE_SKIP_WIZARD: "1"
+    depends_on:
+      state-server:
+        condition: service_healthy
+    networks:
+      - collab-test
+
+  verifier:
+    image: alpine:3.19
+    entrypoint: ["/bin/sh", "/tests/verify.sh"]
+    volumes:
+      - workspace-a:/workspace-a:ro
+      - workspace-b:/workspace-b:ro
+      - ./tests/collab-e2e:/tests:ro
+    depends_on:
+      client-a:
+        condition: service_completed_successfully
+      client-b:
+        condition: service_completed_successfully
+
+volumes:
+  workspace-a:
+  workspace-b:
+  sync:
+
+networks:
+  collab-test:
+    driver: bridge

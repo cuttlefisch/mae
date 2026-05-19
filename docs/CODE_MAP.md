@@ -384,6 +384,7 @@ Source: `crates/sync/src/lib.rs`
 | `cursor-goto` | `crates/scheme/src/runtime.rs` |
 | `open-file` | `crates/scheme/src/runtime.rs` |
 | `run-command` | `crates/scheme/src/runtime.rs` |
+| `execute-ex` | `crates/scheme/src/runtime.rs` |
 | `message` | `crates/scheme/src/runtime.rs` |
 | `add-hook!` | `crates/scheme/src/runtime.rs` |
 | `remove-hook!` | `crates/scheme/src/runtime.rs` |
@@ -451,6 +452,12 @@ Source: `crates/sync/src/lib.rs`
 | `advice-add!` | `crates/scheme/src/runtime.rs` |
 | `advice-remove!` | `crates/scheme/src/runtime.rs` |
 | `check-deprecated` | `crates/scheme/src/runtime.rs` |
+| `exit` | `crates/scheme/src/runtime.rs` |
+| `write-file` | `crates/scheme/src/runtime.rs` |
+| `sleep-ms` | `crates/scheme/src/runtime.rs` |
+| `file-exists?` | `crates/scheme/src/runtime.rs` |
+| `current-milliseconds` | `crates/scheme/src/runtime.rs` |
+| `goto-char` | `crates/scheme/src/runtime.rs` |
 | `buffer-line` | `crates/scheme/src/runtime.rs` |
 | `shell-cwd` | `crates/scheme/src/runtime.rs` |
 | `shell-read-output` | `crates/scheme/src/runtime.rs` |
@@ -472,6 +479,8 @@ Source: `crates/sync/src/lib.rs`
 | `get-option` | `crates/scheme/src/runtime.rs` |
 | `command-exists?` | `crates/scheme/src/runtime.rs` |
 | `keymap-bindings` | `crates/scheme/src/runtime.rs` |
+| `buffer-string` | `crates/scheme/src/runtime.rs` |
+| `buffer-text` | `crates/scheme/src/runtime.rs` |
 | `collab-status` | `crates/scheme/src/runtime.rs` |
 | `collab-synced-buffers` | `crates/scheme/src/runtime.rs` |
 

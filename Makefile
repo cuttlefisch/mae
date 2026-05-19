@@ -346,6 +346,15 @@ install-completions:
 		echo "Installed fish completions"; \
 	fi
 
+## test-scheme: run Scheme test files locally (pass TEST_PATH=path)
+test-scheme: build-tui
+	$(RELEASE_BIN) --test $(or $(TEST_PATH),tests/collab-e2e/)
+
+## docker-collab-test: run collab CRDT E2E tests in Docker containers
+docker-collab-test:
+	docker compose -f docker-compose.collab-test.yml up --build --abort-on-container-exit --exit-code-from verifier
+	docker compose -f docker-compose.collab-test.yml down --volumes
+
 ## docker-network-test: run state-server network E2E tests in Docker
 docker-network-test:
 	docker compose -f docker-compose.test-network.yml run --rm --build test

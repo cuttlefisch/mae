@@ -378,6 +378,10 @@ async fn handle_doc_request(
             // Full resync: returns full state + state vector for a document.
             // BUG C fix: atomic state + sv under single lock (INV-2).
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            // Track this doc for disconnect cleanup (same as sync/full_state).
+            if session_docs.insert(doc_name.clone()) {
+                let _ = doc_store.track_client_connect(&doc_name).await;
+            }
             match doc_store.encode_state_and_sv(&doc_name).await {
                 Ok((state, sv)) => JsonRpcResponse::success(
                     id,
@@ -877,5 +881,112 @@ mod tests {
             .unwrap();
         let resp: JsonRpcResponse = serde_json::from_str(&resp_msg).unwrap();
         assert_eq!(resp.result.unwrap(), "pong");
+    }
+
+    #[tokio::test]
+    async fn resync_tracks_session_doc() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut session_docs = HashSet::new();
+
+        // First create the doc via sync/update.
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "resync test");
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "sync/update",
+            "params": { "doc": "resync-doc", "update": update_to_base64(&update) }
+        });
+        handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut session_docs,
+        )
+        .await;
+
+        // Clear session_docs to simulate a fresh session.
+        session_docs.clear();
+
+        // sync/resync should track the doc in session_docs.
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "sync/resync",
+            "params": { "doc": "resync-doc" }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut session_docs,
+        )
+        .await;
+        assert!(resp.error.is_none(), "resync failed: {:?}", resp.error);
+        assert!(
+            session_docs.contains("resync-doc"),
+            "resync must track doc in session_docs"
+        );
+    }
+
+    #[tokio::test]
+    async fn resync_increments_connected_clients() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut session_docs = HashSet::new();
+
+        // Create doc.
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "hello");
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "sync/update",
+            "params": { "doc": "cc-doc", "update": update_to_base64(&update) }
+        });
+        handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut session_docs,
+        )
+        .await;
+
+        // Resync from a different session.
+        let mut session2 = HashSet::new();
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "sync/resync",
+            "params": { "doc": "cc-doc" }
+        });
+        handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            1,
+            &mut session2,
+        )
+        .await;
+
+        // Check doc_stats — connected_clients should be at least 1.
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 3, "method": "docs/stats",
+            "params": { "doc": "cc-doc" }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            1,
+            &mut session2,
+        )
+        .await;
+        let stats = &resp.result.unwrap()["stats"];
+        assert!(
+            stats["connected_clients"].as_u64().unwrap() >= 1,
+            "resync must increment connected_clients, got: {stats}"
+        );
     }
 }

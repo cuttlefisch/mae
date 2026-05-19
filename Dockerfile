@@ -91,7 +91,7 @@ RUN cargo test --workspace --exclude mae-gui --exclude mae-test-fixtures
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ca-certificates \
+    git ca-certificates netcat-openbsd \
   && rm -rf /var/lib/apt/lists/*
 
 # Non-root user (UID 1000 matches typical host user for volume mounts)

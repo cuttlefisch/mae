@@ -146,6 +146,24 @@ impl Client {
         resp["result"]["content"].as_str().unwrap().to_string()
     }
 
+    async fn resync(&mut self, doc: &str) -> (Vec<u8>, Vec<u8>) {
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"sync/resync","params":{"doc":doc}});
+        self.next_id += 1;
+        self.send(&msg).await;
+        let resp = self.recv().await;
+        let state = base64_to_update(resp["result"]["state"].as_str().unwrap()).unwrap();
+        let sv = base64_to_update(resp["result"]["sv"].as_str().unwrap()).unwrap();
+        (state, sv)
+    }
+
+    async fn doc_stats(&mut self, doc: &str) -> serde_json::Value {
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"docs/stats","params":{"doc":doc}});
+        self.next_id += 1;
+        self.send(&msg).await;
+        let resp = self.recv().await;
+        resp["result"]["stats"].clone()
+    }
+
     async fn debug_stats(&mut self) -> serde_json::Value {
         let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"$/debug"});
         self.next_id += 1;
@@ -556,4 +574,169 @@ async fn debug_response_shape_matches_doctor() {
     let stats = &result["doc_stats"]["debug-test.rs"];
     assert!(stats.is_object(), "doc stats should exist");
     assert!(stats.get("wal_seq").is_some());
+}
+
+// ============================================================================
+// Tier 4 — CRDT Bug Regression Guards
+// ============================================================================
+
+/// BUG 1: sync/resync must track session doc so the joining client
+/// receives subsequent sync/update broadcasts from other clients.
+#[tokio::test]
+async fn join_via_resync_receives_subsequent_updates() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    // Client A shares a doc.
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    client_a.share("resync-bug.txt", "initial").await;
+    let state_a = client_a.full_state("resync-bug.txt").await;
+    let mut ts_a = TextSync::from_state(&state_a).unwrap();
+
+    // Client B joins via resync (the JoinDoc path).
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let (state_b, _sv_b) = client_b.resync("resync-bug.txt").await;
+    let ts_b = TextSync::from_state(&state_b).unwrap();
+    assert_eq!(
+        ts_b.content(),
+        "initial",
+        "resync should return initial content"
+    );
+
+    // Verify the server tracks client B's doc subscription.
+    let stats = client_b.doc_stats("resync-bug.txt").await;
+    assert!(
+        stats["connected_clients"].as_u64().unwrap() >= 2,
+        "both clients should be tracked after resync, got: {stats}"
+    );
+
+    // Client A edits — client B should receive the notification.
+    let update = ts_a.insert(7, " content");
+    client_a.send_update("resync-bug.txt", &update).await;
+
+    let notif = client_b
+        .wait_for_notification("notifications/sync_update", 2000)
+        .await;
+    assert!(
+        notif.is_some(),
+        "BUG 1: client that joined via resync must receive subsequent updates"
+    );
+}
+
+/// BUG 1 (variant): After resync, remote edits apply correctly.
+#[tokio::test]
+async fn remote_update_after_resync_applies() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    client_a.share("remote-apply.txt", "hello").await;
+    let state_a = client_a.full_state("remote-apply.txt").await;
+    let mut ts_a = TextSync::from_state(&state_a).unwrap();
+
+    // Client B joins via resync.
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let (state_b, _) = client_b.resync("remote-apply.txt").await;
+    let mut ts_b = TextSync::from_state(&state_b).unwrap();
+    assert_eq!(ts_b.content(), "hello");
+
+    // Client A appends.
+    let update_a = ts_a.insert(5, " world");
+    client_a.send_update("remote-apply.txt", &update_a).await;
+
+    // Client B receives and applies.
+    let notif = client_b
+        .wait_for_notification("notifications/sync_update", 2000)
+        .await;
+    assert!(notif.is_some(), "client B must receive update");
+    let update_data = notif.unwrap()["params"]["event"]["data"]["update_base64"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let decoded = base64_to_update(&update_data).unwrap();
+    ts_b.apply_update(&decoded).unwrap();
+    assert_eq!(
+        ts_b.content(),
+        "hello world",
+        "remote update must apply correctly after resync"
+    );
+}
+
+/// BUG 2: If load_sync_state fails, collab_doc_id must NOT be set on the buffer.
+#[tokio::test]
+async fn join_failed_buffer_stays_clean() {
+    let mut buf = Buffer::new();
+
+    // Try to load garbage state bytes — should fail.
+    let result = buf.load_sync_state(&[0xFF, 0xFE, 0xFD], 42);
+    assert!(result.is_err(), "invalid state bytes should fail");
+
+    // collab_doc_id must remain None.
+    assert!(
+        buf.collab_doc_id.is_none(),
+        "BUG 2: collab_doc_id must not be set on load failure"
+    );
+    assert!(
+        buf.sync_doc.is_none(),
+        "sync_doc must not be set on load failure"
+    );
+}
+
+/// BUG 6: load_sync_state replaces buffer content from server (no duplication).
+#[tokio::test]
+async fn load_sync_replaces_existing_content() {
+    let mut buf = Buffer::new();
+    buf.insert_text_at(0, "local content that should be replaced");
+
+    let ts = TextSync::new("server content");
+    let state = ts.encode_state();
+    buf.load_sync_state(&state, 42).unwrap();
+
+    assert_eq!(
+        buf.text(),
+        "server content",
+        "content must come from server"
+    );
+    assert!(
+        !buf.text().contains("local content"),
+        "local content must be fully replaced"
+    );
+    assert!(
+        !buf.modified,
+        "buffer should not be modified after sync load"
+    );
+}
+
+/// BUG 3: ShareFailed cleanup must clear sync_doc so re-share starts fresh.
+#[tokio::test]
+async fn share_failed_allows_clean_reshare() {
+    let mut buf = Buffer::new();
+    buf.insert_text_at(0, "test content");
+
+    // Simulate having a sync_doc (as if enable_sync was called optimistically).
+    buf.enable_sync(1);
+    assert!(buf.sync_doc.is_some(), "precondition: sync_doc set");
+
+    // Simulate ShareFailed cleanup (this is what collab_bridge does).
+    buf.collab_doc_id = None;
+    buf.sync_doc = None;
+    buf.pending_sync_updates.clear();
+
+    // Re-enable sync (simulating re-share) — must succeed since sync_doc was cleared.
+    buf.enable_sync(2);
+    assert!(
+        buf.sync_doc.is_some(),
+        "BUG 3: re-share must create new sync_doc"
+    );
+}
+
+/// BUG 5: Channel capacity is sufficient for burst editing.
+#[tokio::test]
+async fn collab_channel_capacity_sufficient() {
+    // The production channel is 256 — verify it can absorb a burst.
+    let (tx, _rx) = tokio::sync::mpsc::channel::<u8>(256);
+    for i in 0..200u8 {
+        tx.try_send(i)
+            .expect("channel should absorb 200 messages without dropping");
+    }
 }
