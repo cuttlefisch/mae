@@ -6,6 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// MCP protocol version (shared by server and client).
+pub const PROTOCOL_VERSION: &str = "2024-11-05";
+
 /// JSON-RPC 2.0 request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
@@ -163,7 +166,7 @@ mod tests {
     #[test]
     fn test_serialize_initialize_result() {
         let result = InitializeResult {
-            protocol_version: "2024-11-05".to_string(),
+            protocol_version: PROTOCOL_VERSION.to_string(),
             capabilities: ServerCapabilities {
                 tools: Some(serde_json::json!({})),
             },

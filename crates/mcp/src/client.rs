@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
@@ -123,57 +123,52 @@ impl McpClient {
             .take()
             .ok_or_else(|| "No stdin for child".to_string())?;
 
-        // Writer task: sends JSON-RPC requests to the child's stdin
+        // Writer task: sends JSON-RPC requests to the child's stdin with
+        // Content-Length framing (spec-compliant).
         let (writer_tx, mut writer_rx) = mpsc::channel::<String>(32);
         tokio::spawn(async move {
             let mut stdin = stdin;
             while let Some(msg) = writer_rx.recv().await {
-                if let Err(e) = stdin.write_all(msg.as_bytes()).await {
-                    error!(error = %e, "MCP client write error");
+                let header = format!("Content-Length: {}\r\n\r\n", msg.len());
+                if let Err(e) = stdin.write_all(header.as_bytes()).await {
+                    error!(error = %e, "MCP client write header error");
                     break;
                 }
-                if let Err(e) = stdin.write_all(b"\n").await {
-                    error!(error = %e, "MCP client write newline error");
+                if let Err(e) = stdin.write_all(msg.as_bytes()).await {
+                    error!(error = %e, "MCP client write body error");
                     break;
                 }
                 let _ = stdin.flush().await;
             }
         });
 
-        // Reader task: reads JSON-RPC responses from the child's stdout
+        // Reader task: reads JSON-RPC responses from the child's stdout.
+        // Uses read_message() which auto-detects Content-Length and line framing.
         let pending = self.pending.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
             loop {
-                line.clear();
-                match reader.read_line(&mut line).await {
-                    Ok(0) => {
-                        debug!("MCP client: child stdout closed");
-                        break;
-                    }
-                    Ok(_) => {
-                        let trimmed = line.trim();
-                        if trimmed.is_empty() {
-                            continue;
-                        }
-                        match serde_json::from_str::<JsonRpcResponse>(trimmed) {
-                            Ok(resp) => {
-                                let id = resp
-                                    .id
-                                    .as_u64()
-                                    .or_else(|| resp.id.as_i64().map(|v| v as u64));
-                                if let Some(id) = id {
-                                    let mut pending = pending.lock().await;
-                                    if let Some(tx) = pending.remove(&id) {
-                                        let _ = tx.send(resp);
-                                    }
+                match crate::read_message(&mut reader).await {
+                    Ok(Some(msg)) => match serde_json::from_str::<JsonRpcResponse>(&msg) {
+                        Ok(resp) => {
+                            let id = resp
+                                .id
+                                .as_u64()
+                                .or_else(|| resp.id.as_i64().map(|v| v as u64));
+                            if let Some(id) = id {
+                                let mut pending = pending.lock().await;
+                                if let Some(tx) = pending.remove(&id) {
+                                    let _ = tx.send(resp);
                                 }
                             }
-                            Err(e) => {
-                                debug!(error = %e, line = %trimmed, "MCP client: non-JSON-RPC line");
-                            }
                         }
+                        Err(e) => {
+                            debug!(error = %e, msg = %msg, "MCP client: non-JSON-RPC message");
+                        }
+                    },
+                    Ok(None) => {
+                        debug!("MCP client: child stdout closed");
+                        break;
                     }
                     Err(e) => {
                         error!(error = %e, "MCP client read error");
@@ -232,10 +227,34 @@ impl McpClient {
         }
     }
 
+    /// Send a JSON-RPC notification (no `id`, fire-and-forget).
+    async fn send_notification(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<(), String> {
+        let writer = self.writer_tx.as_ref().ok_or("Not connected")?;
+
+        let mut msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+        });
+        if let Some(p) = params {
+            msg["params"] = p;
+        }
+
+        let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+        writer
+            .send(json)
+            .await
+            .map_err(|e| format!("Write channel closed: {}", e))?;
+        Ok(())
+    }
+
     /// Perform the MCP initialize handshake.
     pub async fn initialize(&mut self) -> Result<(), String> {
         let params = serde_json::json!({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": crate::protocol::PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {
                 "name": "mae-editor",
@@ -248,8 +267,9 @@ impl McpClient {
             return Err(format!("Initialize failed: {}", err.message));
         }
 
-        // Send initialized notification
-        let _ = self.send_request("notifications/initialized", None).await;
+        // Send initialized notification (no id, per JSON-RPC/MCP spec).
+        self.send_notification("notifications/initialized", None)
+            .await?;
 
         info!(server = %self.config.name, "MCP client initialized");
         Ok(())

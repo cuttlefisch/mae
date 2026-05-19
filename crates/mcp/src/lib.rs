@@ -184,9 +184,20 @@ async fn handle_client(
                 session.messages_received += 1;
 
                 // JSON-RPC notifications have "method" but no "id" — they
-                // must not receive a response. Silently accept them.
+                // must not receive a response. Handle known ones, ignore the rest.
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg) {
                     if val.get("method").is_some() && val.get("id").is_none() {
+                        if let Some(method) = val.get("method").and_then(|m| m.as_str()) {
+                            match method {
+                                "notifications/initialized" => {
+                                    session.initialized = true;
+                                    debug!(session = session.id, "client initialized (notification)");
+                                }
+                                _ => {
+                                    debug!(session = session.id, method = method, "ignoring unknown notification");
+                                }
+                            }
+                        }
                         continue;
                     }
                 }
@@ -421,7 +432,7 @@ pub async fn handle_request(
             );
 
             let result = InitializeResult {
-                protocol_version: "2024-11-05".to_string(),
+                protocol_version: protocol::PROTOCOL_VERSION.to_string(),
                 capabilities: ServerCapabilities {
                     tools: Some(serde_json::json!({})),
                 },
@@ -437,9 +448,12 @@ pub async fn handle_request(
             };
             JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
         }
+        // Backward compat: some clients incorrectly send this as a request
+        // (with `id`). The proper notification path is handled in handle_client
+        // before dispatch. This arm handles the request variant gracefully.
         "notifications/initialized" => {
             session.initialized = true;
-            debug!(session = session.id, "client initialized");
+            debug!(session = session.id, "client initialized (request compat)");
             JsonRpcResponse::success(id, serde_json::Value::Null)
         }
         "$/ping" => {
@@ -474,6 +488,7 @@ pub async fn handle_request(
             let health = serde_json::json!({
                 "uptime_secs": uptime,
                 "session_id": session.id,
+                "initialized": session.initialized,
                 "messages_received": session.messages_received,
                 "tool_calls": session.tool_calls,
                 "protocol_version": env!("CARGO_PKG_VERSION"),
@@ -810,6 +825,29 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    /// Helper: send a JSON-RPC notification (no `id`, fire-and-forget).
+    async fn send_notification(
+        stream: &mut tokio::net::UnixStream,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) {
+        use tokio::io::AsyncWriteExt;
+
+        let mut msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+        });
+        if let Some(p) = params {
+            msg["params"] = p;
+        }
+        let payload = serde_json::to_string(&msg).unwrap();
+        stream
+            .write_all(format!("{}\n", payload).as_bytes())
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+    }
+
     #[tokio::test]
     async fn multi_client_concurrent_connections() {
         let socket_path = format!("/tmp/mae-test-multi-{}.sock", std::process::id());
@@ -1032,15 +1070,10 @@ mod tests {
         .await;
         assert!(resp.error.is_none());
 
-        // 2. notifications/initialized
-        let resp = send_and_recv(
-            &mut client,
-            &serde_json::json!({
-                "jsonrpc": "2.0", "id": 2, "method": "notifications/initialized"
-            }),
-        )
-        .await;
-        assert!(resp.error.is_none());
+        // 2. notifications/initialized — proper notification (no id, no response)
+        send_notification(&mut client, "notifications/initialized", None).await;
+        // Brief pause for server to process the notification.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         // 3. Tool call
         let resp = send_and_recv(
@@ -1752,6 +1785,97 @@ mod tests {
 
         drop(unix_client);
         drop(tcp_client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    // -----------------------------------------------------------------------
+    // Notification handling tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn notification_initialized_sets_session_flag() {
+        let socket_path = format!("/tmp/mae-test-notif-init-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let server = McpServer::new(&socket_path, tool_tx, dummy_broadcaster());
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+
+        // Initialize (request).
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "notif-test", "version": "1.0"}}
+            }),
+        )
+        .await;
+        assert!(resp.error.is_none());
+
+        // Send proper notification (no id).
+        send_notification(&mut client, "notifications/initialized", None).await;
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+        // Verify via health that session is initialized.
+        let health = send_and_recv(
+            &mut client,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "$/health"}),
+        )
+        .await;
+        let result = health.result.unwrap();
+        assert_eq!(
+            result["initialized"], true,
+            "session should be initialized after notification"
+        );
+
+        drop(client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn notification_unknown_silently_accepted() {
+        let socket_path = format!("/tmp/mae-test-notif-unk-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let server = McpServer::new(&socket_path, tool_tx, dummy_broadcaster());
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+
+        // Initialize.
+        send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "unk-notif-test", "version": "1.0"}}
+            }),
+        )
+        .await;
+
+        // Send an unknown notification — should not crash or close connection.
+        send_notification(&mut client, "notifications/something_unknown", None).await;
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+        // Connection should still be alive — verify with ping.
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "$/ping"}),
+        )
+        .await;
+        assert_eq!(resp.result.unwrap(), "pong");
+
+        drop(client);
         let _ = std::fs::remove_file(&socket_path);
     }
 }
