@@ -351,7 +351,11 @@ fn default_init_template() -> &'static str {
     "file-tree"         ; project sidebar
 
   :lang
+    "org"               ; org-mode keymap + hooks
     "tables"            ; table manipulation in org/markdown
+
+  :app
+    "dailies"           ; daily notes (SPC n d)
 )
 
 ;; ── Third-party packages ─────────────────────────────────

@@ -660,7 +660,18 @@ impl Editor {
         } else if self.last_kb_state.is_some() {
             self.help_reopen();
         } else if let Some(id) = self.kb_node_id_for_active_buffer() {
-            self.open_help_at(&id);
+            let prev_idx = self.active_buffer_idx();
+            let idx = self.ensure_kb_buffer_idx(&id);
+            self.kb_populate_buffer(idx);
+            if idx != prev_idx {
+                self.alternate_buffer_idx = Some(prev_idx);
+            }
+            let win = self.window_mgr.focused_window_mut();
+            win.buffer_idx = idx;
+            win.cursor_row = 0;
+            win.cursor_col = 0;
+            self.sync_mode_to_buffer();
+            self.mark_full_redraw();
         } else {
             self.set_status("No KB view to return to");
         }

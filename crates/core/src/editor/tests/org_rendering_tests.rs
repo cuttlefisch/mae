@@ -154,6 +154,56 @@ fn kb_view_has_todo_spans() {
     );
 }
 
+/// open_file_at_path detects language for .org files (Fix 2 regression guard).
+#[test]
+fn daily_file_gets_language_detection() {
+    use crate::syntax::Language;
+    let dir = tempfile::TempDir::new().unwrap();
+    let org_path = dir.path().join("2026-05-19.org");
+    std::fs::write(&org_path, "#+title: 2026-05-19\n* TODO Task\n").unwrap();
+
+    let mut e = Editor::new();
+    e.open_file_at_path(&org_path);
+
+    let idx = e.buffers.len() - 1;
+    assert_eq!(
+        e.syntax.language_of(idx),
+        Some(Language::Org),
+        "open_file_at_path must detect Language::Org for .org files"
+    );
+}
+
+/// help_return_to_view from a daily buffer should NOT split (Fix 4 regression guard).
+#[test]
+fn help_return_to_view_no_split_on_first_invoke() {
+    let mut e = Editor::new();
+
+    // Insert a daily KB node so kb_node_id_for_active_buffer() returns Some
+    let node = mae_kb::Node::new(
+        "daily:2026-05-19",
+        "2026-05-19",
+        mae_kb::NodeKind::Note,
+        "Daily note",
+    );
+    e.kb.insert(node);
+
+    // Set up a buffer that looks like a daily
+    let mut buf = Buffer::new();
+    buf.set_file_path(std::path::PathBuf::from("/tmp/2026-05-19.org"));
+    buf.insert_text_at(0, "Daily note\n");
+    e.buffers.push(buf);
+    let buf_idx = e.buffers.len() - 1;
+    e.window_mgr.focused_window_mut().buffer_idx = buf_idx;
+
+    let win_count_before = e.window_mgr.window_count();
+    e.help_return_to_view();
+    let win_count_after = e.window_mgr.window_count();
+    assert_eq!(
+        win_count_before, win_count_after,
+        "help_return_to_view should not create extra windows"
+    );
+}
+
 /// Display regions force-recompute signal (u64::MAX) bypasses debounce.
 #[test]
 fn toggle_inline_images_forces_immediate_recompute() {

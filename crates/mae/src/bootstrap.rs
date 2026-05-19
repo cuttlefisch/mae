@@ -992,6 +992,7 @@ pub fn load_modules(
 
     // Use declared modules from (mae! ...) if present; otherwise enable all.
     let declared = scheme.declared_modules();
+    let has_mae_block = !declared.is_empty();
     let mut enabled: HashMap<String, Vec<String>> = if declared.is_empty() {
         // No mae! block — enable all discovered modules (backward compat).
         all_modules
@@ -1010,6 +1011,21 @@ pub fn load_modules(
         if doom_available {
             info!("auto-enabling keymap-doom (default keymap — add to mae! block to suppress)");
             enabled.insert("keymap-doom".to_string(), vec![]);
+        }
+    }
+
+    // Auto-enable language modules (category = "lang") unless explicitly disabled.
+    // Language modules provide keymaps and hooks for file types — without them,
+    // file-type features silently fail (Emacs auto-mode-alist equivalent).
+    if has_mae_block {
+        for (_, module) in &all_modules {
+            if module.module.category == "lang" && !enabled.contains_key(module.name()) {
+                info!(
+                    "auto-enabling {} (language module — add to mae! block to customize)",
+                    module.name()
+                );
+                enabled.insert(module.name().to_string(), vec![]);
+            }
         }
     }
 

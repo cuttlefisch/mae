@@ -526,3 +526,21 @@ fn get_option_performance() {
         Some("performance.large_file_lines")
     );
 }
+
+#[test]
+fn mode_report_includes_language() {
+    use crate::syntax::Language;
+    let mut ed = Editor::new();
+    let buf_idx = ed.active_buffer_idx();
+    ed.syntax.set_language(buf_idx, Language::Org);
+    ed.show_mode_report();
+
+    // The mode report is in the last buffer
+    let report_idx = ed.buffers.len() - 1;
+    let content = ed.buffers[report_idx].text();
+    assert!(
+        content.contains("Language:  org"),
+        "mode report should include 'Language:  org', got:\n{}",
+        content
+    );
+}

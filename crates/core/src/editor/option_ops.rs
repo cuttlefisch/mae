@@ -1060,6 +1060,9 @@ impl super::Editor {
         if let Some(parent) = parent_map {
             lines.push(format!("Parent:    {}", parent));
         }
+        if let Some(lang) = self.syntax.language_of(buf_idx) {
+            lines.push(format!("Language:  {}", lang.id()));
+        }
         lines.push(String::new());
         lines.push("Buffer".to_string());
         lines.push("------".to_string());

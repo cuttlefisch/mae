@@ -1342,7 +1342,7 @@ impl Editor {
     }
 
     /// Open a file at a given path (helper for dailies navigation).
-    fn open_file_at_path(&mut self, path: &std::path::Path) {
+    pub(crate) fn open_file_at_path(&mut self, path: &std::path::Path) {
         // Check if buffer already open
         for (i, buf) in self.buffers.iter().enumerate() {
             if buf.file_path().map(|p| p == path).unwrap_or(false) {
@@ -1360,6 +1360,18 @@ impl Editor {
                     .to_string();
                 self.buffers.push(buf);
                 let idx = self.buffers.len() - 1;
+
+                // Language detection (same as open_file_hidden in file_ops.rs)
+                let detected_lang = self.buffers[idx]
+                    .file_path()
+                    .and_then(|p| crate::syntax::language_for_buffer(p, &self.buffers[idx].text()));
+                if let Some(lang) = detected_lang {
+                    self.syntax.set_language(idx, lang);
+                    self.buffers[idx]
+                        .local_options
+                        .apply_defaults(&lang.default_local_options());
+                }
+
                 self.display_buffer(idx);
             }
             Err(e) => {
@@ -1406,6 +1418,23 @@ mod tests {
         editor.config_dir_override = Some(tmp.path().join("config"));
         editor.data_dir_override = Some(tmp.path().join("data"));
         tmp
+    }
+
+    #[test]
+    fn open_file_at_path_detects_language() {
+        let dir = TempDir::new().unwrap();
+        let org_path = dir.path().join("test-daily.org");
+        std::fs::write(&org_path, "#+title: Test\n* Heading\n").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file_at_path(&org_path);
+
+        let idx = editor.buffers.len() - 1;
+        assert_eq!(
+            editor.syntax.language_of(idx),
+            Some(crate::syntax::Language::Org),
+            "open_file_at_path must set Language::Org for .org files"
+        );
     }
 
     #[test]
