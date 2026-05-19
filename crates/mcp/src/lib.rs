@@ -7,6 +7,31 @@
 //! Claude Code (or any MCP client) connects via the mae-mcp-shim binary
 //! which bridges stdio <-> the socket.
 //!
+//! ## Transport framing
+//!
+//! Two distinct framing protocols are in play:
+//!
+//! - **Socket side** (MAE server <-> shim, or direct clients): Content-Length
+//!   framing (LSP-compatible). Each message is preceded by a
+//!   `Content-Length: N\r\n\r\n` header. This is also used for TCP transport
+//!   (collab state server, multi-client).
+//!
+//! - **Stdio side** (shim <-> Claude Code): Newline-delimited JSON per the
+//!   MCP stdio transport specification. Each message is a single JSON object
+//!   on one line, terminated by `\n`. Messages MUST NOT contain embedded
+//!   newlines. See: <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#stdio>
+//!
+//! The `mae-mcp-shim` binary translates between these two framing protocols.
+//! This is critical — using Content-Length framing on stdio will cause MCP
+//! clients (Claude Code, etc.) to hang during the handshake.
+//!
+//! ## Protocol version negotiation
+//!
+//! The server supports multiple MCP protocol versions (see `protocol::SUPPORTED_VERSIONS`).
+//! Per spec, if the client requests a version we support, we MUST echo it back.
+//! If not, we return our latest. Claude Code will disconnect if it receives
+//! a version it doesn't support. See: <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#version-negotiation>
+//!
 //! ## Multi-client support (v0.11.0+)
 //!
 //! The server accepts multiple concurrent clients, each in its own tokio
@@ -408,8 +433,10 @@ pub async fn handle_request(
 
     match request.method.as_str() {
         "initialize" => {
-            // Extract client info if provided.
+            // Extract client info and requested protocol version.
+            let mut client_requested_version: Option<&str> = None;
             if let Some(ref params) = request.params {
+                client_requested_version = params.get("protocolVersion").and_then(|v| v.as_str());
                 if let Some(client_info) = params.get("clientInfo") {
                     session.client_info = Some(ClientInfo {
                         name: client_info
@@ -425,14 +452,20 @@ pub async fn handle_request(
                 }
             }
 
+            let negotiated = match client_requested_version {
+                Some(v) => protocol::negotiate_version(v),
+                None => protocol::PROTOCOL_VERSION,
+            };
+
             info!(
                 session = session.id,
                 client = session.display_name(),
+                negotiated_version = negotiated,
                 "MCP initialize handshake"
             );
 
             let result = InitializeResult {
-                protocol_version: protocol::PROTOCOL_VERSION.to_string(),
+                protocol_version: negotiated.to_string(),
                 capabilities: ServerCapabilities {
                     tools: Some(serde_json::json!({})),
                 },
@@ -666,6 +699,33 @@ mod tests {
         let resp = handle_request(msg, &[], &tx, &mut session, &bc).await;
         assert!(resp.result.is_some());
         assert_eq!(session.client_info.as_ref().unwrap().name, "test-client");
+    }
+
+    #[tokio::test]
+    async fn handle_request_initialize_echoes_protocol_version() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+
+        // Client requests 2025-11-25 — server must echo it back.
+        let msg = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#;
+        let resp = handle_request(msg, &[], &tx, &mut session, &bc).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["protocolVersion"], "2025-11-25");
+
+        // Client requests old version — server echoes that too.
+        let mut session2 = ClientSession::new();
+        let msg2 = r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"old-client","version":"0.1"}}}"#;
+        let resp2 = handle_request(msg2, &[], &tx, &mut session2, &bc).await;
+        let result2 = resp2.result.unwrap();
+        assert_eq!(result2["protocolVersion"], "2024-11-05");
+
+        // Client requests unknown version — server returns latest.
+        let mut session3 = ClientSession::new();
+        let msg3 = r#"{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"protocolVersion":"9999-01-01","capabilities":{},"clientInfo":{"name":"future","version":"9.0"}}}"#;
+        let resp3 = handle_request(msg3, &[], &tx, &mut session3, &bc).await;
+        let result3 = resp3.result.unwrap();
+        assert_eq!(result3["protocolVersion"], "2025-11-25");
     }
 
     #[tokio::test]
@@ -1874,6 +1934,150 @@ mod tests {
         )
         .await;
         assert_eq!(resp.result.unwrap(), "pong");
+
+        drop(client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    // ---- Regression tests for transport framing and version negotiation ----
+    //
+    // These test the specific failure modes discovered when connecting Claude Code
+    // v2.1.72 to MAE via the MCP shim (2026-05-19):
+    //
+    // Bug 1: MAE returned protocolVersion "2024-11-05" when Claude Code requested
+    //         "2025-11-25". Claude Code silently disconnected after 30s.
+    //         Fix: negotiate_version() echoes back the client's version if supported.
+    //
+    // Bug 2: The shim used Content-Length framing on stdout (LSP-style), but the
+    //         MCP stdio transport spec requires newline-delimited JSON. Claude Code
+    //         couldn't parse the response and hung for 30s.
+    //         Fix: shim writes JSON + \n to stdout, reads lines from stdin.
+    //         Ref: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#stdio
+
+    /// Regression: initialize must echo back the client's requested protocol version.
+    /// Claude Code v2.1.72+ requests "2025-11-25" and disconnects if it gets anything else.
+    #[tokio::test]
+    async fn regression_initialize_echoes_client_protocol_version() {
+        let (tx, _rx) = mpsc::channel(1);
+        let bc = dummy_broadcaster();
+
+        // Simulate exactly what Claude Code v2.1.72 sends.
+        let claude_init = r#"{"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"roots":{},"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"claude-code","version":"2.1.72"}},"jsonrpc":"2.0","id":0}"#;
+        let mut session = ClientSession::new();
+        let resp = handle_request(claude_init, &[], &tx, &mut session, &bc).await;
+        let result = resp.result.unwrap();
+
+        // MUST echo back the exact version the client requested.
+        assert_eq!(
+            result["protocolVersion"], "2025-11-25",
+            "Server must echo client's protocolVersion per MCP spec"
+        );
+        // MUST have tools capability.
+        assert!(
+            result["capabilities"]["tools"].is_object(),
+            "Server must declare tools capability"
+        );
+        // MUST have serverInfo with name.
+        assert_eq!(result["serverInfo"]["name"], "mae-editor");
+    }
+
+    /// Regression: server must handle older protocol versions too.
+    #[tokio::test]
+    async fn regression_initialize_accepts_old_protocol_version() {
+        let (tx, _rx) = mpsc::channel(1);
+        let bc = dummy_broadcaster();
+        let mut session = ClientSession::new();
+
+        let old_init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"old-client","version":"0.1"}}}"#;
+        let resp = handle_request(old_init, &[], &tx, &mut session, &bc).await;
+        let result = resp.result.unwrap();
+        assert_eq!(
+            result["protocolVersion"], "2024-11-05",
+            "Server must echo back supported older versions"
+        );
+    }
+
+    /// Regression: read_message must handle newline-delimited JSON (MCP stdio format).
+    /// The shim reads this format from Claude Code's stdin.
+    #[tokio::test]
+    async fn regression_read_message_handles_jsonl_from_stdio() {
+        // This is what Claude Code sends on stdin: bare JSON + newline, no Content-Length.
+        let data = b"{\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\"},\"jsonrpc\":\"2.0\",\"id\":0}\n";
+        let mut reader = tokio::io::BufReader::new(&data[..]);
+        let msg = read_message(&mut reader).await.unwrap().unwrap();
+        assert!(msg.contains("initialize"));
+        assert!(msg.contains("2025-11-25"));
+    }
+
+    /// Regression: read_message must also handle Content-Length framing (socket format).
+    /// The MAE server sends this format over the Unix socket.
+    #[tokio::test]
+    async fn regression_read_message_handles_content_length_from_socket() {
+        let body = r#"{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2025-11-25"}}"#;
+        let framed = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+        let mut reader = tokio::io::BufReader::new(framed.as_bytes());
+        let msg = read_message(&mut reader).await.unwrap().unwrap();
+        assert!(msg.contains("2025-11-25"));
+    }
+
+    /// Regression: the full handshake sequence must work over a real Unix socket.
+    /// Simulates exactly what Claude Code v2.1.72 does:
+    ///   initialize (with protocolVersion) → notifications/initialized → tools/list
+    #[tokio::test]
+    async fn regression_full_handshake_sequence() {
+        let socket_path = format!("/tmp/mae-test-handshake-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel(16);
+        let server = McpServer::new(&socket_path, tool_tx, dummy_broadcaster());
+        let tools = vec![ToolInfo {
+            name: "test_tool".to_string(),
+            description: "A test tool".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        }];
+
+        tokio::spawn(async move {
+            server.run(tools).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+
+        // Step 1: initialize with 2025-11-25 (what Claude Code sends)
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {"roots": {}},
+                    "clientInfo": {"name": "claude-code", "version": "2.1.72"}
+                }
+            }),
+        )
+        .await;
+        assert!(resp.error.is_none(), "initialize should succeed");
+        let result = resp.result.unwrap();
+        assert_eq!(
+            result["protocolVersion"], "2025-11-25",
+            "Must echo back client's protocol version"
+        );
+
+        // Step 2: notifications/initialized (no response expected)
+        send_notification(&mut client, "notifications/initialized", None).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Step 3: tools/list — must return the registered tools
+        let tools_resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        )
+        .await;
+        assert!(tools_resp.error.is_none(), "tools/list should succeed");
+        let tools = tools_resp.result.unwrap();
+        let tool_list = tools["tools"].as_array().unwrap();
+        assert_eq!(tool_list.len(), 1);
+        assert_eq!(tool_list[0]["name"], "test_tool");
 
         drop(client);
         let _ = std::fs::remove_file(&socket_path);

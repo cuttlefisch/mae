@@ -6,8 +6,23 @@
 
 use serde::{Deserialize, Serialize};
 
-/// MCP protocol version (shared by server and client).
-pub const PROTOCOL_VERSION: &str = "2024-11-05";
+/// MCP protocol version — latest version we advertise.
+pub const PROTOCOL_VERSION: &str = "2025-11-25";
+
+/// All protocol versions this server accepts from clients.
+/// Per spec, if the client requests a version we support, we MUST echo it back.
+pub const SUPPORTED_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Given a client-requested version, return the version to echo back.
+/// If the client's version is in our supported list, echo it. Otherwise return our latest.
+pub fn negotiate_version(client_version: &str) -> &'static str {
+    for &v in SUPPORTED_VERSIONS {
+        if v == client_version {
+            return v;
+        }
+    }
+    PROTOCOL_VERSION
+}
 
 /// JSON-RPC 2.0 request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,7 +192,7 @@ mod tests {
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("protocolVersion"));
-        assert!(json.contains("2024-11-05"));
+        assert!(json.contains("2025-11-25"));
     }
 
     #[test]
@@ -212,5 +227,19 @@ mod tests {
         let json = serde_json::to_value(&tool).unwrap();
         assert_eq!(json["name"], "read_buffer");
         assert!(json["inputSchema"]["properties"]["buffer_index"].is_object());
+    }
+
+    #[test]
+    fn negotiate_version_echoes_supported() {
+        assert_eq!(negotiate_version("2025-11-25"), "2025-11-25");
+        assert_eq!(negotiate_version("2024-11-05"), "2024-11-05");
+        assert_eq!(negotiate_version("2025-06-18"), "2025-06-18");
+        assert_eq!(negotiate_version("2025-03-26"), "2025-03-26");
+    }
+
+    #[test]
+    fn negotiate_version_unknown_returns_latest() {
+        assert_eq!(negotiate_version("9999-01-01"), PROTOCOL_VERSION);
+        assert_eq!(negotiate_version("2023-01-01"), PROTOCOL_VERSION);
     }
 }
