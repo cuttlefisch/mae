@@ -104,6 +104,7 @@ bright_orange = "#fe8019"
 "markup.done" = { fg = "bright_green" }
 "markup.checkbox" = { fg = "bright_yellow", bold = true }
 "markup.checkbox.checked" = { fg = "bright_green" }
+"markup.drawer" = { fg = "gray" }
 
 "diff.added" = { fg = "bright_green" }
 "diff.removed" = { fg = "bright_red" }

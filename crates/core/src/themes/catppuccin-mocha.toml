@@ -104,6 +104,7 @@ crust = "#11111b"
 "markup.done" = { fg = "green" }
 "markup.checkbox" = { fg = "yellow", bold = true }
 "markup.checkbox.checked" = { fg = "green" }
+"markup.drawer" = { fg = "overlay1" }
 
 "diff.added" = { fg = "green" }
 "diff.removed" = { fg = "red" }

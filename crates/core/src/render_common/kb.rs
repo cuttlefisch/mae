@@ -3,51 +3,15 @@
 use crate::buffer::Buffer;
 use crate::syntax::HighlightSpan;
 
-/// Compute heading spans from leading `*` or `#` chars in a buffer's rope lines.
-/// Shared between KB view rendering and org-mode edit-mode rendering.
-pub fn compute_org_heading_spans(buf: &Buffer) -> Vec<HighlightSpan> {
-    let mut spans = Vec::new();
-    let rope = buf.rope();
-    for line_idx in 0..buf.line_count() {
-        let line = rope.line(line_idx);
-        let first_char = line.chars().next().unwrap_or(' ');
-        let (_prefix_count, is_heading) = if first_char == '*' {
-            let c = line.chars().take_while(|&ch| ch == '*').count();
-            (c, c > 0 && line.len_chars() > c && line.char(c) == ' ')
-        } else if first_char == '#' {
-            let c = line.chars().take_while(|&ch| ch == '#').count();
-            (c, c > 0 && line.len_chars() > c && line.char(c) == ' ')
-        } else {
-            (0, false)
-        };
-        if !is_heading {
-            continue;
-        }
-        let line_start = rope.line_to_char(line_idx);
-        let line_len = line.len_chars();
-        let text_len = if line_idx + 1 < buf.line_count() {
-            line_len.saturating_sub(1)
-        } else {
-            line_len
-        };
-        let byte_start = rope.char_to_byte(line_start);
-        let byte_end = rope.char_to_byte(line_start + text_len);
-        spans.push(HighlightSpan {
-            byte_start,
-            byte_end,
-            theme_key: "markup.heading",
-        });
-    }
-    spans
-}
-
-/// Compute highlight spans for a KB buffer: heading detection,
+/// Compute highlight spans for a KB buffer: full org structural spans,
 /// inline markdown/org style spans, and link spans from the KbView.
 pub fn compute_kb_spans(buf: &Buffer) -> Vec<HighlightSpan> {
     let mut spans: Vec<HighlightSpan> = Vec::new();
 
-    // Heading + metadata spans
-    spans.extend(compute_org_heading_spans(buf));
+    // Full org structural spans: headings, TODO/DONE, checkboxes, priorities,
+    // drawers, timestamps, directives, links, tables, blockquotes, emphasis.
+    let source_text: String = buf.rope().chars().collect();
+    spans.extend(crate::syntax::markup::compute_org_spans(&source_text));
 
     // Dim metadata lines (kind · id, tags:) in the KB header area
     let rope = buf.rope();
@@ -75,14 +39,12 @@ pub fn compute_kb_spans(buf: &Buffer) -> Vec<HighlightSpan> {
         }
     }
 
-    // Inline style spans (bold, code, italic) — both markdown and org syntax.
-    // Help content mixes markdown and org syntax — compute both.
-    let source_text: String = rope.chars().collect();
+    // Inline markdown style spans — KB content mixes markdown and org syntax.
+    // Org spans are already included above via compute_org_spans().
     spans.extend(crate::syntax::compute_markup_spans(
         &source_text,
         crate::syntax::MarkupFlavor::Markdown,
     ));
-    spans.extend(crate::syntax::compute_org_style_spans(&source_text));
 
     // Syntax highlighting for fenced code blocks (tree-sitter per block).
     spans.extend(code_block_language_spans(&source_text));
@@ -188,6 +150,55 @@ mod tests {
         assert!(
             spans.iter().any(|s| s.theme_key == "markup.heading"),
             "should detect heading span"
+        );
+    }
+
+    #[test]
+    fn kb_spans_include_todo_done() {
+        let mut buf = Buffer::new_kb("test");
+        buf.read_only = false;
+        buf.insert_text_at(0, "* TODO Task\n* DONE Done\n");
+        buf.read_only = true;
+        let spans = compute_kb_spans(&buf);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.todo"),
+            "KB spans should include markup.todo"
+        );
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.done"),
+            "KB spans should include markup.done"
+        );
+    }
+
+    #[test]
+    fn kb_spans_include_checkbox() {
+        let mut buf = Buffer::new_kb("test");
+        buf.read_only = false;
+        buf.insert_text_at(0, "- [ ] unchecked\n- [x] checked\n");
+        buf.read_only = true;
+        let spans = compute_kb_spans(&buf);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.checkbox"),
+            "KB spans should include markup.checkbox"
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.theme_key == "markup.checkbox.checked"),
+            "KB spans should include markup.checkbox.checked"
+        );
+    }
+
+    #[test]
+    fn kb_spans_include_drawer() {
+        let mut buf = Buffer::new_kb("test");
+        buf.read_only = false;
+        buf.insert_text_at(0, "* Heading\n:PROPERTIES:\n :ID: abc\n:END:\n");
+        buf.read_only = true;
+        let spans = compute_kb_spans(&buf);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.drawer"),
+            "KB spans should include markup.drawer"
         );
     }
 }

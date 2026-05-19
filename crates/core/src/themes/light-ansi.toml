@@ -89,6 +89,7 @@
 "markup.done" = { fg = "green" }
 "markup.checkbox" = { fg = "yellow", bold = true }
 "markup.checkbox.checked" = { fg = "green" }
+"markup.drawer" = { fg = "dark_gray" }
 "markup.hr" = { fg = "gray" }
 "markup.priority.a" = { fg = "red", bold = true }
 "markup.priority.b" = { fg = "yellow", bold = true }

@@ -127,16 +127,21 @@ pub fn compute_visible_syntax_spans(editor: &mut crate::editor::Editor) -> Synta
             editor.buffers[idx].display_regions_gen = gen;
             continue;
         }
-        // Debounce: defer recomputation until configured ms after the last edit.
-        // Stale display regions are approximately correct and self-correct.
-        let now = std::time::Instant::now();
-        let dirty_since = *editor.buffers[idx]
-            .display_regions_dirty_since
-            .get_or_insert(now);
-        if now.duration_since(dirty_since)
-            < std::time::Duration::from_millis(editor.display_region_debounce_ms)
-        {
-            continue; // use stale regions, recompute later
+        // Bypass debounce when display_regions_gen == u64::MAX (explicit force signal
+        // from toggle-inline-images / toggle-image-at-point).
+        let force = editor.buffers[idx].display_regions_gen == u64::MAX;
+        if !force {
+            // Debounce: defer recomputation until configured ms after the last edit.
+            // Stale display regions are approximately correct and self-correct.
+            let now = std::time::Instant::now();
+            let dirty_since = *editor.buffers[idx]
+                .display_regions_dirty_since
+                .get_or_insert(now);
+            if now.duration_since(dirty_since)
+                < std::time::Duration::from_millis(editor.display_region_debounce_ms)
+            {
+                continue; // use stale regions, recompute later
+            }
         }
         editor.buffers[idx].display_regions_dirty_since = None;
         let link_descriptive = editor.link_descriptive_for(idx);

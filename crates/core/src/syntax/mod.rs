@@ -633,6 +633,37 @@ mod tests {
     }
 
     #[test]
+    fn compute_org_spans_checkbox() {
+        let src = "- [ ] unchecked\n- [x] checked\n- [-] partial\n";
+        let spans = markup::compute_org_spans(src);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.checkbox"),
+            "expected markup.checkbox for unchecked item"
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.theme_key == "markup.checkbox.checked"),
+            "expected markup.checkbox.checked for [x] item"
+        );
+    }
+
+    #[test]
+    fn compute_org_spans_drawer() {
+        let src = "* Heading\n:PROPERTIES:\n :ID: abc-123\n:END:\n";
+        let spans = markup::compute_org_spans(src);
+        let drawer_spans: Vec<_> = spans
+            .iter()
+            .filter(|s| s.theme_key == "markup.drawer")
+            .collect();
+        assert!(
+            drawer_spans.len() >= 2,
+            "expected at least 2 markup.drawer spans (:PROPERTIES:, :END: or property line), got: {:?}",
+            drawer_spans
+        );
+    }
+
+    #[test]
     fn org_extension_detected() {
         assert_eq!(language_for_path(Path::new("foo.org")), Some(Language::Org));
     }

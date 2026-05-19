@@ -457,7 +457,7 @@ impl Buffer {
     /// Word-wrap is enabled by default — KB text is prose.
     pub fn new_kb(start_node_id: impl Into<String>) -> Self {
         Buffer {
-            name: String::from("*Help*"),
+            name: String::from("*KB*"),
             kind: BufferKind::Kb,
             read_only: true,
             view: BufferView::Kb(Box::new(KbView::new(start_node_id.into()))),
@@ -2602,6 +2602,59 @@ mod tests {
         buf.undo(&mut win);
         assert_eq!(buf.text(), "");
         assert_eq!(buf.sync_doc.as_ref().unwrap().content(), "");
+    }
+
+    #[test]
+    fn sync_roundtrip_preserves_org_structure() {
+        let org_content =
+            "* TODO Fix bug\n- [ ] item\n- [x] done\n:PROPERTIES:\n :ID: abc\n:END:\n";
+        let mut buf_a = Buffer::new();
+        buf_a.rope = Rope::from_str(org_content);
+        buf_a.enable_sync(1);
+
+        // B receives A's full state
+        let mut buf_b = Buffer::new();
+        buf_b.sync_doc = Some(mae_sync::text::TextSync::with_client_id("", 2));
+        let state = buf_a.sync_doc.as_ref().unwrap().encode_state();
+        buf_b.apply_sync_update(&state).unwrap();
+
+        // Text survives roundtrip
+        assert_eq!(buf_b.text(), org_content);
+
+        // Org structural spans are identical on both sides
+        let source_a: String = buf_a.rope().chars().collect();
+        let source_b: String = buf_b.rope().chars().collect();
+        let spans_a = crate::syntax::markup::compute_org_spans(&source_a);
+        let spans_b = crate::syntax::markup::compute_org_spans(&source_b);
+        assert_eq!(
+            spans_a.len(),
+            spans_b.len(),
+            "span count mismatch after sync"
+        );
+        for (a, b) in spans_a.iter().zip(spans_b.iter()) {
+            assert_eq!(a.theme_key, b.theme_key, "span theme_key mismatch");
+            assert_eq!(a.byte_start, b.byte_start, "span byte_start mismatch");
+            assert_eq!(a.byte_end, b.byte_end, "span byte_end mismatch");
+        }
+    }
+
+    #[test]
+    fn sync_update_bumps_generation() {
+        let mut buf_a = Buffer::new();
+        buf_a.rope = Rope::from_str("hello");
+        buf_a.enable_sync(1);
+
+        let mut buf_b = Buffer::new();
+        buf_b.sync_doc = Some(mae_sync::text::TextSync::with_client_id("", 2));
+        let gen_before = buf_b.generation;
+
+        let state = buf_a.sync_doc.as_ref().unwrap().encode_state();
+        buf_b.apply_sync_update(&state).unwrap();
+
+        assert!(
+            buf_b.generation > gen_before,
+            "apply_sync_update must bump generation to invalidate display caches"
+        );
     }
 
     #[test]

@@ -463,6 +463,34 @@ pub(crate) fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
         }
     }
 
+    // Property drawers: :PROPERTIES:, :END:, and property key lines.
+    {
+        static DRAWER: OnceLock<Regex> = OnceLock::new();
+        let drawer = DRAWER.get_or_init(|| Regex::new(r"(?m)^[ \t]*(:[A-Z_]+:)\s*$").unwrap());
+        for cap in drawer.captures_iter(source) {
+            if let Some(m) = cap.get(1) {
+                spans.push(HighlightSpan {
+                    byte_start: m.start(),
+                    byte_end: m.end(),
+                    theme_key: "markup.drawer",
+                });
+            }
+        }
+
+        static PROPERTY_LINE: OnceLock<Regex> = OnceLock::new();
+        let property_line =
+            PROPERTY_LINE.get_or_init(|| Regex::new(r"(?m)^[ \t]+(:[A-Za-z_]+:)\s+(.+)$").unwrap());
+        for cap in property_line.captures_iter(source) {
+            if let Some(m) = cap.get(0) {
+                spans.push(HighlightSpan {
+                    byte_start: m.start(),
+                    byte_end: m.end(),
+                    theme_key: "markup.drawer",
+                });
+            }
+        }
+    }
+
     // Renderer expects spans sorted by start offset.
     spans.sort_by_key(|s| s.byte_start);
     spans
@@ -791,4 +819,333 @@ pub fn detect_code_block_lines_for_range(
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn has_span(spans: &[HighlightSpan], key: &str) -> bool {
+        spans.iter().any(|s| s.theme_key == key)
+    }
+
+    fn span_text<'a>(source: &'a str, spans: &[HighlightSpan], key: &str) -> Vec<&'a str> {
+        spans
+            .iter()
+            .filter(|s| s.theme_key == key)
+            .map(|s| &source[s.byte_start..s.byte_end])
+            .collect()
+    }
+
+    // --- Headlines ---
+
+    #[test]
+    fn org_spans_headline() {
+        let src = "* Heading\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "punctuation"), "star prefix");
+        assert!(has_span(&spans, "markup.heading"), "heading text");
+    }
+
+    #[test]
+    fn org_spans_headline_levels() {
+        let src = "** H2\n*** H3\n";
+        let spans = compute_org_spans(src);
+        let headings = span_text(src, &spans, "markup.heading");
+        assert!(headings.iter().any(|t| t.contains("H2")));
+        assert!(headings.iter().any(|t| t.contains("H3")));
+    }
+
+    // --- TODO/DONE keywords ---
+
+    #[test]
+    fn org_spans_todo_keyword() {
+        let src = "* TODO Task\n";
+        let spans = compute_org_spans(src);
+        let todos = span_text(src, &spans, "markup.todo");
+        assert!(todos.contains(&"TODO"), "expected TODO span");
+    }
+
+    #[test]
+    fn org_spans_done_keyword() {
+        let src = "* DONE Task\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.done"), "expected markup.done");
+    }
+
+    #[test]
+    fn org_spans_next_wait_keywords() {
+        for kw in &["NEXT", "WAIT"] {
+            let src = format!("* {} Task\n", kw);
+            let spans = compute_org_spans(&src);
+            assert!(
+                has_span(&spans, "markup.todo"),
+                "{} should be markup.todo",
+                kw
+            );
+        }
+    }
+
+    #[test]
+    fn org_spans_cancelled_deferred() {
+        for kw in &["CANCELLED", "DEFERRED"] {
+            let src = format!("* {} Task\n", kw);
+            let spans = compute_org_spans(&src);
+            assert!(
+                has_span(&spans, "markup.done"),
+                "{} should be markup.done",
+                kw
+            );
+        }
+    }
+
+    // --- Tags ---
+
+    #[test]
+    fn org_spans_tags() {
+        let src = "* Heading :tag1:tag2:\n";
+        let spans = compute_org_spans(src);
+        let tags = span_text(src, &spans, "attribute");
+        assert!(tags.iter().any(|t| t.contains("tag1")), "expected tag span");
+    }
+
+    // --- Directives ---
+
+    #[test]
+    fn org_spans_directive() {
+        let src = "#+TITLE: My Doc\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "attribute"));
+    }
+
+    // --- Comments ---
+
+    #[test]
+    fn org_spans_comment() {
+        let src = "# this is a comment\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "comment"));
+    }
+
+    // --- Timestamps ---
+
+    #[test]
+    fn org_spans_timestamp_angle() {
+        let src = "Deadline: <2026-05-19>\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "constant"));
+    }
+
+    #[test]
+    fn org_spans_timestamp_bracket() {
+        let src = "Closed: [2026-05-19 Mon]\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "constant"));
+    }
+
+    // --- Links ---
+
+    #[test]
+    fn org_spans_link_with_label() {
+        let src = "Visit [[https://example.com][Example]] here.\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.link"));
+    }
+
+    #[test]
+    fn org_spans_link_bare() {
+        let src = "See [[internal-node]] for details.\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.link"));
+    }
+
+    // --- Emphasis ---
+
+    #[test]
+    fn org_spans_bold() {
+        let src = "This is *bold text* here.\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.bold"));
+        assert!(has_span(&spans, "markup.bold.marker"));
+    }
+
+    #[test]
+    fn org_spans_italic() {
+        let src = "This is /italic text/ here.\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.italic"));
+        assert!(has_span(&spans, "markup.italic.marker"));
+    }
+
+    #[test]
+    fn org_spans_code() {
+        let src = "Use ~some code~ here.\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.literal"));
+    }
+
+    #[test]
+    fn org_spans_verbatim() {
+        let src = "Use =verbatim text= here.\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.literal"));
+    }
+
+    #[test]
+    fn org_spans_strikethrough() {
+        let src = "This is +struck out+ text.\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.strikethrough"));
+    }
+
+    // --- Lists ---
+
+    #[test]
+    fn org_spans_list_marker() {
+        let src = "- item one\n+ item two\n1. item three\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.list"));
+    }
+
+    // --- Checkboxes ---
+
+    #[test]
+    fn org_spans_checkbox_unchecked() {
+        let src = "- [ ] item\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.checkbox"));
+    }
+
+    #[test]
+    fn org_spans_checkbox_checked() {
+        let src = "- [x] item\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.checkbox.checked"));
+    }
+
+    // --- Priorities ---
+
+    #[test]
+    fn org_spans_priority_a() {
+        let src = "* TODO [#A] Urgent task\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.priority.a"));
+    }
+
+    #[test]
+    fn org_spans_priority_b() {
+        let src = "* TODO [#B] Normal task\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.priority.b"));
+    }
+
+    #[test]
+    fn org_spans_priority_c() {
+        let src = "* TODO [#C] Low task\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.priority.c"));
+    }
+
+    // --- Blockquotes ---
+
+    #[test]
+    fn org_spans_blockquote() {
+        let src = "> quoted text\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "punctuation"), "> marker");
+        assert!(has_span(&spans, "markup.quote"), "quote content");
+    }
+
+    // --- Horizontal rule ---
+
+    #[test]
+    fn org_spans_horizontal_rule() {
+        let src = "-----\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.hr"));
+    }
+
+    // --- Drawers ---
+
+    #[test]
+    fn org_spans_drawer() {
+        let src = ":PROPERTIES:\n:END:\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "markup.drawer"));
+    }
+
+    #[test]
+    fn org_spans_property_line() {
+        let src = ":PROPERTIES:\n :ID: abc-123\n:END:\n";
+        let spans = compute_org_spans(src);
+        let drawer_spans: Vec<_> = spans
+            .iter()
+            .filter(|s| s.theme_key == "markup.drawer")
+            .collect();
+        assert!(
+            drawer_spans.len() >= 2,
+            "expected drawer + property line spans, got {}",
+            drawer_spans.len()
+        );
+    }
+
+    // --- Tables ---
+
+    #[test]
+    fn org_spans_table_pipe() {
+        let src = "| a | b |\n";
+        let spans = compute_org_spans(src);
+        let pipes: Vec<_> = spans
+            .iter()
+            .filter(|s| s.theme_key == "punctuation")
+            .collect();
+        assert!(
+            pipes.len() >= 2,
+            "expected pipe punctuation spans, got {}",
+            pipes.len()
+        );
+    }
+
+    #[test]
+    fn org_spans_table_separator() {
+        let src = "|---+---|\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "comment"), "table separator");
+    }
+
+    // --- Code block injection ---
+
+    #[test]
+    fn org_spans_src_block_injection() {
+        let src = "#+begin_src rust\nfn hello() {}\n#+end_src\n";
+        let spans = compute_org_spans(src);
+        assert!(
+            has_span(&spans, "keyword"),
+            "expected injected rust keyword span"
+        );
+    }
+
+    #[test]
+    fn org_spans_code_block_filter() {
+        // Verify src block directives still produce attribute spans.
+        let src = "#+begin_src python\nprint(\"hello\")\n#+end_src\n";
+        let spans = compute_org_spans(src);
+        assert!(has_span(&spans, "attribute"), "directive span");
+    }
+
+    // --- Sort order ---
+
+    #[test]
+    fn org_spans_sorted_by_offset() {
+        let src = "* TODO [#A] Heading :tag:\n- [ ] item\n[[link]]\n#+TITLE: T\n";
+        let spans = compute_org_spans(src);
+        for w in spans.windows(2) {
+            assert!(
+                w[0].byte_start <= w[1].byte_start,
+                "spans not sorted: {} > {}",
+                w[0].byte_start,
+                w[1].byte_start
+            );
+        }
+    }
 }

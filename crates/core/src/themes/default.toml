@@ -105,6 +105,7 @@ gray = "#a89984"
 "markup.priority.a" = { fg = "red", bold = true }
 "markup.priority.b" = { fg = "yellow", bold = true }
 "markup.priority.c" = { fg = "green" }
+"markup.drawer" = { fg = "dark_gray" }
 "markup.code_block" = { bg = "#32302f" }
 
 "diff.added" = { fg = "green" }

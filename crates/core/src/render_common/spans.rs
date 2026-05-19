@@ -33,18 +33,7 @@ pub fn highlight_spans_for_buffer(buf: &Buffer) -> Option<Vec<HighlightSpan>> {
         ),
         crate::buffer::BufferKind::Diff => Some(crate::diff::diff_highlight_spans(buf.rope())),
         crate::buffer::BufferKind::Agenda => Some(super::agenda::compute_agenda_spans(buf)),
-        crate::buffer::BufferKind::Text => {
-            // Org files get heading scale even in edit mode
-            let is_org = buf
-                .file_path()
-                .map(|p| p.extension().is_some_and(|ext| ext == "org"))
-                .unwrap_or(false);
-            if is_org {
-                Some(super::kb::compute_org_heading_spans(buf))
-            } else {
-                None
-            }
-        }
+        crate::buffer::BufferKind::Text => None,
         _ => None,
     }
 }
@@ -113,5 +102,85 @@ mod tests {
         let mut spans = Vec::new();
         enrich_spans_with_markup(&mut spans, &buf, crate::syntax::MarkupFlavor::None);
         assert!(spans.is_empty(), "None flavor should not add spans");
+    }
+
+    /// Regression test: org Text buffers must return None so the syntax cache
+    /// provides full structural spans (TODO/DONE, checkboxes, etc.) instead
+    /// of the heading-only shortcut that was silently dropping all other org spans.
+    #[test]
+    fn org_text_buffer_returns_none_for_syntax_pipeline() {
+        let mut buf = Buffer::new();
+        buf.kind = BufferKind::Text;
+        buf.set_file_path(std::path::PathBuf::from("/tmp/test.org"));
+        buf.insert_text_at(0, "* TODO Heading\n- [ ] item\n");
+        assert!(
+            highlight_spans_for_buffer(&buf).is_none(),
+            "org Text buffer must return None to use syntax cache pipeline"
+        );
+    }
+
+    /// Verify that org structural spans reach the rendering pipeline end-to-end.
+    /// Simulates what both TUI and GUI renderers do: check highlight_spans_for_buffer,
+    /// if None → use syntax cache (compute_org_spans).
+    #[test]
+    fn org_text_buffer_gets_structural_spans_via_syntax() {
+        let source = "* TODO Fix bug\n- [ ] item\n- [x] done\n#+TITLE: Test\n";
+        let spans = crate::syntax::markup::compute_org_spans(source);
+
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.heading"),
+            "missing markup.heading span"
+        );
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.todo"),
+            "missing markup.todo span"
+        );
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.checkbox"),
+            "missing markup.checkbox span"
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.theme_key == "markup.checkbox.checked"),
+            "missing markup.checkbox.checked span"
+        );
+        assert!(
+            spans.iter().any(|s| s.theme_key == "attribute"),
+            "missing attribute span for #+TITLE directive"
+        );
+    }
+
+    /// Verify heading scale spans exist for org Text buffers via the syntax pipeline.
+    #[test]
+    fn org_text_buffer_gets_heading_scale_spans() {
+        let source = "* Big Heading\n** Sub Heading\nBody text\n";
+        let spans = crate::syntax::markup::compute_org_spans(source);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.heading"),
+            "markup.heading span required for GUI heading scale"
+        );
+    }
+
+    /// Verify property drawer spans are produced.
+    #[test]
+    fn org_drawer_dimming() {
+        let source = "* Heading\n:PROPERTIES:\n :ID: abc-123\n:END:\n";
+        let spans = crate::syntax::markup::compute_org_spans(source);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.drawer"),
+            "missing markup.drawer span for property drawer"
+        );
+    }
+
+    /// Verify org link spans are computed for display region concealment.
+    #[test]
+    fn org_text_buffer_link_spans() {
+        let source = "Visit [[https://example.com][Example]] for details.\n";
+        let spans = crate::syntax::markup::compute_org_spans(source);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.link"),
+            "missing markup.link span for org link"
+        );
     }
 }

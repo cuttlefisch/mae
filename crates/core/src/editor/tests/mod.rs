@@ -15,6 +15,7 @@ mod navigation_tests;
 mod operator_tests;
 mod option_tests;
 mod org_checkbox_tests;
+mod org_rendering_tests;
 mod performance_tests;
 mod project_tests;
 mod search_tests;

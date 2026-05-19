@@ -659,9 +659,53 @@ impl Editor {
             self.mark_full_redraw();
         } else if self.last_kb_state.is_some() {
             self.help_reopen();
+        } else if let Some(id) = self.kb_node_id_for_active_buffer() {
+            self.open_help_at(&id);
         } else {
             self.set_status("No KB view to return to");
         }
+    }
+
+    /// Infer a KB node ID from the currently active buffer's file path.
+    /// Matches daily files (`YYYY-MM-DD.org` → `daily:YYYY-MM-DD`) and
+    /// KB nodes whose `source_file` metadata matches the buffer path.
+    pub(crate) fn kb_node_id_for_active_buffer(&self) -> Option<String> {
+        let buf = self.active_buffer();
+        let path = buf.file_path()?;
+        let stem = path.file_stem()?.to_str()?;
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        // Daily pattern: YYYY-MM-DD.org
+        if ext == "org" && stem.len() == 10 && stem.chars().nth(4) == Some('-') {
+            let daily_id = format!("daily:{}", stem);
+            if self.kb_contains_any(&daily_id) {
+                return Some(daily_id);
+            }
+        }
+
+        // Search KB nodes by source_file metadata
+        for id in self.kb.list_ids(None) {
+            if let Some(node) = self.kb.get(&id) {
+                if let Some(ref sf) = node.source_file {
+                    if sf == path {
+                        return Some(id);
+                    }
+                }
+            }
+        }
+        for kb in self.kb_instances.values() {
+            for id in kb.list_ids(None) {
+                if let Some(node) = kb.get(&id) {
+                    if let Some(ref sf) = node.source_file {
+                        if sf == path {
+                            return Some(id);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// Re-render the KB buffer if it exists and the underlying KB node has changed.
@@ -807,7 +851,13 @@ impl Editor {
         if idx != prev_idx {
             self.alternate_buffer_idx = Some(prev_idx);
         }
-        self.display_buffer(idx);
+        // Replace focused window directly (not via display_policy which may split).
+        let win = self.window_mgr.focused_window_mut();
+        win.buffer_idx = idx;
+        win.cursor_row = 0;
+        win.cursor_col = 0;
+        self.sync_mode_to_buffer();
+        self.mark_full_redraw();
     }
 }
 
