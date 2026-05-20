@@ -69,14 +69,14 @@ impl super::Editor {
             "splash_show_logo" => self.splash_show_logo.to_string(),
             "debug_mode" => self.debug_mode.to_string(),
             "clipboard" => self.clipboard.clone(),
-            "ai_tier" => self.ai_permission_tier.clone(),
-            "ai_editor" => self.ai_editor.clone(),
-            "ai_provider" => self.ai_provider.clone(),
-            "ai_model" => self.ai_model.clone(),
-            "ai_api_key_command" => self.ai_api_key_command.clone(),
-            "ai_base_url" => self.ai_base_url.clone(),
-            "ai_mode" => self.ai_mode.clone(),
-            "ai_profile" => self.ai_profile.clone(),
+            "ai_tier" => self.ai.permission_tier.clone(),
+            "ai_editor" => self.ai.editor_name.clone(),
+            "ai_provider" => self.ai.provider.clone(),
+            "ai_model" => self.ai.model.clone(),
+            "ai_api_key_command" => self.ai.api_key_command.clone(),
+            "ai_base_url" => self.ai.base_url.clone(),
+            "ai_mode" => self.ai.mode.clone(),
+            "ai_profile" => self.ai.profile.clone(),
             "restore_session" => self.restore_session.to_string(),
             "insert_ctrl_d" => self.insert_ctrl_d.clone(),
             "heading_scale" => self.heading_scale.to_string(),
@@ -256,7 +256,7 @@ impl super::Editor {
             },
             "ai_tier" => match value {
                 "ReadOnly" | "Write" | "Shell" | "Privileged" => {
-                    self.ai_permission_tier = value.to_string();
+                    self.ai.permission_tier = value.to_string();
                 }
                 _ => {
                     return Err(format!(
@@ -266,19 +266,19 @@ impl super::Editor {
                 }
             },
             "ai_editor" => {
-                self.ai_editor = value.to_string();
+                self.ai.editor_name = value.to_string();
             }
             "ai_provider" => {
-                self.ai_provider = value.to_string();
+                self.ai.provider = value.to_string();
             }
             "ai_model" => {
-                self.ai_model = value.to_string();
+                self.ai.model = value.to_string();
             }
             "ai_api_key_command" => {
-                self.ai_api_key_command = value.to_string();
+                self.ai.api_key_command = value.to_string();
             }
             "ai_base_url" => {
-                self.ai_base_url = value.to_string();
+                self.ai.base_url = value.to_string();
             }
             "ai_mode" => {
                 let valid = ["standard", "plan", "auto-accept"];
@@ -288,10 +288,10 @@ impl super::Editor {
                         value
                     ));
                 }
-                self.ai_mode = value.to_string();
+                self.ai.mode = value.to_string();
             }
             "ai_profile" => {
-                self.ai_profile = value.to_string();
+                self.ai.profile = value.to_string();
             }
             "restore_session" => {
                 self.restore_session = parse_option_bool(value)?;
@@ -1282,10 +1282,10 @@ impl super::Editor {
             String::new(),
             "AI Agent (SPC a a):".to_string(),
         ];
-        let ai_cmd = if self.ai_editor.is_empty() {
+        let ai_cmd = if self.ai.editor_name.is_empty() {
             "claude"
         } else {
-            &self.ai_editor
+            &self.ai.editor_name
         };
         let ai_found = find_on_path(ai_cmd);
         lines.push(format!(
@@ -1301,14 +1301,14 @@ impl super::Editor {
 
         // AI Chat
         lines.push("AI Chat (SPC a p):".to_string());
-        let provider = if self.ai_provider.is_empty() {
+        let provider = if self.ai.provider.is_empty() {
             "(not configured)"
         } else {
-            &self.ai_provider
+            &self.ai.provider
         };
         lines.push(format!("  Provider: {}", provider));
-        if !self.ai_model.is_empty() {
-            lines.push(format!("  Model: {}", self.ai_model));
+        if !self.ai.model.is_empty() {
+            lines.push(format!("  Model: {}", self.ai.model));
         }
         // Check API key from env
         let key_env = match provider {
@@ -1325,10 +1325,10 @@ impl super::Editor {
                 "****".to_string()
             };
             lines.push(format!("  API Key: {}", masked));
-        } else if !self.ai_api_key_command.is_empty() {
+        } else if !self.ai.api_key_command.is_empty() {
             lines.push(format!(
                 "  API Key: via command `{}`",
-                self.ai_api_key_command
+                self.ai.api_key_command
             ));
         } else {
             lines.push("  API Key: [not set]".to_string());

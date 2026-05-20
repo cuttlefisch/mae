@@ -165,17 +165,17 @@ impl Editor {
 
         if let crate::Mode::Visual(_) = self.mode {
             let win = self.window_mgr.focused_window();
-            let start_row = self.visual_anchor_row.min(win.cursor_row);
-            let end_row = self.visual_anchor_row.max(win.cursor_row);
-            let start_col = if start_row == self.visual_anchor_row {
-                self.visual_anchor_col
+            let start_row = self.vi.visual_anchor_row.min(win.cursor_row);
+            let end_row = self.vi.visual_anchor_row.max(win.cursor_row);
+            let start_col = if start_row == self.vi.visual_anchor_row {
+                self.vi.visual_anchor_col
             } else {
                 win.cursor_col
             };
             let end_col = if end_row == win.cursor_row {
                 win.cursor_col
             } else {
-                self.visual_anchor_col
+                self.vi.visual_anchor_col
             };
             self.pending_lsp_requests
                 .push(crate::LspIntent::RangeFormat {

@@ -437,7 +437,7 @@ mod tests {
         ));
         assert!(result.success, "open_file failed: {}", result.output);
         assert_eq!(editor.buffers.len(), 2);
-        let target_idx = editor.ai_target_buffer_idx.expect("should have AI target");
+        let target_idx = editor.ai.target_buffer_idx.expect("should have AI target");
         assert!(editor.buffers[target_idx].text().contains("line1"));
 
         std::fs::remove_file(&path).ok();
@@ -489,7 +489,7 @@ mod tests {
             &PermissionPolicy::default(),
         ));
         assert!(result.success);
-        let target_idx = editor.ai_target_buffer_idx.expect("should have AI target");
+        let target_idx = editor.ai.target_buffer_idx.expect("should have AI target");
         assert_eq!(editor.buffers[target_idx].name, "second");
     }
 
@@ -678,7 +678,7 @@ mod tests {
         ));
         assert!(result.success, "create_file failed: {}", result.output);
         assert_eq!(editor.buffers.len(), 2);
-        let target_idx = editor.ai_target_buffer_idx.expect("should have AI target");
+        let target_idx = editor.ai.target_buffer_idx.expect("should have AI target");
         assert!(editor.buffers[target_idx].text().contains("new file"));
         // File should exist on disk
         assert!(path.exists());
@@ -839,7 +839,7 @@ mod tests {
 
         editor.switch_to_buffer(1);
         assert_eq!(editor.active_buffer_idx(), 1);
-        assert_eq!(editor.alternate_buffer_idx, Some(0));
+        assert_eq!(editor.vi.alternate_buffer_idx, Some(0));
     }
 
     // --- Phase 4c M4: AI DAP tools ---

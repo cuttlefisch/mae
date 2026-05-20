@@ -65,25 +65,25 @@ impl Editor {
         let win = self.window_mgr.focused_window();
         let row = win.cursor_row;
         let col = win.cursor_col;
-        self.changes.truncate(self.change_idx);
-        if let Some(last) = self.changes.last() {
+        self.vi.changes.truncate(self.vi.change_idx);
+        if let Some(last) = self.vi.changes.last() {
             if last.buffer_idx == idx && last.row == row && last.col == col {
                 return;
             }
         }
         // Only materialize the path clone when we're actually going to push.
         let path = self.buffers[idx].file_path().map(|p| p.to_path_buf());
-        self.changes.push(ChangeEntry {
+        self.vi.changes.push(ChangeEntry {
             path,
             buffer_idx: idx,
             row,
             col,
         });
-        if self.changes.len() > CHANGE_LIST_CAP {
-            let overflow = self.changes.len() - CHANGE_LIST_CAP;
-            self.changes.drain(..overflow);
+        if self.vi.changes.len() > CHANGE_LIST_CAP {
+            let overflow = self.vi.changes.len() - CHANGE_LIST_CAP;
+            self.vi.changes.drain(..overflow);
         }
-        self.change_idx = self.changes.len();
+        self.vi.change_idx = self.vi.changes.len();
     }
 
     /// `g;` — navigate backward through the change list. No-op at the
@@ -93,17 +93,17 @@ impl Editor {
     /// non-edit motions pushes the current position so `g,` can return.
     pub fn change_backward(&mut self, n: usize) {
         for _ in 0..n {
-            if self.change_idx == 0 {
+            if self.vi.change_idx == 0 {
                 self.set_status("At oldest change");
                 return;
             }
-            if self.change_idx == self.changes.len() {
+            if self.vi.change_idx == self.vi.changes.len() {
                 let current = self.current_change_entry();
-                if self.changes.last() != Some(&current) {
-                    self.changes.push(current);
+                if self.vi.changes.last() != Some(&current) {
+                    self.vi.changes.push(current);
                 }
             }
-            self.change_idx -= 1;
+            self.vi.change_idx -= 1;
             self.restore_change_at_idx();
         }
     }
@@ -112,22 +112,22 @@ impl Editor {
     /// newest entry.
     pub fn change_forward(&mut self, n: usize) {
         for _ in 0..n {
-            if self.change_idx + 1 >= self.changes.len() {
+            if self.vi.change_idx + 1 >= self.vi.changes.len() {
                 self.set_status("At newest change");
                 return;
             }
-            self.change_idx += 1;
+            self.vi.change_idx += 1;
             self.restore_change_at_idx();
         }
     }
 
-    /// Move the focused window to `self.changes[self.change_idx]`.
+    /// Move the focused window to `self.vi.changes[self.vi.change_idx]`.
     ///
     /// Mirrors `restore_jump_at_idx`: resolve by path first so re-opened
     /// files still work, fall back to the stored index for scratch
     /// buffers, clamp past-EOF positions.
     fn restore_change_at_idx(&mut self) {
-        let entry = self.changes[self.change_idx].clone();
+        let entry = self.vi.changes[self.vi.change_idx].clone();
         let target_idx = if let Some(ref path) = entry.path {
             self.buffers
                 .iter()
@@ -173,23 +173,23 @@ impl Editor {
         let mut body = String::new();
         body.push_str(&format!(
             "*Changes*  {} entries  (idx {})\n\n",
-            self.changes.len(),
-            self.change_idx
+            self.vi.changes.len(),
+            self.vi.change_idx
         ));
-        if self.changes.is_empty() {
+        if self.vi.changes.is_empty() {
             body.push_str("No recorded changes.\n");
         } else {
             body.push_str("    # line  col  file\n");
             // Show newest at top — iterate in reverse with 0 = newest.
-            for (i, entry) in self.changes.iter().enumerate().rev() {
-                let marker = if i == self.change_idx { ">" } else { " " };
+            for (i, entry) in self.vi.changes.iter().enumerate().rev() {
+                let marker = if i == self.vi.change_idx { ">" } else { " " };
                 let display_path = entry
                     .path
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| format!("[buffer {}]", entry.buffer_idx));
                 // Offset from newest so users can eyeball "g; N times".
-                let offset = self.changes.len().saturating_sub(1) - i;
+                let offset = self.vi.changes.len().saturating_sub(1) - i;
                 body.push_str(&format!(
                     "{}  {:3}  {:4}  {:3}  {}\n",
                     marker,
@@ -213,7 +213,7 @@ impl Editor {
             self.buffers.len() - 1
         };
         self.display_buffer(idx);
-        self.set_status(format!("Changes: {} entries", self.changes.len()));
+        self.set_status(format!("Changes: {} entries", self.vi.changes.len()));
     }
 }
 
@@ -239,8 +239,8 @@ mod tests {
         let mut ed = ed_with_text("a\nb\nc\n");
         set_cursor(&mut ed, 1, 0);
         ed.record_change();
-        assert_eq!(ed.changes.len(), 1);
-        assert_eq!(ed.change_idx, 1);
+        assert_eq!(ed.vi.changes.len(), 1);
+        assert_eq!(ed.vi.change_idx, 1);
     }
 
     #[test]
@@ -248,7 +248,7 @@ mod tests {
         let mut ed = ed_with_text("a\nb\n");
         ed.record_change();
         ed.record_change();
-        assert_eq!(ed.changes.len(), 1);
+        assert_eq!(ed.vi.changes.len(), 1);
     }
 
     #[test]
@@ -324,7 +324,7 @@ mod tests {
             set_cursor(&mut ed, 0, i % 2);
             ed.record_change();
         }
-        assert!(ed.changes.len() <= CHANGE_LIST_CAP);
+        assert!(ed.vi.changes.len() <= CHANGE_LIST_CAP);
     }
 
     #[test]

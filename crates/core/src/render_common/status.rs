@@ -80,10 +80,10 @@ pub fn truncate_branch(branch: &str, max_w: usize) -> String {
 
 /// Build the mode label string.
 pub fn mode_label(editor: &Editor) -> String {
-    if editor.input_lock != InputLock::None {
-        match editor.input_lock {
+    if editor.ai.input_lock != InputLock::None {
+        match editor.ai.input_lock {
             InputLock::AiBusy => {
-                if editor.ai_streaming {
+                if editor.ai.streaming {
                     " AI... ".to_string()
                 } else {
                     " AI BUSY ".to_string()
@@ -92,8 +92,8 @@ pub fn mode_label(editor: &Editor) -> String {
             InputLock::McpBusy => " MCP... ".to_string(),
             InputLock::None => unreachable!(),
         }
-    } else if editor.macro_recording {
-        format!(" REC @{} ", editor.macro_register.unwrap_or('?'))
+    } else if editor.vi.macro_recording {
+        format!(" REC @{} ", editor.vi.macro_register.unwrap_or('?'))
     } else {
         // Buffer-kind-aware labels: derive from BufferMode trait.
         let buf_kind = editor.active_buffer().kind;
@@ -126,8 +126,8 @@ pub fn mode_label(editor: &Editor) -> String {
 
 /// Return the theme key for the current mode's status bar style.
 pub fn mode_theme_key(editor: &Editor) -> &'static str {
-    if editor.input_lock != InputLock::None {
-        match editor.input_lock {
+    if editor.ai.input_lock != InputLock::None {
+        match editor.ai.input_lock {
             InputLock::AiBusy => "ui.statusline.mode.locked",
             InputLock::McpBusy => "ui.statusline.mode.mcp",
             InputLock::None => "ui.statusline.mode.normal",
@@ -238,18 +238,18 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
     }
 
     // Priority 7a: colored AI mode badge (only when AI session is active).
-    if editor.conversation_pair.is_some()
-        || editor.ai_session_tokens_in > 0
-        || editor.ai_session_tokens_out > 0
+    if editor.ai.conversation_pair.is_some()
+        || editor.ai.session_tokens_in > 0
+        || editor.ai.session_tokens_out > 0
     {
-        let ai_mode_style = match editor.ai_mode.as_str() {
+        let ai_mode_style = match editor.ai.mode.as_str() {
             "standard" => "ui.statusline.ai.standard",
             "auto-accept" => "ui.statusline.ai.auto",
             "plan" => "ui.statusline.ai.plan",
             _ => "ui.statusline.ai.standard",
         };
         segments.push(Segment::with_style(
-            format!(" {} ", editor.ai_mode.to_uppercase()),
+            format!(" {} ", editor.ai.mode.to_uppercase()),
             7,
             ai_mode_style,
         ));
@@ -268,7 +268,7 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         format!(" {}", file_type)
     };
     let pct = compute_scroll_pct(buf, win);
-    let tier_str = format!(" [{}]", editor.ai_permission_tier);
+    let tier_str = format!(" [{}]", editor.ai.permission_tier);
     let combined_7 = format!("{} {}{}", file_type_str, pct, tier_str);
     if !combined_7.trim().is_empty() {
         segments.push(Segment::new(combined_7, 7));
@@ -382,7 +382,7 @@ pub fn layout_status_segments(
 /// Build the command/message line text.
 pub fn command_line_text(editor: &Editor) -> String {
     if editor.mode == Mode::Command {
-        format!(":{}", editor.command_line)
+        format!(":{}", editor.vi.command_line)
     } else if editor.mode == Mode::Search {
         let prompt = if editor.search_state.direction == crate::SearchDirection::Forward {
             "/"
@@ -390,7 +390,7 @@ pub fn command_line_text(editor: &Editor) -> String {
             "?"
         };
         format!("{}{}", prompt, editor.search_input)
-    } else if let Some(count) = editor.count_prefix {
+    } else if let Some(count) = editor.vi.count_prefix {
         format!("{}", count)
     } else {
         editor.status_msg.clone()
@@ -462,20 +462,20 @@ fn compute_scroll_pct(buf: &Buffer, win: &Window) -> String {
 }
 
 pub fn format_ai_info(editor: &Editor) -> String {
-    if editor.ai_session_tokens_in == 0 && editor.ai_session_tokens_out == 0 {
+    if editor.ai.session_tokens_in == 0 && editor.ai.session_tokens_out == 0 {
         return String::new();
     }
     let tokens = format!(
         "{}/{}",
-        format_tokens(editor.ai_session_tokens_in),
-        format_tokens(editor.ai_session_tokens_out),
+        format_tokens(editor.ai.session_tokens_in),
+        format_tokens(editor.ai.session_tokens_out),
     );
-    let cache_str = format_cache_hit_rate(editor.ai_cache_read_tokens, editor.ai_session_tokens_in);
-    let ctx_str = format_context_usage(editor.ai_context_used_tokens, editor.ai_context_window);
-    if editor.ai_session_cost_usd > 0.0 {
+    let cache_str = format_cache_hit_rate(editor.ai.cache_read_tokens, editor.ai.session_tokens_in);
+    let ctx_str = format_context_usage(editor.ai.context_used_tokens, editor.ai.context_window);
+    if editor.ai.session_cost_usd > 0.0 {
         format!(
             " ${:.2} {}{}{}",
-            editor.ai_session_cost_usd, tokens, cache_str, ctx_str
+            editor.ai.session_cost_usd, tokens, cache_str, ctx_str
         )
     } else {
         format!(" {}{}{}", tokens, cache_str, ctx_str)
@@ -778,7 +778,7 @@ mod tests {
     fn ai_mode_badge_has_style_hint() {
         let mut editor = Editor::new();
         // Badge only appears when AI session is active.
-        editor.ai_session_tokens_in = 100;
+        editor.ai.session_tokens_in = 100;
         let segments = build_status_segments(&editor, None);
         let ai_seg = segments.iter().find(|s| s.text.contains("STANDARD"));
         assert!(ai_seg.is_some());

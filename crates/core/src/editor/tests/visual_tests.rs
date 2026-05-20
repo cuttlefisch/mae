@@ -10,8 +10,8 @@ fn visual_char_mode_sets_anchor() {
     win.cursor_col = 3;
     editor.dispatch_builtin("enter-visual-char");
     assert_eq!(editor.mode, Mode::Visual(VisualType::Char));
-    assert_eq!(editor.visual_anchor_row, 0);
-    assert_eq!(editor.visual_anchor_col, 3);
+    assert_eq!(editor.vi.visual_anchor_row, 0);
+    assert_eq!(editor.vi.visual_anchor_col, 3);
 }
 
 #[test]
@@ -21,7 +21,7 @@ fn visual_line_mode_sets_anchor() {
     win.cursor_row = 1;
     editor.dispatch_builtin("enter-visual-line");
     assert_eq!(editor.mode, Mode::Visual(VisualType::Line));
-    assert_eq!(editor.visual_anchor_row, 1);
+    assert_eq!(editor.vi.visual_anchor_row, 1);
 }
 
 #[test]
@@ -168,7 +168,7 @@ fn visual_delete_charwise() {
     win.cursor_col = 4;
     editor.visual_delete();
     assert_eq!(editor.active_buffer().rope().to_string(), "he world");
-    assert_eq!(editor.registers.get(&'"').unwrap(), "llo");
+    assert_eq!(editor.vi.registers.get(&'"').unwrap(), "llo");
     assert_eq!(editor.mode, Mode::Normal);
 }
 
@@ -180,7 +180,7 @@ fn visual_delete_linewise() {
     win.cursor_row = 1;
     editor.visual_delete();
     assert_eq!(editor.active_buffer().rope().to_string(), "line3");
-    let reg = editor.registers.get(&'"').unwrap();
+    let reg = editor.vi.registers.get(&'"').unwrap();
     assert!(reg.contains("line1"));
     assert!(reg.contains("line2"));
     assert_eq!(editor.mode, Mode::Normal);
@@ -195,7 +195,7 @@ fn visual_yank_charwise() {
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_col = 4;
     editor.visual_yank();
-    assert_eq!(editor.registers.get(&'"').unwrap(), "hello");
+    assert_eq!(editor.vi.registers.get(&'"').unwrap(), "hello");
     // Text unchanged
     assert_eq!(editor.active_buffer().rope().to_string(), "hello world");
     assert_eq!(editor.mode, Mode::Normal);
@@ -206,7 +206,7 @@ fn visual_yank_linewise() {
     let mut editor = editor_with_text("line1\nline2\nline3");
     editor.dispatch_builtin("enter-visual-line");
     editor.visual_yank();
-    assert_eq!(editor.registers.get(&'"').unwrap(), "line1\n");
+    assert_eq!(editor.vi.registers.get(&'"').unwrap(), "line1\n");
     // Text unchanged
     assert_eq!(
         editor.active_buffer().rope().to_string(),
@@ -277,7 +277,7 @@ fn visual_empty_selection_single_char() {
     editor.dispatch_builtin("enter-visual-char");
     // Immediately yank (no movement) → should yank char under cursor
     editor.visual_yank();
-    assert_eq!(editor.registers.get(&'"').unwrap(), "h");
+    assert_eq!(editor.vi.registers.get(&'"').unwrap(), "h");
 }
 
 #[test]
@@ -357,7 +357,7 @@ fn change_line_clears_and_enters_insert() {
 fn change_line_sets_register() {
     let mut editor = editor_with_text("hello world\nsecond line");
     editor.dispatch_builtin("change-line");
-    assert_eq!(editor.registers.get(&'"').unwrap(), "hello world");
+    assert_eq!(editor.vi.registers.get(&'"').unwrap(), "hello world");
 }
 
 // --- from visual_ops_tests ---
@@ -383,12 +383,12 @@ fn gv_reselect_visual() {
     // Exit visual with Esc
     ed.dispatch_builtin("enter-normal-mode");
     assert_eq!(ed.mode, Mode::Normal);
-    assert!(ed.last_visual.is_some());
+    assert!(ed.vi.last_visual.is_some());
     // Now reselect with gv
     ed.dispatch_builtin("reselect-visual");
     assert!(matches!(ed.mode, Mode::Visual(VisualType::Char)));
-    assert_eq!(ed.visual_anchor_row, 0);
-    assert_eq!(ed.visual_anchor_col, 2);
+    assert_eq!(ed.vi.visual_anchor_row, 0);
+    assert_eq!(ed.vi.visual_anchor_col, 2);
     assert_eq!(ed.window_mgr.focused_window().cursor_row, 1);
     assert_eq!(ed.window_mgr.focused_window().cursor_col, 3);
 }
@@ -410,7 +410,7 @@ fn visual_swap_ends() {
     }
     // Anchor=1, cursor=4. After swap: anchor=4, cursor=1.
     ed.visual_swap_ends();
-    assert_eq!(ed.visual_anchor_col, 4);
+    assert_eq!(ed.vi.visual_anchor_col, 4);
     assert_eq!(ed.window_mgr.focused_window().cursor_col, 1);
 }
 

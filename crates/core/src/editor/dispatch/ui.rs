@@ -30,7 +30,7 @@ impl Editor {
                     self.buffers.len() - 1
                 };
                 let prev = self.active_buffer_idx();
-                self.alternate_buffer_idx = Some(prev);
+                self.vi.alternate_buffer_idx = Some(prev);
                 self.display_buffer(idx);
                 self.set_mode(Mode::Normal);
             }
@@ -39,9 +39,9 @@ impl Editor {
                 let is_scratch = self.buffers[current].kind == crate::BufferKind::Text
                     && self.buffers[current].name == "[scratch]";
                 if is_scratch {
-                    let alt = self.alternate_buffer_idx.unwrap_or(0);
+                    let alt = self.vi.alternate_buffer_idx.unwrap_or(0);
                     if alt < self.buffers.len() && alt != current {
-                        self.alternate_buffer_idx = Some(current);
+                        self.vi.alternate_buffer_idx = Some(current);
                         self.display_buffer(alt);
                         self.sync_mode_to_buffer();
                     }
@@ -55,7 +55,7 @@ impl Editor {
                             self.buffers.push(Buffer::new());
                             self.buffers.len() - 1
                         };
-                    self.alternate_buffer_idx = Some(current);
+                    self.vi.alternate_buffer_idx = Some(current);
                     self.display_buffer(idx);
                     self.set_mode(Mode::Normal);
                 }
@@ -170,8 +170,8 @@ impl Editor {
                 self.open_conversation_buffer();
                 // If AI is not configured, show setup guidance in the output buffer
                 // and stay in Normal mode so the user can read/copy the URLs.
-                if !self.ai_configured {
-                    if let Some(ref pair) = self.conversation_pair {
+                if !self.ai.configured {
+                    if let Some(ref pair) = self.ai.conversation_pair {
                         let out_idx = pair.output_buffer_idx;
                         if out_idx < self.buffers.len() {
                             let guidance = "\
@@ -220,7 +220,7 @@ For full setup guide: :help ai-setup";
                     None => "No AI conversation active",
                 };
                 self.set_status(status);
-                self.ai_cancel_requested = true;
+                self.ai.cancel_requested = true;
             }
 
             // Describe
@@ -242,7 +242,7 @@ For full setup guide: :help ai-setup";
                 self.show_bindings_report();
             }
             "describe-module" => {
-                let arg = self.command_line.trim().to_string();
+                let arg = self.vi.command_line.trim().to_string();
                 let module_name = if arg.is_empty() { None } else { Some(arg) };
                 self.show_module_report(module_name.as_deref());
             }
@@ -282,7 +282,7 @@ For full setup guide: :help ai-setup";
                 // Prefer git root so agents operate at the repository level,
                 // not a subcrate Cargo.toml directory.
                 let agent_cwd = self.git_or_project_root();
-                let shell_name = format!("*AI:{}*", self.ai_editor);
+                let shell_name = format!("*AI:{}*", self.ai.editor_name);
                 let mut buf = Buffer::new_shell(shell_name);
                 buf.agent_shell = true;
                 self.buffers.push(buf);
@@ -304,7 +304,7 @@ For full setup guide: :help ai-setup";
                 if let Some(wid) = agent_win_id {
                     self.window_mgr.set_focused(wid);
                 }
-                let cmd = self.ai_editor.clone();
+                let cmd = self.ai.editor_name.clone();
                 self.shell.agent_spawns.push((new_idx, cmd));
                 self.set_mode(Mode::ShellInsert);
             }

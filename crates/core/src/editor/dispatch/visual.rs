@@ -51,15 +51,15 @@ impl Editor {
                 if self.mode == Mode::Visual(VisualType::Block) {
                     let (min_row, max_row, min_col, _max_col) = self.block_selection_rect();
                     self.save_visual_state();
-                    self.pending_block_insert = Some((min_row, max_row, min_col));
+                    self.vi.pending_block_insert = Some((min_row, max_row, min_col));
                     self.search_state.highlight_active = false;
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_row = min_row;
                     win.cursor_col = min_col;
                     let idx = self.active_buffer_idx();
-                    self.insert_start_offset =
+                    self.vi.insert_start_offset =
                         Some(self.buffers[idx].char_offset_at(min_row, min_col));
-                    self.insert_initiated_by = Some("block-visual-insert".to_string());
+                    self.vi.insert_initiated_by = Some("block-visual-insert".to_string());
                     self.buffers[idx].begin_undo_group();
                     self.set_mode(Mode::Insert);
                 }
@@ -69,7 +69,7 @@ impl Editor {
                     let (min_row, max_row, _min_col, max_col) = self.block_selection_rect();
                     self.save_visual_state();
                     let append_col = max_col + 1;
-                    self.pending_block_insert = Some((min_row, max_row, append_col));
+                    self.vi.pending_block_insert = Some((min_row, max_row, append_col));
                     self.search_state.highlight_active = false;
                     let idx = self.active_buffer_idx();
                     let line_len = self.buffers[idx]
@@ -80,9 +80,9 @@ impl Editor {
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_row = min_row;
                     win.cursor_col = append_col.min(line_len);
-                    self.insert_start_offset =
+                    self.vi.insert_start_offset =
                         Some(self.buffers[idx].char_offset_at(min_row, win.cursor_col));
-                    self.insert_initiated_by = Some("block-visual-append".to_string());
+                    self.vi.insert_initiated_by = Some("block-visual-append".to_string());
                     self.buffers[idx].begin_undo_group();
                     self.set_mode(Mode::Insert);
                 }

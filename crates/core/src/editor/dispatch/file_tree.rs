@@ -113,7 +113,7 @@ impl Editor {
                         // Focus a non-tree, non-conversation window to open the file in.
                         let tree_win_id = self.file_tree_window_id;
                         let buffers = &self.buffers;
-                        let conv_pair = &self.conversation_pair;
+                        let conv_pair = &self.ai.conversation_pair;
                         let target_win = self
                             .window_mgr
                             .iter_windows()

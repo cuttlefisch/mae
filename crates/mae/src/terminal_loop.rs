@@ -437,14 +437,14 @@ pub(crate) async fn run_terminal_loop(
                         tui_dirty = true;
                         editor.last_edit_time = std::time::Instant::now();
                         editor.clear_highlights();
-                        if editor.input_lock != mae_core::InputLock::None {
+                        if editor.ai.input_lock != mae_core::InputLock::None {
                             use crossterm::event::{KeyCode, KeyModifiers};
                             if key.code == KeyCode::Esc
                                 || (key.code == KeyCode::Char('c')
                                     && key.modifiers.contains(KeyModifiers::CONTROL))
                             {
-                                editor.input_lock = mae_core::InputLock::None;
-                                editor.ai_streaming = false;
+                                editor.ai.input_lock = mae_core::InputLock::None;
+                                editor.ai.streaming = false;
                                 last_mcp_activity = None;
                                 if let Some(ref tx) = ai_command_tx {
                                     let _ = tx.try_send(AiCommand::Cancel);
@@ -465,13 +465,13 @@ pub(crate) async fn run_terminal_loop(
                             handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx, &mut pending_interactive_event);
 
                             // Handle cancellation requested via command (e.g. SPC a c)
-                            if editor.ai_cancel_requested {
-                                editor.ai_cancel_requested = false;
+                            if editor.ai.cancel_requested {
+                                editor.ai.cancel_requested = false;
                                 if let Some(ref tx) = ai_command_tx {
                                     let _ = tx.try_send(AiCommand::Cancel);
                                 }
-                                editor.ai_streaming = false;
-                                editor.input_lock = mae_core::InputLock::None;
+                                editor.ai.streaming = false;
+                                editor.ai.input_lock = mae_core::InputLock::None;
                                 pending_interactive_event = None;
                                 if editor.cleanup_self_test() {
                                     editor.set_status("[AI] Cancelled — self-test state restored");
@@ -608,10 +608,10 @@ pub(crate) async fn run_terminal_loop(
                     if ts.elapsed() > std::time::Duration::from_millis(500)
                         && deferred_mcp_reply.is_empty()
                     {
-                        if editor.input_lock == mae_core::InputLock::McpBusy {
+                        if editor.ai.input_lock == mae_core::InputLock::McpBusy {
                             editor.set_status("MCP: input unlocked");
                         }
-                        editor.input_lock = mae_core::InputLock::None;
+                        editor.ai.input_lock = mae_core::InputLock::None;
                         last_mcp_activity = None;
                         tui_dirty = true;
                     }
@@ -619,14 +619,14 @@ pub(crate) async fn run_terminal_loop(
             }
             Some(mcp_req) = mcp_tool_rx.recv() => {
                 tui_dirty = true;
-                editor.input_lock = mae_core::InputLock::McpBusy;
+                editor.ai.input_lock = mae_core::InputLock::McpBusy;
                 last_mcp_activity = Some(tokio::time::Instant::now());
                 let immediate = ai_event_handler::handle_mcp_request(
                     editor, mcp_req, all_tools, permission_policy,
                     lsp_command_tx, &mut deferred_mcp_reply,
                 );
                 if immediate && deferred_mcp_reply.is_empty() {
-                    editor.input_lock = mae_core::InputLock::None;
+                    editor.ai.input_lock = mae_core::InputLock::None;
                     last_mcp_activity = None;
                 }
                 // Drain sync updates immediately after MCP-driven edits.

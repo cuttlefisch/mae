@@ -430,10 +430,10 @@ impl SchemeAiOverrides {
     /// Build from editor state. Empty strings mean "not set".
     pub fn from_editor(editor: &mae_core::Editor) -> Self {
         Self {
-            provider: editor.ai_provider.clone(),
-            model: editor.ai_model.clone(),
-            api_key_command: editor.ai_api_key_command.clone(),
-            base_url: editor.ai_base_url.clone(),
+            provider: editor.ai.provider.clone(),
+            model: editor.ai.model.clone(),
+            api_key_command: editor.ai.api_key_command.clone(),
+            base_url: editor.ai.base_url.clone(),
         }
     }
 

@@ -1852,7 +1852,7 @@ impl SchemeRuntime {
         // Compute region bounds (valid only in visual mode, but safe to call anytime)
         let (region_beg, region_end, selection_text) = if is_visual {
             let anchor_offset =
-                buf.char_offset_at(editor.visual_anchor_row, editor.visual_anchor_col);
+                buf.char_offset_at(editor.vi.visual_anchor_row, editor.vi.visual_anchor_col);
             let cursor_off = buf.char_offset_at(win.cursor_row, win.cursor_col);
             let beg = anchor_offset.min(cursor_off);
             let end = anchor_offset.max(cursor_off) + 1; // inclusive end
@@ -2649,7 +2649,7 @@ impl SchemeRuntime {
         if let Some(idx) = state.pending_switch_buffer.take() {
             if idx < editor.buffers.len() {
                 let prev = editor.active_buffer_idx();
-                editor.alternate_buffer_idx = Some(prev);
+                editor.vi.alternate_buffer_idx = Some(prev);
                 editor.display_buffer(idx);
             }
         }
@@ -2820,13 +2820,14 @@ impl SchemeRuntime {
             debug!(name = %tool.name, handler = %tool.handler_fn, "registering Scheme AI tool");
             // Upsert: replace if already registered by name
             if let Some(existing) = editor
-                .scheme_ai_tools
+                .ai
+                .scheme_tools
                 .iter_mut()
                 .find(|t| t.name == tool.name)
             {
                 *existing = tool;
             } else {
-                editor.scheme_ai_tools.push(tool);
+                editor.ai.scheme_tools.push(tool);
             }
         }
 

@@ -291,7 +291,7 @@ impl Editor {
         let prev_idx = self.active_buffer_idx();
         let idx = self.ensure_kb_buffer_idx(&target);
         if idx != prev_idx {
-            self.alternate_buffer_idx = Some(prev_idx);
+            self.vi.alternate_buffer_idx = Some(prev_idx);
         }
         self.kb_populate_buffer(idx);
         self.display_buffer(idx);
@@ -592,6 +592,7 @@ impl Editor {
         // Pick a sensible destination: alternate if set (and not the
         // KB buffer itself), otherwise the first non-KB buffer.
         let dest_idx = self
+            .vi
             .alternate_buffer_idx
             .filter(|&i| i != help_idx && i < self.buffers.len())
             .or_else(|| self.buffers.iter().position(|b| b.kind != BufferKind::Kb))
@@ -664,7 +665,7 @@ impl Editor {
             let idx = self.ensure_kb_buffer_idx(&id);
             self.kb_populate_buffer(idx);
             if idx != prev_idx {
-                self.alternate_buffer_idx = Some(prev_idx);
+                self.vi.alternate_buffer_idx = Some(prev_idx);
             }
             let win = self.window_mgr.focused_window_mut();
             win.buffer_idx = idx;
@@ -860,7 +861,7 @@ impl Editor {
         self.buffers[idx].view = crate::buffer_view::BufferView::Kb(Box::new(saved));
         self.kb_populate_buffer(idx);
         if idx != prev_idx {
-            self.alternate_buffer_idx = Some(prev_idx);
+            self.vi.alternate_buffer_idx = Some(prev_idx);
         }
         // Replace focused window directly (not via display_policy which may split).
         let win = self.window_mgr.focused_window_mut();
@@ -1400,7 +1401,7 @@ mod tests {
         // Group them as a conversation pair
         e.window_mgr
             .wrap_subtree_as_group(&[out_win_id, input_win_id], "ai-chat".to_string());
-        e.conversation_pair = Some(ConversationPair {
+        e.ai.conversation_pair = Some(ConversationPair {
             output_buffer_idx: output_idx,
             input_buffer_idx: input_idx,
             output_window_id: out_win_id,
@@ -1413,7 +1414,7 @@ mod tests {
         // Now close-window should tear down the conversation
         e.dispatch_builtin("close-window");
         assert!(
-            e.conversation_pair.is_none(),
+            e.ai.conversation_pair.is_none(),
             "conversation pair should be cleared"
         );
         assert_eq!(e.mode, crate::Mode::Normal, "should return to Normal mode");

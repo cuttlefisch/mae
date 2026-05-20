@@ -6,7 +6,7 @@ use tracing::{info, warn};
 
 /// Read the full text from the input buffer, trimming trailing newlines.
 fn read_input_text(editor: &Editor) -> String {
-    if let Some(ref pair) = editor.conversation_pair {
+    if let Some(ref pair) = editor.ai.conversation_pair {
         if pair.input_buffer_idx < editor.buffers.len() {
             let rope = editor.buffers[pair.input_buffer_idx].rope();
             let text: String = rope.chars().collect();
@@ -19,7 +19,7 @@ fn read_input_text(editor: &Editor) -> String {
 
 /// Clear the input buffer (for split-pair mode).
 fn clear_input_buffer(editor: &mut Editor) {
-    if let Some(ref pair) = editor.conversation_pair {
+    if let Some(ref pair) = editor.ai.conversation_pair {
         if pair.input_buffer_idx < editor.buffers.len() {
             let buf = &mut editor.buffers[pair.input_buffer_idx];
             buf.replace_contents("");
@@ -40,7 +40,7 @@ fn clear_input_buffer(editor: &mut Editor) {
 /// `editor.viewport_height` which reflects the focused window — typically the
 /// small input pane, not the tall output pane.
 pub fn scroll_output_to_bottom(editor: &mut Editor) {
-    if let Some(ref pair) = editor.conversation_pair {
+    if let Some(ref pair) = editor.ai.conversation_pair {
         if pair.output_buffer_idx < editor.buffers.len() {
             let total_lines = editor.buffers[pair.output_buffer_idx].display_line_count();
 
@@ -91,6 +91,7 @@ pub(crate) fn submit_conversation_prompt(
 
     // Find the output buffer index.
     let output_idx = editor
+        .ai
         .conversation_pair
         .as_ref()
         .map(|p| p.output_buffer_idx)
@@ -180,6 +181,7 @@ pub(super) fn handle_conversation_input(
         KeyCode::Char('c') if ctrl => {
             // Find the output conversation buffer to check streaming state.
             let output_idx = editor
+                .ai
                 .conversation_pair
                 .as_ref()
                 .map(|p| p.output_buffer_idx);
@@ -328,7 +330,7 @@ pub(super) fn handle_conversation_input(
 
         // --- Scroll output window (stay in input mode) ---
         KeyCode::PageUp => {
-            if let Some(ref pair) = editor.conversation_pair {
+            if let Some(ref pair) = editor.ai.conversation_pair {
                 if let Some(win) = editor.window_mgr.window_mut(pair.output_window_id) {
                     win.scroll_offset = win.scroll_offset.saturating_sub(10);
                     win.cursor_row = win.cursor_row.saturating_sub(10);
@@ -336,7 +338,7 @@ pub(super) fn handle_conversation_input(
             }
         }
         KeyCode::PageDown => {
-            if let Some(ref pair) = editor.conversation_pair {
+            if let Some(ref pair) = editor.ai.conversation_pair {
                 let total = editor.buffers[pair.output_buffer_idx].display_line_count();
                 if let Some(win) = editor.window_mgr.window_mut(pair.output_window_id) {
                     win.scroll_offset = (win.scroll_offset + 10).min(total.saturating_sub(1));
@@ -347,12 +349,12 @@ pub(super) fn handle_conversation_input(
 
         // --- Cycle AI Mode ---
         KeyCode::BackTab => {
-            editor.ai_mode = match editor.ai_mode.as_str() {
+            editor.ai.mode = match editor.ai.mode.as_str() {
                 "standard" => "auto-accept".into(),
                 "auto-accept" => "plan".into(),
                 _ => "standard".into(),
             };
-            editor.set_status(format!("[AI] Mode: {}", editor.ai_mode));
+            editor.set_status(format!("[AI] Mode: {}", editor.ai.mode));
         }
 
         KeyCode::Esc => {
@@ -391,7 +393,7 @@ mod tests {
         editor.viewport_height = 5;
 
         // Add a long response to the conversation output.
-        let pair = editor.conversation_pair.clone().unwrap();
+        let pair = editor.ai.conversation_pair.clone().unwrap();
         if let Some(conv) = editor.buffers[pair.output_buffer_idx].conversation_mut() {
             let long_response = (0..60)
                 .map(|i| format!("Line {}", i))
@@ -432,7 +434,7 @@ mod tests {
         let mut editor = editor_with_conversation(0);
         editor.viewport_height = 20;
 
-        let pair = editor.conversation_pair.clone().unwrap();
+        let pair = editor.ai.conversation_pair.clone().unwrap();
         if let Some(conv) = editor.buffers[pair.output_buffer_idx].conversation_mut() {
             conv.push_assistant("Test response");
         }
@@ -446,7 +448,7 @@ mod tests {
     fn scroll_positions_cursor_at_last_line() {
         let mut editor = editor_with_conversation(40);
 
-        let pair = editor.conversation_pair.clone().unwrap();
+        let pair = editor.ai.conversation_pair.clone().unwrap();
         if let Some(conv) = editor.buffers[pair.output_buffer_idx].conversation_mut() {
             conv.push_assistant("Hello world");
         }
@@ -463,7 +465,7 @@ mod tests {
     fn scroll_output_short_content_no_scroll() {
         let mut editor = editor_with_conversation(40);
 
-        let pair = editor.conversation_pair.clone().unwrap();
+        let pair = editor.ai.conversation_pair.clone().unwrap();
         if let Some(conv) = editor.buffers[pair.output_buffer_idx].conversation_mut() {
             conv.push_assistant("Short");
         }
@@ -480,7 +482,7 @@ mod tests {
     fn scroll_output_idempotent() {
         let mut editor = editor_with_conversation(40);
 
-        let pair = editor.conversation_pair.clone().unwrap();
+        let pair = editor.ai.conversation_pair.clone().unwrap();
         if let Some(conv) = editor.buffers[pair.output_buffer_idx].conversation_mut() {
             let long = (0..80)
                 .map(|i| format!("Line {i}"))

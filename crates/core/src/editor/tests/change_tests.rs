@@ -176,7 +176,7 @@ fn replace_char_await_sets_pending() {
     let mut editor = editor_with_text("hello");
     editor.dispatch_builtin("replace-char-await");
     assert_eq!(
-        editor.pending_char_command,
+        editor.vi.pending_char_command,
         Some("replace-char".to_string())
     );
 }

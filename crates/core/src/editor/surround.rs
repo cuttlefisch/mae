@@ -130,7 +130,7 @@ impl Editor {
     /// `apply_pending_operator_for_motion` stashes the range in
     /// `pending_surround_range`.
     pub fn surround_motion(&mut self, ch: char) {
-        let Some((from, to)) = self.pending_surround_range.take() else {
+        let Some((from, to)) = self.vi.pending_surround_range.take() else {
             return;
         };
         let (open, close) = Self::surround_pair(ch);
@@ -150,11 +150,11 @@ impl Editor {
             "delete-surround" => self.delete_surround(ch),
             "change-surround-1" => {
                 // First char captured; stash and re-arm for the second.
-                self.pending_surround_from = Some(ch);
-                self.pending_char_command = Some("change-surround-2".to_string());
+                self.vi.pending_surround_from = Some(ch);
+                self.vi.pending_char_command = Some("change-surround-2".to_string());
             }
             "change-surround-2" => {
-                if let Some(from) = self.pending_surround_from.take() {
+                if let Some(from) = self.vi.pending_surround_from.take() {
                     self.change_surround(from, ch);
                 }
             }
@@ -247,15 +247,15 @@ mod tests {
         set_cursor(&mut ed, 0, 3);
         // First char: arms state for second char.
         assert!(ed.dispatch_surround("change-surround-1", '('));
-        assert_eq!(ed.pending_surround_from, Some('('));
+        assert_eq!(ed.vi.pending_surround_from, Some('('));
         assert_eq!(
-            ed.pending_char_command.as_deref(),
+            ed.vi.pending_char_command.as_deref(),
             Some("change-surround-2")
         );
         // Second char: performs the swap.
         assert!(ed.dispatch_surround("change-surround-2", '['));
         assert_eq!(ed.buffers[0].text(), "x [y] z");
-        assert_eq!(ed.pending_surround_from, None);
+        assert_eq!(ed.vi.pending_surround_from, None);
     }
 
     #[test]
@@ -263,8 +263,8 @@ mod tests {
         let mut ed = ed_with("abcdef");
         // Visual-char: anchor at col 1, cursor at col 3 (selecting "bcd").
         ed.mode = Mode::Visual(crate::VisualType::Char);
-        ed.visual_anchor_row = 0;
-        ed.visual_anchor_col = 1;
+        ed.vi.visual_anchor_row = 0;
+        ed.vi.visual_anchor_col = 1;
         set_cursor(&mut ed, 0, 3);
         ed.surround_visual('(');
         assert_eq!(ed.buffers[0].text(), "a(bcd)ef");
@@ -275,7 +275,7 @@ mod tests {
     fn surround_motion_wraps_range() {
         let mut ed = ed_with("hello world");
         // Simulate ys{motion}( wrapping chars 0..5 ("hello") with parens
-        ed.pending_surround_range = Some((0, 5));
+        ed.vi.pending_surround_range = Some((0, 5));
         ed.surround_motion('(');
         assert_eq!(ed.buffers[0].text(), "(hello) world");
     }
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn surround_motion_brackets() {
         let mut ed = ed_with("foo bar baz");
-        ed.pending_surround_range = Some((4, 7));
+        ed.vi.pending_surround_range = Some((4, 7));
         ed.surround_motion('[');
         assert_eq!(ed.buffers[0].text(), "foo [bar] baz");
     }
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn dispatch_surround_motion() {
         let mut ed = ed_with("test");
-        ed.pending_surround_range = Some((0, 4));
+        ed.vi.pending_surround_range = Some((0, 4));
         assert!(ed.dispatch_surround("surround-motion", '"'));
         assert_eq!(ed.buffers[0].text(), "\"test\"");
     }

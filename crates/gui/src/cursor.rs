@@ -53,8 +53,8 @@ pub fn compute_cursor_position(
 
     match editor.mode {
         Mode::Command => {
-            let cursor_col = editor.command_line
-                [..editor.command_cursor.min(editor.command_line.len())]
+            let cursor_col = editor.vi.command_line
+                [..editor.vi.command_cursor.min(editor.vi.command_line.len())]
                 .chars()
                 .count();
             Some(CursorPos {
@@ -279,8 +279,8 @@ pub fn render_cursor(
             let cursor_fg = theme::color_or(cursor_style.fg, Color4f::new(0.1, 0.1, 0.1, 1.0));
             let ch_under = match editor.mode {
                 Mode::Command => {
-                    let chars: Vec<char> = editor.command_line.chars().collect();
-                    chars.get(editor.command_cursor).copied()
+                    let chars: Vec<char> = editor.vi.command_line.chars().collect();
+                    chars.get(editor.vi.command_cursor).copied()
                 }
                 Mode::Search => None,
                 _ => {
@@ -426,12 +426,10 @@ mod tests {
 
     #[test]
     fn compute_cursor_command_mode() {
-        let editor = Editor {
-            mode: Mode::Command,
-            command_line: "w".to_string(),
-            command_cursor: 1,
-            ..Default::default()
-        };
+        let mut editor = Editor::default();
+        editor.mode = Mode::Command;
+        editor.vi.command_line = "w".to_string();
+        editor.vi.command_cursor = 1;
         let inner = CellRect::new(1, 1, 78, 22);
         let pos = compute_cursor_position(&editor, None, inner, 3, None);
         assert!(pos.is_some());
@@ -519,7 +517,7 @@ mod tests {
         editor.dispatch_builtin("ai-prompt");
         assert_eq!(editor.mode, Mode::ConversationInput);
 
-        let pair = editor.conversation_pair.as_ref().unwrap().clone();
+        let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
 
         // Type "hi" into the input buffer.
         {

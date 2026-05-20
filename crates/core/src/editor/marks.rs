@@ -39,7 +39,7 @@ impl Editor {
         let idx = self.active_buffer_idx();
         let win = self.window_mgr.focused_window();
         let path = self.buffers[idx].file_path().map(|p| p.to_path_buf());
-        self.marks.insert(
+        self.vi.marks.insert(
             ch,
             Mark {
                 path,
@@ -59,6 +59,7 @@ impl Editor {
             return Err(format!("Invalid mark name: '{}'", ch));
         }
         let mark = self
+            .vi
             .marks
             .get(&ch)
             .cloned()

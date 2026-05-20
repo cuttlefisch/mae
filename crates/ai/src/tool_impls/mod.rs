@@ -69,7 +69,8 @@ use mae_core::Editor;
 /// Resolve the window to operate on: explicit AI target > focused window.
 pub fn resolve_active_window_id(editor: &Editor) -> WindowId {
     editor
-        .ai_target_window_id
+        .ai
+        .target_window_id
         .unwrap_or_else(|| editor.window_mgr.focused_id())
 }
 
@@ -82,7 +83,8 @@ pub fn resolve_buffer_idx(editor: &Editor, args: &serde_json::Value) -> Result<u
             .ok_or_else(|| format!("No buffer named '{}'", name))
     } else {
         Ok(editor
-            .ai_target_buffer_idx
+            .ai
+            .target_buffer_idx
             .unwrap_or_else(|| editor.active_buffer_idx()))
     }
 }

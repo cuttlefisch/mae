@@ -44,7 +44,7 @@ impl Editor {
                 self.buffers[idx].modified = false;
                 // Switch to it
                 let prev = self.active_buffer_idx();
-                self.alternate_buffer_idx = Some(prev);
+                self.vi.alternate_buffer_idx = Some(prev);
                 self.display_buffer(idx);
             }
             Err(e) => {
@@ -406,7 +406,7 @@ impl Editor {
 
         // Switch to it
         let prev = self.active_buffer_idx();
-        self.alternate_buffer_idx = Some(prev);
+        self.vi.alternate_buffer_idx = Some(prev);
         self.display_buffer(idx);
         self.set_mode(crate::Mode::Normal);
 

@@ -654,8 +654,8 @@ fn shift_click_starts_selection() {
         matches!(editor.mode, crate::Mode::Visual(crate::VisualType::Char)),
         "shift-click should enter visual char mode"
     );
-    assert_eq!(editor.visual_anchor_row, 0);
-    assert_eq!(editor.visual_anchor_col, 0);
+    assert_eq!(editor.vi.visual_anchor_row, 0);
+    assert_eq!(editor.vi.visual_anchor_col, 0);
     let win = editor.window_mgr.focused_window();
     assert_eq!(win.cursor_col, 5);
 }
@@ -667,8 +667,8 @@ fn shift_click_extends_existing_selection() {
     editor.show_line_numbers = false;
 
     // Enter visual mode manually
-    editor.visual_anchor_row = 0;
-    editor.visual_anchor_col = 2;
+    editor.vi.visual_anchor_row = 0;
+    editor.vi.visual_anchor_col = 2;
     editor.set_mode(crate::Mode::Visual(crate::VisualType::Char));
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_col = 5;
@@ -677,7 +677,7 @@ fn shift_click_extends_existing_selection() {
     editor.handle_mouse_click_shift(1, 10, crate::input::MouseButton::Left, true);
 
     // Anchor unchanged, cursor moved
-    assert_eq!(editor.visual_anchor_col, 2);
+    assert_eq!(editor.vi.visual_anchor_col, 2);
     let win = editor.window_mgr.focused_window();
     assert_eq!(win.cursor_col, 10);
 }

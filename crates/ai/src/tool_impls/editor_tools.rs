@@ -760,10 +760,10 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
     let mut issues = Vec::new();
 
     // AI Agent
-    let ai_cmd = if editor.ai_editor.is_empty() {
+    let ai_cmd = if editor.ai.editor_name.is_empty() {
         "claude".to_string()
     } else {
-        editor.ai_editor.clone()
+        editor.ai.editor_name.clone()
     };
     let ai_agent_found = on_path(&ai_cmd);
     if !ai_agent_found {
@@ -771,12 +771,12 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
     }
 
     // AI Chat
-    let provider = if editor.ai_provider.is_empty() {
+    let provider = if editor.ai.provider.is_empty() {
         String::new()
     } else {
-        editor.ai_provider.clone()
+        editor.ai.provider.clone()
     };
-    let model = editor.ai_model.clone();
+    let model = editor.ai.model.clone();
 
     let (api_key_set, api_key_source) = match provider.as_str() {
         "claude" if std::env::var("ANTHROPIC_API_KEY").is_ok() => {
@@ -791,8 +791,8 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         "deepseek" if std::env::var("DEEPSEEK_API_KEY").is_ok() => {
             (true, "env:DEEPSEEK_API_KEY".to_string())
         }
-        _ if !editor.ai_api_key_command.is_empty() => {
-            (true, format!("command:{}", editor.ai_api_key_command))
+        _ if !editor.ai.api_key_command.is_empty() => {
+            (true, format!("command:{}", editor.ai.api_key_command))
         }
         _ => (false, String::new()),
     };

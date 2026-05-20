@@ -63,8 +63,8 @@ fn execute_dispatch_command(editor: &mut Editor, cmd: &str) -> Result<String, St
 fn execute_set_ai_target(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
     // Clear targeting if requested.
     if args.get("clear").and_then(|v| v.as_bool()).unwrap_or(false) {
-        editor.ai_target_buffer_idx = None;
-        editor.ai_target_window_id = None;
+        editor.ai.target_buffer_idx = None;
+        editor.ai.target_window_id = None;
         return Ok("AI target cleared (using focused window)".into());
     }
 
@@ -73,14 +73,14 @@ fn execute_set_ai_target(editor: &mut Editor, args: &serde_json::Value) -> Resul
         let idx = editor
             .find_buffer_by_name(name)
             .ok_or_else(|| format!("No buffer named '{}'", name))?;
-        editor.ai_target_buffer_idx = Some(idx);
+        editor.ai.target_buffer_idx = Some(idx);
         // Also set window target if a window shows this buffer.
         if let Some(win) = editor
             .window_mgr
             .iter_windows()
             .find(|w| w.buffer_idx == idx)
         {
-            editor.ai_target_window_id = Some(win.id);
+            editor.ai.target_window_id = Some(win.id);
         }
         return Ok(format!("AI target set to buffer '{}'", name));
     }
@@ -94,8 +94,8 @@ fn execute_set_ai_target(editor: &mut Editor, args: &serde_json::Value) -> Resul
             .find(|w| w.id == wid)
             .ok_or_else(|| format!("No window with id {}", wid))?;
         let buf_idx = win.buffer_idx;
-        editor.ai_target_window_id = Some(wid);
-        editor.ai_target_buffer_idx = Some(buf_idx);
+        editor.ai.target_window_id = Some(wid);
+        editor.ai.target_buffer_idx = Some(buf_idx);
         return Ok(format!(
             "AI target set to window {} (buffer '{}')",
             wid, editor.buffers[buf_idx].name

@@ -100,8 +100,8 @@ impl super::Editor {
                         // Start new visual selection from current cursor to click pos
                         let cur_row = self.window_mgr.focused_window().cursor_row;
                         let cur_col = self.window_mgr.focused_window().cursor_col;
-                        self.visual_anchor_row = cur_row;
-                        self.visual_anchor_col = cur_col;
+                        self.vi.visual_anchor_row = cur_row;
+                        self.vi.visual_anchor_col = cur_col;
                         self.set_mode(crate::Mode::Visual(crate::VisualType::Char));
                     }
                     // Move cursor to click position (anchor stays)
@@ -113,8 +113,8 @@ impl super::Editor {
 
                 // --- Triple-click: select line ---
                 if click_count == 3 {
-                    self.visual_anchor_row = target_row;
-                    self.visual_anchor_col = 0;
+                    self.vi.visual_anchor_row = target_row;
+                    self.vi.visual_anchor_col = 0;
                     self.set_mode(crate::Mode::Visual(crate::VisualType::Line));
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_row = target_row;
@@ -138,8 +138,8 @@ impl super::Editor {
                     if word_start <= word_end {
                         let (start_row, start_col) = buf.row_col_from_offset(word_start);
                         let (end_row, end_col) = buf.row_col_from_offset(word_end);
-                        self.visual_anchor_row = start_row;
-                        self.visual_anchor_col = start_col;
+                        self.vi.visual_anchor_row = start_row;
+                        self.vi.visual_anchor_col = start_col;
                         self.set_mode(crate::Mode::Visual(crate::VisualType::Char));
                         let win = self.window_mgr.focused_window_mut();
                         win.cursor_row = end_row;
@@ -299,8 +299,8 @@ impl super::Editor {
         if !matches!(self.mode, crate::Mode::Visual(_)) {
             // Anchor at current cursor position (the click position).
             let win = self.window_mgr.focused_window();
-            self.visual_anchor_row = win.cursor_row;
-            self.visual_anchor_col = win.cursor_col;
+            self.vi.visual_anchor_row = win.cursor_row;
+            self.vi.visual_anchor_col = win.cursor_col;
             self.set_mode(crate::Mode::Visual(crate::VisualType::Char));
         }
 

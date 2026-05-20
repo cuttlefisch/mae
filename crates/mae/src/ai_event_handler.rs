@@ -102,7 +102,7 @@ pub struct AiEventContext<'a> {
 pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventContext) {
     match ai_event {
         AiEvent::ToolCallRequest { call, reply } => {
-            editor.ai_streaming = true;
+            editor.ai.streaming = true;
             info!(tool = %call.name, call_id = %call.id, "executing AI tool call");
             // Update the existing Pending entry (created by ToolCallStarted) to Running,
             // rather than creating a duplicate entry.
@@ -207,7 +207,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             text,
             target_buffer,
         } => {
-            editor.ai_streaming = true;
+            editor.ai.streaming = true;
             if let Some(conv_buf) =
                 find_buffer_by_name_or_default_mut(editor, target_buffer.as_deref())
             {
@@ -263,7 +263,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             text,
             target_buffer,
         } => {
-            editor.ai_streaming = true;
+            editor.ai.streaming = true;
             if let Some(conv_buf) =
                 find_buffer_by_name_or_default_mut(editor, target_buffer.as_deref())
             {
@@ -272,12 +272,13 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             // Sync rope + scroll, but throttle to avoid per-chunk overhead.
             editor.sync_conversation_buffer_rope();
             let should_scroll = editor
-                .ai_last_output_scroll
+                .ai
+                .last_output_scroll
                 .map(|t| t.elapsed() >= std::time::Duration::from_millis(50))
                 .unwrap_or(true);
             if should_scroll {
                 crate::key_handling::conversation::scroll_output_to_bottom(editor);
-                editor.ai_last_output_scroll = Some(std::time::Instant::now());
+                editor.ai.last_output_scroll = Some(std::time::Instant::now());
             }
         }
         AiEvent::SessionComplete {
@@ -298,10 +299,10 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             // Explicit scroll-to-bottom on session complete — the common epilogue
             // also scrolls, but this ensures it happens before state restore.
             crate::key_handling::conversation::scroll_output_to_bottom(editor);
-            editor.ai_streaming = false;
-            editor.input_lock = InputLock::None;
-            editor.ai_work_window_id = None;
-            editor.ai_last_output_scroll = None;
+            editor.ai.streaming = false;
+            editor.ai.input_lock = InputLock::None;
+            editor.ai.work_window_id = None;
+            editor.ai.last_output_scroll = None;
 
             // Auto-restore editor state and clean up sandbox after self-test session.
             if editor.cleanup_self_test() {
@@ -324,17 +325,17 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             latency_ms,
             ..
         } => {
-            editor.ai_session_cost_usd = session_usd;
-            editor.ai_session_tokens_in = tokens_in;
-            editor.ai_session_tokens_out = tokens_out;
-            editor.ai_cache_read_tokens = cache_read_tokens;
-            editor.ai_cache_creation_tokens = cache_creation_tokens;
-            editor.ai_context_window = context_window;
-            editor.ai_context_used_tokens = context_used_tokens;
+            editor.ai.session_cost_usd = session_usd;
+            editor.ai.session_tokens_in = tokens_in;
+            editor.ai.session_tokens_out = tokens_out;
+            editor.ai.cache_read_tokens = cache_read_tokens;
+            editor.ai.cache_creation_tokens = cache_creation_tokens;
+            editor.ai.context_window = context_window;
+            editor.ai.context_used_tokens = context_used_tokens;
             // Network diagnostics
-            editor.ai_last_api_success = Some(std::time::Instant::now());
-            editor.ai_last_api_latency_ms = Some(latency_ms);
-            editor.ai_api_call_count += 1;
+            editor.ai.last_api_success = Some(std::time::Instant::now());
+            editor.ai.last_api_latency_ms = Some(latency_ms);
+            editor.ai.api_call_count += 1;
             // Attach per-turn usage to the last assistant entry.
             if turn_tokens_in > 0 || turn_tokens_out > 0 {
                 if let Some(conv) = find_conversation_buffer_mut(editor) {
@@ -385,8 +386,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 conv_buf.push_system(msg.clone());
                 conv_buf.end_streaming();
             }
-            editor.ai_streaming = false;
-            editor.input_lock = InputLock::None;
+            editor.ai.streaming = false;
+            editor.ai.input_lock = InputLock::None;
             editor.set_status(msg);
         }
         AiEvent::AskUser { question, reply } => {
@@ -396,8 +397,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 conv.end_streaming();
             }
             editor.set_status(format!("AI: {}", question));
-            editor.ai_streaming = false;
-            editor.input_lock = InputLock::None;
+            editor.ai.streaming = false;
+            editor.ai.input_lock = InputLock::None;
             *ctx.pending_interactive_event = Some(PendingInteractiveEvent::AskUser(reply));
         }
         AiEvent::ProposeChanges { changes, reply } => {
@@ -409,7 +410,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             info!(count, "AI proposing changes");
 
             // Auto-accept mode: skip manual approval
-            if editor.ai_mode == "auto-accept" {
+            if editor.ai.mode == "auto-accept" {
                 info!("Auto-accepting AI changes");
                 if let Some(conv) = find_conversation_buffer_mut(editor) {
                     conv.push_system(format!("Auto-accepted changes to {} file(s)", count));
@@ -444,8 +445,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 conv.end_streaming();
             }
             editor.set_status(format!("AI: Proposing changes to {} file(s)", count));
-            editor.ai_streaming = false;
-            editor.input_lock = InputLock::None;
+            editor.ai.streaming = false;
+            editor.ai.input_lock = InputLock::None;
             *ctx.pending_interactive_event = Some(PendingInteractiveEvent::ProposeChanges(reply));
         }
         AiEvent::NetworkDiagnostic(result) => {
@@ -461,7 +462,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 )
             };
             editor.set_status(&status);
-            editor.ai_last_network_check = Some(mae_core::editor::AiNetworkCheck {
+            editor.ai.last_network_check = Some(mae_core::editor::AiNetworkCheck {
                 endpoint: result.endpoint,
                 reachable: result.reachable,
                 http_status: result.http_status,
@@ -627,8 +628,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             round,
             transaction_start_idx,
         } => {
-            editor.ai_current_round = round;
-            editor.ai_transaction_start_idx = transaction_start_idx;
+            editor.ai.current_round = round;
+            editor.ai.transaction_start_idx = transaction_start_idx;
         }
         AiEvent::EventMeta {
             session_id,
@@ -638,7 +639,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
         }
         AiEvent::Error(msg, transcript_path) => {
             error!(error = %msg, "AI error event");
-            editor.ai_last_api_error = Some(msg.clone());
+            editor.ai.last_api_error = Some(msg.clone());
             if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                 conv_buf.push_system(format!("Error: {}", msg));
                 if let Some(ref path) = transcript_path {
@@ -646,8 +647,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 }
                 conv_buf.end_streaming();
             }
-            editor.ai_streaming = false;
-            editor.input_lock = InputLock::None;
+            editor.ai.streaming = false;
+            editor.ai.input_lock = InputLock::None;
             editor.set_status(format!("AI Error: {}", msg));
         }
     }
@@ -657,6 +658,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
     // — but only if the user hasn't scroll-locked during streaming.
     editor.sync_conversation_buffer_rope();
     let is_scroll_locked = editor
+        .ai
         .conversation_pair
         .as_ref()
         .and_then(|p| editor.buffers.get(p.output_buffer_idx))

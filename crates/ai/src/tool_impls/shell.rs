@@ -138,7 +138,8 @@ pub fn execute_terminal_at_file(editor: &mut Editor, args: &Value) -> Result<Str
     } else {
         // Use current buffer's file path.
         let idx = editor
-            .ai_target_buffer_idx
+            .ai
+            .target_buffer_idx
             .unwrap_or_else(|| editor.active_buffer_idx());
         editor.buffers[idx]
             .file_path()

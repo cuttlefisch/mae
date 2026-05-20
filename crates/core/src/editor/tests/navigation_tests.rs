@@ -45,7 +45,7 @@ fn find_char_dispatch() {
 fn yank_line_and_paste_after() {
     let mut editor = editor_with_text("aaa\nbbb\n");
     editor.dispatch_builtin("yank-line");
-    assert_eq!(editor.registers.get(&'"'), Some(&"aaa\n".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"aaa\n".to_string()));
     editor.dispatch_builtin("paste-after");
     assert_eq!(editor.buffers[0].text(), "aaa\naaa\nbbb\n");
     assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
@@ -57,7 +57,7 @@ fn yank_line_and_paste_before() {
     editor.window_mgr.focused_window_mut().cursor_row = 1;
     editor.window_mgr.focused_window_mut().cursor_col = 0;
     editor.dispatch_builtin("yank-line");
-    assert_eq!(editor.registers.get(&'"'), Some(&"bbb\n".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"bbb\n".to_string()));
     editor.dispatch_builtin("paste-before");
     assert_eq!(editor.buffers[0].text(), "aaa\nbbb\nbbb\n");
 }
@@ -69,7 +69,7 @@ fn delete_line_copies_to_register_then_paste_restores() {
     editor.window_mgr.focused_window_mut().cursor_col = 0;
     editor.dispatch_builtin("delete-line");
     assert_eq!(editor.buffers[0].text(), "aaa\nccc\n");
-    assert_eq!(editor.registers.get(&'"'), Some(&"bbb\n".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"bbb\n".to_string()));
     // Paste it back
     editor.window_mgr.focused_window_mut().cursor_row = 0;
     editor.dispatch_builtin("paste-after");
@@ -81,7 +81,7 @@ fn delete_word_forward() {
     let mut editor = editor_with_text("hello world");
     editor.dispatch_builtin("delete-word-forward");
     assert_eq!(editor.buffers[0].text(), "world");
-    assert_eq!(editor.registers.get(&'"'), Some(&"hello ".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"hello ".to_string()));
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn delete_to_line_end() {
     editor.window_mgr.focused_window_mut().cursor_col = 5;
     editor.dispatch_builtin("delete-to-line-end");
     assert_eq!(editor.buffers[0].text(), "hello");
-    assert_eq!(editor.registers.get(&'"'), Some(&" world".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&" world".to_string()));
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn delete_to_line_start() {
     editor.window_mgr.focused_window_mut().cursor_col = 5;
     editor.dispatch_builtin("delete-to-line-start");
     assert_eq!(editor.buffers[0].text(), " world");
-    assert_eq!(editor.registers.get(&'"'), Some(&"hello".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"hello".to_string()));
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn yank_word_does_not_modify_buffer() {
     let mut editor = editor_with_text("hello world");
     editor.dispatch_builtin("yank-word-forward");
     assert_eq!(editor.buffers[0].text(), "hello world");
-    assert_eq!(editor.registers.get(&'"'), Some(&"hello ".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"hello ".to_string()));
 }
 
 #[test]
@@ -115,23 +115,23 @@ fn yank_to_line_end() {
     let mut editor = editor_with_text("hello world");
     editor.window_mgr.focused_window_mut().cursor_col = 6;
     editor.dispatch_builtin("yank-to-line-end");
-    assert_eq!(editor.registers.get(&'"'), Some(&"world".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"world".to_string()));
 }
 
 #[test]
 fn multiple_yanks_overwrite_register() {
     let mut editor = editor_with_text("aaa\nbbb\n");
     editor.dispatch_builtin("yank-line");
-    assert_eq!(editor.registers.get(&'"'), Some(&"aaa\n".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"aaa\n".to_string()));
     editor.window_mgr.focused_window_mut().cursor_row = 1;
     editor.dispatch_builtin("yank-line");
-    assert_eq!(editor.registers.get(&'"'), Some(&"bbb\n".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"bbb\n".to_string()));
 }
 
 #[test]
 fn paste_in_empty_buffer() {
     let mut editor = Editor::new();
-    editor.registers.insert('"', "hello".to_string());
+    editor.vi.registers.insert('"', "hello".to_string());
     editor.dispatch_builtin("paste-after");
     assert_eq!(editor.buffers[0].text(), "hello");
 }
@@ -157,15 +157,15 @@ fn change_list_records_on_edit() {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "abc\ndef\n");
     let mut ed = Editor::with_buffer(buf);
-    ed.registers.insert('"', "X".into());
+    ed.vi.registers.insert('"', "X".into());
     {
         let w = ed.window_mgr.focused_window_mut();
         w.cursor_row = 1;
         w.cursor_col = 1;
     }
     ed.dispatch_builtin("paste-after");
-    assert_eq!(ed.changes.len(), 1);
-    assert_eq!(ed.changes[0].row, 1);
+    assert_eq!(ed.vi.changes.len(), 1);
+    assert_eq!(ed.vi.changes[0].row, 1);
 }
 
 #[test]
@@ -403,7 +403,7 @@ fn minus_moves_up_to_first_non_blank() {
 #[test]
 fn plus_with_count_moves_n_lines() {
     let mut editor = ed_with_text("a\nb\nc\n    d\ne\n");
-    editor.count_prefix = Some(3);
+    editor.vi.count_prefix = Some(3);
     editor.dispatch_builtin("move-line-next-non-blank");
     let w = editor.window_mgr.focused_window();
     assert_eq!((w.cursor_row, w.cursor_col), (3, 4));
@@ -440,13 +440,13 @@ fn substitute_char_deletes_and_enters_insert() {
     assert_eq!(editor.mode, Mode::Insert);
     assert_eq!(editor.active_buffer().text(), "bc\n");
     // Yanked char preserved in default register
-    assert_eq!(editor.registers.get(&'"').map(String::as_str), Some("a"));
+    assert_eq!(editor.vi.registers.get(&'"').map(String::as_str), Some("a"));
 }
 
 #[test]
 fn substitute_char_with_count_deletes_n_chars() {
     let mut editor = ed_with_text("abcdef\n");
-    editor.count_prefix = Some(3);
+    editor.vi.count_prefix = Some(3);
     editor.dispatch_builtin("substitute-char");
     assert_eq!(editor.mode, Mode::Insert);
     assert_eq!(editor.active_buffer().text(), "def\n");
@@ -455,7 +455,7 @@ fn substitute_char_with_count_deletes_n_chars() {
 #[test]
 fn substitute_char_stops_at_line_end() {
     let mut editor = ed_with_text("ab\ncd\n");
-    editor.count_prefix = Some(10);
+    editor.vi.count_prefix = Some(10);
     editor.dispatch_builtin("substitute-char");
     // Should only delete "ab" — bounded to current line, not newline
     assert_eq!(editor.active_buffer().text(), "\ncd\n");
@@ -480,7 +480,7 @@ fn gi_returns_to_last_insert_exit_position() {
     editor.dispatch_builtin("enter-insert-mode");
     editor.dispatch_builtin("enter-normal-mode");
     // Cursor backed up by 1 on exit; last_insert_pos should reflect that.
-    let expected = editor.last_insert_pos;
+    let expected = editor.vi.last_insert_pos;
     assert!(expected.is_some());
 
     // Move cursor elsewhere
@@ -500,7 +500,7 @@ fn gi_returns_to_last_insert_exit_position() {
 #[test]
 fn gi_without_prior_insert_just_enters_insert() {
     let mut editor = ed_with_text("abc\n");
-    assert!(editor.last_insert_pos.is_none());
+    assert!(editor.vi.last_insert_pos.is_none());
     editor.dispatch_builtin("reinsert-at-last-position");
     assert_eq!(editor.mode, Mode::Insert);
 }
@@ -565,7 +565,7 @@ fn gn_selects_next_match() {
     // Should now be in visual char mode
     assert!(matches!(editor.mode, Mode::Visual(VisualType::Char)));
     // Anchor at match start (col 8), cursor at match end inclusive (col 10)
-    assert_eq!(editor.visual_anchor_col, 8);
+    assert_eq!(editor.vi.visual_anchor_col, 8);
     assert_eq!(editor.window_mgr.focused_window().cursor_col, 10);
 }
 
@@ -578,7 +578,7 @@ fn gn_inside_match_selects_containing() {
     editor.window_mgr.focused_window_mut().cursor_col = 2;
     editor.dispatch_builtin("visual-select-next-match");
     assert!(matches!(editor.mode, Mode::Visual(VisualType::Char)));
-    assert_eq!(editor.visual_anchor_col, 0);
+    assert_eq!(editor.vi.visual_anchor_col, 0);
     assert_eq!(editor.window_mgr.focused_window().cursor_col, 4);
 }
 
@@ -592,7 +592,7 @@ fn gN_selects_previous_match() {
     editor.dispatch_builtin("visual-select-prev-match");
     assert!(matches!(editor.mode, Mode::Visual(VisualType::Char)));
     // Should select the 2nd "foo" at col 8..11
-    assert_eq!(editor.visual_anchor_col, 8);
+    assert_eq!(editor.vi.visual_anchor_col, 8);
     assert_eq!(editor.window_mgr.focused_window().cursor_col, 10);
 }
 
@@ -651,7 +651,7 @@ fn ygn_yanks_next_match() {
     // Buffer unchanged
     assert_eq!(editor.buffers[0].text(), "foo bar baz\n");
     // Default register holds "bar"
-    assert_eq!(editor.registers.get(&'"'), Some(&"bar".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"bar".to_string()));
 }
 
 #[test]

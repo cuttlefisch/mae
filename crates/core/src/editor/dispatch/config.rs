@@ -315,7 +315,7 @@ impl Editor {
                 self.display_buffer(buf_idx);
             }
             "module-reload" => {
-                let arg = self.command_line.trim().to_string();
+                let arg = self.vi.command_line.trim().to_string();
                 if arg.is_empty() {
                     self.set_status("Usage: :module-reload <name>".to_string());
                 } else {

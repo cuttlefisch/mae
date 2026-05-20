@@ -142,7 +142,7 @@ fn ctrl_o_in_insert_mode_executes_one_normal_command_then_returns() {
     // C-o: switch to normal for one command
     dispatch(&mut editor, &mut scheme, make_ctrl('o'));
     assert_eq!(editor.mode, Mode::Normal);
-    assert!(editor.insert_mode_oneshot_normal);
+    assert!(editor.vi.insert_mode_oneshot_normal);
 
     // Execute one normal command (e.g. '0' = move to line start)
     // Note: '0' with no count_prefix is move-to-line-start, not a digit
@@ -150,7 +150,7 @@ fn ctrl_o_in_insert_mode_executes_one_normal_command_then_returns() {
 
     // Should be back in insert mode
     assert_eq!(editor.mode, Mode::Insert);
-    assert!(!editor.insert_mode_oneshot_normal);
+    assert!(!editor.vi.insert_mode_oneshot_normal);
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn conversation_multiline_submit_reads_all_lines() {
     // Open conversation (creates pair: *AI* output + *ai-input* input).
     editor.dispatch_builtin("ai-prompt");
     assert_eq!(editor.mode, Mode::ConversationInput);
-    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
 
     // Type "hello" into the input buffer.
     for ch in "hello".chars() {

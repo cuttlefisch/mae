@@ -17,7 +17,7 @@ impl Editor {
         self.debug_populate_buffer(buf_idx);
         let prev = self.active_buffer_idx();
         if prev != buf_idx {
-            self.alternate_buffer_idx = Some(prev);
+            self.vi.alternate_buffer_idx = Some(prev);
         }
         self.display_buffer(buf_idx);
         self.set_mode(crate::Mode::Normal);
@@ -34,7 +34,7 @@ impl Editor {
         };
 
         // Switch away first.
-        let alt = self.alternate_buffer_idx.unwrap_or(0);
+        let alt = self.vi.alternate_buffer_idx.unwrap_or(0);
         let target = if alt < self.buffers.len() && alt != debug_idx {
             alt
         } else {

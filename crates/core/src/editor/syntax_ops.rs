@@ -52,7 +52,7 @@ impl Editor {
         let end_byte = node.end_byte();
         let kind = node.kind().to_string();
 
-        self.syntax_selection_stack.clear();
+        self.vi.syntax_selection_stack.clear();
         self.set_visual_from_byte_range(start_byte, end_byte);
         self.set_status(format!("Selected: {}", kind));
         true
@@ -105,7 +105,7 @@ impl Editor {
         let new_end = node.end_byte();
         let kind = node.kind().to_string();
 
-        self.syntax_selection_stack.push(current_range);
+        self.vi.syntax_selection_stack.push(current_range);
         self.set_visual_from_byte_range(new_start, new_end);
         self.set_status(format!("Expanded: {}", kind));
         true
@@ -113,7 +113,7 @@ impl Editor {
 
     /// Pop the syntax-selection stack and restore the previous Visual range.
     pub fn syntax_contract_selection(&mut self) -> bool {
-        let Some((start, end)) = self.syntax_selection_stack.pop() else {
+        let Some((start, end)) = self.vi.syntax_selection_stack.pop() else {
             self.set_status("No prior selection");
             return false;
         };
@@ -142,8 +142,8 @@ impl Editor {
         let cursor_row = rope.char_to_line(char_cursor);
         let cursor_col = char_cursor - rope.line_to_char(cursor_row);
 
-        self.visual_anchor_row = anchor_row;
-        self.visual_anchor_col = anchor_col;
+        self.vi.visual_anchor_row = anchor_row;
+        self.vi.visual_anchor_col = anchor_col;
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = cursor_row;
         win.cursor_col = cursor_col;

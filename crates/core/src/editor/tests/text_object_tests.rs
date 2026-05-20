@@ -10,7 +10,7 @@ fn delete_inner_parens() {
     editor.delete_text_object('(', true);
     let text = editor.buffers[0].rope().to_string();
     assert_eq!(text, "foo()baz");
-    assert_eq!(editor.registers.get(&'"'), Some(&"bar".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"bar".to_string()));
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn delete_around_parens() {
     editor.delete_text_object('(', false);
     let text = editor.buffers[0].rope().to_string();
     assert_eq!(text, "foobaz");
-    assert_eq!(editor.registers.get(&'"'), Some(&"(bar)".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"(bar)".to_string()));
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn change_inner_quotes() {
     let text = editor.buffers[0].rope().to_string();
     assert_eq!(text, "say \"\"");
     assert_eq!(editor.mode, Mode::Insert);
-    assert_eq!(editor.registers.get(&'"'), Some(&"hello".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"hello".to_string()));
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn yank_inner_braces() {
     // cursor at col 2 = 'c'
     editor.window_mgr.focused_window_mut().cursor_col = 2;
     editor.yank_text_object('{', true);
-    assert_eq!(editor.registers.get(&'"'), Some(&" code ".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&" code ".to_string()));
     // Buffer unchanged
     let text = editor.buffers[0].rope().to_string();
     assert_eq!(text, "{ code }");
@@ -54,7 +54,7 @@ fn delete_inner_word() {
     editor.delete_text_object('w', true);
     let text = editor.buffers[0].rope().to_string();
     assert_eq!(text, " world");
-    assert_eq!(editor.registers.get(&'"'), Some(&"hello".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"hello".to_string()));
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn visual_select_inner_parens() {
     editor.window_mgr.focused_window_mut().cursor_col = 2;
     editor.visual_select_text_object('(', true);
     // Anchor should be at start of inner (col 1), cursor at end (col 3)
-    assert_eq!(editor.visual_anchor_col, 1);
+    assert_eq!(editor.vi.visual_anchor_col, 1);
     let win = editor.window_mgr.focused_window();
     assert_eq!(win.cursor_col, 3);
 }
@@ -172,7 +172,7 @@ fn yank_inner_brackets_no_modification() {
     editor.yank_text_object('[', true);
     let text = editor.buffers[0].rope().to_string();
     assert_eq!(text, "[items]"); // unchanged
-    assert_eq!(editor.registers.get(&'"'), Some(&"items".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"items".to_string()));
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn text_object_no_match_is_noop() {
     // Nothing should change
     let text = editor.buffers[0].rope().to_string();
     assert_eq!(text, "hello world");
-    assert!(!editor.registers.contains_key(&'"'));
+    assert!(!editor.vi.registers.contains_key(&'"'));
 }
 
 // -----------------------------------------------------------------------

@@ -304,7 +304,7 @@ fn save_and_restore_preserves_conversation_pair() {
     editor.buffers.push(input_buf);
 
     // Simulate a conversation pair
-    editor.conversation_pair = Some(ConversationPair {
+    editor.ai.conversation_pair = Some(ConversationPair {
         output_buffer_idx: 0,
         input_buffer_idx: 1,
         output_window_id: 100,
@@ -314,7 +314,7 @@ fn save_and_restore_preserves_conversation_pair() {
     editor.save_state();
 
     // Mutate: clear the pair and add a test buffer
-    editor.conversation_pair = None;
+    editor.ai.conversation_pair = None;
     let mut test_buf = Buffer::new();
     test_buf.name = "test.txt".into();
     editor.buffers.push(test_buf);
@@ -323,6 +323,7 @@ fn save_and_restore_preserves_conversation_pair() {
 
     // Conversation pair should be restored with correct (possibly remapped) indices
     let pair = editor
+        .ai
         .conversation_pair
         .as_ref()
         .expect("pair should be restored");
@@ -339,7 +340,7 @@ fn save_and_restore_preserves_conversation_pair() {
 fn conversation_creates_group() {
     let mut ed = Editor::new();
     ed.open_conversation_buffer();
-    let pair = ed.conversation_pair.as_ref().expect("pair should exist");
+    let pair = ed.ai.conversation_pair.as_ref().expect("pair should exist");
     assert!(
         ed.window_mgr.is_in_group(pair.output_window_id),
         "output window should be in a group"
@@ -358,7 +359,7 @@ fn conversation_creates_group() {
 fn split_from_conversation_wraps_group() {
     let mut ed = Editor::new();
     ed.open_conversation_buffer();
-    let pair = ed.conversation_pair.as_ref().unwrap().clone();
+    let pair = ed.ai.conversation_pair.as_ref().unwrap().clone();
     // Focus the input window and split to open a new buffer.
     ed.window_mgr.set_focused(pair.input_window_id);
     let area = ed.default_area();
@@ -410,7 +411,7 @@ fn ai_active_buffer_idx_uses_target_when_set() {
     let mut editor = Editor::new();
     // Add a second buffer
     editor.buffers.push(Buffer::new());
-    editor.ai_target_buffer_idx = Some(1);
+    editor.ai.target_buffer_idx = Some(1);
     assert_eq!(editor.ai_active_buffer_idx(), 1);
     assert_eq!(editor.active_buffer_idx(), 0); // focused is still 0
 }
@@ -453,7 +454,7 @@ fn ai_cursor_row_uses_target_window() {
         .unwrap()
         .id;
     editor.window_mgr.set_focused(original_id);
-    editor.ai_target_window_id = Some(new_win_id);
+    editor.ai.target_window_id = Some(new_win_id);
 
     assert_eq!(editor.ai_cursor_row(), 42);
     assert_eq!(editor.window_mgr.focused_window().cursor_row, 0); // focused is still 0
@@ -480,7 +481,7 @@ fn dispatch_builtin_in_target_restores_focus() {
         .unwrap()
         .id;
     editor.window_mgr.set_focused(original_id);
-    editor.ai_target_window_id = Some(new_win_id);
+    editor.ai.target_window_id = Some(new_win_id);
 
     // Dispatch move-down in the target window
     editor.dispatch_builtin_in_target("move-down");
@@ -510,7 +511,7 @@ fn execute_command_respects_ai_target() {
         .unwrap()
         .id;
     editor.window_mgr.set_focused(original_id);
-    editor.ai_target_window_id = Some(new_win_id);
+    editor.ai.target_window_id = Some(new_win_id);
 
     // Cursor in target window should be at 0 initially
     let target_row_before = editor
@@ -611,7 +612,7 @@ fn ai_work_window_reused_across_open_file() {
     let idx1 = ed.buffers.len() - 1;
     ed.switch_to_buffer_non_conversation(idx1);
     let window_count_after_first = ed.window_mgr.window_count();
-    let work_id = ed.ai_work_window_id.expect("should record work window");
+    let work_id = ed.ai.work_window_id.expect("should record work window");
 
     // Open second file — reuses the work window, no new split.
     ed.buffers.push(Buffer::new());
@@ -622,7 +623,7 @@ fn ai_work_window_reused_across_open_file() {
         window_count_after_first,
         "should not create additional windows"
     );
-    assert_eq!(ed.ai_work_window_id, Some(work_id));
+    assert_eq!(ed.ai.work_window_id, Some(work_id));
     let win = ed.window_mgr.window(work_id).unwrap();
     assert_eq!(
         win.buffer_idx, idx2,
@@ -634,7 +635,7 @@ fn ai_work_window_reused_across_open_file() {
 fn ai_work_window_cleared_on_stale() {
     let mut ed = Editor::new();
     // Set a fake work window ID that doesn't exist.
-    ed.ai_work_window_id = Some(999u32);
+    ed.ai.work_window_id = Some(999u32);
 
     ed.buffers.push(Buffer::new());
     let idx = ed.buffers.len() - 1;
@@ -642,5 +643,5 @@ fn ai_work_window_cleared_on_stale() {
     let ok = ed.switch_to_buffer_non_conversation(idx);
     assert!(ok);
     // Stale ID should be cleared.
-    assert_ne!(ed.ai_work_window_id, Some(999u32));
+    assert_ne!(ed.ai.work_window_id, Some(999u32));
 }

@@ -11,8 +11,8 @@ impl Editor {
             }
             "debug-start" => {
                 self.set_mode(crate::Mode::Command);
-                self.command_line = "debug-start ".to_string();
-                self.command_cursor = self.command_line.len();
+                self.vi.command_line = "debug-start ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
             }
             "debug-stop" => {
                 if self.debug_state.is_some() {

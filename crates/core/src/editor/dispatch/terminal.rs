@@ -84,7 +84,7 @@ impl Editor {
                         };
 
                         // Record the shell buffer as alternate so close returns to it.
-                        self.alternate_buffer_idx = Some(buf_idx);
+                        self.vi.alternate_buffer_idx = Some(buf_idx);
                         self.display_buffer(new_idx);
                         // Move cursor to end of buffer so user sees most recent output.
                         let line_count = self.buffers[new_idx].display_line_count();
@@ -107,6 +107,7 @@ impl Editor {
                 if let Some(idx) = select_idx {
                     // Switch to alternate buffer (the shell), or first non-select buffer.
                     let dest = self
+                        .vi
                         .alternate_buffer_idx
                         .filter(|&i| i != idx && i < self.buffers.len())
                         .or_else(|| {

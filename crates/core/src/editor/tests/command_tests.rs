@@ -365,9 +365,9 @@ fn spc_prefixes_all_have_which_key_group_names() {
 #[test]
 fn prompt_register_arms_flag() {
     let mut editor = Editor::new();
-    assert!(!editor.pending_register_prompt);
+    assert!(!editor.vi.pending_register_prompt);
     assert!(editor.dispatch_builtin("prompt-register"));
-    assert!(editor.pending_register_prompt);
+    assert!(editor.vi.pending_register_prompt);
 }
 
 #[test]
@@ -397,7 +397,7 @@ fn prompt_register_command_registered() {
 #[test]
 fn insert_from_register_inserts_at_cursor() {
     let mut editor = Editor::new();
-    editor.registers.insert('a', "ABC".into());
+    editor.vi.registers.insert('a', "ABC".into());
     let win = editor.window_mgr.focused_window_mut();
     editor.buffers[0].insert_char(win, 'X');
     // Cursor is now at offset 1 (after 'X')
@@ -490,6 +490,7 @@ fn ai_prompt_creates_split_pair() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
     let pair = editor
+        .ai
         .conversation_pair
         .as_ref()
         .expect("pair should exist");
@@ -506,7 +507,7 @@ fn ai_prompt_creates_split_pair() {
 fn ai_prompt_input_cursor_follows_text() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
-    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
 
     // Should be in ConversationInput mode with focus on input window.
     assert_eq!(editor.mode, Mode::ConversationInput);
@@ -539,7 +540,7 @@ fn ai_input_newline_survives_clamp_all_cursors() {
     // trailing phantom line after '\n', clamping cursor from row 1 back to row 0.
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
-    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
     let buf = &mut editor.buffers[pair.input_buffer_idx];
     let win = editor.window_mgr.focused_window_mut();
     buf.insert_char(win, 'h');
@@ -559,7 +560,7 @@ fn ai_input_newline_after_clear_survives_clamp() {
     // cursor must stay on the new line through clamp_all_cursors.
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
-    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
 
     // Simulate what submit_conversation_prompt does: clear the input buffer.
     editor.buffers[pair.input_buffer_idx].replace_contents("");
@@ -588,7 +589,7 @@ fn ai_input_newline_after_clear_survives_clamp() {
 fn ai_prompt_i_in_output_redirects_to_input() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
-    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
     // Switch to normal mode in the output window.
     editor.set_mode(Mode::Normal);
     editor.window_mgr.set_focused(pair.output_window_id);
@@ -601,13 +602,13 @@ fn kill_conversation_buffer_closes_both() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
     assert_eq!(editor.buffers.len(), 3);
-    assert!(editor.conversation_pair.is_some());
+    assert!(editor.ai.conversation_pair.is_some());
     // Kill the output buffer.
     editor.set_mode(Mode::Normal);
     editor.switch_to_buffer(1);
     editor.dispatch_builtin("force-kill-buffer");
     // Both buffers and the pair should be gone.
-    assert!(editor.conversation_pair.is_none());
+    assert!(editor.ai.conversation_pair.is_none());
     assert_eq!(editor.buffers.len(), 1);
 }
 
@@ -756,7 +757,7 @@ fn cmdline_completes_command_names() {
     let ed = Editor::new();
     // Simulate typing "set-t" — should match set-theme
     let mut ed2 = ed;
-    ed2.command_line = "set-t".to_string();
+    ed2.vi.command_line = "set-t".to_string();
     let completions = ed2.cmdline_completions();
     assert!(
         completions.iter().any(|c| c == "set-theme"),
@@ -768,7 +769,7 @@ fn cmdline_completes_command_names() {
 #[test]
 fn cmdline_completes_command_args() {
     let mut ed = Editor::new();
-    ed.command_line = "set-splash-art b".to_string();
+    ed.vi.command_line = "set-splash-art b".to_string();
     let completions = ed.cmdline_completions();
     assert_eq!(completions, vec!["bat"]);
 }
@@ -776,7 +777,7 @@ fn cmdline_completes_command_args() {
 #[test]
 fn cmdline_completes_theme_names() {
     let mut ed = Editor::new();
-    ed.command_line = "set-theme ".to_string();
+    ed.vi.command_line = "set-theme ".to_string();
     let completions = ed.cmdline_completions();
     assert!(
         completions.len() > 3,

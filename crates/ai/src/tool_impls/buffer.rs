@@ -29,7 +29,7 @@ pub fn execute_buffer_write(
     editor: &mut Editor,
     args: &serde_json::Value,
 ) -> Result<String, String> {
-    if editor.ai_mode == "plan" {
+    if editor.ai.mode == "plan" {
         return Err(
             "buffer_write is disabled in plan mode. Use create_plan to draft changes instead."
                 .into(),
@@ -103,7 +103,8 @@ pub fn execute_cursor_info(editor: &Editor) -> Result<String, String> {
         .unwrap_or_else(|| {
             // Fallback: use ai_target_buffer_idx or active buffer.
             let idx = editor
-                .ai_target_buffer_idx
+                .ai
+                .target_buffer_idx
                 .unwrap_or_else(|| editor.active_buffer_idx());
             let win_data = editor
                 .window_mgr

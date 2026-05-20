@@ -25,7 +25,7 @@ fn join_lines_last_line_noop() {
 #[test]
 fn join_lines_with_count() {
     let mut editor = editor_with_text("line1\nline2\nline3");
-    editor.count_prefix = Some(2);
+    editor.vi.count_prefix = Some(2);
     editor.dispatch_builtin("join-lines");
     assert_eq!(editor.buffers[0].text(), "line1 line2 line3");
 }
@@ -68,7 +68,7 @@ fn dedent_line_no_spaces_noop() {
 #[test]
 fn indent_with_count() {
     let mut editor = editor_with_text("aaa\nbbb\nccc");
-    editor.count_prefix = Some(3);
+    editor.vi.count_prefix = Some(3);
     editor.dispatch_builtin("indent-line");
     assert_eq!(editor.buffers[0].text(), "    aaa\n    bbb\n    ccc");
 }
@@ -76,7 +76,7 @@ fn indent_with_count() {
 #[test]
 fn dedent_with_count_multiple() {
     let mut editor = editor_with_text("    aaa\n    bbb\n    ccc");
-    editor.count_prefix = Some(3);
+    editor.vi.count_prefix = Some(3);
     editor.dispatch_builtin("dedent-line");
     assert_eq!(editor.buffers[0].text(), "aaa\nbbb\nccc");
 }
@@ -100,7 +100,7 @@ fn toggle_case_upper_to_lower() {
 #[test]
 fn toggle_case_with_count() {
     let mut editor = editor_with_text("hello");
-    editor.count_prefix = Some(3);
+    editor.vi.count_prefix = Some(3);
     editor.dispatch_builtin("toggle-case");
     assert_eq!(editor.buffers[0].text(), "HELlo");
     assert_eq!(editor.window_mgr.focused_window().cursor_col, 3);
@@ -209,16 +209,16 @@ fn alternate_file_switches() {
     editor.buffers[1].name = "second".to_string();
     editor.dispatch_builtin("next-buffer");
     assert_eq!(editor.active_buffer_idx(), 1);
-    assert_eq!(editor.alternate_buffer_idx, Some(0));
+    assert_eq!(editor.vi.alternate_buffer_idx, Some(0));
     editor.dispatch_builtin("alternate-file");
     assert_eq!(editor.active_buffer_idx(), 0);
-    assert_eq!(editor.alternate_buffer_idx, Some(1));
+    assert_eq!(editor.vi.alternate_buffer_idx, Some(1));
 }
 
 #[test]
 fn alternate_file_none_is_noop() {
     let mut editor = Editor::new();
-    assert!(editor.alternate_buffer_idx.is_none());
+    assert!(editor.vi.alternate_buffer_idx.is_none());
     editor.dispatch_builtin("alternate-file");
     assert_eq!(editor.active_buffer_idx(), 0);
 }
@@ -239,7 +239,7 @@ fn alternate_file_double_toggle() {
 fn command_history_records() {
     let mut editor = Editor::new();
     editor.push_command_history("w");
-    assert_eq!(editor.command_history, vec!["w"]);
+    assert_eq!(editor.vi.command_history, vec!["w"]);
 }
 
 #[test]
@@ -247,7 +247,7 @@ fn command_history_no_duplicates_consecutive() {
     let mut editor = Editor::new();
     editor.push_command_history("w");
     editor.push_command_history("w");
-    assert_eq!(editor.command_history.len(), 1);
+    assert_eq!(editor.vi.command_history.len(), 1);
 }
 
 #[test]
@@ -256,7 +256,7 @@ fn command_history_allows_non_consecutive_duplicates() {
     editor.push_command_history("w");
     editor.push_command_history("q");
     editor.push_command_history("w");
-    assert_eq!(editor.command_history.len(), 3);
+    assert_eq!(editor.vi.command_history.len(), 3);
 }
 
 #[test]
@@ -265,9 +265,9 @@ fn command_history_prev_recalls() {
     editor.push_command_history("first");
     editor.push_command_history("second");
     editor.command_history_prev();
-    assert_eq!(editor.command_line, "second");
+    assert_eq!(editor.vi.command_line, "second");
     editor.command_history_prev();
-    assert_eq!(editor.command_line, "first");
+    assert_eq!(editor.vi.command_line, "first");
 }
 
 #[test]
@@ -277,18 +277,18 @@ fn command_history_next_clears() {
     editor.push_command_history("second");
     editor.command_history_prev();
     editor.command_history_prev();
-    assert_eq!(editor.command_line, "first");
+    assert_eq!(editor.vi.command_line, "first");
     editor.command_history_next();
-    assert_eq!(editor.command_line, "second");
+    assert_eq!(editor.vi.command_line, "second");
     editor.command_history_next();
-    assert_eq!(editor.command_line, "");
+    assert_eq!(editor.vi.command_line, "");
 }
 
 #[test]
 fn command_history_empty_is_noop() {
     let mut editor = Editor::new();
     editor.command_history_prev();
-    assert_eq!(editor.command_line, "");
+    assert_eq!(editor.vi.command_line, "");
 }
 
 #[test]

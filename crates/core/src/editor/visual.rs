@@ -8,8 +8,8 @@ impl Editor {
     /// Enter visual mode, recording the anchor at the current cursor position.
     pub fn enter_visual_mode(&mut self, vtype: VisualType) {
         let win = self.window_mgr.focused_window();
-        self.visual_anchor_row = win.cursor_row;
-        self.visual_anchor_col = win.cursor_col;
+        self.vi.visual_anchor_row = win.cursor_row;
+        self.vi.visual_anchor_col = win.cursor_col;
         self.set_mode(Mode::Visual(vtype));
     }
 
@@ -21,8 +21,8 @@ impl Editor {
 
         match self.mode {
             Mode::Visual(VisualType::Line) => {
-                let min_row = self.visual_anchor_row.min(win.cursor_row);
-                let max_row = self.visual_anchor_row.max(win.cursor_row);
+                let min_row = self.vi.visual_anchor_row.min(win.cursor_row);
+                let max_row = self.vi.visual_anchor_row.max(win.cursor_row);
                 let start = buf.rope().line_to_char(min_row);
                 let end = if max_row + 1 < buf.line_count() {
                     buf.rope().line_to_char(max_row + 1)
@@ -48,7 +48,8 @@ impl Editor {
             }
             _ => {
                 // Charwise
-                let anchor = buf.char_offset_at(self.visual_anchor_row, self.visual_anchor_col);
+                let anchor =
+                    buf.char_offset_at(self.vi.visual_anchor_row, self.vi.visual_anchor_col);
                 let cursor = buf.char_offset_at(win.cursor_row, win.cursor_col);
                 let start = anchor.min(cursor);
                 let end = (anchor.max(cursor) + 1).min(buf.rope().len_chars());
@@ -116,8 +117,8 @@ impl Editor {
         let flat = conv.flat_text();
         let lines: Vec<&str> = flat.lines().collect();
         let win = self.window_mgr.focused_window();
-        let min_row = self.visual_anchor_row.min(win.cursor_row);
-        let max_row = self.visual_anchor_row.max(win.cursor_row);
+        let min_row = self.vi.visual_anchor_row.min(win.cursor_row);
+        let max_row = self.vi.visual_anchor_row.max(win.cursor_row);
 
         match self.mode {
             Mode::Visual(VisualType::Line) => {
@@ -139,15 +140,15 @@ impl Editor {
                     .skip(min_row)
                 {
                     if row == min_row && row == max_row {
-                        let start_col = self.visual_anchor_col.min(win.cursor_col);
+                        let start_col = self.vi.visual_anchor_col.min(win.cursor_col);
                         let end_col =
-                            (self.visual_anchor_col.max(win.cursor_col) + 1).min(line.len());
+                            (self.vi.visual_anchor_col.max(win.cursor_col) + 1).min(line.len());
                         if start_col < line.len() {
                             result.push_str(&line[start_col..end_col.min(line.len())]);
                         }
                     } else if row == min_row {
-                        let start_col = if self.visual_anchor_row < win.cursor_row {
-                            self.visual_anchor_col
+                        let start_col = if self.vi.visual_anchor_row < win.cursor_row {
+                            self.vi.visual_anchor_col
                         } else {
                             win.cursor_col
                         };
@@ -156,8 +157,8 @@ impl Editor {
                         }
                         result.push('\n');
                     } else if row == max_row {
-                        let end_col = if self.visual_anchor_row > win.cursor_row {
-                            self.visual_anchor_col + 1
+                        let end_col = if self.vi.visual_anchor_row > win.cursor_row {
+                            self.vi.visual_anchor_col + 1
                         } else {
                             win.cursor_col + 1
                         };
@@ -186,9 +187,9 @@ impl Editor {
     pub fn save_visual_state(&mut self) {
         let win = self.window_mgr.focused_window();
         if let Mode::Visual(vtype) = self.mode {
-            self.last_visual = Some((
-                self.visual_anchor_row,
-                self.visual_anchor_col,
+            self.vi.last_visual = Some((
+                self.vi.visual_anchor_row,
+                self.vi.visual_anchor_col,
                 win.cursor_row,
                 win.cursor_col,
                 vtype,
@@ -199,9 +200,9 @@ impl Editor {
     /// Swap cursor and anchor in visual mode (o key).
     pub fn visual_swap_ends(&mut self) {
         let win = self.window_mgr.focused_window_mut();
-        let (ar, ac) = (self.visual_anchor_row, self.visual_anchor_col);
-        self.visual_anchor_row = win.cursor_row;
-        self.visual_anchor_col = win.cursor_col;
+        let (ar, ac) = (self.vi.visual_anchor_row, self.vi.visual_anchor_col);
+        self.vi.visual_anchor_row = win.cursor_row;
+        self.vi.visual_anchor_col = win.cursor_col;
         win.cursor_row = ar;
         win.cursor_col = ac;
     }
@@ -210,8 +211,8 @@ impl Editor {
     pub fn visual_indent(&mut self) {
         self.save_visual_state();
         let win = self.window_mgr.focused_window();
-        let min_row = self.visual_anchor_row.min(win.cursor_row);
-        let max_row = self.visual_anchor_row.max(win.cursor_row);
+        let min_row = self.vi.visual_anchor_row.min(win.cursor_row);
+        let max_row = self.vi.visual_anchor_row.max(win.cursor_row);
         let idx = self.active_buffer_idx();
         for row in min_row..=max_row {
             let line_start = self.buffers[idx].rope().line_to_char(row);
@@ -224,8 +225,8 @@ impl Editor {
     pub fn visual_dedent(&mut self) {
         self.save_visual_state();
         let win = self.window_mgr.focused_window();
-        let min_row = self.visual_anchor_row.min(win.cursor_row);
-        let max_row = self.visual_anchor_row.max(win.cursor_row);
+        let min_row = self.vi.visual_anchor_row.min(win.cursor_row);
+        let max_row = self.vi.visual_anchor_row.max(win.cursor_row);
         let idx = self.active_buffer_idx();
         // Process in reverse so char offsets stay valid.
         for row in (min_row..=max_row).rev() {
@@ -243,8 +244,8 @@ impl Editor {
     pub fn visual_join(&mut self) {
         self.save_visual_state();
         let win = self.window_mgr.focused_window();
-        let min_row = self.visual_anchor_row.min(win.cursor_row);
-        let max_row = self.visual_anchor_row.max(win.cursor_row);
+        let min_row = self.vi.visual_anchor_row.min(win.cursor_row);
+        let max_row = self.vi.visual_anchor_row.max(win.cursor_row);
         let join_count = max_row - min_row;
         // Position cursor at min_row for joining.
         let win = self.window_mgr.focused_window_mut();
@@ -267,7 +268,7 @@ impl Editor {
         }
         let idx = self.active_buffer_idx();
         // Delete the selection (save to black-hole by using active_register = '_').
-        self.active_register = Some('_');
+        self.vi.active_register = Some('_');
         let text = self.buffers[idx].text_range(start, end);
         self.buffers[idx].delete_range(start, end);
         self.save_delete(text);
@@ -312,8 +313,8 @@ impl Editor {
     /// Compute visual selection size: (lines, chars).
     pub fn visual_selection_size(&self) -> (usize, usize) {
         let win = self.window_mgr.focused_window();
-        let min_row = self.visual_anchor_row.min(win.cursor_row);
-        let max_row = self.visual_anchor_row.max(win.cursor_row);
+        let min_row = self.vi.visual_anchor_row.min(win.cursor_row);
+        let max_row = self.vi.visual_anchor_row.max(win.cursor_row);
         let lines = max_row - min_row + 1;
         let (start, end) = self.visual_selection_range();
         let chars = end.saturating_sub(start);
@@ -324,10 +325,10 @@ impl Editor {
     /// (min_row, max_row, min_col, max_col).
     pub fn block_selection_rect(&self) -> (usize, usize, usize, usize) {
         let win = self.window_mgr.focused_window();
-        let min_row = self.visual_anchor_row.min(win.cursor_row);
-        let max_row = self.visual_anchor_row.max(win.cursor_row);
-        let min_col = self.visual_anchor_col.min(win.cursor_col);
-        let max_col = self.visual_anchor_col.max(win.cursor_col);
+        let min_row = self.vi.visual_anchor_row.min(win.cursor_row);
+        let max_row = self.vi.visual_anchor_row.max(win.cursor_row);
+        let min_col = self.vi.visual_anchor_col.min(win.cursor_col);
+        let max_col = self.vi.visual_anchor_col.max(win.cursor_col);
         (min_row, max_row, min_col, max_col)
     }
 

@@ -264,8 +264,8 @@ impl Editor {
         }
         let win = self.window_mgr.focused_window();
         let offset = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
-        self.insert_start_offset = Some(offset);
-        self.insert_initiated_by = Some(command.to_string());
+        self.vi.insert_start_offset = Some(offset);
+        self.vi.insert_initiated_by = Some(command.to_string());
         self.buffers[idx].begin_undo_group();
         self.set_mode(Mode::Insert);
     }
@@ -274,8 +274,8 @@ impl Editor {
     /// Captures any text that was typed during the insert session.
     pub fn finalize_insert_for_repeat(&mut self) {
         if let (Some(cmd), Some(start_offset)) = (
-            self.insert_initiated_by.take(),
-            self.insert_start_offset.take(),
+            self.vi.insert_initiated_by.take(),
+            self.vi.insert_start_offset.take(),
         ) {
             let idx = self.active_buffer_idx();
             let win = self.window_mgr.focused_window();
@@ -288,7 +288,7 @@ impl Editor {
             } else {
                 None
             };
-            self.last_edit = Some(EditRecord {
+            self.vi.last_edit = Some(EditRecord {
                 command: cmd,
                 inserted_text: inserted,
                 char_arg: None,
@@ -308,7 +308,7 @@ impl Editor {
     /// the dirty buffer.
     pub fn record_edit(&mut self, command: &str) {
         self.search_state.matches.clear();
-        self.last_edit = Some(EditRecord {
+        self.vi.last_edit = Some(EditRecord {
             command: command.to_string(),
             inserted_text: None,
             char_arg: None,
@@ -323,7 +323,7 @@ impl Editor {
     /// and queues an LSP didChange so language servers stay in sync.
     pub(crate) fn record_edit_with_count(&mut self, command: &str, count: Option<usize>) {
         self.search_state.matches.clear();
-        self.last_edit = Some(EditRecord {
+        self.vi.last_edit = Some(EditRecord {
             command: command.to_string(),
             inserted_text: None,
             char_arg: None,
@@ -335,14 +335,14 @@ impl Editor {
 
     /// Replay the last recorded edit (dot-repeat).
     pub(crate) fn replay_last_edit(&mut self) {
-        let record = match self.last_edit.clone() {
+        let record = match self.vi.last_edit.clone() {
             Some(r) => r,
             None => return,
         };
 
         // Restore count prefix from the recorded edit so the repeated
         // dispatch uses the same count as the original.
-        self.count_prefix = record.count;
+        self.vi.count_prefix = record.count;
 
         match record.command.as_str() {
             "replace-char" => {
@@ -377,11 +377,11 @@ impl Editor {
                 }
                 // Exit insert mode without recording (would overwrite the repeat record)
                 self.set_mode(Mode::Normal);
-                self.insert_initiated_by = None;
-                self.insert_start_offset = None;
+                self.vi.insert_initiated_by = None;
+                self.vi.insert_start_offset = None;
                 // Restore the last_edit since dispatch_builtin would have set up
                 // insert_initiated_by, and we need to preserve the original record
-                self.last_edit = Some(record);
+                self.vi.last_edit = Some(record);
             }
             "open-line-below" | "open-line-above" => {
                 self.dispatch_builtin(&record.command);
@@ -400,9 +400,9 @@ impl Editor {
                     win.cursor_col = new_offset.saturating_sub(line_start);
                 }
                 self.set_mode(Mode::Normal);
-                self.insert_initiated_by = None;
-                self.insert_start_offset = None;
-                self.last_edit = Some(record);
+                self.vi.insert_initiated_by = None;
+                self.vi.insert_start_offset = None;
+                self.vi.last_edit = Some(record);
             }
             _ => {
                 // Simple commands: delete-line, delete-char-forward, paste-after, etc.
@@ -421,14 +421,14 @@ impl Editor {
 
     /// Apply the pending operator with knowledge of which motion triggered it.
     pub fn apply_pending_operator_for_motion(&mut self, motion_cmd: &str) {
-        let Some(op) = self.pending_operator.take() else {
+        let Some(op) = self.vi.pending_operator.take() else {
             return;
         };
-        let Some((start_row, start_col)) = self.operator_start.take() else {
+        let Some((start_row, start_col)) = self.vi.operator_start.take() else {
             return;
         };
-        self.operator_count = None; // consumed — clean up
-        let linewise = self.last_motion_linewise;
+        self.vi.operator_count = None; // consumed — clean up
+        let linewise = self.vi.last_motion_linewise;
         let exclusive = Self::is_exclusive_motion(motion_cmd);
         let idx = self.active_buffer_idx();
         let win = self.window_mgr.focused_window();
@@ -530,8 +530,8 @@ impl Editor {
             "s" => {
                 // ys{motion}: stash the range for the upcoming char-await
                 // that wraps it with a delimiter pair (surround.rs).
-                self.pending_surround_range = Some((from, to));
-                self.pending_char_command = Some("surround-motion".to_string());
+                self.vi.pending_surround_range = Some((from, to));
+                self.vi.pending_char_command = Some("surround-motion".to_string());
             }
             _ => {}
         }

@@ -84,8 +84,8 @@ impl Editor {
             }
             "lsp-rename" => {
                 self.set_mode(crate::Mode::Command);
-                self.command_line = "lsp-rename ".to_string();
-                self.command_cursor = self.command_line.len();
+                self.vi.command_line = "lsp-rename ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
                 self.set_status("Enter new name for symbol");
             }
             "lsp-format" => {

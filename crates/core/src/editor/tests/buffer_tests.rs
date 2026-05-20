@@ -525,7 +525,7 @@ fn alternate_file_preserves_scroll() {
 
     // Switch to buf2 via display_buffer_and_focus (simulates alternate-file path)
     editor.display_buffer_and_focus(1);
-    assert_eq!(editor.alternate_buffer_idx, Some(0));
+    assert_eq!(editor.vi.alternate_buffer_idx, Some(0));
 
     // Switch back
     editor.display_buffer_and_focus(0);

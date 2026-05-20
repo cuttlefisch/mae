@@ -40,14 +40,15 @@ impl Editor {
                         // close_group refused (would leave 0 windows).
                         // If this is a conversation group, tear it down and
                         // restore the single-window layout with the previous buffer.
-                        if self.conversation_pair.is_some() {
-                            let pair = self.conversation_pair.take().unwrap();
+                        if self.ai.conversation_pair.is_some() {
+                            let pair = self.ai.conversation_pair.take().unwrap();
                             // Collect conversation buffer indices to remove (in reverse order).
                             let mut to_remove = vec![pair.output_buffer_idx, pair.input_buffer_idx];
                             to_remove.sort_unstable();
                             to_remove.dedup();
                             // Find a destination buffer (alternate or first non-conversation).
                             let dest = self
+                                .vi
                                 .alternate_buffer_idx
                                 .filter(|&i| i < self.buffers.len() && !to_remove.contains(&i))
                                 .or_else(|| {
@@ -77,11 +78,11 @@ impl Editor {
                         }
                     }
                     // Clear conversation pair if we closed its windows
-                    if let Some(ref pair) = self.conversation_pair {
+                    if let Some(ref pair) = self.ai.conversation_pair {
                         if buf_indices.contains(&pair.output_buffer_idx)
                             || buf_indices.contains(&pair.input_buffer_idx)
                         {
-                            self.conversation_pair = None;
+                            self.ai.conversation_pair = None;
                         }
                     }
                 } else if self

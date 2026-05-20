@@ -322,8 +322,8 @@ fn sync_scheme_state(editor: &Editor, scheme: &mut SchemeRuntime) {
     let (region_active, region_start, region_end) =
         if matches!(editor.mode, mae_core::Mode::Visual(_)) {
             let rope = &buf.rope();
-            let anchor_line = editor.visual_anchor_row;
-            let anchor_col = editor.visual_anchor_col;
+            let anchor_line = editor.vi.visual_anchor_row;
+            let anchor_col = editor.vi.visual_anchor_col;
             let anchor_offset =
                 rope.line_to_char(anchor_line.min(rope.len_lines().saturating_sub(1))) + anchor_col;
             let cursor_line = win.cursor_row;

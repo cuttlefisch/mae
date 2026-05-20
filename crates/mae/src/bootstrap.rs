@@ -398,7 +398,7 @@ pub fn setup_ai(
         let tools = {
             let mut t = tools_from_registry(&editor.commands);
             t.extend(ai_specific_tools(&editor.option_registry));
-            t.extend(mae_ai::scheme_tools_to_definitions(&editor.scheme_ai_tools));
+            t.extend(mae_ai::scheme_tools_to_definitions(&editor.ai.scheme_tools));
             t
         };
 

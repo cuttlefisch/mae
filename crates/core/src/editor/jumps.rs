@@ -56,18 +56,18 @@ impl Editor {
     pub fn record_jump(&mut self) {
         let entry = self.current_jump_entry();
         // Drop any forward history — new jump redefines the "future".
-        self.jumps.truncate(self.jump_idx);
+        self.vi.jumps.truncate(self.vi.jump_idx);
         // Dedupe against the most recent entry.
-        if self.jumps.last() == Some(&entry) {
+        if self.vi.jumps.last() == Some(&entry) {
             return;
         }
-        self.jumps.push(entry);
+        self.vi.jumps.push(entry);
         // Enforce bound: drop from the front.
-        if self.jumps.len() > JUMP_LIST_CAP {
-            let overflow = self.jumps.len() - JUMP_LIST_CAP;
-            self.jumps.drain(..overflow);
+        if self.vi.jumps.len() > JUMP_LIST_CAP {
+            let overflow = self.vi.jumps.len() - JUMP_LIST_CAP;
+            self.vi.jumps.drain(..overflow);
         }
-        self.jump_idx = self.jumps.len();
+        self.vi.jump_idx = self.vi.jumps.len();
     }
 
     /// `Ctrl-o` — navigate backward through the jump list. No-op at the
@@ -75,20 +75,20 @@ impl Editor {
     /// motions, pushes the current position so `Ctrl-i` can return.
     pub fn jump_backward(&mut self, n: usize) {
         for _ in 0..n {
-            if self.jump_idx == 0 {
+            if self.vi.jump_idx == 0 {
                 return;
             }
             // First backward from the "present" — save where we are so
             // forward navigation can restore this spot.
-            if self.jump_idx == self.jumps.len() {
+            if self.vi.jump_idx == self.vi.jumps.len() {
                 let current = self.current_jump_entry();
-                if self.jumps.last() != Some(&current) {
-                    self.jumps.push(current);
+                if self.vi.jumps.last() != Some(&current) {
+                    self.vi.jumps.push(current);
                     // jump_idx stays pointing at the original "past-end"
                     // slot, which is now the entry we just pushed.
                 }
             }
-            self.jump_idx -= 1;
+            self.vi.jump_idx -= 1;
             self.restore_jump_at_idx();
         }
     }
@@ -97,15 +97,15 @@ impl Editor {
     /// newest entry.
     pub fn jump_forward(&mut self, n: usize) {
         for _ in 0..n {
-            if self.jump_idx + 1 >= self.jumps.len() {
+            if self.vi.jump_idx + 1 >= self.vi.jumps.len() {
                 return;
             }
-            self.jump_idx += 1;
+            self.vi.jump_idx += 1;
             self.restore_jump_at_idx();
         }
     }
 
-    /// Move the focused window to `self.jumps[self.jump_idx]`.
+    /// Move the focused window to `self.vi.jumps[self.vi.jump_idx]`.
     ///
     /// Resolves the entry's buffer via path first (so re-opened files
     /// still work), falling back to the stored index for scratch
@@ -114,7 +114,7 @@ impl Editor {
     /// where it is — the alternative (emitting an error) would be noisy
     /// for an operation users expect to be cheap.
     fn restore_jump_at_idx(&mut self) {
-        let entry = self.jumps[self.jump_idx].clone();
+        let entry = self.vi.jumps[self.vi.jump_idx].clone();
         let target_idx = if let Some(ref path) = entry.path {
             self.buffers
                 .iter()
@@ -176,8 +176,8 @@ mod tests {
         let mut ed = ed_with_text("a\nb\nc\n");
         set_cursor(&mut ed, 0, 0);
         ed.record_jump();
-        assert_eq!(ed.jumps.len(), 1);
-        assert_eq!(ed.jump_idx, 1);
+        assert_eq!(ed.vi.jumps.len(), 1);
+        assert_eq!(ed.vi.jump_idx, 1);
     }
 
     #[test]
@@ -186,7 +186,7 @@ mod tests {
         set_cursor(&mut ed, 0, 0);
         ed.record_jump();
         ed.record_jump();
-        assert_eq!(ed.jumps.len(), 1);
+        assert_eq!(ed.vi.jumps.len(), 1);
     }
 
     #[test]
@@ -290,7 +290,7 @@ mod tests {
             // Alternate col so dedupe doesn't collapse everything.
             ed.record_jump();
         }
-        assert!(ed.jumps.len() <= JUMP_LIST_CAP);
+        assert!(ed.vi.jumps.len() <= JUMP_LIST_CAP);
     }
 
     #[test]

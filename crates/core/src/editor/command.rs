@@ -463,7 +463,7 @@ impl Editor {
             "agent-setup" => {
                 match args.map(str::trim).filter(|s| !s.is_empty()) {
                     Some(name) => {
-                        self.pending_agent_setup = Some(name.to_string());
+                        self.ai.pending_agent_setup = Some(name.to_string());
                     }
                     None => {
                         self.set_status(
@@ -474,7 +474,7 @@ impl Editor {
                 true
             }
             "agent-list" => {
-                self.pending_agent_setup = Some("__list__".to_string());
+                self.ai.pending_agent_setup = Some("__list__".to_string());
                 true
             }
             "read" | "r" => {

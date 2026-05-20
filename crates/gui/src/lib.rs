@@ -1315,8 +1315,8 @@ fn render_gui_cursor(
         let (cw, _) = canvas.cell_size();
         if editor.mode == mae_core::Mode::Command {
             // Command line cursor — always cell-based (no scaling).
-            let cursor_col = editor.command_line
-                [..editor.command_cursor.min(editor.command_line.len())]
+            let cursor_col = editor.vi.command_line
+                [..editor.vi.command_cursor.min(editor.vi.command_line.len())]
                 .chars()
                 .count();
             let pixel_y = cmd_row as f32 * ch;

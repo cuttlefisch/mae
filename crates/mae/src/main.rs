@@ -421,7 +421,7 @@ fn main() -> io::Result<()> {
         editor.splash_art = Some(art.clone());
     }
     if let Some(ref cmd) = app_config.ai.editor {
-        editor.ai_editor = cmd.clone();
+        editor.ai.editor_name = cmd.clone();
     }
     if let Some(restore) = app_config.editor.restore_session {
         editor.restore_session = restore;
@@ -632,7 +632,7 @@ fn main() -> io::Result<()> {
         let mut all_tools = {
             let mut tools = tools_from_registry(&editor.commands);
             tools.extend(ai_specific_tools(&editor.option_registry));
-            tools.extend(mae_ai::scheme_tools_to_definitions(&editor.scheme_ai_tools));
+            tools.extend(mae_ai::scheme_tools_to_definitions(&editor.ai.scheme_tools));
             tools
         };
         let permission_policy = config::resolve_permission_policy(&app_config);
@@ -710,7 +710,7 @@ fn main() -> io::Result<()> {
         )
     });
 
-    editor.ai_configured = ai_command_tx.is_some();
+    editor.ai.configured = ai_command_tx.is_some();
 
     // --self-test [categories] — headless AI self-test.
     if args.iter().any(|a| a == "--self-test") {
@@ -1273,7 +1273,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.dirty = true;
             }
             MaeEvent::McpToolRequest(mcp_req) => {
-                self.editor.input_lock = mae_core::InputLock::McpBusy;
+                self.editor.ai.input_lock = mae_core::InputLock::McpBusy;
                 self.last_mcp_activity = Some(tokio::time::Instant::now());
                 let immediate = ai_event_handler::handle_mcp_request(
                     &mut self.editor,
@@ -1284,7 +1284,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     &mut self.deferred_mcp_reply,
                 );
                 if immediate && self.deferred_mcp_reply.is_empty() {
-                    self.editor.input_lock = mae_core::InputLock::None;
+                    self.editor.ai.input_lock = mae_core::InputLock::None;
                     self.last_mcp_activity = None;
                 }
                 // Drain sync updates immediately after MCP-driven edits.
@@ -1315,10 +1315,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     if ts.elapsed() > std::time::Duration::from_millis(500)
                         && self.deferred_mcp_reply.is_empty()
                     {
-                        if self.editor.input_lock == mae_core::InputLock::McpBusy {
+                        if self.editor.ai.input_lock == mae_core::InputLock::McpBusy {
                             self.editor.set_status("MCP: input unlocked");
                         }
-                        self.editor.input_lock = mae_core::InputLock::None;
+                        self.editor.ai.input_lock = mae_core::InputLock::None;
                         self.last_mcp_activity = None;
                         self.dirty = true;
                     }
@@ -1456,12 +1456,12 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.alt_held,
                     self.shift_held,
                 ) {
-                    if self.editor.input_lock != mae_core::InputLock::None {
+                    if self.editor.ai.input_lock != mae_core::InputLock::None {
                         if kp.key == mae_core::Key::Escape
                             || (kp.key == mae_core::Key::Char('c') && kp.ctrl)
                         {
-                            self.editor.input_lock = mae_core::InputLock::None;
-                            self.editor.ai_streaming = false;
+                            self.editor.ai.input_lock = mae_core::InputLock::None;
+                            self.editor.ai.streaming = false;
                             self.last_mcp_activity = None;
                             if let Some(ref tx) = self.ai_command_tx {
                                 let _ = tx.try_send(AiCommand::Cancel);
@@ -1499,13 +1499,13 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                             &mut self.pending_interactive_event,
                         );
 
-                        if self.editor.ai_cancel_requested {
-                            self.editor.ai_cancel_requested = false;
+                        if self.editor.ai.cancel_requested {
+                            self.editor.ai.cancel_requested = false;
                             if let Some(ref tx) = self.ai_command_tx {
                                 let _ = tx.try_send(AiCommand::Cancel);
                             }
-                            self.editor.ai_streaming = false;
-                            self.editor.input_lock = mae_core::InputLock::None;
+                            self.editor.ai.streaming = false;
+                            self.editor.ai.input_lock = mae_core::InputLock::None;
                             self.pending_interactive_event = None;
                             if self.editor.cleanup_self_test() {
                                 self.editor

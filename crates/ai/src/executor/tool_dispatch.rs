@@ -263,14 +263,14 @@ pub fn execute_tool(
         });
     }
 
-    // 4c. Handle input_lock (sets editor.input_lock).
+    // 4c. Handle input_lock (sets editor.ai.input_lock).
     if call.name == "input_lock" {
         let locked = call
             .arguments
             .get("locked")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        editor.input_lock = if locked {
+        editor.ai.input_lock = if locked {
             mae_core::InputLock::AiBusy
         } else {
             mae_core::InputLock::None
@@ -484,7 +484,7 @@ fn dispatch_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, String>
     }
 
     // Scheme-registered AI tools
-    if let Some(st) = editor.scheme_ai_tools.iter().find(|t| t.name == call.name) {
+    if let Some(st) = editor.ai.scheme_tools.iter().find(|t| t.name == call.name) {
         let handler = st.handler_fn.clone();
         let args_json = serde_json::to_string(&call.arguments).unwrap_or_default();
         let escaped = args_json.replace('\\', "\\\\").replace('"', "\\\"");
@@ -718,7 +718,7 @@ mod tests {
     #[test]
     fn scheme_tool_dispatch_queues_eval() {
         let mut editor = mae_core::Editor::new();
-        editor.scheme_ai_tools.push(mae_core::SchemeToolDef {
+        editor.ai.scheme_tools.push(mae_core::SchemeToolDef {
             name: "my_tool".into(),
             description: "test".into(),
             params: vec![],

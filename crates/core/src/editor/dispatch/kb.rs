@@ -27,18 +27,18 @@ impl Editor {
             }
             "kb-delete" => {
                 self.set_mode(Mode::Command);
-                self.command_line = "kb-delete ".to_string();
-                self.command_cursor = self.command_line.len();
+                self.vi.command_line = "kb-delete ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
             }
             "kb-register" => {
                 self.set_mode(Mode::Command);
-                self.command_line = "kb-register ".to_string();
-                self.command_cursor = self.command_line.len();
+                self.vi.command_line = "kb-register ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
             }
             "kb-reimport" => {
                 self.set_mode(Mode::Command);
-                self.command_line = "kb-reimport ".to_string();
-                self.command_cursor = self.command_line.len();
+                self.vi.command_line = "kb-reimport ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
             }
             "kb-instances" => {
                 self.show_kb_instances();

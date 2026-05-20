@@ -32,7 +32,7 @@ use crate::config;
 
 /// Drain pending agent setup requests (:agent-setup / :agent-list).
 pub fn drain_agent_setup(editor: &mut Editor) {
-    let Some(agent_name) = editor.pending_agent_setup.take() else {
+    let Some(agent_name) = editor.ai.pending_agent_setup.take() else {
         return;
     };
     if agent_name == "__list__" {
@@ -249,7 +249,7 @@ pub fn manage_shell_lifecycle(
             for win_id in orphan_ids {
                 if win_id == focused_id {
                     // Retarget focused window to alternate buffer
-                    let alt = editor.alternate_buffer_idx.unwrap_or(0);
+                    let alt = editor.vi.alternate_buffer_idx.unwrap_or(0);
                     let target = if alt < editor.buffers.len() && alt != buf_idx {
                         alt
                     } else {
@@ -319,7 +319,7 @@ pub fn manage_shell_lifecycle(
                 }
                 mae_core::input::MouseButton::Middle => {
                     // Paste from default register into shell.
-                    if let Some(text) = editor.registers.get(&'"').cloned() {
+                    if let Some(text) = editor.vi.registers.get(&'"').cloned() {
                         shell.write_paste(&text);
                     }
                 }
@@ -343,8 +343,8 @@ pub fn manage_shell_lifecycle(
             shell.update_selection(row, col);
             if let Some(text) = shell.finish_selection() {
                 if !text.is_empty() {
-                    editor.registers.insert('"', text.clone());
-                    editor.registers.insert('+', text);
+                    editor.vi.registers.insert('"', text.clone());
+                    editor.vi.registers.insert('+', text);
                 }
             }
         }
@@ -420,7 +420,7 @@ pub fn health_check(
 
             for win_id in orphan_ids {
                 if win_id == focused_id {
-                    let alt = editor.alternate_buffer_idx.unwrap_or(0);
+                    let alt = editor.vi.alternate_buffer_idx.unwrap_or(0);
                     let target = if alt < editor.buffers.len() && alt != buf_idx {
                         alt
                     } else {
@@ -452,16 +452,16 @@ pub fn health_check(
     }
 
     // Clear stale input locks when the process that set them is no longer active.
-    match editor.input_lock {
+    match editor.ai.input_lock {
         InputLock::AiBusy if !ai_event_active => {
             warn!("health check: stale AiBusy lock — clearing");
-            editor.input_lock = InputLock::None;
-            editor.ai_streaming = false;
+            editor.ai.input_lock = InputLock::None;
+            editor.ai.streaming = false;
             editor.set_status("AI lock cleared (session inactive)");
         }
         InputLock::McpBusy if !mcp_activity_active => {
             warn!("health check: stale McpBusy lock — clearing");
-            editor.input_lock = InputLock::None;
+            editor.ai.input_lock = InputLock::None;
             editor.set_status("MCP lock cleared (no pending requests)");
         }
         _ => {}
