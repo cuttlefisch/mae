@@ -47,11 +47,11 @@
 
 ### Deferred to v0.12+ (Collab)
 
-- [ ] **Offline edit recovery**: Preserve `sync_doc` during disconnect, reconcile on rejoin instead of full-state overwrite.
-- [ ] **Client-side gap detection**: Track `wal_seq` from notifications, trigger auto-resync on gaps.
+- [x] **Offline edit recovery**: Preserve `sync_doc` during disconnect, reconcile on rejoin instead of full-state overwrite. *(b8d4b6a)*
+- [x] **Client-side gap detection**: Track `wal_seq` from notifications, trigger auto-resync on gaps. *(b8d4b6a)*
 - [x] **Save protocol wiring**: Call `docs/save_intent` + `docs/save_committed` from editor's `:w` for synced buffers.
 - [ ] **Awareness protocol**: Cursor/selection sharing via yrs awareness (y-websocket compatible).
-- [ ] **Heartbeat/keepalive**: Detect silent client death, clean up stale `connected_clients`.
+- [x] **Heartbeat/keepalive**: Detect silent client death, clean up stale `connected_clients`. *(b8d4b6a)*
 
 ### Org-Mode Rendering
 
@@ -97,7 +97,7 @@
   - `docs/metadata` endpoint added to state server ✅
   - `WalEntry::client_id` stored but never read for audit/attribution (deferred — needs Phase F auth)
   - `StorageError::Io` variant reserved but unused (pluggable backends — by design)
-- [ ] **State server v2** (Phase F): Awareness protocol (cursor sharing), per-user undo (yrs `UndoManager`), heartbeat/keepalive, auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Priority next-round items: E1 (git-based identity), E8 (buffer status indicators).
+- [ ] **State server v2** (Phase F): Awareness protocol (cursor sharing), per-user undo (yrs `UndoManager`), auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. E1 (git-based identity) and heartbeat/keepalive are complete. Priority next-round items: E8 (buffer status indicators), awareness protocol.
 - [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
   - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
   - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
@@ -215,15 +215,15 @@
 
 ### Architecture Debt (v0.9.1+)
 
-- [ ] **Editor struct field extraction**: ~100+ fields accumulating (Emacs buffer.c trajectory). Extract into named sub-structs: `LspContext` (7 fields), `DapContext` (3+ fields), `ModuleContext` (4 fields), `RenderContext` (5+ fields). Keeps LOC flat, improves cohesion.
-- [ ] **dispatch/ui.rs split**: At 1,141 lines, "UI" dispatch is a semantic dumping ground (config, themes, terminal, help, registers, options, toggles, projects, AI). Split into dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs, dispatch/help.rs.
+- [ ] **Editor struct field extraction**: ~80+ fields after extracting `CollabState` (18 fields) and `ShellIntents` (12 fields). Remaining candidates: `ViModalState` (28 fields), `AiSessionState` (32 fields), `LspContext` (7 fields), `DapContext` (3+ fields). Keeps LOC flat, improves cohesion.
+- [x] **dispatch/ui.rs split**: Split into dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs, dispatch/help.rs, dispatch/kb.rs. *(0829dd5)*
 - [ ] **Custom theme filesystem loading**: Only bundled themes work. No user theme search path (~/.config/mae/themes/). Emacs, Vim, Helix all support this.
 - [ ] **Binding ownership audit**: Every kernel-dispatched command should have a kernel default binding. Module bindings are for module-specific commands or user-facing overrides only.
 - [ ] **Ad-hoc solution review**: Thorough code review for hardcoded values, duplicated logic between TUI/GUI, and workarounds that should be proper abstractions — in prep for server-client architecture.
 - [ ] **Which-key idle delay**: Wire `which-key-idle-delay` option to event loop timer (default 0ms = immediate).
 - [ ] **Which-key floating popup mode**: Option to render which-key as a centered floating popup (like find-file/command-palette) instead of docked to bottom. Controlled by a `which-key-display` option (`docked` | `floating`).
 - [ ] **Scheme configurability audit**: Audit ALL OptionRegistry entries for missing `config_key` (prevents `:set-save` persistence). Verify every option round-trips through config.toml. Document full option surface in `:help concept:options` KB node.
-- [ ] **Performance regression testing**: Build a benchmark suite (`criterion` in `benches/` or `make bench`). Key metrics: startup time, frame render time (TUI + GUI at 50/500/5000 lines), which-key popup open latency, KB search at 100/1K/10K nodes, AI tool dispatch round-trip, memory usage under sustained editing. Integrate with CI to catch regressions per-PR.
+- [x] **Performance regression testing**: Criterion benchmark suite for buffer_ops + crdt_ops. `make bench/bench-save/bench-compare`. *(0829dd5)*
 - [ ] **KB search scoping**: Allow per-project KB search that excludes MAE internal nodes (scheme:*, cmd:*, option:*). Add `kb_search_scope` option: `"all"` (default), `"user"` (exclude internal), `"project"` (only project-registered KBs). AI tools respect scope; `:help` always searches all.
 - [ ] **KB node visibility**: Add `visibility` property to nodes: `public` (default), `internal` (MAE system nodes), `private` (user personal notes). Internal nodes hidden from user-facing search unless explicitly queried with `:help` or `kb_get` by ID.
 - [ ] **Per-workspace KB isolation**: When multiple projects are open, `kb_search` defaults to the active project's registered KB instances. Cross-project search available via `kb_search --all` or `(kb-search-all query)` Scheme API.
@@ -240,8 +240,8 @@
 
 Items E1–E8 track open design questions and planned improvements for the collaborative editing data model. All are `Future` / `Planned` — none are committed to a specific release yet.
 
-- [ ] **E1. Git-based project identity for collab** *(Planned)*
-  `compute_doc_address()` uses FNV-1a of absolute path — Alice at `/home/alice/mae` and Bob at `/home/bob/mae` get different hashes for the same `src/main.rs`. Fix: Use `git remote get-url origin` → normalize → FNV-1a hash. Fallback: `.project` name field, then directory basename. Zed/VS Code/JetBrains all use session-scoped identity (avoids this problem but loses persistence).
+- [x] **E1. Git-based project identity for collab** *(Complete — b8d4b6a)*
+  4-tier identity: git remote → `.project` name → directory basename → FNV-1a hash. `compute_doc_address()` uses `git remote get-url origin` → normalize → FNV-1a. Persistent across sessions (unique in the industry).
 
 - [ ] **E2. KB sync model** *(Future)*
   KB notes (`DocAddress::KbNode`) shared between peers via yrs docs on state server. Conflict resolution for bidirectional link graph.
