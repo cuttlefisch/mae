@@ -17,16 +17,16 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
 }
 
 fn execute_collab_status(editor: &Editor) -> Result<String, String> {
-    let status_str = editor.collab_status.as_str();
-    let peer_count = match editor.collab_status {
+    let status_str = editor.collab.status.as_str();
+    let peer_count = match editor.collab.status {
         CollabStatus::Connected { peer_count } => peer_count,
         _ => 0,
     };
-    let address = editor.collab_server_address.clone();
+    let address = editor.collab.server_address.clone();
     Ok(serde_json::json!({
         "status": status_str,
         "peer_count": peer_count,
-        "synced_docs": editor.collab_synced_docs,
+        "synced_docs": editor.collab.synced_docs,
         "server_address": address,
     })
     .to_string())
@@ -37,8 +37,8 @@ fn execute_collab_connect(editor: &mut Editor, args: &Value) -> Result<String, S
         .get("address")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| editor.collab_server_address.clone());
-    editor.pending_collab_intent = Some(CollabIntent::Connect {
+        .unwrap_or_else(|| editor.collab.server_address.clone());
+    editor.collab.pending_intent = Some(CollabIntent::Connect {
         address: address.clone(),
     });
     editor.set_status(format!("Connecting to {}...", address));
@@ -59,7 +59,7 @@ fn execute_collab_share(editor: &mut Editor, args: &Value) -> Result<String, Str
     editor
         .find_buffer_by_name(&buffer_name)
         .ok_or_else(|| format!("No buffer named '{}'", buffer_name))?;
-    editor.pending_collab_intent = Some(CollabIntent::ShareBuffer {
+    editor.collab.pending_intent = Some(CollabIntent::ShareBuffer {
         buffer_name: buffer_name.clone(),
     });
     editor.set_status(format!("Sharing buffer: {}", buffer_name));
@@ -74,15 +74,15 @@ fn execute_collab_share(editor: &mut Editor, args: &Value) -> Result<String, Str
 fn execute_collab_doctor(editor: &mut Editor) -> Result<String, String> {
     // Return inline diagnostics for AI consumption (structured data, no intent buffer).
     // Also queue intent so the human gets a *Collab Doctor* buffer.
-    editor.pending_collab_intent = Some(CollabIntent::Doctor);
+    editor.collab.pending_intent = Some(CollabIntent::Doctor);
 
-    let status_str = editor.collab_status.as_str();
-    let connected = matches!(editor.collab_status, CollabStatus::Connected { .. });
-    let peer_count = match editor.collab_status {
+    let status_str = editor.collab.status.as_str();
+    let connected = matches!(editor.collab.status, CollabStatus::Connected { .. });
+    let peer_count = match editor.collab.status {
         CollabStatus::Connected { peer_count } => peer_count,
         _ => 0,
     };
-    let address = editor.collab_server_address.clone();
+    let address = editor.collab.server_address.clone();
 
     let mut checks = Vec::new();
     if connected {
@@ -113,7 +113,7 @@ fn execute_collab_doctor(editor: &mut Editor) -> Result<String, String> {
     checks.push(serde_json::json!({
         "check": "synced_docs",
         "passed": true,
-        "detail": format!("{} documents", editor.collab_synced_docs),
+        "detail": format!("{} documents", editor.collab.synced_docs),
     }));
     checks.push(serde_json::json!({
         "check": "authentication",
@@ -162,7 +162,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["address"], "10.0.0.5:9473");
         assert!(matches!(
-            &editor.pending_collab_intent,
+            &editor.collab.pending_intent,
             Some(CollabIntent::Connect { address }) if address == "10.0.0.5:9473"
         ));
     }

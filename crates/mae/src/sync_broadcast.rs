@@ -29,7 +29,7 @@ pub fn drain_and_broadcast(
             .collab_doc_id
             .clone()
             .unwrap_or_else(|| buffer_name.clone());
-        let is_collab_synced = editor.collab_synced_buffers.contains(&doc_id);
+        let is_collab_synced = editor.collab.synced_buffers.contains(&doc_id);
         let mut bc = broadcaster.lock().unwrap();
         for update in updates {
             let update_b64 = mae_sync::encoding::update_to_base64(&update);
@@ -161,7 +161,7 @@ mod tests {
         buf.enable_sync(1);
         buf.insert_text_at(5, " world");
         editor.buffers.push(buf);
-        editor.collab_synced_buffers.insert("collab.rs".to_string());
+        editor.collab.synced_buffers.insert("collab.rs".to_string());
 
         let bc = test_broadcaster();
         let (collab_tx, mut collab_rx) =

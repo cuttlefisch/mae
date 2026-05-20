@@ -303,7 +303,8 @@ pub fn execute_shell_scrollback(
     let lines = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
 
     let viewport = editor
-        .shell_viewports
+        .shell
+        .viewports
         .get(&buf_idx)
         .ok_or_else(|| format!("No shell viewport data for buffer index {}", buf_idx))?;
 
@@ -925,11 +926,11 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         .collect();
 
     // Collaboration
-    let collab_addr = editor.collab_server_address.clone();
-    let collab_auto = editor.collab_auto_connect;
+    let collab_addr = editor.collab.server_address.clone();
+    let collab_auto = editor.collab.auto_connect;
     let collab_configured =
-        collab_auto || !matches!(editor.collab_status, mae_core::CollabStatus::Off);
-    let collab_status_str = editor.collab_status.as_str();
+        collab_auto || !matches!(editor.collab.status, mae_core::CollabStatus::Off);
+    let collab_status_str = editor.collab.status.as_str();
     let state_server_found = on_path("mae-state-server");
     if collab_auto && !state_server_found {
         issues.push(
@@ -956,7 +957,7 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
             "server_address": collab_addr,
             "auto_connect": collab_auto,
             "status": collab_status_str,
-            "synced_docs": editor.collab_synced_docs,
+            "synced_docs": editor.collab.synced_docs,
             "state_server_binary_found": state_server_found,
         },
         "init_files": init_files,

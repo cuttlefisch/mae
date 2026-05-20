@@ -572,10 +572,10 @@ fn disconnect_clears_collab_doc_id() {
     let mut editor = Editor::new();
     editor.buffers[0].collab_doc_id = Some("test-doc".to_string());
     editor.buffers[0].sync_doc = None; // Would be set in real usage
-    editor.collab_synced_buffers.insert("main.rs".to_string());
+    editor.collab.synced_buffers.insert("main.rs".to_string());
 
     // Simulate the disconnect cleanup (matches collab_bridge::handle_collab_event)
-    for buf_name in &editor.collab_synced_buffers.clone() {
+    for buf_name in &editor.collab.synced_buffers.clone() {
         if let Some(idx) = editor.find_buffer_by_name(buf_name) {
             editor.buffers[idx].sync_doc = None;
             editor.buffers[idx].pending_sync_updates.clear();

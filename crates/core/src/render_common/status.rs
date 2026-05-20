@@ -523,15 +523,15 @@ pub fn format_collab_status(editor: &Editor) -> String {
     if buf.collab_offline {
         return " [C:OFFLINE]".to_string();
     }
-    match &editor.collab_status {
+    match &editor.collab.status {
         CollabStatus::Off => String::new(),
         CollabStatus::Connecting => " [C:\u{2026}]".to_string(),
         CollabStatus::Connected { peer_count } => {
             let is_synced = buf
                 .collab_doc_id
                 .as_ref()
-                .is_some_and(|id| editor.collab_synced_buffers.contains(id))
-                || editor.collab_synced_buffers.contains(&buf.name);
+                .is_some_and(|id| editor.collab.synced_buffers.contains(id))
+                || editor.collab.synced_buffers.contains(&buf.name);
             if is_synced {
                 format!(" [C:{}|synced]", peer_count)
             } else {

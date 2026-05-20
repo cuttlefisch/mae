@@ -15,14 +15,14 @@ impl Editor {
                 let buf = Buffer::new_shell(shell_name);
                 self.buffers.push(buf);
                 let idx = self.buffers.len() - 1;
-                self.pending_shell_spawns.push(idx);
+                self.shell.spawns.push(idx);
                 self.display_buffer_and_focus(idx);
                 self.set_mode(Mode::ShellInsert);
             }
             "terminal-reset" => {
                 let idx = self.active_buffer_idx();
                 if self.buffers[idx].kind == crate::BufferKind::Shell {
-                    self.pending_shell_resets.push(idx);
+                    self.shell.resets.push(idx);
                     self.set_status("Terminal reset");
                 } else {
                     self.set_status("Not a terminal buffer");
@@ -35,20 +35,20 @@ impl Editor {
             "terminal-close" => {
                 let idx = self.active_buffer_idx();
                 if self.buffers[idx].kind == crate::BufferKind::Shell {
-                    self.pending_shell_closes.push(idx);
+                    self.shell.closes.push(idx);
                     self.set_mode(Mode::Normal);
                 } else {
                     self.set_status("Not a terminal buffer");
                 }
             }
             "shell-scroll-page-up" => {
-                self.pending_shell_scroll = Some(self.focused_viewport_height() as i32);
+                self.shell.scroll = Some(self.focused_viewport_height() as i32);
             }
             "shell-scroll-page-down" => {
-                self.pending_shell_scroll = Some(-(self.focused_viewport_height() as i32));
+                self.shell.scroll = Some(-(self.focused_viewport_height() as i32));
             }
             "shell-scroll-to-bottom" => {
-                self.pending_shell_scroll = Some(0);
+                self.shell.scroll = Some(0);
             }
             "shell-select-mode" => {
                 let buf_idx = self.active_buffer_idx();
@@ -56,7 +56,7 @@ impl Editor {
                     self.set_status("Not a shell buffer");
                 } else {
                     // Read scrollback from cached shell viewport data.
-                    let content = if let Some(viewport) = self.shell_viewports.get(&buf_idx) {
+                    let content = if let Some(viewport) = self.shell.viewports.get(&buf_idx) {
                         viewport.join("\n")
                     } else {
                         String::new()
@@ -151,8 +151,8 @@ impl Editor {
                     let buf = Buffer::new_shell(shell_name);
                     self.buffers.push(buf);
                     let shell_idx = self.buffers.len() - 1;
-                    self.pending_shell_spawns.push(shell_idx);
-                    self.pending_shell_cwds.insert(shell_idx, dir.clone());
+                    self.shell.spawns.push(shell_idx);
+                    self.shell.cwds.insert(shell_idx, dir.clone());
                     self.display_buffer_and_focus(shell_idx);
                     self.set_mode(Mode::ShellInsert);
                     self.set_status(format!("Terminal: {}", dir.display()));

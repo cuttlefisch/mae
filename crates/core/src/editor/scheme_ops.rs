@@ -94,7 +94,7 @@ impl Editor {
             .enumerate()
             .rev()
             .find(|(idx, b)| {
-                b.kind == crate::buffer::BufferKind::Shell && self.shell_viewports.contains_key(idx)
+                b.kind == crate::buffer::BufferKind::Shell && self.shell.viewports.contains_key(idx)
             })
             .map(|(idx, _)| idx)
     }
@@ -113,7 +113,7 @@ impl Editor {
             self.set_status("send-to-shell: empty line");
             return;
         }
-        self.pending_shell_inputs.push((shell_idx, text + "\r"));
+        self.shell.inputs.push((shell_idx, text + "\r"));
         self.set_status("Sent to shell");
     }
 
@@ -142,7 +142,7 @@ impl Editor {
             self.set_status("send-region-to-shell: empty selection");
             return;
         }
-        self.pending_shell_inputs.push((shell_idx, joined + "\r"));
+        self.shell.inputs.push((shell_idx, joined + "\r"));
         self.set_status("Sent region to shell");
     }
 
@@ -239,7 +239,7 @@ mod tests {
         let mut ed = Editor::with_buffer(buf);
         ed.send_line_to_shell();
         assert!(ed.status_msg.contains("no active terminal"));
-        assert!(ed.pending_shell_inputs.is_empty());
+        assert!(ed.shell.inputs.is_empty());
     }
 
     #[test]
@@ -249,12 +249,12 @@ mod tests {
         ed.buffers[0].replace_contents("echo hello\necho world\n");
         ed.buffers.push(Buffer::new_shell("*terminal*"));
         let shell_idx = ed.buffers.len() - 1;
-        ed.shell_viewports.insert(shell_idx, vec!["$ ".to_string()]);
+        ed.shell.viewports.insert(shell_idx, vec!["$ ".to_string()]);
         // Cursor on line 0 of buffer 0.
         ed.send_line_to_shell();
-        assert_eq!(ed.pending_shell_inputs.len(), 1);
-        assert_eq!(ed.pending_shell_inputs[0].0, shell_idx);
-        assert_eq!(ed.pending_shell_inputs[0].1, "echo hello\r");
+        assert_eq!(ed.shell.inputs.len(), 1);
+        assert_eq!(ed.shell.inputs[0].0, shell_idx);
+        assert_eq!(ed.shell.inputs[0].1, "echo hello\r");
     }
 
     #[test]
@@ -262,11 +262,11 @@ mod tests {
         let mut ed = Editor::new();
         ed.buffers.push(Buffer::new_shell("*terminal*"));
         let shell_idx = ed.buffers.len() - 1;
-        ed.shell_viewports.insert(shell_idx, vec!["$ ".to_string()]);
+        ed.shell.viewports.insert(shell_idx, vec!["$ ".to_string()]);
         // Buffer 0 is empty scratch.
         ed.send_line_to_shell();
         assert!(ed.status_msg.contains("empty"));
-        assert!(ed.pending_shell_inputs.is_empty());
+        assert!(ed.shell.inputs.is_empty());
     }
 
     #[test]
@@ -274,7 +274,7 @@ mod tests {
         let mut ed = Editor::new();
         ed.buffers.push(Buffer::new_shell("*terminal*"));
         let shell_idx = ed.buffers.len() - 1;
-        ed.shell_viewports.insert(shell_idx, vec!["$ ".to_string()]);
+        ed.shell.viewports.insert(shell_idx, vec!["$ ".to_string()]);
         // Switch to shell buffer.
         ed.window_mgr.focused_window_mut().buffer_idx = shell_idx;
         assert_eq!(ed.find_shell_target(), Some(shell_idx));
@@ -287,8 +287,8 @@ mod tests {
         let idx1 = ed.buffers.len() - 1;
         ed.buffers.push(Buffer::new_shell("*terminal-2*"));
         let idx2 = ed.buffers.len() - 1;
-        ed.shell_viewports.insert(idx1, vec!["$ ".to_string()]);
-        ed.shell_viewports.insert(idx2, vec!["$ ".to_string()]);
+        ed.shell.viewports.insert(idx1, vec!["$ ".to_string()]);
+        ed.shell.viewports.insert(idx2, vec!["$ ".to_string()]);
         // Active buffer is 0 (text), so find_shell_target should pick idx2 (most recent).
         assert_eq!(ed.find_shell_target(), Some(idx2));
     }

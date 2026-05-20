@@ -40,7 +40,7 @@ impl super::Editor {
         if self.buffers[active].kind == crate::BufferKind::Shell {
             let shell_row = row.saturating_sub(1);
             let shell_col = col.saturating_sub(1);
-            self.pending_shell_click = Some((shell_row, shell_col, button));
+            self.shell.click = Some((shell_row, shell_col, button));
             return;
         }
 
@@ -271,7 +271,7 @@ impl super::Editor {
         if self.buffers[active].kind == crate::BufferKind::Shell {
             let shell_row = row.saturating_sub(1);
             let shell_col = col.saturating_sub(1);
-            self.pending_shell_drag = Some((shell_row, shell_col));
+            self.shell.drag = Some((shell_row, shell_col));
             return;
         }
 
@@ -318,7 +318,7 @@ impl super::Editor {
         if self.buffers[active].kind == crate::BufferKind::Shell {
             let shell_row = row.saturating_sub(1);
             let shell_col = col.saturating_sub(1);
-            self.pending_shell_release = Some((shell_row, shell_col));
+            self.shell.release = Some((shell_row, shell_col));
         }
     }
 
@@ -457,8 +457,8 @@ impl super::Editor {
                 } else {
                     -(lines as i32 * scroll_speed as i32)
                 };
-                let prev = self.pending_shell_scroll.unwrap_or(0);
-                self.pending_shell_scroll = Some(prev + amount);
+                let prev = self.shell.scroll.unwrap_or(0);
+                self.shell.scroll = Some(prev + amount);
             }
             crate::BufferKind::Messages => {
                 let total = self.message_log.len();

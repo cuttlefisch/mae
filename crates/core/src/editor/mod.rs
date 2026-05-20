@@ -112,6 +112,111 @@ pub enum CollabIntent {
     },
 }
 
+/// Shell/terminal intent queue and cached state, extracted from Editor.
+/// All fields were previously `pending_shell_*` / `shell_*` on Editor;
+/// now accessed via `editor.shell.*`.
+#[derive(Debug, Default)]
+pub struct ShellIntents {
+    /// Buffer indices of newly created shell buffers that need PTY spawning.
+    pub spawns: Vec<usize>,
+    /// Working directory overrides for shell spawns: buffer_idx → dir.
+    pub cwds: HashMap<usize, std::path::PathBuf>,
+    /// Agent shell spawns: (buf_idx, command).
+    pub agent_spawns: Vec<(usize, String)>,
+    /// Buffer indices of shell terminals that should be reset (clear screen).
+    pub resets: Vec<usize>,
+    /// Buffer indices of shell terminals that should be closed.
+    pub closes: Vec<usize>,
+    /// Queued text to send to shell terminals: (buffer_index, text).
+    pub inputs: Vec<(usize, String)>,
+    /// Pending scroll amount. Positive = up, negative = down, zero = bottom.
+    pub scroll: Option<i32>,
+    /// Pending mouse click: (row, col, button).
+    pub click: Option<(usize, usize, crate::input::MouseButton)>,
+    /// Pending mouse drag position: (row, col).
+    pub drag: Option<(usize, usize)>,
+    /// Pending mouse release position: (row, col).
+    pub release: Option<(usize, usize)>,
+    /// Cached viewport snapshots, keyed by buffer index.
+    pub viewports: HashMap<usize, Vec<String>>,
+    /// Cached current working directories, keyed by buffer index.
+    pub viewport_cwds: HashMap<usize, String>,
+}
+
+/// Collaborative editing state extracted from Editor.
+/// All fields were previously `collab_*` on Editor; now accessed via `editor.collab.*`.
+#[derive(Debug)]
+pub struct CollabState {
+    /// Current connection status (Off/Connecting/Connected/Reconnecting/Disconnected).
+    pub status: CollabStatus,
+    /// Number of documents currently synced via the collaborative state server.
+    pub synced_docs: usize,
+    /// Set of buffer names currently synced via the collaborative state server.
+    pub synced_buffers: HashSet<String>,
+    /// Pending collaborative editing intent for the binary event loop to drain.
+    pub pending_intent: Option<CollabIntent>,
+    /// TCP address of the collaborative state server.
+    pub server_address: String,
+    /// Automatically connect to the state server on startup.
+    pub auto_connect: bool,
+    /// Automatically share new buffers when connected.
+    pub auto_share: bool,
+    /// Seconds between automatic reconnection attempts.
+    pub reconnect_interval: u64,
+    /// Display name for collaborative edits.
+    pub user_name: String,
+    /// Write timeout for peer connections, in milliseconds.
+    pub write_timeout_ms: u64,
+    /// Maximum pending updates before warning (0 = unlimited).
+    pub max_pending_updates: u64,
+    /// Exponential backoff multiplier for reconnection attempts.
+    pub reconnect_backoff_factor: u64,
+    /// Maximum reconnection attempts before giving up (0 = infinite).
+    pub max_reconnect_attempts: u64,
+    /// Milliseconds to batch local updates before sending (0 = immediate).
+    pub batch_update_ms: u64,
+    /// When joining a doc, prompt to map to local project path.
+    pub auto_resolve_paths: bool,
+    /// Default directory for :saveas on joined buffers (empty = CWD).
+    pub default_save_dir: String,
+    /// Auto-save local file when CRDT update arrives.
+    pub save_on_remote_update: bool,
+    /// Pending save_committed to send on next drain tick.
+    /// Format: (doc_id, save_epoch, content_hash, saved_by).
+    pub pending_save_committed: Option<(String, u64, String, String)>,
+}
+
+impl CollabState {
+    pub fn new() -> Self {
+        Self {
+            status: CollabStatus::Off,
+            synced_docs: 0,
+            synced_buffers: HashSet::new(),
+            pending_intent: None,
+            server_address: DEFAULT_COLLAB_ADDRESS.to_string(),
+            auto_connect: false,
+            auto_share: false,
+            reconnect_interval: 5,
+            user_name: String::new(),
+            write_timeout_ms: 5000,
+            max_pending_updates: 1000,
+            reconnect_backoff_factor: 2,
+            max_reconnect_attempts: 0,
+            batch_update_ms: 0,
+            auto_resolve_paths: false,
+            default_save_dir: String::new(),
+            save_on_remote_update: false,
+            pending_save_committed: None,
+        }
+    }
+}
+
+impl Default for CollabState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// State for an active note capture session (org-roam parity).
 /// Set when `kb_create_note_from_title` creates a note; cleared by
 /// `capture-finalize` (C-c C-c) or `capture-abort` (C-c C-k).
@@ -439,9 +544,9 @@ pub struct AiNetworkCheck {
     pub error: Option<String>,
 }
 
-// @ai-caution: [dispatch] ~100+ fields. Growing toward Emacs buffer.c pattern.
+// @ai-caution: [dispatch] ~80+ fields after CollabState + ShellIntents extraction.
 // Before adding fields, check if the state belongs in a sub-struct (LspContext,
-// DapContext, ModuleContext, RenderContext). See ROADMAP.md architecture debt.
+// DapContext, ViModalState, AiSessionState). See ROADMAP.md architecture debt.
 /// Top-level editor state.
 ///
 /// Designed as a clean, composable state machine that both human keybindings
@@ -580,46 +685,11 @@ pub struct Editor {
     /// directly; commands push intents here and `main.rs` forwards them to
     /// `run_dap_task`.
     pub pending_dap_intents: Vec<DapIntent>,
-    /// Buffer indices of newly created shell buffers that need PTY spawning.
-    /// The binary drains this and creates `ShellTerminal` instances.
-    pub pending_shell_spawns: Vec<usize>,
-    /// Working directory overrides for shell spawns: buffer_idx → dir.
-    /// Drained together with `pending_shell_spawns` by the binary.
-    pub pending_shell_cwds: HashMap<usize, std::path::PathBuf>,
-    /// Agent shell spawns: (buf_idx, command). The binary spawns these with
-    /// `spawn_command` so the PTY exits when the agent command exits.
-    pub pending_agent_spawns: Vec<(usize, String)>,
-    /// Buffer indices of shell terminals that should be reset (clear screen).
-    /// Drained by the binary which owns the `ShellTerminal` instances.
-    pub pending_shell_resets: Vec<usize>,
-    /// Buffer indices of shell terminals that should be closed.
-    /// Drained by the binary which shuts down the PTY and removes the terminal.
-    pub pending_shell_closes: Vec<usize>,
-    /// Queued text to send to shell terminals: (buffer_index, text).
-    /// Drained by the binary which owns the `ShellTerminal` instances.
-    pub pending_shell_inputs: Vec<(usize, String)>,
-    /// Pending shell scroll amount. Positive = scroll up, negative = scroll down,
-    /// zero = scroll to bottom. Consumed by the binary which owns `ShellTerminal`.
-    pub pending_shell_scroll: Option<i32>,
-    /// Pending shell mouse click: (row, col, button). Set by `handle_mouse_click`
-    /// for shell buffers, drained by the binary which owns `ShellTerminal`.
-    pub pending_shell_click: Option<(usize, usize, crate::input::MouseButton)>,
-    /// Pending shell mouse drag position: (row, col). Set during drag in shell
-    /// buffers, drained by the binary.
-    pub pending_shell_drag: Option<(usize, usize)>,
-    /// Pending shell mouse release position: (row, col). Set on button release
-    /// in shell buffers, drained by the binary to finalize selection.
-    pub pending_shell_release: Option<(usize, usize)>,
+    /// Shell/terminal intent queue and cached state.
+    pub shell: ShellIntents,
     /// Buffer indices removed this tick, for the binary to rekey its own
     /// shell-related HashMaps (shell_terminals, shell_last_dims, etc.).
     pub pending_buffer_removals: Vec<usize>,
-    /// Cached viewport snapshots for shell terminals, updated by the binary
-    /// each render tick. Keyed by buffer index. Used by AI tools to read
-    /// terminal output without direct access to `ShellTerminal`.
-    pub shell_viewports: HashMap<usize, Vec<String>>,
-    /// Cached current working directories for shell terminals, keyed by
-    /// buffer index. Updated by the binary via /proc/{pid}/cwd.
-    pub shell_cwds: HashMap<usize, String>,
     /// Hook registry: named extension points with ordered Scheme function lists.
     /// Populated by `(add-hook! ...)` from Scheme, fired by core operations.
     pub hooks: HookRegistry,
@@ -1126,43 +1196,8 @@ pub struct Editor {
     /// Paths for which this editor instance holds advisory file locks.
     /// Locks are acquired on file open and released on buffer close or exit.
     pub locked_files: HashSet<PathBuf>,
-    /// Current collaborative editing connection status.
-    pub collab_status: CollabStatus,
-    /// Number of documents currently synced via the collaborative state server.
-    pub collab_synced_docs: usize,
-    /// Set of buffer names currently synced via the collaborative state server.
-    pub collab_synced_buffers: HashSet<String>,
-    /// Pending collaborative editing intent for the binary event loop to drain.
-    pub pending_collab_intent: Option<CollabIntent>,
-    /// TCP address of the collaborative state server.
-    pub collab_server_address: String,
-    /// Automatically connect to the state server on startup.
-    pub collab_auto_connect: bool,
-    /// Automatically share new buffers when connected.
-    pub collab_auto_share: bool,
-    /// Seconds between automatic reconnection attempts.
-    pub collab_reconnect_interval: u64,
-    /// Display name for collaborative edits.
-    pub collab_user_name: String,
-    /// Write timeout for peer connections, in milliseconds.
-    pub collab_write_timeout_ms: u64,
-    /// Maximum pending updates before warning (0 = unlimited).
-    pub collab_max_pending_updates: u64,
-    /// Exponential backoff multiplier for reconnection attempts.
-    pub collab_reconnect_backoff_factor: u64,
-    /// Maximum reconnection attempts before giving up (0 = infinite).
-    pub collab_max_reconnect_attempts: u64,
-    /// Milliseconds to batch local updates before sending (0 = immediate).
-    pub collab_batch_update_ms: u64,
-    /// When joining a doc, prompt to map to local project path.
-    pub collab_auto_resolve_paths: bool,
-    /// Default directory for :saveas on joined buffers (empty = CWD).
-    pub collab_default_save_dir: String,
-    /// Auto-save local file when CRDT update arrives.
-    pub collab_save_on_remote_update: bool,
-    /// Pending save_committed to send on next drain tick.
-    /// Format: (doc_id, save_epoch, content_hash, saved_by).
-    pub collab_pending_save_committed: Option<(String, u64, String, String)>,
+    /// Collaborative editing state (connection, sync, options).
+    pub collab: CollabState,
 }
 
 impl Default for Editor {
@@ -1238,19 +1273,8 @@ impl Editor {
             lsp_trigger_characters: std::collections::HashMap::new(),
             pending_lsp_root_change: None,
             pending_dap_intents: Vec::new(),
-            pending_shell_spawns: Vec::new(),
-            pending_shell_cwds: HashMap::new(),
-            pending_agent_spawns: Vec::new(),
-            pending_shell_resets: Vec::new(),
-            pending_shell_closes: Vec::new(),
-            pending_shell_inputs: Vec::new(),
-            pending_shell_scroll: None,
-            pending_shell_click: None,
-            pending_shell_drag: None,
-            pending_shell_release: None,
+            shell: ShellIntents::default(),
             pending_buffer_removals: Vec::new(),
-            shell_viewports: HashMap::new(),
-            shell_cwds: HashMap::new(),
             hooks,
             pending_hook_evals: Vec::new(),
             diagnostics: DiagnosticStore::default(),
@@ -1461,24 +1485,7 @@ impl Editor {
             pending_pkg_commands: Vec::new(),
             pending_git_diff: None,
             locked_files: HashSet::new(),
-            collab_status: CollabStatus::Off,
-            collab_synced_docs: 0,
-            collab_synced_buffers: HashSet::new(),
-            pending_collab_intent: None,
-            collab_server_address: DEFAULT_COLLAB_ADDRESS.to_string(),
-            collab_auto_connect: false,
-            collab_auto_share: false,
-            collab_reconnect_interval: 5,
-            collab_user_name: String::new(),
-            collab_write_timeout_ms: 5000,
-            collab_max_pending_updates: 1000,
-            collab_reconnect_backoff_factor: 2,
-            collab_max_reconnect_attempts: 0,
-            collab_batch_update_ms: 0,
-            collab_auto_resolve_paths: false,
-            collab_default_save_dir: String::new(),
-            collab_save_on_remote_update: false,
-            collab_pending_save_committed: None,
+            collab: CollabState::new(),
         }
     }
 
@@ -2454,12 +2461,12 @@ impl Editor {
         self.adjust_ai_target_after_remove(removed_idx);
 
         // 2. Editor-owned shell maps
-        rekey_after_remove(&mut self.shell_viewports, removed_idx);
-        rekey_after_remove(&mut self.shell_cwds, removed_idx);
-        rekey_after_remove(&mut self.pending_shell_cwds, removed_idx);
+        rekey_after_remove(&mut self.shell.viewports, removed_idx);
+        rekey_after_remove(&mut self.shell.viewport_cwds, removed_idx);
+        rekey_after_remove(&mut self.shell.cwds, removed_idx);
 
         // 3. Pending shell queues (Vec<usize> and Vec<(usize, _)>)
-        self.pending_shell_spawns.retain_mut(|idx| {
+        self.shell.spawns.retain_mut(|idx| {
             if *idx == removed_idx {
                 return false;
             }
@@ -2468,7 +2475,7 @@ impl Editor {
             }
             true
         });
-        self.pending_agent_spawns.retain_mut(|(idx, _)| {
+        self.shell.agent_spawns.retain_mut(|(idx, _)| {
             if *idx == removed_idx {
                 return false;
             }
@@ -2477,7 +2484,7 @@ impl Editor {
             }
             true
         });
-        self.pending_shell_resets.retain_mut(|idx| {
+        self.shell.resets.retain_mut(|idx| {
             if *idx == removed_idx {
                 return false;
             }
@@ -2486,7 +2493,7 @@ impl Editor {
             }
             true
         });
-        self.pending_shell_closes.retain_mut(|idx| {
+        self.shell.closes.retain_mut(|idx| {
             if *idx == removed_idx {
                 return false;
             }
@@ -2495,7 +2502,7 @@ impl Editor {
             }
             true
         });
-        self.pending_shell_inputs.retain_mut(|(idx, _)| {
+        self.shell.inputs.retain_mut(|(idx, _)| {
             if *idx == removed_idx {
                 return false;
             }

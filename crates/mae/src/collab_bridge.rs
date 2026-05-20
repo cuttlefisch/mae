@@ -152,7 +152,7 @@ pub enum CollabEvent {
 pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender<CollabCommand>) {
     // Drain pending save_committed first (queued by SaveIntentOk handler).
     if let Some((doc_id, save_epoch, content_hash, saved_by)) =
-        editor.collab_pending_save_committed.take()
+        editor.collab.pending_save_committed.take()
     {
         let cmd = CollabCommand::SendSaveCommitted {
             doc_id,
@@ -165,7 +165,7 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         }
     }
 
-    let intent = match editor.pending_collab_intent.take() {
+    let intent = match editor.collab.pending_intent.take() {
         Some(i) => i,
         None => return,
     };
@@ -209,8 +209,8 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
                 buf.collab_doc_id = Some(doc_id.clone());
                 // BUG A fix: immediately track as synced so edits during the
                 // server round-trip are forwarded via drain_and_broadcast().
-                editor.collab_synced_buffers.insert(doc_id.clone());
-                editor.collab_synced_docs = editor.collab_synced_buffers.len();
+                editor.collab.synced_buffers.insert(doc_id.clone());
+                editor.collab.synced_docs = editor.collab.synced_buffers.len();
                 debug!(doc = %doc_id, "share: immediately tracked as synced");
                 CollabCommand::ShareBuffer {
                     doc_id,
@@ -226,7 +226,8 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         CollabIntent::Doctor => {
             // Collect per-buffer sync info for the doctor report.
             let synced_info: Vec<(String, usize)> = editor
-                .collab_synced_buffers
+                .collab
+                .synced_buffers
                 .iter()
                 .map(|doc_id| {
                     let pending = editor
@@ -321,7 +322,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             peer_count,
         } => {
             info!(address = %address, peers = peer_count, "collab connected");
-            editor.collab_status = CollabStatus::Connected { peer_count };
+            editor.collab.status = CollabStatus::Connected { peer_count };
             editor.set_status(format!("Connected to {} ({} peers)", address, peer_count));
             // WU3: On reconnect, re-share buffers that still have CRDT state (offline recovery).
             let offline_docs: Vec<(String, Vec<u8>)> = editor
@@ -336,15 +337,15 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 .collect();
             for (doc_id, _state_bytes) in &offline_docs {
                 info!(doc = %doc_id, "reconnect: re-sharing offline buffer");
-                editor.collab_synced_buffers.insert(doc_id.clone());
+                editor.collab.synced_buffers.insert(doc_id.clone());
             }
             if !offline_docs.is_empty() {
-                editor.collab_synced_docs = editor.collab_synced_buffers.len();
+                editor.collab.synced_docs = editor.collab.synced_buffers.len();
                 // Queue re-share for each offline doc. The first one goes via
                 // pending_collab_intent; additional ones would need the command channel.
                 // For now, queue the first and set a status message.
                 if let Some((doc_id, _state)) = offline_docs.first() {
-                    editor.pending_collab_intent = Some(CollabIntent::ForceSync {
+                    editor.collab.pending_intent = Some(CollabIntent::ForceSync {
                         buffer_name: doc_id.clone(),
                     });
                 }
@@ -358,7 +359,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
         }
         CollabEvent::Disconnected { reason } => {
             info!(reason = %reason, "collab disconnected");
-            editor.collab_status = CollabStatus::Disconnected;
+            editor.collab.status = CollabStatus::Disconnected;
             editor.set_status(format!("Collab disconnected: {}", reason));
             // Preserve sync_doc and collab_doc_id for offline recovery (WU3).
             // Only clear UI tracking state — CRDT state survives disconnect
@@ -374,8 +375,8 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     }
                 }
             }
-            editor.collab_synced_docs = 0;
-            editor.collab_synced_buffers.clear();
+            editor.collab.synced_docs = 0;
+            editor.collab.synced_buffers.clear();
             editor.mark_full_redraw();
         }
         CollabEvent::RemoteUpdate {
@@ -410,7 +411,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 doc_id, expected, got
             ));
             // Queue a ForceSync to trigger resync.
-            editor.pending_collab_intent = Some(CollabIntent::ForceSync {
+            editor.collab.pending_intent = Some(CollabIntent::ForceSync {
                 buffer_name: doc_id,
             });
             editor.mark_full_redraw();
@@ -460,8 +461,8 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             info!(doc = %doc_id, "buffer shared (server confirmed)");
             // Doc was already added optimistically in drain_collab_intents (BUG A fix).
             // This insert is idempotent — ensures consistency if event ordering varies.
-            editor.collab_synced_buffers.insert(doc_id.clone());
-            editor.collab_synced_docs = editor.collab_synced_buffers.len();
+            editor.collab.synced_buffers.insert(doc_id.clone());
+            editor.collab.synced_docs = editor.collab.synced_buffers.len();
             editor.set_status(format!("Shared: {}", doc_id));
             editor.mark_full_redraw();
         }
@@ -571,8 +572,8 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                             editor.syntax.invalidate(idx);
                         }
                     }
-                    editor.collab_synced_buffers.insert(doc_id.clone());
-                    editor.collab_synced_docs = editor.collab_synced_buffers.len();
+                    editor.collab.synced_buffers.insert(doc_id.clone());
+                    editor.collab.synced_docs = editor.collab.synced_buffers.len();
                     editor.switch_to_buffer(idx);
                     editor.set_status(format!("Joined: {}", doc_id));
                     editor.mark_full_redraw();
@@ -619,8 +620,8 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
         CollabEvent::ShareFailed { doc_id, message } => {
             warn!(doc = %doc_id, error = %message, "share failed — rolling back synced state");
             // Remove from synced set (was optimistically added in drain_collab_intents).
-            editor.collab_synced_buffers.remove(&doc_id);
-            editor.collab_synced_docs = editor.collab_synced_buffers.len();
+            editor.collab.synced_buffers.remove(&doc_id);
+            editor.collab.synced_docs = editor.collab.synced_buffers.len();
             // Clear all collab state on the buffer so re-share starts fresh.
             if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
                 editor.buffers[idx].collab_doc_id = None;
@@ -636,13 +637,13 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             content_hash,
         } => {
             info!(doc = %doc_id, save_epoch, "save intent accepted — sending save_committed");
-            let saved_by = if editor.collab_user_name.is_empty() {
+            let saved_by = if editor.collab.user_name.is_empty() {
                 "unknown".to_string()
             } else {
-                editor.collab_user_name.clone()
+                editor.collab.user_name.clone()
             };
             // Queue the save_committed command for the next drain tick.
-            editor.collab_pending_save_committed =
+            editor.collab.pending_save_committed =
                 Some((doc_id.clone(), save_epoch, content_hash, saved_by));
             editor.set_status(format!("Saved (collab epoch {})", save_epoch));
             editor.mark_full_redraw();
@@ -657,8 +658,8 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
         }
         CollabEvent::PeerCountChanged { peer_count } => {
             debug!(peer_count, "peer count changed");
-            if let CollabStatus::Connected { .. } = editor.collab_status {
-                editor.collab_status = CollabStatus::Connected { peer_count };
+            if let CollabStatus::Connected { .. } = editor.collab.status {
+                editor.collab.status = CollabStatus::Connected { peer_count };
                 if peer_count == 0 {
                     editor.set_status("All other collaborators disconnected");
                 } else {
@@ -709,12 +710,12 @@ pub(crate) fn setup_collab_channels(
     let (cmd_tx, cmd_rx) = mpsc::channel::<CollabCommand>(COLLAB_CMD_CHANNEL_CAP);
     let (evt_tx, evt_rx) = mpsc::channel::<CollabEvent>(COLLAB_EVT_CHANNEL_CAP);
 
-    let reconnect_secs = editor.collab_reconnect_interval;
-    let write_timeout_ms = editor.collab_write_timeout_ms;
+    let reconnect_secs = editor.collab.reconnect_interval;
+    let write_timeout_ms = editor.collab.write_timeout_ms;
 
     let auto_connect_addr =
-        if editor.collab_auto_connect && !editor.collab_server_address.is_empty() {
-            Some(editor.collab_server_address.clone())
+        if editor.collab.auto_connect && !editor.collab.server_address.is_empty() {
+            Some(editor.collab.server_address.clone())
         } else {
             None
         };
@@ -1982,12 +1983,12 @@ mod tests {
     #[test]
     fn drain_collab_intent_connect() {
         let mut editor = Editor::new();
-        editor.pending_collab_intent = Some(CollabIntent::Connect {
+        editor.collab.pending_intent = Some(CollabIntent::Connect {
             address: "127.0.0.1:9473".to_string(),
         });
         let (tx, mut rx) = mpsc::channel(8);
         drain_collab_intents(&mut editor, &tx);
-        assert!(editor.pending_collab_intent.is_none());
+        assert!(editor.collab.pending_intent.is_none());
         let cmd = rx.try_recv().unwrap();
         assert!(matches!(cmd, CollabCommand::Connect { .. }));
     }
@@ -2004,7 +2005,7 @@ mod tests {
     fn drain_collab_share_enables_sync() {
         let mut editor = Editor::new();
         let buf_name = editor.buffers[0].name.clone();
-        editor.pending_collab_intent = Some(CollabIntent::ShareBuffer {
+        editor.collab.pending_intent = Some(CollabIntent::ShareBuffer {
             buffer_name: buf_name.clone(),
         });
         let (tx, mut rx) = mpsc::channel(8);
@@ -2031,7 +2032,7 @@ mod tests {
     #[test]
     fn drain_collab_list_docs() {
         let mut editor = Editor::new();
-        editor.pending_collab_intent = Some(CollabIntent::ListDocs);
+        editor.collab.pending_intent = Some(CollabIntent::ListDocs);
         let (tx, mut rx) = mpsc::channel(8);
         drain_collab_intents(&mut editor, &tx);
         let cmd = rx.try_recv().unwrap();
@@ -2041,7 +2042,7 @@ mod tests {
     #[test]
     fn drain_collab_join_doc() {
         let mut editor = Editor::new();
-        editor.pending_collab_intent = Some(CollabIntent::JoinDoc {
+        editor.collab.pending_intent = Some(CollabIntent::JoinDoc {
             doc_id: "test.org".to_string(),
         });
         let (tx, mut rx) = mpsc::channel(8);
@@ -2064,7 +2065,7 @@ mod tests {
             },
         );
         assert_eq!(
-            editor.collab_status,
+            editor.collab.status,
             CollabStatus::Connected { peer_count: 2 }
         );
     }
@@ -2072,18 +2073,18 @@ mod tests {
     #[test]
     fn handle_disconnected_event() {
         let mut editor = Editor::new();
-        editor.collab_status = CollabStatus::Connected { peer_count: 1 };
-        editor.collab_synced_buffers.insert("test.rs".to_string());
+        editor.collab.status = CollabStatus::Connected { peer_count: 1 };
+        editor.collab.synced_buffers.insert("test.rs".to_string());
         handle_collab_event(
             &mut editor,
             CollabEvent::Disconnected {
                 reason: "test".to_string(),
             },
         );
-        assert_eq!(editor.collab_status, CollabStatus::Disconnected);
-        assert_eq!(editor.collab_synced_docs, 0);
+        assert_eq!(editor.collab.status, CollabStatus::Disconnected);
+        assert_eq!(editor.collab.synced_docs, 0);
         // UI tracking cleared, but per-buffer state depends on sync_doc presence.
-        assert!(editor.collab_synced_buffers.is_empty());
+        assert!(editor.collab.synced_buffers.is_empty());
     }
 
     #[test]
@@ -2095,8 +2096,8 @@ mod tests {
                 doc_id: "main.rs".to_string(),
             },
         );
-        assert!(editor.collab_synced_buffers.contains("main.rs"));
-        assert_eq!(editor.collab_synced_docs, 1);
+        assert!(editor.collab.synced_buffers.contains("main.rs"));
+        assert_eq!(editor.collab.synced_docs, 1);
         assert!(editor.status_msg.contains("Shared: main.rs"));
     }
 
@@ -2482,7 +2483,7 @@ mod tests {
     fn drain_share_sets_synced_immediately() {
         let mut editor = Editor::new();
         let buf_name = editor.buffers[0].name.clone();
-        editor.pending_collab_intent = Some(CollabIntent::ShareBuffer {
+        editor.collab.pending_intent = Some(CollabIntent::ShareBuffer {
             buffer_name: buf_name.clone(),
         });
         let (tx, _rx) = mpsc::channel(8);
@@ -2491,18 +2492,18 @@ mod tests {
         // BUG A: doc_id must be in collab_synced_buffers IMMEDIATELY.
         let expected_doc_id = format!("shared:{}", buf_name);
         assert!(
-            editor.collab_synced_buffers.contains(&expected_doc_id),
+            editor.collab.synced_buffers.contains(&expected_doc_id),
             "doc_id should be in collab_synced_buffers immediately after drain"
         );
-        assert_eq!(editor.collab_synced_docs, 1);
+        assert_eq!(editor.collab.synced_docs, 1);
     }
 
     #[test]
     fn share_failure_removes_from_synced() {
         let mut editor = Editor::new();
         // Simulate: doc was optimistically added during share.
-        editor.collab_synced_buffers.insert("test-doc".to_string());
-        editor.collab_synced_docs = 1;
+        editor.collab.synced_buffers.insert("test-doc".to_string());
+        editor.collab.synced_docs = 1;
         // Also set collab_doc_id on a buffer so the rollback can clear it.
         editor.buffers[0].collab_doc_id = Some("test-doc".to_string());
 
@@ -2514,21 +2515,21 @@ mod tests {
             },
         );
 
-        assert!(!editor.collab_synced_buffers.contains("test-doc"));
-        assert_eq!(editor.collab_synced_docs, 0);
+        assert!(!editor.collab.synced_buffers.contains("test-doc"));
+        assert_eq!(editor.collab.synced_docs, 0);
         assert!(editor.buffers[0].collab_doc_id.is_none());
     }
 
     #[test]
     fn handle_disconnect_preserves_sync_for_offline_recovery() {
         let mut editor = Editor::new();
-        editor.collab_status = CollabStatus::Connected { peer_count: 1 };
+        editor.collab.status = CollabStatus::Connected { peer_count: 1 };
         // Set up a buffer as if it were synced.
         let buf = &mut editor.buffers[0];
         buf.collab_doc_id = Some("test-doc".to_string());
         buf.enable_sync(42);
         buf.insert_text_at(5, "x"); // generates pending_sync_update
-        editor.collab_synced_buffers.insert("test-doc".to_string());
+        editor.collab.synced_buffers.insert("test-doc".to_string());
 
         handle_collab_event(
             &mut editor,
@@ -2537,8 +2538,8 @@ mod tests {
             },
         );
 
-        assert!(editor.collab_synced_buffers.is_empty());
-        assert_eq!(editor.collab_synced_docs, 0);
+        assert!(editor.collab.synced_buffers.is_empty());
+        assert_eq!(editor.collab.synced_docs, 0);
         // WU3: sync_doc and collab_doc_id are PRESERVED for offline recovery.
         assert!(editor.buffers[0].collab_doc_id.is_some());
         assert!(editor.buffers[0].sync_doc.is_some());
@@ -2590,7 +2591,8 @@ mod tests {
         editor.buffers[0].enable_sync(1);
         editor.buffers[0].collab_doc_id = Some("doc-tracked".to_string());
         editor
-            .collab_synced_buffers
+            .collab
+            .synced_buffers
             .insert("doc-tracked".to_string());
 
         // Buffer B: has collab_doc_id but no sync_doc (ShareFailed cleared it).
@@ -2600,8 +2602,8 @@ mod tests {
         // No enable_sync → sync_doc is None.
         editor.buffers.push(buf_b);
 
-        editor.collab_status = CollabStatus::Connected { peer_count: 1 };
-        editor.collab_synced_docs = 1;
+        editor.collab.status = CollabStatus::Connected { peer_count: 1 };
+        editor.collab.synced_docs = 1;
 
         handle_collab_event(
             &mut editor,
@@ -2639,14 +2641,14 @@ mod tests {
         editor.buffers[0].name = "good.rs".to_string();
         editor.buffers[0].enable_sync(1);
         editor.buffers[0].collab_doc_id = Some("doc-good".to_string());
-        editor.collab_synced_buffers.insert("doc-good".to_string());
+        editor.collab.synced_buffers.insert("doc-good".to_string());
 
         let mut buf_bad = Buffer::new();
         buf_bad.name = "bad.rs".to_string();
         buf_bad.enable_sync(2);
         buf_bad.collab_doc_id = Some("doc-bad".to_string());
         editor.buffers.push(buf_bad);
-        editor.collab_status = CollabStatus::Connected { peer_count: 1 };
+        editor.collab.status = CollabStatus::Connected { peer_count: 1 };
 
         // ShareFailed clears doc-bad from the buffer.
         handle_collab_event(
@@ -2804,7 +2806,7 @@ mod tests {
     #[test]
     fn drain_save_collab_sends_save_intent() {
         let mut editor = Editor::new();
-        editor.pending_collab_intent = Some(CollabIntent::SaveCollab {
+        editor.collab.pending_intent = Some(CollabIntent::SaveCollab {
             doc_id: "file:abc/main.rs".to_string(),
             content_hash: "deadbeef".to_string(),
         });
@@ -2826,7 +2828,7 @@ mod tests {
     #[test]
     fn drain_pending_save_committed() {
         let mut editor = Editor::new();
-        editor.collab_pending_save_committed = Some((
+        editor.collab.pending_save_committed = Some((
             "doc1".to_string(),
             42,
             "hash123".to_string(),
@@ -2849,13 +2851,13 @@ mod tests {
             }
             other => panic!("expected SendSaveCommitted, got {:?}", other),
         }
-        assert!(editor.collab_pending_save_committed.is_none());
+        assert!(editor.collab.pending_save_committed.is_none());
     }
 
     #[test]
     fn handle_save_intent_ok_queues_committed() {
         let mut editor = Editor::new();
-        editor.collab_user_name = "bob".to_string();
+        editor.collab.user_name = "bob".to_string();
         handle_collab_event(
             &mut editor,
             CollabEvent::SaveIntentOk {
@@ -2864,9 +2866,9 @@ mod tests {
                 content_hash: "abc".to_string(),
             },
         );
-        assert!(editor.collab_pending_save_committed.is_some());
+        assert!(editor.collab.pending_save_committed.is_some());
         let (doc_id, epoch, hash, saved_by) =
-            editor.collab_pending_save_committed.as_ref().unwrap();
+            editor.collab.pending_save_committed.as_ref().unwrap();
         assert_eq!(doc_id, "test-doc");
         assert_eq!(*epoch, 5);
         assert_eq!(hash, "abc");
@@ -2962,11 +2964,11 @@ mod tests {
     #[test]
     fn peer_count_zero_shows_all_disconnected() {
         let mut editor = Editor::new();
-        editor.collab_status = CollabStatus::Connected { peer_count: 2 };
+        editor.collab.status = CollabStatus::Connected { peer_count: 2 };
         handle_collab_event(&mut editor, CollabEvent::PeerCountChanged { peer_count: 0 });
         assert!(editor.status_msg.contains("disconnected"));
         assert_eq!(
-            editor.collab_status,
+            editor.collab.status,
             CollabStatus::Connected { peer_count: 0 }
         );
     }
@@ -3073,8 +3075,8 @@ mod tests {
         );
         assert!(editor.status_msg.contains("gap"));
         // Should queue a ForceSync intent.
-        assert!(editor.pending_collab_intent.is_some());
-        match editor.pending_collab_intent.as_ref().unwrap() {
+        assert!(editor.collab.pending_intent.is_some());
+        match editor.collab.pending_intent.as_ref().unwrap() {
             CollabIntent::ForceSync { buffer_name } => {
                 assert_eq!(buffer_name, "test-doc");
             }
@@ -3087,11 +3089,11 @@ mod tests {
     #[test]
     fn disconnect_preserves_sync_doc() {
         let mut editor = Editor::new();
-        editor.collab_status = CollabStatus::Connected { peer_count: 1 };
+        editor.collab.status = CollabStatus::Connected { peer_count: 1 };
         let buf = &mut editor.buffers[0];
         buf.collab_doc_id = Some("test-doc".to_string());
         buf.enable_sync(42);
-        editor.collab_synced_buffers.insert("test-doc".to_string());
+        editor.collab.synced_buffers.insert("test-doc".to_string());
 
         handle_collab_event(
             &mut editor,
@@ -3114,8 +3116,8 @@ mod tests {
             "collab_offline should be set"
         );
         // UI tracking should be cleared.
-        assert!(editor.collab_synced_buffers.is_empty());
-        assert_eq!(editor.collab_synced_docs, 0);
+        assert!(editor.collab.synced_buffers.is_empty());
+        assert_eq!(editor.collab.synced_docs, 0);
     }
 
     #[test]
@@ -3135,8 +3137,8 @@ mod tests {
         );
 
         // Should queue a ForceSync intent for the offline buffer.
-        assert!(editor.pending_collab_intent.is_some());
-        assert!(editor.collab_synced_buffers.contains("test-doc"));
+        assert!(editor.collab.pending_intent.is_some());
+        assert!(editor.collab.synced_buffers.contains("test-doc"));
     }
 
     #[test]

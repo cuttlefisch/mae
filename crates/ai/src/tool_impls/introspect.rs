@@ -203,8 +203,8 @@ fn build_buffers_section(editor: &Editor) -> serde_json::Value {
 
 fn build_shell_section(editor: &Editor) -> serde_json::Value {
     json!({
-        "viewport_count": editor.shell_viewports.len(),
-        "cwd_count": editor.shell_cwds.len(),
+        "viewport_count": editor.shell.viewports.len(),
+        "cwd_count": editor.shell.viewport_cwds.len(),
     })
 }
 
@@ -369,13 +369,13 @@ fn build_ai_section(editor: &Editor) -> serde_json::Value {
 }
 
 fn build_collaboration_section(editor: &Editor) -> serde_json::Value {
-    let collab_status = editor.collab_status.as_str();
-    let collab_server = editor.collab_server_address.clone();
+    let collab_status = editor.collab.status.as_str();
+    let collab_server = editor.collab.server_address.clone();
     json!({
         "collab_status": collab_status,
         "collab_server": collab_server,
-        "synced_buffers": editor.collab_synced_docs,
-        "pending_collab_intent": editor.pending_collab_intent.is_some(),
+        "synced_buffers": editor.collab.synced_docs,
+        "pending_collab_intent": editor.collab.pending_intent.is_some(),
     })
 }
 

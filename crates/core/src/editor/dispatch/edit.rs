@@ -168,7 +168,7 @@ impl Editor {
                 if let Some(text) = self.paste_text() {
                     let idx = self.active_buffer_idx();
                     if self.buffers[idx].kind == crate::BufferKind::Shell {
-                        self.pending_shell_inputs.push((idx, text));
+                        self.shell.inputs.push((idx, text));
                         return None;
                     }
                     if self.buffers[idx].read_only {
@@ -211,7 +211,7 @@ impl Editor {
                 if let Some(text) = self.paste_text() {
                     let idx = self.active_buffer_idx();
                     if self.buffers[idx].kind == crate::BufferKind::Shell {
-                        self.pending_shell_inputs.push((idx, text));
+                        self.shell.inputs.push((idx, text));
                         return None;
                     }
                     if self.buffers[idx].read_only {
@@ -617,7 +617,7 @@ impl Editor {
                 if let Some(text) = self.registers.get(&'0').cloned() {
                     let idx = self.active_buffer_idx();
                     if self.buffers[idx].kind == crate::BufferKind::Shell {
-                        self.pending_shell_inputs.push((idx, text));
+                        self.shell.inputs.push((idx, text));
                         return None;
                     }
                     if self.buffers[idx].read_only {

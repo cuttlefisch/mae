@@ -138,7 +138,7 @@ pub(super) fn handle_command_palette_mode(
                     }
                 }
                 (Some(doc_name), PalettePurpose::CollabJoin) => {
-                    editor.pending_collab_intent =
+                    editor.collab.pending_intent =
                         Some(mae_core::CollabIntent::JoinDoc { doc_id: doc_name });
                     editor.set_status("Joining document...");
                 }

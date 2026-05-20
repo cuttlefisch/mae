@@ -288,7 +288,7 @@ For full setup guide: :help ai-setup";
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;
                 if let Some(cwd) = agent_cwd {
-                    self.pending_shell_cwds.insert(new_idx, cwd);
+                    self.shell.cwds.insert(new_idx, cwd);
                 }
                 // @ai-caution: [window-split] Agent shells MUST use
                 // switch_to_buffer_non_conversation() + split_root(), NOT
@@ -305,7 +305,7 @@ For full setup guide: :help ai-setup";
                     self.window_mgr.set_focused(wid);
                 }
                 let cmd = self.ai_editor.clone();
-                self.pending_agent_spawns.push((new_idx, cmd));
+                self.shell.agent_spawns.push((new_idx, cmd));
                 self.set_mode(Mode::ShellInsert);
             }
 

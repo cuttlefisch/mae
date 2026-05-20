@@ -29,8 +29,8 @@ impl Editor {
                     }
                 } else if kind == crate::BufferKind::Shell {
                     // In normal mode over a shell buffer, scroll scrollback up.
-                    let prev = self.pending_shell_scroll.unwrap_or(0);
-                    self.pending_shell_scroll = Some(prev + n as i32);
+                    let prev = self.shell.scroll.unwrap_or(0);
+                    self.shell.scroll = Some(prev + n as i32);
                 } else {
                     let buf = &self.buffers[idx];
                     for _ in 0..n {
@@ -53,8 +53,8 @@ impl Editor {
                     }
                 } else if kind == crate::BufferKind::Shell {
                     // In normal mode over a shell buffer, scroll scrollback down.
-                    let prev = self.pending_shell_scroll.unwrap_or(0);
-                    self.pending_shell_scroll = Some(prev - n as i32);
+                    let prev = self.shell.scroll.unwrap_or(0);
+                    self.shell.scroll = Some(prev - n as i32);
                 } else {
                     let buf = &self.buffers[idx];
                     for _ in 0..n {
@@ -377,8 +377,8 @@ impl Editor {
                     }
                     crate::BufferKind::Shell => {
                         for _ in 0..n {
-                            let prev = self.pending_shell_scroll.unwrap_or(0);
-                            self.pending_shell_scroll = Some(prev + amount as i32);
+                            let prev = self.shell.scroll.unwrap_or(0);
+                            self.shell.scroll = Some(prev + amount as i32);
                         }
                     }
                     _ => {
@@ -414,8 +414,8 @@ impl Editor {
                     }
                     crate::BufferKind::Shell => {
                         for _ in 0..n {
-                            let prev = self.pending_shell_scroll.unwrap_or(0);
-                            self.pending_shell_scroll = Some(prev - amount as i32);
+                            let prev = self.shell.scroll.unwrap_or(0);
+                            self.shell.scroll = Some(prev - amount as i32);
                         }
                     }
                     _ => {
@@ -453,8 +453,8 @@ impl Editor {
                     crate::BufferKind::Shell => {
                         let scroll_speed = self.scroll_speed as i32;
                         for _ in 0..n {
-                            let prev = self.pending_shell_scroll.unwrap_or(0);
-                            self.pending_shell_scroll = Some(prev - scroll_speed);
+                            let prev = self.shell.scroll.unwrap_or(0);
+                            self.shell.scroll = Some(prev - scroll_speed);
                         }
                     }
                     _ => {
@@ -538,8 +538,8 @@ impl Editor {
                     crate::BufferKind::Shell => {
                         let scroll_speed = self.scroll_speed as i32;
                         for _ in 0..n {
-                            let prev = self.pending_shell_scroll.unwrap_or(0);
-                            self.pending_shell_scroll = Some(prev + scroll_speed);
+                            let prev = self.shell.scroll.unwrap_or(0);
+                            self.shell.scroll = Some(prev + scroll_speed);
                         }
                     }
                     _ => {

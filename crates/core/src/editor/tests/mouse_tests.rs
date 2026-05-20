@@ -92,8 +92,8 @@ fn mouse_click_shell_buffer_routes_to_pending() {
     editor.handle_mouse_click(5, 10, crate::input::MouseButton::Left);
 
     // Should have set pending_shell_click (with border offset subtracted).
-    assert!(editor.pending_shell_click.is_some());
-    let (row, col, _) = editor.pending_shell_click.unwrap();
+    assert!(editor.shell.click.is_some());
+    let (row, col, _) = editor.shell.click.unwrap();
     assert_eq!(row, 4); // 5 - 1 border
     assert_eq!(col, 9); // 10 - 1 border
 }
@@ -108,8 +108,8 @@ fn mouse_drag_shell_buffer_routes_to_pending() {
 
     editor.handle_mouse_drag(3, 7);
 
-    assert!(editor.pending_shell_drag.is_some());
-    let (row, col) = editor.pending_shell_drag.unwrap();
+    assert!(editor.shell.drag.is_some());
+    let (row, col) = editor.shell.drag.unwrap();
     assert_eq!(row, 2);
     assert_eq!(col, 6);
     // Should NOT enter Visual mode for shell buffers.
@@ -126,8 +126,8 @@ fn mouse_release_shell_buffer_routes_to_pending() {
 
     editor.handle_mouse_release(8, 15);
 
-    assert!(editor.pending_shell_release.is_some());
-    let (row, col) = editor.pending_shell_release.unwrap();
+    assert!(editor.shell.release.is_some());
+    let (row, col) = editor.shell.release.unwrap();
     assert_eq!(row, 7);
     assert_eq!(col, 14);
 }
@@ -137,7 +137,7 @@ fn mouse_release_text_buffer_is_noop() {
     let mut editor = Editor::new();
     editor.handle_mouse_release(5, 10);
     // Text buffer → no pending shell release.
-    assert!(editor.pending_shell_release.is_none());
+    assert!(editor.shell.release.is_none());
 }
 
 #[test]

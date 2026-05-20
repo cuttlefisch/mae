@@ -1774,7 +1774,7 @@ impl SchemeRuntime {
             .register_value("*shell-buffers*", SteelVal::ListV(shell_indices.into()));
 
         // (shell-cwd BUF-IDX) — return cached CWD for a shell buffer.
-        let cwds = editor.shell_cwds.clone();
+        let cwds = editor.shell.viewport_cwds.clone();
         self.engine.register_fn("shell-cwd", move |idx: isize| {
             cwds.get(&(idx.max(0) as usize))
                 .cloned()
@@ -1782,7 +1782,7 @@ impl SchemeRuntime {
         });
 
         // (shell-read-output BUF-IDX MAX-LINES) — read viewport snapshot.
-        let viewports = editor.shell_viewports.clone();
+        let viewports = editor.shell.viewports.clone();
         self.engine
             .register_fn("shell-read-output", move |idx: isize, max: isize| {
                 let idx = idx.max(0) as usize;
@@ -2105,9 +2105,9 @@ impl SchemeRuntime {
 
         // (collab-status) — returns an alist with current collaboration state.
         // Returns: ((status . "off") (server . "127.0.0.1:9473") (synced-docs . 0) (peer-count . 0))
-        let collab_status_str = editor.collab_status.as_str().to_string();
-        let collab_server_addr = editor.collab_server_address.clone();
-        let collab_synced_docs = editor.collab_synced_docs;
+        let collab_status_str = editor.collab.status.as_str().to_string();
+        let collab_server_addr = editor.collab.server_address.clone();
+        let collab_synced_docs = editor.collab.synced_docs;
         self.engine
             .register_fn("collab-status", move || -> SteelVal {
                 let make_pair = |k: &str, v: SteelVal| -> SteelVal {
@@ -2131,7 +2131,7 @@ impl SchemeRuntime {
             });
 
         // (collab-synced-buffers) — returns a list of synced buffer names.
-        let synced_names: Vec<String> = editor.collab_synced_buffers.iter().cloned().collect();
+        let synced_names: Vec<String> = editor.collab.synced_buffers.iter().cloned().collect();
         self.engine
             .register_fn("collab-synced-buffers", move || -> SteelVal {
                 SteelVal::ListV(
@@ -2692,7 +2692,7 @@ impl SchemeRuntime {
 
         // (shell-send-input BUF-IDX TEXT) — queue shell terminal input.
         for (buf_idx, text) in state.pending_shell_inputs.drain(..) {
-            editor.pending_shell_inputs.push((buf_idx, text));
+            editor.shell.inputs.push((buf_idx, text));
         }
 
         // Recent files and projects
@@ -3502,7 +3502,10 @@ mod tests {
     fn test_shell_cwd_returns_cached_value() {
         let mut rt = new_runtime();
         let mut editor = Editor::new();
-        editor.shell_cwds.insert(1, "/home/user".to_string());
+        editor
+            .shell
+            .viewport_cwds
+            .insert(1, "/home/user".to_string());
         rt.inject_editor_state(&editor);
         let result = rt.eval("(shell-cwd 1)").unwrap();
         assert_eq!(result, "/home/user");
@@ -3513,7 +3516,8 @@ mod tests {
         let mut rt = new_runtime();
         let mut editor = Editor::new();
         editor
-            .shell_viewports
+            .shell
+            .viewports
             .insert(2, vec!["$ ls".to_string(), "file.txt".to_string()]);
         rt.inject_editor_state(&editor);
         let result = rt.eval("(shell-read-output 2 10)").unwrap();

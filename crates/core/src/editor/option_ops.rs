@@ -143,19 +143,19 @@ impl super::Editor {
             "format_on_save" => self.format_on_save.to_string(),
             "spell_enabled" => self.spell_enabled.to_string(),
             "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
-            "collab_server_address" => self.collab_server_address.clone(),
-            "collab_auto_connect" => self.collab_auto_connect.to_string(),
-            "collab_auto_share" => self.collab_auto_share.to_string(),
-            "collab_reconnect_interval" => self.collab_reconnect_interval.to_string(),
-            "collab_user_name" => self.collab_user_name.clone(),
-            "collab_write_timeout_ms" => self.collab_write_timeout_ms.to_string(),
-            "collab_max_pending_updates" => self.collab_max_pending_updates.to_string(),
-            "collab_reconnect_backoff_factor" => self.collab_reconnect_backoff_factor.to_string(),
-            "collab_max_reconnect_attempts" => self.collab_max_reconnect_attempts.to_string(),
-            "collab_batch_update_ms" => self.collab_batch_update_ms.to_string(),
-            "collab_auto_resolve_paths" => self.collab_auto_resolve_paths.to_string(),
-            "collab_default_save_dir" => self.collab_default_save_dir.clone(),
-            "collab_save_on_remote_update" => self.collab_save_on_remote_update.to_string(),
+            "collab_server_address" => self.collab.server_address.clone(),
+            "collab_auto_connect" => self.collab.auto_connect.to_string(),
+            "collab_auto_share" => self.collab.auto_share.to_string(),
+            "collab_reconnect_interval" => self.collab.reconnect_interval.to_string(),
+            "collab_user_name" => self.collab.user_name.clone(),
+            "collab_write_timeout_ms" => self.collab.write_timeout_ms.to_string(),
+            "collab_max_pending_updates" => self.collab.max_pending_updates.to_string(),
+            "collab_reconnect_backoff_factor" => self.collab.reconnect_backoff_factor.to_string(),
+            "collab_max_reconnect_attempts" => self.collab.max_reconnect_attempts.to_string(),
+            "collab_batch_update_ms" => self.collab.batch_update_ms.to_string(),
+            "collab_auto_resolve_paths" => self.collab.auto_resolve_paths.to_string(),
+            "collab_default_save_dir" => self.collab.default_save_dir.clone(),
+            "collab_save_on_remote_update" => self.collab.save_on_remote_update.to_string(),
             "fill_column" => self.fill_column.to_string(),
             _ => return None,
         };
@@ -579,50 +579,50 @@ impl super::Editor {
                 self.file_tree_focus_on_open = parse_option_bool(value)?;
             }
             "collab_server_address" => {
-                self.collab_server_address = value.to_string();
+                self.collab.server_address = value.to_string();
             }
             "collab_auto_connect" => {
-                self.collab_auto_connect = parse_option_bool(value)?;
+                self.collab.auto_connect = parse_option_bool(value)?;
             }
             "collab_auto_share" => {
-                self.collab_auto_share = parse_option_bool(value)?;
+                self.collab.auto_share = parse_option_bool(value)?;
             }
             "collab_reconnect_interval" => {
                 let v: u64 = value
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.collab_reconnect_interval = v.clamp(1, 300);
+                self.collab.reconnect_interval = v.clamp(1, 300);
             }
             "collab_user_name" => {
-                self.collab_user_name = value.to_string();
+                self.collab.user_name = value.to_string();
             }
             "collab_write_timeout_ms" => {
                 let v: u64 = value
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.collab_write_timeout_ms = v.clamp(500, 60_000);
+                self.collab.write_timeout_ms = v.clamp(500, 60_000);
             }
             "collab_max_pending_updates" => {
-                self.collab_max_pending_updates = parse_option_int(value)? as u64;
+                self.collab.max_pending_updates = parse_option_int(value)? as u64;
             }
             "collab_reconnect_backoff_factor" => {
                 let v = parse_option_int(value)? as u64;
-                self.collab_reconnect_backoff_factor = v.clamp(1, 10);
+                self.collab.reconnect_backoff_factor = v.clamp(1, 10);
             }
             "collab_max_reconnect_attempts" => {
-                self.collab_max_reconnect_attempts = parse_option_int(value)? as u64;
+                self.collab.max_reconnect_attempts = parse_option_int(value)? as u64;
             }
             "collab_batch_update_ms" => {
-                self.collab_batch_update_ms = parse_option_int(value)? as u64;
+                self.collab.batch_update_ms = parse_option_int(value)? as u64;
             }
             "collab_auto_resolve_paths" => {
-                self.collab_auto_resolve_paths = parse_option_bool(value)?;
+                self.collab.auto_resolve_paths = parse_option_bool(value)?;
             }
             "collab_default_save_dir" => {
-                self.collab_default_save_dir = value.to_string();
+                self.collab.default_save_dir = value.to_string();
             }
             "collab_save_on_remote_update" => {
-                self.collab_save_on_remote_update = parse_option_bool(value)?;
+                self.collab.save_on_remote_update = parse_option_bool(value)?;
             }
             "fill_column" => {
                 let v: usize = value

@@ -270,10 +270,10 @@ fn main() -> io::Result<()> {
 
         // Apply env-var overrides for collab.
         if let Ok(addr) = std::env::var("MAE_COLLAB_SERVER") {
-            editor.collab_server_address = addr;
+            editor.collab.server_address = addr;
         }
         if std::env::var("MAE_COLLAB_AUTO_CONNECT").is_ok() {
-            editor.collab_auto_connect = true;
+            editor.collab.auto_connect = true;
         }
 
         let _module_registry = load_init_file(&mut scheme, &mut editor);
@@ -291,7 +291,7 @@ fn main() -> io::Result<()> {
             collab_bridge::spawn_collab_task(collab_spawn);
 
             // Give the collab bridge a moment to connect if auto-connect is set.
-            if editor.collab_auto_connect {
+            if editor.collab.auto_connect {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 // Drain initial connection events.
                 while let Ok(event) = collab_event_rx.try_recv() {

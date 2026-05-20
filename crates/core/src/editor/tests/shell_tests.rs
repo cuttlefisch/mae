@@ -217,7 +217,7 @@ fn shell_select_mode_creates_temp_buffer() {
     editor.buffers.push(shell_buf);
     editor.switch_to_buffer(1);
     let shell_idx = editor.active_buffer_idx();
-    editor.shell_viewports.insert(
+    editor.shell.viewports.insert(
         shell_idx,
         vec!["$ echo hello".into(), "hello".into(), "$ ".into()],
     );
@@ -277,7 +277,8 @@ fn shell_select_mode_reuses_existing_buffer() {
     editor.switch_to_buffer(1);
     let shell_idx = editor.active_buffer_idx();
     editor
-        .shell_viewports
+        .shell
+        .viewports
         .insert(shell_idx, vec!["first".into()]);
 
     editor.dispatch_builtin("shell-select-mode");
@@ -286,7 +287,8 @@ fn shell_select_mode_reuses_existing_buffer() {
     // Switch back to the shell buffer and run again with updated content.
     editor.switch_to_buffer(shell_idx);
     editor
-        .shell_viewports
+        .shell
+        .viewports
         .insert(shell_idx, vec!["second".into()]);
     editor.dispatch_builtin("shell-select-mode");
 
@@ -313,7 +315,8 @@ fn shell_select_q_closes_and_returns() {
     editor.switch_to_buffer(1);
     let shell_idx = editor.active_buffer_idx();
     editor
-        .shell_viewports
+        .shell
+        .viewports
         .insert(shell_idx, vec!["output".into()]);
 
     editor.dispatch_builtin("shell-select-mode");
@@ -422,18 +425,18 @@ fn test_notify_buffer_removed_viewports() {
     // Set up 3 buffers
     editor.buffers.push(Buffer::new());
     editor.buffers.push(Buffer::new());
-    editor.shell_viewports.insert(0, vec!["a".into()]);
-    editor.shell_viewports.insert(2, vec!["c".into()]);
+    editor.shell.viewports.insert(0, vec!["a".into()]);
+    editor.shell.viewports.insert(2, vec!["c".into()]);
     // Remove buffer 1
     editor.buffers.remove(1);
     editor.notify_buffer_removed(1);
     // Key 0 unchanged, key 2 shifted to 1
-    assert!(editor.shell_viewports.contains_key(&0));
+    assert!(editor.shell.viewports.contains_key(&0));
     assert_eq!(
-        editor.shell_viewports.get(&1).unwrap(),
+        editor.shell.viewports.get(&1).unwrap(),
         &vec!["c".to_string()]
     );
-    assert!(!editor.shell_viewports.contains_key(&2));
+    assert!(!editor.shell.viewports.contains_key(&2));
 }
 
 #[test]
@@ -495,16 +498,16 @@ fn test_notify_buffer_removed_pending_queues() {
     let mut editor = Editor::new();
     editor.buffers.push(Buffer::new());
     editor.buffers.push(Buffer::new());
-    editor.pending_shell_spawns = vec![0, 1, 2];
-    editor.pending_shell_resets = vec![2];
-    editor.pending_agent_spawns = vec![(1, "cmd".into()), (2, "cmd2".into())];
+    editor.shell.spawns = vec![0, 1, 2];
+    editor.shell.resets = vec![2];
+    editor.shell.agent_spawns = vec![(1, "cmd".into()), (2, "cmd2".into())];
     // Remove buffer 1
     editor.buffers.remove(1);
     editor.notify_buffer_removed(1);
     // idx 1 dropped, idx 2 shifted to 1
-    assert_eq!(editor.pending_shell_spawns, vec![0, 1]);
-    assert_eq!(editor.pending_shell_resets, vec![1]);
-    assert_eq!(editor.pending_agent_spawns, vec![(1, "cmd2".into())]);
+    assert_eq!(editor.shell.spawns, vec![0, 1]);
+    assert_eq!(editor.shell.resets, vec![1]);
+    assert_eq!(editor.shell.agent_spawns, vec![(1, "cmd2".into())]);
     // pending_buffer_removals should have an entry
     assert_eq!(editor.pending_buffer_removals, vec![1]);
 }

@@ -278,7 +278,7 @@ impl Editor {
                     let mut hasher = Sha256::new();
                     hasher.update(content.as_bytes());
                     let content_hash = format!("{:x}", hasher.finalize());
-                    self.pending_collab_intent = Some(super::CollabIntent::SaveCollab {
+                    self.collab.pending_intent = Some(super::CollabIntent::SaveCollab {
                         doc_id: doc_id.clone(),
                         content_hash,
                     });
