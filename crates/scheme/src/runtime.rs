@@ -170,6 +170,32 @@ struct SharedState {
     encoded_state: Option<String>,
     /// Buffer name→index mapping (updated by test runner for cross-test visibility).
     buffer_names: Vec<(usize, String)>,
+
+    // --- Option state (updated by test runner) ---
+    /// Snapshot of option values: (name, value_string).
+    option_values: Vec<(String, String)>,
+
+    // --- Visual/region state (updated by test runner) ---
+    /// Whether a visual selection is active.
+    region_active: bool,
+    /// Start offset of the visual selection.
+    region_start: usize,
+    /// End offset of the visual selection.
+    region_end: usize,
+
+    // --- State vector / reconcile (new CRDT test primitives) ---
+    /// Pending state vector encode request.
+    pending_encode_state_vector: bool,
+    /// Encoded state vector result (base64).
+    encoded_state_vector: Option<String>,
+    /// Pending compute-diff: (remote_state_vector_base64).
+    pending_compute_diff: Option<String>,
+    /// Computed diff result (base64).
+    computed_diff: Option<String>,
+    /// Pending reconcile-to: target text.
+    pending_reconcile_to: Option<String>,
+    /// Reconcile result (base64 update).
+    reconcile_result: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1291,6 +1317,51 @@ impl SchemeRuntime {
                 .unwrap_or(SteelVal::BoolV(false))
         });
 
+        // (test-get-option NAME) — read option value from SharedState (fresh each step).
+        let s = shared.clone();
+        engine.register_fn("test-get-option", move |name: String| -> SteelVal {
+            let state = s.lock().unwrap();
+            state
+                .option_values
+                .iter()
+                .find(|(n, _)| n == &name)
+                .map(|(_, v)| SteelVal::StringV(v.clone().into()))
+                .unwrap_or(SteelVal::BoolV(false))
+        });
+
+        // (test-region-active?) — whether a visual selection is active.
+        let s = shared.clone();
+        engine.register_fn("test-region-active?", move || -> bool {
+            s.lock().unwrap().region_active
+        });
+
+        // (test-region-start) — start offset of the visual selection.
+        let s = shared.clone();
+        engine.register_fn("test-region-start", move || -> isize {
+            s.lock().unwrap().region_start as isize
+        });
+
+        // (test-region-end) — end offset of the visual selection.
+        let s = shared.clone();
+        engine.register_fn("test-region-end", move || -> isize {
+            s.lock().unwrap().region_end as isize
+        });
+
+        // (test-search-forward PATTERN) — search for PATTERN in active buffer text.
+        // Returns the character offset of the first match, or #f if not found.
+        let s = shared.clone();
+        engine.register_fn("test-search-forward", move |pattern: String| -> SteelVal {
+            let state = s.lock().unwrap();
+            match state.current_buffer_text.find(&pattern) {
+                Some(byte_offset) => {
+                    // Convert byte offset to char offset.
+                    let char_offset = state.current_buffer_text[..byte_offset].chars().count();
+                    SteelVal::IntV(char_offset as isize)
+                }
+                None => SteelVal::BoolV(false),
+            }
+        });
+
         // --- CRDT/sync test primitives ---
 
         // (buffer-enable-sync CLIENT-ID) — enable sync on active buffer.
@@ -1342,6 +1413,60 @@ impl SchemeRuntime {
                 }
             },
         );
+
+        // (buffer-encode-state-vector) — request encoding of the active buffer's state vector.
+        // The result is available via (buffer-get-state-vector) after the next apply cycle.
+        let s = shared.clone();
+        engine.register_fn("buffer-encode-state-vector", move || {
+            s.lock().unwrap().pending_encode_state_vector = true;
+            SteelVal::Void
+        });
+
+        // (buffer-get-state-vector) — retrieve the encoded state vector (base64) or #f.
+        let s = shared.clone();
+        engine.register_fn("buffer-get-state-vector", move || -> SteelVal {
+            let state = s.lock().unwrap();
+            match &state.encoded_state_vector {
+                Some(sv) => SteelVal::StringV(sv.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
+
+        // (buffer-compute-diff SV-BASE64) — compute diff from remote state vector.
+        // The result is available via (buffer-get-diff) after the next apply cycle.
+        let s = shared.clone();
+        engine.register_fn("buffer-compute-diff", move |sv_b64: String| {
+            s.lock().unwrap().pending_compute_diff = Some(sv_b64);
+            SteelVal::Void
+        });
+
+        // (buffer-get-diff) — retrieve the computed diff (base64) or #f.
+        let s = shared.clone();
+        engine.register_fn("buffer-get-diff", move || -> SteelVal {
+            let state = s.lock().unwrap();
+            match &state.computed_diff {
+                Some(d) => SteelVal::StringV(d.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
+
+        // (buffer-reconcile-to TEXT) — reconcile sync doc to target text.
+        // The result (base64 update) is available via (buffer-get-reconcile-result).
+        let s = shared.clone();
+        engine.register_fn("buffer-reconcile-to", move |text: String| {
+            s.lock().unwrap().pending_reconcile_to = Some(text);
+            SteelVal::Void
+        });
+
+        // (buffer-get-reconcile-result) — retrieve reconcile result (base64 update) or #f.
+        let s = shared.clone();
+        engine.register_fn("buffer-get-reconcile-result", move || -> SteelVal {
+            let state = s.lock().unwrap();
+            match &state.reconcile_result {
+                Some(r) => SteelVal::StringV(r.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
 
         // Register default values for state-injected variables.
         // This prevents FreeIdentifier errors in init.scm during startup.
@@ -1450,6 +1575,19 @@ impl SchemeRuntime {
     /// Update buffer names in SharedState for `(get-buffer-by-name)` across tests.
     pub fn set_buffer_names(&self, names: Vec<(usize, String)>) {
         self.shared.lock().unwrap().buffer_names = names;
+    }
+
+    /// Update option values in SharedState for test runner.
+    pub fn set_option_values(&self, values: Vec<(String, String)>) {
+        self.shared.lock().unwrap().option_values = values;
+    }
+
+    /// Update region (visual selection) state in SharedState for test runner.
+    pub fn set_region_state(&self, active: bool, start: usize, end: usize) {
+        let mut state = self.shared.lock().unwrap();
+        state.region_active = active;
+        state.region_start = start;
+        state.region_end = end;
     }
 
     /// Drain pending file writes from `(write-file PATH CONTENT)`.
@@ -2380,6 +2518,76 @@ impl SchemeRuntime {
                 }
             } else {
                 warn!(buffer = %buf_name, "buffer not found for sync update");
+            }
+        }
+
+        // (buffer-encode-state-vector) — encode active buffer's state vector.
+        if state.pending_encode_state_vector {
+            state.pending_encode_state_vector = false;
+            let idx = editor.active_buffer_idx();
+            if let Some(ref sync) = editor.buffers[idx].sync_doc {
+                use base64::Engine as _;
+                let sv = sync.state_vector();
+                state.encoded_state_vector =
+                    Some(base64::engine::general_purpose::STANDARD.encode(&sv));
+            } else {
+                state.encoded_state_vector = None;
+            }
+        }
+
+        // (buffer-compute-diff SV-BASE64) — compute diff from remote state vector.
+        if let Some(sv_b64) = state.pending_compute_diff.take() {
+            use base64::Engine as _;
+            use mae_sync::yrs::updates::decoder::Decode;
+            use mae_sync::yrs::{ReadTxn, Transact};
+            let idx = editor.active_buffer_idx();
+            if let Some(ref sync) = editor.buffers[idx].sync_doc {
+                match base64::engine::general_purpose::STANDARD.decode(&sv_b64) {
+                    Ok(sv_bytes) => {
+                        let txn = sync.doc().transact();
+                        match mae_sync::yrs::StateVector::decode_v1(&sv_bytes) {
+                            Ok(sv) => {
+                                let diff = txn.encode_state_as_update_v1(&sv);
+                                state.computed_diff =
+                                    Some(base64::engine::general_purpose::STANDARD.encode(&diff));
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "failed to decode state vector");
+                                state.computed_diff = None;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to base64-decode state vector");
+                        state.computed_diff = None;
+                    }
+                }
+            } else {
+                state.computed_diff = None;
+            }
+        }
+
+        // (buffer-reconcile-to TEXT) — reconcile sync doc to target text.
+        if let Some(target) = state.pending_reconcile_to.take() {
+            use base64::Engine as _;
+            let idx = editor.active_buffer_idx();
+            let has_sync = editor.buffers[idx].sync_doc.is_some();
+            if has_sync {
+                let update = editor.buffers[idx]
+                    .sync_doc
+                    .as_mut()
+                    .unwrap()
+                    .reconcile_to(&target);
+                if update.is_empty() {
+                    state.reconcile_result = Some(String::new());
+                } else {
+                    state.reconcile_result =
+                        Some(base64::engine::general_purpose::STANDARD.encode(&update));
+                }
+                // Rebuild the buffer rope from the sync doc.
+                editor.buffers[idx].rebuild_rope_from_sync();
+            } else {
+                state.reconcile_result = None;
             }
         }
 

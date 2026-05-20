@@ -152,6 +152,31 @@ jobs:
       - name: Verify lockfile
         run: test -f ~/.config/mae/packages.lock
 
+  scheme-tests:
+    name: scheme / e2e
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build TUI binary
+        run: cargo build --release --workspace --exclude mae-gui --exclude mae-test-fixtures
+      - name: Editor tests
+        run: ./target/release/mae --test tests/editor/
+      - name: CRDT tests
+        run: ./target/release/mae --test tests/crdt/
+
+  collab-e2e:
+    name: collab / docker e2e
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run collab E2E
+        run: make docker-collab-test
+        timeout-minutes: 10
+
   code-map:
     name: code-map freshness
     runs-on: ubuntu-latest

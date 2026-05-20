@@ -725,6 +725,20 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
             "testing",
         ),
         (
+            "should-error",
+            "(should-error THUNK)",
+            "Assert THUNK signals an error. Passes if an error is raised, fails if THUNK returns normally.",
+            "(should-error (lambda () (error \"expected\")))",
+            "testing",
+        ),
+        (
+            "should-match",
+            "(should-match HAYSTACK PATTERN)",
+            "Assert HAYSTACK string contains PATTERN substring. Alias for should-contain with pattern-oriented naming.",
+            "(should-match (buffer-string) \"hello\")",
+            "testing",
+        ),
+        (
             "before-each",
             "(before-each HOOK-FN)",
             "Register a setup function for the current describe scope. Called before each it-test.",

@@ -363,6 +363,9 @@ test-scheme-all: build-tui
 	$(RELEASE_BIN) --test tests/crdt/
 	$(RELEASE_BIN) --test tests/editor/
 
+## test-scheme-ci: same as test-scheme-all (CI entry point)
+test-scheme-ci: test-scheme-all
+
 ## docker-collab-test: run collab CRDT E2E tests in Docker containers
 docker-collab-test:
 	docker compose -f docker-compose.collab-test.yml up --build --abort-on-container-exit --exit-code-from verifier

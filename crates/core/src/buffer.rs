@@ -968,6 +968,15 @@ impl Buffer {
         }
     }
 
+    /// Rebuild the buffer rope from the sync doc's current content.
+    /// Used after external reconcile operations that modify the sync doc directly.
+    pub fn rebuild_rope_from_sync(&mut self) {
+        if let Some(sync) = &self.sync_doc {
+            self.rope = sync.rope().clone();
+            self.bump_generation();
+        }
+    }
+
     /// Rebuild sync_doc from current rope state (used after undo/redo,
     /// reload_from_disk, replace_rope, replace_contents).
     ///

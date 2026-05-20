@@ -117,6 +117,24 @@
       (error (string-append "Assertion failed: expected '" needle "' in string"))
       #t))
 
+;; (should-error THUNK) — assert THUNK signals an error. Passes if error raised,
+;; fails if THUNK returns normally.
+(define (should-error thunk)
+  (set! *assertion-count* (+ *assertion-count* 1))
+  (with-handler
+    (lambda (e) #t)
+    (begin (thunk)
+           (error "Expected error but none was raised"))))
+
+;; (should-match HAYSTACK PATTERN) — assert HAYSTACK contains PATTERN substring.
+;; Alias for should-contain with a more descriptive name for pattern-like usage.
+(define (should-match haystack pattern)
+  (set! *assertion-count* (+ *assertion-count* 1))
+  (if (not (string-contains? haystack pattern))
+      (error (string-append "Expected match for '" pattern "' in: "
+                            (substring haystack 0 (min (string-length haystack) 80))))
+      #t))
+
 ;; (should-mode EXPECTED) — assert current editor mode matches expected string.
 ;; Uses (current-mode) which reads from SharedState via Rust, bypassing
 ;; the Steel binding scope issue with *mode* across multi-file test runs.

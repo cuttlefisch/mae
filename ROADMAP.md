@@ -132,6 +132,26 @@
 - [x] Org ↔ Markdown bidirectional conversion (`:markdown-to-org`, `:org-to-markdown`)
 - [ ] Investigate `bincode` unmaintained dependency (RUSTSEC-2025-0141) — transitive via `steel-core`; evaluate alternatives (`bitcode`, `postcard`) or upstream Steel fix
 
+### Phase 12: RAG Pipeline (planned)
+
+- [ ] **Embedding storage**: `sqlite-vec` extension for f32 vectors in KB SQLite. Schema: `node_embeddings(node_id, model, vector BLOB, updated_at)`.
+- [ ] **Embedding generation**: Support local models (GGUF/llama.cpp) and API-based (OpenAI, Voyage). `mae-embed` crate or integration in `mae-kb`.
+- [ ] **Vector search**: `kb_semantic_search(query, top_k)` MCP tool + `(kb-semantic-search QUERY K)` Scheme fn. Cosine similarity, FTS5 fallback.
+- [ ] **Retrieval pipeline**: Before each AI turn, auto-retrieve relevant KB nodes by: buffer context, semantic similarity, explicit references. Budget: `rag_max_context_tokens` option (default 2048).
+- [ ] **Context injection**: Retrieved nodes as structured `<context>` blocks in system prompt. Dedup, TTL cache (5 min).
+- [ ] **Incremental re-embedding**: `kb-reindex` command, background task, status bar progress.
+- [ ] **Multi-source indexing**: Code files (tree-sitter chunked), docs (section chunked), git history (recent commits).
+
+### AI Harness & Per-Model Tuning (planned)
+
+- [ ] **Model profiles**: `ModelProfile` type — max tokens, cache control, tool reliability, prompt style. Stored in `~/.config/mae/models.toml`. Built-in defaults for Claude family, GPT-4o/4.1, Gemini 2.5, DeepSeek V3/R1.
+- [ ] **Prompt template engine**: Template files in `~/.config/mae/prompts/` with variables (`{buffer_name}`, `{language}`, `{tools}`, `{context_budget}`). Per-model overrides.
+- [ ] **Tool tier selection**: Core (15 tools) / Extended (50) / Full (450+). Auto-selected by model reliability score. User-overridable via `ai_tool_tier` option.
+- [ ] **Capability detection**: Auto-run `model_exam` on first use. Cache in `~/.local/share/mae/model-capabilities.json`. Drive tool tier + prompt style.
+- [ ] **Prompt A/B harness**: `mae --prompt-eval` mode — standardized coding tasks x models x configs. Outputs comparison table (accuracy, tokens, latency).
+- [ ] **Per-model tokenizer**: tiktoken (OpenAI), anthropic tokenizer (Claude) for accurate budget math. Character fallback for unknown models.
+- [ ] **Graceful degradation**: Circuit breaker -> reduce tool tier -> simplify prompt -> add examples -> surface warning.
+
 ### Doom Parity Roadmap: Future Feature Crates
 
 **Tier 1: High-value, self-contained (next 2-3 releases)**

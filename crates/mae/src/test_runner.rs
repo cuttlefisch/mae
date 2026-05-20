@@ -134,6 +134,9 @@ async fn run_tests_iteratively(
     println!("TAP version 14");
     println!("1..{}", count);
 
+    // Initial sync so first test sees current editor state (mode, buffer text, etc.).
+    sync_scheme_state(editor, scheme);
+
     let mut pass_count = 0usize;
     let mut fail_count = 0usize;
 
@@ -213,7 +216,12 @@ fn install_mutable_buffer_accessors(_editor: &Editor, scheme: &mut SchemeRuntime
           (define (buffer-pending-updates) (test-pending-updates))
           (define (buffer-sync-content) (test-sync-content))
           (define (buffer-encode-state) (test-encode-state))
-          (define (get-buffer-by-name name) (test-get-buffer-by-name name)))"#;
+          (define (get-buffer-by-name name) (test-get-buffer-by-name name))
+          (define (region-active?) (test-region-active?))
+          (define (region-beginning) (test-region-start))
+          (define (region-end) (test-region-end))
+          (define (buffer-search-forward pattern) (test-search-forward pattern))
+          (define (get-option name) (test-get-option name)))"#;
     let _ = scheme.eval(code);
 }
 
@@ -291,6 +299,39 @@ fn sync_scheme_state(editor: &Editor, scheme: &mut SchemeRuntime) {
         .map(|(i, b)| (i, b.name.clone()))
         .collect();
     scheme.set_buffer_names(buffer_names);
+
+    // Update option values in SharedState.
+    let option_values: Vec<(String, String)> = editor
+        .option_registry
+        .list()
+        .iter()
+        .filter_map(|o| {
+            editor
+                .get_option(&o.name)
+                .map(|(v, _)| (o.name.to_string(), v))
+        })
+        .collect();
+    scheme.set_option_values(option_values);
+
+    // Update region (visual selection) state in SharedState.
+    let (region_active, region_start, region_end) =
+        if matches!(editor.mode, mae_core::Mode::Visual(_)) {
+            let rope = &buf.rope();
+            let anchor_line = editor.visual_anchor_row;
+            let anchor_col = editor.visual_anchor_col;
+            let anchor_offset =
+                rope.line_to_char(anchor_line.min(rope.len_lines().saturating_sub(1))) + anchor_col;
+            let cursor_line = win.cursor_row;
+            let cursor_col = win.cursor_col;
+            let cursor_offset =
+                rope.line_to_char(cursor_line.min(rope.len_lines().saturating_sub(1))) + cursor_col;
+            let start = anchor_offset.min(cursor_offset);
+            let end = anchor_offset.max(cursor_offset);
+            (true, start, end)
+        } else {
+            (false, 0, 0)
+        };
+    scheme.set_region_state(region_active, region_start, region_end);
 
     // Update sync state in SharedState.
     let sync_content = buf.sync_doc.as_ref().map(|s| s.content());

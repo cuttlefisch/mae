@@ -754,7 +754,8 @@
     "mae-scheme": {
       "path": "crates/scheme/src/lib.rs",
       "dependencies": [
-        "mae-core"
+        "mae-core",
+        "mae-sync"
       ],
       "public_items": [
         {
@@ -1207,6 +1208,98 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "current-mode",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-buffer-string",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-buffer-text",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-sync-enabled?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-pending-updates",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-sync-content",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-encode-state",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-get-buffer-by-name",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-get-option",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-region-active?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-region-start",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-region-end",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-search-forward",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-enable-sync",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-disable-sync",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-apply-update",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-load-sync-state",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-encode-state-vector",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-get-state-vector",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-compute-diff",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-get-diff",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-reconcile-to",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-get-reconcile-result",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "buffer-line",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -1304,6 +1397,34 @@
     },
     {
       "name": "collab-synced-buffers",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-sync-enabled?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-pending-updates",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-sync-content",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-drain-updates",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-encode-state",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "undo-available?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "redo-available?",
       "source": "crates/scheme/src/runtime.rs"
     }
   ],

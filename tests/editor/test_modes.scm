@@ -2,6 +2,10 @@
 
 (describe-group "Mode transitions"
   (lambda ()
+    (it-test "setup fresh buffer"
+      (lambda ()
+        (create-buffer "*test-modes*")))
+
     (it-test "starts in normal mode"
       (lambda ()
         (should-mode "normal")))
