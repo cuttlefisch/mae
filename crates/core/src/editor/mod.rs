@@ -548,9 +548,9 @@ pub struct AiNetworkCheck {
     pub error: Option<String>,
 }
 
-// @ai-caution: [dispatch] ~60 fields after ViState (41) + CollabState + ShellIntents extraction.
-// Before adding fields, check if the state belongs in a sub-struct (AiState,
-// LspContext, DapContext, KbContext). See ROADMAP.md architecture debt.
+// @ai-caution: [dispatch] ~40 fields after ViState (41) + AiState (34) + CollabState (18) + ShellIntents (12) extraction.
+// Before adding fields, check if the state belongs in a sub-struct
+// (LspContext, DapContext, KbContext). See ROADMAP.md architecture debt.
 /// Top-level editor state.
 ///
 /// Designed as a clean, composable state machine that both human keybindings
