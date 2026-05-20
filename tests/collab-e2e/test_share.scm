@@ -20,14 +20,23 @@
           (should (pair? status)))))
 
     ;; --- Scenario 1: Separate filesystems ---
-    (it-test "creates and shares a file"
+    ;; Each pending op (open-file, buffer-insert, run-command) is processed
+    ;; by apply_to_editor AFTER the test step. Split into separate steps so
+    ;; open-file completes before buffer-insert targets the new buffer.
+    (it-test "opens test file"
       (lambda ()
-        (open-file "/workspace/test.txt")
+        (open-file "/workspace/test.txt")))
+
+    (it-test "inserts content and saves"
+      (lambda ()
         (run-command "enter-insert-mode")
         (buffer-insert "Hello from Client A\n")
         (run-command "enter-normal-mode")
         (run-command "save")
-        (sleep-ms 500)
+        (sleep-ms 500)))
+
+    (it-test "shares the file"
+      (lambda ()
         (run-command "collab-share")
         (sleep-ms 3000)))
 

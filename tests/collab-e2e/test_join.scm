@@ -37,10 +37,15 @@
         (let ((text (buffer-text "test.txt")))
           (should (string-contains? text "Hello from Client A")))))
 
-    (it-test "edits and syncs back"
+    ;; Split into steps: switch-to-buffer and buffer-insert are pending ops
+    ;; processed by apply_to_editor — they must be in separate test steps.
+    (it-test "switches to joined buffer"
       (lambda ()
         (switch-to-buffer (get-buffer-by-name "test.txt"))
-        (run-command "move-to-last-line")
+        (run-command "move-to-last-line")))
+
+    (it-test "edits and syncs back"
+      (lambda ()
         (run-command "enter-insert-mode")
         (buffer-insert "Hello from Client B\n")
         (run-command "enter-normal-mode")
