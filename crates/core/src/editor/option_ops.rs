@@ -153,6 +153,9 @@ impl super::Editor {
             "collab_reconnect_backoff_factor" => self.collab_reconnect_backoff_factor.to_string(),
             "collab_max_reconnect_attempts" => self.collab_max_reconnect_attempts.to_string(),
             "collab_batch_update_ms" => self.collab_batch_update_ms.to_string(),
+            "collab_auto_resolve_paths" => self.collab_auto_resolve_paths.to_string(),
+            "collab_default_save_dir" => self.collab_default_save_dir.clone(),
+            "collab_save_on_remote_update" => self.collab_save_on_remote_update.to_string(),
             "fill_column" => self.fill_column.to_string(),
             _ => return None,
         };
@@ -611,6 +614,15 @@ impl super::Editor {
             }
             "collab_batch_update_ms" => {
                 self.collab_batch_update_ms = parse_option_int(value)? as u64;
+            }
+            "collab_auto_resolve_paths" => {
+                self.collab_auto_resolve_paths = parse_option_bool(value)?;
+            }
+            "collab_default_save_dir" => {
+                self.collab_default_save_dir = value.to_string();
+            }
+            "collab_save_on_remote_update" => {
+                self.collab_save_on_remote_update = parse_option_bool(value)?;
             }
             "fill_column" => {
                 let v: usize = value

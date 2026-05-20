@@ -1971,20 +1971,29 @@ impl SchemeRuntime {
         self.engine
             .register_value("*option-list*", SteelVal::ListV(opt_info.into()));
 
+        // Populate SharedState option_values so get-option has initial data.
+        {
+            let values: Vec<(String, String)> = editor
+                .option_registry
+                .list()
+                .iter()
+                .filter_map(|o| {
+                    editor
+                        .get_option(&o.name)
+                        .map(|(v, _)| (o.name.to_string(), v))
+                })
+                .collect();
+            self.shared.lock().unwrap().option_values = values;
+        }
+
         // (get-option NAME) — returns current value as string, or #f
-        let options_snapshot: Vec<(String, String)> = editor
-            .option_registry
-            .list()
-            .iter()
-            .filter_map(|o| {
-                editor
-                    .get_option(&o.name)
-                    .map(|(v, _)| (o.name.to_string(), v))
-            })
-            .collect();
+        // Reads from SharedState so values are fresh after sync_scheme_state.
+        let s = self.shared.clone();
         self.engine
             .register_fn("get-option", move |name: String| -> SteelVal {
-                options_snapshot
+                let state = s.lock().unwrap();
+                state
+                    .option_values
                     .iter()
                     .find(|(n, _)| n == &name)
                     .map(|(_, v)| SteelVal::StringV(v.clone().into()))

@@ -26,13 +26,15 @@
       (lambda ()
         (run-command "save")))
 
-    (it-test "saveas creates file on disk"
+    (it-test "saveas sets path and writes file"
       (lambda ()
-        (execute-ex "saveas /tmp/mae-test-collab-join/saved.txt")))
+        (execute-ex "saveas /tmp/mae-test-collab-join-saved.txt")))
 
-    (it-test "verify file exists"
+    ;; Split into separate step: saveas dispatches through apply_to_editor,
+    ;; file write completes before next sync_scheme_state.
+    (it-test "verify file exists after saveas"
       (lambda ()
-        (should (file-exists? "/tmp/mae-test-collab-join/saved.txt"))))
+        (should (file-exists? "/tmp/mae-test-collab-join-saved.txt"))))
 
     (it-test "save again works after saveas"
       (lambda ()

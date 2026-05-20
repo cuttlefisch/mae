@@ -4,18 +4,17 @@
 
 ### Rust (workspace)
 ```bash
-cargo test --workspace          # All Rust tests (3,629+ tests)
+cargo test --workspace          # All Rust tests (3,639+ tests)
 cargo test -p mae-core          # Core editor tests only
 cargo test -p mae-dap           # DAP client mock tests
 cargo test -p mae-mcp           # MCP server tests
 cargo test -p mae-sync          # CRDT sync tests
-make ci                         # Full CI: fmt + clippy + check + test (excludes GUI)
 make verify                     # check + test with summary
 ```
 
 ### Scheme (headless editor)
 ```bash
-mae --test tests/editor/                    # Editor E2E tests (~225 steps)
+mae --test tests/editor/                    # Editor E2E tests (~260 steps)
 mae --test tests/crdt/                      # CRDT lifecycle tests (~151 steps)
 mae --test tests/editor/test_editing.scm    # Single file
 make test-scheme-editor                     # Editor tests (builds first)
@@ -29,6 +28,21 @@ MAE_TCP_E2E=1 cargo test -p mae --test collab_tcp_e2e -- --ignored --nocapture  
 make docker-ci                  # Full CI in container
 make docker-collab-test         # Collab E2E (state-server + clients in Docker)
 ```
+
+### Tiered CI Targets
+```bash
+make ci              # Fast: fmt + clippy + check + test + Scheme editor tests + check-config + code-map
+make ci-extended     # Thorough: ci + CRDT Scheme tests + docker-smoke + docker-new-user
+make ci-docker-e2e   # On-demand: Docker collab E2E (when touching collab/sync code)
+make ci-complete     # Everything: mirrors GitHub CI
+```
+
+| Target | When to Run | Time |
+|--------|-------------|------|
+| `make ci` | Before every commit | ~3 min |
+| `make ci-extended` | Before opening a PR | ~10 min |
+| `make ci-docker-e2e` | When touching collab/sync | ~5 min |
+| `make ci-complete` | Full validation | ~15 min |
 
 ## Test Architecture (3 layers)
 
@@ -67,6 +81,8 @@ Boot a real headless editor, exercise the Scheme API. Each `it-test` is one eval
 - `tests/editor/test_kb.scm` — KB operations
 - `tests/editor/test_test_library.scm` — Self-tests for assertions
 - `tests/editor/test_collab_options.scm` — Collab option get/set round-trip
+- `tests/editor/test_collab_join_save.scm` — Join-save model: saveas, pathless buffers, collab options
+- `tests/editor/test_kb_search.scm` — KB search sort option round-trip
 - `tests/crdt/` — 7 files: sync, convergence, concurrent edits, 3-client, undo, state vector, reconcile
 
 ### Layer 3: Docker / TCP E2E

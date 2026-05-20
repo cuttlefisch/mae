@@ -1149,6 +1149,12 @@ pub struct Editor {
     pub collab_max_reconnect_attempts: u64,
     /// Milliseconds to batch local updates before sending (0 = immediate).
     pub collab_batch_update_ms: u64,
+    /// When joining a doc, prompt to map to local project path.
+    pub collab_auto_resolve_paths: bool,
+    /// Default directory for :saveas on joined buffers (empty = CWD).
+    pub collab_default_save_dir: String,
+    /// Auto-save local file when CRDT update arrives.
+    pub collab_save_on_remote_update: bool,
 }
 
 impl Default for Editor {
@@ -1461,6 +1467,9 @@ impl Editor {
             collab_reconnect_backoff_factor: 2,
             collab_max_reconnect_attempts: 0,
             collab_batch_update_ms: 0,
+            collab_auto_resolve_paths: false,
+            collab_default_save_dir: String::new(),
+            collab_save_on_remote_update: false,
         }
     }
 

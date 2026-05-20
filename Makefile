@@ -45,7 +45,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-service install-completions docker-network-test
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-service install-completions docker-network-test
 
 # Default target: release build
 all: build
@@ -230,12 +230,39 @@ fmt-check:
 clippy:
 	$(CARGO) clippy $(FEAT_FLAG) -- -D warnings
 
-## ci: run the full CI pipeline locally (fmt + clippy + check + test, excludes mae-gui)
+## ci: run the full CI pipeline locally (fmt + clippy + check + test + scheme tests, excludes mae-gui)
 ci: fmt-check
 	$(CARGO) clippy --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures -- -D warnings
 	$(CARGO) check --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures
 	$(CARGO) test --workspace --exclude mae-gui --exclude mae-test-fixtures
+	@echo "==> Scheme editor tests..."
+	./target/debug/mae --test tests/editor/
+	@echo "==> Config validation..."
+	./target/debug/mae --check-config
+	@echo "==> Code-map freshness..."
+	cd tools/code-map && $(CARGO) run --release -- --workspace-root ../.. --check
 	@echo "CI passed ✓"
+
+## ci-extended: thorough CI — run before opening a PR (ci + CRDT tests + docker smoke)
+ci-extended: ci
+	@echo "==> Scheme CRDT tests..."
+	./target/debug/mae --test tests/crdt/
+	@echo "==> Docker smoke test..."
+	$(MAKE) docker-smoke
+	@echo "==> Docker new-user test..."
+	$(MAKE) docker-new-user
+	@echo "CI extended passed ✓"
+
+## ci-docker-e2e: on-demand collab E2E in Docker (when touching collab/sync code)
+ci-docker-e2e:
+	@echo "==> Docker collab E2E..."
+	docker compose -f docker-compose.collab-test.yml up --build --abort-on-container-exit --exit-code-from verifier
+	docker compose -f docker-compose.collab-test.yml down --volumes
+	@echo "Docker collab E2E passed ✓"
+
+## ci-complete: everything — mirrors GitHub CI
+ci-complete: ci-extended ci-docker-e2e
+	@echo "CI complete passed ✓"
 
 ## audit: run cargo-deny security + license scanning
 audit:
