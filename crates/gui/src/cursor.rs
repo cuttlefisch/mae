@@ -425,6 +425,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn compute_cursor_command_mode() {
         let mut editor = Editor::default();
         editor.mode = Mode::Command;
