@@ -336,3 +336,120 @@ async fn tcp_reconnect_after_server_restart() {
     client2.share("tcp-reconnect.txt", "after restart").await;
     assert_eq!(client2.content("tcp-reconnect.txt").await, "after restart");
 }
+
+/// WU6: Offline edit → reconnect → resync — CRDT state preserved across server restart.
+#[tokio::test]
+#[ignore]
+async fn tcp_offline_edit_reconnect_resync() {
+    if !should_run() {
+        return;
+    }
+    let (mut server, addr) = spawn_server().await;
+
+    // Client A shares "offline.txt" = "v1".
+    let mut client_a = TcpClient::connect(&addr).await;
+    client_a.share("offline.txt", "v1").await;
+
+    // Client A edits to "v1-updated".
+    let state = client_a.full_state("offline.txt").await;
+    let mut ts_a = TextSync::from_state(&state).unwrap();
+    let update = ts_a.reconcile_to("v1-updated");
+    client_a.send_update("offline.txt", &update).await;
+    assert_eq!(client_a.content("offline.txt").await, "v1-updated");
+
+    // Preserve CRDT state locally.
+    let preserved = client_a.full_state("offline.txt").await;
+
+    // Kill server.
+    server.kill().await.expect("failed to kill server");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Restart server on same port.
+    let _server2 = Command::new("cargo")
+        .args(["run", "-p", "mae-state-server", "--", "--bind", &addr])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("failed to restart");
+
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if TcpStream::connect(&addr).await.is_ok() {
+            break;
+        }
+    }
+
+    // Client A reconnects and re-shares with preserved CRDT state.
+    let mut client_a2 = TcpClient::connect(&addr).await;
+    let share_msg = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": client_a2.next_id,
+        "method": "sync/share",
+        "params": {
+            "doc": "offline.txt",
+            "update": update_to_base64(&preserved)
+        }
+    });
+    client_a2.next_id += 1;
+    client_a2.send(&share_msg).await;
+    let resp = client_a2.recv().await;
+    assert!(resp.get("error").is_none(), "re-share failed: {resp}");
+
+    // Client B joins and verifies content = "v1-updated".
+    let mut client_b = TcpClient::connect(&addr).await;
+    assert_eq!(
+        client_b.content("offline.txt").await,
+        "v1-updated",
+        "CRDT state must survive server restart"
+    );
+}
+
+/// WU6: Peer join/leave notifications over TCP.
+#[tokio::test]
+#[ignore]
+async fn tcp_peer_join_leave_notifications() {
+    if !should_run() {
+        return;
+    }
+    let (_server, addr) = spawn_server().await;
+
+    // Client A shares a doc.
+    let mut client_a = TcpClient::connect(&addr).await;
+    client_a.share("peer-notify.txt", "hello").await;
+
+    // Client B joins via resync.
+    let mut client_b = TcpClient::connect(&addr).await;
+    let resync_msg = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": client_b.next_id,
+        "method": "sync/resync",
+        "params": { "doc": "peer-notify.txt" }
+    });
+    client_b.next_id += 1;
+    client_b.send(&resync_msg).await;
+    let resp = client_b.recv().await;
+    assert!(resp.get("error").is_none(), "resync failed: {resp}");
+
+    // Client A should receive peer_joined notification.
+    let joined = client_a
+        .wait_for_notification("notifications/peer_joined", 2000)
+        .await;
+    assert!(
+        joined.is_some(),
+        "client A should receive peer_joined notification"
+    );
+
+    // Drop client B.
+    drop(client_b);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Client A should receive peer_left notification.
+    let left = client_a
+        .wait_for_notification("notifications/peer_left", 3000)
+        .await;
+    assert!(
+        left.is_some(),
+        "client A should receive peer_left notification"
+    );
+}
