@@ -2239,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "base64",
  "crossterm",
@@ -2272,7 +2272,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2289,11 +2289,11 @@ dependencies = [
 
 [[package]]
 name = "mae-babel"
-version = "0.10.1"
+version = "0.10.3"
 
 [[package]]
 name = "mae-core"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "criterion",
  "hostname",
@@ -2337,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "mae-dap"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "mae-core",
  "serde",
@@ -2348,18 +2348,18 @@ dependencies = [
 
 [[package]]
 name = "mae-export"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "mae-babel",
 ]
 
 [[package]]
 name = "mae-format"
-version = "0.10.1"
+version = "0.10.3"
 
 [[package]]
 name = "mae-gui"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -2373,7 +2373,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "mae-sync",
  "notify",
@@ -2388,14 +2388,14 @@ dependencies = [
 
 [[package]]
 name = "mae-lookup"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-lsp"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -2405,14 +2405,14 @@ dependencies = [
 
 [[package]]
 name = "mae-make"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-mcp"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -2423,7 +2423,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -2435,7 +2435,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "base64",
  "mae-core",
@@ -2446,7 +2446,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
@@ -2455,15 +2455,15 @@ dependencies = [
 
 [[package]]
 name = "mae-snippets"
-version = "0.10.1"
+version = "0.10.3"
 
 [[package]]
 name = "mae-spell"
-version = "0.10.1"
+version = "0.10.3"
 
 [[package]]
 name = "mae-state-server"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "async-trait",
  "dirs",
@@ -2482,7 +2482,7 @@ dependencies = [
 
 [[package]]
 name = "mae-sync"
-version = "0.10.1"
+version = "0.10.3"
 dependencies = [
  "base64",
  "criterion",
@@ -4660,9 +4660,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.39.1"
+version = "0.39.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4deba334e1190ba7cb498327affa11e5ece10d26a30ab2f27fcf09504b8d8b6"
+checksum = "14311e7e9a03114cd4b65eedd54e8fed2945e17f08586ae97ef53bc0669f9581"
 dependencies = [
  "libc",
  "memchr",
@@ -5166,9 +5166,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.26.8"
+version = "0.26.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "887bd495d0582c5e3e0d8ece2233666169fa56a9644d172fc22ad179ab2d0538"
+checksum = "4dab76d0b724ba557954125188cf0633a1ca43199ced82d95c7b9c32cc3de1f3"
 dependencies = [
  "cc",
  "regex",
@@ -5200,9 +5200,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-highlight"
-version = "0.26.8"
+version = "0.26.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccde2b54a34b58313e69c02496a2a9ad38d59af79b196b5e1df063431752a7e0"
+checksum = "f4fbfa3f35520ff730da507e2c9a526a98156f417e0008c73de873741d7e4ecc"
 dependencies = [
  "regex",
  "streaming-iterator",

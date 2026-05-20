@@ -2,13 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.10.2] - 2026-05-20
+
+### CI
+
+- *(deps)* Bump schneegans/dynamic-badges-action ([eab0672](https://github.com/cuttlefisch/mae/commit/eab067296d8a4a23d50895f1403920fe1ece5c79))
+
+### Miscellaneous
+
+- *(deps)* Bump the rust-dependencies group with 12 updates ([fb4c506](https://github.com/cuttlefisch/mae/commit/fb4c5066868a912a28b3cf12198d5aee33eb5e79))
+- Bump version to 0.10.2 ([8eee744](https://github.com/cuttlefisch/mae/commit/8eee74465af45405789de19b1d006cc31de17535))
+
+## [0.10.1] - 2026-05-15
 
 ### Bug Fixes
 
 - CI code-map job — check freshness instead of auto-push ([5e7686e](https://github.com/cuttlefisch/mae/commit/5e7686e066c002db0c9b5757e2b3614e8d579e5e))
 - Run code-map freshness check on PRs too, not just main pushes ([1ea3dc7](https://github.com/cuttlefisch/mae/commit/1ea3dc762d736d068d8586ea096a01b1dcf16fc2))
 - Remove dead code-map auto-push from release workflow ([9445297](https://github.com/cuttlefisch/mae/commit/9445297be8bdbc864c735331be9303f4c642ce64))
+
+### Miscellaneous
+
+- Bump version to 0.10.1 ([5a00884](https://github.com/cuttlefisch/mae/commit/5a0088469db75110fa09e120f36e53f19f73cb1c))
 
 ### Refactor
 
