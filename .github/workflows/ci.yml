@@ -38,10 +38,11 @@ jobs:
       - name: cargo test
         if: matrix.step == 'test'
         run: |
-          cargo test --workspace --exclude mae-gui          cargo test --doc --workspace --exclude mae-gui
+          cargo test --workspace --exclude mae-gui
+          cargo test --doc --workspace --exclude mae-gui
       - name: cargo clippy
         if: matrix.step == 'clippy'
-        run: cargo clippy --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures -- -D warnings
+        run: cargo clippy --workspace --all-targets --exclude mae-gui -- -D warnings
 
       - name: cargo fmt
         if: matrix.step == 'fmt'
@@ -63,7 +64,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build TUI binary
-        run: cargo build --release --workspace --exclude mae-gui      - name: Validate init.scm
+        run: cargo build --release --workspace --exclude mae-gui
+      - name: Validate init.scm
         run: ./target/release/mae --check-config
 
   server-client:
@@ -132,7 +134,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build TUI binary
-        run: cargo build --release --workspace --exclude mae-gui      - name: Declare test package in init.scm
+        run: cargo build --release --workspace --exclude mae-gui
+      - name: Declare test package in init.scm
         run: |
           mkdir -p ~/.config/mae
           cat > ~/.config/mae/init.scm <<'SCHEME'
@@ -156,7 +159,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build TUI binary
-        run: cargo build --release --workspace --exclude mae-gui      - name: Create Steel home directory
+        run: cargo build --release --workspace --exclude mae-gui
+      - name: Create Steel home directory
         run: mkdir -p ~/.local/share/steel
       - name: Editor tests
         run: ./target/release/mae --test tests/editor/
