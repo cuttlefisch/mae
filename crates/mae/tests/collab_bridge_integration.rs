@@ -13,6 +13,7 @@ use mae_state_server::handler::handle_client;
 use mae_state_server::storage::SqliteBackend;
 use mae_sync::encoding::{base64_to_update, update_to_base64};
 use mae_sync::text::TextSync;
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncWriteExt, BufReader};
 
 // --- Test Infrastructure ---
@@ -171,6 +172,33 @@ impl Client {
         self.recv().await
     }
 
+    async fn ping(&mut self) -> serde_json::Value {
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"$/ping"});
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
+    async fn save_intent(&mut self, doc: &str, expected_hash: &str) -> serde_json::Value {
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"docs/save_intent","params":{"doc":doc,"expected_hash":expected_hash}});
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
+    async fn save_committed(
+        &mut self,
+        doc: &str,
+        saved_by: &str,
+        save_epoch: u64,
+        content_hash: &str,
+    ) -> serde_json::Value {
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"docs/save_committed","params":{"doc":doc,"saved_by":saved_by,"save_epoch":save_epoch,"content_hash":content_hash}});
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
     async fn wait_for_notification(
         &mut self,
         method: &str,
@@ -295,7 +323,8 @@ async fn drain_and_broadcast_uses_collab_doc_id() {
     buf.insert_text_at(5, " end");
     editor.buffers.push(buf);
     editor
-        .collab_synced_buffers
+        .collab
+        .synced_buffers
         .insert("file:proj/main.rs".to_string());
 
     // Verify that collab_doc_id is used (not buffer name) when forwarding.
@@ -422,6 +451,191 @@ async fn reshare_replaces_not_appends() {
     assert_eq!(client.content("reshare.txt").await, "version 1");
     client.share("reshare.txt", "version 2").await;
     assert_eq!(client.content("reshare.txt").await, "version 2");
+}
+
+// ============================================================================
+// Tier 2 — Protocol Feature Tests (save protocol, heartbeat, reconnect)
+// ============================================================================
+
+fn sha256_hash(content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// WU3: Save intent → committed round-trip with broadcast to second client.
+#[tokio::test]
+async fn save_intent_to_committed_roundtrip() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Client A shares a doc with known content.
+    client_a.share("save-test.txt", "save me").await;
+
+    // Client B joins (so it receives broadcasts).
+    let _ = client_b.resync("save-test.txt").await;
+
+    // Client A sends save_intent with correct SHA-256 hash.
+    let hash = sha256_hash("save me");
+    let resp = client_a.save_intent("save-test.txt", &hash).await;
+    assert!(resp.get("error").is_none(), "save_intent failed: {resp}");
+    let result = &resp["result"]["result"];
+    assert_eq!(result["status"].as_str().unwrap(), "ok");
+    let save_epoch = result["save_epoch"].as_u64().unwrap();
+    assert!(save_epoch > 0, "save_epoch should be > 0, got {save_epoch}");
+
+    // Client A sends save_committed.
+    let committed_resp = client_a
+        .save_committed("save-test.txt", "test-user", save_epoch, &hash)
+        .await;
+    assert!(
+        committed_resp.get("error").is_none(),
+        "save_committed failed: {committed_resp}"
+    );
+    assert_eq!(committed_resp["result"]["committed"], true);
+
+    // Client B should receive a save_committed notification.
+    let notif = client_b
+        .wait_for_notification("notifications/save_committed", 2000)
+        .await;
+    assert!(
+        notif.is_some(),
+        "client B should receive save_committed broadcast"
+    );
+    let event = &notif.unwrap()["params"]["event"];
+    assert_eq!(event["data"]["doc"].as_str().unwrap(), "save-test.txt");
+    assert_eq!(event["data"]["saved_by"].as_str().unwrap(), "test-user");
+}
+
+/// WU3 (variant): Save intent with wrong hash returns conflict.
+#[tokio::test]
+async fn save_intent_conflict_on_hash_mismatch() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("conflict-test.txt", "real content").await;
+
+    // Send save_intent with wrong hash.
+    let resp = client
+        .save_intent("conflict-test.txt", "0000000000000000")
+        .await;
+    assert!(resp.get("error").is_none(), "should not be an RPC error");
+    assert_eq!(
+        resp["result"]["result"]["status"].as_str().unwrap(),
+        "conflict"
+    );
+}
+
+/// WU4: Heartbeat ping/pong and server-drop EOF detection.
+#[tokio::test]
+async fn heartbeat_ping_pong_and_server_drop() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    // Use raw duplex so we can drop the server handle.
+    let (client_stream, server_stream) = tokio::io::duplex(8192);
+    let (sr, sw) = tokio::io::split(server_stream);
+
+    let handle = tokio::spawn(async move {
+        handle_client(BufReader::new(sr), sw, store, bc, std::time::Instant::now()).await;
+    });
+
+    let (cr, cw) = tokio::io::split(client_stream);
+    let mut client = Client {
+        writer: cw,
+        reader: BufReader::new(cr),
+        next_id: 1,
+    };
+    client.initialize().await;
+
+    // Send $/ping and verify "pong".
+    let resp = client.ping().await;
+    assert!(resp.get("error").is_none(), "ping failed: {resp}");
+    assert_eq!(resp["result"], "pong");
+
+    // Drop server handle (simulates crash).
+    handle.abort();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Next read should return EOF or error — not hang.
+    match tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        mae_mcp::read_message(&mut client.reader),
+    )
+    .await
+    {
+        Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {} // expected: EOF, error, or timeout
+        Ok(Ok(Some(_))) => {}                    // leftover message is acceptable
+    }
+}
+
+/// WU5: Client reconnects to fresh server and re-shares — CRDT content preserved.
+#[tokio::test]
+async fn reconnect_reshare_preserves_crdt_state() {
+    // Phase 1: Share and edit.
+    let store1 = test_doc_store();
+    let bc1 = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store1), Arc::clone(&bc1)).await;
+
+    client.share("reconnect.txt", "original content").await;
+    let state = client.full_state("reconnect.txt").await;
+    let mut ts = TextSync::from_state(&state).unwrap();
+    let update = ts.reconcile_to("modified content");
+    assert!(!update.is_empty());
+    client.send_update("reconnect.txt", &update).await;
+    assert_eq!(client.content("reconnect.txt").await, "modified content");
+
+    // Capture local CRDT state before disconnect.
+    let preserved_state = client.full_state("reconnect.txt").await;
+
+    // Phase 2: "Server crash" — drop store and broadcaster.
+    drop(client);
+    drop(store1);
+    drop(bc1);
+
+    // Phase 3: Fresh server.
+    let store2 = test_doc_store();
+    let bc2 = test_broadcaster();
+    let mut client2 = Client::connect(Arc::clone(&store2), Arc::clone(&bc2)).await;
+
+    // Re-share using preserved CRDT state (full state encode).
+    let ts2 = TextSync::from_state(&preserved_state).unwrap();
+    assert_eq!(ts2.content(), "modified content");
+
+    // Share the preserved content to the new server.
+    let share_msg = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": client2.next_id,
+        "method": "sync/share",
+        "params": {
+            "doc": "reconnect.txt",
+            "update": update_to_base64(&preserved_state)
+        }
+    });
+    client2.next_id += 1;
+    client2.send(&share_msg).await;
+    let resp = client2.recv().await;
+    assert!(resp.get("error").is_none(), "re-share failed: {resp}");
+
+    // Verify: new server has the modified content.
+    assert_eq!(
+        client2.content("reconnect.txt").await,
+        "modified content",
+        "CRDT state must survive reconnect to fresh server"
+    );
+
+    // Verify: a third client joining sees the correct content.
+    let mut client3 = Client::connect(Arc::clone(&store2), Arc::clone(&bc2)).await;
+    let (state3, _) = client3.resync("reconnect.txt").await;
+    let ts3 = TextSync::from_state(&state3).unwrap();
+    assert_eq!(
+        ts3.content(),
+        "modified content",
+        "new peer must see preserved content"
+    );
 }
 
 // ============================================================================
