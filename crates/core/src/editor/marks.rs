@@ -110,7 +110,7 @@ mod tests {
     use super::*;
     use crate::buffer::Buffer;
 
-    fn ed_with_text(s: &str) -> Editor {
+    fn editor_with_bulk_text(s: &str) -> Editor {
         let mut buf = Buffer::new();
         buf.insert_text_at(0, s);
         Editor::with_buffer(buf)
@@ -118,107 +118,107 @@ mod tests {
 
     #[test]
     fn set_and_jump_same_buffer_restores_cursor() {
-        let mut ed = ed_with_text("line1\nline2\nline3\n");
+        let mut editor = editor_with_bulk_text("line1\nline2\nline3\n");
         // Move to row 2, col 3
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 2;
             win.cursor_col = 3;
         }
-        ed.set_mark('a').unwrap();
+        editor.set_mark('a').unwrap();
 
         // Move somewhere else.
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 0;
             win.cursor_col = 0;
         }
 
-        ed.jump_to_mark('a').unwrap();
-        let win = ed.window_mgr.focused_window();
+        editor.jump_to_mark('a').unwrap();
+        let win = editor.window_mgr.focused_window();
         assert_eq!(win.cursor_row, 2);
         assert_eq!(win.cursor_col, 3);
     }
 
     #[test]
     fn set_mark_rejects_non_alpha() {
-        let mut ed = ed_with_text("hi\n");
-        assert!(ed.set_mark('1').is_err());
-        assert!(ed.set_mark(' ').is_err());
-        assert!(ed.set_mark('!').is_err());
+        let mut editor = editor_with_bulk_text("hi\n");
+        assert!(editor.set_mark('1').is_err());
+        assert!(editor.set_mark(' ').is_err());
+        assert!(editor.set_mark('!').is_err());
     }
 
     #[test]
     fn jump_to_mark_rejects_non_alpha() {
-        let mut ed = ed_with_text("hi\n");
-        assert!(ed.jump_to_mark('1').is_err());
+        let mut editor = editor_with_bulk_text("hi\n");
+        assert!(editor.jump_to_mark('1').is_err());
     }
 
     #[test]
     fn jump_to_unset_mark_errors() {
-        let mut ed = ed_with_text("hi\n");
-        let err = ed.jump_to_mark('z').unwrap_err();
+        let mut editor = editor_with_bulk_text("hi\n");
+        let err = editor.jump_to_mark('z').unwrap_err();
         assert!(err.contains("not set"));
     }
 
     #[test]
     fn uppercase_and_lowercase_are_distinct() {
-        let mut ed = ed_with_text("line1\nline2\n");
+        let mut editor = editor_with_bulk_text("line1\nline2\n");
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 0;
         }
-        ed.set_mark('a').unwrap();
+        editor.set_mark('a').unwrap();
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 1;
         }
-        ed.set_mark('A').unwrap();
+        editor.set_mark('A').unwrap();
 
-        ed.jump_to_mark('a').unwrap();
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 0);
+        editor.jump_to_mark('a').unwrap();
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 0);
 
-        ed.jump_to_mark('A').unwrap();
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 1);
+        editor.jump_to_mark('A').unwrap();
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
     }
 
     #[test]
     fn jump_clamps_row_past_eof() {
-        let mut ed = ed_with_text("aaa\nbbb\nccc\nddd\n");
+        let mut editor = editor_with_bulk_text("aaa\nbbb\nccc\nddd\n");
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 3;
             win.cursor_col = 2;
         }
-        ed.set_mark('e').unwrap();
+        editor.set_mark('e').unwrap();
         // Truncate the buffer to remove the `ddd` line entirely.
-        let buf = &mut ed.buffers[0];
+        let buf = &mut editor.buffers[0];
         let total = buf.rope().len_chars();
         let two_lines_end = buf.rope().line_to_char(2);
         buf.delete_range(two_lines_end, total);
 
-        ed.jump_to_mark('e').unwrap();
-        let win = ed.window_mgr.focused_window();
+        editor.jump_to_mark('e').unwrap();
+        let win = editor.window_mgr.focused_window();
         // Row must be within the display line count (phantom line excluded).
-        assert!(win.cursor_row < ed.buffers[0].display_line_count());
+        assert!(win.cursor_row < editor.buffers[0].display_line_count());
         assert!(win.cursor_row < 3, "was {}", win.cursor_row);
     }
 
     #[test]
     fn jump_clamps_col_past_eol() {
-        let mut ed = ed_with_text("hello world\nhi\n");
+        let mut editor = editor_with_bulk_text("hello world\nhi\n");
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 0;
             win.cursor_col = 10;
         }
-        ed.set_mark('m').unwrap();
+        editor.set_mark('m').unwrap();
         // Jump into a shorter context by deleting most of line 0.
-        let buf = &mut ed.buffers[0];
+        let buf = &mut editor.buffers[0];
         buf.delete_range(2, 11); // "he\nhi\n"
 
-        ed.jump_to_mark('m').unwrap();
-        let win = ed.window_mgr.focused_window();
+        editor.jump_to_mark('m').unwrap();
+        let win = editor.window_mgr.focused_window();
         assert_eq!(win.cursor_row, 0);
         // "he" is len 2, so col is clamped to 2.
         assert!(win.cursor_col <= 2);
@@ -226,42 +226,42 @@ mod tests {
 
     #[test]
     fn scratch_buffer_mark_survives_same_scratch() {
-        let mut ed = ed_with_text("scratch\n");
+        let mut editor = editor_with_bulk_text("scratch\n");
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 0;
             win.cursor_col = 5;
         }
-        ed.set_mark('s').unwrap();
+        editor.set_mark('s').unwrap();
 
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_col = 0;
         }
-        ed.jump_to_mark('s').unwrap();
-        assert_eq!(ed.window_mgr.focused_window().cursor_col, 5);
+        editor.jump_to_mark('s').unwrap();
+        assert_eq!(editor.window_mgr.focused_window().cursor_col, 5);
     }
 
     #[test]
     fn overwriting_mark_replaces_previous_position() {
-        let mut ed = ed_with_text("line1\nline2\n");
+        let mut editor = editor_with_bulk_text("line1\nline2\n");
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 0;
         }
-        ed.set_mark('a').unwrap();
+        editor.set_mark('a').unwrap();
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 1;
         }
-        ed.set_mark('a').unwrap();
+        editor.set_mark('a').unwrap();
 
         // Clear cursor, jump: should land at row 1 (the newer position).
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 0;
         }
-        ed.jump_to_mark('a').unwrap();
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 1);
+        editor.jump_to_mark('a').unwrap();
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
     }
 }

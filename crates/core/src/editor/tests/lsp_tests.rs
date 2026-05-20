@@ -254,7 +254,7 @@ fn kill_buffer_shifts_syntax_indices() {
 
 #[test]
 fn syntax_select_node_enters_visual() {
-    let mut editor = ed_with_rust("fn main() {}");
+    let mut editor = editor_with_rust("fn main() {}");
     assert!(editor.syntax_select_node());
     assert!(matches!(editor.mode, Mode::Visual(VisualType::Char)));
     // Selection should cover some bytes.
@@ -271,7 +271,7 @@ fn syntax_select_node_no_language_fails() {
 
 #[test]
 fn syntax_expand_selection_grows_to_parent() {
-    let mut editor = ed_with_rust("fn main() { let x = 1; }");
+    let mut editor = editor_with_rust("fn main() { let x = 1; }");
     // Place cursor inside the body on the 'x' identifier (column 16).
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 0;
@@ -299,7 +299,7 @@ fn syntax_expand_selection_grows_to_parent() {
 
 #[test]
 fn syntax_contract_selection_restores_previous() {
-    let mut editor = ed_with_rust("fn main() { let x = 1; }");
+    let mut editor = editor_with_rust("fn main() { let x = 1; }");
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 0;
     win.cursor_col = 16;
@@ -313,21 +313,21 @@ fn syntax_contract_selection_restores_previous() {
 
 #[test]
 fn syntax_contract_without_stack_reports_status() {
-    let mut editor = ed_with_rust("fn main() {}");
+    let mut editor = editor_with_rust("fn main() {}");
     assert!(!editor.syntax_contract_selection());
     assert!(editor.status_msg.contains("No prior"));
 }
 
 #[test]
 fn syntax_tree_sexp_contains_function_item() {
-    let mut editor = ed_with_rust("fn main() {}");
+    let mut editor = editor_with_rust("fn main() {}");
     let sexp = editor.syntax_tree_sexp().unwrap();
     assert!(sexp.contains("function_item"), "sexp: {}", sexp);
 }
 
 #[test]
 fn syntax_node_kind_at_cursor_on_keyword() {
-    let mut editor = ed_with_rust("fn main() {}");
+    let mut editor = editor_with_rust("fn main() {}");
     // Cursor at (0,0) — 'f' of 'fn'
     let kind = editor.syntax_node_kind_at_cursor().unwrap();
     // Either the keyword itself or the wrapping function item — just

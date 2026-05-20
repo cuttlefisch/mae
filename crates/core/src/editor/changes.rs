@@ -222,128 +222,136 @@ mod tests {
     use super::*;
     use crate::buffer::Buffer;
 
-    fn ed_with_text(s: &str) -> Editor {
+    fn editor_with_bulk_text(s: &str) -> Editor {
         let mut buf = Buffer::new();
         buf.insert_text_at(0, s);
         Editor::with_buffer(buf)
     }
 
-    fn set_cursor(ed: &mut Editor, row: usize, col: usize) {
-        let win = ed.window_mgr.focused_window_mut();
+    fn set_cursor(editor: &mut Editor, row: usize, col: usize) {
+        let win = editor.window_mgr.focused_window_mut();
         win.cursor_row = row;
         win.cursor_col = col;
     }
 
     #[test]
     fn record_change_appends_entry() {
-        let mut ed = ed_with_text("a\nb\nc\n");
-        set_cursor(&mut ed, 1, 0);
-        ed.record_change();
-        assert_eq!(ed.vi.changes.len(), 1);
-        assert_eq!(ed.vi.change_idx, 1);
+        let mut editor = editor_with_bulk_text("a\nb\nc\n");
+        set_cursor(&mut editor, 1, 0);
+        editor.record_change();
+        assert_eq!(editor.vi.changes.len(), 1);
+        assert_eq!(editor.vi.change_idx, 1);
     }
 
     #[test]
     fn record_change_dedupes_consecutive() {
-        let mut ed = ed_with_text("a\nb\n");
-        ed.record_change();
-        ed.record_change();
-        assert_eq!(ed.vi.changes.len(), 1);
+        let mut editor = editor_with_bulk_text("a\nb\n");
+        editor.record_change();
+        editor.record_change();
+        assert_eq!(editor.vi.changes.len(), 1);
     }
 
     #[test]
     fn g_semi_walks_back_through_edits() {
-        let mut ed = ed_with_text("a\nb\nc\nd\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.record_change();
-        set_cursor(&mut ed, 1, 0);
-        ed.record_change();
-        set_cursor(&mut ed, 2, 0);
-        ed.record_change();
+        let mut editor = editor_with_bulk_text("a\nb\nc\nd\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.record_change();
+        set_cursor(&mut editor, 1, 0);
+        editor.record_change();
+        set_cursor(&mut editor, 2, 0);
+        editor.record_change();
 
         // Simulate moving the cursor (not an edit) then g;
-        set_cursor(&mut ed, 3, 0);
-        ed.change_backward(1);
-        let w = ed.window_mgr.focused_window();
+        set_cursor(&mut editor, 3, 0);
+        editor.change_backward(1);
+        let w = editor.window_mgr.focused_window();
         assert_eq!((w.cursor_row, w.cursor_col), (2, 0));
 
-        ed.change_backward(1);
-        let w = ed.window_mgr.focused_window();
+        editor.change_backward(1);
+        let w = editor.window_mgr.focused_window();
         assert_eq!((w.cursor_row, w.cursor_col), (1, 0));
     }
 
     #[test]
     fn g_comma_returns_forward() {
-        let mut ed = ed_with_text("aaaaaaa\nbbbbbbb\nccccccc\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.record_change();
-        set_cursor(&mut ed, 1, 0);
-        ed.record_change();
-        set_cursor(&mut ed, 2, 5);
+        let mut editor = editor_with_bulk_text("aaaaaaa\nbbbbbbb\nccccccc\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.record_change();
+        set_cursor(&mut editor, 1, 0);
+        editor.record_change();
+        set_cursor(&mut editor, 2, 5);
 
-        ed.change_backward(1);
-        ed.change_forward(1);
-        let w = ed.window_mgr.focused_window();
+        editor.change_backward(1);
+        editor.change_forward(1);
+        let w = editor.window_mgr.focused_window();
         assert_eq!((w.cursor_row, w.cursor_col), (2, 5));
     }
 
     #[test]
     fn change_backward_at_oldest_is_noop() {
-        let mut ed = ed_with_text("a\nb\n");
-        ed.change_backward(1);
-        let w = ed.window_mgr.focused_window();
+        let mut editor = editor_with_bulk_text("a\nb\n");
+        editor.change_backward(1);
+        let w = editor.window_mgr.focused_window();
         assert_eq!((w.cursor_row, w.cursor_col), (0, 0));
     }
 
     #[test]
     fn new_edit_truncates_forward_history() {
-        let mut ed = ed_with_text("a\nb\nc\nd\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.record_change();
-        set_cursor(&mut ed, 1, 0);
-        ed.record_change();
-        set_cursor(&mut ed, 2, 0);
-        ed.record_change();
+        let mut editor = editor_with_bulk_text("a\nb\nc\nd\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.record_change();
+        set_cursor(&mut editor, 1, 0);
+        editor.record_change();
+        set_cursor(&mut editor, 2, 0);
+        editor.record_change();
 
-        ed.change_backward(2);
+        editor.change_backward(2);
         // New edit here discards the two forward entries.
-        set_cursor(&mut ed, 3, 1);
-        ed.record_change();
+        set_cursor(&mut editor, 3, 1);
+        editor.record_change();
 
         // g, should be a no-op — no forward history.
-        set_cursor(&mut ed, 0, 0);
-        ed.change_forward(1);
-        let w = ed.window_mgr.focused_window();
+        set_cursor(&mut editor, 0, 0);
+        editor.change_forward(1);
+        let w = editor.window_mgr.focused_window();
         assert_eq!((w.cursor_row, w.cursor_col), (0, 0));
     }
 
     #[test]
     fn change_list_bounded() {
-        let mut ed = ed_with_text("x\n");
+        let mut editor = editor_with_bulk_text("x\n");
         for i in 0..(CHANGE_LIST_CAP + 10) {
-            set_cursor(&mut ed, 0, i % 2);
-            ed.record_change();
+            set_cursor(&mut editor, 0, i % 2);
+            editor.record_change();
         }
-        assert!(ed.vi.changes.len() <= CHANGE_LIST_CAP);
+        assert!(editor.vi.changes.len() <= CHANGE_LIST_CAP);
     }
 
     #[test]
     fn show_changes_buffer_empty() {
-        let mut ed = ed_with_text("a\n");
-        ed.show_changes_buffer();
-        let buf = ed.buffers.iter().find(|b| b.name == "*Changes*").unwrap();
+        let mut editor = editor_with_bulk_text("a\n");
+        editor.show_changes_buffer();
+        let buf = editor
+            .buffers
+            .iter()
+            .find(|b| b.name == "*Changes*")
+            .unwrap();
         assert!(buf.text().contains("No recorded changes"));
     }
 
     #[test]
     fn show_changes_buffer_lists_entries() {
-        let mut ed = ed_with_text("a\nb\nc\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.record_change();
-        set_cursor(&mut ed, 2, 1);
-        ed.record_change();
-        ed.show_changes_buffer();
-        let buf = ed.buffers.iter().find(|b| b.name == "*Changes*").unwrap();
+        let mut editor = editor_with_bulk_text("a\nb\nc\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.record_change();
+        set_cursor(&mut editor, 2, 1);
+        editor.record_change();
+        editor.show_changes_buffer();
+        let buf = editor
+            .buffers
+            .iter()
+            .find(|b| b.name == "*Changes*")
+            .unwrap();
         let text = buf.text();
         assert!(text.contains("2 entries"));
         // Both rows visible (1-indexed).
@@ -353,19 +361,19 @@ mod tests {
 
     #[test]
     fn restore_change_clamps_past_eof() {
-        let mut ed = ed_with_text("one\ntwo\nthree\n");
-        set_cursor(&mut ed, 2, 3);
-        ed.record_change();
-        set_cursor(&mut ed, 0, 0);
+        let mut editor = editor_with_bulk_text("one\ntwo\nthree\n");
+        set_cursor(&mut editor, 2, 3);
+        editor.record_change();
+        set_cursor(&mut editor, 0, 0);
 
         // Truncate the buffer so the recorded row no longer exists.
-        let buf = &mut ed.buffers[0];
+        let buf = &mut editor.buffers[0];
         let total = buf.rope().len_chars();
         let trim = buf.rope().line_to_char(1);
         buf.delete_range(trim, total);
 
-        ed.change_backward(1);
-        let w = ed.window_mgr.focused_window();
-        assert!(w.cursor_row < ed.buffers[0].display_line_count());
+        editor.change_backward(1);
+        let w = editor.window_mgr.focused_window();
+        assert!(w.cursor_row < editor.buffers[0].display_line_count());
     }
 }

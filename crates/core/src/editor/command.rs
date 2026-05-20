@@ -253,10 +253,11 @@ impl Editor {
                 self.dispatch_path_op(
                     args,
                     "kb-save",
-                    |ed, p| {
-                        ed.kb
+                    |editor, p| {
+                        editor
+                            .kb
                             .save_to_sqlite(p)
-                            .map(|()| ed.kb.len())
+                            .map(|()| editor.kb.len())
                             .map_err(|e| format!("kb save failed: {}", e))
                     },
                     "Saved",
@@ -268,8 +269,9 @@ impl Editor {
                 self.dispatch_path_op(
                     args,
                     "kb-load",
-                    |ed, p| {
-                        ed.kb
+                    |editor, p| {
+                        editor
+                            .kb
                             .load_from_sqlite(p)
                             .map_err(|e| format!("kb load failed: {}", e))
                     },
@@ -771,11 +773,23 @@ impl Editor {
                 true
             }
             "ai-save" => {
-                self.dispatch_path_op(args, "ai-save", |ed, p| ed.ai_save(p), "Saved", "to");
+                self.dispatch_path_op(
+                    args,
+                    "ai-save",
+                    |editor, p| editor.ai_save(p),
+                    "Saved",
+                    "to",
+                );
                 true
             }
             "ai-load" => {
-                self.dispatch_path_op(args, "ai-load", |ed, p| ed.ai_load(p), "Loaded", "from");
+                self.dispatch_path_op(
+                    args,
+                    "ai-load",
+                    |editor, p| editor.ai_load(p),
+                    "Loaded",
+                    "from",
+                );
                 true
             }
             "ai-set-mode" => {
@@ -957,7 +971,7 @@ impl Editor {
                 self.dispatch_path_op(
                     args,
                     "record-save",
-                    |ed, p| ed.event_recorder.save(p),
+                    |editor, p| editor.event_recorder.save(p),
                     "Saved",
                     "to",
                 );
@@ -1177,47 +1191,47 @@ mod tests {
 
     #[test]
     fn debug_start_command_without_args_shows_usage() {
-        let mut ed = Editor::new();
-        ed.execute_command("debug-start");
-        assert!(ed.status_msg.to_lowercase().contains("usage"));
-        assert!(ed.pending_dap_intents.is_empty());
+        let mut editor = Editor::new();
+        editor.execute_command("debug-start");
+        assert!(editor.status_msg.to_lowercase().contains("usage"));
+        assert!(editor.pending_dap_intents.is_empty());
     }
 
     #[test]
     fn debug_start_command_queues_intent() {
-        let mut ed = Editor::new();
-        ed.execute_command("debug-start lldb /bin/ls");
-        assert_eq!(ed.pending_dap_intents.len(), 1);
+        let mut editor = Editor::new();
+        editor.execute_command("debug-start lldb /bin/ls");
+        assert_eq!(editor.pending_dap_intents.len(), 1);
     }
 
     #[test]
     fn debug_start_command_unknown_adapter_sets_status() {
-        let mut ed = Editor::new();
-        ed.execute_command("debug-start bogus /bin/ls");
-        assert!(ed.status_msg.contains("Unknown adapter"));
-        assert!(ed.pending_dap_intents.is_empty());
+        let mut editor = Editor::new();
+        editor.execute_command("debug-start bogus /bin/ls");
+        assert!(editor.status_msg.contains("Unknown adapter"));
+        assert!(editor.pending_dap_intents.is_empty());
     }
 
     #[test]
     fn ai_save_without_args_shows_usage() {
-        let mut ed = Editor::new();
-        ed.execute_command("ai-save");
-        assert!(ed.status_msg.to_lowercase().contains("usage"));
+        let mut editor = Editor::new();
+        editor.execute_command("ai-save");
+        assert!(editor.status_msg.to_lowercase().contains("usage"));
     }
 
     #[test]
     fn ai_save_without_conversation_sets_error() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        ed.execute_command(&format!("ai-save {}", tmp.path().display()));
-        assert!(ed.status_msg.contains("No conversation"));
+        editor.execute_command(&format!("ai-save {}", tmp.path().display()));
+        assert!(editor.status_msg.contains("No conversation"));
     }
 
     #[test]
     fn ai_load_without_args_shows_usage() {
-        let mut ed = Editor::new();
-        ed.execute_command("ai-load");
-        assert!(ed.status_msg.to_lowercase().contains("usage"));
+        let mut editor = Editor::new();
+        editor.execute_command("ai-load");
+        assert!(editor.status_msg.to_lowercase().contains("usage"));
     }
 
     #[test]
@@ -1225,34 +1239,37 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("conv.json");
 
-        let mut ed = Editor::new();
-        ed.open_conversation_buffer();
-        ed.conversation_mut().unwrap().push_user("round-trip");
+        let mut editor = Editor::new();
+        editor.open_conversation_buffer();
+        editor.conversation_mut().unwrap().push_user("round-trip");
 
-        ed.execute_command(&format!("ai-save {}", path.display()));
-        assert!(ed.status_msg.contains("Saved 1 entries"));
+        editor.execute_command(&format!("ai-save {}", path.display()));
+        assert!(editor.status_msg.contains("Saved 1 entries"));
         assert!(std::fs::read_to_string(&path)
             .unwrap()
             .contains("round-trip"));
 
         // Mutate, then reload: load must replace, not merge.
-        ed.conversation_mut().unwrap().push_user("to-be-replaced");
-        assert_eq!(ed.conversation().unwrap().entries.len(), 2);
+        editor
+            .conversation_mut()
+            .unwrap()
+            .push_user("to-be-replaced");
+        assert_eq!(editor.conversation().unwrap().entries.len(), 2);
 
-        ed.execute_command(&format!("ai-load {}", path.display()));
-        assert!(ed.status_msg.contains("Loaded 1 entries"));
-        assert_eq!(ed.conversation().unwrap().entries.len(), 1);
+        editor.execute_command(&format!("ai-load {}", path.display()));
+        assert!(editor.status_msg.contains("Loaded 1 entries"));
+        assert_eq!(editor.conversation().unwrap().entries.len(), 1);
     }
 
     #[test]
     fn read_command_shell_inserts_output() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         // Put some content in the buffer so cursor is on a real line
-        ed.active_buffer_mut().insert_text_at(0, "first line\n");
-        ed.execute_command("read !echo hello");
-        let content = ed.active_buffer().rope().to_string();
+        editor.active_buffer_mut().insert_text_at(0, "first line\n");
+        editor.execute_command("read !echo hello");
+        let content = editor.active_buffer().rope().to_string();
         assert!(content.contains("hello"), "content was: {}", content);
-        assert!(ed.status_msg.contains("1 lines inserted"));
+        assert!(editor.status_msg.contains("1 lines inserted"));
     }
 
     #[test]
@@ -1260,28 +1277,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.txt");
         std::fs::write(&path, "file content\n").unwrap();
-        let mut ed = Editor::new();
-        ed.execute_command(&format!("read {}", path.display()));
-        let content = ed.active_buffer().rope().to_string();
+        let mut editor = Editor::new();
+        editor.execute_command(&format!("read {}", path.display()));
+        let content = editor.active_buffer().rope().to_string();
         assert!(content.contains("file content"), "content was: {}", content);
     }
 
     #[test]
     fn read_command_no_args_shows_usage() {
-        let mut ed = Editor::new();
-        ed.execute_command("read");
+        let mut editor = Editor::new();
+        editor.execute_command("read");
         assert!(
-            ed.status_msg.to_lowercase().contains("usage"),
+            editor.status_msg.to_lowercase().contains("usage"),
             "status was: {}",
-            ed.status_msg
+            editor.status_msg
         );
     }
 
     #[test]
     fn r_alias_works() {
-        let mut ed = Editor::new();
-        ed.execute_command("r !echo test");
-        let content = ed.active_buffer().rope().to_string();
+        let mut editor = Editor::new();
+        editor.execute_command("r !echo test");
+        let content = editor.active_buffer().rope().to_string();
         assert!(content.contains("test"), "content was: {}", content);
     }
 }

@@ -997,93 +997,93 @@ mod tests {
     use crate::syntax::Language;
 
     fn org_editor(text: &str) -> Editor {
-        let mut ed = Editor::new();
-        ed.buffers[0].insert_text_at(0, text);
-        ed.syntax.set_language(0, Language::Org);
-        ed
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, text);
+        editor.syntax.set_language(0, Language::Org);
+        editor
     }
 
     fn org_editor_with_headings() -> Editor {
         let text = "* H1\nbody1\n** H2a\nbody2a\n*** H3\nbody3\n** H2b\nbody2b\n* H1b\nbody1b\n";
-        let mut ed = Editor::new();
-        let idx = ed.active_buffer_idx();
-        ed.buffers[idx].insert_text_at(0, text);
-        ed.syntax.set_language(idx, Language::Org);
-        ed
+        let mut editor = Editor::new();
+        let idx = editor.active_buffer_idx();
+        editor.buffers[idx].insert_text_at(0, text);
+        editor.syntax.set_language(idx, Language::Org);
+        editor
     }
 
     // --- Narrow/widen tests ---
 
     #[test]
     fn narrow_to_subtree_hides_outer_lines() {
-        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.narrow_to_subtree();
-        let range = ed.buffers[0].narrowed_range;
+        let mut editor = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.narrow_to_subtree();
+        let range = editor.buffers[0].narrowed_range;
         assert_eq!(range, Some((0, 2)));
         // Lines outside range are not visible
-        assert!(ed.buffers[0].is_line_visible(0));
-        assert!(ed.buffers[0].is_line_visible(1));
-        assert!(!ed.buffers[0].is_line_visible(2));
-        assert!(!ed.buffers[0].is_line_visible(3));
+        assert!(editor.buffers[0].is_line_visible(0));
+        assert!(editor.buffers[0].is_line_visible(1));
+        assert!(!editor.buffers[0].is_line_visible(2));
+        assert!(!editor.buffers[0].is_line_visible(3));
     }
 
     #[test]
     fn widen_restores_full_buffer() {
-        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.narrow_to_subtree();
-        assert!(ed.buffers[0].narrowed_range.is_some());
-        ed.widen();
-        assert!(ed.buffers[0].narrowed_range.is_none());
-        assert!(ed.buffers[0].is_line_visible(3));
+        let mut editor = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.narrow_to_subtree();
+        assert!(editor.buffers[0].narrowed_range.is_some());
+        editor.widen();
+        assert!(editor.buffers[0].narrowed_range.is_none());
+        assert!(editor.buffers[0].is_line_visible(3));
     }
 
     #[test]
     fn narrow_clamps_cursor() {
-        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 3;
+        let mut editor = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 3;
         // Narrow to H1 subtree (rows 0-1), cursor at row 3 should clamp
-        ed.buffers[0].narrow_to(0, 2);
-        let win = ed.window_mgr.focused_window_mut();
-        win.clamp_cursor(&ed.buffers[0]);
+        editor.buffers[0].narrow_to(0, 2);
+        let win = editor.window_mgr.focused_window_mut();
+        win.clamp_cursor(&editor.buffers[0]);
         assert!(win.cursor_row <= 1);
     }
 
     #[test]
     fn narrow_status_indicator() {
-        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.narrow_to_subtree();
-        assert!(ed.status_msg.contains("Narrowed"));
+        let mut editor = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.narrow_to_subtree();
+        assert!(editor.status_msg.contains("Narrowed"));
     }
 
     // --- Global fold cycle tests ---
 
     #[test]
     fn global_cycle_to_overview() {
-        let mut ed = org_editor_with_headings();
+        let mut editor = org_editor_with_headings();
         // State 0 → 1 (OVERVIEW): all headings folded
-        ed.heading_global_cycle(Language::Org);
-        assert_eq!(ed.buffers[0].global_fold_state, 1);
-        assert!(!ed.buffers[0].folded_ranges.is_empty());
+        editor.heading_global_cycle(Language::Org);
+        assert_eq!(editor.buffers[0].global_fold_state, 1);
+        assert!(!editor.buffers[0].folded_ranges.is_empty());
         // Every heading with a body should be folded
-        assert!(ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0)); // H1
-        assert!(ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 8)); // H1b
+        assert!(editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0)); // H1
+        assert!(editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 8)); // H1b
     }
 
     #[test]
     fn global_cycle_to_contents() {
-        let mut ed = org_editor_with_headings();
+        let mut editor = org_editor_with_headings();
         // Cycle twice: 0 → 1 → 2 (CONTENTS)
-        ed.heading_global_cycle(Language::Org);
-        ed.heading_global_cycle(Language::Org);
-        assert_eq!(ed.buffers[0].global_fold_state, 2);
+        editor.heading_global_cycle(Language::Org);
+        editor.heading_global_cycle(Language::Org);
+        assert_eq!(editor.buffers[0].global_fold_state, 2);
         // Level 3+ headings should be folded
-        let has_l3_fold = ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 4);
+        let has_l3_fold = editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 4);
         assert!(has_l3_fold, "Level 3 heading should be folded");
         // Level 1/2 headings should NOT be folded
-        let has_l1_fold = ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0);
+        let has_l1_fold = editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0);
         assert!(
             !has_l1_fold,
             "Level 1 heading should not be folded in CONTENTS"
@@ -1092,58 +1092,58 @@ mod tests {
 
     #[test]
     fn global_cycle_to_show_all() {
-        let mut ed = org_editor_with_headings();
+        let mut editor = org_editor_with_headings();
         // Cycle three times: 0 → 1 → 2 → 0 (SHOW ALL)
-        ed.heading_global_cycle(Language::Org);
-        ed.heading_global_cycle(Language::Org);
-        ed.heading_global_cycle(Language::Org);
-        assert_eq!(ed.buffers[0].global_fold_state, 0);
-        assert!(ed.buffers[0].folded_ranges.is_empty());
+        editor.heading_global_cycle(Language::Org);
+        editor.heading_global_cycle(Language::Org);
+        editor.heading_global_cycle(Language::Org);
+        assert_eq!(editor.buffers[0].global_fold_state, 0);
+        assert!(editor.buffers[0].folded_ranges.is_empty());
     }
 
     #[test]
     fn global_cycle_round_trip() {
-        let mut ed = org_editor_with_headings();
+        let mut editor = org_editor_with_headings();
         // Full cycle: 0 → 1 → 2 → 0 → 1
         for _ in 0..3 {
-            ed.heading_global_cycle(Language::Org);
+            editor.heading_global_cycle(Language::Org);
         }
-        assert_eq!(ed.buffers[0].global_fold_state, 0);
-        ed.heading_global_cycle(Language::Org);
-        assert_eq!(ed.buffers[0].global_fold_state, 1);
+        assert_eq!(editor.buffers[0].global_fold_state, 0);
+        editor.heading_global_cycle(Language::Org);
+        assert_eq!(editor.buffers[0].global_fold_state, 1);
     }
 
     // --- Checkbox and statistics cookie tests ---
 
     #[test]
     fn toggle_checkbox_checks() {
-        let mut ed = org_editor("- [ ] task\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.toggle_checkbox_at_cursor();
-        assert!(ed.buffers[0].text().contains("[x]"));
+        let mut editor = org_editor("- [ ] task\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.toggle_checkbox_at_cursor();
+        assert!(editor.buffers[0].text().contains("[x]"));
     }
 
     #[test]
     fn toggle_checkbox_unchecks() {
-        let mut ed = org_editor("- [x] task\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.toggle_checkbox_at_cursor();
-        assert!(ed.buffers[0].text().contains("[ ]"));
+        let mut editor = org_editor("- [x] task\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.toggle_checkbox_at_cursor();
+        assert!(editor.buffers[0].text().contains("[ ]"));
     }
 
     #[test]
     fn statistics_cookie_fraction_updates() {
-        let mut ed = org_editor("* Parent [0/2]\n- [ ] a\n- [ ] b\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 1;
-        ed.toggle_checkbox_at_cursor();
-        assert!(ed.buffers[0].text().contains("[1/2]"));
+        let mut editor = org_editor("* Parent [0/2]\n- [ ] a\n- [ ] b\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 1;
+        editor.toggle_checkbox_at_cursor();
+        assert!(editor.buffers[0].text().contains("[1/2]"));
     }
 
     #[test]
     fn statistics_cookie_percent_updates() {
-        let mut ed = org_editor("* Parent [0%]\n- [ ] a\n- [ ] b\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 1;
-        ed.toggle_checkbox_at_cursor();
-        assert!(ed.buffers[0].text().contains("[50%]"));
+        let mut editor = org_editor("* Parent [0%]\n- [ ] a\n- [ ] b\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 1;
+        editor.toggle_checkbox_at_cursor();
+        assert!(editor.buffers[0].text().contains("[50%]"));
     }
 }

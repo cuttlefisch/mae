@@ -366,147 +366,147 @@ fn change_line_sets_register() {
 fn gv_reselect_visual() {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "line one\nline two\nline three\n");
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     // Enter visual mode at (0, 2)
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         w.cursor_col = 2;
     }
-    ed.enter_visual_mode(VisualType::Char);
+    editor.enter_visual_mode(VisualType::Char);
     // Move cursor to (1, 3)
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 1;
         w.cursor_col = 3;
     }
     // Exit visual with Esc
-    ed.dispatch_builtin("enter-normal-mode");
-    assert_eq!(ed.mode, Mode::Normal);
-    assert!(ed.vi.last_visual.is_some());
+    editor.dispatch_builtin("enter-normal-mode");
+    assert_eq!(editor.mode, Mode::Normal);
+    assert!(editor.vi.last_visual.is_some());
     // Now reselect with gv
-    ed.dispatch_builtin("reselect-visual");
-    assert!(matches!(ed.mode, Mode::Visual(VisualType::Char)));
-    assert_eq!(ed.vi.visual_anchor_row, 0);
-    assert_eq!(ed.vi.visual_anchor_col, 2);
-    assert_eq!(ed.window_mgr.focused_window().cursor_row, 1);
-    assert_eq!(ed.window_mgr.focused_window().cursor_col, 3);
+    editor.dispatch_builtin("reselect-visual");
+    assert!(matches!(editor.mode, Mode::Visual(VisualType::Char)));
+    assert_eq!(editor.vi.visual_anchor_row, 0);
+    assert_eq!(editor.vi.visual_anchor_col, 2);
+    assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
+    assert_eq!(editor.window_mgr.focused_window().cursor_col, 3);
 }
 
 #[test]
 fn visual_swap_ends() {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "abcdef\n");
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         w.cursor_col = 1;
     }
-    ed.enter_visual_mode(VisualType::Char);
+    editor.enter_visual_mode(VisualType::Char);
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_col = 4;
     }
     // Anchor=1, cursor=4. After swap: anchor=4, cursor=1.
-    ed.visual_swap_ends();
-    assert_eq!(ed.vi.visual_anchor_col, 4);
-    assert_eq!(ed.window_mgr.focused_window().cursor_col, 1);
+    editor.visual_swap_ends();
+    assert_eq!(editor.vi.visual_anchor_col, 4);
+    assert_eq!(editor.window_mgr.focused_window().cursor_col, 1);
 }
 
 #[test]
 fn visual_indent_dedent() {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "aaa\nbbb\nccc\n");
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     // Select lines 0-1 in visual line mode
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         w.cursor_col = 0;
     }
-    ed.enter_visual_mode(VisualType::Line);
+    editor.enter_visual_mode(VisualType::Line);
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 1;
     }
-    ed.visual_indent();
-    assert_eq!(ed.mode, Mode::Normal);
-    assert_eq!(ed.active_buffer().line_text(0), "    aaa\n");
-    assert_eq!(ed.active_buffer().line_text(1), "    bbb\n");
+    editor.visual_indent();
+    assert_eq!(editor.mode, Mode::Normal);
+    assert_eq!(editor.active_buffer().line_text(0), "    aaa\n");
+    assert_eq!(editor.active_buffer().line_text(1), "    bbb\n");
     // ccc should be untouched
-    assert_eq!(ed.active_buffer().line_text(2), "ccc\n");
+    assert_eq!(editor.active_buffer().line_text(2), "ccc\n");
 
     // Now dedent lines 0-1
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
     }
-    ed.enter_visual_mode(VisualType::Line);
+    editor.enter_visual_mode(VisualType::Line);
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 1;
     }
-    ed.visual_dedent();
-    assert_eq!(ed.active_buffer().line_text(0), "aaa\n");
-    assert_eq!(ed.active_buffer().line_text(1), "bbb\n");
+    editor.visual_dedent();
+    assert_eq!(editor.active_buffer().line_text(0), "aaa\n");
+    assert_eq!(editor.active_buffer().line_text(1), "bbb\n");
 }
 
 #[test]
 fn visual_uppercase_lowercase() {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "hello world\n");
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     // Select "hello" (chars 0..5)
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         w.cursor_col = 0;
     }
-    ed.enter_visual_mode(VisualType::Char);
+    editor.enter_visual_mode(VisualType::Char);
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_col = 4; // 0..=4 = "hello"
     }
-    ed.visual_uppercase();
-    assert_eq!(ed.mode, Mode::Normal);
-    assert!(ed.active_buffer().text().starts_with("HELLO world"));
+    editor.visual_uppercase();
+    assert_eq!(editor.mode, Mode::Normal);
+    assert!(editor.active_buffer().text().starts_with("HELLO world"));
 
     // Now lowercase it back
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         w.cursor_col = 0;
     }
-    ed.enter_visual_mode(VisualType::Char);
+    editor.enter_visual_mode(VisualType::Char);
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_col = 4;
     }
-    ed.visual_lowercase();
-    assert!(ed.active_buffer().text().starts_with("hello world"));
+    editor.visual_lowercase();
+    assert!(editor.active_buffer().text().starts_with("hello world"));
 }
 
 #[test]
 fn search_word_backward_hash() {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "foo bar foo baz foo\n");
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     // Place cursor on last "foo" (col 16)
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         w.cursor_col = 16;
     }
-    ed.dispatch_builtin("search-word-under-cursor-backward");
+    editor.dispatch_builtin("search-word-under-cursor-backward");
     // Should search backward, landing on the "foo" before the cursor.
     // The search direction should be backward.
     assert_eq!(
-        ed.search_state.direction,
+        editor.search_state.direction,
         crate::search::SearchDirection::Backward
     );
     // Cursor should have moved to a different "foo".
-    let col = ed.window_mgr.focused_window().cursor_col;
+    let col = editor.window_mgr.focused_window().cursor_col;
     assert!(
         col < 16,
         "Expected cursor to move backward, got col={}",
@@ -519,30 +519,30 @@ fn visual_line_selection_range_conversation_buffer() {
     // Regression: V-line in *AI* output buffer should produce correct
     // char offsets from visual_selection_range(), matching the rope lines
     // synced from the conversation.
-    let mut ed = Editor::new();
+    let mut editor = Editor::new();
     // Create a conversation buffer with a few rendered lines.
-    let idx = ed.ensure_conversation_buffer_idx();
+    let idx = editor.ensure_conversation_buffer_idx();
     {
-        let buf = &mut ed.buffers[idx];
+        let buf = &mut editor.buffers[idx];
         let conv = buf.conversation_mut().unwrap();
         conv.push_user("hello");
         conv.push_assistant("world\nsecond line");
     }
-    ed.buffers[idx].sync_conversation_rope();
+    editor.buffers[idx].sync_conversation_rope();
     // Point the focused window at the conversation buffer.
-    let win = ed.window_mgr.focused_window_mut();
+    let win = editor.window_mgr.focused_window_mut();
     win.buffer_idx = idx;
     win.cursor_row = 0;
     win.cursor_col = 0;
 
     // Enter V-line mode on row 0, then move down one line.
-    ed.enter_visual_mode(VisualType::Line);
-    ed.dispatch_builtin("move-down");
+    editor.enter_visual_mode(VisualType::Line);
+    editor.dispatch_builtin("move-down");
 
-    let (start, end) = ed.visual_selection_range();
+    let (start, end) = editor.visual_selection_range();
     // Two full lines selected — offsets should span at least 2 lines of rope.
     assert!(end > start, "selection range should be non-empty");
-    let rope = ed.buffers[idx].rope();
+    let rope = editor.buffers[idx].rope();
     let text = rope.slice(start..end).to_string();
     // Should contain content from both selected lines.
     assert!(

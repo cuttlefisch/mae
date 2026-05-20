@@ -526,7 +526,7 @@ mod tests {
     use crate::editor::Editor;
 
     fn ed_with_debug_state() -> Editor {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let mut state = DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "/bin/test".into(),
@@ -579,15 +579,15 @@ mod tests {
             ],
         );
         state.set_stopped_location("main.rs", 42);
-        ed.debug_state = Some(state);
-        ed
+        editor.debug_state = Some(state);
+        editor
     }
 
     #[test]
     fn open_creates_debug_buffer() {
-        let mut ed = ed_with_debug_state();
-        ed.open_debug_panel();
-        let debug_buf = ed.buffers.iter().find(|b| b.kind == BufferKind::Debug);
+        let mut editor = ed_with_debug_state();
+        editor.open_debug_panel();
+        let debug_buf = editor.buffers.iter().find(|b| b.kind == BufferKind::Debug);
         assert!(debug_buf.is_some());
         let buf = debug_buf.unwrap();
         assert_eq!(buf.name, "*Debug*");
@@ -597,14 +597,14 @@ mod tests {
 
     #[test]
     fn open_populates_with_sections() {
-        let mut ed = ed_with_debug_state();
-        ed.open_debug_panel();
-        let idx = ed
+        let mut editor = ed_with_debug_state();
+        editor.open_debug_panel();
+        let idx = editor
             .buffers
             .iter()
             .position(|b| b.kind == BufferKind::Debug)
             .unwrap();
-        let text: String = ed.buffers[idx].rope().chars().collect();
+        let text: String = editor.buffers[idx].rope().chars().collect();
         assert!(text.contains("Threads"));
         assert!(text.contains("Call Stack"));
         assert!(text.contains("main"));
@@ -614,14 +614,14 @@ mod tests {
 
     #[test]
     fn open_populates_line_map() {
-        let mut ed = ed_with_debug_state();
-        ed.open_debug_panel();
-        let idx = ed
+        let mut editor = ed_with_debug_state();
+        editor.open_debug_panel();
+        let idx = editor
             .buffers
             .iter()
             .position(|b| b.kind == BufferKind::Debug)
             .unwrap();
-        let view = ed.buffers[idx].debug_view().unwrap();
+        let view = editor.buffers[idx].debug_view().unwrap();
         // Should have section headers, threads, frames, variables, blanks.
         assert!(!view.line_map.is_empty());
         // Check specific items exist.
@@ -641,67 +641,70 @@ mod tests {
 
     #[test]
     fn toggle_opens_and_closes() {
-        let mut ed = ed_with_debug_state();
-        assert!(!ed.buffers.iter().any(|b| b.kind == BufferKind::Debug));
+        let mut editor = ed_with_debug_state();
+        assert!(!editor.buffers.iter().any(|b| b.kind == BufferKind::Debug));
 
-        ed.toggle_debug_panel();
-        assert!(ed.buffers.iter().any(|b| b.kind == BufferKind::Debug));
+        editor.toggle_debug_panel();
+        assert!(editor.buffers.iter().any(|b| b.kind == BufferKind::Debug));
 
-        ed.toggle_debug_panel();
-        assert!(!ed.buffers.iter().any(|b| b.kind == BufferKind::Debug));
+        editor.toggle_debug_panel();
+        assert!(!editor.buffers.iter().any(|b| b.kind == BufferKind::Debug));
     }
 
     #[test]
     fn close_removes_buffer() {
-        let mut ed = ed_with_debug_state();
-        ed.open_debug_panel();
-        assert!(ed.buffers.iter().any(|b| b.kind == BufferKind::Debug));
-        ed.close_debug_panel();
-        assert!(!ed.buffers.iter().any(|b| b.kind == BufferKind::Debug));
+        let mut editor = ed_with_debug_state();
+        editor.open_debug_panel();
+        assert!(editor.buffers.iter().any(|b| b.kind == BufferKind::Debug));
+        editor.close_debug_panel();
+        assert!(!editor.buffers.iter().any(|b| b.kind == BufferKind::Debug));
     }
 
     #[test]
     fn no_session_shows_message() {
-        let mut ed = Editor::new();
-        ed.open_debug_panel();
-        let idx = ed
+        let mut editor = Editor::new();
+        editor.open_debug_panel();
+        let idx = editor
             .buffers
             .iter()
             .position(|b| b.kind == BufferKind::Debug)
             .unwrap();
-        let text: String = ed.buffers[idx].rope().chars().collect();
+        let text: String = editor.buffers[idx].rope().chars().collect();
         assert!(text.contains("No active debug session"));
     }
 
     #[test]
     fn select_frame_updates_view() {
-        let mut ed = ed_with_debug_state();
-        ed.open_debug_panel();
-        let debug_idx = ed
+        let mut editor = ed_with_debug_state();
+        editor.open_debug_panel();
+        let debug_idx = editor
             .buffers
             .iter()
             .position(|b| b.kind == BufferKind::Debug)
             .unwrap();
 
         // Move cursor to a frame line.
-        let frame_line = ed.buffers[debug_idx]
+        let frame_line = editor.buffers[debug_idx]
             .debug_view()
             .unwrap()
             .line_map
             .iter()
             .position(|item| matches!(item, crate::debug_view::DebugLineItem::Frame(100)))
             .unwrap();
-        ed.buffers[debug_idx].debug_view_mut().unwrap().cursor_index = frame_line;
+        editor.buffers[debug_idx]
+            .debug_view_mut()
+            .unwrap()
+            .cursor_index = frame_line;
 
-        ed.debug_panel_select();
+        editor.debug_panel_select();
 
-        let _view = ed
+        let _view = editor
             .buffers
             .iter()
             .find(|b| b.kind == BufferKind::Debug)
             .and_then(|b| b.debug_view());
         // Frame may have been selected (scopes request queued).
-        assert!(ed.pending_dap_intents.iter().any(|i| matches!(
+        assert!(editor.pending_dap_intents.iter().any(|i| matches!(
             i,
             crate::dap_intent::DapIntent::RequestScopes { frame_id: 100 }
         )));
@@ -709,16 +712,16 @@ mod tests {
 
     #[test]
     fn expand_variable_toggles_and_queues() {
-        let mut ed = ed_with_debug_state();
-        ed.open_debug_panel();
-        let debug_idx = ed
+        let mut editor = ed_with_debug_state();
+        editor.open_debug_panel();
+        let debug_idx = editor
             .buffers
             .iter()
             .position(|b| b.kind == BufferKind::Debug)
             .unwrap();
 
         // Find the expandable variable (editor, var_ref=50).
-        let var_line = ed.buffers[debug_idx]
+        let var_line = editor.buffers[debug_idx]
             .debug_view()
             .unwrap()
             .line_map
@@ -730,19 +733,22 @@ mod tests {
                 )
             })
             .unwrap();
-        ed.buffers[debug_idx].debug_view_mut().unwrap().cursor_index = var_line;
+        editor.buffers[debug_idx]
+            .debug_view_mut()
+            .unwrap()
+            .cursor_index = var_line;
 
-        ed.debug_panel_select();
+        editor.debug_panel_select();
 
         // Should have expanded and queued a variables request.
-        let view: &crate::debug_view::DebugView = ed
+        let view: &crate::debug_view::DebugView = editor
             .buffers
             .iter()
             .find(|b| b.kind == BufferKind::Debug)
             .and_then(|b| b.debug_view())
             .unwrap();
         assert!(view.is_expanded(50));
-        assert!(ed.pending_dap_intents.iter().any(|i| matches!(
+        assert!(editor.pending_dap_intents.iter().any(|i| matches!(
             i,
             crate::dap_intent::DapIntent::RequestVariables {
                 variables_reference: 50,
@@ -753,59 +759,64 @@ mod tests {
 
     #[test]
     fn toggle_output_view() {
-        let mut ed = ed_with_debug_state();
-        ed.debug_state.as_mut().unwrap().log("hello world");
-        ed.open_debug_panel();
+        let mut editor = ed_with_debug_state();
+        editor.debug_state.as_mut().unwrap().log("hello world");
+        editor.open_debug_panel();
 
-        let debug_idx = ed
+        let debug_idx = editor
             .buffers
             .iter()
             .position(|b| b.kind == BufferKind::Debug)
             .unwrap();
 
         // Initially in state view.
-        let text: String = ed.buffers[debug_idx].rope().chars().collect();
+        let text: String = editor.buffers[debug_idx].rope().chars().collect();
         assert!(text.contains("Threads"));
 
         // Toggle to output.
-        ed.debug_toggle_output();
-        let text: String = ed.buffers[debug_idx].rope().chars().collect();
+        editor.debug_toggle_output();
+        let text: String = editor.buffers[debug_idx].rope().chars().collect();
         assert!(text.contains("Debug Output"));
         assert!(text.contains("hello world"));
 
         // Toggle back.
-        ed.debug_toggle_output();
-        let text: String = ed.buffers[debug_idx].rope().chars().collect();
+        editor.debug_toggle_output();
+        let text: String = editor.buffers[debug_idx].rope().chars().collect();
         assert!(text.contains("Threads"));
     }
 
     #[test]
     fn refresh_if_open_updates_content() {
-        let mut ed = ed_with_debug_state();
-        ed.open_debug_panel();
+        let mut editor = ed_with_debug_state();
+        editor.open_debug_panel();
 
         // Add a new thread to state.
-        ed.debug_state.as_mut().unwrap().threads.push(DebugThread {
-            id: 3,
-            name: "new-thread".into(),
-            stopped: true,
-        });
+        editor
+            .debug_state
+            .as_mut()
+            .unwrap()
+            .threads
+            .push(DebugThread {
+                id: 3,
+                name: "new-thread".into(),
+                stopped: true,
+            });
 
-        ed.debug_panel_refresh_if_open();
+        editor.debug_panel_refresh_if_open();
 
-        let debug_idx = ed
+        let debug_idx = editor
             .buffers
             .iter()
             .position(|b| b.kind == BufferKind::Debug)
             .unwrap();
-        let text: String = ed.buffers[debug_idx].rope().chars().collect();
+        let text: String = editor.buffers[debug_idx].rope().chars().collect();
         assert!(text.contains("new-thread"));
     }
 
     #[test]
     fn store_children() {
-        let mut ed = ed_with_debug_state();
-        ed.open_debug_panel();
+        let mut editor = ed_with_debug_state();
+        editor.open_debug_panel();
 
         let children = vec![Variable {
             name: "mode".into(),
@@ -813,9 +824,9 @@ mod tests {
             var_type: Some("Mode".into()),
             variables_reference: 0,
         }];
-        ed.debug_panel_store_children(50, children);
+        editor.debug_panel_store_children(50, children);
 
-        let view = ed
+        let view = editor
             .buffers
             .iter()
             .find(|b| b.kind == BufferKind::Debug)
@@ -826,14 +837,14 @@ mod tests {
 
     #[test]
     fn expandable_variable_shows_marker() {
-        let mut ed = ed_with_debug_state();
-        ed.open_debug_panel();
-        let debug_idx = ed
+        let mut editor = ed_with_debug_state();
+        editor.open_debug_panel();
+        let debug_idx = editor
             .buffers
             .iter()
             .position(|b| b.kind == BufferKind::Debug)
             .unwrap();
-        let text: String = ed.buffers[debug_idx].rope().chars().collect();
+        let text: String = editor.buffers[debug_idx].rope().chars().collect();
         // The "editor" variable (var_ref=50) should have ▶ marker.
         assert!(text.contains("▶ editor"));
         // The "x" variable (var_ref=0) should NOT have ▶.

@@ -556,14 +556,14 @@ mod tests {
 
     #[test]
     fn lsp_context_returns_none_when_no_file_path() {
-        let ed = Editor::new();
-        assert!(ed.lsp_context_at_cursor().is_none());
+        let editor = Editor::new();
+        assert!(editor.lsp_context_at_cursor().is_none());
     }
 
     #[test]
     fn lsp_context_rust_file() {
-        let ed = editor_with_file("/tmp/test.rs", "fn main() {}\n");
-        let ctx = ed.lsp_context_at_cursor();
+        let editor = editor_with_file("/tmp/test.rs", "fn main() {}\n");
+        let ctx = editor.lsp_context_at_cursor();
         assert!(ctx.is_some());
         let (uri, lang, line, ch) = ctx.unwrap();
         assert_eq!(uri, "file:///tmp/test.rs");
@@ -574,16 +574,16 @@ mod tests {
 
     #[test]
     fn lsp_context_unknown_language() {
-        let ed = editor_with_file("/tmp/test.xyz", "");
-        assert!(ed.lsp_context_at_cursor().is_none());
+        let editor = editor_with_file("/tmp/test.xyz", "");
+        assert!(editor.lsp_context_at_cursor().is_none());
     }
 
     #[test]
     fn lsp_request_definition_queues_intent() {
-        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        ed.lsp_request_definition();
-        assert_eq!(ed.pending_lsp_requests.len(), 1);
-        match &ed.pending_lsp_requests[0] {
+        let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        editor.lsp_request_definition();
+        assert_eq!(editor.pending_lsp_requests.len(), 1);
+        match &editor.pending_lsp_requests[0] {
             LspIntent::GotoDefinition {
                 uri, language_id, ..
             } => {
@@ -596,38 +596,38 @@ mod tests {
 
     #[test]
     fn lsp_request_references_queues_intent() {
-        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        ed.lsp_request_references();
+        let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        editor.lsp_request_references();
         assert!(matches!(
-            ed.pending_lsp_requests[0],
+            editor.pending_lsp_requests[0],
             LspIntent::FindReferences { .. }
         ));
     }
 
     #[test]
     fn lsp_request_hover_queues_intent() {
-        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        ed.lsp_request_hover();
+        let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        editor.lsp_request_hover();
         assert!(matches!(
-            ed.pending_lsp_requests[0],
+            editor.pending_lsp_requests[0],
             LspIntent::Hover { .. }
         ));
     }
 
     #[test]
     fn lsp_request_without_file_sets_status() {
-        let mut ed = Editor::new();
-        ed.lsp_request_definition();
-        assert!(ed.pending_lsp_requests.is_empty());
-        assert!(ed.status_msg.contains("no language server"));
+        let mut editor = Editor::new();
+        editor.lsp_request_definition();
+        assert!(editor.pending_lsp_requests.is_empty());
+        assert!(editor.status_msg.contains("no language server"));
     }
 
     #[test]
     fn lsp_notify_did_open_queues_intent_with_text() {
-        let mut ed = editor_with_file("/tmp/a.rs", "hello\nworld\n");
-        ed.lsp_notify_did_open();
-        assert_eq!(ed.pending_lsp_requests.len(), 1);
-        match &ed.pending_lsp_requests[0] {
+        let mut editor = editor_with_file("/tmp/a.rs", "hello\nworld\n");
+        editor.lsp_notify_did_open();
+        assert_eq!(editor.pending_lsp_requests.len(), 1);
+        match &editor.pending_lsp_requests[0] {
             LspIntent::DidOpen {
                 uri,
                 language_id,
@@ -644,30 +644,30 @@ mod tests {
 
     #[test]
     fn lsp_notify_did_save_queues_intent() {
-        let mut ed = editor_with_file("/tmp/a.rs", "x\n");
-        ed.lsp_notify_did_save();
+        let mut editor = editor_with_file("/tmp/a.rs", "x\n");
+        editor.lsp_notify_did_save();
         assert!(matches!(
-            ed.pending_lsp_requests[0],
+            editor.pending_lsp_requests[0],
             LspIntent::DidSave { .. }
         ));
     }
 
     #[test]
     fn lsp_notify_did_change_queues_intent() {
-        let mut ed = editor_with_file("/tmp/a.rs", "x\n");
-        ed.lsp_notify_did_change();
+        let mut editor = editor_with_file("/tmp/a.rs", "x\n");
+        editor.lsp_notify_did_change();
         assert!(matches!(
-            ed.pending_lsp_requests[0],
+            editor.pending_lsp_requests[0],
             LspIntent::DidChange { .. }
         ));
     }
 
     #[test]
     fn lsp_notify_did_close_queues_intent() {
-        let mut ed = editor_with_file("/tmp/a.rs", "x\n");
-        ed.lsp_notify_did_close_for_buffer(0);
-        assert_eq!(ed.pending_lsp_requests.len(), 1);
-        match &ed.pending_lsp_requests[0] {
+        let mut editor = editor_with_file("/tmp/a.rs", "x\n");
+        editor.lsp_notify_did_close_for_buffer(0);
+        assert_eq!(editor.pending_lsp_requests.len(), 1);
+        match &editor.pending_lsp_requests[0] {
             LspIntent::DidClose { uri, language_id } => {
                 assert_eq!(uri, "file:///tmp/a.rs");
                 assert_eq!(language_id, "rust");
@@ -678,91 +678,91 @@ mod tests {
 
     #[test]
     fn lsp_notify_did_close_out_of_bounds_is_noop() {
-        let mut ed = Editor::new();
-        ed.lsp_notify_did_close_for_buffer(42);
-        assert!(ed.pending_lsp_requests.is_empty());
+        let mut editor = Editor::new();
+        editor.lsp_notify_did_close_for_buffer(42);
+        assert!(editor.pending_lsp_requests.is_empty());
     }
 
     #[test]
     fn lsp_notify_skipped_for_unknown_language() {
-        let mut ed = editor_with_file("/tmp/a.xyz", "x\n");
-        ed.lsp_notify_did_open();
-        assert!(ed.pending_lsp_requests.is_empty());
+        let mut editor = editor_with_file("/tmp/a.xyz", "x\n");
+        editor.lsp_notify_did_open();
+        assert!(editor.pending_lsp_requests.is_empty());
     }
 
     #[test]
     fn lsp_notify_skipped_for_unsaved_buffer() {
-        let mut ed = Editor::new();
-        ed.lsp_notify_did_open();
-        assert!(ed.pending_lsp_requests.is_empty());
+        let mut editor = Editor::new();
+        editor.lsp_notify_did_open();
+        assert!(editor.pending_lsp_requests.is_empty());
     }
 
     #[test]
     fn apply_hover_result_empty_shows_no_info() {
-        let mut ed = Editor::new();
-        ed.apply_hover_result(String::new());
-        assert!(ed.status_msg.contains("no hover"));
+        let mut editor = Editor::new();
+        editor.apply_hover_result(String::new());
+        assert!(editor.status_msg.contains("no hover"));
     }
 
     #[test]
     fn apply_hover_result_creates_popup() {
-        let mut ed = Editor::new();
-        ed.apply_hover_result("fn main()".into());
-        assert!(ed.hover_popup.is_some());
-        assert_eq!(ed.hover_popup.as_ref().unwrap().contents, "fn main()");
+        let mut editor = Editor::new();
+        editor.apply_hover_result("fn main()".into());
+        assert!(editor.hover_popup.is_some());
+        assert_eq!(editor.hover_popup.as_ref().unwrap().contents, "fn main()");
     }
 
     #[test]
     fn apply_hover_result_collapses_newlines() {
-        let mut ed = Editor::new();
-        ed.lsp_hover_popup = false; // test status-bar path
-        ed.apply_hover_result("fn main()\n  does stuff".into());
-        assert_eq!(ed.status_msg, "fn main()   does stuff");
+        let mut editor = Editor::new();
+        editor.lsp_hover_popup = false; // test status-bar path
+        editor.apply_hover_result("fn main()\n  does stuff".into());
+        assert_eq!(editor.status_msg, "fn main()   does stuff");
     }
 
     #[test]
     fn apply_hover_result_truncates_long_text() {
-        let mut ed = Editor::new();
-        ed.lsp_hover_popup = false; // test status-bar path
+        let mut editor = Editor::new();
+        editor.lsp_hover_popup = false; // test status-bar path
         let long: String = "a".repeat(500);
-        ed.apply_hover_result(long);
-        assert!(ed.status_msg.ends_with("..."));
-        assert!(ed.status_msg.chars().count() <= 200);
+        editor.apply_hover_result(long);
+        assert!(editor.status_msg.ends_with("..."));
+        assert!(editor.status_msg.chars().count() <= 200);
     }
 
     #[test]
     fn hover_popup_dismiss() {
-        let mut ed = Editor::new();
-        ed.apply_hover_result("hello".into());
-        assert!(ed.hover_popup.is_some());
-        ed.dismiss_hover_popup();
-        assert!(ed.hover_popup.is_none());
+        let mut editor = Editor::new();
+        editor.apply_hover_result("hello".into());
+        assert!(editor.hover_popup.is_some());
+        editor.dismiss_hover_popup();
+        assert!(editor.hover_popup.is_none());
     }
 
     #[test]
     fn hover_popup_scroll() {
-        let mut ed = Editor::new();
-        ed.apply_hover_result("hello\nworld\nfoo\nbar".into());
-        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 0);
-        ed.hover_scroll_down();
-        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 1);
-        ed.hover_scroll_up();
-        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 0);
-        ed.hover_scroll_up(); // doesn't underflow
-        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 0);
+        let mut editor = Editor::new();
+        editor.apply_hover_result("hello\nworld\nfoo\nbar".into());
+        assert_eq!(editor.hover_popup.as_ref().unwrap().scroll_offset, 0);
+        editor.hover_scroll_down();
+        assert_eq!(editor.hover_popup.as_ref().unwrap().scroll_offset, 1);
+        editor.hover_scroll_up();
+        assert_eq!(editor.hover_popup.as_ref().unwrap().scroll_offset, 0);
+        editor.hover_scroll_up(); // doesn't underflow
+        assert_eq!(editor.hover_popup.as_ref().unwrap().scroll_offset, 0);
     }
 
     #[test]
     fn apply_definition_empty_shows_not_found() {
-        let mut ed = editor_with_file("/tmp/a.rs", "x\n");
-        let result = ed.apply_definition_result(vec![]);
+        let mut editor = editor_with_file("/tmp/a.rs", "x\n");
+        let result = editor.apply_definition_result(vec![]);
         assert!(result.is_none());
-        assert!(ed.status_msg.contains("not found"));
+        assert!(editor.status_msg.contains("not found"));
     }
 
     #[test]
     fn apply_definition_same_file_jumps_cursor() {
-        let mut ed = editor_with_file("/tmp/a.rs", "line0\nline1\nline2\n");
+        let mut editor = editor_with_file("/tmp/a.rs", "line0\nline1\nline2\n");
         let loc = LspLocation {
             uri: "file:///tmp/a.rs".into(),
             range: LspRange {
@@ -772,15 +772,15 @@ mod tests {
                 end_character: 4,
             },
         };
-        let result = ed.apply_definition_result(vec![loc]);
+        let result = editor.apply_definition_result(vec![loc]);
         assert!(result.is_none());
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 2);
-        assert_eq!(ed.window_mgr.focused_window().cursor_col, 1);
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 2);
+        assert_eq!(editor.window_mgr.focused_window().cursor_col, 1);
     }
 
     #[test]
     fn apply_definition_other_file_returns_location() {
-        let mut ed = editor_with_file("/tmp/a.rs", "x\n");
+        let mut editor = editor_with_file("/tmp/a.rs", "x\n");
         let loc = LspLocation {
             uri: "file:///tmp/other.rs".into(),
             range: LspRange {
@@ -790,20 +790,20 @@ mod tests {
                 end_character: 0,
             },
         };
-        let result = ed.apply_definition_result(vec![loc.clone()]);
+        let result = editor.apply_definition_result(vec![loc.clone()]);
         assert_eq!(result, Some(loc));
     }
 
     #[test]
     fn apply_references_empty() {
-        let mut ed = Editor::new();
-        ed.apply_references_result(vec![]);
-        assert!(ed.status_msg.contains("no references"));
+        let mut editor = Editor::new();
+        editor.apply_references_result(vec![]);
+        assert!(editor.status_msg.contains("no references"));
     }
 
     #[test]
     fn apply_references_count() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let locs = vec![
             LspLocation {
                 uri: "file:///a.rs".into(),
@@ -816,15 +816,15 @@ mod tests {
             };
             3
         ];
-        ed.apply_references_result(locs);
-        assert!(ed.status_msg.contains("3 reference"));
+        editor.apply_references_result(locs);
+        assert!(editor.status_msg.contains("3 reference"));
     }
 
     #[test]
     fn lsp_status_buffer_empty() {
-        let mut ed = Editor::new();
-        ed.show_lsp_status_buffer();
-        let buf = &ed.buffers[ed.window_mgr.focused_window().buffer_idx];
+        let mut editor = Editor::new();
+        editor.show_lsp_status_buffer();
+        let buf = &editor.buffers[editor.window_mgr.focused_window().buffer_idx];
         assert_eq!(buf.name, "*LSP Status*");
         assert!(buf.text().contains("No LSP servers configured"));
     }
@@ -832,8 +832,8 @@ mod tests {
     #[test]
     fn lsp_status_buffer_shows_servers() {
         use crate::editor::{LspServerInfo, LspServerStatus};
-        let mut ed = Editor::new();
-        ed.lsp_servers.insert(
+        let mut editor = Editor::new();
+        editor.lsp_servers.insert(
             "rust".to_string(),
             LspServerInfo {
                 status: LspServerStatus::Connected,
@@ -841,7 +841,7 @@ mod tests {
                 binary_found: true,
             },
         );
-        ed.lsp_servers.insert(
+        editor.lsp_servers.insert(
             "python".to_string(),
             LspServerInfo {
                 status: LspServerStatus::Failed,
@@ -849,8 +849,8 @@ mod tests {
                 binary_found: false,
             },
         );
-        ed.show_lsp_status_buffer();
-        let buf = &ed.buffers[ed.window_mgr.focused_window().buffer_idx];
+        editor.show_lsp_status_buffer();
+        let buf = &editor.buffers[editor.window_mgr.focused_window().buffer_idx];
         let text = buf.text();
         assert!(text.contains("rust"));
         assert!(text.contains("rust-analyzer"));
@@ -864,10 +864,10 @@ mod tests {
     #[test]
     fn lsp_status_buffer_reuses_existing() {
         use crate::editor::{LspServerInfo, LspServerStatus};
-        let mut ed = Editor::new();
-        ed.show_lsp_status_buffer();
-        let initial_count = ed.buffers.len();
-        ed.lsp_servers.insert(
+        let mut editor = Editor::new();
+        editor.show_lsp_status_buffer();
+        let initial_count = editor.buffers.len();
+        editor.lsp_servers.insert(
             "go".to_string(),
             LspServerInfo {
                 status: LspServerStatus::Starting,
@@ -875,9 +875,9 @@ mod tests {
                 binary_found: true,
             },
         );
-        ed.show_lsp_status_buffer();
-        assert_eq!(ed.buffers.len(), initial_count); // no new buffer created
-        let buf = &ed.buffers[ed.window_mgr.focused_window().buffer_idx];
+        editor.show_lsp_status_buffer();
+        assert_eq!(editor.buffers.len(), initial_count); // no new buffer created
+        let buf = &editor.buffers[editor.window_mgr.focused_window().buffer_idx];
         assert!(buf.text().contains("gopls"));
     }
 
@@ -887,43 +887,43 @@ mod tests {
 
     #[test]
     fn hover_auto_dismiss_on_motion() {
-        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        ed.apply_hover_result("some hover docs".into());
-        assert!(ed.hover_popup.is_some());
+        let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        editor.apply_hover_result("some hover docs".into());
+        assert!(editor.hover_popup.is_some());
         // Moving cursor should dismiss via dispatch_builtin auto-dismiss.
-        ed.dispatch_builtin("move-down");
-        assert!(ed.hover_popup.is_none());
+        editor.dispatch_builtin("move-down");
+        assert!(editor.hover_popup.is_none());
     }
 
     #[test]
     fn hover_k_again_scrolls_down() {
-        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        ed.apply_hover_result("line1\nline2\nline3".into());
-        assert!(ed.hover_popup.is_some());
-        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 0);
+        let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        editor.apply_hover_result("line1\nline2\nline3".into());
+        assert!(editor.hover_popup.is_some());
+        assert_eq!(editor.hover_popup.as_ref().unwrap().scroll_offset, 0);
         // Pressing K again (lsp-hover) when popup visible scrolls.
-        ed.dispatch_builtin("lsp-hover");
-        assert!(ed.hover_popup.is_some()); // not dismissed
-        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 1);
+        editor.dispatch_builtin("lsp-hover");
+        assert!(editor.hover_popup.is_some()); // not dismissed
+        assert_eq!(editor.hover_popup.as_ref().unwrap().scroll_offset, 1);
     }
 
     #[test]
     fn toggle_diagnostics_inline_via_dispatch() {
-        let mut ed = Editor::new();
-        assert!(ed.lsp_diagnostics_inline); // default on
-        ed.dispatch_builtin("toggle-lsp-diagnostics-inline");
-        assert!(!ed.lsp_diagnostics_inline);
-        ed.dispatch_builtin("toggle-lsp-diagnostics-inline");
-        assert!(ed.lsp_diagnostics_inline);
+        let mut editor = Editor::new();
+        assert!(editor.lsp_diagnostics_inline); // default on
+        editor.dispatch_builtin("toggle-lsp-diagnostics-inline");
+        assert!(!editor.lsp_diagnostics_inline);
+        editor.dispatch_builtin("toggle-lsp-diagnostics-inline");
+        assert!(editor.lsp_diagnostics_inline);
     }
 
     #[test]
     fn lsp_status_via_dispatch() {
-        let mut ed = Editor::new();
-        let initial = ed.buffers.len();
-        ed.dispatch_builtin("lsp-status");
-        assert!(ed.buffers.len() > initial);
-        let buf = &ed.buffers[ed.window_mgr.focused_window().buffer_idx];
+        let mut editor = Editor::new();
+        let initial = editor.buffers.len();
+        editor.dispatch_builtin("lsp-status");
+        assert!(editor.buffers.len() > initial);
+        let buf = &editor.buffers[editor.window_mgr.focused_window().buffer_idx];
         assert!(buf.name.contains("LSP Status"));
     }
 
@@ -934,8 +934,8 @@ mod tests {
     #[test]
     fn lsp_request_queued_even_when_server_starting() {
         use crate::editor::{LspServerInfo, LspServerStatus};
-        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        ed.lsp_servers.insert(
+        let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        editor.lsp_servers.insert(
             "rust".to_string(),
             LspServerInfo {
                 status: LspServerStatus::Starting,
@@ -943,30 +943,30 @@ mod tests {
                 binary_found: true,
             },
         );
-        ed.lsp_request_definition();
+        editor.lsp_request_definition();
         assert_eq!(
-            ed.pending_lsp_requests.len(),
+            editor.pending_lsp_requests.len(),
             1,
             "should queue even when starting"
         );
         assert!(
-            ed.status_msg.contains("server starting"),
+            editor.status_msg.contains("server starting"),
             "status should mention server starting"
         );
 
-        ed.lsp_request_hover();
-        assert_eq!(ed.pending_lsp_requests.len(), 2);
+        editor.lsp_request_hover();
+        assert_eq!(editor.pending_lsp_requests.len(), 2);
 
-        ed.lsp_request_references();
-        assert_eq!(ed.pending_lsp_requests.len(), 3);
+        editor.lsp_request_references();
+        assert_eq!(editor.pending_lsp_requests.len(), 3);
     }
 
     #[test]
     fn hover_popup_sets_hint_status() {
-        let mut ed = Editor::new();
-        ed.apply_hover_result("fn main()".into());
-        assert!(ed.hover_popup.is_some());
-        assert!(ed.status_msg.contains("K to scroll"));
+        let mut editor = Editor::new();
+        editor.apply_hover_result("fn main()".into());
+        assert!(editor.hover_popup.is_some());
+        assert!(editor.status_msg.contains("K to scroll"));
     }
 
     // --- Center-on-jump tests ---
@@ -975,10 +975,10 @@ mod tests {
     fn apply_definition_same_file_centers_viewport() {
         // Buffer with 100 lines, viewport height 20.
         let text: String = (0..100).map(|i| format!("line{}\n", i)).collect();
-        let mut ed = editor_with_file("/tmp/a.rs", &text);
-        ed.viewport_height = 20;
+        let mut editor = editor_with_file("/tmp/a.rs", &text);
+        editor.viewport_height = 20;
         // Match layout area so focused_viewport_height() uses fallback.
-        ed.last_layout_area = crate::window::Rect {
+        editor.last_layout_area = crate::window::Rect {
             x: 0,
             y: 0,
             width: 0,
@@ -993,40 +993,40 @@ mod tests {
                 end_character: 4,
             },
         };
-        ed.apply_definition_result(vec![loc]);
+        editor.apply_definition_result(vec![loc]);
         // Cursor should be on row 50 and scroll_offset should center it.
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 50);
-        assert_eq!(ed.window_mgr.focused_window().scroll_offset, 40);
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 50);
+        assert_eq!(editor.window_mgr.focused_window().scroll_offset, 40);
     }
 
     // --- Document highlight tests ---
 
     #[test]
     fn clear_highlights_increments_generation() {
-        let mut ed = Editor::new();
-        let gen0 = ed.highlight_generation;
-        ed.clear_highlights();
-        assert_eq!(ed.highlight_generation, gen0 + 1);
+        let mut editor = Editor::new();
+        let gen0 = editor.highlight_generation;
+        editor.clear_highlights();
+        assert_eq!(editor.highlight_generation, gen0 + 1);
     }
 
     #[test]
     fn clear_highlights_empties_ranges() {
-        let mut ed = Editor::new();
-        ed.highlight_ranges.push(DocumentHighlightRange {
+        let mut editor = Editor::new();
+        editor.highlight_ranges.push(DocumentHighlightRange {
             start_line: 0,
             start_col: 0,
             end_line: 0,
             end_col: 5,
             kind: HighlightKind::Read,
         });
-        ed.clear_highlights();
-        assert!(ed.highlight_ranges.is_empty());
+        editor.clear_highlights();
+        assert!(editor.highlight_ranges.is_empty());
     }
 
     #[test]
     fn apply_document_highlight_stores_ranges() {
-        let mut ed = Editor::new();
-        let gen = ed.highlight_generation;
+        let mut editor = Editor::new();
+        let gen = editor.highlight_generation;
         let highlights = vec![DocumentHighlightRange {
             start_line: 5,
             start_col: 2,
@@ -1034,14 +1034,14 @@ mod tests {
             end_col: 7,
             kind: HighlightKind::Write,
         }];
-        ed.apply_document_highlight_result(highlights, gen);
-        assert_eq!(ed.highlight_ranges.len(), 1);
-        assert_eq!(ed.highlight_ranges[0].kind, HighlightKind::Write);
+        editor.apply_document_highlight_result(highlights, gen);
+        assert_eq!(editor.highlight_ranges.len(), 1);
+        assert_eq!(editor.highlight_ranges[0].kind, HighlightKind::Write);
     }
 
     #[test]
     fn apply_document_highlight_stale_generation_ignored() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let highlights = vec![DocumentHighlightRange {
             start_line: 0,
             start_col: 0,
@@ -1050,7 +1050,7 @@ mod tests {
             kind: HighlightKind::Text,
         }];
         // Apply with a stale generation (gen + 1 != current).
-        ed.apply_document_highlight_result(highlights, ed.highlight_generation + 1);
-        assert!(ed.highlight_ranges.is_empty());
+        editor.apply_document_highlight_result(highlights, editor.highlight_generation + 1);
+        assert!(editor.highlight_ranges.is_empty());
     }
 }

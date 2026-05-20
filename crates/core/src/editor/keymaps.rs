@@ -562,9 +562,9 @@ mod tests {
 
     #[test]
     fn org_buffer_keymap_names() {
-        let mut ed = Editor::new();
-        ed.syntax.set_language(0, Language::Org);
-        let names = ed.current_keymap_names();
+        let mut editor = Editor::new();
+        editor.syntax.set_language(0, Language::Org);
+        let names = editor.current_keymap_names();
         // Org keymap moved to modules/org/ — falls back to normal at construction
         assert_eq!(names, Some(("org", Some("normal"))));
     }
@@ -574,8 +574,8 @@ mod tests {
 
     #[test]
     fn all_spc_bindings_resolve_to_registered_commands() {
-        let ed = Editor::new();
-        let normal = ed.keymaps.get("normal").unwrap();
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
         let spc = parse_key_seq("SPC");
         let mut missing = Vec::new();
         for (keys, cmd) in normal.bindings() {
@@ -583,7 +583,7 @@ mod tests {
             if keys.first() != spc.first() {
                 continue;
             }
-            if !ed.commands.contains(cmd) {
+            if !editor.commands.contains(cmd) {
                 missing.push(cmd.clone());
             }
         }
@@ -596,8 +596,8 @@ mod tests {
 
     #[test]
     fn new_spc_bindings_resolve_correctly() {
-        let ed = Editor::new();
-        let normal = ed.keymaps.get("normal").unwrap();
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
         // SPC g bindings moved to modules/git-status/
         let cases = vec![
             ("SPC w w", "focus-next-window"),
@@ -625,8 +625,8 @@ mod tests {
 
     #[test]
     fn ctrl_g_resolves_to_file_info() {
-        let ed = Editor::new();
-        let normal = ed.keymaps.get("normal").unwrap();
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
         let keys = vec![KeyPress::ctrl('g')];
         assert_eq!(
             normal.lookup(&keys),
@@ -640,29 +640,29 @@ mod tests {
     // Verify commands remain registered as kernel builtins.
     #[test]
     fn file_tree_commands_registered() {
-        let ed = Editor::new();
-        assert!(ed.commands.contains("file-tree-toggle"));
-        assert!(ed.commands.contains("file-tree-down"));
-        assert!(ed.commands.contains("file-tree-open"));
-        assert!(ed.commands.contains("file-tree-create"));
+        let editor = Editor::new();
+        assert!(editor.commands.contains("file-tree-toggle"));
+        assert!(editor.commands.contains("file-tree-down"));
+        assert!(editor.commands.contains("file-tree-open"));
+        assert!(editor.commands.contains("file-tree-create"));
     }
 
     #[test]
     fn file_tree_buffer_keymap_names() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let root = std::env::current_dir().unwrap();
         let tree_buf = crate::buffer::Buffer::new_file_tree(&root);
-        ed.buffers.push(tree_buf);
-        let tree_idx = ed.buffers.len() - 1;
-        ed.window_mgr.focused_window_mut().buffer_idx = tree_idx;
-        let names = ed.current_keymap_names();
+        editor.buffers.push(tree_buf);
+        let tree_idx = editor.buffers.len() - 1;
+        editor.window_mgr.focused_window_mut().buffer_idx = tree_idx;
+        let names = editor.current_keymap_names();
         assert_eq!(names, Some(("file-tree", Some("normal"))));
     }
 
     #[test]
     fn help_keymap_exists_with_bindings() {
-        let ed = Editor::new();
-        let help_map = ed.keymaps.get("help").unwrap();
+        let editor = Editor::new();
+        let help_map = editor.keymaps.get("help").unwrap();
         assert_eq!(help_map.parent.as_deref(), Some("normal"));
         let q_key = parse_key_seq("q");
         assert_eq!(
@@ -680,23 +680,23 @@ mod tests {
 
     #[test]
     fn help_buffer_uses_help_keymap() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         // Create a KB buffer and focus it
         let mut buf = crate::buffer::Buffer::new();
         buf.kind = crate::buffer::BufferKind::Kb;
         buf.name = "*Help*".to_string();
-        ed.buffers.push(buf);
-        let help_idx = ed.buffers.len() - 1;
-        ed.window_mgr.focused_window_mut().buffer_idx = help_idx;
-        let names = ed.current_keymap_names();
+        editor.buffers.push(buf);
+        let help_idx = editor.buffers.len() - 1;
+        editor.window_mgr.focused_window_mut().buffer_idx = help_idx;
+        let names = editor.current_keymap_names();
         assert_eq!(names, Some(("help", Some("normal"))));
     }
 
     #[test]
     fn dailies_bindings_registered() {
-        let ed = Editor::new();
-        let normal = ed.keymaps.get("normal").unwrap();
-        let entries = normal.which_key_entries(&parse_key_seq_spaced("SPC n d"), &ed.commands);
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
+        let entries = normal.which_key_entries(&parse_key_seq_spaced("SPC n d"), &editor.commands);
         assert!(
             entries.iter().any(|e| e.label.contains("today")),
             "dailies bindings should include 'today'"
@@ -727,12 +727,12 @@ mod tests {
 
     #[test]
     fn overlay_keymaps_have_parent_field() {
-        let ed = Editor::new();
+        let editor = Editor::new();
         // git-status, org, markdown keymaps moved to modules
         // Only kernel keymaps remain at construction
-        assert!(ed.keymaps.get("normal").unwrap().parent.is_none());
+        assert!(editor.keymaps.get("normal").unwrap().parent.is_none());
         assert_eq!(
-            ed.keymaps.get("help").unwrap().parent.as_deref(),
+            editor.keymaps.get("help").unwrap().parent.as_deref(),
             Some("normal")
         );
     }
@@ -743,10 +743,10 @@ mod tests {
 
     #[test]
     fn overlay_keymaps_have_show_buffer_keys_help() {
-        let ed = Editor::new();
+        let editor = Editor::new();
         let q_key = parse_key_seq("?");
         // Only help keymap remains in kernel
-        let km = ed.keymaps.get("help").unwrap();
+        let km = editor.keymaps.get("help").unwrap();
         assert_eq!(
             km.lookup(&q_key),
             crate::keymap::LookupResult::Exact("show-buffer-keys"),
@@ -755,23 +755,23 @@ mod tests {
 
     #[test]
     fn buffer_keys_entries_returns_entries() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         // Create a KB buffer and focus it (help keymap is still in kernel)
         let mut buf = crate::buffer::Buffer::new();
         buf.kind = crate::buffer::BufferKind::Kb;
         buf.name = "*Help*".to_string();
-        ed.buffers.push(buf);
-        let idx = ed.buffers.len() - 1;
-        ed.window_mgr.focused_window_mut().buffer_idx = idx;
-        let entries = ed.buffer_keys_entries();
+        editor.buffers.push(buf);
+        let idx = editor.buffers.len() - 1;
+        editor.window_mgr.focused_window_mut().buffer_idx = idx;
+        let entries = editor.buffer_keys_entries();
         // Should have entries from help + normal keymaps
         assert!(!entries.is_empty());
     }
 
     #[test]
     fn shift_i_bound_in_normal_mode() {
-        let ed = Editor::new();
-        let normal = ed.keymaps.get("normal").unwrap();
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
         let seq = parse_key_seq("I");
         let result = normal.lookup(&seq);
         assert_eq!(
@@ -786,9 +786,9 @@ mod tests {
         // the kernel fallback: org buffers should map to ("org", Some("normal"))
         // and the org keymap (if loaded) would have Tab and Enter bindings.
         // Here we just verify the kernel keymap name resolution is correct.
-        let mut ed = Editor::new();
-        ed.syntax.set_language(0, Language::Org);
-        let (primary, fallback) = ed.current_keymap_names().unwrap();
+        let mut editor = Editor::new();
+        editor.syntax.set_language(0, Language::Org);
+        let (primary, fallback) = editor.current_keymap_names().unwrap();
         assert_eq!(primary, "org");
         assert_eq!(fallback, Some("normal"));
     }

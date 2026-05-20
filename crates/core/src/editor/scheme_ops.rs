@@ -178,55 +178,59 @@ mod tests {
     fn eval_current_line_captures_text() {
         let mut buf = Buffer::new();
         buf.replace_contents("(+ 1 2)\n(+ 3 4)\n");
-        let mut ed = Editor::with_buffer(buf);
+        let mut editor = Editor::with_buffer(buf);
         // cursor on line 0
-        ed.eval_current_line();
-        assert_eq!(ed.pending_scheme_eval.len(), 1);
-        assert_eq!(ed.pending_scheme_eval[0], "(+ 1 2)");
+        editor.eval_current_line();
+        assert_eq!(editor.pending_scheme_eval.len(), 1);
+        assert_eq!(editor.pending_scheme_eval[0], "(+ 1 2)");
     }
 
     #[test]
     fn eval_current_line_empty_sets_status() {
-        let mut ed = Editor::new();
-        ed.eval_current_line();
-        assert!(ed.status_msg.contains("empty"));
-        assert!(ed.pending_scheme_eval.is_empty());
+        let mut editor = Editor::new();
+        editor.eval_current_line();
+        assert!(editor.status_msg.contains("empty"));
+        assert!(editor.pending_scheme_eval.is_empty());
     }
 
     #[test]
     fn eval_current_buffer_captures_all_text() {
         let mut buf = Buffer::new();
         buf.replace_contents("(define x 42)\n(+ x 1)\n");
-        let mut ed = Editor::with_buffer(buf);
-        ed.eval_current_buffer();
-        assert_eq!(ed.pending_scheme_eval.len(), 1);
-        assert!(ed.pending_scheme_eval[0].contains("(define x 42)"));
-        assert!(ed.pending_scheme_eval[0].contains("(+ x 1)"));
+        let mut editor = Editor::with_buffer(buf);
+        editor.eval_current_buffer();
+        assert_eq!(editor.pending_scheme_eval.len(), 1);
+        assert!(editor.pending_scheme_eval[0].contains("(define x 42)"));
+        assert!(editor.pending_scheme_eval[0].contains("(+ x 1)"));
     }
 
     #[test]
     fn open_scheme_repl_creates_buffer() {
-        let mut ed = Editor::new();
-        ed.open_scheme_repl();
-        assert!(ed.buffers.iter().any(|b| b.name == "*Scheme*"));
-        assert_eq!(ed.active_buffer().name, "*Scheme*");
+        let mut editor = Editor::new();
+        editor.open_scheme_repl();
+        assert!(editor.buffers.iter().any(|b| b.name == "*Scheme*"));
+        assert_eq!(editor.active_buffer().name, "*Scheme*");
     }
 
     #[test]
     fn open_scheme_repl_reuses_existing() {
-        let mut ed = Editor::new();
-        ed.open_scheme_repl();
-        let count = ed.buffers.len();
-        ed.switch_to_buffer(0);
-        ed.open_scheme_repl();
-        assert_eq!(ed.buffers.len(), count);
+        let mut editor = Editor::new();
+        editor.open_scheme_repl();
+        let count = editor.buffers.len();
+        editor.switch_to_buffer(0);
+        editor.open_scheme_repl();
+        assert_eq!(editor.buffers.len(), count);
     }
 
     #[test]
     fn append_to_scheme_repl_adds_text() {
-        let mut ed = Editor::new();
-        ed.append_to_scheme_repl("> (+ 1 2)\n; => 3\n");
-        let buf = ed.buffers.iter().find(|b| b.name == "*Scheme*").unwrap();
+        let mut editor = Editor::new();
+        editor.append_to_scheme_repl("> (+ 1 2)\n; => 3\n");
+        let buf = editor
+            .buffers
+            .iter()
+            .find(|b| b.name == "*Scheme*")
+            .unwrap();
         assert!(buf.text().contains("; => 3"));
     }
 
@@ -236,60 +240,69 @@ mod tests {
     fn send_line_to_shell_no_shell() {
         let mut buf = Buffer::new();
         buf.replace_contents("echo hello\n");
-        let mut ed = Editor::with_buffer(buf);
-        ed.send_line_to_shell();
-        assert!(ed.status_msg.contains("no active terminal"));
-        assert!(ed.shell.inputs.is_empty());
+        let mut editor = Editor::with_buffer(buf);
+        editor.send_line_to_shell();
+        assert!(editor.status_msg.contains("no active terminal"));
+        assert!(editor.shell.inputs.is_empty());
     }
 
     #[test]
     fn send_line_to_shell_queues_input() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         // Set up: a text buffer with content, and a shell buffer with viewport.
-        ed.buffers[0].replace_contents("echo hello\necho world\n");
-        ed.buffers.push(Buffer::new_shell("*terminal*"));
-        let shell_idx = ed.buffers.len() - 1;
-        ed.shell.viewports.insert(shell_idx, vec!["$ ".to_string()]);
+        editor.buffers[0].replace_contents("echo hello\necho world\n");
+        editor.buffers.push(Buffer::new_shell("*terminal*"));
+        let shell_idx = editor.buffers.len() - 1;
+        editor
+            .shell
+            .viewports
+            .insert(shell_idx, vec!["$ ".to_string()]);
         // Cursor on line 0 of buffer 0.
-        ed.send_line_to_shell();
-        assert_eq!(ed.shell.inputs.len(), 1);
-        assert_eq!(ed.shell.inputs[0].0, shell_idx);
-        assert_eq!(ed.shell.inputs[0].1, "echo hello\r");
+        editor.send_line_to_shell();
+        assert_eq!(editor.shell.inputs.len(), 1);
+        assert_eq!(editor.shell.inputs[0].0, shell_idx);
+        assert_eq!(editor.shell.inputs[0].1, "echo hello\r");
     }
 
     #[test]
     fn send_line_to_shell_empty_line() {
-        let mut ed = Editor::new();
-        ed.buffers.push(Buffer::new_shell("*terminal*"));
-        let shell_idx = ed.buffers.len() - 1;
-        ed.shell.viewports.insert(shell_idx, vec!["$ ".to_string()]);
+        let mut editor = Editor::new();
+        editor.buffers.push(Buffer::new_shell("*terminal*"));
+        let shell_idx = editor.buffers.len() - 1;
+        editor
+            .shell
+            .viewports
+            .insert(shell_idx, vec!["$ ".to_string()]);
         // Buffer 0 is empty scratch.
-        ed.send_line_to_shell();
-        assert!(ed.status_msg.contains("empty"));
-        assert!(ed.shell.inputs.is_empty());
+        editor.send_line_to_shell();
+        assert!(editor.status_msg.contains("empty"));
+        assert!(editor.shell.inputs.is_empty());
     }
 
     #[test]
     fn find_shell_target_prefers_active() {
-        let mut ed = Editor::new();
-        ed.buffers.push(Buffer::new_shell("*terminal*"));
-        let shell_idx = ed.buffers.len() - 1;
-        ed.shell.viewports.insert(shell_idx, vec!["$ ".to_string()]);
+        let mut editor = Editor::new();
+        editor.buffers.push(Buffer::new_shell("*terminal*"));
+        let shell_idx = editor.buffers.len() - 1;
+        editor
+            .shell
+            .viewports
+            .insert(shell_idx, vec!["$ ".to_string()]);
         // Switch to shell buffer.
-        ed.window_mgr.focused_window_mut().buffer_idx = shell_idx;
-        assert_eq!(ed.find_shell_target(), Some(shell_idx));
+        editor.window_mgr.focused_window_mut().buffer_idx = shell_idx;
+        assert_eq!(editor.find_shell_target(), Some(shell_idx));
     }
 
     #[test]
     fn find_shell_target_finds_most_recent() {
-        let mut ed = Editor::new();
-        ed.buffers.push(Buffer::new_shell("*terminal-1*"));
-        let idx1 = ed.buffers.len() - 1;
-        ed.buffers.push(Buffer::new_shell("*terminal-2*"));
-        let idx2 = ed.buffers.len() - 1;
-        ed.shell.viewports.insert(idx1, vec!["$ ".to_string()]);
-        ed.shell.viewports.insert(idx2, vec!["$ ".to_string()]);
+        let mut editor = Editor::new();
+        editor.buffers.push(Buffer::new_shell("*terminal-1*"));
+        let idx1 = editor.buffers.len() - 1;
+        editor.buffers.push(Buffer::new_shell("*terminal-2*"));
+        let idx2 = editor.buffers.len() - 1;
+        editor.shell.viewports.insert(idx1, vec!["$ ".to_string()]);
+        editor.shell.viewports.insert(idx2, vec!["$ ".to_string()]);
         // Active buffer is 0 (text), so find_shell_target should pick idx2 (most recent).
-        assert_eq!(ed.find_shell_target(), Some(idx2));
+        assert_eq!(editor.find_shell_target(), Some(idx2));
     }
 }

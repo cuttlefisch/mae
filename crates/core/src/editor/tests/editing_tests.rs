@@ -307,7 +307,7 @@ fn shell_escape_empty_shows_usage() {
 
 #[test]
 fn shift_i_enters_insert_at_first_non_blank() {
-    let mut editor = ed_with_text("    hello world");
+    let mut editor = editor_with_bulk_text("    hello world");
     // Start cursor in the middle of the line
     editor.window_mgr.focused_window_mut().cursor_col = 8;
     assert_eq!(editor.mode, Mode::Normal);

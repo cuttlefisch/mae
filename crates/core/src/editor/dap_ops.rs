@@ -859,59 +859,59 @@ mod tests {
 
     #[test]
     fn dap_start_session_queues_intent_and_sets_state() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let spawn = DapSpawnConfig {
             command: "lldb-dap".into(),
             args: vec![],
             adapter_id: "lldb".into(),
         };
-        ed.dap_start_session(
+        editor.dap_start_session(
             spawn.clone(),
             "/bin/ls".into(),
             serde_json::json!({"program": "/bin/ls"}),
             false,
         );
-        assert_eq!(ed.pending_dap_intents.len(), 1);
+        assert_eq!(editor.pending_dap_intents.len(), 1);
         assert!(matches!(
-            ed.pending_dap_intents[0],
+            editor.pending_dap_intents[0],
             DapIntent::StartSession { attach: false, .. }
         ));
-        let state = ed.debug_state.as_ref().unwrap();
+        let state = editor.debug_state.as_ref().unwrap();
         assert!(matches!(state.target, DebugTarget::Dap { .. }));
     }
 
     #[test]
     fn dap_toggle_breakpoint_requires_file_path_in_dap_session() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         // Start a DAP session first so the "no file path" check kicks in.
-        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+        editor.debug_state = Some(DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         }));
-        ed.dap_toggle_breakpoint_at_cursor();
-        assert!(ed.pending_dap_intents.is_empty());
-        assert!(ed.status_msg.contains("no file path"));
+        editor.dap_toggle_breakpoint_at_cursor();
+        assert!(editor.pending_dap_intents.is_empty());
+        assert!(editor.status_msg.contains("no file path"));
     }
 
     #[test]
     fn dap_toggle_breakpoint_falls_back_to_buffer_name_in_self_debug() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         // No file path, no DAP session → self-debug falls back to buffer name
-        ed.dap_toggle_breakpoint_at_cursor();
-        let state = ed.debug_state.as_ref().unwrap();
+        editor.dap_toggle_breakpoint_at_cursor();
+        let state = editor.debug_state.as_ref().unwrap();
         assert_eq!(state.breakpoint_count(), 1);
     }
 
     #[test]
     fn dap_toggle_breakpoint_records_locally_without_session() {
-        let mut ed = editor_with_file("/tmp/a.rs", "line1\nline2\nline3\n");
+        let mut editor = editor_with_file("/tmp/a.rs", "line1\nline2\nline3\n");
         // Move cursor to line 2 (row=1, line=2 in DAP 1-based)
-        ed.window_mgr.focused_window_mut().cursor_row = 1;
-        ed.dap_toggle_breakpoint_at_cursor();
+        editor.window_mgr.focused_window_mut().cursor_row = 1;
+        editor.dap_toggle_breakpoint_at_cursor();
         // No DAP session → no intent sent to adapter
-        assert!(ed.pending_dap_intents.is_empty());
+        assert!(editor.pending_dap_intents.is_empty());
         // But state has the breakpoint
-        let state = ed.debug_state.as_ref().unwrap();
+        let state = editor.debug_state.as_ref().unwrap();
         assert_eq!(state.breakpoint_count(), 1);
         let bps = state.breakpoints.get("/tmp/a.rs").unwrap();
         assert_eq!(bps[0].line, 2);
@@ -919,8 +919,8 @@ mod tests {
 
     #[test]
     fn dap_toggle_breakpoint_forwards_to_adapter_during_session() {
-        let mut ed = editor_with_file("/tmp/a.rs", "x\ny\nz\n");
-        ed.dap_start_session(
+        let mut editor = editor_with_file("/tmp/a.rs", "x\ny\nz\n");
+        editor.dap_start_session(
             DapSpawnConfig {
                 command: "lldb-dap".into(),
                 args: vec![],
@@ -931,10 +931,10 @@ mod tests {
             false,
         );
         // Clear the StartSession intent for clarity
-        ed.pending_dap_intents.clear();
-        ed.dap_toggle_breakpoint_at_cursor();
-        assert_eq!(ed.pending_dap_intents.len(), 1);
-        match &ed.pending_dap_intents[0] {
+        editor.pending_dap_intents.clear();
+        editor.dap_toggle_breakpoint_at_cursor();
+        assert_eq!(editor.pending_dap_intents.len(), 1);
+        match &editor.pending_dap_intents[0] {
             DapIntent::SetBreakpoints {
                 source_path,
                 breakpoints,
@@ -949,47 +949,47 @@ mod tests {
 
     #[test]
     fn dap_toggle_twice_removes_breakpoint() {
-        let mut ed = editor_with_file("/tmp/a.rs", "x\ny\n");
-        ed.dap_toggle_breakpoint_at_cursor();
-        ed.dap_toggle_breakpoint_at_cursor();
-        let state = ed.debug_state.as_ref().unwrap();
+        let mut editor = editor_with_file("/tmp/a.rs", "x\ny\n");
+        editor.dap_toggle_breakpoint_at_cursor();
+        editor.dap_toggle_breakpoint_at_cursor();
+        let state = editor.debug_state.as_ref().unwrap();
         assert_eq!(state.breakpoint_count(), 0);
     }
 
     #[test]
     fn dap_continue_step_queue_intents() {
-        let mut ed = Editor::new();
-        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+        let mut editor = Editor::new();
+        editor.debug_state = Some(DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         }));
-        ed.debug_state.as_mut().unwrap().active_thread_id = 7;
-        ed.dap_continue();
-        ed.dap_step(StepKind::Over);
-        ed.dap_step(StepKind::In);
-        ed.dap_step(StepKind::Out);
-        assert_eq!(ed.pending_dap_intents.len(), 4);
+        editor.debug_state.as_mut().unwrap().active_thread_id = 7;
+        editor.dap_continue();
+        editor.dap_step(StepKind::Over);
+        editor.dap_step(StepKind::In);
+        editor.dap_step(StepKind::Out);
+        assert_eq!(editor.pending_dap_intents.len(), 4);
         assert!(matches!(
-            ed.pending_dap_intents[0],
+            editor.pending_dap_intents[0],
             DapIntent::Continue { thread_id: 7 }
         ));
         assert!(matches!(
-            ed.pending_dap_intents[1],
+            editor.pending_dap_intents[1],
             DapIntent::Next { thread_id: 7 }
         ));
         assert!(matches!(
-            ed.pending_dap_intents[2],
+            editor.pending_dap_intents[2],
             DapIntent::StepIn { thread_id: 7 }
         ));
         assert!(matches!(
-            ed.pending_dap_intents[3],
+            editor.pending_dap_intents[3],
             DapIntent::StepOut { thread_id: 7 }
         ));
     }
 
     #[test]
     fn dap_resync_pushes_one_intent_per_source() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let mut state = DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
@@ -997,14 +997,14 @@ mod tests {
         state.add_breakpoint("/a.rs", 1);
         state.add_breakpoint("/a.rs", 5);
         state.add_breakpoint("/b.rs", 10);
-        ed.debug_state = Some(state);
-        ed.dap_resync_breakpoints();
-        assert_eq!(ed.pending_dap_intents.len(), 2);
+        editor.debug_state = Some(state);
+        editor.dap_resync_breakpoints();
+        assert_eq!(editor.pending_dap_intents.len(), 2);
     }
 
     #[test]
     fn apply_stopped_marks_threads_and_refreshes() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let mut state = DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
@@ -1014,21 +1014,21 @@ mod tests {
             name: "main".into(),
             stopped: false,
         });
-        ed.debug_state = Some(state);
-        ed.apply_dap_stopped("breakpoint".into(), Some(1), None);
-        let state = ed.debug_state.as_ref().unwrap();
+        editor.debug_state = Some(state);
+        editor.apply_dap_stopped("breakpoint".into(), Some(1), None);
+        let state = editor.debug_state.as_ref().unwrap();
         assert!(state.threads[0].stopped);
         assert_eq!(state.active_thread_id, 1);
         // A refresh intent should have been queued.
         assert!(matches!(
-            ed.pending_dap_intents.last(),
+            editor.pending_dap_intents.last(),
             Some(DapIntent::RefreshThreadsAndStack { .. })
         ));
     }
 
     #[test]
     fn apply_continued_clears_stopped() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let mut state = DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
@@ -1039,16 +1039,16 @@ mod tests {
             stopped: true,
         });
         state.set_stopped_location("a.rs", 10);
-        ed.debug_state = Some(state);
-        ed.apply_dap_continued(1, true);
-        let state = ed.debug_state.as_ref().unwrap();
+        editor.debug_state = Some(state);
+        editor.apply_dap_continued(1, true);
+        let state = editor.debug_state.as_ref().unwrap();
         assert!(!state.is_stopped());
         assert!(!state.threads[0].stopped);
     }
 
     #[test]
     fn apply_threads_preserves_stopped_flags() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let mut state = DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
@@ -1058,9 +1058,9 @@ mod tests {
             name: "old".into(),
             stopped: false,
         });
-        ed.debug_state = Some(state);
-        ed.apply_dap_threads(vec![(1, "main".into()), (2, "worker".into())]);
-        let state = ed.debug_state.as_ref().unwrap();
+        editor.debug_state = Some(state);
+        editor.apply_dap_threads(vec![(1, "main".into()), (2, "worker".into())]);
+        let state = editor.debug_state.as_ref().unwrap();
         assert_eq!(state.threads.len(), 2);
         assert!(!state.threads[0].stopped); // preserved from prior
         assert!(state.threads[1].stopped); // new defaults to stopped
@@ -1068,23 +1068,23 @@ mod tests {
 
     #[test]
     fn apply_stack_trace_sets_stopped_location_and_queues_scopes() {
-        let mut ed = Editor::new();
-        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+        let mut editor = Editor::new();
+        editor.debug_state = Some(DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         }));
-        ed.apply_dap_stack_trace(
+        editor.apply_dap_stack_trace(
             1,
             vec![
                 (100, "main".into(), Some("main.rs".into()), 42, 0),
                 (101, "caller".into(), Some("lib.rs".into()), 10, 0),
             ],
         );
-        let state = ed.debug_state.as_ref().unwrap();
+        let state = editor.debug_state.as_ref().unwrap();
         assert_eq!(state.stack_frames.len(), 2);
         assert_eq!(state.stopped_location, Some(("main.rs".into(), 42)));
         // Scopes request should be queued for top frame (id=100).
-        assert!(ed
+        assert!(editor
             .pending_dap_intents
             .iter()
             .any(|i| matches!(i, DapIntent::RequestScopes { frame_id: 100 })));
@@ -1092,12 +1092,12 @@ mod tests {
 
     #[test]
     fn apply_scopes_queues_variables_requests_skipping_expensive() {
-        let mut ed = Editor::new();
-        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+        let mut editor = Editor::new();
+        editor.debug_state = Some(DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         }));
-        ed.apply_dap_scopes(
+        editor.apply_dap_scopes(
             1,
             vec![
                 ("Locals".into(), 10, false),
@@ -1105,10 +1105,10 @@ mod tests {
                 ("Registers".into(), 12, false),
             ],
         );
-        let state = ed.debug_state.as_ref().unwrap();
+        let state = editor.debug_state.as_ref().unwrap();
         assert_eq!(state.scopes.len(), 3);
         // Two non-expensive scopes → two variable requests.
-        let req_count = ed
+        let req_count = editor
             .pending_dap_intents
             .iter()
             .filter(|i| matches!(i, DapIntent::RequestVariables { .. }))
@@ -1118,19 +1118,19 @@ mod tests {
 
     #[test]
     fn apply_variables_stores_by_scope() {
-        let mut ed = Editor::new();
-        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+        let mut editor = Editor::new();
+        editor.debug_state = Some(DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         }));
-        ed.apply_dap_variables(
+        editor.apply_dap_variables(
             "Locals".into(),
             vec![
                 ("x".into(), "42".into(), Some("i32".into()), 0),
                 ("s".into(), "\"hi\"".into(), Some("String".into()), 0),
             ],
         );
-        let state = ed.debug_state.as_ref().unwrap();
+        let state = editor.debug_state.as_ref().unwrap();
         let vars = state.variables.get("Locals").unwrap();
         assert_eq!(vars.len(), 2);
         assert_eq!(vars[0].name, "x");
@@ -1139,15 +1139,15 @@ mod tests {
 
     #[test]
     fn apply_breakpoints_set_replaces_source_entries() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let mut state = DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         });
         state.add_breakpoint("/a.rs", 1);
-        ed.debug_state = Some(state);
-        ed.apply_dap_breakpoints_set("/a.rs".into(), vec![(99, true, 1), (100, false, 5)]);
-        let state = ed.debug_state.as_ref().unwrap();
+        editor.debug_state = Some(state);
+        editor.apply_dap_breakpoints_set("/a.rs".into(), vec![(99, true, 1), (100, false, 5)]);
+        let state = editor.debug_state.as_ref().unwrap();
         let bps = state.breakpoints.get("/a.rs").unwrap();
         assert_eq!(bps.len(), 2);
         assert_eq!(bps[0].id, 99);
@@ -1158,25 +1158,25 @@ mod tests {
 
     #[test]
     fn apply_adapter_exited_drops_session() {
-        let mut ed = Editor::new();
-        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+        let mut editor = Editor::new();
+        editor.debug_state = Some(DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         }));
-        ed.apply_dap_adapter_exited();
-        assert!(ed.debug_state.is_none());
+        editor.apply_dap_adapter_exited();
+        assert!(editor.debug_state.is_none());
     }
 
     #[test]
     fn apply_output_appends_to_log() {
-        let mut ed = Editor::new();
-        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+        let mut editor = Editor::new();
+        editor.debug_state = Some(DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         }));
-        ed.apply_dap_output("stdout".into(), "hello\n".into());
-        ed.apply_dap_output("stderr".into(), "warn\n".into());
-        let state = ed.debug_state.as_ref().unwrap();
+        editor.apply_dap_output("stdout".into(), "hello\n".into());
+        editor.apply_dap_output("stderr".into(), "warn\n".into());
+        let state = editor.debug_state.as_ref().unwrap();
         assert_eq!(state.output_log.len(), 2);
         assert!(state.output_log[0].contains("[stdout]"));
         assert!(state.output_log[0].contains("hello"));
@@ -1184,23 +1184,23 @@ mod tests {
 
     #[test]
     fn apply_session_started_triggers_resync() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let mut state = DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         });
         state.add_breakpoint("/a.rs", 10);
         state.add_breakpoint("/b.rs", 20);
-        ed.debug_state = Some(state);
-        ed.apply_dap_session_started("lldb".into());
+        editor.debug_state = Some(state);
+        editor.apply_dap_session_started("lldb".into());
         // Two SetBreakpoints (one per source) + one RefreshThreadsAndStack.
-        let bp_count = ed
+        let bp_count = editor
             .pending_dap_intents
             .iter()
             .filter(|i| matches!(i, DapIntent::SetBreakpoints { .. }))
             .count();
         assert_eq!(bp_count, 2);
-        assert!(ed
+        assert!(editor
             .pending_dap_intents
             .iter()
             .any(|i| matches!(i, DapIntent::RefreshThreadsAndStack { .. })));
@@ -1208,15 +1208,15 @@ mod tests {
 
     #[test]
     fn dap_disconnect_clears_debug_state() {
-        let mut ed = Editor::new();
-        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+        let mut editor = Editor::new();
+        editor.debug_state = Some(DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         }));
-        ed.dap_disconnect(false);
-        assert!(ed.debug_state.is_none());
+        editor.dap_disconnect(false);
+        assert!(editor.debug_state.is_none());
         assert!(matches!(
-            ed.pending_dap_intents[0],
+            editor.pending_dap_intents[0],
             DapIntent::Disconnect {
                 terminate_debuggee: false
             }
@@ -1225,40 +1225,40 @@ mod tests {
 
     #[test]
     fn dap_set_breakpoint_adds_and_is_idempotent() {
-        let mut ed = Editor::new();
-        let lines = ed.dap_set_breakpoint("/a.rs".into(), 10);
+        let mut editor = Editor::new();
+        let lines = editor.dap_set_breakpoint("/a.rs".into(), 10);
         assert_eq!(lines, vec![10]);
         // Idempotent — calling again does not duplicate or re-queue.
-        let intents_before = ed.pending_dap_intents.len();
-        let lines2 = ed.dap_set_breakpoint("/a.rs".into(), 10);
+        let intents_before = editor.pending_dap_intents.len();
+        let lines2 = editor.dap_set_breakpoint("/a.rs".into(), 10);
         assert_eq!(lines2, vec![10]);
-        assert_eq!(ed.pending_dap_intents.len(), intents_before);
+        assert_eq!(editor.pending_dap_intents.len(), intents_before);
         assert_eq!(
-            ed.debug_state.as_ref().unwrap().breakpoints["/a.rs"].len(),
+            editor.debug_state.as_ref().unwrap().breakpoints["/a.rs"].len(),
             1
         );
     }
 
     #[test]
     fn dap_set_breakpoint_queues_intent_in_dap_session() {
-        let mut ed = Editor::new();
-        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+        let mut editor = Editor::new();
+        editor.debug_state = Some(DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "/bin/ls".into(),
         }));
-        ed.dap_set_breakpoint("/a.rs".into(), 10);
+        editor.dap_set_breakpoint("/a.rs".into(), 10);
         assert!(matches!(
-            ed.pending_dap_intents[0],
+            editor.pending_dap_intents[0],
             DapIntent::SetBreakpoints { .. }
         ));
     }
 
     #[test]
     fn dap_set_breakpoint_multiple_lines_same_source() {
-        let mut ed = Editor::new();
-        ed.dap_set_breakpoint("/a.rs".into(), 10);
-        ed.dap_set_breakpoint("/a.rs".into(), 20);
-        let lines = ed.dap_set_breakpoint("/a.rs".into(), 30);
+        let mut editor = Editor::new();
+        editor.dap_set_breakpoint("/a.rs".into(), 10);
+        editor.dap_set_breakpoint("/a.rs".into(), 20);
+        let lines = editor.dap_set_breakpoint("/a.rs".into(), 30);
         assert_eq!(lines.len(), 3);
         assert!(lines.contains(&10));
         assert!(lines.contains(&20));
@@ -1267,38 +1267,38 @@ mod tests {
 
     #[test]
     fn dap_remove_breakpoint_removes_and_is_idempotent() {
-        let mut ed = Editor::new();
-        ed.dap_set_breakpoint("/a.rs".into(), 10);
-        ed.dap_set_breakpoint("/a.rs".into(), 20);
-        let lines = ed.dap_remove_breakpoint("/a.rs".into(), 10);
+        let mut editor = Editor::new();
+        editor.dap_set_breakpoint("/a.rs".into(), 10);
+        editor.dap_set_breakpoint("/a.rs".into(), 20);
+        let lines = editor.dap_remove_breakpoint("/a.rs".into(), 10);
         assert_eq!(lines, vec![20]);
         // Removing again is a no-op.
-        let lines2 = ed.dap_remove_breakpoint("/a.rs".into(), 10);
+        let lines2 = editor.dap_remove_breakpoint("/a.rs".into(), 10);
         assert_eq!(lines2, vec![20]);
     }
 
     #[test]
     fn dap_remove_breakpoint_no_state_is_noop() {
-        let mut ed = Editor::new();
-        let lines = ed.dap_remove_breakpoint("/a.rs".into(), 10);
+        let mut editor = Editor::new();
+        let lines = editor.dap_remove_breakpoint("/a.rs".into(), 10);
         assert!(lines.is_empty());
-        assert!(ed.debug_state.is_none());
+        assert!(editor.debug_state.is_none());
     }
 
     #[test]
     fn dap_continue_without_session_is_noop() {
-        let mut ed = Editor::new();
-        ed.dap_continue();
-        assert!(ed.pending_dap_intents.is_empty());
+        let mut editor = Editor::new();
+        editor.dap_continue();
+        assert!(editor.pending_dap_intents.is_empty());
     }
 
     #[test]
     fn dap_step_without_session_is_noop() {
-        let mut ed = Editor::new();
-        ed.dap_step(StepKind::Over);
-        ed.dap_step(StepKind::In);
-        ed.dap_step(StepKind::Out);
-        assert!(ed.pending_dap_intents.is_empty());
+        let mut editor = Editor::new();
+        editor.dap_step(StepKind::Over);
+        editor.dap_step(StepKind::In);
+        editor.dap_step(StepKind::Out);
+        assert!(editor.pending_dap_intents.is_empty());
     }
 
     #[test]
@@ -1346,79 +1346,83 @@ mod tests {
 
     #[test]
     fn dap_start_with_adapter_queues_intent() {
-        let mut ed = Editor::new();
-        ed.dap_start_with_adapter("lldb", "/bin/ls", &[]).unwrap();
-        assert_eq!(ed.pending_dap_intents.len(), 1);
+        let mut editor = Editor::new();
+        editor
+            .dap_start_with_adapter("lldb", "/bin/ls", &[])
+            .unwrap();
+        assert_eq!(editor.pending_dap_intents.len(), 1);
         assert!(matches!(
-            ed.pending_dap_intents[0],
+            editor.pending_dap_intents[0],
             DapIntent::StartSession { attach: false, .. }
         ));
     }
 
     #[test]
     fn dap_start_with_adapter_unknown_returns_err() {
-        let mut ed = Editor::new();
-        let err = ed
+        let mut editor = Editor::new();
+        let err = editor
             .dap_start_with_adapter("bogus", "/bin/ls", &[])
             .unwrap_err();
         assert!(err.contains("Unknown adapter"));
-        assert!(ed.pending_dap_intents.is_empty());
-        assert!(ed.debug_state.is_none());
+        assert!(editor.pending_dap_intents.is_empty());
+        assert!(editor.debug_state.is_none());
     }
 
     #[test]
     fn dap_start_with_adapter_rejects_concurrent_session() {
-        let mut ed = Editor::new();
-        ed.dap_start_with_adapter("lldb", "/bin/ls", &[]).unwrap();
-        let intents_before = ed.pending_dap_intents.len();
-        let err = ed
+        let mut editor = Editor::new();
+        editor
+            .dap_start_with_adapter("lldb", "/bin/ls", &[])
+            .unwrap();
+        let intents_before = editor.pending_dap_intents.len();
+        let err = editor
             .dap_start_with_adapter("lldb", "/bin/sh", &[])
             .unwrap_err();
         assert!(err.contains("already active"));
         // No extra intent should have been queued by the rejected call.
-        assert_eq!(ed.pending_dap_intents.len(), intents_before);
+        assert_eq!(editor.pending_dap_intents.len(), intents_before);
     }
 
     // ---- Tier 4 tests: attach, evaluate, conditional breakpoints ----
 
     #[test]
     fn dap_attach_with_adapter_queues_attach_intent() {
-        let mut ed = Editor::new();
-        ed.dap_attach_with_adapter("lldb", 12345).unwrap();
-        assert_eq!(ed.pending_dap_intents.len(), 1);
+        let mut editor = Editor::new();
+        editor.dap_attach_with_adapter("lldb", 12345).unwrap();
+        assert_eq!(editor.pending_dap_intents.len(), 1);
         assert!(matches!(
-            ed.pending_dap_intents[0],
+            editor.pending_dap_intents[0],
             DapIntent::StartSession { attach: true, .. }
         ));
-        let state = ed.debug_state.as_ref().unwrap();
+        let state = editor.debug_state.as_ref().unwrap();
         assert!(matches!(state.target, DebugTarget::Dap { .. }));
     }
 
     #[test]
     fn dap_attach_unknown_adapter_errors() {
-        let mut ed = Editor::new();
-        let err = ed.dap_attach_with_adapter("bogus", 1).unwrap_err();
+        let mut editor = Editor::new();
+        let err = editor.dap_attach_with_adapter("bogus", 1).unwrap_err();
         assert!(err.contains("Unknown adapter"));
     }
 
     #[test]
     fn dap_attach_rejects_concurrent_session() {
-        let mut ed = Editor::new();
-        ed.dap_attach_with_adapter("lldb", 1).unwrap();
-        let err = ed.dap_attach_with_adapter("lldb", 2).unwrap_err();
+        let mut editor = Editor::new();
+        editor.dap_attach_with_adapter("lldb", 1).unwrap();
+        let err = editor.dap_attach_with_adapter("lldb", 2).unwrap_err();
         assert!(err.contains("already active"));
     }
 
     #[test]
     fn dap_evaluate_queues_intent() {
-        let mut ed = Editor::new();
-        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+        let mut editor = Editor::new();
+        editor.debug_state = Some(DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         }));
-        ed.dap_evaluate("1 + 2", Some(100), Some("repl"));
-        assert_eq!(ed.pending_dap_intents.len(), 1);
-        match &ed.pending_dap_intents[0] {
+        editor.dap_evaluate("1 + 2", Some(100), Some("repl"));
+        assert_eq!(editor.pending_dap_intents.len(), 1);
+        match &editor.pending_dap_intents[0] {
             DapIntent::Evaluate {
                 expression,
                 frame_id,
@@ -1434,9 +1438,9 @@ mod tests {
 
     #[test]
     fn dap_evaluate_no_frame_no_context() {
-        let mut ed = Editor::new();
-        ed.dap_evaluate("x", None, None);
-        match &ed.pending_dap_intents[0] {
+        let mut editor = Editor::new();
+        editor.dap_evaluate("x", None, None);
+        match &editor.pending_dap_intents[0] {
             DapIntent::Evaluate {
                 expression,
                 frame_id,
@@ -1452,11 +1456,11 @@ mod tests {
 
     #[test]
     fn dap_set_breakpoint_conditional_stores_condition() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let lines =
-            ed.dap_set_breakpoint_conditional("/a.rs".into(), 10, Some("x > 5".into()), None);
+            editor.dap_set_breakpoint_conditional("/a.rs".into(), 10, Some("x > 5".into()), None);
         assert_eq!(lines, vec![10]);
-        let state = ed.debug_state.as_ref().unwrap();
+        let state = editor.debug_state.as_ref().unwrap();
         let bp = &state.breakpoints["/a.rs"][0];
         assert_eq!(bp.condition.as_deref(), Some("x > 5"));
         assert!(bp.hit_condition.is_none());
@@ -1464,17 +1468,17 @@ mod tests {
 
     #[test]
     fn dap_set_breakpoint_conditional_updates_existing() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         // First set without condition.
-        ed.dap_set_breakpoint("/a.rs".into(), 10);
+        editor.dap_set_breakpoint("/a.rs".into(), 10);
         // Now update with condition.
-        ed.dap_set_breakpoint_conditional(
+        editor.dap_set_breakpoint_conditional(
             "/a.rs".into(),
             10,
             Some("i == 42".into()),
             Some(">= 3".into()),
         );
-        let state = ed.debug_state.as_ref().unwrap();
+        let state = editor.debug_state.as_ref().unwrap();
         let bps = &state.breakpoints["/a.rs"];
         assert_eq!(bps.len(), 1); // Not duplicated.
         assert_eq!(bps[0].condition.as_deref(), Some("i == 42"));
@@ -1483,11 +1487,11 @@ mod tests {
 
     #[test]
     fn dap_set_breakpoint_conditional_with_hit_condition() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let lines =
-            ed.dap_set_breakpoint_conditional("/a.rs".into(), 5, None, Some(">= 10".into()));
+            editor.dap_set_breakpoint_conditional("/a.rs".into(), 5, None, Some(">= 10".into()));
         assert_eq!(lines, vec![5]);
-        let state = ed.debug_state.as_ref().unwrap();
+        let state = editor.debug_state.as_ref().unwrap();
         let bp = &state.breakpoints["/a.rs"][0];
         assert!(bp.condition.is_none());
         assert_eq!(bp.hit_condition.as_deref(), Some(">= 10"));
@@ -1495,16 +1499,16 @@ mod tests {
 
     #[test]
     fn dap_resync_carries_conditions() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let mut state = DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "x".into(),
         });
         state.add_breakpoint_conditional("/a.rs", 10, Some("x > 0".into()), None);
-        ed.debug_state = Some(state);
-        ed.dap_resync_breakpoints();
-        assert_eq!(ed.pending_dap_intents.len(), 1);
-        match &ed.pending_dap_intents[0] {
+        editor.debug_state = Some(state);
+        editor.dap_resync_breakpoints();
+        assert_eq!(editor.pending_dap_intents.len(), 1);
+        match &editor.pending_dap_intents[0] {
             DapIntent::SetBreakpoints { breakpoints, .. } => {
                 assert_eq!(breakpoints[0].condition.as_deref(), Some("x > 0"));
             }
@@ -1549,9 +1553,9 @@ mod tests {
 
     #[test]
     fn dap_set_breakpoint_stores_absolute_path() {
-        let mut ed = Editor::new();
-        ed.dap_set_breakpoint("relative/path.py".into(), 10);
-        let state = ed.debug_state.as_ref().unwrap();
+        let mut editor = Editor::new();
+        editor.dap_set_breakpoint("relative/path.py".into(), 10);
+        let state = editor.debug_state.as_ref().unwrap();
         for key in state.breakpoints.keys() {
             assert!(
                 std::path::Path::new(key).is_absolute(),
@@ -1563,21 +1567,22 @@ mod tests {
 
     #[test]
     fn dap_remove_breakpoint_matches_canonical_path() {
-        let mut ed = Editor::new();
-        ed.dap_set_breakpoint("relative/path.py".into(), 10);
-        assert_eq!(ed.debug_state.as_ref().unwrap().breakpoints.len(), 1);
+        let mut editor = Editor::new();
+        editor.dap_set_breakpoint("relative/path.py".into(), 10);
+        assert_eq!(editor.debug_state.as_ref().unwrap().breakpoints.len(), 1);
         // Remove using the same relative path — should match after canonicalization
-        let remaining = ed.dap_remove_breakpoint("relative/path.py".into(), 10);
+        let remaining = editor.dap_remove_breakpoint("relative/path.py".into(), 10);
         assert!(remaining.is_empty(), "breakpoint should be removed");
     }
 
     #[test]
     fn dap_start_with_adapter_uses_absolute_program_path() {
-        let mut ed = Editor::new();
-        ed.dap_start_with_adapter("lldb", "relative/binary", &[])
+        let mut editor = Editor::new();
+        editor
+            .dap_start_with_adapter("lldb", "relative/binary", &[])
             .unwrap();
-        assert_eq!(ed.pending_dap_intents.len(), 1);
-        match &ed.pending_dap_intents[0] {
+        assert_eq!(editor.pending_dap_intents.len(), 1);
+        match &editor.pending_dap_intents[0] {
             DapIntent::StartSession { launch_args, .. } => {
                 let program = launch_args["program"].as_str().unwrap();
                 assert!(
@@ -1592,9 +1597,14 @@ mod tests {
 
     #[test]
     fn dap_set_breakpoint_conditional_stores_absolute_path() {
-        let mut ed = Editor::new();
-        ed.dap_set_breakpoint_conditional("relative/path.py".into(), 5, Some("x > 0".into()), None);
-        let state = ed.debug_state.as_ref().unwrap();
+        let mut editor = Editor::new();
+        editor.dap_set_breakpoint_conditional(
+            "relative/path.py".into(),
+            5,
+            Some("x > 0".into()),
+            None,
+        );
+        let state = editor.debug_state.as_ref().unwrap();
         for key in state.breakpoints.keys() {
             assert!(
                 std::path::Path::new(key).is_absolute(),

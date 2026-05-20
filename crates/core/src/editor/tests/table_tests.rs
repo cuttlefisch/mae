@@ -4,15 +4,15 @@ use super::*;
 
 #[test]
 fn table_next_cell_moves_cursor() {
-    let mut ed = ed_with_text("| abc | def |\n| ghi | jkl |\n");
+    let mut editor = editor_with_bulk_text("| abc | def |\n| ghi | jkl |\n");
     // Position cursor in first cell (col 2 = inside " abc ")
-    let win = ed.window_mgr.focused_window_mut();
+    let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 0;
     win.cursor_col = 2;
 
-    ed.table_next_cell();
+    editor.table_next_cell();
 
-    let win = ed.window_mgr.focused_window();
+    let win = editor.window_mgr.focused_window();
     // Should be in the second cell of row 0
     assert_eq!(win.cursor_row, 0);
     // cursor_col should be inside second cell (past the pipe + space)
@@ -25,15 +25,15 @@ fn table_next_cell_moves_cursor() {
 
 #[test]
 fn table_next_cell_wraps_row() {
-    let mut ed = ed_with_text("| a | b |\n|---|---|\n| c | d |\n");
+    let mut editor = editor_with_bulk_text("| a | b |\n|---|---|\n| c | d |\n");
     // Position cursor in last cell of first row
-    let win = ed.window_mgr.focused_window_mut();
+    let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 0;
     win.cursor_col = 6; // inside second cell
 
-    ed.table_next_cell();
+    editor.table_next_cell();
 
-    let win = ed.window_mgr.focused_window();
+    let win = editor.window_mgr.focused_window();
     // Should wrap to first cell of next data row (skipping separator at row 1)
     assert_eq!(
         win.cursor_row, 2,
@@ -43,16 +43,16 @@ fn table_next_cell_wraps_row() {
 
 #[test]
 fn table_alignment_idempotent_via_editor() {
-    let mut ed = ed_with_text("| short | x |\n| a | longer |\n");
-    let win = ed.window_mgr.focused_window_mut();
+    let mut editor = editor_with_bulk_text("| short | x |\n| a | longer |\n");
+    let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 0;
     win.cursor_col = 2;
 
     // Align twice via table_next_cell (which aligns internally)
-    ed.table_align();
-    let text1: String = ed.buffers[0].rope().chars().collect();
-    ed.table_align();
-    let text2: String = ed.buffers[0].rope().chars().collect();
+    editor.table_align();
+    let text1: String = editor.buffers[0].rope().chars().collect();
+    editor.table_align();
+    let text2: String = editor.buffers[0].rope().chars().collect();
 
     assert_eq!(text1, text2, "Double alignment must be idempotent");
 }
@@ -76,20 +76,20 @@ fn blank_row_not_separator() {
 #[test]
 fn tab_end_of_table_inserts_data_row() {
     // Tab at last cell should insert a blank data row that survives re-parse.
-    let mut ed = ed_with_text("| a | b |\n| c | d |\n");
-    let win = ed.window_mgr.focused_window_mut();
+    let mut editor = editor_with_bulk_text("| a | b |\n| c | d |\n");
+    let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 1;
     win.cursor_col = 8; // last cell of last row
 
-    ed.table_next_cell();
+    editor.table_next_cell();
 
     // Should now have 3 data rows.
-    let text: String = ed.buffers[0].rope().chars().collect();
+    let text: String = editor.buffers[0].rope().chars().collect();
     let lines: Vec<&str> = text.lines().collect();
     assert!(lines.len() >= 3, "should have 3+ lines, got: {text}");
 
     // Re-parse: the new row must be a data row, not a separator.
-    let t = crate::table::table_at_line(ed.buffers[0].rope(), 0).unwrap();
+    let t = crate::table::table_at_line(editor.buffers[0].rope(), 0).unwrap();
     assert!(
         !t.separators.contains(&2),
         "new row must not be classified as separator"
@@ -99,15 +99,15 @@ fn tab_end_of_table_inserts_data_row() {
 #[test]
 fn tab_end_of_table_double_tap() {
     // Two Tabs at end: first adds data row, second adds another (no dashes).
-    let mut ed = ed_with_text("| a | b |\n");
-    let win = ed.window_mgr.focused_window_mut();
+    let mut editor = editor_with_bulk_text("| a | b |\n");
+    let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 0;
     win.cursor_col = 8;
 
-    ed.table_next_cell(); // adds row 1
-    ed.table_next_cell(); // should add row 2
+    editor.table_next_cell(); // adds row 1
+    editor.table_next_cell(); // should add row 2
 
-    let text: String = ed.buffers[0].rope().chars().collect();
+    let text: String = editor.buffers[0].rope().chars().collect();
     // No line should contain only dashes (no accidental separator creation).
     for line in text.lines() {
         if line.trim().starts_with('|') {
@@ -130,14 +130,14 @@ fn tab_end_of_table_double_tap() {
 #[test]
 fn tab_inserts_before_trailing_hline() {
     // If table ends with |---|, new row goes above it.
-    let mut ed = ed_with_text("| a | b |\n|---|---|\n");
-    let win = ed.window_mgr.focused_window_mut();
+    let mut editor = editor_with_bulk_text("| a | b |\n|---|---|\n");
+    let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 0;
     win.cursor_col = 8; // last cell
 
-    ed.table_next_cell();
+    editor.table_next_cell();
 
-    let text: String = ed.buffers[0].rope().chars().collect();
+    let text: String = editor.buffers[0].rope().chars().collect();
     let lines: Vec<&str> = text.lines().collect();
     // The last table line should still be a separator.
     let last_table_line = lines.last().unwrap();
@@ -211,16 +211,16 @@ fn alignment_markers_preserved_on_format() {
 #[test]
 fn shift_tab_navigates_prev_cell() {
     // S-Tab on a table line should dispatch table_prev_cell, not global fold.
-    let mut ed = ed_with_text("| a | b |\n| c | d |\n");
-    ed.syntax.set_language(0, crate::syntax::Language::Org);
-    let win = ed.window_mgr.focused_window_mut();
+    let mut editor = editor_with_bulk_text("| a | b |\n| c | d |\n");
+    editor.syntax.set_language(0, crate::syntax::Language::Org);
+    let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 0;
     win.cursor_col = 6; // in second cell
 
     // heading_global_cycle is what S-Tab dispatches.
-    ed.heading_global_cycle(crate::syntax::Language::Org);
+    editor.heading_global_cycle(crate::syntax::Language::Org);
 
-    let win = ed.window_mgr.focused_window();
+    let win = editor.window_mgr.focused_window();
     // Should have moved to first cell (col ~2), not folded headings.
     assert_eq!(win.cursor_row, 0, "should stay on row 0");
     assert!(
@@ -233,16 +233,20 @@ fn shift_tab_navigates_prev_cell() {
 #[test]
 fn cursor_lands_on_content_right_aligned() {
     // Tab into a right-aligned cell should place cursor on content, not padding.
-    let mut ed = ed_with_text("| Name | Price |\n|---|---:|\n| Apple | 1 |\n");
-    let win = ed.window_mgr.focused_window_mut();
+    let mut editor = editor_with_bulk_text("| Name | Price |\n|---|---:|\n| Apple | 1 |\n");
+    let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 2;
     win.cursor_col = 2; // in Name cell
 
-    ed.table_next_cell(); // move to Price cell
+    editor.table_next_cell(); // move to Price cell
 
-    let win = ed.window_mgr.focused_window();
+    let win = editor.window_mgr.focused_window();
     // Cursor should be on '1', not on leading padding space.
-    let line: String = ed.buffers[0].rope().line(win.cursor_row).chars().collect();
+    let line: String = editor.buffers[0]
+        .rope()
+        .line(win.cursor_row)
+        .chars()
+        .collect();
     let ch = line.chars().nth(win.cursor_col).unwrap_or(' ');
     assert_ne!(
         ch,
