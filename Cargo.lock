@@ -2079,6 +2079,7 @@ dependencies = [
 name = "mae"
 version = "0.10.1"
 dependencies = [
+ "base64",
  "crossterm",
  "dirs",
  "futures",
@@ -2273,7 +2274,9 @@ dependencies = [
 name = "mae-scheme"
 version = "0.10.1"
 dependencies = [
+ "base64",
  "mae-core",
+ "mae-sync",
  "steel-core",
  "tracing",
 ]

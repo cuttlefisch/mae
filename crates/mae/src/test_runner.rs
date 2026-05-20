@@ -72,15 +72,12 @@ pub(crate) async fn run_scheme_tests(
     }
 
     // Load and evaluate each test file.
+    // We call inject_editor_state + install_mutable_buffer_accessors before
+    // each file to ensure the file's closures capture bindings in the current
+    // module context. sync_scheme_state then uses set! to update these.
     for file in &test_files {
         info!(file = %file.display(), "loading test file");
         scheme.inject_editor_state(editor);
-
-        // Override buffer-string and buffer-text with mutable-cell versions.
-        // inject_editor_state creates closure-captured snapshots via register_fn.
-        // We replace them with Scheme functions that read from mutable variables.
-        // This way, test thunks defined in the test file capture the forwarding
-        // function, and sync_scheme_state can update *buffer-text* via set!.
         install_mutable_buffer_accessors(editor, scheme);
 
         if let Err(e) = scheme.load_file(file) {
@@ -204,29 +201,20 @@ async fn run_tests_iteratively(
 /// 1. Test file closures capture these Scheme functions (not Rust closures)
 /// 2. sync_scheme_state can update *buffer-text* etc. via set!
 /// 3. Test thunks see fresh buffer contents between test steps
-fn install_mutable_buffer_accessors(editor: &Editor, scheme: &mut SchemeRuntime) {
-    // Build all-buffer-texts as a Scheme list of (name text) pairs.
-    let mut all_bufs = String::from("(list");
-    for b in &editor.buffers {
-        let bname = b.name.replace('\\', "\\\\").replace('"', "\\\"");
-        let btext = b.text().replace('\\', "\\\\").replace('"', "\\\"");
-        all_bufs.push_str(&format!(" (list \"{}\" \"{}\")", bname, btext));
-    }
-    all_bufs.push(')');
-
-    let code = format!(
-        r#"(begin
-          (define *all-buffer-texts* {all_bufs})
-          (define (buffer-string) *buffer-text*)
-          (define (buffer-text name)
-            (let loop ((entries *all-buffer-texts*))
-              (if (null? entries) #f
-                  (if (string-contains? (car (car entries)) name)
-                      (car (cdr (car entries)))
-                      (loop (cdr entries)))))))"#,
-        all_bufs = all_bufs,
-    );
-    let _ = scheme.eval(&code);
+fn install_mutable_buffer_accessors(_editor: &Editor, scheme: &mut SchemeRuntime) {
+    // Override buffer-string, buffer-text, and sync inspection functions
+    // to read from SharedState via Rust functions. This avoids the Steel
+    // binding scope issue where set! on variables only updates the most
+    // recent binding, not earlier files' captures.
+    let code = r#"(begin
+          (define (buffer-string) (test-buffer-string))
+          (define (buffer-text name) (test-buffer-text name))
+          (define (buffer-sync-enabled?) (test-sync-enabled?))
+          (define (buffer-pending-updates) (test-pending-updates))
+          (define (buffer-sync-content) (test-sync-content))
+          (define (buffer-encode-state) (test-encode-state))
+          (define (get-buffer-by-name name) (test-get-buffer-by-name name)))"#;
+    let _ = scheme.eval(code);
 }
 
 /// Sync Scheme state variables using `set!` instead of `register_value`.
@@ -241,6 +229,21 @@ fn sync_scheme_state(editor: &Editor, scheme: &mut SchemeRuntime) {
     let buf_count = editor.buffers.len();
     let win = editor.window_mgr.focused_window();
 
+    // Mode string
+    let mode_str = match editor.mode {
+        mae_core::Mode::Normal => "normal",
+        mae_core::Mode::Insert => "insert",
+        mae_core::Mode::Visual(_) => "visual",
+        mae_core::Mode::Command => "command",
+        mae_core::Mode::ConversationInput => "conversation",
+        mae_core::Mode::Search => "search",
+        mae_core::Mode::FilePicker => "file-picker",
+        mae_core::Mode::FileBrowser => "file-browser",
+        mae_core::Mode::CommandPalette => "command-palette",
+        mae_core::Mode::ShellInsert => "shell-insert",
+    };
+    let sync_enabled = buf.sync_doc.is_some();
+
     // Build a single set! expression to update all state variables.
     let sync_code = format!(
         r#"(begin
@@ -250,7 +253,9 @@ fn sync_scheme_state(editor: &Editor, scheme: &mut SchemeRuntime) {
           (set! *buffer-modified?* {modified})
           (set! *buffer-line-count* {lines})
           (set! *cursor-row* {crow})
-          (set! *cursor-col* {ccol}))"#,
+          (set! *cursor-col* {ccol})
+          (set! *mode* "{mode}")
+          (set! *buffer-sync-enabled?* {sync_enabled}))"#,
         text = text,
         name = name,
         buf_count = buf_count,
@@ -258,27 +263,47 @@ fn sync_scheme_state(editor: &Editor, scheme: &mut SchemeRuntime) {
         lines = buf.line_count(),
         crow = win.cursor_row,
         ccol = win.cursor_col,
+        mode = mode_str,
+        sync_enabled = if sync_enabled { "#t" } else { "#f" },
     );
+
+    // Update SharedState for Rust-backed test functions (current-mode, buffer-string, etc.)
+    scheme.set_current_mode(mode_str);
+    scheme.set_current_buffer_text(&buf.text());
 
     if let Err(e) = scheme.eval(&sync_code) {
         warn!(error = %e.message, "failed to sync scheme state variables");
     }
 
-    // Also update all buffer text snapshots in the all-buffers list.
-    // This is used by (buffer-text NAME) which searches by name.
-    let mut all_bufs = String::from("(list");
-    for b in &editor.buffers {
-        let bname = b.name.replace('\\', "\\\\").replace('"', "\\\"");
-        let btext = b.text().replace('\\', "\\\\").replace('"', "\\\"");
-        all_bufs.push_str(&format!(" (list \"{}\" \"{}\")", bname, btext));
-    }
-    all_bufs.push(')');
-    let sync2 = format!(
-        r#"(begin
-          (set! *all-buffer-texts* {all_bufs}))"#,
-        all_bufs = all_bufs,
+    // Update all buffer texts in SharedState for (buffer-text NAME).
+    let all_texts: Vec<(String, String)> = editor
+        .buffers
+        .iter()
+        .map(|b| (b.name.clone(), b.text()))
+        .collect();
+    scheme.set_all_buffer_texts(all_texts);
+
+    // Update buffer names in SharedState for (get-buffer-by-name).
+    let buffer_names: Vec<(usize, String)> = editor
+        .buffers
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (i, b.name.clone()))
+        .collect();
+    scheme.set_buffer_names(buffer_names);
+
+    // Update sync state in SharedState.
+    let sync_content = buf.sync_doc.as_ref().map(|s| s.content());
+    let encoded = buf.sync_doc.as_ref().map(|s| {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(s.encode_state())
+    });
+    scheme.set_sync_state(
+        sync_enabled,
+        buf.pending_sync_updates.len(),
+        sync_content,
+        encoded,
     );
-    let _ = scheme.eval(&sync2);
 }
 
 /// Process all pending side effects: drain collab events, handle sleep-ms,
@@ -388,21 +413,32 @@ fn collect_test_files(path: &str) -> Vec<std::path::PathBuf> {
         return vec![p.to_path_buf()];
     }
     if p.is_dir() {
-        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(p)
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == "scm"))
-            .filter(|p| {
-                p.file_name()
-                    .is_some_and(|n| n.to_str().is_some_and(|s| s.starts_with("test")))
-            })
-            .collect();
+        let mut files = Vec::new();
+        collect_test_files_recursive(p, &mut files);
         files.sort();
         return files;
     }
     vec![]
+}
+
+/// Recursively collect test .scm files from a directory.
+fn collect_test_files_recursive(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_test_files_recursive(&path, files);
+        } else if path.extension().is_some_and(|ext| ext == "scm")
+            && path
+                .file_name()
+                .is_some_and(|n| n.to_str().is_some_and(|s| s.starts_with("test")))
+        {
+            files.push(path);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -350,6 +350,19 @@ install-completions:
 test-scheme: build-tui
 	$(RELEASE_BIN) --test $(or $(TEST_PATH),tests/collab-e2e/)
 
+## test-scheme-crdt: run CRDT/sync Scheme tests
+test-scheme-crdt: build-tui
+	$(RELEASE_BIN) --test tests/crdt/
+
+## test-scheme-editor: run editor feature Scheme tests
+test-scheme-editor: build-tui
+	$(RELEASE_BIN) --test tests/editor/
+
+## test-scheme-all: run all local Scheme tests (crdt + editor)
+test-scheme-all: build-tui
+	$(RELEASE_BIN) --test tests/crdt/
+	$(RELEASE_BIN) --test tests/editor/
+
 ## docker-collab-test: run collab CRDT E2E tests in Docker containers
 docker-collab-test:
 	docker compose -f docker-compose.collab-test.yml up --build --abort-on-container-exit --exit-code-from verifier

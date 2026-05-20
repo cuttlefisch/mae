@@ -897,6 +897,22 @@ fn static_nodes() -> Vec<Node> {
         )
         .with_tags(["workflow", "sync", "collaboration"])
         .with_aliases(["collab workflows", "loopback", "multi-user"]),
+        Node::new(
+            "concept:scheme-testing",
+            "Concept: Scheme Testing Framework",
+            NodeKind::Concept,
+            CONCEPT_SCHEME_TESTING,
+        )
+        .with_tags(["testing", "scheme", "development"])
+        .with_aliases(["test", "ert", "buttercup", "plenary", "tap"]),
+        Node::new(
+            "concept:test-runner",
+            "Concept: Headless Test Runner",
+            NodeKind::Concept,
+            CONCEPT_TEST_RUNNER,
+        )
+        .with_tags(["testing", "development", "architecture"])
+        .with_aliases(["mae --test", "headless", "tap"]),
     ]
 }
 

@@ -117,6 +117,12 @@
       (error (string-append "Assertion failed: expected '" needle "' in string"))
       #t))
 
+;; (should-mode EXPECTED) — assert current editor mode matches expected string.
+;; Uses (current-mode) which reads from SharedState via Rust, bypassing
+;; the Steel binding scope issue with *mode* across multi-file test runs.
+(define (should-mode expected)
+  (should-equal (current-mode) expected))
+
 ;; --- Async helpers ---
 
 ;; (wait-until PRED TIMEOUT-MS) — poll PRED every 50ms, sleeping between checks.

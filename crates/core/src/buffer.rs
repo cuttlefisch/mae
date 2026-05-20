@@ -687,6 +687,16 @@ impl Buffer {
         self.rope.len_lines()
     }
 
+    /// Whether the undo stack is non-empty.
+    pub fn has_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    /// Whether the redo stack is non-empty.
+    pub fn has_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
     /// Line count excluding the phantom empty line that ropey adds after
     /// a trailing `\n`.
     ///

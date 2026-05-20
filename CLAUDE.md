@@ -263,6 +263,54 @@ Environment variable overrides for adapter/server paths:
 - **DAP:** `MAE_DAP_LLDB`, `MAE_DAP_CODELLDB`, `MAE_DAP_DEBUGPY`
 - **LSP:** `MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_TYPESCRIPT`, `MAE_LSP_GO`
 
+## Scheme Testing Framework
+
+MAE has a headless test runner inspired by Emacs ERT/Buttercup and Neovim Plenary. Tests boot a real editor (no mocks) and exercise the same Scheme API surface available to users.
+
+### Running Tests
+```bash
+mae --test tests/crdt/              # CRDT sync tests
+mae --test tests/editor/            # Editor feature tests
+mae --test tests/collab-e2e/test_smoke.scm  # Single file
+make test-scheme-crdt               # CRDT tests (builds first)
+make test-scheme-editor             # Editor tests
+make test-scheme-all                # All local tests
+```
+
+### Architecture (3 layers)
+1. **`scheme/lib/mae-test.scm`** — BDD library: `describe-group`/`it-test`/`should`/TAP output
+2. **`crates/mae/src/test_runner.rs`** — Rust orchestrator: iterates tests, syncs state between steps
+3. **`crates/scheme/src/runtime.rs`** — Scheme primitives for buffer mutation + state inspection
+
+### Writing Tests
+```scheme
+(describe-group "Feature name"
+  (lambda ()
+    (it-test "setup"
+      (lambda ()
+        (create-buffer "*test-feature*")))
+    (it-test "do something"
+      (lambda ()
+        (buffer-insert "hello")))
+    (it-test "verify result"
+      (lambda ()
+        (should-equal (buffer-string) "hello")))))
+;; No (run-tests) — Rust-side iteration handles state refresh
+```
+
+### Design Principles
+- **Real editor, not mocks.** Tests boot headless with full event loop. Same API for tests and users.
+- **One pending op per test step.** Each `it-test` is one eval→apply cycle. `buffer-insert` + `goto-char` in the same step may execute in unexpected order. Split into separate steps.
+- **SharedState pattern for cross-test reads.** Functions like `buffer-string`, `buffer-sync-enabled?`, `current-mode`, and `get-buffer-by-name` read from `Arc<Mutex<SharedState>>` (not closure-captured snapshots) so they see fresh state after `sync_scheme_state`.
+- **Assertions signal errors.** `should`/`should-equal`/`should-contain` signal Scheme errors caught by the runner. Use `should-mode` for mode checks.
+- **TAP v14 output.** Machine-parseable, CI-friendly.
+- **Rust-side iteration preferred.** Don't add `(run-tests)` at end of test files. The runner calls `run-nth-test` with `apply_to_editor` + `sync_scheme_state` between each step.
+
+### Adding New Test Primitives
+- **Read-only state**: Add to `SharedState`, register `test-*` Rust function in `new()`, add Scheme forwarding in `install_mutable_buffer_accessors`, update in `sync_scheme_state`.
+- **Mutations**: Add pending field to `SharedState`, register Scheme function that sets it, process in `apply_to_editor`.
+- **Never call `inject_editor_state` between test registration and execution** — it shadows captured bindings (Steel `register_value` creates new cells).
+
 ## Developing MAE Inside MAE (MCP Tools)
 
 All 130+ MAE editor tools are exposed via MCP with full parity — the same tools the built-in AI agent uses. When developing MAE with Claude Code connected via the MCP shim (`mae-mcp-shim`), prefer these tools over raw file reads for structured editor operations.

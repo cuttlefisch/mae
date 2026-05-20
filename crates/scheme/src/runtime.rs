@@ -140,6 +140,36 @@ struct SharedState {
     /// Ex-commands to dispatch via `(execute-ex CMD-STRING)`.
     /// Routes through `execute_command()` which handles argument parsing.
     pending_ex_commands: Vec<String>,
+
+    // --- CRDT/sync test primitives ---
+    /// Pending enable-sync: client_id for active buffer.
+    pending_enable_sync: Option<u64>,
+    /// Pending disable-sync on active buffer.
+    pending_disable_sync: bool,
+    /// Pending sync updates to apply: (buffer_name, base64-encoded update).
+    pending_sync_applies: Vec<(String, Vec<u8>)>,
+    /// Pending load-sync-state: (base64-decoded state bytes, client_id).
+    pending_load_sync_state: Option<(Vec<u8>, u64)>,
+    /// Flag: drain pending_sync_updates on active buffer after next apply.
+    pending_drain_sync_updates: bool,
+    /// Drained sync updates (stored here so Scheme can retrieve them).
+    drained_sync_updates: Vec<String>,
+    /// Current mode string for test inspection (updated by test runner).
+    current_mode: String,
+    /// Active buffer text for test inspection (updated by test runner).
+    current_buffer_text: String,
+    /// All buffer texts for (buffer-text NAME) (updated by test runner).
+    all_buffer_texts: Vec<(String, String)>,
+    /// Whether sync is enabled on active buffer (updated by test runner).
+    sync_enabled: bool,
+    /// Number of pending sync updates (updated by test runner).
+    pending_update_count: usize,
+    /// Sync doc content (None if sync not enabled) (updated by test runner).
+    sync_content: Option<String>,
+    /// Encoded sync state (None if sync not enabled) (updated by test runner).
+    encoded_state: Option<String>,
+    /// Buffer name→index mapping (updated by test runner for cross-test visibility).
+    buffer_names: Vec<(usize, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -1187,6 +1217,132 @@ impl SchemeRuntime {
             SteelVal::Void
         });
 
+        // --- Test introspection via SharedState ---
+
+        // --- Test introspection functions via SharedState ---
+        // These read from SharedState (updated by test runner's sync_scheme_state),
+        // so they always return the latest value regardless of Steel binding scopes.
+
+        // (current-mode) — read the current mode.
+        let s = shared.clone();
+        engine.register_fn("current-mode", move || -> String {
+            s.lock().unwrap().current_mode.clone()
+        });
+
+        // (test-buffer-string) — read active buffer text (test runner updates this).
+        let s = shared.clone();
+        engine.register_fn("test-buffer-string", move || -> String {
+            s.lock().unwrap().current_buffer_text.clone()
+        });
+
+        // (test-buffer-text NAME) — read named buffer text.
+        let s = shared.clone();
+        engine.register_fn("test-buffer-text", move |name: String| -> SteelVal {
+            let state = s.lock().unwrap();
+            state
+                .all_buffer_texts
+                .iter()
+                .find(|(n, _)| n == &name || n.ends_with(&name))
+                .map(|(_, t)| SteelVal::StringV(t.clone().into()))
+                .unwrap_or(SteelVal::BoolV(false))
+        });
+
+        // (test-sync-enabled?) — whether sync is enabled on active buffer.
+        let s = shared.clone();
+        engine.register_fn("test-sync-enabled?", move || -> bool {
+            s.lock().unwrap().sync_enabled
+        });
+
+        // (test-pending-updates) — number of pending sync updates.
+        let s = shared.clone();
+        engine.register_fn("test-pending-updates", move || -> isize {
+            s.lock().unwrap().pending_update_count as isize
+        });
+
+        // (test-sync-content) — sync doc content or #f.
+        let s = shared.clone();
+        engine.register_fn("test-sync-content", move || -> SteelVal {
+            let state = s.lock().unwrap();
+            match &state.sync_content {
+                Some(c) => SteelVal::StringV(c.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
+
+        // (test-encode-state) — encoded sync state or #f.
+        let s = shared.clone();
+        engine.register_fn("test-encode-state", move || -> SteelVal {
+            let state = s.lock().unwrap();
+            match &state.encoded_state {
+                Some(s) => SteelVal::StringV(s.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
+
+        // (test-get-buffer-by-name NAME) — lookup buffer index by name from SharedState.
+        let s = shared.clone();
+        engine.register_fn("test-get-buffer-by-name", move |name: String| -> SteelVal {
+            let state = s.lock().unwrap();
+            state
+                .buffer_names
+                .iter()
+                .find(|(_, n)| n == &name)
+                .map(|(i, _)| SteelVal::IntV(*i as isize))
+                .unwrap_or(SteelVal::BoolV(false))
+        });
+
+        // --- CRDT/sync test primitives ---
+
+        // (buffer-enable-sync CLIENT-ID) — enable sync on active buffer.
+        let s = shared.clone();
+        engine.register_fn("buffer-enable-sync", move |client_id: isize| {
+            s.lock().unwrap().pending_enable_sync = Some(client_id.max(1) as u64);
+            SteelVal::Void
+        });
+
+        // (buffer-disable-sync) — disable sync on active buffer.
+        let s = shared.clone();
+        engine.register_fn("buffer-disable-sync", move || {
+            s.lock().unwrap().pending_disable_sync = true;
+            SteelVal::Void
+        });
+
+        // (buffer-apply-update BUFFER-NAME UPDATE-BASE64) — apply encoded sync update.
+        let s = shared.clone();
+        engine.register_fn(
+            "buffer-apply-update",
+            move |buf_name: String, update_b64: String| {
+                use base64::Engine as _;
+                match base64::engine::general_purpose::STANDARD.decode(&update_b64) {
+                    Ok(bytes) => {
+                        s.lock()
+                            .unwrap()
+                            .pending_sync_applies
+                            .push((buf_name, bytes));
+                        SteelVal::BoolV(true)
+                    }
+                    Err(e) => SteelVal::StringV(format!("base64 decode error: {}", e).into()),
+                }
+            },
+        );
+
+        // (buffer-load-sync-state STATE-BASE64 CLIENT-ID) — load full state into active buffer.
+        let s = shared.clone();
+        engine.register_fn(
+            "buffer-load-sync-state",
+            move |state_b64: String, client_id: isize| {
+                use base64::Engine as _;
+                match base64::engine::general_purpose::STANDARD.decode(&state_b64) {
+                    Ok(bytes) => {
+                        s.lock().unwrap().pending_load_sync_state =
+                            Some((bytes, client_id.max(1) as u64));
+                        SteelVal::BoolV(true)
+                    }
+                    Err(e) => SteelVal::StringV(format!("base64 decode error: {}", e).into()),
+                }
+            },
+        );
+
         // Register default values for state-injected variables.
         // This prevents FreeIdentifier errors in init.scm during startup.
         engine.register_value("*buffer-name*", SteelVal::StringV("scratch".into()));
@@ -1259,6 +1415,41 @@ impl SchemeRuntime {
     /// Take the pending exit code set by `(exit CODE)`, if any.
     pub fn take_exit_code(&mut self) -> Option<i32> {
         self.shared.lock().unwrap().pending_exit_code.take()
+    }
+
+    /// Update the current mode string in SharedState (for test runner).
+    pub fn set_current_mode(&self, mode: &str) {
+        self.shared.lock().unwrap().current_mode = mode.to_string();
+    }
+
+    /// Update the active buffer text in SharedState (for test runner).
+    pub fn set_current_buffer_text(&self, text: &str) {
+        self.shared.lock().unwrap().current_buffer_text = text.to_string();
+    }
+
+    /// Update all buffer texts in SharedState (for test runner).
+    pub fn set_all_buffer_texts(&self, texts: Vec<(String, String)>) {
+        self.shared.lock().unwrap().all_buffer_texts = texts;
+    }
+
+    /// Update sync state in SharedState (for test runner).
+    pub fn set_sync_state(
+        &self,
+        enabled: bool,
+        pending_count: usize,
+        content: Option<String>,
+        encoded: Option<String>,
+    ) {
+        let mut state = self.shared.lock().unwrap();
+        state.sync_enabled = enabled;
+        state.pending_update_count = pending_count;
+        state.sync_content = content;
+        state.encoded_state = encoded;
+    }
+
+    /// Update buffer names in SharedState for `(get-buffer-by-name)` across tests.
+    pub fn set_buffer_names(&self, names: Vec<(usize, String)>) {
+        self.shared.lock().unwrap().buffer_names = names;
     }
 
     /// Drain pending file writes from `(write-file PATH CONTENT)`.
@@ -1759,6 +1950,70 @@ impl SchemeRuntime {
                         .into(),
                 )
             });
+
+        // --- Sync/CRDT state inspection ---
+
+        // (buffer-sync-enabled?) — #t if sync_doc is active on the current buffer.
+        let sync_enabled = buf.sync_doc.is_some();
+        self.engine
+            .register_value("*buffer-sync-enabled?*", SteelVal::BoolV(sync_enabled));
+        self.engine
+            .register_fn("buffer-sync-enabled?", move || sync_enabled);
+
+        // (buffer-pending-updates) — number of pending sync updates on active buffer.
+        let pending_count = buf.pending_sync_updates.len() as isize;
+        self.engine
+            .register_fn("buffer-pending-updates", move || pending_count);
+
+        // (buffer-sync-content) — read content from the yrs doc (not the rope).
+        let sync_content = buf.sync_doc.as_ref().map(|s| s.content());
+        self.engine
+            .register_fn("buffer-sync-content", move || -> SteelVal {
+                match &sync_content {
+                    Some(c) => SteelVal::StringV(c.clone().into()),
+                    None => SteelVal::BoolV(false),
+                }
+            });
+
+        // (buffer-drain-updates) — request drain of pending sync updates.
+        // Sets a flag in SharedState; apply_to_editor drains the actual updates
+        // and stores them as base64 strings. Returns the previously drained list.
+        let s = self.shared.clone();
+        self.engine
+            .register_fn("buffer-drain-updates", move || -> SteelVal {
+                let mut state = s.lock().unwrap();
+                state.pending_drain_sync_updates = true;
+                // Return previously drained updates (from last apply cycle).
+                let updates = std::mem::take(&mut state.drained_sync_updates);
+                SteelVal::ListV(
+                    updates
+                        .into_iter()
+                        .map(|s| SteelVal::StringV(s.into()))
+                        .collect::<Vec<_>>()
+                        .into(),
+                )
+            });
+
+        // (buffer-encode-state) — return full yrs document state as base64.
+        let encoded_state = buf.sync_doc.as_ref().map(|s| {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(s.encode_state())
+        });
+        self.engine
+            .register_fn("buffer-encode-state", move || -> SteelVal {
+                match &encoded_state {
+                    Some(s) => SteelVal::StringV(s.clone().into()),
+                    None => SteelVal::BoolV(false),
+                }
+            });
+
+        // (undo-available?) — #t if undo stack is non-empty.
+        let has_undo = buf.has_undo();
+        self.engine.register_fn("undo-available?", move || has_undo);
+
+        // (redo-available?) — #t if redo stack is non-empty.
+        let has_redo = buf.has_redo();
+        self.engine.register_fn("redo-available?", move || has_redo);
     }
 
     /// Apply accumulated config changes to the editor.
@@ -2072,6 +2327,60 @@ impl SchemeRuntime {
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].redo(win);
+        }
+
+        // --- CRDT/sync operations ---
+
+        // (buffer-enable-sync CLIENT-ID)
+        if let Some(client_id) = state.pending_enable_sync.take() {
+            let idx = editor.active_buffer_idx();
+            editor.buffers[idx].enable_sync(client_id);
+            debug!(client_id = client_id, "sync enabled on active buffer");
+        }
+
+        // (buffer-disable-sync)
+        if state.pending_disable_sync {
+            state.pending_disable_sync = false;
+            let idx = editor.active_buffer_idx();
+            editor.buffers[idx].disable_sync();
+            debug!("sync disabled on active buffer");
+        }
+
+        // (buffer-load-sync-state STATE-BYTES CLIENT-ID)
+        if let Some((state_bytes, client_id)) = state.pending_load_sync_state.take() {
+            let idx = editor.active_buffer_idx();
+            match editor.buffers[idx].load_sync_state(&state_bytes, client_id) {
+                Ok(()) => debug!(client_id = client_id, "sync state loaded on active buffer"),
+                Err(e) => warn!(error = %e, "failed to load sync state"),
+            }
+        }
+
+        // (buffer-drain-updates) — drain pending sync updates from active buffer
+        if state.pending_drain_sync_updates {
+            state.pending_drain_sync_updates = false;
+            let idx = editor.active_buffer_idx();
+            let updates: Vec<String> = editor.buffers[idx]
+                .pending_sync_updates
+                .drain(..)
+                .map(|u| {
+                    use base64::Engine as _;
+                    base64::engine::general_purpose::STANDARD.encode(&u)
+                })
+                .collect();
+            state.drained_sync_updates = updates;
+        }
+
+        // (buffer-apply-update BUFFER-NAME UPDATE-BYTES)
+        let sync_applies: Vec<(String, Vec<u8>)> = state.pending_sync_applies.drain(..).collect();
+        for (buf_name, update_bytes) in sync_applies {
+            if let Some(idx) = editor.buffers.iter().position(|b| b.name == buf_name) {
+                match editor.buffers[idx].apply_sync_update(&update_bytes) {
+                    Ok(()) => debug!(buffer = %buf_name, "sync update applied"),
+                    Err(e) => warn!(buffer = %buf_name, error = %e, "failed to apply sync update"),
+                }
+            } else {
+                warn!(buffer = %buf_name, "buffer not found for sync update");
+            }
         }
 
         // (switch-to-buffer IDX)

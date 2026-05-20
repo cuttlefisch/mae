@@ -44,6 +44,7 @@ graph TD
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
     mae_scheme --> mae_core
+    mae_scheme --> mae_sync
     mae_shell[mae-shell]
     mae_snippets[mae-snippets]
     mae_spell[mae-spell]
@@ -458,6 +459,18 @@ Source: `crates/sync/src/lib.rs`
 | `file-exists?` | `crates/scheme/src/runtime.rs` |
 | `current-milliseconds` | `crates/scheme/src/runtime.rs` |
 | `goto-char` | `crates/scheme/src/runtime.rs` |
+| `current-mode` | `crates/scheme/src/runtime.rs` |
+| `test-buffer-string` | `crates/scheme/src/runtime.rs` |
+| `test-buffer-text` | `crates/scheme/src/runtime.rs` |
+| `test-sync-enabled?` | `crates/scheme/src/runtime.rs` |
+| `test-pending-updates` | `crates/scheme/src/runtime.rs` |
+| `test-sync-content` | `crates/scheme/src/runtime.rs` |
+| `test-encode-state` | `crates/scheme/src/runtime.rs` |
+| `test-get-buffer-by-name` | `crates/scheme/src/runtime.rs` |
+| `buffer-enable-sync` | `crates/scheme/src/runtime.rs` |
+| `buffer-disable-sync` | `crates/scheme/src/runtime.rs` |
+| `buffer-apply-update` | `crates/scheme/src/runtime.rs` |
+| `buffer-load-sync-state` | `crates/scheme/src/runtime.rs` |
 | `buffer-line` | `crates/scheme/src/runtime.rs` |
 | `shell-cwd` | `crates/scheme/src/runtime.rs` |
 | `shell-read-output` | `crates/scheme/src/runtime.rs` |
@@ -483,6 +496,13 @@ Source: `crates/sync/src/lib.rs`
 | `buffer-text` | `crates/scheme/src/runtime.rs` |
 | `collab-status` | `crates/scheme/src/runtime.rs` |
 | `collab-synced-buffers` | `crates/scheme/src/runtime.rs` |
+| `buffer-sync-enabled?` | `crates/scheme/src/runtime.rs` |
+| `buffer-pending-updates` | `crates/scheme/src/runtime.rs` |
+| `buffer-sync-content` | `crates/scheme/src/runtime.rs` |
+| `buffer-drain-updates` | `crates/scheme/src/runtime.rs` |
+| `buffer-encode-state` | `crates/scheme/src/runtime.rs` |
+| `undo-available?` | `crates/scheme/src/runtime.rs` |
+| `redo-available?` | `crates/scheme/src/runtime.rs` |
 
 ## Commands (504 built-in)
 

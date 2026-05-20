@@ -1511,3 +1511,68 @@ mae-state-server --bind 0.0.0.0:9473\n\
 - `mae doctor` (CLI) — checks state-server process, port binding, WAL integrity\n\n\
 See also: [[concept:collab-architecture]], [[lesson:collab-setup]], \
 [[concept:sync-engine]], [[index]]\n";
+
+pub(super) const CONCEPT_SCHEME_TESTING: &str = "\
+MAE has a headless **Scheme test framework** inspired by Emacs ERT/Buttercup \
+and Neovim Plenary. Tests boot a real editor (no mocks) and exercise the same \
+Scheme API available to users.\n\n\
+## BDD Structure\n\
+Tests use `describe-group` / `it-test` blocks (like Buttercup's `describe`/`it`):\n\n\
+```scheme\n\
+(describe-group \"Feature name\"\n\
+  (lambda ()\n\
+    (it-test \"setup\"\n\
+      (lambda () (create-buffer \"*test*\")))\n\
+    (it-test \"insert text\"\n\
+      (lambda () (buffer-insert \"hello\")))\n\
+    (it-test \"verify\"\n\
+      (lambda () (should-equal (buffer-string) \"hello\")))))\n\
+```\n\n\
+## Assertions\n\
+| Function | Purpose |\n\
+|----------|----------|\n\
+| [[scheme:should]] | Assert truthy |\n\
+| [[scheme:should-not]] | Assert falsy |\n\
+| [[scheme:should-equal]] | Assert equality |\n\
+| [[scheme:should-contain]] | Assert substring |\n\
+| `(should-mode MODE)` | Assert editor mode |\n\n\
+## Running Tests\n\
+```\n\
+mae --test tests/crdt/               # CRDT sync tests\n\
+mae --test tests/editor/             # Editor feature tests\n\
+mae --test tests/collab-e2e/test_smoke.scm  # Single file\n\
+```\n\n\
+## Key Principle: One Op Per Step\n\
+Each `it-test` is one eval→apply cycle. Pending mutations (`buffer-insert`, \
+`goto-char`, etc.) execute during `apply_to_editor` after eval completes. \
+Multiple mutations in one step may execute in unexpected order — split them.\n\n\
+See also: [[concept:test-runner]], [[scheme:describe-group]], \
+[[scheme:it-test]], [[index]]\n";
+
+pub(super) const CONCEPT_TEST_RUNNER: &str = "\
+The **headless test runner** (`mae --test PATH`) orchestrates Scheme test \
+execution from the Rust side. It is the canonical path for all tests.\n\n\
+## Architecture (3 layers)\n\
+1. **`scheme/lib/mae-test.scm`** — BDD library (describe/it/should/TAP output)\n\
+2. **`crates/mae/src/test_runner.rs`** — Rust orchestrator\n\
+3. **`crates/scheme/src/runtime.rs`** — Scheme primitives\n\n\
+## Execution Flow\n\
+1. Boot editor headless (no terminal/GUI)\n\
+2. Load `mae-test.scm` library\n\
+3. Load test file(s) → registers tests via `describe-group`/`it-test`\n\
+4. Iterate tests from Rust: `eval(\"(run-nth-test N)\")` for each test\n\
+5. Between each test: `apply_to_editor()` + `sync_scheme_state()`\n\
+6. Print TAP v14 output, exit 0 (pass) or 1 (fail)\n\n\
+## SharedState Pattern\n\
+Steel's `register_value` creates new binding cells on each call, breaking \
+closures captured in earlier evals. The solution: store mutable state in \
+`Arc<Mutex<SharedState>>` and register Rust functions that read from it. \
+Scheme forwarding functions (`buffer-string`, `buffer-sync-enabled?`, \
+`current-mode`, `get-buffer-by-name`) call these Rust functions.\n\n\
+## Adding New Test Primitives\n\
+- **Read-only**: Add to SharedState → register `test-*` Rust fn → add \
+  Scheme forwarding in `install_mutable_buffer_accessors` → update in \
+  `sync_scheme_state`\n\
+- **Mutations**: Add pending field to SharedState → register Scheme fn → \
+  process in `apply_to_editor`\n\n\
+See also: [[concept:scheme-testing]], [[concept:scheme-api]], [[index]]\n";
