@@ -870,6 +870,10 @@
         {
           "name": "compare_state_vectors",
           "kind": "fn"
+        },
+        {
+          "name": "compute_project_identity",
+          "kind": "fn"
         }
       ]
     }

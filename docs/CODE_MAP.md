@@ -369,6 +369,7 @@ Source: `crates/sync/src/lib.rs`
 | `SyncDiagnosis` | struct |
 | `SyncOverallStatus` | enum |
 | `compare_state_vectors` | fn |
+| `compute_project_identity` | fn |
 
 ## Scheme API
 

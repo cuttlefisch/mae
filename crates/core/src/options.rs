@@ -413,6 +413,9 @@ impl OptionRegistry {
                 opt!("collab_save_on_remote_update", &["collab-save-on-remote-update"],
                     "Auto-save local file when CRDT update arrives (requires file_path set)",
                     OptionKind::Bool, "false", Some("collaboration.save_on_remote_update"), &[]),
+                opt!("collab_heartbeat_interval", &["collab-heartbeat-interval"],
+                    "Seconds between heartbeat pings to the state server (0 = disabled)",
+                    OptionKind::Int, "30", Some("collaboration.heartbeat_interval_secs"), &[]),
             ],
         }
     }

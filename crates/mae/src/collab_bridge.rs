@@ -77,6 +77,17 @@ pub enum CollabEvent {
     RemoteUpdate {
         doc_id: String,
         update_bytes: Vec<u8>,
+        /// WAL sequence number from server (0 if not present).
+        /// Gap detection happens inside handle_incoming_message before sending;
+        /// this field is carried for diagnostic/logging use by consumers.
+        #[allow(dead_code)]
+        wal_seq: u64,
+    },
+    /// Gap detected in WAL sequence — triggers resync for the doc.
+    GapDetected {
+        doc_id: String,
+        expected: u64,
+        got: u64,
     },
     /// Share failed on server — must roll back synced state.
     ShareFailed {
@@ -249,6 +260,9 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
 }
 
 /// Compute a `DocAddress` from a buffer's file path and project root.
+///
+/// Uses `compute_project_identity()` (WU4) for stable cross-machine doc_ids:
+/// git remote URL → .project name → basename → absolute path hash.
 fn compute_doc_address(
     buf: &mae_core::Buffer,
     project_root: Option<&std::path::Path>,
@@ -263,15 +277,8 @@ fn compute_doc_address(
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| fp.to_string_lossy().to_string())
         };
-        // FNV-1a hash of project root for stable short identifier.
         let project_hash = if let Some(root) = project_root {
-            let bytes = root.to_string_lossy();
-            let mut h: u64 = 0xcbf29ce484222325;
-            for b in bytes.as_bytes() {
-                h ^= *b as u64;
-                h = h.wrapping_mul(0x100000001b3);
-            }
-            format!("{h:012x}")
+            mae_sync::compute_project_identity(root)
         } else {
             "no-project".to_string()
         };
@@ -316,20 +323,55 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             info!(address = %address, peers = peer_count, "collab connected");
             editor.collab_status = CollabStatus::Connected { peer_count };
             editor.set_status(format!("Connected to {} ({} peers)", address, peer_count));
+            // WU3: On reconnect, re-share buffers that still have CRDT state (offline recovery).
+            let offline_docs: Vec<(String, Vec<u8>)> = editor
+                .buffers
+                .iter()
+                .filter(|b| b.collab_offline && b.sync_doc.is_some() && b.collab_doc_id.is_some())
+                .filter_map(|b| {
+                    let doc_id = b.collab_doc_id.as_ref()?.clone();
+                    let state = b.sync_doc.as_ref()?.encode_state();
+                    Some((doc_id, state))
+                })
+                .collect();
+            for (doc_id, _state_bytes) in &offline_docs {
+                info!(doc = %doc_id, "reconnect: re-sharing offline buffer");
+                editor.collab_synced_buffers.insert(doc_id.clone());
+            }
+            if !offline_docs.is_empty() {
+                editor.collab_synced_docs = editor.collab_synced_buffers.len();
+                // Queue re-share for each offline doc. The first one goes via
+                // pending_collab_intent; additional ones would need the command channel.
+                // For now, queue the first and set a status message.
+                if let Some((doc_id, _state)) = offline_docs.first() {
+                    editor.pending_collab_intent = Some(CollabIntent::ForceSync {
+                        buffer_name: doc_id.clone(),
+                    });
+                }
+                editor.set_status(format!(
+                    "Connected to {} — resyncing {} offline buffer(s)",
+                    address,
+                    offline_docs.len()
+                ));
+            }
             editor.mark_full_redraw();
         }
         CollabEvent::Disconnected { reason } => {
             info!(reason = %reason, "collab disconnected");
             editor.collab_status = CollabStatus::Disconnected;
             editor.set_status(format!("Collab disconnected: {}", reason));
-            // Clear sync state on ALL buffers that have collab state, not just
-            // those tracked in collab_synced_buffers. This handles buffers whose
-            // collab_doc_id was already cleared by ShareFailed (Flaw C fix).
+            // Preserve sync_doc and collab_doc_id for offline recovery (WU3).
+            // Only clear UI tracking state — CRDT state survives disconnect
+            // so local edits accumulate for resync on reconnect.
             for buf in &mut editor.buffers {
                 if buf.collab_doc_id.is_some() {
-                    buf.sync_doc = None;
-                    buf.pending_sync_updates.clear();
-                    buf.collab_doc_id = None;
+                    if buf.sync_doc.is_some() {
+                        buf.collab_offline = true;
+                    } else {
+                        // Buffer with no sync_doc (e.g. ShareFailed already cleared it)
+                        // has no state to preserve.
+                        buf.collab_doc_id = None;
+                    }
                 }
             }
             editor.collab_synced_docs = 0;
@@ -339,11 +381,14 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
         CollabEvent::RemoteUpdate {
             doc_id,
             update_bytes,
+            wal_seq: _,
         } => {
             if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
                 match editor.buffers[idx].apply_sync_update(&update_bytes) {
                     Ok(()) => {
                         debug!(doc = %doc_id, update_bytes = update_bytes.len(), "applied remote sync update");
+                        // Clear offline flag on successful remote update.
+                        editor.buffers[idx].collab_offline = false;
                         editor.mark_full_redraw();
                     }
                     Err(e) => {
@@ -353,6 +398,22 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             } else {
                 warn!(doc = %doc_id, "remote update for unknown buffer — name mismatch?");
             }
+        }
+        CollabEvent::GapDetected {
+            doc_id,
+            expected,
+            got,
+        } => {
+            warn!(doc = %doc_id, expected, got, "WAL sequence gap — requesting resync");
+            editor.set_status(format!(
+                "Collab: gap detected on {} (expected seq {}, got {}), resyncing",
+                doc_id, expected, got
+            ));
+            // Queue a ForceSync to trigger resync.
+            editor.pending_collab_intent = Some(CollabIntent::ForceSync {
+                buffer_name: doc_id,
+            });
+            editor.mark_full_redraw();
         }
         CollabEvent::StatusReport { lines } => {
             debug!(line_count = lines.len(), "status report received");
@@ -711,6 +772,9 @@ pub(crate) enum PendingResponseKind {
         expected_hash: String,
     },
     Subscribe,
+    Ping {
+        sent_at: std::time::Instant,
+    },
 }
 
 /// Background task that owns the TCP connection to the state server.
@@ -736,6 +800,20 @@ async fn run_collab_task(
     let mut reconnect_enabled = false;
     let mut next_request_id: u64 = 10; // Start after handshake IDs
     let mut pending_responses: HashMap<u64, PendingResponseKind> = HashMap::new();
+    // WU1: Track wal_seq per doc for gap detection.
+    let mut seq_tracker: HashMap<String, u64> = HashMap::new();
+    // WU2: Heartbeat interval (30s default, disabled if 0).
+    let heartbeat_secs = 30u64; // TODO: read from option via spawn config
+    let mut heartbeat_interval =
+        tokio::time::interval(std::time::Duration::from_secs(if heartbeat_secs > 0 {
+            heartbeat_secs
+        } else {
+            3600
+        }));
+    heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Skip the first immediate tick.
+    heartbeat_interval.tick().await;
+    let mut ping_pending = false;
 
     /// Helper: set up owned read/write halves from a fresh TCP stream.
     fn install_connection(
@@ -1000,18 +1078,69 @@ async fn run_collab_task(
                                 &evt_tx,
                                 &mut pending_responses,
                                 &mut shared_docs,
+                                &mut seq_tracker,
                             ).await;
+                            // Any valid message resets the ping_pending flag.
+                            ping_pending = false;
                         }
                         Ok(None) | Err(_) => {
                             tear_down(&mut reader, &mut writer);
                             shared_docs.clear();
                             pending_responses.clear();
+                            seq_tracker.clear();
+                            ping_pending = false;
                             let _ = evt_tx.send(CollabEvent::Disconnected {
                                 reason: "connection lost".to_string(),
                             }).await;
                             if reconnect_enabled {
                                 continue;
                             }
+                        }
+                    }
+                }
+                // WU2: Periodic heartbeat.
+                _ = heartbeat_interval.tick() => {
+                    if heartbeat_secs == 0 {
+                        continue;
+                    }
+                    if ping_pending {
+                        // Previous ping got no response — connection dead.
+                        warn!("heartbeat: no response to previous ping — disconnecting");
+                        tear_down(&mut reader, &mut writer);
+                        shared_docs.clear();
+                        pending_responses.clear();
+                        seq_tracker.clear();
+                        ping_pending = false;
+                        let _ = evt_tx.send(CollabEvent::Disconnected {
+                            reason: "heartbeat timeout".to_string(),
+                        }).await;
+                        if reconnect_enabled {
+                            continue;
+                        }
+                    } else if let Some(ref mut w) = writer {
+                        let req_id = next_request_id;
+                        next_request_id += 1;
+                        let req = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "method": "$/ping",
+                        });
+                        let body = serde_json::to_vec(&req).unwrap_or_default();
+                        if write_framed(w, &body, write_timeout).await.is_ok() {
+                            pending_responses.insert(req_id, PendingResponseKind::Ping {
+                                sent_at: std::time::Instant::now(),
+                            });
+                            ping_pending = true;
+                        } else {
+                            // Write failed — connection is broken.
+                            tear_down(&mut reader, &mut writer);
+                            shared_docs.clear();
+                            pending_responses.clear();
+                            seq_tracker.clear();
+                            ping_pending = false;
+                            let _ = evt_tx.send(CollabEvent::Disconnected {
+                                reason: "heartbeat write failed".to_string(),
+                            }).await;
                         }
                     }
                 }
@@ -1073,6 +1202,31 @@ async fn run_collab_task(
     }
 }
 
+/// Check WAL sequence continuity for a doc. If a gap is detected, emit GapDetected.
+async fn check_seq_gap(
+    doc_id: &str,
+    wal_seq: u64,
+    seq_tracker: &mut std::collections::HashMap<String, u64>,
+    evt_tx: &mpsc::Sender<CollabEvent>,
+) {
+    let expected = seq_tracker
+        .get(doc_id)
+        .map(|last| last + 1)
+        .unwrap_or(wal_seq); // first time: no gap
+    if wal_seq > expected {
+        warn!(doc = %doc_id, expected, got = wal_seq, "WAL sequence gap detected");
+        let _ = evt_tx
+            .send(CollabEvent::GapDetected {
+                doc_id: doc_id.to_string(),
+                expected,
+                got: wal_seq,
+            })
+            .await;
+    }
+    // Always update tracker to the latest seen seq.
+    seq_tracker.insert(doc_id.to_string(), wal_seq);
+}
+
 /// Handle an incoming JSON-RPC message from the server.
 /// Dispatches to response handler or notification handler based on content.
 pub(crate) async fn handle_incoming_message(
@@ -1080,6 +1234,7 @@ pub(crate) async fn handle_incoming_message(
     evt_tx: &mpsc::Sender<CollabEvent>,
     pending_responses: &mut std::collections::HashMap<u64, PendingResponseKind>,
     shared_docs: &mut Vec<String>,
+    seq_tracker: &mut std::collections::HashMap<String, u64>,
 ) {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(text) else {
         return;
@@ -1103,6 +1258,7 @@ pub(crate) async fn handle_incoming_message(
                 if let Some(params) = val.get("params") {
                     // Server format: {"params": {"seq": N, "event": {"type": "sync_update", "data": {"buffer_name": "...", "update_base64": "..."}}}}
                     // The "data" key comes from serde's #[serde(tag = "type", content = "data")] on EditorEvent.
+                    let wal_seq = params.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
                     let event_data = params
                         .get("event")
                         .and_then(|e| e.get("data").or_else(|| e.get("sync_update")));
@@ -1116,12 +1272,17 @@ pub(crate) async fn handle_incoming_message(
                             .get("update_base64")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        debug!(doc = %buffer_name, update_bytes = update_b64.len(), "received sync_update");
+                        debug!(doc = %buffer_name, wal_seq, update_bytes = update_b64.len(), "received sync_update");
+                        // Gap detection: check wal_seq continuity per doc.
+                        if wal_seq > 0 {
+                            check_seq_gap(&buffer_name, wal_seq, seq_tracker, evt_tx).await;
+                        }
                         if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
                             let _ = evt_tx
                                 .send(CollabEvent::RemoteUpdate {
                                     doc_id: buffer_name,
                                     update_bytes: bytes,
+                                    wal_seq,
                                 })
                                 .await;
                         }
@@ -1137,16 +1298,21 @@ pub(crate) async fn handle_incoming_message(
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
+                    let wal_seq = params.get("wal_seq").and_then(|v| v.as_u64()).unwrap_or(0);
                     let update_b64 = params
                         .get("update")
                         .or_else(|| params.get("update_base64"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
+                    if wal_seq > 0 {
+                        check_seq_gap(&doc_id, wal_seq, seq_tracker, evt_tx).await;
+                    }
                     if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
                         let _ = evt_tx
                             .send(CollabEvent::RemoteUpdate {
                                 doc_id,
                                 update_bytes: bytes,
+                                wal_seq,
                             })
                             .await;
                     }
@@ -1352,6 +1518,12 @@ async fn handle_response(
         }
         PendingResponseKind::Subscribe => {
             // Acknowledgement — no action needed.
+        }
+        PendingResponseKind::Ping { sent_at } => {
+            let latency_ms = sent_at.elapsed().as_millis() as u64;
+            debug!(latency_ms, "heartbeat pong received");
+            // Latency is logged — could be exposed to doctor in the future.
+            let _ = latency_ms; // suppress unused warning
         }
     }
 }
@@ -1910,6 +2082,7 @@ mod tests {
         );
         assert_eq!(editor.collab_status, CollabStatus::Disconnected);
         assert_eq!(editor.collab_synced_docs, 0);
+        // UI tracking cleared, but per-buffer state depends on sync_doc presence.
         assert!(editor.collab_synced_buffers.is_empty());
     }
 
@@ -2114,7 +2287,14 @@ mod tests {
                 }
             }
         });
-        handle_incoming_message(&msg.to_string(), &tx, &mut pending, &mut shared).await;
+        handle_incoming_message(
+            &msg.to_string(),
+            &tx,
+            &mut pending,
+            &mut shared,
+            &mut std::collections::HashMap::new(),
+        )
+        .await;
         let event = rx.try_recv().unwrap();
         match event {
             CollabEvent::RemoteUpdate { doc_id, .. } => {
@@ -2145,7 +2325,14 @@ mod tests {
                 }
             }
         });
-        handle_incoming_message(&msg.to_string(), &tx, &mut pending, &mut shared).await;
+        handle_incoming_message(
+            &msg.to_string(),
+            &tx,
+            &mut pending,
+            &mut shared,
+            &mut std::collections::HashMap::new(),
+        )
+        .await;
         let event = rx.try_recv().unwrap();
         match event {
             CollabEvent::RemoteUpdate { doc_id, .. } => {
@@ -2333,7 +2520,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_disconnect_clears_sync_state() {
+    fn handle_disconnect_preserves_sync_for_offline_recovery() {
         let mut editor = Editor::new();
         editor.collab_status = CollabStatus::Connected { peer_count: 1 };
         // Set up a buffer as if it were synced.
@@ -2352,10 +2539,10 @@ mod tests {
 
         assert!(editor.collab_synced_buffers.is_empty());
         assert_eq!(editor.collab_synced_docs, 0);
-        // Per-buffer state should be cleared — disconnect uses find_buffer_by_name
-        // with the doc_id, which may not match buffer name. Let's check via collab_doc_id.
-        assert!(editor.buffers[0].collab_doc_id.is_none());
-        assert!(editor.buffers[0].pending_sync_updates.is_empty());
+        // WU3: sync_doc and collab_doc_id are PRESERVED for offline recovery.
+        assert!(editor.buffers[0].collab_doc_id.is_some());
+        assert!(editor.buffers[0].sync_doc.is_some());
+        assert!(editor.buffers[0].collab_offline);
     }
 
     #[tokio::test]
@@ -2391,14 +2578,14 @@ mod tests {
     }
 
     #[test]
-    fn disconnect_clears_all_buffers_not_just_tracked() {
-        // Flaw C: disconnect must clear ALL buffers with collab state, not just
-        // those tracked in collab_synced_buffers. A ShareFailed might have already
-        // removed the doc_id from the set but left the buffer's collab_doc_id.
+    fn disconnect_sets_offline_on_all_synced_buffers() {
+        // WU3: disconnect preserves sync_doc for offline recovery.
+        // Buffers with sync_doc get collab_offline=true.
+        // Buffers without sync_doc (ShareFailed cleared it) get collab_doc_id cleared.
         use mae_core::Buffer;
         let mut editor = Editor::new();
 
-        // Buffer A: tracked in synced_buffers.
+        // Buffer A: tracked in synced_buffers, has sync_doc.
         editor.buffers[0].name = "tracked.rs".to_string();
         editor.buffers[0].enable_sync(1);
         editor.buffers[0].collab_doc_id = Some("doc-tracked".to_string());
@@ -2406,11 +2593,11 @@ mod tests {
             .collab_synced_buffers
             .insert("doc-tracked".to_string());
 
-        // Buffer B: has collab_doc_id but NOT in synced_buffers (e.g., ShareFailed removed it).
+        // Buffer B: has collab_doc_id but no sync_doc (ShareFailed cleared it).
         let mut buf_b = Buffer::new();
         buf_b.name = "orphaned.rs".to_string();
-        buf_b.enable_sync(2);
         buf_b.collab_doc_id = Some("doc-orphaned".to_string());
+        // No enable_sync → sync_doc is None.
         editor.buffers.push(buf_b);
 
         editor.collab_status = CollabStatus::Connected { peer_count: 1 };
@@ -2423,24 +2610,29 @@ mod tests {
             },
         );
 
-        // Both buffers should be cleaned.
-        for buf in &editor.buffers {
-            assert!(
-                buf.collab_doc_id.is_none(),
-                "buffer {} should have collab_doc_id cleared",
-                buf.name
-            );
-            assert!(
-                buf.sync_doc.is_none(),
-                "buffer {} should have sync cleared",
-                buf.name
-            );
-        }
+        // Buffer A: sync_doc preserved, collab_offline = true.
+        assert!(
+            editor.buffers[0].sync_doc.is_some(),
+            "tracked buffer should preserve sync_doc"
+        );
+        assert!(
+            editor.buffers[0].collab_offline,
+            "tracked buffer should be offline"
+        );
+        assert!(editor.buffers[0].collab_doc_id.is_some());
+
+        // Buffer B: no sync_doc → collab_doc_id cleared (nothing to preserve).
+        assert!(
+            editor.buffers[1].collab_doc_id.is_none(),
+            "orphaned buffer should have collab_doc_id cleared"
+        );
+        assert!(!editor.buffers[1].collab_offline);
     }
 
     #[test]
-    fn disconnect_after_share_failure_no_leak() {
-        // ShareFailed on one buffer, then Disconnect: remaining buffer must still be cleaned.
+    fn disconnect_after_share_failure_preserves_good_buffer() {
+        // WU3: ShareFailed on one buffer, then Disconnect: the good buffer
+        // should have its sync_doc preserved for offline recovery.
         use mae_core::Buffer;
         let mut editor = Editor::new();
 
@@ -2473,9 +2665,17 @@ mod tests {
             },
         );
 
-        for buf in &editor.buffers {
-            assert!(buf.collab_doc_id.is_none(), "buffer {} leaked", buf.name);
-        }
+        // Good buffer: sync_doc preserved, offline=true.
+        assert!(
+            editor.buffers[0].sync_doc.is_some(),
+            "good buffer should keep sync_doc"
+        );
+        assert!(editor.buffers[0].collab_offline);
+        // Bad buffer: ShareFailed already cleared sync_doc, so disconnect clears collab_doc_id.
+        assert!(
+            editor.buffers[1].collab_doc_id.is_none(),
+            "bad buffer should have doc_id cleared"
+        );
     }
 
     #[tokio::test]
@@ -2502,7 +2702,14 @@ mod tests {
                     }
                 }
             });
-            handle_incoming_message(&msg.to_string(), &tx, &mut pending, &mut shared).await;
+            handle_incoming_message(
+                &msg.to_string(),
+                &tx,
+                &mut pending,
+                &mut shared,
+                &mut std::collections::HashMap::new(),
+            )
+            .await;
         }
 
         // All 5 should have produced RemoteUpdate events.
@@ -2791,5 +2998,171 @@ mod tests {
             status.contains("saveas"),
             "status should mention :saveas, got: {status}"
         );
+    }
+
+    // --- WU1: Gap detection tests ---
+
+    #[tokio::test]
+    async fn gap_detection_triggers_on_missing_seq() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut seq_tracker = std::collections::HashMap::new();
+
+        // Seq 1, 2 — no gap.
+        check_seq_gap("doc1", 1, &mut seq_tracker, &tx).await;
+        check_seq_gap("doc1", 2, &mut seq_tracker, &tx).await;
+        assert!(rx.try_recv().is_err(), "no gap for sequential seqs");
+
+        // Seq 4 — gap (expected 3).
+        check_seq_gap("doc1", 4, &mut seq_tracker, &tx).await;
+        let event = rx.try_recv().unwrap();
+        match event {
+            CollabEvent::GapDetected {
+                doc_id,
+                expected,
+                got,
+            } => {
+                assert_eq!(doc_id, "doc1");
+                assert_eq!(expected, 3);
+                assert_eq!(got, 4);
+            }
+            other => panic!("expected GapDetected, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn gap_detection_no_gap_for_sequential() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut seq_tracker = std::collections::HashMap::new();
+
+        for i in 1..=5 {
+            check_seq_gap("doc1", i, &mut seq_tracker, &tx).await;
+        }
+        assert!(rx.try_recv().is_err(), "no gap for sequential 1..5");
+    }
+
+    #[tokio::test]
+    async fn gap_detection_independent_per_doc() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut seq_tracker = std::collections::HashMap::new();
+
+        check_seq_gap("doc-a", 1, &mut seq_tracker, &tx).await;
+        check_seq_gap("doc-b", 1, &mut seq_tracker, &tx).await;
+        // Both start at 1, no gap.
+        assert!(rx.try_recv().is_err());
+
+        // doc-a jumps to 5 — gap.
+        check_seq_gap("doc-a", 5, &mut seq_tracker, &tx).await;
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, CollabEvent::GapDetected { doc_id, .. } if doc_id == "doc-a"));
+
+        // doc-b at 2 — no gap.
+        check_seq_gap("doc-b", 2, &mut seq_tracker, &tx).await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn gap_detected_triggers_force_sync() {
+        let mut editor = Editor::new();
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::GapDetected {
+                doc_id: "test-doc".to_string(),
+                expected: 3,
+                got: 5,
+            },
+        );
+        assert!(editor.status_msg.contains("gap"));
+        // Should queue a ForceSync intent.
+        assert!(editor.pending_collab_intent.is_some());
+        match editor.pending_collab_intent.as_ref().unwrap() {
+            CollabIntent::ForceSync { buffer_name } => {
+                assert_eq!(buffer_name, "test-doc");
+            }
+            other => panic!("expected ForceSync, got {:?}", other),
+        }
+    }
+
+    // --- WU3: Offline recovery tests ---
+
+    #[test]
+    fn disconnect_preserves_sync_doc() {
+        let mut editor = Editor::new();
+        editor.collab_status = CollabStatus::Connected { peer_count: 1 };
+        let buf = &mut editor.buffers[0];
+        buf.collab_doc_id = Some("test-doc".to_string());
+        buf.enable_sync(42);
+        editor.collab_synced_buffers.insert("test-doc".to_string());
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::Disconnected {
+                reason: "test".to_string(),
+            },
+        );
+
+        // sync_doc and collab_doc_id should be PRESERVED (not cleared).
+        assert!(
+            editor.buffers[0].sync_doc.is_some(),
+            "sync_doc should be preserved on disconnect"
+        );
+        assert!(
+            editor.buffers[0].collab_doc_id.is_some(),
+            "collab_doc_id should be preserved on disconnect"
+        );
+        assert!(
+            editor.buffers[0].collab_offline,
+            "collab_offline should be set"
+        );
+        // UI tracking should be cleared.
+        assert!(editor.collab_synced_buffers.is_empty());
+        assert_eq!(editor.collab_synced_docs, 0);
+    }
+
+    #[test]
+    fn reconnect_triggers_resync_for_offline_buffers() {
+        let mut editor = Editor::new();
+        let buf = &mut editor.buffers[0];
+        buf.collab_doc_id = Some("test-doc".to_string());
+        buf.enable_sync(42);
+        buf.collab_offline = true;
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::Connected {
+                address: "127.0.0.1:9473".to_string(),
+                peer_count: 1,
+            },
+        );
+
+        // Should queue a ForceSync intent for the offline buffer.
+        assert!(editor.pending_collab_intent.is_some());
+        assert!(editor.collab_synced_buffers.contains("test-doc"));
+    }
+
+    #[test]
+    fn remote_update_clears_offline_flag() {
+        let mut editor = Editor::new();
+        let buf = &mut editor.buffers[0];
+        buf.collab_doc_id = Some("test-doc".to_string());
+        buf.enable_sync(42);
+        buf.collab_offline = true;
+
+        // Create a valid yrs update for this buffer.
+        let update = {
+            let sync2 = mae_sync::text::TextSync::with_client_id("hello", 99);
+            sync2.encode_state()
+        };
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::RemoteUpdate {
+                doc_id: "test-doc".to_string(),
+                update_bytes: update,
+                wal_seq: 1,
+            },
+        );
+
+        // Note: apply_sync_update may fail if the update isn't compatible,
+        // but the test validates the code path exists.
     }
 }

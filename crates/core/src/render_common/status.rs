@@ -517,11 +517,16 @@ pub fn format_lsp_status(editor: &Editor) -> String {
 }
 
 pub fn format_collab_status(editor: &Editor) -> String {
+    let buf = &editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+    // Show offline indicator regardless of connection status — buffer may have
+    // CRDT state from a previous session even after disconnect.
+    if buf.collab_offline {
+        return " [C:OFFLINE]".to_string();
+    }
     match &editor.collab_status {
         CollabStatus::Off => String::new(),
         CollabStatus::Connecting => " [C:\u{2026}]".to_string(),
         CollabStatus::Connected { peer_count } => {
-            let buf = &editor.buffers[editor.window_mgr.focused_window().buffer_idx];
             let is_synced = buf
                 .collab_doc_id
                 .as_ref()

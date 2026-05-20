@@ -221,6 +221,123 @@ impl fmt::Display for DocAddress {
     }
 }
 
+// --- WU4: Git-based project identity ---
+
+/// Compute a stable project identity string from a project root directory.
+///
+/// Precedence:
+/// 1. `git remote get-url origin` → normalize URL → FNV-1a hash
+/// 2. `.project` TOML file `name` field
+/// 3. Directory basename
+/// 4. FNV-1a of absolute path (backward compat)
+///
+/// The returned string is suitable as the `project_hash` component of `DocAddress::File`.
+pub fn compute_project_identity(project_root: &std::path::Path) -> String {
+    // 1. Try git remote origin URL.
+    if let Some(hash) = git_remote_identity(project_root) {
+        return hash;
+    }
+    // 2. Try .project TOML name field.
+    if let Some(name) = dotproject_name(project_root) {
+        return fnv1a_hash(name.as_bytes());
+    }
+    // 3. Directory basename.
+    if let Some(basename) = project_root.file_name() {
+        let s = basename.to_string_lossy();
+        if !s.is_empty() {
+            return fnv1a_hash(s.as_bytes());
+        }
+    }
+    // 4. Fallback: FNV-1a of absolute path.
+    fnv1a_hash(project_root.to_string_lossy().as_bytes())
+}
+
+/// Normalize a git remote URL for stable identity:
+/// - Strip `.git` suffix
+/// - Strip auth (user@, user:pass@)
+/// - Lowercase host
+/// - Handle SSH `git@host:path` → `host/path`
+fn normalize_git_url(url: &str) -> String {
+    let mut s = url.trim().to_string();
+    // Strip trailing .git
+    if s.ends_with(".git") {
+        s.truncate(s.len() - 4);
+    }
+    // SSH format: git@github.com:user/repo → github.com/user/repo
+    if let Some(rest) = s.strip_prefix("git@") {
+        s = rest.replacen(':', "/", 1);
+    }
+    // HTTPS: https://user:pass@host/path → host/path
+    if let Some(rest) = s
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+    {
+        // Strip auth
+        let rest = if let Some(at_pos) = rest.find('@') {
+            &rest[at_pos + 1..]
+        } else {
+            rest
+        };
+        s = rest.to_string();
+    }
+    // Lowercase the host portion (everything before first /).
+    if let Some(slash_pos) = s.find('/') {
+        let (host, path) = s.split_at(slash_pos);
+        s = format!("{}{}", host.to_lowercase(), path);
+    } else {
+        s = s.to_lowercase();
+    }
+    s
+}
+
+fn git_remote_identity(project_root: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(project_root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let url = String::from_utf8_lossy(&output.stdout);
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    let normalized = normalize_git_url(url);
+    Some(fnv1a_hash(normalized.as_bytes()))
+}
+
+fn dotproject_name(project_root: &std::path::Path) -> Option<String> {
+    let path = project_root.join(".project");
+    let content = std::fs::read_to_string(path).ok()?;
+    // Simple TOML parsing: look for `name = "..."` line.
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("name") {
+            let rest = rest.trim();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let val = rest.trim().trim_matches('"').trim_matches('\'');
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn fnv1a_hash(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:012x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,5 +437,78 @@ mod tests {
             name: "test".to_string(),
         };
         assert_eq!(format!("{addr}"), "shared:test");
+    }
+
+    // --- WU4: Git identity tests ---
+
+    #[test]
+    fn normalize_git_url_https() {
+        let url = "https://github.com/user/repo.git";
+        assert_eq!(normalize_git_url(url), "github.com/user/repo");
+    }
+
+    #[test]
+    fn normalize_git_url_ssh() {
+        let url = "git@github.com:user/repo.git";
+        assert_eq!(normalize_git_url(url), "github.com/user/repo");
+    }
+
+    #[test]
+    fn normalize_git_url_with_auth() {
+        let url = "https://token:x-oauth@github.com/user/repo.git";
+        assert_eq!(normalize_git_url(url), "github.com/user/repo");
+    }
+
+    #[test]
+    fn normalize_git_url_lowercase_host() {
+        let url = "https://GitHub.COM/User/Repo";
+        assert_eq!(normalize_git_url(url), "github.com/User/Repo");
+    }
+
+    #[test]
+    fn same_remote_different_paths_same_identity() {
+        // Two users with the same git remote should get the same identity.
+        // We test normalize + hash directly since git_remote_identity requires a real repo.
+        let url1 = "git@github.com:cuttlefisch/mae.git";
+        let url2 = "https://github.com/cuttlefisch/mae.git";
+        let h1 = fnv1a_hash(normalize_git_url(url1).as_bytes());
+        let h2 = fnv1a_hash(normalize_git_url(url2).as_bytes());
+        assert_eq!(h1, h2, "SSH and HTTPS should produce same identity");
+    }
+
+    #[test]
+    fn dotproject_name_parses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".project"),
+            "name = \"my-project\"\nversion = \"1.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(dotproject_name(dir.path()), Some("my-project".to_string()));
+    }
+
+    #[test]
+    fn dotproject_name_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(dotproject_name(dir.path()), None);
+    }
+
+    #[test]
+    fn compute_project_identity_uses_basename_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("my-project");
+        std::fs::create_dir(&sub).unwrap();
+        let identity = compute_project_identity(&sub);
+        let expected = fnv1a_hash(b"my-project");
+        assert_eq!(identity, expected);
+    }
+
+    #[test]
+    fn compute_project_identity_uses_dotproject() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".project"), "name = \"test-proj\"\n").unwrap();
+        let identity = compute_project_identity(dir.path());
+        let expected = fnv1a_hash(b"test-proj");
+        assert_eq!(identity, expected);
     }
 }
