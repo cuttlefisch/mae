@@ -262,9 +262,9 @@ impl Editor {
                     if self.kb_path_in_instance(&path) {
                         // Guard the path so the watcher doesn't re-ingest
                         // what we just saved (deduplicate sync+async reimport).
-                        self.kb_write_guard.insert(path.clone());
+                        self.kb.write_guard.insert(path.clone());
                         self.kb_reimport_file(&path);
-                        self.kb_watcher_stats.reimports_total += 1;
+                        self.kb.watcher_stats.reimports_total += 1;
                         // Record modification for activity tracking.
                         self.kb_record_modification(&path);
                         // Refresh KB buffer if it's showing a node from this file
@@ -1072,13 +1072,14 @@ impl Editor {
                 // Complete from all KB node IDs + bare names (without namespace prefix)
                 let mut matches: Vec<String> = self
                     .kb
+                    .primary
                     .list_ids(None)
                     .into_iter()
                     .filter(|id| id.starts_with(prefix))
                     .collect();
                 // Also match bare names (e.g. "buffer-insert" matches "scheme:buffer-insert")
                 if !prefix.contains(':') {
-                    for id in self.kb.list_ids(None) {
+                    for id in self.kb.primary.list_ids(None) {
                         if let Some(name) = id.split(':').nth(1) {
                             if name.starts_with(prefix) && !matches.contains(&name.to_string()) {
                                 matches.push(name.to_string());
@@ -1242,7 +1243,9 @@ impl Editor {
                                 )
                             })
                             .unwrap_or_default();
-                        self.kb.ingest_project(&proj.name, &root, &config_body);
+                        self.kb
+                            .primary
+                            .ingest_project(&proj.name, &root, &config_body);
                     }
                 }
 

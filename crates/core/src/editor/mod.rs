@@ -16,6 +16,7 @@ pub(crate) mod help_ops;
 mod hook_ops;
 mod jumps;
 pub(crate) mod kb_ops;
+pub mod kb_state;
 mod keymaps;
 mod lsp_actions;
 mod lsp_completion;
@@ -46,6 +47,7 @@ pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use help_ops::is_builtin_node;
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
 pub use kb_ops::KbWatcherStats;
+pub use kb_state::KbContext;
 pub use vi_state::ViState;
 
 /// Default TCP address for the collaborative state server.
@@ -660,53 +662,8 @@ pub struct Editor {
     pub completion_items: Vec<CompletionItem>,
     /// Index of the currently selected completion item.
     pub completion_selected: usize,
-    /// Knowledge base: backing store for the manual and user notes,
-    /// plus the AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
-    /// hand-authored concept nodes on startup.
-    pub kb: mae_kb::KnowledgeBase,
-    /// KB federation: registry of external KB instances (org-roam dirs etc.).
-    pub kb_registry: mae_kb::federation::KbRegistry,
-    /// KB federation: loaded KB instances keyed by registry UUID.
-    pub kb_instances: HashMap<String, mae_kb::KnowledgeBase>,
-    /// KB federation: live file watchers for registered org directories.
-    pub kb_watchers: HashMap<String, mae_kb::watch::OrgDirWatcher>,
-    /// KB watcher: last drain timestamp per instance UUID (for debounce).
-    pub kb_last_drain: HashMap<String, std::time::Instant>,
-    /// KB watcher: cumulative statistics.
-    pub kb_watcher_stats: KbWatcherStats,
-    /// KB option: enable/disable file watchers.
-    pub kb_watcher_enabled: bool,
-    /// KB option: debounce interval in ms between watcher drains.
-    pub kb_watcher_debounce_ms: u64,
-    /// KB option: max events processed per idle tick.
-    pub kb_max_drain_events: usize,
-    /// KB option: max bytes for RAG excerpt truncation.
-    pub kb_search_excerpt_length: usize,
-    /// KB option: hard cap for kb_search_context results.
-    pub kb_search_max_results: usize,
-    /// KB option: auto-register org directories in project root.
-    pub kb_auto_register: bool,
-    /// KB option: default directory for user-created notes (org-roam-directory equivalent).
-    pub kb_notes_dir: Option<std::path::PathBuf>,
-    /// Active capture state (org-roam C-c C-c / C-c C-k flow).
-    pub capture_state: Option<CaptureState>,
-    /// KB node IDs visited via AI tools (kb_get/links_from/links_to) this session.
-    /// Append guidance on revisit to steer away from manual graph traversal loops.
-    /// Cleared when a new AI conversation starts.
-    pub kb_ai_visited_ids: std::collections::HashSet<String>,
-    /// Paths currently being written by MAE itself (activity tracking, chain-fill).
-    /// Watcher events for these paths are suppressed to prevent cascading reimports.
-    pub kb_write_guard: std::collections::HashSet<std::path::PathBuf>,
-    /// KB option: enable activity tracking (last-accessed/modified/linked timestamps).
-    pub kb_activity_tracking: bool,
-    /// KB option: decay rate for activity scoring.
-    pub kb_activity_decay: f64,
-    /// KB option: search result ordering ("relevance", "activity", "alphabetical").
-    pub kb_search_sort: String,
-    /// KB option: dailies directory (explicit setting or derived from kb_notes_dir/daily).
-    pub kb_dailies_dir: Option<std::path::PathBuf>,
-    /// KB option: max days to walk backwards when chain-filling dailies (default 90).
-    pub kb_daily_chain_gap_max: usize,
+    /// Knowledge base state: backing store, federation, watchers, and config.
+    pub kb: KbContext,
 
     /// Override for config dir (test isolation — prevents clobbering ~/.config/mae).
     pub config_dir_override: Option<std::path::PathBuf>,
@@ -1084,27 +1041,7 @@ impl Editor {
             splash_image_height: 20,
             splash_show_logo: true,
             pending_scheme_eval: Vec::new(),
-            kb,
-            kb_registry: mae_kb::federation::KbRegistry::default(),
-            kb_instances: HashMap::new(),
-            kb_watchers: HashMap::new(),
-            kb_last_drain: HashMap::new(),
-            kb_watcher_stats: KbWatcherStats::default(),
-            kb_watcher_enabled: true,
-            kb_watcher_debounce_ms: 500,
-            kb_max_drain_events: 100,
-            kb_search_excerpt_length: 500,
-            kb_search_max_results: 20,
-            kb_auto_register: false,
-            kb_notes_dir: None,
-            capture_state: None,
-            kb_ai_visited_ids: std::collections::HashSet::new(),
-            kb_write_guard: std::collections::HashSet::new(),
-            kb_activity_tracking: true,
-            kb_activity_decay: 0.01,
-            kb_search_sort: "relevance".to_string(),
-            kb_dailies_dir: None,
-            kb_daily_chain_gap_max: 90,
+            kb: KbContext::new(kb),
             config_dir_override: None,
             data_dir_override: None,
             babel_confirm: true,

@@ -53,8 +53,9 @@ impl Editor {
                 self.set_status("Usage: :kb-ingest <directory>");
             }
             "kb-rebuild" => {
-                self.kb = crate::kb_seed::seed_kb(&self.commands, &self.keymaps, &self.hooks);
-                let count = self.kb.list_ids(None).len();
+                self.kb.primary =
+                    crate::kb_seed::seed_kb(&self.commands, &self.keymaps, &self.hooks);
+                let count = self.kb.primary.list_ids(None).len();
                 self.set_status(format!("KB rebuilt: {} nodes", count));
             }
             "kb-audit" => {
@@ -72,7 +73,7 @@ impl Editor {
                 }
             }
             "capture-finalize" => {
-                if let Some(cap) = self.capture_state.take() {
+                if let Some(cap) = self.kb.capture_state.take() {
                     self.dispatch_builtin("save");
                     // Remove hidden KB buffer seeded for this node
                     if let Some(hi) = self
@@ -97,7 +98,7 @@ impl Editor {
                 }
             }
             "capture-abort" => {
-                if let Some(cap) = self.capture_state.take() {
+                if let Some(cap) = self.kb.capture_state.take() {
                     // Force-kill the capture buffer (no save prompt)
                     self.dispatch_builtin("force-kill-buffer");
                     // Remove hidden KB buffer seeded for this node
@@ -118,8 +119,8 @@ impl Editor {
                         let _ = std::fs::remove_file(path);
                     }
                     // Remove node from KB
-                    self.kb.remove(&cap.node_id);
-                    for kb in self.kb_instances.values_mut() {
+                    self.kb.primary.remove(&cap.node_id);
+                    for kb in self.kb.instances.values_mut() {
                         kb.remove(&cap.node_id);
                     }
                     let ret = cap

@@ -1152,14 +1152,14 @@ pub fn load_modules(
                 path: m.path.display().to_string(),
             })
             .collect();
-        install_module_nodes(&mut editor.kb, &module_data);
+        install_module_nodes(&mut editor.kb.primary, &module_data);
     }
 
     // Also drain any KB nodes registered from Scheme during module autoloads
     for (id, title, body) in scheme.drain_kb_nodes() {
         let node = mae_core::KbNode::new(id, title, mae_core::KbNodeKind::Note, body)
             .with_tags(["scheme"]);
-        editor.kb.insert(node);
+        editor.kb.primary.insert(node);
     }
 
     let loaded_count = resolved

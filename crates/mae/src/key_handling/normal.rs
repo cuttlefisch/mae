@@ -262,7 +262,7 @@ pub(super) fn handle_describe_key_await(
             pending_keys.clear();
             editor.clear_which_key_prefix();
             let id = format!("cmd:{}", cmd);
-            if editor.kb.contains(&id) {
+            if editor.kb.primary.contains(&id) {
                 editor.open_help_at(&id);
             } else {
                 // Command is bound but has no KB node (rare — all

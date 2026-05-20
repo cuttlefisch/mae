@@ -2364,7 +2364,7 @@ impl SchemeRuntime {
         for (id, title, body) in state.pending_kb_nodes.drain(..) {
             let node = mae_core::KbNode::new(id.clone(), title, mae_core::KbNodeKind::Note, body)
                 .with_tags(["scheme"]);
-            editor.kb.insert(node);
+            editor.kb.primary.insert(node);
             debug!(id = %id, "kb node registered from scheme");
         }
 
@@ -4249,7 +4249,7 @@ mod tests {
             .unwrap();
         rt.apply_to_editor(&mut editor);
 
-        let node = editor.kb.get("module:test:guide");
+        let node = editor.kb.primary.get("module:test:guide");
         assert!(node.is_some(), "expected kb node to be registered");
         assert_eq!(node.unwrap().title, "Test Guide");
     }

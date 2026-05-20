@@ -245,39 +245,39 @@ fn build_frame_section(editor: &Editor) -> serde_json::Value {
 }
 
 fn build_kb_section(editor: &Editor) -> serde_json::Value {
-    let local_nodes = editor.kb.len();
-    let federated_instances = editor.kb_instances.len();
-    let total_federated_nodes: usize = editor.kb_instances.values().map(|kb| kb.len()).sum();
-    let watcher_count = editor.kb_watchers.len();
-    let ws = &editor.kb_watcher_stats;
+    let local_nodes = editor.kb.primary.len();
+    let federated_instances = editor.kb.instances.len();
+    let total_federated_nodes: usize = editor.kb.instances.values().map(|kb| kb.len()).sum();
+    let watcher_count = editor.kb.watchers.len();
+    let ws = &editor.kb.watcher_stats;
 
     // Check for non-default KB options
     let mut option_overrides = serde_json::Map::new();
-    if !editor.kb_watcher_enabled {
+    if !editor.kb.watcher_enabled {
         option_overrides.insert("kb_watcher_enabled".into(), json!(false));
     }
-    if editor.kb_watcher_debounce_ms != 500 {
+    if editor.kb.watcher_debounce_ms != 500 {
         option_overrides.insert(
             "kb_watcher_debounce_ms".into(),
-            json!(editor.kb_watcher_debounce_ms),
+            json!(editor.kb.watcher_debounce_ms),
         );
     }
-    if editor.kb_max_drain_events != 100 {
+    if editor.kb.max_drain_events != 100 {
         option_overrides.insert(
             "kb_max_drain_events".into(),
-            json!(editor.kb_max_drain_events),
+            json!(editor.kb.max_drain_events),
         );
     }
-    if editor.kb_search_excerpt_length != 500 {
+    if editor.kb.search_excerpt_length != 500 {
         option_overrides.insert(
             "kb_search_excerpt_length".into(),
-            json!(editor.kb_search_excerpt_length),
+            json!(editor.kb.search_excerpt_length),
         );
     }
-    if editor.kb_search_max_results != 20 {
+    if editor.kb.search_max_results != 20 {
         option_overrides.insert(
             "kb_search_max_results".into(),
-            json!(editor.kb_search_max_results),
+            json!(editor.kb.search_max_results),
         );
     }
 

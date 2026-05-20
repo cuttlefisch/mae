@@ -56,7 +56,7 @@ impl Editor {
         let nodes: Vec<_> = if let Some(ref states) = filter.todo_states {
             let mut result = Vec::new();
             for state in states {
-                for node in self.kb.nodes_by_todo_state(state) {
+                for node in self.kb.primary.nodes_by_todo_state(state) {
                     if matches_filter(node, filter) {
                         result.push(node.clone());
                     }
@@ -66,6 +66,7 @@ impl Editor {
         } else {
             // All TODO nodes
             self.kb
+                .primary
                 .todo_nodes()
                 .into_iter()
                 .filter(|n| matches_filter(n, filter))
@@ -228,9 +229,9 @@ impl Editor {
     fn ingest_single_agenda_path(&mut self, path: &str) {
         let p = std::path::Path::new(path);
         if p.is_dir() {
-            self.kb.ingest_org_dir(p);
+            self.kb.primary.ingest_org_dir(p);
         } else if p.is_file() {
-            self.kb.ingest_org_file(p);
+            self.kb.primary.ingest_org_file(p);
         }
     }
 
@@ -293,11 +294,11 @@ mod tests {
     fn open_agenda_creates_buffer() {
         let mut editor = Editor::new();
         // Insert some TODO nodes into KB.
-        editor.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:1", "Fix bug", mae_kb::NodeKind::Note, "Fix the bug")
                 .with_todo_state("TODO"),
         );
-        editor.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new(
                 "todo:2",
                 "Write docs",
@@ -318,11 +319,11 @@ mod tests {
     #[test]
     fn agenda_filter_by_state() {
         let mut editor = Editor::new();
-        editor.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:1", "Active", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO"),
         );
-        editor.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:2", "Finished", mae_kb::NodeKind::Note, "")
                 .with_todo_state("DONE"),
         );
@@ -339,12 +340,12 @@ mod tests {
     #[test]
     fn agenda_filter_by_priority() {
         let mut editor = Editor::new();
-        editor.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:1", "Urgent", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO")
                 .with_priority('A'),
         );
-        editor.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:2", "Low", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO")
                 .with_priority('C'),
@@ -362,12 +363,12 @@ mod tests {
     #[test]
     fn agenda_filter_by_tag() {
         let mut editor = Editor::new();
-        editor.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:1", "Work item", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO")
                 .with_tags(["work"]),
         );
-        editor.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:2", "Personal", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO")
                 .with_tags(["home"]),
@@ -385,7 +386,7 @@ mod tests {
     #[test]
     fn agenda_refresh_preserves_filter() {
         let mut editor = Editor::new();
-        editor.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:1", "Active", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO"),
         );
@@ -394,7 +395,7 @@ mod tests {
             ..Default::default()
         });
         // Add another TODO after opening
-        editor.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:2", "New task", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO"),
         );
@@ -449,7 +450,7 @@ Deploy the latest build.
 
     fn ingest_org_fixture(editor: &mut Editor, content: &str) {
         for node in mae_kb::org::parse_org_multi(content) {
-            editor.kb.insert(node);
+            editor.kb.primary.insert(node);
         }
     }
 
@@ -568,7 +569,7 @@ Deploy the latest build.
                 1 => 'B',
                 _ => 'C',
             };
-            editor.kb.insert(
+            editor.kb.primary.insert(
                 mae_kb::Node::new(
                     format!("perf:{}", i),
                     format!("Task {}", i),
@@ -605,7 +606,10 @@ Deploy the latest build.
         .unwrap();
         let mut editor = Editor::new();
         editor.agenda_add_path(&tmp.path().to_string_lossy());
-        assert!(editor.kb.contains("tmp-task-1"), "node should be ingested");
+        assert!(
+            editor.kb.primary.contains("tmp-task-1"),
+            "node should be ingested"
+        );
         assert_eq!(editor.org_agenda_files.len(), 1);
     }
 
@@ -632,7 +636,7 @@ Deploy the latest build.
             .push(tmp.path().to_string_lossy().to_string());
         editor.ingest_agenda_files();
         assert!(
-            editor.kb.contains("rescan-task-1"),
+            editor.kb.primary.contains("rescan-task-1"),
             "node should be ingested"
         );
     }

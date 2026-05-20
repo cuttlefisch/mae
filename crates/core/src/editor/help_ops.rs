@@ -228,18 +228,18 @@ impl Editor {
     /// isn't found.
     /// Check if a node ID exists in the local KB or any federated instance.
     fn kb_contains_any(&self, id: &str) -> bool {
-        if self.kb.contains(id) {
+        if self.kb.primary.contains(id) {
             return true;
         }
-        self.kb_instances.values().any(|kb| kb.contains(id))
+        self.kb.instances.values().any(|kb| kb.contains(id))
     }
 
     /// Resolve a node title across local + federated KBs.
     fn kb_resolve_title(&self, id: &str) -> Option<String> {
-        if let Some(n) = self.kb.get(id) {
+        if let Some(n) = self.kb.primary.get(id) {
             return Some(n.title.clone());
         }
-        for kb in self.kb_instances.values() {
+        for kb in self.kb.instances.values() {
             if let Some(n) = kb.get(id) {
                 return Some(n.title.clone());
             }
@@ -249,10 +249,10 @@ impl Editor {
 
     /// Get the KnowledgeBase that contains a given node ID (local first, then federated).
     fn kb_for_node(&self, id: &str) -> Option<&mae_kb::KnowledgeBase> {
-        if self.kb.contains(id) {
-            return Some(&self.kb);
+        if self.kb.primary.contains(id) {
+            return Some(&self.kb.primary);
         }
-        self.kb_instances.values().find(|kb| kb.contains(id))
+        self.kb.instances.values().find(|kb| kb.contains(id))
     }
 
     pub fn open_help_at(&mut self, node_id: &str) {
@@ -261,7 +261,7 @@ impl Editor {
         } else {
             // Try namespace prefix expansion: "buffer" → "concept:buffer", "save" → "cmd:save"
             let mut found = None;
-            for prefix in self.kb.namespace_prefixes() {
+            for prefix in self.kb.primary.namespace_prefixes() {
                 let expanded = format!("{}{}", prefix, node_id);
                 if self.kb_contains_any(&expanded) {
                     found = Some(expanded);
@@ -311,7 +311,7 @@ impl Editor {
                 let mut out = String::new();
                 let mut links = Vec::new();
                 // Add header info from KB node if it exists
-                if let Some(node) = self.kb.get(&node_id) {
+                if let Some(node) = self.kb.primary.get(&node_id) {
                     out.push_str(&format!("# {}", node.title));
                     out.push('\n');
                     out.push_str(&format!("{} · {}\n", node_kind_label(node.kind), node.id));
@@ -326,8 +326,8 @@ impl Editor {
                     out.push('\n');
                 }
                 // Add neighborhood from KB (federation-aware)
-                let outgoing = self.kb.links_from(&node_id);
-                let incoming = self.kb.links_to(&node_id);
+                let outgoing = self.kb.primary.links_from(&node_id);
+                let incoming = self.kb.primary.links_to(&node_id);
                 if !outgoing.is_empty() || !incoming.is_empty() {
                     out.push('\n');
                     out.push_str("## Neighborhood\n");
@@ -374,9 +374,9 @@ impl Editor {
                 );
                 (out, links)
             } else {
-                let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb);
-                let local = &self.kb;
-                let federated = &self.kb_instances;
+                let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb.primary);
+                let local = &self.kb.primary;
+                let federated = &self.kb.instances;
                 render_kb_node(kb, &node_id, |id| {
                     local.get(id).map(|n| n.title.clone()).or_else(|| {
                         federated
@@ -386,9 +386,9 @@ impl Editor {
                 })
             }
         } else {
-            let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb);
-            let local = &self.kb;
-            let federated = &self.kb_instances;
+            let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb.primary);
+            let local = &self.kb.primary;
+            let federated = &self.kb.instances;
             render_kb_node(kb, &node_id, |id| {
                 local.get(id).map(|n| n.title.clone()).or_else(|| {
                     federated
@@ -630,8 +630,9 @@ impl Editor {
         // Look up the node (local first, then federated) and get source_file
         let source_file = self
             .kb
+            .primary
             .get(&node_id)
-            .or_else(|| self.kb_instances.values().find_map(|kb| kb.get(&node_id)))
+            .or_else(|| self.kb.instances.values().find_map(|kb| kb.get(&node_id)))
             .and_then(|n| n.source_file.clone());
 
         match source_file {
@@ -696,8 +697,8 @@ impl Editor {
         }
 
         // Search KB nodes by source_file metadata
-        for id in self.kb.list_ids(None) {
-            if let Some(node) = self.kb.get(&id) {
+        for id in self.kb.primary.list_ids(None) {
+            if let Some(node) = self.kb.primary.get(&id) {
                 if let Some(ref sf) = node.source_file {
                     if sf == path {
                         return Some(id);
@@ -705,7 +706,7 @@ impl Editor {
                 }
             }
         }
-        for kb in self.kb_instances.values() {
+        for kb in self.kb.instances.values() {
             for id in kb.list_ids(None) {
                 if let Some(node) = kb.get(&id) {
                     if let Some(ref sf) = node.source_file {
@@ -963,8 +964,8 @@ mod tests {
             e.open_help_at("index");
             e
         };
-        let outgoing = e.kb.links_from("index");
-        let incoming = e.kb.links_to("index");
+        let outgoing = e.kb.primary.links_from("index");
+        let incoming = e.kb.primary.links_to("index");
         assert!(!outgoing.is_empty(), "index must have outgoing links");
         assert!(!incoming.is_empty(), "index must have incoming links");
 
@@ -1145,7 +1146,7 @@ mod tests {
             "body",
         )
         .with_source_file(tmp.clone());
-        e.kb.insert(node);
+        e.kb.primary.insert(node);
         e.open_help_at("user:src-test");
         e.help_edit_source();
         // Should have opened the file
@@ -1205,7 +1206,7 @@ mod tests {
             mae_kb::NodeKind::Note,
             ":PROPERTIES:\n:ID: drawer-test\n:END:\nVisible body.\n",
         );
-        e.kb.insert(node);
+        e.kb.primary.insert(node);
         e.open_help_at("user:drawer-test");
         let text: String = e.buffers[e.active_buffer_idx()].rope().chars().collect();
         assert!(
@@ -1259,7 +1260,7 @@ mod tests {
             mae_kb::NodeKind::Note,
             "## Section 1\nBody 1\nBody 2\n## Section 2\nBody 3\n",
         );
-        e.kb.insert(node);
+        e.kb.primary.insert(node);
         e.open_help_at("user:fold-test");
         let buf_idx = e.active_buffer_idx();
         // Find the ## Section 1 line (should be after title + metadata)
@@ -1291,7 +1292,7 @@ mod tests {
             mae_kb::NodeKind::Note,
             "## A\nBody A\n## B\nBody B\n",
         );
-        e.kb.insert(node);
+        e.kb.primary.insert(node);
         e.open_help_at("user:fold-all-test");
         let buf_idx = e.active_buffer_idx();
         e.help_close_all_folds();
@@ -1317,7 +1318,7 @@ mod tests {
             mae_kb::NodeKind::Note,
             "See [[nonexistent:target]] for info.\n",
         );
-        e.kb.insert(node);
+        e.kb.primary.insert(node);
         e.open_help_at("user:broken-link-test");
         let view = e.kb_view().unwrap();
         assert!(
@@ -1351,7 +1352,7 @@ mod tests {
             mae_kb::NodeKind::Note,
             "See [[concept:buffer]] for info.\n",
         );
-        e.kb.insert(node);
+        e.kb.primary.insert(node);
         e.open_help_at("user:fuzzy-test");
         // Focus the link and follow it — should work since concept:buffer exists
         e.help_next_link();

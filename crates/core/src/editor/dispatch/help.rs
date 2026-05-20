@@ -19,14 +19,20 @@ impl Editor {
             "help-search" => {
                 let mut nodes: Vec<(String, String)> = self
                     .kb
+                    .primary
                     .list_ids(None)
                     .iter()
                     .filter(|id| crate::editor::help_ops::is_builtin_node(id))
-                    .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
+                    .filter_map(|id| {
+                        self.kb
+                            .primary
+                            .get(id)
+                            .map(|n| (id.clone(), n.title.clone()))
+                    })
                     .collect();
-                if self.kb_search_sort == "activity" {
+                if self.kb.search_sort == "activity" {
                     let weights = mae_kb::activity::ActivityWeights {
-                        decay: self.kb_activity_decay,
+                        decay: self.kb.activity_decay,
                         ..Default::default()
                     };
                     let today = crate::editor::kb_ops::today_ymd();

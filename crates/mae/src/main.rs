@@ -539,12 +539,12 @@ fn main() -> io::Result<()> {
                     errors = report.errors.len(),
                     "KB instance loaded"
                 );
-                editor.kb_instances.insert(inst.uuid.clone(), kb);
+                editor.kb.instances.insert(inst.uuid.clone(), kb);
             } else {
                 info!(name = %inst.name, dir = %inst.org_dir.display(), "KB instance dir missing, skipping");
             }
         }
-        editor.kb_registry = registry;
+        editor.kb.registry = registry;
     }
 
     // Fire app-start hook after initialization is complete.

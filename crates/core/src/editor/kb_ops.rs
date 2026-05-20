@@ -174,17 +174,18 @@ impl Editor {
         let _ = std::fs::create_dir_all(&data_dir);
 
         let uuid = self
-            .kb_registry
+            .kb
+            .registry
             .register(name.to_string(), org_dir.to_path_buf(), &data_dir);
 
         // Import org files recursively
         let (kb, report, health) = mae_kb::federation::import_org_dir(org_dir);
 
         // Store the instance
-        self.kb_instances.insert(uuid.clone(), kb);
+        self.kb.instances.insert(uuid.clone(), kb);
 
         // Start file watcher for live updates (if enabled)
-        if self.kb_watcher_enabled {
+        if self.kb.watcher_enabled {
             match mae_kb::watch::OrgDirWatcher::new(org_dir) {
                 Ok(watcher) => {
                     watcher.seed(
@@ -193,7 +194,7 @@ impl Editor {
                             .iter()
                             .map(|(p, ids)| (p.clone(), ids.clone())),
                     );
-                    self.kb_watchers.insert(uuid.clone(), watcher);
+                    self.kb.watchers.insert(uuid.clone(), watcher);
                 }
                 Err(e) => {
                     let msg = e.to_string();
@@ -211,7 +212,8 @@ impl Editor {
 
         // Update last_import timestamp
         if let Some(inst) = self
-            .kb_registry
+            .kb
+            .registry
             .instances
             .iter_mut()
             .find(|i| i.uuid == uuid)
@@ -220,7 +222,7 @@ impl Editor {
         }
 
         // Persist registry
-        let _ = self.kb_registry.save(&data_dir);
+        let _ = self.kb.registry.save(&data_dir);
 
         let result = KbImportResult {
             name: name.to_string(),
@@ -235,14 +237,14 @@ impl Editor {
 
     /// Unregister a KB instance by name or UUID.
     pub fn kb_unregister(&mut self, name_or_uuid: &str) {
-        let found = self.kb_registry.find(name_or_uuid).map(|i| i.uuid.clone());
+        let found = self.kb.registry.find(name_or_uuid).map(|i| i.uuid.clone());
         match found {
             Some(uuid) => {
-                self.kb_instances.remove(&uuid);
-                self.kb_watchers.remove(&uuid);
-                self.kb_registry.unregister(name_or_uuid);
+                self.kb.instances.remove(&uuid);
+                self.kb.watchers.remove(&uuid);
+                self.kb.registry.unregister(name_or_uuid);
                 if let Some(data_dir) = self.mae_data_dir() {
-                    let _ = self.kb_registry.save(&data_dir);
+                    let _ = self.kb.registry.save(&data_dir);
                 }
                 self.set_status(format!("KB instance '{}' unregistered", name_or_uuid));
             }
@@ -257,15 +259,16 @@ impl Editor {
 
     /// Re-import an existing KB instance (refresh after org file edits).
     pub fn kb_reimport(&mut self, name_or_uuid: &str) -> Option<KbImportResult> {
-        let inst = self.kb_registry.find(name_or_uuid).cloned();
+        let inst = self.kb.registry.find(name_or_uuid).cloned();
         match inst {
             Some(instance) => {
                 let (kb, report, health) = mae_kb::federation::import_org_dir(&instance.org_dir);
-                self.kb_instances.insert(instance.uuid.clone(), kb);
+                self.kb.instances.insert(instance.uuid.clone(), kb);
 
                 // Update timestamp
                 if let Some(reg_inst) = self
-                    .kb_registry
+                    .kb
+                    .registry
                     .instances
                     .iter_mut()
                     .find(|i| i.uuid == instance.uuid)
@@ -273,7 +276,7 @@ impl Editor {
                     reg_inst.last_import = Some(chrono_now());
                 }
                 if let Some(data_dir) = self.mae_data_dir() {
-                    let _ = self.kb_registry.save(&data_dir);
+                    let _ = self.kb.registry.save(&data_dir);
                 }
 
                 let result = KbImportResult {
@@ -311,7 +314,7 @@ impl Editor {
         kind: mae_kb::NodeKind,
     ) -> Result<(), String> {
         // Guard: refuse to overwrite seed nodes
-        if let Some(existing) = self.kb.get(id) {
+        if let Some(existing) = self.kb.primary.get(id) {
             if existing.source == Some(mae_kb::NodeSource::Seed) {
                 return Err(format!(
                     "Cannot overwrite seed node '{}' — built-in help is protected",
@@ -321,7 +324,7 @@ impl Editor {
         }
         let node =
             mae_kb::Node::new(id, title, kind, body).with_source(mae_kb::NodeSource::Manual, 0);
-        self.kb.insert(node);
+        self.kb.primary.insert(node);
         self.set_status(format!("KB node created: {}", id));
         Ok(())
     }
@@ -329,14 +332,14 @@ impl Editor {
     /// Delete a KB node from the local knowledge base.
     /// Rejects deleting seed nodes (built-in help).
     pub fn kb_delete_node(&mut self, id: &str) -> Result<(), String> {
-        match self.kb.get(id) {
+        match self.kb.primary.get(id) {
             None => Err(format!("No KB node: {}", id)),
             Some(node) if node.source == Some(mae_kb::NodeSource::Seed) => Err(format!(
                 "Cannot delete seed node '{}' — built-in help is protected",
                 id
             )),
             Some(_) => {
-                self.kb.remove(id);
+                self.kb.primary.remove(id);
                 self.set_status(format!("KB node deleted: {}", id));
                 Ok(())
             }
@@ -354,6 +357,7 @@ impl Editor {
     ) -> Result<(), String> {
         let existing = self
             .kb
+            .primary
             .get(id)
             .ok_or_else(|| format!("No KB node: {}", id))?
             .clone();
@@ -373,7 +377,7 @@ impl Editor {
         if let Some(t) = tags {
             updated.tags = t;
         }
-        self.kb.insert(updated);
+        self.kb.primary.insert(updated);
         self.set_status(format!("KB node updated: {}", id));
         Ok(())
     }
@@ -385,13 +389,14 @@ impl Editor {
             "============".to_string(),
             String::new(),
         ];
-        let count = self.kb_registry.instances.len();
-        if self.kb_registry.instances.is_empty() {
+        let count = self.kb.registry.instances.len();
+        if self.kb.registry.instances.is_empty() {
             lines.push("  (none registered)".to_string());
         } else {
-            for inst in &self.kb_registry.instances {
+            for inst in &self.kb.registry.instances {
                 let node_count = self
-                    .kb_instances
+                    .kb
+                    .instances
                     .get(&inst.uuid)
                     .map(|kb| kb.len())
                     .unwrap_or(0);
@@ -436,7 +441,7 @@ impl Editor {
         let timestamp = mae_kb::timestamp_id();
         let id = format!("user:{}-{}", timestamp, slug);
 
-        if let Some(dir) = self.kb_notes_dir.clone() {
+        if let Some(dir) = self.kb.notes_dir.clone() {
             // Ensure directory exists
             std::fs::create_dir_all(&dir)
                 .map_err(|e| format!("Cannot create kb-notes-dir: {}", e))?;
@@ -466,7 +471,7 @@ impl Editor {
             self.kb_populate_buffer(help_idx);
 
             // Enter capture mode (C-c C-c to finalize, C-c C-k to abort)
-            self.capture_state = Some(super::CaptureState {
+            self.kb.capture_state = Some(super::CaptureState {
                 node_id: id.clone(),
                 file_path: Some(path.clone()),
                 return_buffer_idx: return_idx,
@@ -492,11 +497,11 @@ impl Editor {
             .with_source_file(path);
 
         // Try to find a registered instance whose org_dir matches kb_notes_dir
-        let notes_dir = self.kb_notes_dir.clone();
+        let notes_dir = self.kb.notes_dir.clone();
         if let Some(ref dir) = notes_dir {
-            for inst in &self.kb_registry.instances {
+            for inst in &self.kb.registry.instances {
                 if inst.org_dir == *dir {
-                    if let Some(kb) = self.kb_instances.get_mut(&inst.uuid) {
+                    if let Some(kb) = self.kb.instances.get_mut(&inst.uuid) {
                         kb.insert(node);
                         return;
                     }
@@ -505,16 +510,16 @@ impl Editor {
         }
 
         // Fallback: insert into local KB
-        self.kb.insert(node);
+        self.kb.primary.insert(node);
     }
 
     /// Collect all KB node (id, title) pairs from local + federated instances.
     pub fn kb_all_node_pairs(&self) -> Vec<(String, String)> {
-        let mut pairs: Vec<(String, String)> = self.kb.all_id_title_pairs();
+        let mut pairs: Vec<(String, String)> = self.kb.primary.all_id_title_pairs();
         let mut seen: std::collections::HashSet<String> =
             pairs.iter().map(|(id, _)| id.clone()).collect();
 
-        for kb in self.kb_instances.values() {
+        for kb in self.kb.instances.values() {
             for (id, title) in kb.all_id_title_pairs() {
                 if seen.insert(id.clone()) {
                     pairs.push((id, title));
@@ -530,11 +535,12 @@ impl Editor {
     /// Sorted according to `kb_search_sort` option: alphabetical (default/relevance),
     /// activity (recent first), or alphabetical.
     pub fn kb_all_node_triples(&self) -> Vec<(String, String, String)> {
-        let mut triples: Vec<(String, String, String)> = self.kb.all_id_title_body_triples();
+        let mut triples: Vec<(String, String, String)> =
+            self.kb.primary.all_id_title_body_triples();
         let mut seen: std::collections::HashSet<String> =
             triples.iter().map(|(id, _, _)| id.clone()).collect();
 
-        for kb in self.kb_instances.values() {
+        for kb in self.kb.instances.values() {
             for (id, title, body) in kb.all_id_title_body_triples() {
                 if seen.insert(id.clone()) {
                     triples.push((id, title, body));
@@ -542,9 +548,9 @@ impl Editor {
             }
         }
 
-        if self.kb_search_sort == "activity" {
+        if self.kb.search_sort == "activity" {
             let weights = mae_kb::activity::ActivityWeights {
-                decay: self.kb_activity_decay,
+                decay: self.kb.activity_decay,
                 ..Default::default()
             };
             let today = today_ymd();
@@ -569,10 +575,10 @@ impl Editor {
         weights: &mae_kb::activity::ActivityWeights,
         today: (i32, u32, u32),
     ) -> f64 {
-        if let Some(node) = self.kb.get(id) {
+        if let Some(node) = self.kb.primary.get(id) {
             return mae_kb::activity::activity_score(&node.properties, weights, today);
         }
-        for kb in self.kb_instances.values() {
+        for kb in self.kb.instances.values() {
             if let Some(node) = kb.get(id) {
                 return mae_kb::activity::activity_score(&node.properties, weights, today);
             }
@@ -584,13 +590,14 @@ impl Editor {
     /// Used after saving a file inside `kb_notes_dir` to keep the graph in sync.
     pub fn kb_reimport_file(&mut self, path: &std::path::Path) {
         for (uuid, inst) in self
-            .kb_registry
+            .kb
+            .registry
             .instances
             .iter()
             .map(|i| (i.uuid.clone(), i.org_dir.clone()))
         {
             if path.starts_with(&inst) {
-                if let Some(kb) = self.kb_instances.get_mut(&uuid) {
+                if let Some(kb) = self.kb.instances.get_mut(&uuid) {
                     kb.ingest_org_file(path);
                     return;
                 }
@@ -600,7 +607,8 @@ impl Editor {
 
     /// Check if a path is inside a registered KB instance directory.
     pub fn kb_path_in_instance(&self, path: &std::path::Path) -> bool {
-        self.kb_registry
+        self.kb
+            .registry
             .instances
             .iter()
             .any(|i| path.starts_with(&i.org_dir))
@@ -611,10 +619,10 @@ impl Editor {
     /// Local results take priority over federated.
     /// Respects `kb_search_sort` option: "relevance" (default), "activity", "alphabetical".
     pub fn kb_federated_search(&self, query: &str) -> Vec<(Option<String>, &mae_kb::Node)> {
-        let use_activity = self.kb_search_sort == "activity";
-        let use_alpha = self.kb_search_sort == "alphabetical";
+        let use_activity = self.kb.search_sort == "activity";
+        let use_alpha = self.kb.search_sort == "alphabetical";
         let weights = mae_kb::activity::ActivityWeights {
-            decay: self.kb_activity_decay,
+            decay: self.kb.activity_decay,
             ..Default::default()
         };
         let today = if use_activity { today_ymd() } else { (0, 0, 0) };
@@ -624,12 +632,14 @@ impl Editor {
 
         // Local KB first (always wins on duplicates)
         let local_ids = if use_activity {
-            self.kb.search_sorted_by_activity(query, &weights, today)
+            self.kb
+                .primary
+                .search_sorted_by_activity(query, &weights, today)
         } else {
-            self.kb.search(query)
+            self.kb.primary.search(query)
         };
         for id in local_ids {
-            if let Some(node) = self.kb.get(&id) {
+            if let Some(node) = self.kb.primary.get(&id) {
                 if seen_ids.insert(&node.id) {
                     results.push((None, node));
                 }
@@ -637,8 +647,8 @@ impl Editor {
         }
 
         // Then each federated instance (skip if already seen)
-        for (uuid, kb) in &self.kb_instances {
-            let inst_name = self.kb_registry.find_by_uuid(uuid).map(|i| i.name.clone());
+        for (uuid, kb) in &self.kb.instances {
+            let inst_name = self.kb.registry.find_by_uuid(uuid).map(|i| i.name.clone());
             let fed_ids = if use_activity {
                 kb.search_sorted_by_activity(query, &weights, today)
             } else {
@@ -662,12 +672,12 @@ impl Editor {
 
     /// Get a node by ID, searching local first then federated instances.
     pub fn kb_federated_get(&self, id: &str) -> Option<(Option<String>, &mae_kb::Node)> {
-        if let Some(node) = self.kb.get(id) {
+        if let Some(node) = self.kb.primary.get(id) {
             return Some((None, node));
         }
-        for (uuid, kb) in &self.kb_instances {
+        for (uuid, kb) in &self.kb.instances {
             if let Some(node) = kb.get(id) {
-                let name = self.kb_registry.find_by_uuid(uuid).map(|i| i.name.clone());
+                let name = self.kb.registry.find_by_uuid(uuid).map(|i| i.name.clone());
                 return Some((name, node));
             }
         }
@@ -681,34 +691,34 @@ impl Editor {
     /// time-boxing (50ms deadline), error tracking, and enable/disable toggle.
     pub fn drain_kb_watchers(&mut self) {
         // Early return if watchers disabled
-        if !self.kb_watcher_enabled {
+        if !self.kb.watcher_enabled {
             return;
         }
 
         let drain_start = std::time::Instant::now();
-        let debounce_dur = std::time::Duration::from_millis(self.kb_watcher_debounce_ms);
-        let max_events = self.kb_max_drain_events;
+        let debounce_dur = std::time::Duration::from_millis(self.kb.watcher_debounce_ms);
+        let max_events = self.kb.max_drain_events;
         let deadline = drain_start + std::time::Duration::from_millis(50);
 
-        let uuids: Vec<String> = self.kb_watchers.keys().cloned().collect();
+        let uuids: Vec<String> = self.kb.watchers.keys().cloned().collect();
         let mut changed = false;
         let mut total_processed: usize = 0;
 
         for uuid in uuids {
             // Debounce: skip if last drain was too recent
-            if let Some(last) = self.kb_last_drain.get(&uuid) {
+            if let Some(last) = self.kb.last_drain.get(&uuid) {
                 if last.elapsed() < debounce_dur {
-                    self.kb_watcher_stats.suppressed_debounce += 1;
+                    self.kb.watcher_stats.suppressed_debounce += 1;
                     continue;
                 }
             }
 
-            let changes = match self.kb_watchers.get(&uuid) {
+            let changes = match self.kb.watchers.get(&uuid) {
                 Some(w) => {
                     // Track watcher errors
                     let errs = w.error_count();
-                    if errs > self.kb_watcher_stats.errors {
-                        self.kb_watcher_stats.errors = errs;
+                    if errs > self.kb.watcher_stats.errors {
+                        self.kb.watcher_stats.errors = errs;
                     }
                     w.drain()
                 }
@@ -719,18 +729,19 @@ impl Editor {
             }
 
             // Update last drain timestamp
-            self.kb_last_drain
+            self.kb
+                .last_drain
                 .insert(uuid.clone(), std::time::Instant::now());
 
             let skipped = changes.len().saturating_sub(max_events);
             if skipped > 0 {
-                self.kb_watcher_stats.suppressed_timebox += skipped as u64;
+                self.kb.watcher_stats.suppressed_timebox += skipped as u64;
             }
 
             for change in changes.into_iter().take(max_events) {
                 // Time-boxing: break if we've exceeded the 50ms budget
                 if std::time::Instant::now() > deadline {
-                    self.kb_watcher_stats.suppressed_timebox += 1;
+                    self.kb.watcher_stats.suppressed_timebox += 1;
                     break;
                 }
 
@@ -738,27 +749,27 @@ impl Editor {
                     mae_kb::watch::OrgChange::Upserted(path) => {
                         // Suppress events for paths MAE is currently writing
                         // (activity tracking, chain-fill) to prevent cascade.
-                        if self.kb_write_guard.remove(&path) {
-                            self.kb_watcher_stats.events_suppressed += 1;
+                        if self.kb.write_guard.remove(&path) {
+                            self.kb.watcher_stats.events_suppressed += 1;
                             total_processed += 1;
                             continue;
                         }
-                        if let Some(kb) = self.kb_instances.get_mut(&uuid) {
+                        if let Some(kb) = self.kb.instances.get_mut(&uuid) {
                             let ids = kb.ingest_org_file(&path);
-                            if let Some(w) = self.kb_watchers.get(&uuid) {
+                            if let Some(w) = self.kb.watchers.get(&uuid) {
                                 w.record_ids(path, ids);
                             }
-                            self.kb_watcher_stats.events_upserted += 1;
+                            self.kb.watcher_stats.events_upserted += 1;
                             changed = true;
                             total_processed += 1;
                         }
                     }
                     mae_kb::watch::OrgChange::Removed(ids) => {
-                        if let Some(kb) = self.kb_instances.get_mut(&uuid) {
+                        if let Some(kb) = self.kb.instances.get_mut(&uuid) {
                             for id in ids {
                                 kb.remove(&id);
                             }
-                            self.kb_watcher_stats.events_removed += 1;
+                            self.kb.watcher_stats.events_removed += 1;
                             changed = true;
                             total_processed += 1;
                         }
@@ -769,13 +780,13 @@ impl Editor {
 
         // Record timing in both watcher stats and perf stats
         let elapsed_us = drain_start.elapsed().as_micros() as u64;
-        self.kb_watcher_stats.last_drain_us = elapsed_us;
-        self.kb_watcher_stats.last_drain_event_count = total_processed;
+        self.kb.watcher_stats.last_drain_us = elapsed_us;
+        self.kb.watcher_stats.last_drain_event_count = total_processed;
         if total_processed > 0 {
-            self.kb_watcher_stats.drain_us_sum += elapsed_us;
-            self.kb_watcher_stats.drain_count += 1;
-            self.kb_watcher_stats.reimports_total +=
-                self.kb_watcher_stats.events_upserted + self.kb_watcher_stats.events_removed;
+            self.kb.watcher_stats.drain_us_sum += elapsed_us;
+            self.kb.watcher_stats.drain_count += 1;
+            self.kb.watcher_stats.reimports_total +=
+                self.kb.watcher_stats.events_upserted + self.kb.watcher_stats.events_removed;
         }
         self.perf_stats.kb_watcher_drain_us = elapsed_us;
         self.perf_stats.kb_watcher_events += total_processed as u64;
@@ -796,10 +807,11 @@ impl Editor {
         let node_id: Option<String> = buf.file_path().and_then(|path| {
             // Find a node whose source_file matches this path
             self.kb
+                .primary
                 .all_id_title_pairs()
                 .into_iter()
                 .find_map(|(id, _)| {
-                    self.kb.get(&id).and_then(|n| {
+                    self.kb.primary.get(&id).and_then(|n| {
                         n.source_file
                             .as_ref()
                             .filter(|sf| sf.as_path() == path)
@@ -819,11 +831,11 @@ impl Editor {
         });
 
         if let Some(id) = node_id {
-            let missing = self.kb.validate_links(&id);
+            let missing = self.kb.primary.validate_links(&id);
             // Also check federated instances for the targets
             let missing: Vec<_> = missing
                 .into_iter()
-                .filter(|target| !self.kb_instances.values().any(|kb| kb.contains(target)))
+                .filter(|target| !self.kb.instances.values().any(|kb| kb.contains(target)))
                 .collect();
             if !missing.is_empty() {
                 self.set_status(format!(
@@ -839,7 +851,7 @@ impl Editor {
     /// Returns the number of orphans removed.
     pub fn kb_cleanup_orphans(&mut self) -> usize {
         let seed_prefixes = ["cmd:", "concept:", "lesson:", "scheme:", "option:"];
-        let report = self.kb.health_report();
+        let report = self.kb.primary.health_report();
         let to_remove: Vec<String> = report
             .orphan_ids
             .into_iter()
@@ -847,7 +859,7 @@ impl Editor {
             .collect();
         let count = to_remove.len();
         for id in &to_remove {
-            self.kb.remove(id);
+            self.kb.primary.remove(id);
         }
         if count > 0 {
             self.fire_hook("after-kb-change");
@@ -921,7 +933,7 @@ impl Editor {
     /// Record an access event for a KB node. Updates `:last-accessed:` in the
     /// source .org file (if any) and in-memory properties.
     pub fn kb_record_access(&mut self, node_id: &str) {
-        if !self.kb_activity_tracking {
+        if !self.kb.activity_tracking {
             return;
         }
         let today = today_str();
@@ -931,7 +943,7 @@ impl Editor {
     /// Record a modification event. Computes body hash, compares to stored
     /// `:hash:`, and updates `:last-modified:` + `:hash:` if changed.
     pub fn kb_record_modification(&mut self, path: &std::path::Path) {
-        if !self.kb_activity_tracking {
+        if !self.kb.activity_tracking {
             return;
         }
         let Ok(content) = std::fs::read_to_string(path) else {
@@ -963,7 +975,7 @@ impl Editor {
 
     /// Record a link event for a target node. Updates `:last-linked:`.
     pub fn kb_record_link(&mut self, target_id: &str) {
-        if !self.kb_activity_tracking {
+        if !self.kb.activity_tracking {
             return;
         }
         let today = today_str();
@@ -994,17 +1006,17 @@ impl Editor {
             return;
         };
         // Guard the path to prevent watcher cascade
-        self.kb_write_guard.insert(path.to_path_buf());
+        self.kb.write_guard.insert(path.to_path_buf());
         if std::fs::write(path, &updated).is_ok() {
             // Reimport synchronously to keep in-memory KB in sync
             self.kb_reimport_file(path);
-            self.kb_watcher_stats.reimports_total += 1;
+            self.kb.watcher_stats.reimports_total += 1;
         }
     }
 
     /// Find a node by its source file path (across all KB instances).
     fn kb_find_node_by_path(&self, path: &std::path::Path) -> Option<&mae_kb::Node> {
-        for kb in self.kb_instances.values() {
+        for kb in self.kb.instances.values() {
             for id in kb.list_ids(None) {
                 if let Some(node) = kb.get(&id) {
                     if node.source_file.as_deref() == Some(path) {
@@ -1018,7 +1030,7 @@ impl Editor {
 
     /// Get the source file path for a node by ID.
     fn kb_node_source_path(&self, node_id: &str) -> Option<std::path::PathBuf> {
-        for kb in self.kb_instances.values() {
+        for kb in self.kb.instances.values() {
             if let Some(node) = kb.get(node_id) {
                 return node.source_file.clone();
             }
@@ -1028,7 +1040,7 @@ impl Editor {
 
     /// Get a mutable reference to a node by ID (across all KB instances).
     fn kb_get_node_mut(&mut self, node_id: &str) -> Option<&mut mae_kb::Node> {
-        for kb in self.kb_instances.values_mut() {
+        for kb in self.kb.instances.values_mut() {
             if let Some(node) = kb.get_mut(node_id) {
                 return Some(node);
             }
@@ -1045,13 +1057,15 @@ impl Editor {
         lines.push(String::new());
 
         // 1. Basic health
-        let total_nodes: usize = self.kb_instances.values().map(|kb| kb.len()).sum();
+        let total_nodes: usize = self.kb.instances.values().map(|kb| kb.len()).sum();
         let total_links: usize = self
-            .kb_instances
+            .kb
+            .instances
             .values()
             .flat_map(|kb| kb.list_ids(None))
             .filter_map(|id| {
-                self.kb_instances
+                self.kb
+                    .instances
                     .values()
                     .find_map(|kb| kb.get(&id))
                     .map(|n| n.links().len())
@@ -1063,7 +1077,7 @@ impl Editor {
 
         // 2. Stale node detection
         let mut stale_count = 0;
-        for kb in self.kb_instances.values() {
+        for kb in self.kb.instances.values() {
             for id in kb.list_ids(None) {
                 if let Some(node) = kb.get(&id) {
                     if let Some(ref sf) = node.source_file {
@@ -1129,7 +1143,7 @@ impl Editor {
         lines.push(String::new());
 
         // 4. Watcher stats
-        let stats = &self.kb_watcher_stats;
+        let stats = &self.kb.watcher_stats;
         lines.push("** Watcher stats".to_string());
         lines.push(format!("   Upserted: {}", stats.events_upserted));
         lines.push(format!("   Removed: {}", stats.events_removed));
@@ -1154,10 +1168,10 @@ impl Editor {
     /// Resolve the dailies directory. Explicit setting takes priority;
     /// falls back to `kb_notes_dir/daily`.
     pub fn kb_dailies_dir(&self) -> Option<std::path::PathBuf> {
-        if let Some(ref dir) = self.kb_dailies_dir {
+        if let Some(ref dir) = self.kb.dailies_dir {
             return Some(dir.clone());
         }
-        self.kb_notes_dir.as_ref().map(|d| d.join("daily"))
+        self.kb.notes_dir.as_ref().map(|d| d.join("daily"))
     }
 
     /// Path for a daily note file: `dailies_dir/YYYY-MM-DD.org`.
@@ -1205,9 +1219,9 @@ impl Editor {
         );
         std::fs::write(&path, &content).map_err(|e| format!("Failed to write daily: {}", e))?;
         // Guard and reimport
-        self.kb_write_guard.insert(path.clone());
+        self.kb.write_guard.insert(path.clone());
         self.kb_reimport_file(&path);
-        self.kb_watcher_stats.reimports_total += 1;
+        self.kb.watcher_stats.reimports_total += 1;
         Ok(path)
     }
 
@@ -1220,7 +1234,7 @@ impl Editor {
         d: u32,
         direction: i32,
     ) -> Option<(i32, u32, u32)> {
-        let max_search = self.kb_daily_chain_gap_max;
+        let max_search = self.kb.daily_chain_gap_max;
         let step = if direction < 0 {
             mae_kb::activity::prev_day
         } else {
@@ -1255,7 +1269,7 @@ impl Editor {
         let _ = target_path; // used implicitly via reimport
 
         // Walk backwards to find the anchor (pre-existing daily)
-        let max_gap = self.kb_daily_chain_gap_max;
+        let max_gap = self.kb.daily_chain_gap_max;
         let mut cur = (y, m, d);
         let mut chain: Vec<(i32, u32, u32)> = vec![cur];
 
@@ -1295,10 +1309,10 @@ impl Editor {
                             .unwrap_or(lines.len());
                         lines.insert(insert_pos, &link_line);
                         let updated = lines.join("\n") + "\n";
-                        self.kb_write_guard.insert(path.clone());
+                        self.kb.write_guard.insert(path.clone());
                         if std::fs::write(&path, &updated).is_ok() {
                             self.kb_reimport_file(&path);
-                            self.kb_watcher_stats.reimports_total += 1;
+                            self.kb.watcher_stats.reimports_total += 1;
                             result.links_inserted += 1;
                         }
                     }
@@ -1321,10 +1335,10 @@ impl Editor {
                             .unwrap_or(lines.len());
                         lines.insert(insert_pos, &next_link_line);
                         let updated = lines.join("\n") + "\n";
-                        self.kb_write_guard.insert(prev_path.clone());
+                        self.kb.write_guard.insert(prev_path.clone());
                         if std::fs::write(&prev_path, &updated).is_ok() {
                             self.kb_reimport_file(&prev_path);
-                            self.kb_watcher_stats.reimports_total += 1;
+                            self.kb.watcher_stats.reimports_total += 1;
                             result.links_inserted += 1;
                         }
                     }
@@ -1527,8 +1541,8 @@ mod tests {
         assert_eq!(result.report.nodes_skipped, 1); // no-id.org
         assert!(result.report.links_created >= 1); // note2 links to note1
         assert!(!result.uuid.is_empty());
-        assert!(editor.kb_instances.contains_key(&result.uuid));
-        assert_eq!(editor.kb_instances[&result.uuid].len(), 2);
+        assert!(editor.kb.instances.contains_key(&result.uuid));
+        assert_eq!(editor.kb.instances[&result.uuid].len(), 2);
     }
 
     #[test]
@@ -1539,7 +1553,7 @@ mod tests {
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         // note2.org is in subdir/ — must be found
         assert_eq!(result.report.nodes_imported, 2);
-        let kb = &editor.kb_instances[&result.uuid];
+        let kb = &editor.kb.instances[&result.uuid];
         assert!(kb.get("test-note-2").is_some());
     }
 
@@ -1550,11 +1564,11 @@ mod tests {
         let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         let uuid = result.uuid.clone();
-        assert!(editor.kb_instances.contains_key(&uuid));
+        assert!(editor.kb.instances.contains_key(&uuid));
 
         editor.kb_unregister("TestNotes");
-        assert!(!editor.kb_instances.contains_key(&uuid));
-        assert!(editor.kb_registry.find("TestNotes").is_none());
+        assert!(!editor.kb.instances.contains_key(&uuid));
+        assert!(editor.kb.registry.find("TestNotes").is_none());
     }
 
     #[test]
@@ -1574,7 +1588,7 @@ mod tests {
 
         let result2 = editor.kb_reimport("TestNotes").unwrap();
         assert_eq!(result2.report.nodes_imported, 3);
-        assert!(editor.kb_instances[&uuid].get("test-note-3").is_some());
+        assert!(editor.kb.instances[&uuid].get("test-note-3").is_some());
     }
 
     #[test]
@@ -1635,7 +1649,7 @@ mod tests {
             mae_kb::NodeKind::Note,
         );
         assert!(result.is_ok());
-        let node = editor.kb.get("user:test-note").unwrap();
+        let node = editor.kb.primary.get("user:test-note").unwrap();
         assert_eq!(node.title, "Test Note");
         assert_eq!(node.body, "Hello");
         assert_eq!(node.source, Some(mae_kb::NodeSource::Manual));
@@ -1656,10 +1670,10 @@ mod tests {
         editor
             .kb_create_node("user:del-me", "Delete Me", "bye", mae_kb::NodeKind::Note)
             .unwrap();
-        assert!(editor.kb.get("user:del-me").is_some());
+        assert!(editor.kb.primary.get("user:del-me").is_some());
         let result = editor.kb_delete_node("user:del-me");
         assert!(result.is_ok());
-        assert!(editor.kb.get("user:del-me").is_none());
+        assert!(editor.kb.primary.get("user:del-me").is_none());
     }
 
     #[test]
@@ -1669,7 +1683,7 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("seed node"));
         // Confirm the node still exists
-        assert!(editor.kb.get("index").is_some());
+        assert!(editor.kb.primary.get("index").is_some());
     }
 
     #[test]
@@ -1690,7 +1704,7 @@ mod tests {
             Some(vec!["tag1".into()]),
         );
         assert!(result.is_ok());
-        let node = editor.kb.get("user:upd").unwrap();
+        let node = editor.kb.primary.get("user:upd").unwrap();
         assert_eq!(node.title, "Updated Title");
         assert_eq!(node.body, "original body"); // unchanged
         assert_eq!(node.tags, vec!["tag1".to_string()]);
@@ -1703,7 +1717,7 @@ mod tests {
         let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         assert!(
-            editor.kb_watchers.contains_key(&result.uuid),
+            editor.kb.watchers.contains_key(&result.uuid),
             "watcher should start on register"
         );
     }
@@ -1715,9 +1729,9 @@ mod tests {
         let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         let uuid = result.uuid.clone();
-        assert!(editor.kb_watchers.contains_key(&uuid));
+        assert!(editor.kb.watchers.contains_key(&uuid));
         editor.kb_unregister("TestNotes");
-        assert!(!editor.kb_watchers.contains_key(&uuid));
+        assert!(!editor.kb.watchers.contains_key(&uuid));
     }
 
     #[test]
@@ -1739,13 +1753,13 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while std::time::Instant::now() < deadline {
             editor.drain_kb_watchers();
-            if editor.kb_instances[&uuid].get("watch-test-new").is_some() {
+            if editor.kb.instances[&uuid].get("watch-test-new").is_some() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         assert!(
-            editor.kb_instances[&uuid].get("watch-test-new").is_some(),
+            editor.kb.instances[&uuid].get("watch-test-new").is_some(),
             "new org file should be auto-ingested by watcher"
         );
     }
@@ -1823,15 +1837,15 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while std::time::Instant::now() < deadline {
             editor.drain_kb_watchers();
-            if editor.kb_last_drain.contains_key(&uuid) {
+            if editor.kb.last_drain.contains_key(&uuid) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        assert!(editor.kb_last_drain.contains_key(&uuid));
+        assert!(editor.kb.last_drain.contains_key(&uuid));
 
         // Now set a very long debounce
-        editor.kb_watcher_debounce_ms = 60_000;
+        editor.kb.watcher_debounce_ms = 60_000;
 
         // Write another file
         std::fs::write(
@@ -1844,7 +1858,7 @@ mod tests {
         // This drain should be debounced — second node should NOT appear
         editor.drain_kb_watchers();
         assert!(
-            editor.kb_instances[&uuid].get("debounce-second").is_none(),
+            editor.kb.instances[&uuid].get("debounce-second").is_none(),
             "debounce should have skipped the drain"
         );
     }
@@ -1854,11 +1868,11 @@ mod tests {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
         let _test_dirs = with_test_dirs(&mut editor);
-        editor.kb_watcher_enabled = false;
+        editor.kb.watcher_enabled = false;
         // Register should skip watcher creation
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         assert!(
-            !editor.kb_watchers.contains_key(&result.uuid),
+            !editor.kb.watchers.contains_key(&result.uuid),
             "watcher should not be created when disabled"
         );
         // drain should be a no-op
@@ -1888,7 +1902,7 @@ mod tests {
             mae_kb::NodeKind::Note,
             "body",
         ));
-        editor.kb_instances.insert("inst-1".to_string(), inst);
+        editor.kb.instances.insert("inst-1".to_string(), inst);
 
         let results = editor.kb_federated_search("Dedup");
         let dedup_count = results.iter().filter(|(_, n)| n.id == "dedup-test").count();
@@ -1921,14 +1935,14 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while std::time::Instant::now() < deadline {
             editor.drain_kb_watchers();
-            if editor.kb_instances[&uuid].get("stats-test").is_some() {
+            if editor.kb.instances[&uuid].get("stats-test").is_some() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
         assert!(
-            editor.kb_watcher_stats.events_upserted > 0,
+            editor.kb.watcher_stats.events_upserted > 0,
             "events_upserted should be positive after drain"
         );
     }

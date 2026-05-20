@@ -120,26 +120,28 @@ impl super::Editor {
             "display_region_debounce_ms" => self.display_region_debounce_ms.to_string(),
             "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
             "org_agenda_files" => self.org_agenda_files.join(", "),
-            "kb_watcher_enabled" => self.kb_watcher_enabled.to_string(),
-            "kb_watcher_debounce_ms" => self.kb_watcher_debounce_ms.to_string(),
-            "kb_max_drain_events" => self.kb_max_drain_events.to_string(),
-            "kb_search_excerpt_length" => self.kb_search_excerpt_length.to_string(),
-            "kb_search_max_results" => self.kb_search_max_results.to_string(),
-            "kb_auto_register" => self.kb_auto_register.to_string(),
+            "kb_watcher_enabled" => self.kb.watcher_enabled.to_string(),
+            "kb_watcher_debounce_ms" => self.kb.watcher_debounce_ms.to_string(),
+            "kb_max_drain_events" => self.kb.max_drain_events.to_string(),
+            "kb_search_excerpt_length" => self.kb.search_excerpt_length.to_string(),
+            "kb_search_max_results" => self.kb.search_max_results.to_string(),
+            "kb_auto_register" => self.kb.auto_register.to_string(),
             "kb_notes_dir" => self
-                .kb_notes_dir
+                .kb
+                .notes_dir
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
-            "kb_activity_tracking" => self.kb_activity_tracking.to_string(),
-            "kb_activity_decay" => self.kb_activity_decay.to_string(),
-            "kb_search_sort" => self.kb_search_sort.clone(),
+            "kb_activity_tracking" => self.kb.activity_tracking.to_string(),
+            "kb_activity_decay" => self.kb.activity_decay.to_string(),
+            "kb_search_sort" => self.kb.search_sort.clone(),
             "kb_dailies_dir" => self
-                .kb_dailies_dir
+                .kb
+                .dailies_dir
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
-            "kb_daily_chain_gap_max" => self.kb_daily_chain_gap_max.to_string(),
+            "kb_daily_chain_gap_max" => self.kb.daily_chain_gap_max.to_string(),
             "format_on_save" => self.format_on_save.to_string(),
             "spell_enabled" => self.spell_enabled.to_string(),
             "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
@@ -498,55 +500,55 @@ impl super::Editor {
                 return Err("Use :agenda-add / :agenda-remove to manage agenda files".to_string());
             }
             "kb_watcher_enabled" => {
-                self.kb_watcher_enabled = parse_option_bool(value)?;
+                self.kb.watcher_enabled = parse_option_bool(value)?;
             }
             "kb_watcher_debounce_ms" => {
                 let v: u64 = value
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.kb_watcher_debounce_ms = v.clamp(0, 60_000);
+                self.kb.watcher_debounce_ms = v.clamp(0, 60_000);
             }
             "kb_max_drain_events" => {
                 let v: usize = value
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.kb_max_drain_events = v.clamp(1, 10_000);
+                self.kb.max_drain_events = v.clamp(1, 10_000);
             }
             "kb_search_excerpt_length" => {
                 let v: usize = value
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.kb_search_excerpt_length = v.clamp(50, 10_000);
+                self.kb.search_excerpt_length = v.clamp(50, 10_000);
             }
             "kb_search_max_results" => {
                 let v: usize = value
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.kb_search_max_results = v.clamp(1, 100);
+                self.kb.search_max_results = v.clamp(1, 100);
             }
             "kb_auto_register" => {
-                self.kb_auto_register = parse_option_bool(value)?;
+                self.kb.auto_register = parse_option_bool(value)?;
             }
             "kb_notes_dir" => {
                 if value.is_empty() {
-                    self.kb_notes_dir = None;
+                    self.kb.notes_dir = None;
                 } else {
                     let expanded = crate::file_picker::expand_tilde(value);
-                    self.kb_notes_dir = Some(std::path::PathBuf::from(expanded));
+                    self.kb.notes_dir = Some(std::path::PathBuf::from(expanded));
                 }
             }
             "kb_activity_tracking" => {
-                self.kb_activity_tracking = parse_option_bool(value)?;
+                self.kb.activity_tracking = parse_option_bool(value)?;
             }
             "kb_activity_decay" => {
                 let v: f64 = value
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
-                self.kb_activity_decay = v.clamp(0.0001, 1.0);
+                self.kb.activity_decay = v.clamp(0.0001, 1.0);
             }
             "kb_search_sort" => match value {
                 "relevance" | "activity" | "alphabetical" => {
-                    self.kb_search_sort = value.to_string();
+                    self.kb.search_sort = value.to_string();
                 }
                 _ => {
                     return Err(format!(
@@ -557,17 +559,17 @@ impl super::Editor {
             },
             "kb_dailies_dir" => {
                 if value.is_empty() {
-                    self.kb_dailies_dir = None;
+                    self.kb.dailies_dir = None;
                 } else {
                     let expanded = crate::file_picker::expand_tilde(value);
-                    self.kb_dailies_dir = Some(std::path::PathBuf::from(expanded));
+                    self.kb.dailies_dir = Some(std::path::PathBuf::from(expanded));
                 }
             }
             "kb_daily_chain_gap_max" => {
                 let v: usize = value
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.kb_daily_chain_gap_max = v.clamp(1, 365);
+                self.kb.daily_chain_gap_max = v.clamp(1, 365);
             }
             "format_on_save" => {
                 self.format_on_save = parse_option_bool(value)?;
@@ -931,8 +933,8 @@ impl super::Editor {
     }
 
     pub fn show_kb_health_report(&mut self) {
-        let mut report = self.kb.health_report();
-        report.stale_nodes = self.kb.detect_stale_nodes();
+        let mut report = self.kb.primary.health_report();
+        report.stale_nodes = self.kb.primary.detect_stale_nodes();
         let mut lines = Vec::new();
         lines.push("KB Health Report".to_string());
         lines.push("================".to_string());
@@ -1043,7 +1045,7 @@ impl super::Editor {
         lines.push(String::new());
 
         // Watcher performance metrics.
-        let ws = &self.kb_watcher_stats;
+        let ws = &self.kb.watcher_stats;
         lines.push("Watcher Metrics".to_string());
         lines.push("---------------".to_string());
         lines.push(format!("  Reimports total:     {}", ws.reimports_total));

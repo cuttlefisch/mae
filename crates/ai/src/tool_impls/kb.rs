@@ -17,22 +17,23 @@ use mae_core::Editor;
 /// what `kb_search` / `kb_list` would produce on the same node.
 fn node_json(editor: &Editor, id: &str) -> Option<serde_json::Value> {
     // Try local KB first
-    if let Some(node) = editor.kb.get(id) {
+    if let Some(node) = editor.kb.primary.get(id) {
         return Some(serde_json::json!({
             "id": node.id,
             "title": node.title,
             "kind": node.kind,
             "body": node.body,
             "tags": node.tags,
-            "links_from": editor.kb.links_from(id),
-            "links_to": editor.kb.links_to(id),
+            "links_from": editor.kb.primary.links_from(id),
+            "links_to": editor.kb.primary.links_to(id),
         }));
     }
     // Try federated instances
-    for (uuid, kb) in &editor.kb_instances {
+    for (uuid, kb) in &editor.kb.instances {
         if let Some(node) = kb.get(id) {
             let inst_name = editor
-                .kb_registry
+                .kb
+                .registry
                 .find_by_uuid(uuid)
                 .map(|i| i.name.as_str())
                 .unwrap_or("unknown");
@@ -59,7 +60,7 @@ pub fn execute_kb_get(editor: &Editor, args: &serde_json::Value) -> Result<Strin
     match node_json(editor, id) {
         Some(v) => {
             let mut result = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
-            if editor.kb_ai_visited_ids.contains(id) {
+            if editor.kb.ai_visited_ids.contains(id) {
                 result.push_str("\n\n[Note: You already visited this node. Use kb_graph with depth=2 for neighborhood traversal instead of manual link-following.]");
             }
             Ok(result)
@@ -70,7 +71,7 @@ pub fn execute_kb_get(editor: &Editor, args: &serde_json::Value) -> Result<Strin
 
 /// Record a KB node ID as visited by the AI agent (for cycle detection).
 pub fn record_kb_visit(editor: &mut Editor, id: &str) {
-    editor.kb_ai_visited_ids.insert(id.to_string());
+    editor.kb.ai_visited_ids.insert(id.to_string());
 }
 
 pub fn execute_kb_search(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -86,7 +87,7 @@ pub fn execute_kb_search(editor: &Editor, args: &serde_json::Value) -> Result<St
 
 pub fn execute_kb_list(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let prefix = args.get("prefix").and_then(|v| v.as_str());
-    let ids = editor.kb.list_ids(prefix);
+    let ids = editor.kb.primary.list_ids(prefix);
     serde_json::to_string_pretty(&ids).map_err(|e| e.to_string())
 }
 
@@ -96,11 +97,11 @@ pub fn execute_kb_links_from(editor: &Editor, args: &serde_json::Value) -> Resul
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: id".to_string())?;
     // Check local KB first, then federated instances
-    if editor.kb.contains(id) {
-        let links = editor.kb.links_from(id);
+    if editor.kb.primary.contains(id) {
+        let links = editor.kb.primary.links_from(id);
         return serde_json::to_string_pretty(&links).map_err(|e| e.to_string());
     }
-    for kb in editor.kb_instances.values() {
+    for kb in editor.kb.instances.values() {
         if kb.contains(id) {
             let links = kb.links_from(id);
             return serde_json::to_string_pretty(&links).map_err(|e| e.to_string());
@@ -114,9 +115,9 @@ pub fn execute_kb_links_to(editor: &Editor, args: &serde_json::Value) -> Result<
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: id".to_string())?;
-    let mut links = editor.kb.links_to(id);
+    let mut links = editor.kb.primary.links_to(id);
     // Merge from federated instances
-    for kb in editor.kb_instances.values() {
+    for kb in editor.kb.instances.values() {
         for l in kb.links_to(id) {
             if !links.contains(&l) {
                 links.push(l);
@@ -140,7 +141,7 @@ pub fn execute_kb_graph(editor: &Editor, args: &serde_json::Value) -> Result<Str
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: id".to_string())?;
     // Check local KB first, then federated
-    if !editor.kb.contains(id) && !editor.kb_instances.values().any(|kb| kb.contains(id)) {
+    if !editor.kb.primary.contains(id) && !editor.kb.instances.values().any(|kb| kb.contains(id)) {
         return Err(format!("No KB node: {}", id));
     }
     let depth = args
@@ -153,9 +154,9 @@ pub fn execute_kb_graph(editor: &Editor, args: &serde_json::Value) -> Result<Str
 
     // Helper: get neighbors from local + all federated KBs, deduped
     let federated_neighbors = |nid: &str| -> Vec<String> {
-        let mut out = editor.kb.neighbors(nid);
+        let mut out = editor.kb.primary.neighbors(nid);
         let mut seen: HashSet<String> = out.iter().cloned().collect();
-        for kb in editor.kb_instances.values() {
+        for kb in editor.kb.instances.values() {
             for n in kb.neighbors(nid) {
                 if seen.insert(n.clone()) {
                     out.push(n);
@@ -169,15 +170,16 @@ pub fn execute_kb_graph(editor: &Editor, args: &serde_json::Value) -> Result<Str
     let get_node = |nid: &str| -> Option<&mae_core::KbNode> {
         editor
             .kb
+            .primary
             .get(nid)
-            .or_else(|| editor.kb_instances.values().find_map(|kb| kb.get(nid)))
+            .or_else(|| editor.kb.instances.values().find_map(|kb| kb.get(nid)))
     };
 
     // Helper: links_from across all KBs
     let federated_links_from = |nid: &str| -> Vec<String> {
-        let mut out = editor.kb.links_from(nid);
+        let mut out = editor.kb.primary.links_from(nid);
         let mut seen: HashSet<String> = out.iter().cloned().collect();
-        for kb in editor.kb_instances.values() {
+        for kb in editor.kb.instances.values() {
             for l in kb.links_from(nid) {
                 if seen.insert(l.clone()) {
                     out.push(l);
@@ -218,11 +220,12 @@ pub fn execute_kb_graph(editor: &Editor, args: &serde_json::Value) -> Result<Str
                         "hop": hop,
                     });
                     // Add instance info for federated nodes
-                    if !editor.kb.contains(&n.id) {
-                        for (uuid, kb) in &editor.kb_instances {
+                    if !editor.kb.primary.contains(&n.id) {
+                        for (uuid, kb) in &editor.kb.instances {
                             if kb.contains(&n.id) {
                                 let inst_name = editor
-                                    .kb_registry
+                                    .kb
+                                    .registry
                                     .find_by_uuid(uuid)
                                     .map(|i| i.name.as_str())
                                     .unwrap_or("unknown");
@@ -317,20 +320,23 @@ pub fn execute_kb_health(editor: &Editor) -> Result<String, String> {
     // Build a cross-federation resolver: local KB checks federated instances.
     let report = editor
         .kb
-        .health_report_with(|id| editor.kb_instances.values().any(|kb| kb.contains(id)));
+        .primary
+        .health_report_with(|id| editor.kb.instances.values().any(|kb| kb.contains(id)));
 
     // Federated instance health summaries — with full broken link detail.
     let instances: Vec<serde_json::Value> = editor
-        .kb_registry
+        .kb
+        .registry
         .instances
         .iter()
         .map(|inst| {
-            let kb_health = editor.kb_instances.get(&inst.uuid).map(|kb| {
+            let kb_health = editor.kb.instances.get(&inst.uuid).map(|kb| {
                 // Cross-federation: check local KB + other instances.
                 kb.health_report_with(|id| {
-                    editor.kb.contains(id)
+                    editor.kb.primary.contains(id)
                         || editor
-                            .kb_instances
+                            .kb
+                            .instances
                             .iter()
                             .any(|(uuid, other)| *uuid != inst.uuid && other.contains(id))
                 })
@@ -536,13 +542,13 @@ pub fn execute_kb_search_context(
         .get("query")
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: query")?;
-    let configured_limit = editor.kb_search_max_results;
+    let configured_limit = editor.kb.search_max_results;
     let limit = args
         .get("limit")
         .and_then(|v| v.as_u64())
         .unwrap_or(5)
         .min(configured_limit as u64) as usize;
-    let excerpt_len = editor.kb_search_excerpt_length;
+    let excerpt_len = editor.kb.search_excerpt_length;
 
     // Deduplicated collection
     let mut seen = std::collections::HashSet::new();
@@ -550,8 +556,8 @@ pub fn execute_kb_search_context(
     let query_lower = query.to_lowercase();
 
     // Search local KB first (wins on duplicates)
-    for id in editor.kb.search(query) {
-        if let Some(node) = editor.kb.get(&id) {
+    for id in editor.kb.primary.search(query) {
+        if let Some(node) = editor.kb.primary.get(&id) {
             if seen.insert(node.id.clone()) {
                 let score = score_node(&query_lower, node);
                 results.push((None, node.clone(), score));
@@ -559,9 +565,10 @@ pub fn execute_kb_search_context(
         }
     }
     // Search federated instances
-    for (uuid, kb) in &editor.kb_instances {
+    for (uuid, kb) in &editor.kb.instances {
         let inst_name = editor
-            .kb_registry
+            .kb
+            .registry
             .find_by_uuid(uuid)
             .map(|i| i.name.clone());
         for id in kb.search(query) {
@@ -665,7 +672,7 @@ mod tests {
         let editor = Editor::new();
         let result = execute_kb_search(&editor, &serde_json::json!({"query": ""})).unwrap();
         let ids: Vec<String> = serde_json::from_str(&result).unwrap();
-        assert_eq!(ids.len(), editor.kb.len());
+        assert_eq!(ids.len(), editor.kb.primary.len());
     }
 
     #[test]
@@ -682,7 +689,7 @@ mod tests {
         let editor = Editor::new();
         let result = execute_kb_list(&editor, &serde_json::json!({})).unwrap();
         let ids: Vec<String> = serde_json::from_str(&result).unwrap();
-        assert_eq!(ids.len(), editor.kb.len());
+        assert_eq!(ids.len(), editor.kb.primary.len());
     }
 
     #[test]
@@ -725,7 +732,7 @@ mod tests {
         assert!(nodes.iter().any(|n| n["id"] == "index" && n["hop"] == 0));
         assert!(nodes.iter().all(|n| n["hop"].as_u64().unwrap() <= 1));
         // Every outgoing link from index should appear as a hop-1 node.
-        for t in editor.kb.links_from("index") {
+        for t in editor.kb.primary.links_from("index") {
             assert!(
                 nodes.iter().any(|n| n["id"] == t),
                 "missing outgoing neighbor {}",
@@ -742,7 +749,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         let nodes = v["nodes"].as_array().unwrap();
         // Every backlink to concept:buffer should appear in the neighborhood.
-        for src in editor.kb.links_to("concept:buffer") {
+        for src in editor.kb.primary.links_to("concept:buffer") {
             assert!(
                 nodes.iter().any(|n| n["id"] == src),
                 "missing backlink neighbor {}",
@@ -856,7 +863,7 @@ mod tests {
         .unwrap();
         let result = execute_kb_delete(&mut editor, &serde_json::json!({"id": "user:del-tool"}));
         assert!(result.is_ok());
-        assert!(editor.kb.get("user:del-tool").is_none());
+        assert!(editor.kb.primary.get("user:del-tool").is_none());
     }
 
     #[test]
@@ -876,7 +883,7 @@ mod tests {
         // created at runtime from CommandRegistry. Only non-cmd broken
         // links indicate a real problem in seed data.
         let editor = Editor::new();
-        let report = editor.kb.health_report();
+        let report = editor.kb.primary.health_report();
         let non_cmd: Vec<_> = report
             .broken_links
             .iter()
@@ -909,7 +916,7 @@ mod tests {
             mae_core::KbNodeKind::Note,
             "links to [[index]]",
         ));
-        editor.kb_instances.insert("inst-1".to_string(), inst);
+        editor.kb.instances.insert("inst-1".to_string(), inst);
         let result =
             execute_kb_links_from(&editor, &serde_json::json!({"id": "fed-node"})).unwrap();
         let links: Vec<String> = serde_json::from_str(&result).unwrap();
@@ -926,7 +933,7 @@ mod tests {
             mae_core::KbNodeKind::Note,
             "see [[concept:buffer]]",
         ));
-        editor.kb_instances.insert("inst-1".to_string(), inst);
+        editor.kb.instances.insert("inst-1".to_string(), inst);
         let result =
             execute_kb_links_to(&editor, &serde_json::json!({"id": "concept:buffer"})).unwrap();
         let links: Vec<String> = serde_json::from_str(&result).unwrap();
@@ -943,7 +950,7 @@ mod tests {
             mae_core::KbNodeKind::Note,
             "see [[index]]",
         ));
-        editor.kb_instances.insert("inst-1".to_string(), inst);
+        editor.kb.instances.insert("inst-1".to_string(), inst);
         let result = execute_kb_graph(&editor, &serde_json::json!({"id": "index"})).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         let nodes = v["nodes"].as_array().unwrap();
@@ -982,7 +989,7 @@ mod tests {
             mae_core::KbNodeKind::Note,
             "This is a unique rag test body for federated search",
         ));
-        editor.kb_instances.insert("rag-inst".to_string(), inst);
+        editor.kb.instances.insert("rag-inst".to_string(), inst);
         let result =
             execute_kb_search_context(&editor, &serde_json::json!({"query": "unique rag test"}))
                 .unwrap();
@@ -1014,7 +1021,7 @@ mod tests {
             mae_core::KbNodeKind::Note,
             "dedup test body",
         ));
-        editor.kb_instances.insert("dedup-inst".to_string(), inst);
+        editor.kb.instances.insert("dedup-inst".to_string(), inst);
         let result =
             execute_kb_search_context(&editor, &serde_json::json!({"query": "rag dedup"})).unwrap();
         let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();

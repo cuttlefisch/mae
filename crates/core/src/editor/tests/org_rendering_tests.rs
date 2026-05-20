@@ -106,7 +106,7 @@ fn kb_view_from_daily_node() {
         mae_kb::NodeKind::Note,
         "Daily note content",
     );
-    e.kb.insert(node);
+    e.kb.primary.insert(node);
 
     // Open a file that looks like a daily
     let mut buf = Buffer::new();
@@ -185,7 +185,7 @@ fn help_return_to_view_no_split_on_first_invoke() {
         mae_kb::NodeKind::Note,
         "Daily note",
     );
-    e.kb.insert(node);
+    e.kb.primary.insert(node);
 
     // Set up a buffer that looks like a daily
     let mut buf = Buffer::new();

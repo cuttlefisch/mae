@@ -129,7 +129,7 @@ impl Editor {
                             format!("tutorial:{}", topic),
                             format!("category:{}", topic),
                         ];
-                        let found = candidates.iter().find(|id| self.kb.contains(id));
+                        let found = candidates.iter().find(|id| self.kb.primary.contains(id));
                         match found {
                             Some(id) => self.open_help_at(id),
                             None => self.set_status(format!("No help for: {}", topic)),
@@ -144,7 +144,7 @@ impl Editor {
                     return true;
                 };
                 let id = format!("cmd:{}", name);
-                if self.kb.contains(&id) {
+                if self.kb.primary.contains(&id) {
                     self.open_help_at(&id);
                 } else {
                     self.set_status(format!("Unknown command: {}", name));
@@ -172,7 +172,7 @@ impl Editor {
                 match args.map(str::trim).filter(|s| !s.is_empty()) {
                     None => self.set_status("Usage: :kb-ingest <directory>"),
                     Some(dir) => {
-                        let report = self.kb.ingest_org_dir(dir);
+                        let report = self.kb.primary.ingest_org_dir(dir);
                         self.set_status(format!(
                             "kb: indexed {}, skipped {} (no :ID:), errors {}",
                             report.indexed,
@@ -256,8 +256,9 @@ impl Editor {
                     |editor, p| {
                         editor
                             .kb
+                            .primary
                             .save_to_sqlite(p)
-                            .map(|()| editor.kb.len())
+                            .map(|()| editor.kb.primary.len())
                             .map_err(|e| format!("kb save failed: {}", e))
                     },
                     "Saved",
@@ -272,6 +273,7 @@ impl Editor {
                     |editor, p| {
                         editor
                             .kb
+                            .primary
                             .load_from_sqlite(p)
                             .map_err(|e| format!("kb load failed: {}", e))
                     },
@@ -720,7 +722,7 @@ impl Editor {
                         // Try to find the option and open its KB node
                         if let Some((_, def)) = self.get_option(n) {
                             let id = format!("option:{}", def.name);
-                            if self.kb.contains(&id) {
+                            if self.kb.primary.contains(&id) {
                                 self.open_help_at(&id);
                             } else {
                                 // Fallback: show inline
