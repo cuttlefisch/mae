@@ -866,8 +866,8 @@ mod tests {
             &privileged_policy(),
         ));
         assert!(result.success, "dap_start failed: {}", result.output);
-        assert_eq!(editor.pending_dap_intents.len(), 1);
-        assert!(editor.debug_state.is_some());
+        assert_eq!(editor.dap.pending_intents.len(), 1);
+        assert!(editor.dap.state.is_some());
     }
 
     #[test]
@@ -927,7 +927,7 @@ mod tests {
     #[test]
     fn dap_step_tool_rejects_unknown_direction() {
         let mut editor = Editor::new();
-        editor.debug_state = Some(mae_core::DebugState::new(mae_core::DebugTarget::Dap {
+        editor.dap.state = Some(mae_core::DebugState::new(mae_core::DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "/bin/ls".into(),
         }));

@@ -11,10 +11,10 @@ pub fn execute_editor_state(editor: &Editor) -> Result<String, String> {
         "active_buffer": buf.name,
         "active_buffer_modified": buf.modified,
         "message_log_entries": editor.message_log.len(),
-        "debug_session_active": editor.debug_state.is_some(),
-        "debug_target": editor.debug_state.as_ref().map(|s| format!("{:?}", s.target)),
+        "debug_session_active": editor.dap.state.is_some(),
+        "debug_target": editor.dap.state.as_ref().map(|s| format!("{:?}", s.target)),
         "debug_panel_open": editor.buffers.iter().any(|b| b.kind == mae_core::buffer::BufferKind::Debug),
-        "breakpoint_count": editor.debug_state.as_ref().map(|s| s.breakpoint_count()).unwrap_or(0),
+        "breakpoint_count": editor.dap.state.as_ref().map(|s| s.breakpoint_count()).unwrap_or(0),
         "command_count": editor.commands.len(),
         "renderer": editor.renderer_name,
         "git_branch": editor.git_branch,
@@ -130,7 +130,7 @@ pub fn execute_set_option(editor: &mut Editor, args: &serde_json::Value) -> Resu
 }
 
 pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
-    match &editor.debug_state {
+    match &editor.dap.state {
         None => Ok("No active debug session".into()),
         Some(state) => {
             let threads: Vec<serde_json::Value> = state

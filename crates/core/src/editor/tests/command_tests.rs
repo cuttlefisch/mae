@@ -615,16 +615,16 @@ fn kill_conversation_buffer_closes_both() {
 #[test]
 fn debug_state_starts_none() {
     let editor = Editor::new();
-    assert!(editor.debug_state.is_none());
+    assert!(editor.dap.state.is_none());
 }
 
 #[test]
 fn debug_self_populates_state() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("debug-self");
-    assert!(editor.debug_state.is_some());
+    assert!(editor.dap.state.is_some());
 
-    let state = editor.debug_state.as_ref().unwrap();
+    let state = editor.dap.state.as_ref().unwrap();
     assert_eq!(state.target, crate::debug::DebugTarget::SelfDebug);
     assert_eq!(state.threads.len(), 2);
     assert_eq!(state.threads[0].name, "Rust Core");
@@ -643,7 +643,7 @@ fn debug_self_captures_correct_values() {
     editor.mode = Mode::Insert;
     editor.dispatch_builtin("debug-self");
 
-    let state = editor.debug_state.as_ref().unwrap();
+    let state = editor.dap.state.as_ref().unwrap();
     let editor_vars = &state.variables["Editor State"];
     let mode_var = editor_vars.iter().find(|v| v.name == "mode").unwrap();
     assert_eq!(mode_var.value, "Insert");
@@ -653,9 +653,9 @@ fn debug_self_captures_correct_values() {
 fn debug_stop_clears_state() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("debug-self");
-    assert!(editor.debug_state.is_some());
+    assert!(editor.dap.state.is_some());
     editor.dispatch_builtin("debug-stop");
-    assert!(editor.debug_state.is_none());
+    assert!(editor.dap.state.is_none());
     assert!(editor.status_msg.contains("ended"));
 }
 
@@ -671,13 +671,13 @@ fn debug_toggle_breakpoint() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("debug-self");
     editor.dispatch_builtin("debug-toggle-breakpoint");
-    let state = editor.debug_state.as_ref().unwrap();
+    let state = editor.dap.state.as_ref().unwrap();
     assert_eq!(state.breakpoint_count(), 1);
     assert!(editor.status_msg.contains("Breakpoint set"));
 
     // Toggle again removes it
     editor.dispatch_builtin("debug-toggle-breakpoint");
-    let state = editor.debug_state.as_ref().unwrap();
+    let state = editor.dap.state.as_ref().unwrap();
     assert_eq!(state.breakpoint_count(), 0);
     assert!(editor.status_msg.contains("Breakpoint removed"));
 }

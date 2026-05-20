@@ -4,6 +4,7 @@ mod babel_ops;
 mod changes;
 mod command;
 mod dap_ops;
+pub mod dap_state;
 mod debug_panel_ops;
 mod diagnostics;
 pub mod dispatch;
@@ -43,6 +44,7 @@ mod visual;
 
 pub use ai_state::AiState;
 pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
+pub use dap_state::DapContext;
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use help_ops::is_builtin_node;
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
@@ -264,8 +266,6 @@ pub fn rekey_after_remove<V>(map: &mut HashMap<usize, V>, removed_idx: usize) {
 }
 use crate::command_palette::CommandPalette;
 use crate::commands::CommandRegistry;
-use crate::dap_intent::DapIntent;
-use crate::debug::DebugState;
 use crate::file_picker::FilePicker;
 use crate::hooks::HookRegistry;
 use crate::kb_seed::seed_kb;
@@ -584,8 +584,8 @@ pub struct Editor {
     pub message_log: MessageLog,
     /// Active color theme. All rendering reads from this.
     pub theme: Theme,
-    /// Active debug session state, if any. Both self-debug and DAP populate this.
-    pub debug_state: Option<DebugState>,
+    /// DAP debug session state and pending intent queue.
+    pub dap: DapContext,
     /// Vi-modal editing state (operators, registers, marks, macros, command-line, etc.).
     pub vi: ViState,
     /// True while the user is resolving `SPC h k` (describe-key).
@@ -627,11 +627,6 @@ pub struct Editor {
     /// when a project root is first detected after LSP has already started
     /// (e.g. launched from app launcher with `cwd = $HOME`).
     pub pending_lsp_root_change: Option<String>,
-    /// Queue of pending DAP requests for the binary to drain each event-loop tick.
-    /// Same pattern as `pending_lsp_requests`: core cannot call async DAP code
-    /// directly; commands push intents here and `main.rs` forwards them to
-    /// `run_dap_task`.
-    pub pending_dap_intents: Vec<DapIntent>,
     /// Shell/terminal intent queue and cached state.
     pub shell: ShellIntents,
     /// Buffer indices removed this tick, for the binary to rekey its own
@@ -1001,7 +996,7 @@ impl Editor {
             which_key_scroll: 0,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             theme: default_theme(),
-            debug_state: None,
+            dap: DapContext::new(),
             vi: ViState::new(),
             awaiting_key_description: false,
             conv_esc_pending: false,
@@ -1022,7 +1017,6 @@ impl Editor {
             pending_lsp_requests: Vec::new(),
             lsp_trigger_characters: std::collections::HashMap::new(),
             pending_lsp_root_change: None,
-            pending_dap_intents: Vec::new(),
             shell: ShellIntents::default(),
             pending_buffer_removals: Vec::new(),
             hooks,

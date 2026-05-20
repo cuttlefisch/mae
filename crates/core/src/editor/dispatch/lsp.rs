@@ -19,7 +19,7 @@ impl Editor {
                 }
                 self.lsp_request_hover();
                 // Also show debug variable value if stopped.
-                if let Some(state) = &self.debug_state {
+                if let Some(state) = &self.dap.state {
                     if state.is_stopped() {
                         let buf = &self.buffers[self.active_buffer_idx()];
                         let win = self.window_mgr.focused_window();

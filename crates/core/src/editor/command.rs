@@ -870,7 +870,7 @@ impl Editor {
                 let expression = args.unwrap_or("").trim();
                 if expression.is_empty() {
                     self.set_status("Usage: :debug-eval <expression>");
-                } else if self.debug_state.is_none() {
+                } else if self.dap.state.is_none() {
                     self.set_status("No active debug session");
                 } else {
                     self.dap_evaluate(expression, None, Some("repl"));
@@ -1196,14 +1196,14 @@ mod tests {
         let mut editor = Editor::new();
         editor.execute_command("debug-start");
         assert!(editor.status_msg.to_lowercase().contains("usage"));
-        assert!(editor.pending_dap_intents.is_empty());
+        assert!(editor.dap.pending_intents.is_empty());
     }
 
     #[test]
     fn debug_start_command_queues_intent() {
         let mut editor = Editor::new();
         editor.execute_command("debug-start lldb /bin/ls");
-        assert_eq!(editor.pending_dap_intents.len(), 1);
+        assert_eq!(editor.dap.pending_intents.len(), 1);
     }
 
     #[test]
@@ -1211,7 +1211,7 @@ mod tests {
         let mut editor = Editor::new();
         editor.execute_command("debug-start bogus /bin/ls");
         assert!(editor.status_msg.contains("Unknown adapter"));
-        assert!(editor.pending_dap_intents.is_empty());
+        assert!(editor.dap.pending_intents.is_empty());
     }
 
     #[test]

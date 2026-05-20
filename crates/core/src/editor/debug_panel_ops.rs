@@ -111,7 +111,7 @@ impl Editor {
             .map(|v| v.show_output)
             .unwrap_or(false);
 
-        let Some(state) = &self.debug_state else {
+        let Some(state) = &self.dap.state else {
             text.push_str("No active debug session.\n");
             text.push_str("\nStart one with :debug-start <adapter> <program>\n");
             text.push_str("or SPC d d\n");
@@ -397,7 +397,7 @@ impl Editor {
 
         match item {
             DebugLineItem::Thread(tid) => {
-                if let Some(state) = self.debug_state.as_mut() {
+                if let Some(state) = self.dap.state.as_mut() {
                     state.set_active_thread(tid);
                 }
                 self.dap_refresh();
@@ -446,7 +446,8 @@ impl Editor {
     /// Navigate to the source file/line of a stack frame.
     fn debug_navigate_to_frame_source(&mut self, frame_id: i64) {
         let frame = self
-            .debug_state
+            .dap
+            .state
             .as_ref()
             .and_then(|s| s.stack_frames.iter().find(|f| f.id == frame_id))
             .cloned();
@@ -579,7 +580,7 @@ mod tests {
             ],
         );
         state.set_stopped_location("main.rs", 42);
-        editor.debug_state = Some(state);
+        editor.dap.state = Some(state);
         editor
     }
 
@@ -704,7 +705,7 @@ mod tests {
             .find(|b| b.kind == BufferKind::Debug)
             .and_then(|b| b.debug_view());
         // Frame may have been selected (scopes request queued).
-        assert!(editor.pending_dap_intents.iter().any(|i| matches!(
+        assert!(editor.dap.pending_intents.iter().any(|i| matches!(
             i,
             crate::dap_intent::DapIntent::RequestScopes { frame_id: 100 }
         )));
@@ -748,7 +749,7 @@ mod tests {
             .and_then(|b| b.debug_view())
             .unwrap();
         assert!(view.is_expanded(50));
-        assert!(editor.pending_dap_intents.iter().any(|i| matches!(
+        assert!(editor.dap.pending_intents.iter().any(|i| matches!(
             i,
             crate::dap_intent::DapIntent::RequestVariables {
                 variables_reference: 50,
@@ -760,7 +761,7 @@ mod tests {
     #[test]
     fn toggle_output_view() {
         let mut editor = ed_with_debug_state();
-        editor.debug_state.as_mut().unwrap().log("hello world");
+        editor.dap.state.as_mut().unwrap().log("hello world");
         editor.open_debug_panel();
 
         let debug_idx = editor
@@ -792,7 +793,8 @@ mod tests {
 
         // Add a new thread to state.
         editor
-            .debug_state
+            .dap
+            .state
             .as_mut()
             .unwrap()
             .threads

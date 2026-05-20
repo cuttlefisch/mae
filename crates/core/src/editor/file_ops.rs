@@ -822,13 +822,13 @@ impl Editor {
         // Mark as stopped (self-debug is always "stopped" — it's a snapshot)
         state.stopped_location = Some(("crates/mae/src/main.rs".into(), 0));
 
-        self.debug_state = Some(state);
+        self.dap.state = Some(state);
         self.set_status("Self-debug: Rust state captured. Use SPC d v to inspect.");
     }
 
     /// Refresh the Rust portion of the self-debug state (call on each debug render).
     pub fn refresh_self_debug(&mut self) {
-        if let Some(ref state) = self.debug_state {
+        if let Some(ref state) = self.dap.state {
             if state.target == DebugTarget::SelfDebug {
                 // Re-capture by starting fresh
                 self.start_self_debug();

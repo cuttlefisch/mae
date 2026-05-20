@@ -65,7 +65,7 @@ pub fn render_debug_window(
     let cursor_idx = view.cursor_index;
     let scroll_offset = debug_scroll_offset(cursor_idx, inner_height);
 
-    let active_thread_id = editor.debug_state.as_ref().map(|s| s.active_thread_id);
+    let active_thread_id = editor.dap.state.as_ref().map(|s| s.active_thread_id);
     let selected_frame_id = view.selected_frame_id;
     let cursor_bg = theme::ts_bg(editor, "ui.selection");
 

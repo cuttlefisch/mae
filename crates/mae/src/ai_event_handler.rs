@@ -979,7 +979,7 @@ pub fn try_resolve_deferred_dap(
             mae_dap::DapTaskEvent::StackTraceResult { .. },
         ) => {
             let tool_call_id = state.tool_call_id.clone();
-            // Build rich response from editor.debug_state (already updated by handle_dap_event
+            // Build rich response from editor.dap.state (already updated by handle_dap_event
             // for the Stopped event; StackTraceResult will be applied after this returns)
             let output = build_dap_stopped_response(editor, dap_event);
             resolve_dap_deferred(editor, deferred_dap_reply, true, &output, &tool_call_id);
@@ -1048,7 +1048,8 @@ fn build_dap_stopped_response(editor: &Editor, dap_event: &mae_dap::DapTaskEvent
 
     // Get stop reason from debug_state (already updated by apply_dap_stopped)
     let reason = editor
-        .debug_state
+        .dap
+        .state
         .as_ref()
         .and_then(|ds| ds.last_stop_reason.as_deref())
         .unwrap_or("unknown");
@@ -1070,7 +1071,8 @@ fn build_dap_stopped_response(editor: &Editor, dap_event: &mae_dap::DapTaskEvent
 
     // Breakpoint count
     let bp_count = editor
-        .debug_state
+        .dap
+        .state
         .as_ref()
         .map(|ds| ds.breakpoints.values().map(|v| v.len()).sum::<usize>())
         .unwrap_or(0);
@@ -1117,7 +1119,7 @@ pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut 
             warn!(?kind, ?phase, %tool_call_id, "deferred DAP tool call timed out after 15s");
 
             // Build diagnostic info from current debug state.
-            let diag = if let Some(ds) = editor.debug_state.as_ref() {
+            let diag = if let Some(ds) = editor.dap.state.as_ref() {
                 let thread_info = if ds.threads.is_empty() {
                     "no threads known".to_string()
                 } else {
