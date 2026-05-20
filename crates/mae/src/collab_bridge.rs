@@ -413,7 +413,9 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             // Use a display-friendly name for the buffer.
             let buf_name = match &doc_addr {
                 Some(mae_sync::DocAddress::File { rel_path, .. }) => rel_path.clone(),
-                _ => doc_id.clone(),
+                Some(mae_sync::DocAddress::Shared { name }) => name.clone(),
+                Some(mae_sync::DocAddress::KbNode { node_id }) => node_id.clone(),
+                None => doc_id.clone(),
             };
             // Find or create buffer, load sync state directly (no merge).
             let idx = editor.find_or_create_buffer(&buf_name, || {
@@ -432,35 +434,9 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     Ok(()) => {
                         // Set doc_address for save policy resolution.
                         buf.doc_address = doc_addr.clone();
-                        // Resolve file_path from DocAddress or doc_id.
-                        // Always set file_path — file may not exist yet (created on :w).
-                        if buf.file_path().is_none() {
-                            let rel = match &doc_addr {
-                                Some(mae_sync::DocAddress::File { rel_path, .. }) => {
-                                    rel_path.clone()
-                                }
-                                _ => doc_id.clone(),
-                            };
-                            // Try project_root/rel_path first, then CWD/rel_path.
-                            let resolved = if let Some(root) = &project_root {
-                                let rooted = root.join(&rel);
-                                if rooted.exists() {
-                                    rooted.canonicalize().unwrap_or(rooted)
-                                } else {
-                                    rooted // set even if doesn't exist
-                                }
-                            } else if let Ok(cwd) = std::env::current_dir() {
-                                let cwd_path = cwd.join(&rel);
-                                if cwd_path.exists() {
-                                    cwd_path.canonicalize().unwrap_or(cwd_path)
-                                } else {
-                                    cwd_path // set even if doesn't exist
-                                }
-                            } else {
-                                std::path::PathBuf::from(&rel)
-                            };
-                            buf.set_file_path(resolved);
-                        }
+                        // Joined buffers have NO auto file_path. Users must :saveas
+                        // to create a local copy. This matches industry standard
+                        // (VS Code Live Share, Zed — guests get no local files).
                         Ok(())
                     }
                     Err(e) => Err(e),
@@ -492,6 +468,40 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     editor.switch_to_buffer(idx);
                     editor.set_status(format!("Joined: {}", doc_id));
                     editor.mark_full_redraw();
+
+                    // Opt-in: if collab_auto_resolve_paths is enabled and the
+                    // doc has a file address with a matching local file, prompt
+                    // the user to map the buffer to their local project path.
+                    if editor
+                        .get_option("collab_auto_resolve_paths")
+                        .map(|(v, _)| v == "true")
+                        .unwrap_or(false)
+                    {
+                        if let Some(mae_sync::DocAddress::File { rel_path, .. }) = &doc_addr {
+                            let resolved = if let Some(root) = &project_root {
+                                let rooted = root.join(rel_path);
+                                if rooted.exists() && rooted.parent().is_some_and(|p| p.is_dir()) {
+                                    Some(rooted.canonicalize().unwrap_or(rooted))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                            if let Some(resolved_path) = resolved {
+                                let display = rel_path.clone();
+                                editor.mini_dialog = Some(
+                                    mae_core::command_palette::MiniDialogState::confirm(
+                                        format!("Map to local project file {}? (y/n)", display),
+                                        mae_core::command_palette::MiniDialogContext::CollabResolvePath {
+                                            buf_idx: idx,
+                                            resolved_path,
+                                        },
+                                    ),
+                                );
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     editor.set_status(format!("Failed to join {}: {}", doc_id, e));
@@ -2305,6 +2315,109 @@ mod tests {
             5,
             "all queued server notifications must be processed; got {:?}",
             received
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Join-save model: joined buffers have no auto file_path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn buffer_joined_has_no_file_path() {
+        let mut editor = Editor::new();
+        let content = "shared text\n";
+        let sync = mae_sync::text::TextSync::with_client_id(content, 1);
+        let state_bytes = sync.encode_state();
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::BufferJoined {
+                doc_id: "file:abc123/src/main.rs".to_string(),
+                state_bytes,
+            },
+        );
+
+        let idx = editor
+            .find_buffer_by_name("src/main.rs")
+            .expect("joined buffer should use rel_path as name");
+        // Joined buffers must NOT have auto file_path set.
+        assert!(
+            editor.buffers[idx].file_path().is_none(),
+            "joined buffer should have no file_path by default"
+        );
+        // But collab_doc_id should be set.
+        assert_eq!(
+            editor.buffers[idx].collab_doc_id.as_deref(),
+            Some("file:abc123/src/main.rs")
+        );
+    }
+
+    #[test]
+    fn buffer_joined_sets_buffer_name_from_rel_path() {
+        let mut editor = Editor::new();
+        let sync = mae_sync::text::TextSync::with_client_id("hi", 1);
+        let state_bytes = sync.encode_state();
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::BufferJoined {
+                doc_id: "file:proj/utils.rs".to_string(),
+                state_bytes,
+            },
+        );
+
+        assert!(
+            editor.find_buffer_by_name("utils.rs").is_some(),
+            "buffer name should be the rel_path from DocAddress"
+        );
+    }
+
+    #[test]
+    fn buffer_joined_shared_doc_name_extraction() {
+        let mut editor = Editor::new();
+        let sync = mae_sync::text::TextSync::with_client_id("data", 1);
+        let state_bytes = sync.encode_state();
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::BufferJoined {
+                doc_id: "shared:notes".to_string(),
+                state_bytes,
+            },
+        );
+
+        assert!(
+            editor.find_buffer_by_name("notes").is_some(),
+            "shared doc buffer name should be the name field"
+        );
+    }
+
+    #[test]
+    fn save_pathless_collab_buffer_shows_guidance() {
+        let mut editor = Editor::new();
+        let sync = mae_sync::text::TextSync::with_client_id("text", 1);
+        let state_bytes = sync.encode_state();
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::BufferJoined {
+                doc_id: "shared:test".to_string(),
+                state_bytes,
+            },
+        );
+
+        let idx = editor
+            .find_buffer_by_name("test")
+            .expect("buffer should exist");
+        editor.switch_to_buffer(idx);
+        // Use dispatch_builtin("save") which is public and calls save_current_buffer.
+        editor.dispatch_builtin("save");
+
+        // Should show guidance about :saveas
+        let status = &editor.status_msg;
+        assert!(
+            status.contains("saveas"),
+            "status should mention :saveas, got: {status}"
         );
     }
 }

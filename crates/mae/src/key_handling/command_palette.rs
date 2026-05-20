@@ -460,6 +460,18 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
                 }
             }
         }
+        MiniDialogContext::CollabResolvePath {
+            buf_idx,
+            resolved_path,
+        } => {
+            let buf_idx = *buf_idx;
+            if buf_idx < editor.buffers.len() {
+                editor.buffers[buf_idx].set_file_path(resolved_path.clone());
+                editor.set_status(format!("Mapped to local path: {}", resolved_path.display()));
+            } else {
+                editor.set_status("Buffer no longer exists".to_string());
+            }
+        }
         MiniDialogContext::RevertBuffer { buf_idx } => {
             let buf_idx = *buf_idx;
             if buf_idx < editor.buffers.len() {

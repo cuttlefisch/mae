@@ -1,7 +1,8 @@
 ;;; test_share.scm — Client A: Share workflow
 ;;;
 ;;; Creates a file, shares it via collab, waits for Client B's edit,
-;;; verifies CRDT convergence with no duplication.
+;;; verifies CRDT convergence with no duplication. Tests both separate
+;;; and shared filesystem save scenarios.
 ;;;
 ;;; No (run-tests) — uses Rust-side iteration for inject/apply between tests.
 ;;; Uses sleep-ms instead of wait-until (sleep is processed between test steps).
@@ -18,6 +19,7 @@
         (let ((status (collab-status)))
           (should (pair? status)))))
 
+    ;; --- Scenario 1: Separate filesystems ---
     (it-test "creates and shares a file"
       (lambda ()
         (open-file "/workspace/test.txt")
@@ -47,7 +49,17 @@
         (let ((text (buffer-text "test.txt")))
           (should-not (string-contains? text "Hello from Client A\nHello from Client A")))))
 
-    (it-test "saves converged state to disk"
+    (it-test "saves converged state to local disk"
       (lambda ()
         (run-command "save")
-        (sleep-ms 500)))))
+        (sleep-ms 500)))
+
+    ;; --- Scenario 2: Shared filesystem ---
+    (it-test "saves converged state to shared disk"
+      (lambda ()
+        (execute-ex "saveas /shared/test.txt")
+        (sleep-ms 500)))
+
+    (it-test "signals save complete"
+      (lambda ()
+        (write-file "/sync/a-saved-shared" "done")))))

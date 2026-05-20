@@ -126,6 +126,10 @@ pub enum MiniDialogContext {
         buf_idx: usize,
     },
     DailyGotoDate,
+    CollabResolvePath {
+        buf_idx: usize,
+        resolved_path: std::path::PathBuf,
+    },
 }
 
 /// State for a multi-field mini-dialog (edit-link, rename, etc.)

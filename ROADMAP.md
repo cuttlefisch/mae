@@ -233,6 +233,43 @@
 - [ ] **Replace mode (R)**: Standard vim replace mode where keystrokes overwrite characters.
 - [ ] **Doc store eviction TOCTOU**: Between identifying eviction candidates (read lock) and evicting (write lock), a client could reconnect. Low probability; fix requires holding write lock during entire eviction.
 - [ ] **Unified buffer-switching strategy**: Three patterns exist (`switch_to_buffer`, `display_buffer_and_focus`, palette). Should converge on one with consistent view state management.
+- [ ] **KB fuzzy body search**: `kb_search` currently matches node titles and tags via FTS5 but not node body content in a fuzzy/substring way. Searching for a term like "DeltaDB" that only appears in the body of some nodes returns no results. Add full-text indexing of node bodies (FTS5 `content` column) so `kb_search` and `:help` fuzzy completion can find concepts mentioned anywhere in the knowledge graph, not just in titles.
+
+---
+
+## Collab Data Lifecycle (Future)
+
+Items E1–E8 track open design questions and planned improvements for the collaborative editing data model. All are `Future` / `Planned` — none are committed to a specific release yet.
+
+- [ ] **E1. Git-based project identity for collab** *(Planned)*
+  `compute_doc_address()` uses FNV-1a of absolute path — Alice at `/home/alice/mae` and Bob at `/home/bob/mae` get different hashes for the same `src/main.rs`. Fix: Use `git remote get-url origin` → normalize → FNV-1a hash. Fallback: `.project` name field, then directory basename. Zed/VS Code/JetBrains all use session-scoped identity (avoids this problem but loses persistence).
+
+- [ ] **E2. KB sync model** *(Future)*
+  KB notes (`DocAddress::KbNode`) shared between peers via yrs docs on state server. Conflict resolution for bidirectional link graph.
+
+- [ ] **E3. Directory creation policy for collab saves** *(Future)*
+  `collab_create_parent_dirs` option (default: false) — auto-create missing parent dirs on `:saveas`. Safety: prompt before creating directories.
+
+- [ ] **E4. Collab save conflict detection** *(Planned)*
+  Two clients both `:w` to shared filesystem path simultaneously. Advisory lock system + content-hash verification.
+
+- [ ] **E5. File-change notification for collab** *(Future)*
+  When Bob saves locally, notify Alice via `file-changed-on-disk` hook + inotify.
+
+- [ ] **E6. Peer-to-Peer collaborative editing** *(Future)*
+  - P2P-LAN: mDNS discovery + symmetric TCP. Transport layer already generic (`AsyncWrite`/`AsyncBufRead`)
+  - P2P-KB: KB node replication, link graph merge
+  - P2P-Internet: WebRTC/QUIC NAT traversal
+  - P2P-E2E: End-to-end encryption (Noise protocol)
+  - Blockers: collab_bridge is client-only, no mDNS, no peer auth
+
+- [ ] **E7. Operation-based version control** *(Future)*
+  Inspired by Zed DeltaDB ($32M Series B) — every keystroke tracked, character-level permalinks. yrs already stores operations; annotate with timestamp/user_id/commit message. Timeline scrubber UI showing who changed what.
+
+- [ ] **E8. Collab buffer status indicators** *(Planned)*
+  - Visual distinction for pathless vs mapped collab buffers in status bar
+  - Show sync state (in-sync, pending, disconnected) per buffer
+  - Show peer count
 
 ---
 

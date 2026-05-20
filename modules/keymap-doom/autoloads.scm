@@ -180,7 +180,7 @@
 (define-key "normal" "SPC c x" "lsp-show-diagnostics")
 (define-key "normal" "SPC c a" "lsp-code-action")
 (define-key "normal" "SPC c R" "lsp-rename")
-(define-key "normal" "SPC c f" "lsp-format")
+;; SPC c f owned by format module (format-buffer)
 (define-key "normal" "SPC c F" "lsp-range-format")
 (define-key "normal" "SPC c s" "lsp-status")
 (define-key "normal" "SPC c o" "lsp-symbol-outline")

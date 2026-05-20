@@ -1,7 +1,8 @@
 ;;; test_join.scm — Client B: Join workflow
 ;;;
 ;;; Waits for Client A to share, joins the document, edits,
-;;; verifies round-trip CRDT convergence.
+;;; verifies round-trip CRDT convergence. Joined buffers have no
+;;; auto file_path — uses :saveas to create local copies.
 ;;;
 ;;; No (run-tests) — uses Rust-side iteration for inject/apply between tests.
 ;;; Uses sleep-ms instead of wait-until (sleep is processed between test steps).
@@ -20,10 +21,12 @@
         ;; In docker, Client A should be ready within ~15s.
         (sleep-ms 15000)))
 
+    ;; --- Scenario 1: Join + edit + sync ---
     (it-test "joins the shared document"
       (lambda ()
+        ;; Uses bare filename — server-side suffix matching resolves it
         (execute-ex "collab-join test.txt")
-        (sleep-ms 3000)))
+        (sleep-ms 5000)))
 
     (it-test "verifies join succeeded"
       (lambda ()
@@ -41,9 +44,21 @@
         (run-command "enter-insert-mode")
         (buffer-insert "Hello from Client B\n")
         (run-command "enter-normal-mode")
-        (sleep-ms 3000)))
+        (sleep-ms 5000)))
 
-    (it-test "saves to local disk"
+    ;; Joined buffer has no auto file_path — must use :saveas explicitly.
+    ;; This tests the correct UX: user chooses where to save.
+    (it-test "saves to local disk with explicit path"
       (lambda ()
-        (execute-ex "w /workspace/test.txt")
+        (execute-ex "saveas /workspace/test.txt")
+        (sleep-ms 500)))
+
+    ;; --- Scenario 2: Save to shared filesystem (after A finishes) ---
+    (it-test "waits for Client A to save shared"
+      (lambda ()
+        (sleep-ms 5000)))
+
+    (it-test "saves to shared disk"
+      (lambda ()
+        (execute-ex "saveas /shared/test.txt")
         (sleep-ms 500)))))

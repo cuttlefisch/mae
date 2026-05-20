@@ -531,6 +531,12 @@ Open a file you want to collaborate on, then press `SPC C S` \
 - `SPC C l` (`:collab-list`) — list all documents shared on the server.\n\
 - `SPC C j` (`:collab-join`) — open a picker to select and join a shared document.\n\
 - `:collab-join <name>` — join a specific document by name.\n\n\
+**Joined buffers have no local file path by default.** The buffer is \
+live-synced via CRDT, but you choose where (or whether) to save locally:\n\
+- `:saveas <path>` — save the joined buffer to a local file.\n\
+- `:w` on a pathless joined buffer shows guidance to use `:saveas`.\n\
+- Enable `collab_auto_resolve_paths` to get prompted when the file \
+  matches a path in your local project.\n\n\
 ### Step 6 — Verify the connection\n\n\
 - `SPC C i` (`:collab-status`) — shows server address, connected peers, \
   and shared document list.\n\

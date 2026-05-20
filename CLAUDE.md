@@ -83,6 +83,8 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 11. **CRDT-first sync (yrs/YATA).** All collaborative state flows through yrs (Yjs Rust port). Text buffers use `YText`, visual documents use `YMap`/`YArray`, KB nodes are yrs documents. The ropey rope is a read-only rendering mirror rebuilt from yrs on remote changes. Local edits generate yrs transactions (attributed, undoable via per-user `UndoManager`). This is the universal substrate — no separate sync mechanism for different content types. See ADR-002, ADR-005, ADR-006. Local undo/redo uses `reconcile_to()` (character-level LCS diff) to generate CRDT-safe deltas instead of full-state replacements.
 
+12. **Local-first by design.** MAE satisfies 5 of 7 Ink & Switch local-first ideals today (no spinners, multi-device, network optional, collaboration without conflict, user ownership). P2P collaboration and E2E encryption will complete the remaining two. The state server is an optimization for persistence and discovery, not a requirement for collaboration.
+
 ### Rendering Pipeline
 The GUI renderer uses a three-phase pipeline: `compute_layout()` produces
 a `FrameLayout`, `render_buffer_content()` draws text, and `render_cursor()`
@@ -479,7 +481,13 @@ mae-state-server doctor             # run diagnostics
 
 **Scheme API:** `(collab-status)` → alist, `(collab-synced-buffers)` → list
 
-**Options:** `collab_server_address`, `collab_auto_connect`, `collab_auto_share`, `collab_reconnect_interval`, `collab_user_name`
+**Options:** `collab_server_address`, `collab_auto_connect`, `collab_auto_share`, `collab_reconnect_interval`, `collab_user_name`, `collab_auto_resolve_paths`, `collab_default_save_dir`, `collab_save_on_remote_update`
+
+**Join-save model:** Joined buffers have no local file path by default. Users use `:saveas` to persist locally. `collab_auto_resolve_paths` enables prompted project-root mapping via MiniDialog. Server-side suffix matching resolves bare filenames (e.g. `:collab-join test.txt` finds `file:no-project/test.txt`).
+
+**Persistent doc_id:** MAE's doc_ids persist across sessions (unique in the industry — Zed/VS Code/JetBrains all use session-scoped identity). Persistent identity enables asynchronous collaboration — documents survive host disconnection, support offline editing, and provide cross-session continuity.
+
+**P2P readiness:** Transport layer (`read_message`/`write_framed`) is generic over `AsyncWrite`/`AsyncBufRead` — P2P-ready by design. P2P collaboration via mDNS LAN discovery is planned (ROADMAP).
 
 **Security (v1):** No authentication. TCP is open. For trusted LAN use only.
 Auth roadmap: PSK → SSH key exchange → OAuth/OIDC (via `initialize` params extension).
@@ -495,7 +503,7 @@ These APIs are intended to remain stable through v1.0:
 - **Scheme API:** ~50 functions + ~25 variables (see `:help concept:scheme-api`)
 - **Hooks:** 18 hook points (see `:help concept:hooks`)
 - **MCP tools:** 130+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
-- **Config options:** 88+ registered, persistable via `:set-save`
+- **Config options:** 91+ registered, persistable via `:set-save`
 
 ## Related Resources
 

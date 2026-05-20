@@ -274,7 +274,14 @@ impl Editor {
                 self.fire_hook("after-save");
             }
             Err(e) => {
-                self.set_status(format!("Error saving: {}", e));
+                // Collab buffers with no file_path: guide user to :saveas
+                if self.buffers[idx].collab_doc_id.is_some()
+                    && self.buffers[idx].file_path().is_none()
+                {
+                    self.set_status("No local path set — use :saveas <path> to save".to_string());
+                } else {
+                    self.set_status(format!("Error saving: {}", e));
+                }
             }
         }
     }

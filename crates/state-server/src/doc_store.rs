@@ -294,6 +294,34 @@ impl DocStore {
         docs.len()
     }
 
+    /// Check if a document exists in memory.
+    pub async fn has_doc(&self, name: &str) -> bool {
+        let docs = self.docs.read().await;
+        docs.contains_key(name)
+    }
+
+    /// Find a document by suffix matching. Returns the full doc name if exactly
+    /// one document ends with `/<suffix>` or `:<suffix>`. Returns None if zero
+    /// or multiple matches (ambiguous).
+    pub async fn find_doc_by_suffix(&self, suffix: &str) -> Option<String> {
+        let docs = self.docs.read().await;
+        // Exact match takes priority.
+        if docs.contains_key(suffix) {
+            return Some(suffix.to_string());
+        }
+        let mut matches: Vec<&String> = docs
+            .keys()
+            .filter(|k| {
+                k.ends_with(&format!("/{}", suffix)) || k.ends_with(&format!(":{}", suffix))
+            })
+            .collect();
+        if matches.len() == 1 {
+            Some(matches.remove(0).clone())
+        } else {
+            None // ambiguous or no match
+        }
+    }
+
     /// Compute a diff from a given state vector (for reconnect protocol).
     pub async fn encode_diff(
         &self,
@@ -877,6 +905,73 @@ mod tests {
             state.snapshot.is_some(),
             "snapshot should exist after forced WAL compaction"
         );
+    }
+
+    #[tokio::test]
+    async fn has_doc_returns_true_for_existing() {
+        let store = test_store();
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "hello");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        assert!(store.has_doc("doc1").await);
+        assert!(!store.has_doc("nonexistent").await);
+    }
+
+    #[tokio::test]
+    async fn find_doc_by_suffix_exact_match() {
+        let store = test_store();
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "hello");
+        store
+            .apply_update("test.txt", &update, Some(1))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.find_doc_by_suffix("test.txt").await,
+            Some("test.txt".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn find_doc_by_suffix_file_address() {
+        let store = test_store();
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "hello");
+        store
+            .apply_update("file:no-project/test.txt", &update, Some(1))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.find_doc_by_suffix("test.txt").await,
+            Some("file:no-project/test.txt".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn find_doc_by_suffix_no_match() {
+        let store = test_store();
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "hello");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        assert_eq!(store.find_doc_by_suffix("nonexistent").await, None);
+    }
+
+    #[tokio::test]
+    async fn find_doc_by_suffix_ambiguous() {
+        let store = test_store();
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "hello");
+        // Two docs that both end with /test.txt
+        store
+            .apply_update("file:proj-a/test.txt", &update, Some(1))
+            .await
+            .unwrap();
+        store
+            .apply_update("file:proj-b/test.txt", &update, Some(1))
+            .await
+            .unwrap();
+        // Ambiguous — should return None
+        assert_eq!(store.find_doc_by_suffix("test.txt").await, None);
     }
 
     #[tokio::test]

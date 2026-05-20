@@ -529,7 +529,21 @@ impl Buffer {
             // (disk full, crash, etc.). rename(2) is atomic on POSIX.
             let parent = path.parent().unwrap_or(Path::new("."));
             let tmp_path = parent.join(format!(".mae-save-{}.tmp", std::process::id()));
-            let file = fs::File::create(&tmp_path)?;
+            let file = fs::File::create(&tmp_path).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    std::io::Error::other(format!(
+                        "Cannot save: directory '{}' does not exist",
+                        parent.display()
+                    ))
+                } else if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    std::io::Error::other(format!(
+                        "Cannot save: permission denied for '{}'",
+                        path.display()
+                    ))
+                } else {
+                    e
+                }
+            })?;
             let mut writer = std::io::BufWriter::new(file);
             self.rope.write_to(&mut writer)?;
             writer.flush()?;

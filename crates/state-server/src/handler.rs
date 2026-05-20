@@ -402,7 +402,16 @@ async fn handle_doc_request(
         "sync/resync" => {
             // Full resync: returns full state + state vector for a document.
             // BUG C fix: atomic state + sv under single lock (INV-2).
-            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            let raw_name = params["doc"].as_str().unwrap_or("default").to_string();
+            // Resolve bare filenames via suffix matching (e.g. "test.txt" finds "file:no-project/test.txt").
+            let doc_name = if doc_store.has_doc(&raw_name).await {
+                raw_name
+            } else if let Some(found) = doc_store.find_doc_by_suffix(&raw_name).await {
+                info!(requested = %raw_name, resolved = %found, "resolved doc by suffix match");
+                found
+            } else {
+                raw_name // fall through — will create new empty doc
+            };
             // Track this doc for disconnect cleanup (same as sync/full_state).
             if session_docs.insert(doc_name.clone()) {
                 let _ = doc_store.track_client_connect(&doc_name).await;
@@ -1068,6 +1077,45 @@ mod tests {
             err_msg.contains("too large"),
             "error should mention size: {err_msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn resync_with_suffix_matching() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        // Create a doc with a file: prefix address.
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "shared content");
+        store
+            .apply_update("file:no-project/test.txt", &update, None)
+            .await
+            .unwrap();
+
+        // Resync using bare filename — suffix matching should resolve.
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "sync/resync",
+            "params": { "doc": "test.txt" }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
+        assert!(
+            resp.error.is_none(),
+            "resync should succeed: {:?}",
+            resp.error
+        );
+        let result = resp.result.unwrap();
+        // The response should use the resolved full name.
+        assert_eq!(result["doc"], "file:no-project/test.txt");
+        // State should be non-empty (contains the shared content).
+        assert!(!result["state"].as_str().unwrap().is_empty());
     }
 
     #[tokio::test]

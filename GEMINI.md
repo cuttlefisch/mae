@@ -28,6 +28,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
     - `make docker-dev` — interactive dev shell with Rust toolchain
     - `make docker-smoke` — quick binary smoke test
     - `make docker-clean` — remove Docker images and cache
+    - `make docker-collab-test` — collab CRDT E2E test (state-server + 2 clients + verifier)
   - Dockerfile: multi-stage (base -> builder -> ci -> runtime), TUI-only (no Skia in container)
   - `docker compose run --rm --build <service>` is the canonical invocation
 
@@ -44,7 +45,9 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) |
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) |
-| `mae-mcp` | MCP server — Unix socket, JSON-RPC, stdio shim |
+| `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O |
+| `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers |
+| `mae-state-server` | Standalone collab state server — TCP sync, WAL persistence, per-doc locking |
 | `mae-babel` | Org-babel executor — 12 languages, persistent sessions, language backends |
 | `mae-export` | Org/Markdown export — HTML, Markdown, TOC, syntax highlighting |
 | `mae-snippets` | YASnippet-style templates — tab-stops, mirrors, transforms |
@@ -70,6 +73,14 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 6. **Runtime redefinability is sacred.** Users must be able to redefine any function while the editor is running.
 
+7. **No hardcoding — Scheme-first configurability.** Every user-visible behavior exposed as a configurable option via the OptionRegistry.
+
+8. **Shared computation, backend-specific drawing.** All layout math lives in `mae-core`. Backends contain ONLY platform API calls.
+
+9. **CRDT-first sync (yrs/YATA).** All collaborative state flows through yrs (Yjs Rust port). The ropey rope is a read-only rendering mirror. See ADR-002.
+
+10. **Local-first by design.** MAE satisfies 5 of 7 Ink & Switch local-first ideals today. The state server is an optimization, not a requirement.
+
 ## Key Design Decisions
 
 - **Scheme over other Lisps:** R7RS-small — hygienic macros, proper tail calls, first-class continuations.
@@ -86,28 +97,60 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 - **`(mae!)` block**: Declarative module selection in `init.scm`. Only declared modules load.
 - **Never duplicate** bindings between kernel and modules without a documented migration path.
 
+## Sync Engine (yrs/YATA)
+
+Collaborative state uses **yrs** (Yjs Rust port, YATA algorithm). `mae-sync` wraps yrs with MAE-specific document schemas and provides the ropey bridge.
+
+- Text buffers use `YText`, KB nodes are yrs documents
+- Built-in `UndoManager` with per-user stacks
+- Transport: JSON-RPC 2.0 with Content-Length framing over TCP and Unix sockets
+- `DocAddress` enum: `File { project_hash, rel_path }`, `Shared { name }`, `KbNode { node_id }`
+- Local undo/redo uses `reconcile_to()` (character-level LCS diff) for CRDT-safe deltas
+
+## State Server (`mae-state-server`)
+
+Standalone binary for multi-machine collaborative editing.
+
+**Usage:** `mae-state-server [--bind 0.0.0.0:9473] [--unix-socket /path] [--check-config] [doctor]`
+
+**Architecture:**
+- Per-document locking (`RwLock<HashMap<String, Arc<Mutex<DocEntry>>>>`)
+- SQLite connection pool: FNV-1a hash-sharded (default 4 shards, WAL mode)
+- WAL-first persistence: append to SQLite WAL before in-memory apply
+- Compaction + idle eviction background tasks
+
+**Join-save model:** Joined buffers have no local file path by default. Users use `:saveas` to persist locally. `collab_auto_resolve_paths` enables prompted project-root mapping. Server-side suffix matching resolves bare filenames.
+
+**Persistent doc_id:** MAE's doc_ids persist across sessions (unique in the industry). Enables asynchronous collaboration — documents survive host disconnection. P2P collaboration via mDNS is planned.
+
+**Editor commands:** `collab-start` (SPC C s), `collab-connect` (SPC C c), `collab-share` (SPC C S), `collab-join` (SPC C j), `collab-status` (SPC C i), `collab-doctor` (SPC C D)
+
+**Collab options (11):** `collab_server_address`, `collab_auto_connect`, `collab_auto_share`, `collab_reconnect_interval`, `collab_user_name`, `collab_write_timeout_ms`, `collab_max_pending_updates`, `collab_reconnect_backoff_factor`, `collab_max_reconnect_attempts`, `collab_batch_update_ms`, `collab_auto_resolve_paths`, `collab_default_save_dir`, `collab_save_on_remote_update`
+
+## Scheme Testing Framework
+
+MAE has a headless test runner. Tests boot a real editor (no mocks) and exercise the same Scheme API surface available to users.
+
+```bash
+mae --test tests/crdt/              # CRDT sync tests
+mae --test tests/editor/            # Editor feature tests
+make test-scheme-all                # All local tests
+```
+
+Architecture: `scheme/lib/mae-test.scm` (BDD library) + `crates/mae/src/test_runner.rs` (Rust orchestrator). TAP v14 output for CI.
+
 ## Development Status
 
-**v0.9.0-dev** — 3,059+ tests, all 11 phases complete.
+**v0.11.0-dailies** — 3,638+ tests, 20 crates, 19 modules. All phases through 8 complete.
 
-See `ROADMAP.md` for granular milestone tracking:
-- Core editor, Scheme runtime, AI integration, LSP/DAP, syntax highlighting
-- Knowledge base, embedded shell, MCP bridge, GUI backend
-- Babel + export (12 languages, HTML/Markdown, noweb, tangle)
-- AI agent efficiency (tiered prompts, provider-aware hints, target dispatch, frame profiling)
-- Large document performance (graceful degradation, binary search display regions, content hash clipping)
-- LSP+DAP polish (rename, format, symbol outline, breadcrumbs, peek references, watch expressions, exception breakpoints)
-- Render pipeline performance (tiered redraw levels, frame snapshot profiling, cache separation)
-- Module system (19 modules, Doom Emacs model, `module.toml` manifests, `mae pkg` CLI)
-- KB federation (live watching, edit-source, RAG, Obsidian/org-roam import)
-- Feature crate extraction (mae-babel, mae-export, mae-snippets, mae-format, mae-make, mae-lookup, mae-spell)
+See `ROADMAP.md` for granular milestone tracking.
 
 ### Key Modules
 
-- **`crates/core/src/editor/dispatch/`** — command dispatch split into 10 submodules: `git.rs`, `fold_org.rs`, `nav.rs`, `edit.rs`, `visual.rs`, `window.rs`, `lsp.rs`, `dap.rs`, `file.rs`, `ui.rs`. Each has `fn dispatch_X(&mut self, name, ...) -> Option<bool>`. `mod.rs` delegates.
-- **`crates/core/src/diff.rs`** — LCS-based unified diff (DiffLine enum, unified_diff/unified_diff_string)
-- **`crates/core/src/syntax.rs`** — tree-sitter syntax highlighting + incremental reparse (Tree::edit) + fold range computation
-- **`crates/gui/src/canvas.rs`** — Skia canvas with font pre-scaling cache (HashMap<u32, Font>)
+- **`crates/core/src/editor/dispatch/`** — command dispatch split into 10 submodules
+- **`crates/core/src/diff.rs`** — LCS-based unified diff
+- **`crates/core/src/syntax.rs`** — tree-sitter syntax highlighting + incremental reparse
+- **`crates/gui/src/canvas.rs`** — Skia canvas with font pre-scaling cache
 
 ## File Conventions
 

@@ -400,6 +400,15 @@ impl OptionRegistry {
                 opt!("fill_column", &["fill-column"],
                     "Column at which fill-paragraph wraps text (Emacs fill-column)",
                     OptionKind::Int, "80", Some("editor.fill_column"), &[]),
+                opt!("collab_auto_resolve_paths", &["collab-auto-resolve-paths"],
+                    "When joining a doc, prompt to map to local project path if project root matches",
+                    OptionKind::Bool, "false", Some("collaboration.auto_resolve_paths"), &[]),
+                opt!("collab_default_save_dir", &["collab-default-save-dir"],
+                    "Default directory for :saveas on joined buffers (empty = CWD)",
+                    OptionKind::String, "", Some("collaboration.default_save_dir"), &[]),
+                opt!("collab_save_on_remote_update", &["collab-save-on-remote-update"],
+                    "Auto-save local file when CRDT update arrives (requires file_path set)",
+                    OptionKind::Bool, "false", Some("collaboration.save_on_remote_update"), &[]),
             ],
         }
     }
