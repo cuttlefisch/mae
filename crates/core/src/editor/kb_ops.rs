@@ -525,6 +525,61 @@ impl Editor {
         pairs
     }
 
+    /// Collect all KB node (id, title, body) triples from local + federated instances.
+    /// Used by KB palettes that need body content for search matching.
+    /// Sorted according to `kb_search_sort` option: alphabetical (default/relevance),
+    /// activity (recent first), or alphabetical.
+    pub fn kb_all_node_triples(&self) -> Vec<(String, String, String)> {
+        let mut triples: Vec<(String, String, String)> = self.kb.all_id_title_body_triples();
+        let mut seen: std::collections::HashSet<String> =
+            triples.iter().map(|(id, _, _)| id.clone()).collect();
+
+        for kb in self.kb_instances.values() {
+            for (id, title, body) in kb.all_id_title_body_triples() {
+                if seen.insert(id.clone()) {
+                    triples.push((id, title, body));
+                }
+            }
+        }
+
+        if self.kb_search_sort == "activity" {
+            let weights = mae_kb::activity::ActivityWeights {
+                decay: self.kb_activity_decay,
+                ..Default::default()
+            };
+            let today = today_ymd();
+            triples.sort_by(|a, b| {
+                let score_a = self.kb_activity_score_for_id(&a.0, &weights, today);
+                let score_b = self.kb_activity_score_for_id(&b.0, &weights, today);
+                score_b
+                    .partial_cmp(&score_a)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+        } else {
+            triples.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+        triples
+    }
+
+    /// Get activity score for a node by ID, searching local then federated KBs.
+    pub fn kb_activity_score_for_id(
+        &self,
+        id: &str,
+        weights: &mae_kb::activity::ActivityWeights,
+        today: (i32, u32, u32),
+    ) -> f64 {
+        if let Some(node) = self.kb.get(id) {
+            return mae_kb::activity::activity_score(&node.properties, weights, today);
+        }
+        for kb in self.kb_instances.values() {
+            if let Some(node) = kb.get(id) {
+                return mae_kb::activity::activity_score(&node.properties, weights, today);
+            }
+        }
+        0.0
+    }
+
     /// Re-import a single file into the KB instance that covers its directory.
     /// Used after saving a file inside `kb_notes_dir` to keep the graph in sync.
     pub fn kb_reimport_file(&mut self, path: &std::path::Path) {
@@ -554,12 +609,26 @@ impl Editor {
     /// Search across local KB and all federated instances.
     /// Returns (instance_name_or_none, node) pairs, deduplicated by node ID.
     /// Local results take priority over federated.
+    /// Respects `kb_search_sort` option: "relevance" (default), "activity", "alphabetical".
     pub fn kb_federated_search(&self, query: &str) -> Vec<(Option<String>, &mae_kb::Node)> {
+        let use_activity = self.kb_search_sort == "activity";
+        let use_alpha = self.kb_search_sort == "alphabetical";
+        let weights = mae_kb::activity::ActivityWeights {
+            decay: self.kb_activity_decay,
+            ..Default::default()
+        };
+        let today = if use_activity { today_ymd() } else { (0, 0, 0) };
+
         let mut results: Vec<(Option<String>, &mae_kb::Node)> = Vec::new();
         let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
         // Local KB first (always wins on duplicates)
-        for id in self.kb.search(query) {
+        let local_ids = if use_activity {
+            self.kb.search_sorted_by_activity(query, &weights, today)
+        } else {
+            self.kb.search(query)
+        };
+        for id in local_ids {
             if let Some(node) = self.kb.get(&id) {
                 if seen_ids.insert(&node.id) {
                     results.push((None, node));
@@ -570,13 +639,22 @@ impl Editor {
         // Then each federated instance (skip if already seen)
         for (uuid, kb) in &self.kb_instances {
             let inst_name = self.kb_registry.find_by_uuid(uuid).map(|i| i.name.clone());
-            for id in kb.search(query) {
+            let fed_ids = if use_activity {
+                kb.search_sorted_by_activity(query, &weights, today)
+            } else {
+                kb.search(query)
+            };
+            for id in fed_ids {
                 if let Some(node) = kb.get(&id) {
                     if seen_ids.insert(&node.id) {
                         results.push((inst_name.clone(), node));
                     }
                 }
             }
+        }
+
+        if use_alpha {
+            results.sort_by(|a, b| a.1.id.cmp(&b.1.id));
         }
 
         results
@@ -796,9 +874,8 @@ fn today_str() -> String {
     mae_kb::activity::format_date(y, m, d)
 }
 
-/// Current date as (year, month, day). Used by dailies (Part 4).
-#[allow(dead_code)]
-fn today_ymd() -> (i32, u32, u32) {
+/// Current date as (year, month, day). Used by dailies, activity sorting.
+pub fn today_ymd() -> (i32, u32, u32) {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -171,13 +171,27 @@ impl Editor {
             "help-prev-link" => self.help_prev_link(),
             "help-close" => self.help_close(),
             "help-search" => {
-                let nodes: Vec<(String, String)> = self
+                let mut nodes: Vec<(String, String)> = self
                     .kb
                     .list_ids(None)
                     .iter()
                     .filter(|id| crate::editor::help_ops::is_builtin_node(id))
                     .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
                     .collect();
+                if self.kb_search_sort == "activity" {
+                    let weights = mae_kb::activity::ActivityWeights {
+                        decay: self.kb_activity_decay,
+                        ..Default::default()
+                    };
+                    let today = crate::editor::kb_ops::today_ymd();
+                    nodes.sort_by(|a, b| {
+                        let sa = self.kb_activity_score_for_id(&a.0, &weights, today);
+                        let sb = self.kb_activity_score_for_id(&b.0, &weights, today);
+                        sb.partial_cmp(&sa)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| a.0.cmp(&b.0))
+                    });
+                }
                 self.command_palette = Some(
                     crate::command_palette::CommandPalette::for_help_search(&nodes),
                 );
@@ -567,7 +581,7 @@ For full setup guide: :help ai-setup";
 
             // +notes (KB)
             "kb-find" | "kb-create" => {
-                let nodes = self.kb_all_node_pairs();
+                let nodes = self.kb_all_node_triples();
                 self.command_palette =
                     Some(crate::command_palette::CommandPalette::for_kb_find_or_create(&nodes));
                 self.set_mode(Mode::CommandPalette);

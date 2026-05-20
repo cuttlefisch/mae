@@ -698,6 +698,8 @@ pub struct Editor {
     pub kb_activity_tracking: bool,
     /// KB option: decay rate for activity scoring.
     pub kb_activity_decay: f64,
+    /// KB option: search result ordering ("relevance", "activity", "alphabetical").
+    pub kb_search_sort: String,
     /// KB option: dailies directory (explicit setting or derived from kb_notes_dir/daily).
     pub kb_dailies_dir: Option<std::path::PathBuf>,
     /// KB option: max days to walk backwards when chain-filling dailies (default 90).
@@ -1283,6 +1285,7 @@ impl Editor {
             kb_write_guard: std::collections::HashSet::new(),
             kb_activity_tracking: true,
             kb_activity_decay: 0.01,
+            kb_search_sort: "relevance".to_string(),
             kb_dailies_dir: None,
             kb_daily_chain_gap_max: 90,
             config_dir_override: None,

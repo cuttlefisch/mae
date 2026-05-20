@@ -133,6 +133,7 @@ impl super::Editor {
                 .unwrap_or_default(),
             "kb_activity_tracking" => self.kb_activity_tracking.to_string(),
             "kb_activity_decay" => self.kb_activity_decay.to_string(),
+            "kb_search_sort" => self.kb_search_sort.clone(),
             "kb_dailies_dir" => self
                 .kb_dailies_dir
                 .as_ref()
@@ -540,6 +541,17 @@ impl super::Editor {
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_activity_decay = v.clamp(0.0001, 1.0);
             }
+            "kb_search_sort" => match value {
+                "relevance" | "activity" | "alphabetical" => {
+                    self.kb_search_sort = value.to_string();
+                }
+                _ => {
+                    return Err(format!(
+                    "Invalid kb_search_sort: '{}' (expected: relevance, activity, alphabetical)",
+                    value
+                ))
+                }
+            },
             "kb_dailies_dir" => {
                 if value.is_empty() {
                     self.kb_dailies_dir = None;

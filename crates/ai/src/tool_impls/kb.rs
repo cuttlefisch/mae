@@ -75,15 +75,12 @@ pub fn record_kb_visit(editor: &mut Editor, id: &str) {
 
 pub fn execute_kb_search(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-    // Search local KB
-    let mut ids = editor.kb.search(query);
-    // Search federated instances
-    for kb in editor.kb_instances.values() {
-        ids.extend(kb.search(query));
-    }
-    // Deduplicate (local results take priority — they appear first)
-    let mut seen = std::collections::HashSet::new();
-    ids.retain(|id| seen.insert(id.clone()));
+    // Use kb_federated_search which respects kb_search_sort option
+    let results = editor.kb_federated_search(query);
+    let ids: Vec<String> = results
+        .into_iter()
+        .map(|(_, node)| node.id.clone())
+        .collect();
     serde_json::to_string_pretty(&ids).map_err(|e| e.to_string())
 }
 

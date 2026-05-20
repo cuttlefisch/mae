@@ -546,7 +546,10 @@ impl KnowledgeBase {
         if !title_hits.is_empty() {
             return title_hits;
         }
-        // Fuzzy fallback: score against id + title + aliases.
+        // Fuzzy fallback: score against id + title + aliases only.
+        // Body is excluded from fuzzy — long body text matches almost any
+        // query as a subsequence, producing too many false positives.
+        // Body is already covered by substring matching above.
         let query_chars: Vec<char> = q.chars().collect();
         let mut scored: Vec<(String, i64)> = self
             .lower
@@ -846,6 +849,18 @@ impl KnowledgeBase {
             .collect();
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
         pairs
+    }
+
+    /// Return all (id, title, body) triples for all nodes, sorted by id.
+    /// Body is included for search matching in the palette.
+    pub fn all_id_title_body_triples(&self) -> Vec<(String, String, String)> {
+        let mut triples: Vec<(String, String, String)> = self
+            .nodes
+            .values()
+            .map(|n| (n.id.clone(), n.title.clone(), n.body.clone()))
+            .collect();
+        triples.sort_by(|a, b| a.0.cmp(&b.0));
+        triples
     }
 }
 
@@ -1378,6 +1393,92 @@ mod tests {
                 ("b".to_string(), "Beta".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn search_finds_body_substring() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new(
+            "zed-arch",
+            "Zed Architecture",
+            NodeKind::Note,
+            "The collaboration layer uses DeltaDB for state sync.",
+        ));
+        let hits = kb.search("DeltaDB");
+        assert!(
+            hits.contains(&"zed-arch".to_string()),
+            "body substring should match, got {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn search_body_substring_but_not_fuzzy() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new(
+            "zed-arch",
+            "Zed Architecture",
+            NodeKind::Note,
+            "The collaboration layer uses DeltaDB for state sync.",
+        ));
+        // "DeltaDB" is a substring in body — should match
+        assert!(!kb.search("DeltaDB").is_empty());
+        // "DltDB" is NOT a substring — fuzzy fallback excludes body,
+        // so this should NOT match (only title/id/aliases get fuzzy).
+        let hits = kb.search("DltDB");
+        assert!(
+            hits.is_empty(),
+            "fuzzy body matching should not produce false positives"
+        );
+    }
+
+    #[test]
+    fn search_title_ranks_above_body() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new(
+            "a",
+            "DeltaDB Overview",
+            NodeKind::Note,
+            "empty body",
+        ));
+        kb.insert(Node::new(
+            "b",
+            "Zed Architecture",
+            NodeKind::Note,
+            "Uses DeltaDB for collaboration",
+        ));
+        let hits = kb.search("DeltaDB");
+        assert_eq!(hits[0], "a", "title match should rank before body match");
+    }
+
+    #[test]
+    fn search_sorted_by_activity_recent_first() {
+        let mut kb = KnowledgeBase::new();
+        let mut old_node = Node::new("old", "Old Note", NodeKind::Note, "");
+        old_node
+            .properties
+            .insert("last-accessed".to_string(), "2026-01-01".to_string());
+        let mut new_node = Node::new("new", "New Note", NodeKind::Note, "");
+        new_node
+            .properties
+            .insert("last-accessed".to_string(), "2026-05-20".to_string());
+        kb.insert(old_node);
+        kb.insert(new_node);
+        let weights = activity::ActivityWeights::default();
+        let hits = kb.search_sorted_by_activity("Note", &weights, (2026, 5, 20));
+        assert_eq!(hits[0], "new", "recently accessed node should rank first");
+    }
+
+    #[test]
+    fn all_id_title_body_triples_sorted() {
+        let kb = kb_with(vec![
+            Node::new("b", "Beta", NodeKind::Note, "beta body"),
+            Node::new("a", "Alpha", NodeKind::Note, "alpha body"),
+        ]);
+        let triples = kb.all_id_title_body_triples();
+        assert_eq!(triples[0].0, "a");
+        assert_eq!(triples[0].2, "alpha body");
+        assert_eq!(triples[1].0, "b");
     }
 
     #[test]
