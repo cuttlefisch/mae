@@ -47,7 +47,7 @@ jobs:
       - name: Update test badge
         if: steps.badge_check.outputs.skip != 'true'
         continue-on-error: true
-        uses: schneegans/dynamic-badges-action@v1.7.0
+        uses: schneegans/dynamic-badges-action@v1.8.0
         with:
           auth: ${{ secrets.MAE_BADGE_TOKEN }}
           gistID: ${{ vars.MAE_BADGE_GIST }}
@@ -59,7 +59,7 @@ jobs:
       - name: Update LOC badge
         if: steps.badge_check.outputs.skip != 'true'
         continue-on-error: true
-        uses: schneegans/dynamic-badges-action@v1.7.0
+        uses: schneegans/dynamic-badges-action@v1.8.0
         with:
           auth: ${{ secrets.MAE_BADGE_TOKEN }}
           gistID: ${{ vars.MAE_BADGE_GIST }}
