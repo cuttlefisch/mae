@@ -343,7 +343,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC c x"), "lsp-show-diagnostics");
         normal.bind(parse_key_seq_spaced("SPC c a"), "lsp-code-action");
         normal.bind(parse_key_seq_spaced("SPC c R"), "lsp-rename");
-        normal.bind(parse_key_seq_spaced("SPC c f"), "lsp-format");
+        // SPC c f owned by format module (format-buffer) — do not bind here.
         normal.bind(parse_key_seq_spaced("SPC c F"), "lsp-range-format");
         normal.bind(parse_key_seq_spaced("SPC c s"), "lsp-status");
         normal.bind(parse_key_seq_spaced("SPC c o"), "lsp-symbol-outline");
@@ -381,8 +381,9 @@ impl Editor {
         insert.bind(vec![KeyPress::special(Key::Right)], "move-right");
         // LSP completion navigation (Tab/Ctrl-n/Ctrl-p handled specially in binary
         // so they can either trigger/navigate the popup or fall through to Tab insert).
-        // We bind them here so dispatch_builtin can route them.
-        insert.bind(vec![KeyPress::special(Key::Tab)], "lsp-accept-completion");
+        // Tab is owned by the snippet module (snippet-expand-or-next), with fallback
+        // to lsp-accept-completion in keymap-doom if snippets are not loaded.
+        // Binary insert.rs handles Tab directly via pattern match before keymap dispatch.
         insert.bind(vec![KeyPress::ctrl('n')], "lsp-complete-next");
         insert.bind(vec![KeyPress::ctrl('p')], "lsp-complete-prev");
         // Note: Enter, Backspace, and printable chars are handled specially

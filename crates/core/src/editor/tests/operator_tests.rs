@@ -228,9 +228,11 @@ fn spc_c_group_has_code_bindings() {
         normal.lookup(&parse_key_seq_spaced("SPC c R")),
         LookupResult::Exact("lsp-rename")
     );
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC c f")),
-        LookupResult::Exact("lsp-format")
+    // SPC c f is owned by the format module (format-buffer), not the kernel.
+    // Verify it's not bound in the kernel keymap.
+    assert!(
+        normal.lookup(&parse_key_seq_spaced("SPC c f")) != LookupResult::Exact("lsp-format"),
+        "SPC c f should not be bound to lsp-format in kernel (owned by format module)"
     );
 }
 

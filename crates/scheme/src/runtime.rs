@@ -2082,14 +2082,21 @@ impl SchemeRuntime {
             .register_fn("buffer-string", move || -> String { active_text.clone() });
 
         // (buffer-text NAME) — return full text of a named buffer.
-        let all_buf_texts: Vec<(String, String)> = editor
-            .buffers
-            .iter()
-            .map(|b| (b.name.clone(), b.text()))
-            .collect();
+        // Reads from SharedState so values are fresh after sync_scheme_state.
+        {
+            let all_buf_texts: Vec<(String, String)> = editor
+                .buffers
+                .iter()
+                .map(|b| (b.name.clone(), b.text()))
+                .collect();
+            self.shared.lock().unwrap().all_buffer_texts = all_buf_texts;
+        }
+        let s = self.shared.clone();
         self.engine
             .register_fn("buffer-text", move |name: String| -> SteelVal {
-                all_buf_texts
+                let state = s.lock().unwrap();
+                state
+                    .all_buffer_texts
                     .iter()
                     .find(|(n, _)| n == &name || n.ends_with(&name))
                     .map(|(_, t)| SteelVal::StringV(t.clone().into()))

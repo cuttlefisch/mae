@@ -88,7 +88,7 @@ impl CommandRegistry {
         let overwrote_builtin = if let Some(existing) = self.commands.get(&name) {
             match &existing.source {
                 CommandSource::Builtin => {
-                    tracing::warn!(command = %name, "module overrides builtin command with Scheme function");
+                    tracing::debug!(command = %name, "module overrides builtin command with Scheme function");
                     true
                 }
                 _ => {
