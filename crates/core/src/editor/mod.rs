@@ -105,6 +105,11 @@ pub enum CollabIntent {
     ListDocsForJoin,
     /// Join a shared document by name (create buffer from server state).
     JoinDoc { doc_id: String },
+    /// Save a synced buffer via the collab save protocol (docs/save_intent).
+    SaveCollab {
+        doc_id: String,
+        content_hash: String,
+    },
 }
 
 /// State for an active note capture session (org-roam parity).
@@ -1155,6 +1160,9 @@ pub struct Editor {
     pub collab_default_save_dir: String,
     /// Auto-save local file when CRDT update arrives.
     pub collab_save_on_remote_update: bool,
+    /// Pending save_committed to send on next drain tick.
+    /// Format: (doc_id, save_epoch, content_hash, saved_by).
+    pub collab_pending_save_committed: Option<(String, u64, String, String)>,
 }
 
 impl Default for Editor {
@@ -1470,6 +1478,7 @@ impl Editor {
             collab_auto_resolve_paths: false,
             collab_default_save_dir: String::new(),
             collab_save_on_remote_update: false,
+            collab_pending_save_committed: None,
         }
     }
 

@@ -50,6 +50,18 @@ pub enum CollabCommand {
     JoinDoc {
         doc_id: String,
     },
+    /// Send save intent to the server (docs/save_intent).
+    SendSaveIntent {
+        doc_id: String,
+        expected_hash: String,
+    },
+    /// Confirm save completed (docs/save_committed).
+    SendSaveCommitted {
+        doc_id: String,
+        save_epoch: u64,
+        content_hash: String,
+        saved_by: String,
+    },
 }
 
 /// Events sent from the collab background task back to the main thread.
@@ -100,6 +112,17 @@ pub enum CollabEvent {
         doc_id: String,
         state_bytes: Vec<u8>,
     },
+    /// Save intent accepted — server returned save_epoch.
+    SaveIntentOk {
+        doc_id: String,
+        save_epoch: u64,
+        content_hash: String,
+    },
+    /// Save intent rejected — content hash mismatch (concurrent edit).
+    SaveIntentConflict {
+        doc_id: String,
+        message: String,
+    },
     /// Peer count changed (peer joined or left).
     PeerCountChanged {
         peer_count: usize,
@@ -116,6 +139,21 @@ pub enum CollabEvent {
 /// Drain the pending collab intent from the editor and forward to the background task.
 /// Safe to call every loop iteration.
 pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender<CollabCommand>) {
+    // Drain pending save_committed first (queued by SaveIntentOk handler).
+    if let Some((doc_id, save_epoch, content_hash, saved_by)) =
+        editor.collab_pending_save_committed.take()
+    {
+        let cmd = CollabCommand::SendSaveCommitted {
+            doc_id,
+            save_epoch,
+            content_hash,
+            saved_by,
+        };
+        if collab_tx.try_send(cmd).is_err() {
+            warn!("collab command channel full — save_committed dropped");
+        }
+    }
+
     let intent = match editor.pending_collab_intent.take() {
         Some(i) => i,
         None => return,
@@ -189,6 +227,13 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
                 .collect();
             CollabCommand::Doctor { synced_info }
         }
+        CollabIntent::SaveCollab {
+            doc_id,
+            content_hash,
+        } => CollabCommand::SendSaveIntent {
+            doc_id,
+            expected_hash: content_hash,
+        },
         CollabIntent::ListDocs => CollabCommand::ListDocs { for_join: false },
         CollabIntent::ListDocsForJoin => CollabCommand::ListDocs { for_join: true },
         CollabIntent::JoinDoc { doc_id } => CollabCommand::JoinDoc { doc_id },
@@ -252,6 +297,8 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::Doctor { .. } => "doctor",
         CollabCommand::StartServer => "start-server",
         CollabCommand::SendUpdate { .. } => "send-update",
+        CollabCommand::SendSaveIntent { .. } => "send-save-intent",
+        CollabCommand::SendSaveCommitted { .. } => "send-save-committed",
         CollabCommand::ListDocs { .. } => "list-docs",
         CollabCommand::JoinDoc { .. } => "join-doc",
     }
@@ -522,11 +569,44 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             editor.set_status(format!("Share failed: {}", message));
             editor.mark_full_redraw();
         }
+        CollabEvent::SaveIntentOk {
+            doc_id,
+            save_epoch,
+            content_hash,
+        } => {
+            info!(doc = %doc_id, save_epoch, "save intent accepted — sending save_committed");
+            let saved_by = if editor.collab_user_name.is_empty() {
+                "unknown".to_string()
+            } else {
+                editor.collab_user_name.clone()
+            };
+            // Queue the save_committed command for the next drain tick.
+            editor.collab_pending_save_committed =
+                Some((doc_id.clone(), save_epoch, content_hash, saved_by));
+            editor.set_status(format!("Saved (collab epoch {})", save_epoch));
+            editor.mark_full_redraw();
+        }
+        CollabEvent::SaveIntentConflict { doc_id, message } => {
+            warn!(doc = %doc_id, "save intent conflict: {}", message);
+            editor.set_status(format!(
+                "Save conflict on {} — sync first (:collab-sync)",
+                doc_id
+            ));
+            editor.mark_full_redraw();
+        }
         CollabEvent::PeerCountChanged { peer_count } => {
             debug!(peer_count, "peer count changed");
             if let CollabStatus::Connected { .. } = editor.collab_status {
                 editor.collab_status = CollabStatus::Connected { peer_count };
-                editor.set_status(format!("Peer count: {}", peer_count));
+                if peer_count == 0 {
+                    editor.set_status("All other collaborators disconnected");
+                } else {
+                    editor.set_status(format!(
+                        "Peer count: {} collaborator{}",
+                        peer_count,
+                        if peer_count == 1 { "" } else { "s" }
+                    ));
+                }
                 editor.mark_full_redraw();
             }
         }
@@ -611,11 +691,25 @@ pub(crate) fn spawn_collab_task(spawn: CollabSpawn) {
 /// Kinds of pending request-response correlations.
 #[derive(Debug)]
 pub(crate) enum PendingResponseKind {
-    ListDocs { for_join: bool },
-    JoinDoc { doc_id: String },
-    ShareBuffer { doc_id: String },
-    ForceSync { doc_id: String },
-    SyncUpdate { doc_id: String },
+    ListDocs {
+        for_join: bool,
+    },
+    JoinDoc {
+        doc_id: String,
+    },
+    ShareBuffer {
+        doc_id: String,
+    },
+    ForceSync {
+        doc_id: String,
+    },
+    SyncUpdate {
+        doc_id: String,
+    },
+    SaveIntent {
+        doc_id: String,
+        expected_hash: String,
+    },
     Subscribe,
 }
 
@@ -828,6 +922,60 @@ async fn run_collab_task(
                                     let _ = evt_tx.send(CollabEvent::Error {
                                         message: format!("Failed to join {}", doc_id),
                                     }).await;
+                                }
+                            }
+                        }
+                        CollabCommand::SendSaveIntent { doc_id, expected_hash } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req_id,
+                                    "method": "docs/save_intent",
+                                    "params": {
+                                        "doc": doc_id,
+                                        "expected_hash": expected_hash,
+                                    }
+                                });
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("collab serialize error: {e}"); continue; }
+                                };
+                                if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    pending_responses.insert(req_id, PendingResponseKind::SaveIntent {
+                                        doc_id,
+                                        expected_hash,
+                                    });
+                                } else {
+                                    let _ = evt_tx.send(CollabEvent::Error {
+                                        message: "Failed to send save intent".to_string(),
+                                    }).await;
+                                }
+                            }
+                        }
+                        CollabCommand::SendSaveCommitted { doc_id, save_epoch, content_hash, saved_by } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req_id,
+                                    "method": "docs/save_committed",
+                                    "params": {
+                                        "doc": doc_id,
+                                        "save_epoch": save_epoch,
+                                        "content_hash": content_hash,
+                                        "saved_by": saved_by,
+                                    }
+                                });
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("collab serialize error: {e}"); continue; }
+                                };
+                                // Fire-and-forget — no pending response tracking needed.
+                                if write_framed(w, &body, write_timeout).await.is_err() {
+                                    warn!(doc = %doc_id, "failed to send save_committed");
                                 }
                             }
                         }
@@ -1158,6 +1306,50 @@ async fn handle_response(
                 warn!(doc = %doc_id, error = ?err, "server rejected sync update");
             }
         }
+        PendingResponseKind::SaveIntent {
+            doc_id,
+            expected_hash,
+        } => {
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("save intent failed")
+                    .to_string();
+                let _ = evt_tx
+                    .send(CollabEvent::SaveIntentConflict {
+                        doc_id,
+                        message: msg,
+                    })
+                    .await;
+            } else if let Some(r) = result {
+                let save_result = r.get("result").unwrap_or(r);
+                let status = save_result
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                if status == "conflict" {
+                    let _ = evt_tx
+                        .send(CollabEvent::SaveIntentConflict {
+                            doc_id,
+                            message: "Content hash mismatch — sync first".to_string(),
+                        })
+                        .await;
+                } else {
+                    let save_epoch = save_result
+                        .get("save_epoch")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let _ = evt_tx
+                        .send(CollabEvent::SaveIntentOk {
+                            doc_id,
+                            save_epoch,
+                            content_hash: expected_hash,
+                        })
+                        .await;
+                }
+            }
+        }
         PendingResponseKind::Subscribe => {
             // Acknowledgement — no action needed.
         }
@@ -1366,6 +1558,16 @@ async fn handle_disconnected_cmd(
                     message: format!("Not connected \u{2014} cannot join '{}'", doc_id),
                 })
                 .await;
+        }
+        CollabCommand::SendSaveIntent { doc_id, .. } => {
+            let _ = evt_tx
+                .send(CollabEvent::Error {
+                    message: format!("Not connected \u{2014} cannot save '{}'", doc_id),
+                })
+                .await;
+        }
+        CollabCommand::SendSaveCommitted { .. } => {
+            // Silently drop — not connected.
         }
     }
 }
@@ -2389,6 +2591,176 @@ mod tests {
         assert!(
             editor.find_buffer_by_name("notes").is_some(),
             "shared doc buffer name should be the name field"
+        );
+    }
+
+    #[test]
+    fn drain_save_collab_sends_save_intent() {
+        let mut editor = Editor::new();
+        editor.pending_collab_intent = Some(CollabIntent::SaveCollab {
+            doc_id: "file:abc/main.rs".to_string(),
+            content_hash: "deadbeef".to_string(),
+        });
+        let (tx, mut rx) = mpsc::channel(8);
+        drain_collab_intents(&mut editor, &tx);
+        let cmd = rx.try_recv().unwrap();
+        match cmd {
+            CollabCommand::SendSaveIntent {
+                doc_id,
+                expected_hash,
+            } => {
+                assert_eq!(doc_id, "file:abc/main.rs");
+                assert_eq!(expected_hash, "deadbeef");
+            }
+            other => panic!("expected SendSaveIntent, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn drain_pending_save_committed() {
+        let mut editor = Editor::new();
+        editor.collab_pending_save_committed = Some((
+            "doc1".to_string(),
+            42,
+            "hash123".to_string(),
+            "alice".to_string(),
+        ));
+        let (tx, mut rx) = mpsc::channel(8);
+        drain_collab_intents(&mut editor, &tx);
+        let cmd = rx.try_recv().unwrap();
+        match cmd {
+            CollabCommand::SendSaveCommitted {
+                doc_id,
+                save_epoch,
+                content_hash,
+                saved_by,
+            } => {
+                assert_eq!(doc_id, "doc1");
+                assert_eq!(save_epoch, 42);
+                assert_eq!(content_hash, "hash123");
+                assert_eq!(saved_by, "alice");
+            }
+            other => panic!("expected SendSaveCommitted, got {:?}", other),
+        }
+        assert!(editor.collab_pending_save_committed.is_none());
+    }
+
+    #[test]
+    fn handle_save_intent_ok_queues_committed() {
+        let mut editor = Editor::new();
+        editor.collab_user_name = "bob".to_string();
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::SaveIntentOk {
+                doc_id: "test-doc".to_string(),
+                save_epoch: 5,
+                content_hash: "abc".to_string(),
+            },
+        );
+        assert!(editor.collab_pending_save_committed.is_some());
+        let (doc_id, epoch, hash, saved_by) =
+            editor.collab_pending_save_committed.as_ref().unwrap();
+        assert_eq!(doc_id, "test-doc");
+        assert_eq!(*epoch, 5);
+        assert_eq!(hash, "abc");
+        assert_eq!(saved_by, "bob");
+    }
+
+    #[test]
+    fn handle_save_intent_conflict_shows_status() {
+        let mut editor = Editor::new();
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::SaveIntentConflict {
+                doc_id: "test-doc".to_string(),
+                message: "hash mismatch".to_string(),
+            },
+        );
+        assert!(editor.status_msg.contains("conflict"));
+    }
+
+    #[tokio::test]
+    async fn handle_response_save_intent_ok() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut shared = Vec::new();
+
+        let val = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "doc": "test.rs",
+                "result": {
+                    "status": "ok",
+                    "server_hash": "abc123",
+                    "save_epoch": 3
+                }
+            }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::SaveIntent {
+                doc_id: "test.rs".to_string(),
+                expected_hash: "abc123".to_string(),
+            },
+            &tx,
+            &mut shared,
+        )
+        .await;
+        let event = rx.try_recv().unwrap();
+        match event {
+            CollabEvent::SaveIntentOk {
+                doc_id, save_epoch, ..
+            } => {
+                assert_eq!(doc_id, "test.rs");
+                assert_eq!(save_epoch, 3);
+            }
+            other => panic!("expected SaveIntentOk, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_response_save_intent_conflict() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut shared = Vec::new();
+
+        let val = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "doc": "test.rs",
+                "result": {
+                    "status": "conflict",
+                    "server_hash": "xyz"
+                }
+            }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::SaveIntent {
+                doc_id: "test.rs".to_string(),
+                expected_hash: "abc123".to_string(),
+            },
+            &tx,
+            &mut shared,
+        )
+        .await;
+        let event = rx.try_recv().unwrap();
+        assert!(
+            matches!(event, CollabEvent::SaveIntentConflict { .. }),
+            "expected SaveIntentConflict, got {:?}",
+            event
+        );
+    }
+
+    #[test]
+    fn peer_count_zero_shows_all_disconnected() {
+        let mut editor = Editor::new();
+        editor.collab_status = CollabStatus::Connected { peer_count: 2 };
+        handle_collab_event(&mut editor, CollabEvent::PeerCountChanged { peer_count: 0 });
+        assert!(editor.status_msg.contains("disconnected"));
+        assert_eq!(
+            editor.collab_status,
+            CollabStatus::Connected { peer_count: 0 }
         );
     }
 

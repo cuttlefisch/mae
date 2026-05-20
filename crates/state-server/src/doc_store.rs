@@ -40,6 +40,8 @@ pub struct DocStats {
     pub content_length: usize,
     pub idle_secs: u64,
     pub connected_clients: u32,
+    pub save_epoch: u64,
+    pub last_saved_by: Option<String>,
 }
 
 /// Result of a save intent check.
@@ -288,7 +290,6 @@ impl DocStore {
     }
 
     /// Number of documents currently in memory.
-    #[allow(dead_code)]
     pub async fn document_count(&self) -> usize {
         let docs = self.docs.read().await;
         docs.len()
@@ -335,7 +336,6 @@ impl DocStore {
     }
 
     /// Compute SHA-256 content hash for a document.
-    #[allow(dead_code)] // Public API for future docs/metadata endpoint
     pub async fn content_hash(&self, doc_name: &str) -> Result<String, StorageError> {
         let entry = self.get_or_create(doc_name).await?;
         let doc = entry.lock().await;
@@ -389,6 +389,8 @@ impl DocStore {
             content_length: doc.sync.content().len(),
             idle_secs: doc.last_activity.elapsed().as_secs(),
             connected_clients: doc.connected_clients,
+            save_epoch: doc.save_epoch,
+            last_saved_by: doc.last_saved_by.clone(),
         })
     }
 

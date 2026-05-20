@@ -212,6 +212,7 @@ fn is_doc_method(msg: &str) -> bool {
         || msg.contains("\"docs/save_intent\"")
         || msg.contains("\"docs/save_committed\"")
         || msg.contains("\"docs/delete\"")
+        || msg.contains("\"docs/metadata\"")
         || msg.contains("\"sync/share\"")
         || msg.contains("\"$/debug\"")
 }
@@ -436,6 +437,29 @@ async fn handle_doc_request(
                     id,
                     serde_json::json!({ "doc": doc_name, "stats": stats }),
                 ),
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+            }
+        }
+
+        "docs/metadata" => {
+            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            match doc_store.doc_stats(&doc_name).await {
+                Ok(stats) => {
+                    let connection_count = broadcaster.lock().unwrap().client_count();
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({
+                            "doc": doc_name,
+                            "connected_clients": stats.connected_clients,
+                            "save_epoch": stats.save_epoch,
+                            "last_saved_by": stats.last_saved_by,
+                            "content_length": stats.content_length,
+                            "update_count": stats.update_count,
+                            "idle_secs": stats.idle_secs,
+                            "total_connections": connection_count,
+                        }),
+                    )
+                }
                 Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
             }
         }
@@ -1116,6 +1140,41 @@ mod tests {
         assert_eq!(result["doc"], "file:no-project/test.txt");
         // State should be non-empty (contains the shared content).
         assert!(!result["state"].as_str().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn docs_metadata_returns_save_epoch() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        // Create a doc and record a save.
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "hello");
+        store.apply_update("test", &update, Some(1)).await.unwrap();
+        store.record_save("test", "alice").await.unwrap();
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "docs/metadata",
+            "params": { "doc": "test" }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
+        assert!(
+            resp.error.is_none(),
+            "docs/metadata failed: {:?}",
+            resp.error
+        );
+        let result = resp.result.unwrap();
+        assert_eq!(result["doc"], "test");
+        assert_eq!(result["last_saved_by"], "alice");
+        assert!(result["content_length"].as_u64().unwrap() > 0);
     }
 
     #[tokio::test]

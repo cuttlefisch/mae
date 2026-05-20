@@ -34,7 +34,7 @@
 - [x] **One-directional sync**: cli1→cli2 works but cli2→cli1 does not. Root cause: `biased` tokio::select starved TCP reads. Fix: remove `biased;` from connected select loop.
 - [x] **First `SPC C j` unresponsive from Dashboard**: Join only works after a `SPC C D`/`SPC C i` round-trip. Root cause: splash screen intercept swallows `j` during multi-key sequences. Fix: add `pending_keys.is_empty()` guard.
 - [x] **Syntax highlighting differs on join**: Joiner sees wrong colors (purple bullets, green title). Root cause: `set_language` without `invalidate()` leaves no tree-sitter parse tree. Fix: call `syntax.invalidate(idx)` after join.
-- [ ] **Undo broadcasts full buffer to peers**: Undo on one client inserts entire buffer contents at point on other clients. Root cause: yrs UndoManager transaction likely generates a full-text update rather than a delta. Needs investigation of undo → yrs transaction → sync update pipeline.
+- [ ] **Undo broadcasts full buffer to peers**: Undo on one client inserts entire buffer contents at point on other clients. Root cause: `reconcile_to()` after undo generates a full-state replacement delta instead of a targeted reversal. Full fix requires yrs `UndoManager` integration (Phase F) — per-user undo stacks that generate CRDT-safe inverse operations. Current workaround: none (known limitation).
 - [ ] **`:w` fails on non-sharer clients**: Save works only for the client that originally opened and shared the file. Other clients (including those that outlive the sharer) get errors. Root cause: `file_path` not properly resolved on join, or save protocol assumes original sharer identity.
 - [ ] **Sharer quit doesn't notify peers or stop sharing**: When the client that triggered the share disconnects, peers are not notified and the shared document lingers. Need graceful disconnect protocol: server detects client drop → notifies remaining peers → optionally promotes new owner or marks doc read-only.
 - [ ] **Client disconnect lifecycle undefined**: No documented or tested behavior for: client crash, network drop, graceful quit, last-client-leaves. Must define and implement industry-standard behavior (cf. VS Code Live Share, Google Docs). Document in `docs/COLLABORATION.md`.
@@ -49,7 +49,7 @@
 
 - [ ] **Offline edit recovery**: Preserve `sync_doc` during disconnect, reconcile on rejoin instead of full-state overwrite.
 - [ ] **Client-side gap detection**: Track `wal_seq` from notifications, trigger auto-resync on gaps.
-- [ ] **Save protocol wiring**: Call `docs/save_intent` + `docs/save_committed` from editor's `:w` for synced buffers.
+- [x] **Save protocol wiring**: Call `docs/save_intent` + `docs/save_committed` from editor's `:w` for synced buffers.
 - [ ] **Awareness protocol**: Cursor/selection sharing via yrs awareness (y-websocket compatible).
 - [ ] **Heartbeat/keepalive**: Detect silent client death, clean up stale `connected_clients`.
 
@@ -86,19 +86,18 @@
 - [x] **State server v1** (`mae-state-server` binary): Standalone CRDT sync server over TCP (port 9473). Per-document locking, WAL-first SQLite persistence, periodic compaction, transport-generic I/O (reuses `mae_mcp` primitives). Sync protocol: `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`. No auth (trusted LAN only).
 - [x] **State server v1.5** (scalability + UX): Sharded SQLite pool (4 shards), save protocol (SHA-256 content-hash), event sequence tracking (wal_seq), background compaction + idle eviction. Editor: 7 commands (SPC C prefix), 4 AI tools, status bar segment, 5 options, doctor integration, audit_configuration collab section. New methods: `sync/resync`, `docs/stats`, `docs/save_intent`, `docs/save_committed`, `$/debug`.
 - [x] **Client ID echo filtering**: Server `broadcast_except()` skips the originating session on `sync/update`. Eliminates wasted bandwidth/CPU from self-echo and prevents share duplication race.
-- [ ] **Collab stub audit** (v0.11.0 correctness): Systematic review completed. Known gaps:
-  - `docs/save_committed` handler is a no-op stub (handler.rs:381)
-  - `track_client_connect()` / `track_client_disconnect()` are `#[allow(dead_code)]` (doc_store.rs:287-303)
-  - `DocAddress` enum defined but never used in collab protocol (sync/lib.rs:39-50)
-  - `SaveIntentResult` returned by server but never consumed by editor
-  - `save_intent` never called from the editor save path
-  - No `docs/metadata` endpoint (would provide save_epoch, connected_clients)
-  - Per-doc `connected_clients` counter never incremented/decremented (always 0)
-  - `save_epoch` tracking doesn't exist yet
-  - No `peer_joined` / `peer_left` events in `EditorEvent` enum
-  - `WalEntry::client_id` stored but never read for audit/attribution
-  - `StorageError::Io` variant reserved but unused (pluggable backends)
-- [ ] **State server v2** (Phase F): Awareness protocol (cursor sharing), per-user undo, auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync.
+- [x] **Collab stub audit** (v0.11.0 correctness): Systematic review completed. Resolved items:
+  - ~~`docs/save_committed` handler is a no-op stub~~ — NOT a no-op: broadcasts `SaveCommitted` to peers (handler.rs:463-492)
+  - ~~`track_client_connect()` / `track_client_disconnect()` dead code~~ — called from handler.rs on `sync/update`, `sync/full_state`, `sync/resync`, `sync/share`, and session teardown
+  - ~~`DocAddress` enum never used~~ — used in `compute_doc_address()` (collab_bridge.rs) + `BufferJoined` handler
+  - ~~Per-doc `connected_clients` never incremented~~ — tracked by `share_doc()` (=1) + `track_client_connect/disconnect` in handler
+  - ~~No `peer_joined`/`peer_left` events~~ — exist in `EditorEvent`, broadcast by server on connect/disconnect
+  - `SaveIntentResult` returned by server, now consumed by editor save path ✅
+  - `save_intent` now called from editor `:w` for synced buffers ✅
+  - `docs/metadata` endpoint added to state server ✅
+  - `WalEntry::client_id` stored but never read for audit/attribution (deferred — needs Phase F auth)
+  - `StorageError::Io` variant reserved but unused (pluggable backends — by design)
+- [ ] **State server v2** (Phase F): Awareness protocol (cursor sharing), per-user undo (yrs `UndoManager`), heartbeat/keepalive, auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Priority next-round items: E1 (git-based identity), E8 (buffer status indicators).
 - [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
   - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
   - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.

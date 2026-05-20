@@ -488,6 +488,49 @@ CRDT and git are complementary:
 
 ---
 
+## Disconnect Lifecycle
+
+MAE handles several disconnection scenarios:
+
+### Graceful Quit
+
+When a client runs `:q` or `:collab-disconnect`:
+1. Editor sets `pending_collab_intent = Disconnect`
+2. Bridge sends TCP close, tears down read/write halves
+3. Server detects EOF → calls `track_client_disconnect()` for all session docs
+4. Server broadcasts `PeerLeft { peer_count }` to remaining clients
+5. Editor clears `collab_doc_id`, `sync_doc`, and `pending_sync_updates` on **all** buffers
+
+### Client Crash / Network Drop
+
+1. Server's `read_message()` returns `Err` or `Ok(None)`
+2. Same cleanup as graceful quit (step 3–4 above)
+3. Surviving clients see "Peer count: N" or "All other collaborators disconnected"
+4. If `collab_reconnect_interval` is set, crashed client auto-reconnects
+
+### Last Client Leaves
+
+When the last client disconnects (`peer_count` reaches 0):
+- Server keeps the document in memory (no eviction while `idle_eviction_secs` hasn't elapsed)
+- Document state persists in WAL — reconnecting clients get the full state via `sync/resync`
+- If `idle_eviction_secs` elapses with no clients, server compacts and evicts the doc from memory
+  (but WAL/snapshot remain in SQLite for recovery)
+
+### Reconnection
+
+1. Client detects connection loss → `CollabStatus::Reconnecting`
+2. Exponential backoff with `collab_reconnect_interval` base and `collab_reconnect_backoff_factor`
+3. On reconnect: re-`initialize`, re-`subscribe`, re-share/re-join previously synced buffers
+4. Full state reload via `sync/resync` ensures convergence after partition
+
+### Save Protocol During Disconnect
+
+- If a save is in flight when disconnection occurs, the `SendSaveIntent` / `SendSaveCommitted`
+  commands are dropped silently. The local file save (`:w`) has already succeeded at that point.
+- Peers will not receive a `save_committed` notification, but the CRDT state is consistent.
+
+---
+
 ## See Also
 
 - `docs/adr/002-text-sync-model.md` — text sync decision (ADR-002)
