@@ -139,6 +139,43 @@ On PR merge, the `version-bump.yml` workflow:
 - Follow existing module patterns in the crate you're modifying
 - Read **CLAUDE.md** for architecture principles and non-negotiable constraints
 
+## Naming Conventions
+
+These conventions apply to both production code and tests. AI and human
+contributors should follow them consistently.
+
+### Variable Names
+
+| Context | Name | Example |
+|---------|------|---------|
+| Editor instance | `editor` | `let mut editor = Editor::new();` |
+| Buffer reference | `buf` | `let buf = &editor.buffers[idx];` |
+| Window reference | `win` | `let win = editor.window_mgr.focused_window_mut();` |
+| Buffer index | `idx` | `let idx = editor.active_buffer_idx();` |
+| Second editor | `editor2` | `let mut editor2 = Editor::new();` |
+
+Never abbreviate `editor` to `ed`, `e`, or single letters.
+
+### Function Naming
+
+| Category | Pattern | Example |
+|----------|---------|---------|
+| Command dispatch | `dispatch_<category>` | `dispatch_nav`, `dispatch_edit` |
+| Input handlers | `handle_<mode>` | `handle_normal_mode` |
+| AI tool impl | `execute_<tool>` | `execute_buffer_read` |
+
+### Test Helpers
+
+Defined in `crates/core/src/editor/tests/mod.rs`:
+
+| Helper | Method | Use When |
+|--------|--------|----------|
+| `editor_with_text(s)` | Char-by-char (input mode) | Testing input processing, mode transitions |
+| `editor_with_bulk_text(s)` | `insert_text_at()` (bulk) | Multi-line content without input side effects |
+| `editor_with_rust(s)` | Char-by-char + `.rs` path | Syntax highlighting, LSP features |
+
+New helpers should follow the `editor_with_*` pattern with a doc-comment.
+
 ## AI Testing
 
 The self-test exercises the AI's tool surface against the live editor:
