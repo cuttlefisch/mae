@@ -1,12 +1,17 @@
 mod collab;
+mod config;
 mod dap;
 mod edit;
 mod file;
 mod file_tree;
 mod fold_org;
 mod git;
+mod help;
+mod kb;
 mod lsp;
 mod nav;
+mod project;
+mod terminal;
 mod ui;
 mod visual;
 mod window;
@@ -89,6 +94,21 @@ impl Editor {
             return v;
         }
         if let Some(v) = self.dispatch_window(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_help(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_terminal(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_project(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_kb(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_config(name) {
             return v;
         }
         if let Some(v) = self.dispatch_ui(name) {

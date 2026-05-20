@@ -45,7 +45,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-service install-completions docker-network-test
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-service install-completions docker-network-test bench bench-save bench-compare
 
 # Default target: release build
 all: build
@@ -432,6 +432,18 @@ docs-tangle:
 docs-tangle-check:
 	@test -d docs/adr && test -n "$$(ls docs/adr/*.md 2>/dev/null)" || (echo "FAIL: docs/adr/ missing or empty" && exit 1)
 	@echo "docs-tangle-check passed ✓"
+
+## bench: run criterion benchmarks (buffer ops, CRDT ops)
+bench:
+	cargo bench --package mae-core --package mae-sync
+
+## bench-save: save benchmark baseline for comparison
+bench-save:
+	cargo bench --package mae-core --package mae-sync -- --save-baseline main
+
+## bench-compare: compare against saved baseline
+bench-compare:
+	cargo bench --package mae-core --package mae-sync -- --baseline main
 
 ## help: print this help
 help:
