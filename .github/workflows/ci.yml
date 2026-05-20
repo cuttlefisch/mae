@@ -34,14 +34,11 @@ jobs:
 
       - name: cargo check
         if: matrix.step == 'check'
-        run: cargo check --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures
-
+        run: cargo check --workspace --all-targets --exclude mae-gui
       - name: cargo test
         if: matrix.step == 'test'
         run: |
-          cargo test --workspace --exclude mae-gui --exclude mae-test-fixtures
-          cargo test --doc --workspace --exclude mae-gui --exclude mae-test-fixtures
-
+          cargo test --workspace --exclude mae-gui          cargo test --doc --workspace --exclude mae-gui
       - name: cargo clippy
         if: matrix.step == 'clippy'
         run: cargo clippy --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures -- -D warnings
@@ -66,8 +63,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build TUI binary
-        run: cargo build --release --workspace --exclude mae-gui --exclude mae-test-fixtures
-      - name: Validate init.scm
+        run: cargo build --release --workspace --exclude mae-gui      - name: Validate init.scm
         run: ./target/release/mae --check-config
 
   server-client:
@@ -136,8 +132,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build TUI binary
-        run: cargo build --release --workspace --exclude mae-gui --exclude mae-test-fixtures
-      - name: Declare test package in init.scm
+        run: cargo build --release --workspace --exclude mae-gui      - name: Declare test package in init.scm
         run: |
           mkdir -p ~/.config/mae
           cat > ~/.config/mae/init.scm <<'SCHEME'
@@ -161,7 +156,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build TUI binary
-        run: cargo build --release --workspace --exclude mae-gui --exclude mae-test-fixtures
+        run: cargo build --release --workspace --exclude mae-gui      - name: Create Steel home directory
+        run: mkdir -p ~/.local/share/steel
       - name: Editor tests
         run: ./target/release/mae --test tests/editor/
       - name: CRDT tests
@@ -170,7 +166,6 @@ jobs:
   collab-e2e:
     name: collab / docker e2e
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v6
       - name: Run collab E2E

@@ -141,6 +141,29 @@
 (define (should-mode expected)
   (should-equal (current-mode) expected))
 
+;; (should-greater-than A B) — assert A > B (numeric).
+(define (should-greater-than a b)
+  (set! *assertion-count* (+ *assertion-count* 1))
+  (if (not (> a b))
+      (error (string-append "Assertion failed: expected "
+                            (to-string a) " > " (to-string b)))
+      #t))
+
+;; (should-less-than A B) — assert A < B (numeric).
+(define (should-less-than a b)
+  (set! *assertion-count* (+ *assertion-count* 1))
+  (if (not (< a b))
+      (error (string-append "Assertion failed: expected "
+                            (to-string a) " < " (to-string b)))
+      #t))
+
+;; (should-buffer-state TEXT ROW COL) — combined buffer content + cursor check.
+;; Uses SharedState-backed test primitives directly (always available).
+(define (should-buffer-state text row col)
+  (should-equal (test-buffer-string) text)
+  (should-equal (test-cursor-row) row)
+  (should-equal (test-cursor-col) col))
+
 ;; --- Async helpers ---
 
 ;; (wait-until PRED TIMEOUT-MS) — poll PRED every 50ms, sleeping between checks.

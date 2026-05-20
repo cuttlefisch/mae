@@ -60,9 +60,16 @@ pub struct DocStore {
     docs: RwLock<HashMap<String, Arc<Mutex<DocEntry>>>>,
     storage: Arc<dyn StorageBackend>,
     compact_threshold: u64,
+    /// Maximum number of documents allowed in memory (0 = unlimited).
+    max_documents: usize,
+    /// Maximum WAL entries before forced compaction (0 = no forced compaction).
+    max_wal_entries: u64,
+    /// Maximum document size in bytes before warning (0 = unlimited).
+    max_document_size_bytes: usize,
 }
 
 /// Result of applying an update.
+#[derive(Debug)]
 pub struct ApplyResult {
     /// The update bytes to broadcast to other clients.
     pub update: Vec<u8>,
@@ -76,7 +83,28 @@ impl DocStore {
             docs: RwLock::new(HashMap::new()),
             storage,
             compact_threshold,
+            max_documents: 0,
+            max_wal_entries: 0,
+            max_document_size_bytes: 0,
         }
+    }
+
+    /// Set maximum documents allowed in memory. 0 = unlimited.
+    pub fn with_max_documents(mut self, max: usize) -> Self {
+        self.max_documents = max;
+        self
+    }
+
+    /// Set maximum WAL entries before forced compaction. 0 = disabled.
+    pub fn with_max_wal_entries(mut self, max: u64) -> Self {
+        self.max_wal_entries = max;
+        self
+    }
+
+    /// Set maximum document size (bytes) before warning. 0 = unlimited.
+    pub fn with_max_document_size(mut self, max: usize) -> Self {
+        self.max_document_size_bytes = max;
+        self
     }
 
     /// Get or create a document. Loads from storage if not in memory.
@@ -94,6 +122,14 @@ impl DocStore {
         // Double-check after acquiring write lock.
         if let Some(entry) = docs.get(doc_name) {
             return Ok(Arc::clone(entry));
+        }
+
+        // Enforce max_documents limit.
+        if self.max_documents > 0 && docs.len() >= self.max_documents {
+            return Err(StorageError::Sqlite(format!(
+                "document limit reached (max: {})",
+                self.max_documents
+            )));
         }
 
         let (sync, wal_seq) = match self.storage.load_document(doc_name).await? {
@@ -163,7 +199,23 @@ impl DocStore {
             doc.wal_seq = wal_id;
             doc.update_count += 1;
             doc.last_activity = std::time::Instant::now();
-            doc.update_count >= self.compact_threshold
+
+            // Warn if document exceeds max size (don't reject — CRDT convergence).
+            if self.max_document_size_bytes > 0 {
+                let content_len = doc.sync.content().len();
+                if content_len > self.max_document_size_bytes {
+                    warn!(
+                        doc = doc_name,
+                        size = content_len,
+                        limit = self.max_document_size_bytes,
+                        "document exceeds max size limit"
+                    );
+                }
+            }
+
+            // Force compaction at WAL entry hard limit.
+            let forced = self.max_wal_entries > 0 && doc.update_count >= self.max_wal_entries;
+            forced || doc.update_count >= self.compact_threshold
         };
 
         if should_compact {
@@ -428,8 +480,11 @@ impl DocStore {
         validate_update(update)
             .map_err(|e| StorageError::Sqlite(format!("invalid update: {e}")))?;
 
-        // Delete old doc from storage (ignore not-found).
-        let _ = self.storage.delete_document(doc_name).await;
+        // Delete old doc from storage. Log errors — silent swallow could
+        // lead to corrupted recovery if WAL append succeeds but old data remains.
+        if let Err(e) = self.storage.delete_document(doc_name).await {
+            warn!(doc = doc_name, error = %e, "share_doc: failed to delete old document from storage");
+        }
 
         // Remove old in-memory entry.
         {
@@ -754,5 +809,125 @@ mod tests {
         let mut names = store.document_names().await;
         names.sort();
         assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[tokio::test]
+    async fn max_documents_enforced_at_runtime() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = DocStore::new(backend, 500).with_max_documents(2);
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let u1 = ts.insert(0, "doc1 content");
+        let u2 = ts.insert(0, "doc2 content");
+
+        // First two documents succeed.
+        store.apply_update("doc1", &u1, Some(1)).await.unwrap();
+        store.apply_update("doc2", &u2, Some(2)).await.unwrap();
+
+        // Third document must fail with the limit error.
+        let mut ts3 = TextSync::with_client_id("", 3);
+        let u3 = ts3.insert(0, "doc3 content");
+        let err = store.apply_update("doc3", &u3, Some(3)).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("document limit reached"),
+            "expected 'document limit reached' in error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn max_documents_allows_existing() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = DocStore::new(backend, 500).with_max_documents(2);
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let u1 = ts.insert(0, "hello");
+        let u2 = ts.insert(5, " world");
+
+        // Create both documents.
+        store.apply_update("doc1", &u1, Some(1)).await.unwrap();
+        store.apply_update("doc2", &u1, Some(2)).await.unwrap();
+
+        // Applying a second update to an existing document must succeed even
+        // though the map is at capacity — get_or_create takes the fast path.
+        store
+            .apply_update("doc1", &u2, Some(1))
+            .await
+            .expect("second update to existing doc must succeed at capacity");
+
+        let content = store.content("doc1").await.unwrap();
+        assert_eq!(content, "hello world");
+    }
+
+    #[tokio::test]
+    async fn max_wal_entries_forces_compaction() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        // compact_threshold is high (500), but max_wal_entries is low (3).
+        let store = DocStore::new(backend.clone(), 500).with_max_wal_entries(3);
+
+        let mut ts = TextSync::with_client_id("", 1);
+        for i in 0..5 {
+            let update = ts.insert(i, "x");
+            store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        }
+
+        // After 5 updates with max_wal_entries=3, forced compaction should have run.
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+        assert!(
+            state.snapshot.is_some(),
+            "snapshot should exist after forced WAL compaction"
+        );
+    }
+
+    #[tokio::test]
+    async fn large_document_warns_but_accepts() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        // Set max_document_size to 5 bytes — any real content will exceed it.
+        let store = DocStore::new(backend, 500).with_max_document_size(5);
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "hello world, this exceeds the limit");
+
+        // Should succeed (warning only, no rejection).
+        let result = store.apply_update("doc1", &update, Some(1)).await;
+        assert!(
+            result.is_ok(),
+            "large document should be accepted with warning"
+        );
+
+        let content = store.content("doc1").await.unwrap();
+        assert_eq!(content, "hello world, this exceeds the limit");
+    }
+
+    #[tokio::test]
+    async fn share_doc_error_logged_not_swallowed() {
+        let store = test_store();
+
+        // Create an initial document.
+        let mut ts = TextSync::with_client_id("", 1);
+        let initial = ts.insert(0, "old content");
+        store.apply_update("doc1", &initial, Some(1)).await.unwrap();
+
+        // share_doc replaces the document with brand-new content.
+        // The happy path must still produce the correct content even after the
+        // internal delete (which logs errors instead of swallowing them via `let _ =`).
+        let ts2 = TextSync::new("replaced content");
+        let new_state = ts2.encode_state();
+        let result = store.share_doc("doc1", &new_state).await;
+        assert!(
+            result.is_ok(),
+            "share_doc must succeed on the happy path: {:?}",
+            result.err()
+        );
+
+        let content = store.content("doc1").await.unwrap();
+        assert_eq!(
+            content, "replaced content",
+            "share_doc must replace document content, not append"
+        );
+
+        // connected_clients is set to 1 by share_doc (BUG D invariant).
+        let stats = store.doc_stats("doc1").await.unwrap();
+        assert_eq!(stats.connected_clients, 1);
     }
 }

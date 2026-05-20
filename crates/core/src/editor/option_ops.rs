@@ -1,4 +1,4 @@
-use crate::options::{parse_option_bool, OptionKind};
+use crate::options::{parse_option_bool, parse_option_int, OptionKind};
 
 impl super::Editor {
     pub fn set_local_option(&mut self, name: &str, value: &str) -> Result<String, String> {
@@ -148,6 +148,10 @@ impl super::Editor {
             "collab_reconnect_interval" => self.collab_reconnect_interval.to_string(),
             "collab_user_name" => self.collab_user_name.clone(),
             "collab_write_timeout_ms" => self.collab_write_timeout_ms.to_string(),
+            "collab_max_pending_updates" => self.collab_max_pending_updates.to_string(),
+            "collab_reconnect_backoff_factor" => self.collab_reconnect_backoff_factor.to_string(),
+            "collab_max_reconnect_attempts" => self.collab_max_reconnect_attempts.to_string(),
+            "collab_batch_update_ms" => self.collab_batch_update_ms.to_string(),
             "fill_column" => self.fill_column.to_string(),
             _ => return None,
         };
@@ -582,6 +586,19 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.collab_write_timeout_ms = v.clamp(500, 60_000);
+            }
+            "collab_max_pending_updates" => {
+                self.collab_max_pending_updates = parse_option_int(value)? as u64;
+            }
+            "collab_reconnect_backoff_factor" => {
+                let v = parse_option_int(value)? as u64;
+                self.collab_reconnect_backoff_factor = v.clamp(1, 10);
+            }
+            "collab_max_reconnect_attempts" => {
+                self.collab_max_reconnect_attempts = parse_option_int(value)? as u64;
+            }
+            "collab_batch_update_ms" => {
+                self.collab_batch_update_ms = parse_option_int(value)? as u64;
             }
             "fill_column" => {
                 let v: usize = value

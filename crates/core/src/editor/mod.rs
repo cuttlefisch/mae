@@ -1139,6 +1139,14 @@ pub struct Editor {
     pub collab_user_name: String,
     /// Write timeout for peer connections, in milliseconds.
     pub collab_write_timeout_ms: u64,
+    /// Maximum pending updates before warning (0 = unlimited).
+    pub collab_max_pending_updates: u64,
+    /// Exponential backoff multiplier for reconnection attempts.
+    pub collab_reconnect_backoff_factor: u64,
+    /// Maximum reconnection attempts before giving up (0 = infinite).
+    pub collab_max_reconnect_attempts: u64,
+    /// Milliseconds to batch local updates before sending (0 = immediate).
+    pub collab_batch_update_ms: u64,
 }
 
 impl Default for Editor {
@@ -1446,6 +1454,10 @@ impl Editor {
             collab_reconnect_interval: 5,
             collab_user_name: String::new(),
             collab_write_timeout_ms: 5000,
+            collab_max_pending_updates: 1000,
+            collab_reconnect_backoff_factor: 2,
+            collab_max_reconnect_attempts: 0,
+            collab_batch_update_ms: 0,
         }
     }
 

@@ -995,4 +995,204 @@ mod tests {
             "pending map should be cleaned on timeout"
         );
     }
+
+    #[tokio::test]
+    async fn evaluate_returns_parsed_result() {
+        let body = serde_json::json!({
+            "result": "42",
+            "type": "int",
+            "variablesReference": 0
+        });
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps()), Action::Respond(body)]);
+        let client = DapClient::from_streams(r, w, "mock").await.unwrap();
+        let result = client
+            .evaluate("1 + 1", Some(1), Some("repl"))
+            .await
+            .unwrap();
+        assert_eq!(result.result, "42");
+        assert_eq!(result.variables_reference, 0);
+    }
+
+    #[tokio::test]
+    async fn stack_trace_returns_frames() {
+        let body = serde_json::json!({
+            "stackFrames": [
+                {
+                    "id": 1,
+                    "name": "main",
+                    "line": 10,
+                    "column": 1,
+                    "source": {"name": "test.rs", "path": "/tmp/test.rs"}
+                }
+            ],
+            "totalFrames": 1
+        });
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps()), Action::Respond(body)]);
+        let client = DapClient::from_streams(r, w, "mock").await.unwrap();
+        let result = client.stack_trace(1, Some(20)).await.unwrap();
+        assert_eq!(result.stack_frames.len(), 1);
+        assert_eq!(result.stack_frames[0].name, "main");
+        assert_eq!(result.stack_frames[0].line, 10);
+    }
+
+    #[tokio::test]
+    async fn scopes_returns_parsed_list() {
+        let body = serde_json::json!({
+            "scopes": [
+                {"name": "Locals", "variablesReference": 100, "expensive": false},
+                {"name": "Globals", "variablesReference": 200, "expensive": true}
+            ]
+        });
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps()), Action::Respond(body)]);
+        let client = DapClient::from_streams(r, w, "mock").await.unwrap();
+        let scopes = client.scopes(1).await.unwrap();
+        assert_eq!(scopes.len(), 2);
+        assert_eq!(scopes[0].name, "Locals");
+        assert_eq!(scopes[0].variables_reference, 100);
+        assert_eq!(scopes[1].name, "Globals");
+    }
+
+    #[tokio::test]
+    async fn variables_returns_parsed_list() {
+        let body = serde_json::json!({
+            "variables": [
+                {"name": "x", "value": "42", "type": "int", "variablesReference": 0},
+                {"name": "msg", "value": "\"hello\"", "type": "str", "variablesReference": 0}
+            ]
+        });
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps()), Action::Respond(body)]);
+        let client = DapClient::from_streams(r, w, "mock").await.unwrap();
+        let vars = client.variables(100).await.unwrap();
+        assert_eq!(vars.len(), 2);
+        assert_eq!(vars[0].name, "x");
+        assert_eq!(vars[0].value, "42");
+        assert_eq!(vars[1].name, "msg");
+    }
+
+    #[tokio::test]
+    async fn set_exception_breakpoints_round_trip() {
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps()), Action::RespondOk]);
+        let client = DapClient::from_streams(r, w, "mock").await.unwrap();
+        let resp = client
+            .set_exception_breakpoints(vec!["uncaught".into(), "raised".into()])
+            .await
+            .unwrap();
+        assert!(resp.success);
+        assert_eq!(resp.command, "setExceptionBreakpoints");
+    }
+
+    #[tokio::test]
+    async fn terminate_round_trip() {
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps()), Action::RespondOk]);
+        let client = DapClient::from_streams(r, w, "mock").await.unwrap();
+        let resp = client.terminate().await.unwrap();
+        assert!(resp.success);
+        assert_eq!(resp.command, "terminate");
+    }
+
+    #[tokio::test]
+    async fn disconnect_while_request_in_flight() {
+        // Adapter responds to initialize only, then the mock task exits and
+        // closes the stream. A subsequent request should fail because the
+        // reader drops the oneshot sender (ConnectionClosed path) or times
+        // out — either way the caller gets an Err and/or the event_rx
+        // delivers AdapterExited.
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps())]);
+        let mut client = DapClient::from_streams(r, w, "mock").await.unwrap();
+
+        // Issue a threads request with a generous timeout. The adapter won't
+        // respond (it already exited), so the oneshot sender gets dropped
+        // when the reader task encounters ConnectionClosed and terminates.
+        let result = client
+            .request("threads", None, std::time::Duration::from_millis(500))
+            .await;
+
+        // The request must fail: either a timeout or a closed channel.
+        assert!(
+            result.is_err(),
+            "expected error when adapter closed mid-request"
+        );
+
+        // Additionally the event channel must eventually deliver AdapterExited.
+        let evt = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            client.event_rx.recv(),
+        )
+        .await
+        .expect("timed out waiting for AdapterExited event")
+        .expect("event channel closed unexpectedly");
+
+        assert!(
+            matches!(evt, DapEventKind::AdapterExited),
+            "expected AdapterExited, got: {:?}",
+            evt
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluate_failure_returns_err() {
+        // Adapter responds to initialize with capabilities, then replies to
+        // the evaluate request with success=false.
+        let (r, w) = spawn_mock_adapter(vec![
+            Action::Respond(init_caps()),
+            Action::RespondErr("expression not evaluable in this context"),
+        ]);
+        let client = DapClient::from_streams(r, w, "mock").await.unwrap();
+        let err = client
+            .evaluate("bad_expr", Some(1), Some("repl"))
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("evaluate failed"),
+            "expected 'evaluate failed' prefix, got: {}",
+            err
+        );
+        assert!(
+            err.contains("expression not evaluable in this context"),
+            "expected adapter message in error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn scopes_error_returns_err() {
+        // Adapter responds to initialize, then rejects the scopes request.
+        let (r, w) = spawn_mock_adapter(vec![
+            Action::Respond(init_caps()),
+            Action::RespondErr("invalid frame id"),
+        ]);
+        let client = DapClient::from_streams(r, w, "mock").await.unwrap();
+        let err = client.scopes(99).await.unwrap_err();
+        assert!(
+            err.contains("scopes rejected"),
+            "expected 'scopes rejected' prefix, got: {}",
+            err
+        );
+        assert!(
+            err.contains("invalid frame id"),
+            "expected adapter message in error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn variables_error_returns_err() {
+        // Adapter responds to initialize, then rejects the variables request.
+        let (r, w) = spawn_mock_adapter(vec![
+            Action::Respond(init_caps()),
+            Action::RespondErr("variables reference expired"),
+        ]);
+        let client = DapClient::from_streams(r, w, "mock").await.unwrap();
+        let err = client.variables(999).await.unwrap_err();
+        assert!(
+            err.contains("variables rejected"),
+            "expected 'variables rejected' prefix, got: {}",
+            err
+        );
+        assert!(
+            err.contains("variables reference expired"),
+            "expected adapter message in error, got: {}",
+            err
+        );
+    }
 }

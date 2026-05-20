@@ -10,6 +10,11 @@ use mae_core::{CollabIntent, CollabStatus, Editor};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+/// Capacity for the command channel (main thread -> collab background task).
+const COLLAB_CMD_CHANNEL_CAP: usize = 256;
+/// Capacity for the event channel (collab background task -> main thread).
+const COLLAB_EVT_CHANNEL_CAP: usize = 64;
+
 // --- Command / Event types ---
 
 /// Commands sent from the main thread to the collab background task.
@@ -550,8 +555,8 @@ pub(crate) fn setup_collab_channels(
     mpsc::Sender<CollabCommand>,
     CollabSpawn,
 ) {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<CollabCommand>(256);
-    let (evt_tx, evt_rx) = mpsc::channel::<CollabEvent>(64);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<CollabCommand>(COLLAB_CMD_CHANNEL_CAP);
+    let (evt_tx, evt_rx) = mpsc::channel::<CollabEvent>(COLLAB_EVT_CHANNEL_CAP);
 
     let reconnect_secs = editor.collab_reconnect_interval;
     let write_timeout_ms = editor.collab_write_timeout_ms;
@@ -710,7 +715,10 @@ async fn run_collab_task(
                                         "update": update_b64,
                                     }
                                 });
-                                let body = serde_json::to_vec(&req).unwrap();
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("collab serialize error: {e}"); continue; }
+                                };
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
                                     pending_responses.insert(req_id, PendingResponseKind::ShareBuffer { doc_id });
                                 } else {
@@ -730,7 +738,10 @@ async fn run_collab_task(
                                     "method": "sync/full_state",
                                     "params": { "doc": doc_id }
                                 });
-                                let body = serde_json::to_vec(&req).unwrap();
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("collab serialize error: {e}"); continue; }
+                                };
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
                                     pending_responses.insert(req_id, PendingResponseKind::ForceSync { doc_id });
                                 } else {
@@ -753,7 +764,10 @@ async fn run_collab_task(
                                         "update": update_base64,
                                     }
                                 });
-                                let body = serde_json::to_vec(&req).unwrap();
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("collab serialize error: {e}"); continue; }
+                                };
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
                                     pending_responses.insert(req_id, PendingResponseKind::SyncUpdate { doc_id });
                                 }
@@ -768,7 +782,10 @@ async fn run_collab_task(
                                     "id": req_id,
                                     "method": "docs/list",
                                 });
-                                let body = serde_json::to_vec(&req).unwrap();
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("collab serialize error: {e}"); continue; }
+                                };
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
                                     pending_responses.insert(req_id, PendingResponseKind::ListDocs { for_join });
                                 } else {
@@ -788,7 +805,10 @@ async fn run_collab_task(
                                     "method": "sync/resync",
                                     "params": { "doc": doc_id },
                                 });
-                                let body = serde_json::to_vec(&req).unwrap();
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("collab serialize error: {e}"); continue; }
+                                };
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
                                     pending_responses.insert(req_id, PendingResponseKind::JoinDoc { doc_id: doc_id.clone() });
                                     if !shared_docs.contains(&doc_id) {

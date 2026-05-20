@@ -99,4 +99,91 @@ mod tests {
         };
         assert!(validate_update(&update).is_ok());
     }
+
+    #[test]
+    fn decode_empty_state_vector() {
+        let result = yrs::StateVector::decode_v1(&[]);
+        assert!(
+            result.is_err(),
+            "empty bytes should not decode as a valid StateVector"
+        );
+    }
+
+    #[test]
+    fn decode_truncated_update() {
+        let doc = Doc::with_client_id(1);
+        let text = doc.get_or_insert_text("t");
+        let update = {
+            let mut txn = doc.transact_mut();
+            text.insert(&mut txn, 0, "truncation test");
+            txn.encode_update_v1()
+        };
+        assert!(update.len() >= 2, "update must be long enough to truncate");
+        let truncated = &update[..update.len() / 2];
+        assert!(
+            validate_update(truncated).is_err(),
+            "truncated update should fail validation"
+        );
+    }
+
+    #[test]
+    fn encode_decode_large_state_vector() {
+        let doc = Doc::new();
+        // Create 100 distinct client IDs making edits by merging updates from
+        // separate per-client docs into one doc.
+        for client_id in 1u64..=100 {
+            let client_doc = Doc::with_client_id(client_id);
+            let text = client_doc.get_or_insert_text("shared");
+            {
+                let mut txn = client_doc.transact_mut();
+                text.insert(&mut txn, 0, &format!("c{client_id} "));
+            }
+            // Encode the client's full state as an update and apply to the main doc.
+            let client_update = {
+                let txn = client_doc.transact();
+                txn.encode_state_as_update_v1(&yrs::StateVector::default())
+            };
+            let update = yrs::Update::decode_v1(&client_update).unwrap();
+            let mut txn = doc.transact_mut();
+            txn.apply_update(update).unwrap();
+        }
+
+        // Encode state vector, round-trip through base64, decode back.
+        let sv_bytes = {
+            let txn = doc.transact();
+            txn.state_vector().encode_v1()
+        };
+        assert!(!sv_bytes.is_empty());
+
+        let encoded = state_vector_to_base64(&sv_bytes);
+        let decoded_bytes = base64_to_update(&encoded).unwrap();
+        assert_eq!(decoded_bytes, sv_bytes);
+
+        // Verify the decoded bytes parse as a valid StateVector.
+        let sv_decoded = yrs::StateVector::decode_v1(&decoded_bytes).unwrap();
+        // The state vector should contain entries for all 100 client IDs.
+        for client_id in 1u64..=100 {
+            assert!(
+                sv_decoded.get(&client_id) > 0,
+                "state vector missing clock for client {client_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_update_rejects_random_bytes() {
+        // Deterministic pseudo-random bytes (LCG with fixed seed — no external deps).
+        let mut state: u64 = 0xdeadbeef_cafebabe;
+        let mut bytes = vec![0u8; 256];
+        for b in bytes.iter_mut() {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *b = (state >> 33) as u8;
+        }
+        assert!(
+            validate_update(&bytes).is_err(),
+            "pseudo-random bytes should not be a valid yrs update"
+        );
+    }
 }

@@ -112,4 +112,53 @@
 
     (it-test "to-string passes through string"
       (lambda ()
-        (should-equal (to-string "hello") "hello")))))
+        (should-equal (to-string "hello") "hello")))
+
+    ;; --- should-greater-than ---
+    (it-test "should-greater-than passes when a > b"
+      (lambda ()
+        (should-greater-than 10 5)))
+
+    (it-test "should-greater-than fails when a <= b"
+      (lambda ()
+        (should-error (lambda () (should-greater-than 3 5)))))
+
+    ;; --- should-less-than ---
+    (it-test "should-less-than passes when a < b"
+      (lambda ()
+        (should-less-than 5 10)))
+
+    (it-test "should-less-than fails when a >= b"
+      (lambda ()
+        (should-error (lambda () (should-less-than 10 5)))))
+
+    ;; --- should-buffer-state ---
+    (it-test "setup buffer for state check"
+      (lambda ()
+        (create-buffer "*test-buf-state*")))
+
+    (it-test "insert content for state check"
+      (lambda ()
+        (buffer-insert "abc")))
+
+    (it-test "goto known position"
+      (lambda ()
+        (cursor-goto 0 1)))
+
+    (it-test "should-buffer-state passes with correct state"
+      (lambda ()
+        (should-buffer-state "abc" 0 1)))
+
+    ;; --- cursor-row / cursor-col ---
+    (it-test "cursor-row returns a number"
+      (lambda ()
+        (should (number? (cursor-row)))))
+
+    (it-test "cursor-col returns a number"
+      (lambda ()
+        (should (number? (cursor-col)))))
+
+    ;; --- status-message ---
+    (it-test "status-message returns a string"
+      (lambda ()
+        (should (string? (status-message)))))))

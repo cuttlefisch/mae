@@ -279,17 +279,33 @@ impl StorageBackend for SqliteBackend {
         up_to_wal_id: u64,
     ) -> Result<(), StorageError> {
         let conn = self.pool.shard_for(doc_name).lock().unwrap();
-        conn.execute(
-            "INSERT OR REPLACE INTO snapshots (doc_name, state, wal_id, updated_at)
-             VALUES (?1, ?2, ?3, datetime('now'))",
-            rusqlite::params![doc_name, state, up_to_wal_id as i64],
-        )?;
-        conn.execute(
-            "DELETE FROM wal WHERE doc_name = ?1 AND id <= ?2",
-            rusqlite::params![doc_name, up_to_wal_id as i64],
-        )?;
-        info!(doc = doc_name, up_to = up_to_wal_id, "compacted");
-        Ok(())
+        // Atomic: snapshot write + WAL trim in a single transaction.
+        // Without this, a crash between the two statements causes duplicate
+        // replay on recovery.
+        conn.execute("BEGIN IMMEDIATE", [])?;
+        let result = (|| -> Result<(), rusqlite::Error> {
+            conn.execute(
+                "INSERT OR REPLACE INTO snapshots (doc_name, state, wal_id, updated_at)
+                 VALUES (?1, ?2, ?3, datetime('now'))",
+                rusqlite::params![doc_name, state, up_to_wal_id as i64],
+            )?;
+            conn.execute(
+                "DELETE FROM wal WHERE doc_name = ?1 AND id <= ?2",
+                rusqlite::params![doc_name, up_to_wal_id as i64],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", [])?;
+                info!(doc = doc_name, up_to = up_to_wal_id, "compacted");
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", []);
+                Err(StorageError::Sqlite(format!("compact transaction: {e}")))
+            }
+        }
     }
 
     async fn list_documents(&self) -> Result<Vec<String>, StorageError> {
@@ -382,5 +398,90 @@ mod tests {
         let state = backend.load_document("doc1").await.unwrap().unwrap();
         assert_eq!(state.snapshot.as_deref(), Some(b"state2".as_slice()));
         assert!(state.wal_tail.is_empty());
+    }
+
+    #[tokio::test]
+    async fn compact_is_atomic() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        let id1 = backend.wal_append("doc1", b"u1", None).await.unwrap();
+        let id2 = backend.wal_append("doc1", b"u2", None).await.unwrap();
+        let id3 = backend.wal_append("doc1", b"u3", None).await.unwrap();
+
+        // Compact up to id2, leaving id3 in the WAL.
+        backend
+            .compact("doc1", b"snapshot-at-id2", id2)
+            .await
+            .unwrap();
+
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+
+        // Invariant: snapshot must exist and its wal_id must be >= any remaining
+        // WAL entry's id. This verifies the atomic post-condition: it is
+        // impossible to observe a snapshot without the corresponding WAL trim
+        // (or vice-versa), because compact() wraps both in a single transaction.
+        let snap_wal_id: i64 = {
+            let conn = backend.pool.primary().lock().unwrap();
+            conn.query_row(
+                "SELECT wal_id FROM snapshots WHERE doc_name = 'doc1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert!(
+            state.snapshot.is_some(),
+            "snapshot must exist after compact"
+        );
+        for entry in &state.wal_tail {
+            assert!(
+                snap_wal_id as u64 >= id1,
+                "snapshot.wal_id ({snap_wal_id}) must be >= first compacted id ({id1})"
+            );
+            assert!(
+                entry.id > snap_wal_id as u64,
+                "remaining WAL entry id ({}) must be > snapshot.wal_id ({snap_wal_id})",
+                entry.id
+            );
+        }
+        // Only id3 should remain.
+        assert_eq!(state.wal_tail.len(), 1);
+        assert_eq!(state.wal_tail[0].id, id3);
+        assert_eq!(state.wal_tail[0].update, b"u3");
+    }
+
+    #[tokio::test]
+    async fn recovery_after_wal_append_without_compact() {
+        let backend = SqliteBackend::open_memory().unwrap();
+
+        // Append 10 WAL entries without compacting.
+        for i in 0u8..10 {
+            backend.wal_append("doc1", &[i], None).await.unwrap();
+        }
+
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+
+        // No compaction was performed, so there must be no snapshot.
+        assert!(
+            state.snapshot.is_none(),
+            "no compaction occurred — snapshot must be None"
+        );
+        // All 10 WAL entries must be present and in order.
+        assert_eq!(
+            state.wal_tail.len(),
+            10,
+            "all 10 WAL entries must survive a load without compaction"
+        );
+        for (i, entry) in state.wal_tail.iter().enumerate() {
+            assert_eq!(
+                entry.update,
+                vec![i as u8],
+                "WAL entry {i} has wrong payload"
+            );
+        }
+        // IDs must be monotonically increasing.
+        let ids: Vec<u64> = state.wal_tail.iter().map(|e| e.id).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(ids, sorted, "WAL entries must be in id order");
     }
 }

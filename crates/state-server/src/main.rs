@@ -163,10 +163,12 @@ async fn run_server(start_args: cli::StartArgs) {
     };
 
     // Create doc store and broadcaster.
-    let doc_store = Arc::new(doc_store::DocStore::new(
-        backend.clone(),
-        config.storage.compact_threshold,
-    ));
+    let doc_store = Arc::new(
+        doc_store::DocStore::new(backend.clone(), config.storage.compact_threshold)
+            .with_max_documents(config.sync.max_documents)
+            .with_max_wal_entries(config.storage.max_wal_entries)
+            .with_max_document_size(config.sync.max_document_size_bytes),
+    );
     let broadcaster: SharedBroadcaster = Arc::new(std::sync::Mutex::new(EventBroadcaster::new()));
 
     // Recover documents from storage.

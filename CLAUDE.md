@@ -428,7 +428,7 @@ Events carry version numbers for ordering. Slow clients are dropped, not blocked
 
 ### Architecture Decision Records
 ADRs live in `docs/adr/` and as KB concept nodes (`concept:adr-*`).
-See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine).
+See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine), ADR-007 (save coordination), ADR-008 (CRDT target metrics).
 
 ### Sync Engine (yrs — Accepted)
 Collaborative state uses **yrs** (Yjs Rust port, YATA algorithm). Decision rationale:

@@ -472,6 +472,9 @@ Source: `crates/sync/src/lib.rs`
 | `test-region-start` | `crates/scheme/src/runtime.rs` |
 | `test-region-end` | `crates/scheme/src/runtime.rs` |
 | `test-search-forward` | `crates/scheme/src/runtime.rs` |
+| `test-cursor-row` | `crates/scheme/src/runtime.rs` |
+| `test-cursor-col` | `crates/scheme/src/runtime.rs` |
+| `test-status-message` | `crates/scheme/src/runtime.rs` |
 | `buffer-enable-sync` | `crates/scheme/src/runtime.rs` |
 | `buffer-disable-sync` | `crates/scheme/src/runtime.rs` |
 | `buffer-apply-update` | `crates/scheme/src/runtime.rs` |

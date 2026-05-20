@@ -221,7 +221,10 @@ fn install_mutable_buffer_accessors(_editor: &Editor, scheme: &mut SchemeRuntime
           (define (region-beginning) (test-region-start))
           (define (region-end) (test-region-end))
           (define (buffer-search-forward pattern) (test-search-forward pattern))
-          (define (get-option name) (test-get-option name)))"#;
+          (define (get-option name) (test-get-option name))
+          (define (cursor-row) (test-cursor-row))
+          (define (cursor-col) (test-cursor-col))
+          (define (status-message) (test-status-message)))"#;
     let _ = scheme.eval(code);
 }
 
@@ -278,6 +281,8 @@ fn sync_scheme_state(editor: &Editor, scheme: &mut SchemeRuntime) {
     // Update SharedState for Rust-backed test functions (current-mode, buffer-string, etc.)
     scheme.set_current_mode(mode_str);
     scheme.set_current_buffer_text(&buf.text());
+    scheme.set_cursor_position(win.cursor_row, win.cursor_col);
+    scheme.set_last_status_message(&editor.status_msg);
 
     if let Err(e) = scheme.eval(&sync_code) {
         warn!(error = %e.message, "failed to sync scheme state variables");

@@ -1260,6 +1260,18 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "test-cursor-row",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-cursor-col",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-status-message",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "buffer-enable-sync",
       "source": "crates/scheme/src/runtime.rs"
     },

@@ -40,6 +40,8 @@ pub struct StorageConfig {
     pub data_dir: Option<PathBuf>,
     /// WAL compaction threshold (number of updates per document).
     pub compact_threshold: u64,
+    /// Maximum WAL entries between forced compactions (0 = no forced compaction).
+    pub max_wal_entries: u64,
 }
 
 impl Default for StorageConfig {
@@ -48,6 +50,7 @@ impl Default for StorageConfig {
             backend: "sqlite".to_string(),
             data_dir: None,
             compact_threshold: 500,
+            max_wal_entries: 5000,
         }
     }
 }
@@ -64,6 +67,10 @@ pub struct SyncConfig {
     pub idle_eviction_secs: u64,
     /// Background compaction interval in seconds.
     pub compaction_interval_secs: u64,
+    /// Maximum update payload size in bytes (0 = unlimited).
+    pub max_update_size_bytes: usize,
+    /// Maximum document size in bytes before warning (0 = unlimited).
+    pub max_document_size_bytes: usize,
 }
 
 impl Default for SyncConfig {
@@ -73,6 +80,8 @@ impl Default for SyncConfig {
             max_documents: 1000,
             idle_eviction_secs: 300,
             compaction_interval_secs: 60,
+            max_update_size_bytes: 1_048_576,    // 1 MB
+            max_document_size_bytes: 10_485_760, // 10 MB
         }
     }
 }

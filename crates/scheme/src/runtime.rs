@@ -183,6 +183,14 @@ struct SharedState {
     /// End offset of the visual selection.
     region_end: usize,
 
+    // --- Cursor state (updated by test runner) ---
+    /// Cursor row (0-indexed), updated by sync_scheme_state.
+    cursor_row: usize,
+    /// Cursor column (0-indexed), updated by sync_scheme_state.
+    cursor_col: usize,
+    /// Last status message set by the editor (for test inspection).
+    last_status_message: String,
+
     // --- State vector / reconcile (new CRDT test primitives) ---
     /// Pending state vector encode request.
     pending_encode_state_vector: bool,
@@ -746,7 +754,7 @@ impl SchemeRuntime {
         engine
             .run(
                 r#"
-(define (when-flag flag-name thunk)
+(define (when-flag module-name flag-name thunk)
   ;; Flag variables are set as __mae-flag-MODULE-FLAG = #t by the loader.
   ;; We can't easily check from Scheme since we don't know the module name here,
   ;; so for now just evaluate the thunk. The loader only sets flags that are enabled.
@@ -1362,6 +1370,24 @@ impl SchemeRuntime {
             }
         });
 
+        // (test-cursor-row) — cursor row (0-indexed) from SharedState.
+        let s = shared.clone();
+        engine.register_fn("test-cursor-row", move || -> isize {
+            s.lock().unwrap().cursor_row as isize
+        });
+
+        // (test-cursor-col) — cursor column (0-indexed) from SharedState.
+        let s = shared.clone();
+        engine.register_fn("test-cursor-col", move || -> isize {
+            s.lock().unwrap().cursor_col as isize
+        });
+
+        // (test-status-message) — last status bar message from SharedState.
+        let s = shared.clone();
+        engine.register_fn("test-status-message", move || -> String {
+            s.lock().unwrap().last_status_message.clone()
+        });
+
         // --- CRDT/sync test primitives ---
 
         // (buffer-enable-sync CLIENT-ID) — enable sync on active buffer.
@@ -1588,6 +1614,18 @@ impl SchemeRuntime {
         state.region_active = active;
         state.region_start = start;
         state.region_end = end;
+    }
+
+    /// Update cursor position in SharedState (called by test runner).
+    pub fn set_cursor_position(&self, row: usize, col: usize) {
+        let mut state = self.shared.lock().unwrap();
+        state.cursor_row = row;
+        state.cursor_col = col;
+    }
+
+    /// Update last status message in SharedState (called by test runner).
+    pub fn set_last_status_message(&self, msg: &str) {
+        self.shared.lock().unwrap().last_status_message = msg.to_string();
     }
 
     /// Drain pending file writes from `(write-file PATH CONTENT)`.

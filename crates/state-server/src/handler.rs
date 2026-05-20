@@ -20,6 +20,13 @@ use tracing::{debug, error, info, warn};
 
 use crate::doc_store::DocStore;
 
+/// Write timeout for event notifications to clients (seconds).
+const WRITE_TIMEOUT_SECS: u64 = 5;
+/// Disconnect client after this many consecutive write failures.
+const MAX_CONSECUTIVE_WRITE_FAILURES: u32 = 3;
+/// Maximum allowed size for a single sync update payload (bytes).
+const MAX_UPDATE_SIZE: usize = 1_048_576; // 1 MB
+
 /// Run the client handler loop for a single connection.
 ///
 /// Generic over reader/writer — works with TCP, Unix, or any async stream.
@@ -34,7 +41,7 @@ pub async fn handle_client<R, W>(
     W: AsyncWrite + Unpin,
 {
     let mut reader = reader;
-    let write_timeout = std::time::Duration::from_secs(5);
+    let write_timeout = std::time::Duration::from_secs(WRITE_TIMEOUT_SECS);
 
     let mut session = ClientSession::new();
     let session_id = session.id;
@@ -152,7 +159,7 @@ pub async fn handle_client<R, W>(
                 if mae_mcp::write_framed(&mut writer, &body, write_timeout).await.is_err() {
                     consecutive_write_failures += 1;
                     session.events_dropped += 1;
-                    if consecutive_write_failures >= 3 {
+                    if consecutive_write_failures >= MAX_CONSECUTIVE_WRITE_FAILURES {
                         warn!(session = session_id, "disconnecting after 3 write failures");
                         break;
                     }
@@ -247,7 +254,15 @@ async fn handle_doc_request(
         }
 
         "sync/update" => {
-            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            let doc_name = match params["doc"].as_str() {
+                Some(d) => d.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'doc' field".to_string()),
+                    );
+                }
+            };
             // Track this doc for disconnect cleanup.
             if session_docs.insert(doc_name.clone()) {
                 // First interaction — track client connect.
@@ -271,6 +286,16 @@ async fn handle_doc_request(
                     );
                 }
             };
+            if update_bytes.len() > MAX_UPDATE_SIZE {
+                return JsonRpcResponse::error(
+                    id,
+                    McpError::parse_error(format!(
+                        "update too large: {} bytes (max {})",
+                        update_bytes.len(),
+                        MAX_UPDATE_SIZE
+                    )),
+                );
+            }
             let client_id = params["client_id"].as_u64();
 
             match doc_store
@@ -988,5 +1013,81 @@ mod tests {
             stats["connected_clients"].as_u64().unwrap() >= 1,
             "resync must increment connected_clients, got: {stats}"
         );
+    }
+
+    #[tokio::test]
+    async fn sync_update_missing_doc_returns_error() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        // sync/update without "doc" param should return an error (not silently use "default").
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "sync/update",
+            "params": { "update": "AAAA" }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
+        assert!(
+            resp.error.is_some(),
+            "sync/update without doc should return error"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_update_oversized_rejected() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        // Create a base64 string that decodes to > 1 MB.
+        let big_data = vec![0u8; MAX_UPDATE_SIZE + 1];
+        let big_b64 = mae_sync::encoding::update_to_base64(&big_data);
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "sync/update",
+            "params": { "doc": "test", "update": big_b64 }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
+        assert!(resp.error.is_some(), "oversized update should be rejected");
+        let err_msg = resp.error.unwrap().message;
+        assert!(
+            err_msg.contains("too large"),
+            "error should mention size: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_method_returns_error() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "sync/nonexistent"
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().message.contains("Unknown method"));
     }
 }
