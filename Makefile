@@ -230,11 +230,11 @@ fmt-check:
 clippy:
 	$(CARGO) clippy $(FEAT_FLAG) -- -D warnings
 
-## ci: run the full CI pipeline locally (fmt + clippy + check + test + scheme tests, excludes mae-gui)
+## ci: run the full CI pipeline locally (fmt + clippy + check + test + scheme tests)
 ci: fmt-check
-	$(CARGO) clippy --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures -- -D warnings
-	$(CARGO) check --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures
-	$(CARGO) test --workspace --exclude mae-gui --exclude mae-test-fixtures
+	$(CARGO) clippy --workspace --all-targets -- -D warnings
+	$(CARGO) check --workspace --all-targets
+	$(CARGO) test --workspace
 	@echo "==> Scheme editor tests..."
 	./target/debug/mae --test tests/editor/
 	@echo "==> Config validation..."

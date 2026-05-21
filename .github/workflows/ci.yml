@@ -30,19 +30,23 @@ jobs:
           toolchain: ${{ matrix.toolchain }}
           components: clippy, rustfmt
 
+      - name: Install GUI dependencies
+        if: matrix.step != 'fmt'
+        run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libfreetype6-dev
+
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo check
         if: matrix.step == 'check'
-        run: cargo check --workspace --all-targets --exclude mae-gui
+        run: cargo check --workspace --all-targets
       - name: cargo test
         if: matrix.step == 'test'
         run: |
-          cargo test --workspace --exclude mae-gui
-          cargo test --doc --workspace --exclude mae-gui
+          cargo test --workspace
+          cargo test --doc --workspace
       - name: cargo clippy
         if: matrix.step == 'clippy'
-        run: cargo clippy --workspace --all-targets --exclude mae-gui -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo fmt
         if: matrix.step == 'fmt'
@@ -79,22 +83,16 @@ jobs:
         timeout-minutes: 1
 
   gui:
-    name: gui / build + test
+    name: gui / release binary
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
       - name: Install GUI dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libfreetype6-dev
       - uses: Swatinem/rust-cache@v2
       - name: Build GUI binary
         run: cargo build --release --features gui --package mae
-      - name: GUI unit tests
-        run: cargo test --package mae-gui
-      - name: GUI clippy
-        run: cargo clippy --package mae-gui --all-targets -- -D warnings
 
   containers:
     name: container / smoke + new-user
@@ -115,9 +113,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install GUI dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libfreetype6-dev
       - uses: Swatinem/rust-cache@v2
-      - name: Build TUI binary
-        run: cargo build --release --workspace --exclude mae-gui
+      - name: Build binary
+        run: cargo build --release --workspace
       - name: Create Steel home directory
         run: mkdir -p ~/.local/share/steel
       - name: Validate init.scm
@@ -145,7 +145,7 @@ jobs:
       - uses: actions/checkout@v6
       - name: Run collab E2E
         run: make docker-collab-test
-        timeout-minutes: 10
+        timeout-minutes: 15
 
   code-map:
     name: code-map freshness
