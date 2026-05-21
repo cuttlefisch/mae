@@ -114,6 +114,8 @@ services:
     volumes:
       - workspace-a:/workspace-a:ro
       - workspace-b:/workspace-b:ro
+      - workspace-undo-a:/workspace-undo-a:ro
+      - workspace-undo-b:/workspace-undo-b:ro
       - shared-workspace:/shared-workspace:ro
       - ./tests/collab-e2e:/tests:ro
     depends_on:

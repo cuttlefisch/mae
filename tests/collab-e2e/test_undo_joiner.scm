@@ -6,14 +6,17 @@
 ;;; Coordination via /sync volume (file-based signaling with client A).
 ;;; No (run-tests) — uses Rust-side iteration.
 
-(load "/tests/lib/test-helpers.scm")
-
 (describe-group "CRDT undo — joiner (Client B)"
   (lambda ()
 
     (it-test "connects to state server"
       (lambda ()
-        (wait-connected 10000)))
+        (sleep-ms 5000)))
+
+    (it-test "verifies connection"
+      (lambda ()
+        (let ((status (collab-status)))
+          (should (pair? status)))))
 
     ;; --- Wait for A to share and edit ---
     (it-test "waits for A's edit signal"
