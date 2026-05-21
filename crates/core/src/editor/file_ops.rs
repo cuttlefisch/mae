@@ -271,17 +271,21 @@ impl Editor {
                         self.refresh_help_if_stale();
                     }
                 }
-                // If buffer is synced via collab, trigger the save protocol.
-                if let Some(ref doc_id) = self.buffers[idx].collab_doc_id {
-                    let content = self.buffers[idx].text();
-                    use sha2::{Digest, Sha256};
-                    let mut hasher = Sha256::new();
-                    hasher.update(content.as_bytes());
-                    let content_hash = format!("{:x}", hasher.finalize());
-                    self.collab.pending_intent = Some(super::CollabIntent::SaveCollab {
-                        doc_id: doc_id.clone(),
-                        content_hash,
-                    });
+                // If buffer is synced via collab AND this client is the sharer,
+                // trigger the save protocol. Joiners save locally only — they are
+                // not the authoritative saver (Bug 2 fix).
+                if self.buffers[idx].collab_is_sharer {
+                    if let Some(ref doc_id) = self.buffers[idx].collab_doc_id {
+                        let content = self.buffers[idx].text();
+                        use sha2::{Digest, Sha256};
+                        let mut hasher = Sha256::new();
+                        hasher.update(content.as_bytes());
+                        let content_hash = format!("{:x}", hasher.finalize());
+                        self.collab.pending_intent = Some(super::CollabIntent::SaveCollab {
+                            doc_id: doc_id.clone(),
+                            content_hash,
+                        });
+                    }
                 }
                 self.fire_hook("after-save");
             }

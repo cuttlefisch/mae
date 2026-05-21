@@ -30,6 +30,8 @@ struct DocEntry {
     save_epoch: u64,
     /// User who last saved this document.
     last_saved_by: Option<String>,
+    /// Session ID of the client that shared this document (None if loaded from WAL).
+    sharer_session_id: Option<u64>,
 }
 
 /// Statistics for a single document.
@@ -171,6 +173,7 @@ impl DocStore {
             connected_clients: 0,
             save_epoch: 0,
             last_saved_by: None,
+            sharer_session_id: None,
         }));
         docs.insert(doc_name.to_string(), Arc::clone(&entry));
         Ok(entry)
@@ -542,6 +545,35 @@ impl DocStore {
             update: update.to_vec(),
             wal_seq: wal_id,
         })
+    }
+
+    /// Set the sharer session ID for a document.
+    pub async fn set_sharer_session(&self, doc_name: &str, session_id: u64) {
+        let docs = self.docs.read().await;
+        if let Some(entry) = docs.get(doc_name) {
+            let mut doc = entry.lock().await;
+            doc.sharer_session_id = Some(session_id);
+        }
+    }
+
+    /// Check if a session is the sharer for a document.
+    pub async fn is_sharer(&self, doc_name: &str, session_id: u64) -> bool {
+        let docs = self.docs.read().await;
+        if let Some(entry) = docs.get(doc_name) {
+            let doc = entry.lock().await;
+            doc.sharer_session_id == Some(session_id)
+        } else {
+            false
+        }
+    }
+
+    /// Clear the sharer for a document (called on sharer disconnect).
+    pub async fn clear_sharer(&self, doc_name: &str) {
+        let docs = self.docs.read().await;
+        if let Some(entry) = docs.get(doc_name) {
+            let mut doc = entry.lock().await;
+            doc.sharer_session_id = None;
+        }
     }
 
     /// Compact a single document (public interface for background tasks).
@@ -1026,5 +1058,25 @@ mod tests {
         // connected_clients is set to 1 by share_doc (BUG D invariant).
         let stats = store.doc_stats("doc1").await.unwrap();
         assert_eq!(stats.connected_clients, 1);
+    }
+
+    #[tokio::test]
+    async fn sharer_session_tracking() {
+        let store = test_store();
+        let ts = TextSync::new("content");
+        let state = ts.encode_state();
+        store.share_doc("doc1", &state).await.unwrap();
+
+        // Initially no sharer.
+        assert!(!store.is_sharer("doc1", 42).await);
+
+        // Set sharer.
+        store.set_sharer_session("doc1", 42).await;
+        assert!(store.is_sharer("doc1", 42).await);
+        assert!(!store.is_sharer("doc1", 99).await);
+
+        // Clear sharer.
+        store.clear_sharer("doc1").await;
+        assert!(!store.is_sharer("doc1", 42).await);
     }
 }

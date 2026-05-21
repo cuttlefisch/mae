@@ -518,9 +518,13 @@ pub fn format_lsp_status(editor: &Editor) -> String {
 
 pub fn format_collab_status(editor: &Editor) -> String {
     let buf = &editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+    let pending = buf.pending_sync_updates.len();
     // Show offline indicator regardless of connection status — buffer may have
     // CRDT state from a previous session even after disconnect.
     if buf.collab_offline {
+        if pending > 0 {
+            return format!(" [C:OFFLINE|pending:{}]", pending);
+        }
         return " [C:OFFLINE]".to_string();
     }
     match &editor.collab.status {
@@ -532,11 +536,17 @@ pub fn format_collab_status(editor: &Editor) -> String {
                 .as_ref()
                 .is_some_and(|id| editor.collab.synced_buffers.contains(id))
                 || editor.collab.synced_buffers.contains(&buf.name);
-            if is_synced {
-                format!(" [C:{}|synced]", peer_count)
-            } else {
-                format!(" [C:{}]", peer_count)
+            if !is_synced {
+                return format!(" [C:{}]", peer_count);
             }
+            let role = if buf.collab_is_sharer {
+                "sharer"
+            } else if pending > 0 {
+                return format!(" [C:{}|pending:{}]", peer_count, pending);
+            } else {
+                "synced"
+            };
+            format!(" [C:{}|{}]", peer_count, role)
         }
         CollabStatus::Reconnecting => " [C:\u{27f3}]".to_string(),
         CollabStatus::Disconnected => " [C:\u{2717}]".to_string(),
@@ -813,5 +823,52 @@ mod tests {
             &layout.right_text[span.byte_offset..span.byte_offset + span.byte_len],
             " MODE "
         );
+    }
+
+    #[test]
+    fn format_collab_status_sharer() {
+        let mut editor = crate::Editor::new();
+        editor.collab.status = crate::editor::CollabStatus::Connected { peer_count: 3 };
+        let buf = &mut editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+        buf.collab_doc_id = Some("test".to_string());
+        buf.collab_is_sharer = true;
+        editor.collab.synced_buffers.insert("test".to_string());
+        let s = format_collab_status(&editor);
+        assert_eq!(s, " [C:3|sharer]");
+    }
+
+    #[test]
+    fn format_collab_status_synced_joiner() {
+        let mut editor = crate::Editor::new();
+        editor.collab.status = crate::editor::CollabStatus::Connected { peer_count: 2 };
+        let buf = &mut editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+        buf.collab_doc_id = Some("test".to_string());
+        buf.collab_is_sharer = false;
+        editor.collab.synced_buffers.insert("test".to_string());
+        let s = format_collab_status(&editor);
+        assert_eq!(s, " [C:2|synced]");
+    }
+
+    #[test]
+    fn format_collab_status_pending() {
+        let mut editor = crate::Editor::new();
+        editor.collab.status = crate::editor::CollabStatus::Connected { peer_count: 1 };
+        let buf = &mut editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+        buf.collab_doc_id = Some("test".to_string());
+        buf.collab_is_sharer = false;
+        buf.pending_sync_updates = vec![vec![1], vec![2]];
+        editor.collab.synced_buffers.insert("test".to_string());
+        let s = format_collab_status(&editor);
+        assert_eq!(s, " [C:1|pending:2]");
+    }
+
+    #[test]
+    fn format_collab_status_offline_pending() {
+        let mut editor = crate::Editor::new();
+        let buf = &mut editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+        buf.collab_offline = true;
+        buf.pending_sync_updates = vec![vec![1]; 5];
+        let s = format_collab_status(&editor);
+        assert_eq!(s, " [C:OFFLINE|pending:5]");
     }
 }

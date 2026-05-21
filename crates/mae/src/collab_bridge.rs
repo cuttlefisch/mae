@@ -134,6 +134,10 @@ pub enum CollabEvent {
         doc_id: String,
         message: String,
     },
+    /// The sharer of a document disconnected.
+    SharerLeft {
+        doc_id: String,
+    },
     /// Peer count changed (peer joined or left).
     PeerCountChanged {
         peer_count: usize,
@@ -463,6 +467,10 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             // This insert is idempotent — ensures consistency if event ordering varies.
             editor.collab.synced_buffers.insert(doc_id.clone());
             editor.collab.synced_docs = editor.collab.synced_buffers.len();
+            // Mark this buffer as the sharer (authoritative saver).
+            if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
+                editor.buffers[idx].collab_is_sharer = true;
+            }
             editor.set_status(format!("Shared: {}", doc_id));
             editor.mark_full_redraw();
         }
@@ -656,6 +664,11 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             ));
             editor.mark_full_redraw();
         }
+        CollabEvent::SharerLeft { doc_id } => {
+            warn!(doc = %doc_id, "sharer disconnected");
+            editor.set_status(format!("Sharer disconnected for {}", doc_id));
+            editor.mark_full_redraw();
+        }
         CollabEvent::PeerCountChanged { peer_count } => {
             debug!(peer_count, "peer count changed");
             if let CollabStatus::Connected { .. } = editor.collab.status {
@@ -695,6 +708,8 @@ pub(crate) struct CollabSpawn {
     write_timeout_ms: u64,
     auto_connect_addr: Option<String>,
     cmd_tx_clone: mpsc::Sender<CollabCommand>,
+    backoff_factor: u64,
+    max_reconnect_attempts: u64,
 }
 
 /// Create collab channels and read config. Does NOT require a tokio runtime.
@@ -720,6 +735,9 @@ pub(crate) fn setup_collab_channels(
             None
         };
 
+    let backoff_factor = editor.collab.reconnect_backoff_factor;
+    let max_reconnect_attempts = editor.collab.max_reconnect_attempts;
+
     let spawn = CollabSpawn {
         cmd_rx,
         evt_tx,
@@ -727,6 +745,8 @@ pub(crate) fn setup_collab_channels(
         write_timeout_ms,
         auto_connect_addr,
         cmd_tx_clone: cmd_tx.clone(),
+        backoff_factor,
+        max_reconnect_attempts,
     };
 
     (evt_rx, cmd_tx, spawn)
@@ -740,6 +760,8 @@ pub(crate) fn spawn_collab_task(spawn: CollabSpawn) {
         spawn.evt_tx,
         spawn.reconnect_secs,
         write_timeout,
+        spawn.backoff_factor,
+        spawn.max_reconnect_attempts,
     ));
 
     // Auto-connect if configured
@@ -787,6 +809,8 @@ async fn run_collab_task(
     evt_tx: mpsc::Sender<CollabEvent>,
     reconnect_secs: u64,
     write_timeout: std::time::Duration,
+    backoff_factor: u64,
+    max_reconnect_attempts: u64,
 ) {
     use mae_mcp::{read_message, write_framed};
     use std::collections::HashMap;
@@ -799,6 +823,10 @@ async fn run_collab_task(
     let mut target_address: Option<String> = None;
     let mut shared_docs: Vec<String> = Vec::new();
     let mut reconnect_enabled = false;
+    let mut reconnect_attempt: u32 = 0;
+    // ForceSync debounce: track last force-sync time per doc.
+    let mut last_force_sync: std::collections::HashMap<String, std::time::Instant> =
+        std::collections::HashMap::new();
     let mut next_request_id: u64 = 10; // Start after handshake IDs
     let mut pending_responses: HashMap<u64, PendingResponseKind> = HashMap::new();
     // WU1: Track wal_seq per doc for gap detection.
@@ -912,6 +940,15 @@ async fn run_collab_task(
                             }
                         }
                         CollabCommand::ForceSync { doc_id } => {
+                            // Debounce: skip if we sent ForceSync for this doc within 2s.
+                            let now = std::time::Instant::now();
+                            if let Some(last) = last_force_sync.get(&doc_id) {
+                                if now.duration_since(*last).as_secs() < 2 {
+                                    debug!(doc = %doc_id, "ForceSync debounced (within 2s)");
+                                    continue;
+                                }
+                            }
+                            last_force_sync.insert(doc_id.clone(), now);
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
                                 next_request_id += 1;
@@ -1160,10 +1197,26 @@ async fn run_collab_task(
                                 &mut pending_responses, write_timeout,
                             ).await;
                         }
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(reconnect_secs)) => {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(
+                            compute_backoff(reconnect_secs, backoff_factor, reconnect_attempt)
+                        )) => {
+                            // Check max attempts (0 = infinite).
+                            if max_reconnect_attempts > 0
+                                && reconnect_attempt as u64 >= max_reconnect_attempts
+                            {
+                                warn!(attempts = reconnect_attempt, max = max_reconnect_attempts,
+                                    "max reconnect attempts exhausted");
+                                reconnect_enabled = false;
+                                let _ = evt_tx.send(CollabEvent::Disconnected {
+                                    reason: format!("max reconnect attempts ({}) exhausted", max_reconnect_attempts),
+                                }).await;
+                                continue;
+                            }
+                            reconnect_attempt += 1;
                             if let Ok(mut stream) = TcpStream::connect(&addr_clone).await {
                                 if let Some(peer_count) = send_initialize(&mut stream, write_timeout).await {
                                     install_connection(stream, &mut reader, &mut writer);
+                                    reconnect_attempt = 0; // Reset on success.
                                     // Subscribe to sync_update events (B4 fix).
                                     if let Some(ref mut w) = writer {
                                         send_subscribe(w, &mut next_request_id, &mut pending_responses, write_timeout).await;
@@ -1174,7 +1227,8 @@ async fn run_collab_task(
                                     }).await;
                                 }
                             } else {
-                                debug!(addr = %addr_clone, "reconnect failed, will retry");
+                                debug!(addr = %addr_clone, attempt = reconnect_attempt,
+                                    "reconnect failed, will retry");
                             }
                         }
                     }
@@ -1226,6 +1280,13 @@ async fn check_seq_gap(
     }
     // Always update tracker to the latest seen seq.
     seq_tracker.insert(doc_id.to_string(), wal_seq);
+}
+
+/// Compute exponential backoff delay: `base * factor^min(attempt, 5)`, capped at 300s.
+fn compute_backoff(base_secs: u64, factor: u64, attempt: u32) -> u64 {
+    let exp = attempt.min(5);
+    let delay = base_secs.saturating_mul(factor.saturating_pow(exp));
+    delay.min(300)
 }
 
 /// Handle an incoming JSON-RPC message from the server.
@@ -1341,6 +1402,19 @@ pub(crate) async fn handle_incoming_message(
                     let _ = evt_tx
                         .send(CollabEvent::PeerCountChanged { peer_count })
                         .await;
+                }
+            }
+            "notifications/sharer_left" => {
+                if let Some(params) = val.get("params") {
+                    let event = params.get("event").unwrap_or(params);
+                    let data = event.get("data").unwrap_or(event);
+                    let doc_id = data
+                        .get("doc")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    debug!(doc = %doc_id, "received sharer_left notification");
+                    let _ = evt_tx.send(CollabEvent::SharerLeft { doc_id }).await;
                 }
             }
             "notifications/save_committed" => {
@@ -3166,5 +3240,157 @@ mod tests {
 
         // Note: apply_sync_update may fail if the update isn't compatible,
         // but the test validates the code path exists.
+    }
+
+    // --- WU1: Buffer status indicator tests ---
+
+    #[test]
+    fn buffer_shared_sets_is_sharer() {
+        let mut editor = Editor::new();
+        editor.buffers[0].collab_doc_id = Some("test-doc".to_string());
+        editor.collab.status = CollabStatus::Connected { peer_count: 1 };
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::BufferShared {
+                doc_id: "test-doc".to_string(),
+            },
+        );
+        assert!(editor.buffers[0].collab_is_sharer);
+    }
+
+    #[test]
+    fn buffer_joined_stays_not_sharer() {
+        let mut editor = Editor::new();
+        let sync = mae_sync::text::TextSync::with_client_id("hello", 1);
+        let state = sync.encode_state();
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::BufferJoined {
+                doc_id: "test-doc".to_string(),
+                state_bytes: state,
+            },
+        );
+        // Find the buffer that was created for the joined doc.
+        let idx = editor.find_buffer_by_collab_doc_id("test-doc");
+        assert!(idx.is_some());
+        assert!(!editor.buffers[idx.unwrap()].collab_is_sharer);
+    }
+
+    // --- WU2: Save guard tests ---
+
+    #[test]
+    fn collab_is_sharer_defaults_false() {
+        let buf = mae_core::Buffer::new();
+        assert!(!buf.collab_is_sharer);
+    }
+
+    #[test]
+    fn collab_is_sharer_set_on_share_not_join() {
+        // Verify that BufferShared sets is_sharer and BufferJoined does not.
+        let mut editor = Editor::new();
+        editor.buffers[0].collab_doc_id = Some("doc-a".to_string());
+        editor.collab.status = CollabStatus::Connected { peer_count: 1 };
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::BufferShared {
+                doc_id: "doc-a".to_string(),
+            },
+        );
+        assert!(
+            editor.buffers[0].collab_is_sharer,
+            "sharer should be true after BufferShared"
+        );
+
+        // Join a different doc — its buffer should NOT be sharer.
+        let sync = mae_sync::text::TextSync::with_client_id("content", 2);
+        let state = sync.encode_state();
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::BufferJoined {
+                doc_id: "doc-b".to_string(),
+                state_bytes: state,
+            },
+        );
+        let idx = editor.find_buffer_by_collab_doc_id("doc-b").unwrap();
+        assert!(
+            !editor.buffers[idx].collab_is_sharer,
+            "joiner should not be sharer"
+        );
+    }
+
+    // --- WU3: SharerLeft event handling ---
+
+    #[test]
+    fn sharer_left_sets_status() {
+        let mut editor = Editor::new();
+        editor.collab.status = CollabStatus::Connected { peer_count: 2 };
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::SharerLeft {
+                doc_id: "test-doc".to_string(),
+            },
+        );
+        assert!(editor.status_msg.contains("Sharer disconnected"));
+    }
+
+    // --- WU4: Backoff + debounce tests ---
+
+    #[test]
+    fn compute_backoff_exponential() {
+        // base=5, factor=2: 5, 10, 20, 40, 80, 160
+        assert_eq!(compute_backoff(5, 2, 0), 5);
+        assert_eq!(compute_backoff(5, 2, 1), 10);
+        assert_eq!(compute_backoff(5, 2, 2), 20);
+        assert_eq!(compute_backoff(5, 2, 3), 40);
+        assert_eq!(compute_backoff(5, 2, 4), 80);
+        assert_eq!(compute_backoff(5, 2, 5), 160);
+        // Capped at attempt=5 exponent, so attempt 6 same as 5.
+        assert_eq!(compute_backoff(5, 2, 6), 160);
+    }
+
+    #[test]
+    fn compute_backoff_capped_at_300() {
+        // base=10, factor=3: attempt 5 = 10 * 243 = 2430 → capped at 300.
+        assert_eq!(compute_backoff(10, 3, 5), 300);
+    }
+
+    #[test]
+    fn compute_backoff_factor_one_is_constant() {
+        // factor=1 means no exponential growth.
+        assert_eq!(compute_backoff(5, 1, 0), 5);
+        assert_eq!(compute_backoff(5, 1, 5), 5);
+    }
+
+    // --- WU3: Notification parsing ---
+
+    #[tokio::test]
+    async fn parse_sharer_left_notification() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut pending = std::collections::HashMap::new();
+        let mut shared = Vec::new();
+        let mut seq = std::collections::HashMap::new();
+        let msg = r#"{
+            "jsonrpc": "2.0",
+            "method": "notifications/sharer_left",
+            "params": {
+                "seq": 1,
+                "event": {
+                    "type": "sharer_left",
+                    "data": {
+                        "session_id": 42,
+                        "doc": "file:abc/main.rs",
+                        "peer_count": 1
+                    }
+                }
+            }
+        }"#;
+        handle_incoming_message(msg, &tx, &mut pending, &mut shared, &mut seq).await;
+        let event = rx.try_recv().unwrap();
+        match event {
+            CollabEvent::SharerLeft { doc_id } => {
+                assert_eq!(doc_id, "file:abc/main.rs");
+            }
+            other => panic!("expected SharerLeft, got {:?}", other),
+        }
     }
 }

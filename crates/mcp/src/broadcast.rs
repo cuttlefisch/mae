@@ -60,6 +60,13 @@ pub enum EditorEvent {
     /// A peer left a collaborative session.
     #[serde(rename = "peer_left")]
     PeerLeft { session_id: u64, peer_count: usize },
+    /// The sharer of a document disconnected — doc is now unowned.
+    #[serde(rename = "sharer_left")]
+    SharerLeft {
+        session_id: u64,
+        doc: String,
+        peer_count: usize,
+    },
     /// A peer completed a file save (docs/save_committed).
     #[serde(rename = "save_committed")]
     SaveCommitted {
@@ -83,6 +90,7 @@ impl EditorEvent {
             EditorEvent::SyncUpdate { .. } => "sync_update",
             EditorEvent::PeerJoined { .. } => "peer_joined",
             EditorEvent::PeerLeft { .. } => "peer_left",
+            EditorEvent::SharerLeft { .. } => "sharer_left",
             EditorEvent::SaveCommitted { .. } => "save_committed",
         }
     }

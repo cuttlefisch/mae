@@ -178,6 +178,23 @@ pub async fn handle_client<R, W>(
         }
     }
 
+    // Check if this session was the sharer for any docs and broadcast SharerLeft.
+    for doc_name in &session_docs {
+        if doc_store.is_sharer(doc_name, session_id).await {
+            doc_store.clear_sharer(doc_name).await;
+            let mut bc = broadcaster.lock().unwrap();
+            let remaining = bc.client_count().saturating_sub(1);
+            bc.broadcast_except(
+                &EditorEvent::SharerLeft {
+                    session_id,
+                    doc: doc_name.clone(),
+                    peer_count: remaining,
+                },
+                session_id,
+            );
+        }
+    }
+
     // Broadcast PeerLeft to remaining clients.
     {
         let mut bc = broadcaster.lock().unwrap();
@@ -541,6 +558,8 @@ async fn handle_doc_request(
 
             match doc_store.share_doc(&doc_name, &update_bytes).await {
                 Ok(result) => {
+                    // Record this session as the sharer for disconnect notifications.
+                    doc_store.set_sharer_session(&doc_name, session_id).await;
                     // Broadcast to all OTHER subscribers (not the sharer).
                     {
                         let mut bc = broadcaster.lock().unwrap();
