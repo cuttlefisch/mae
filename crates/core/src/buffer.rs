@@ -894,6 +894,8 @@ impl Buffer {
     /// Call `end_undo_group()` to flush as one `EditAction::Group`.
     pub fn begin_undo_group(&mut self) {
         self.undo_group_acc = Some(Vec::new());
+        // No-op on CRDT side: yrs groups by capture_timeout (0ms = every txn),
+        // reset() is called in end_undo_group to mark the boundary.
     }
 
     /// Flush the accumulated edits as a single undo entry.
@@ -907,6 +909,11 @@ impl Buffer {
             }
             self.redo_stack.clear();
         }
+        // Mark a group boundary in the CRDT undo manager so subsequent
+        // edits start a new stack item.
+        if let Some(sync) = &mut self.sync_doc {
+            sync.undo_reset();
+        }
     }
 
     // --- Collaborative sync helpers ---
@@ -914,9 +921,9 @@ impl Buffer {
     /// Enable collaborative sync for this buffer.
     pub fn enable_sync(&mut self, client_id: u64) {
         let content = self.rope.to_string();
-        self.sync_doc = Some(mae_sync::text::TextSync::with_client_id(
-            &content, client_id,
-        ));
+        let mut sync = mae_sync::text::TextSync::with_client_id(&content, client_id);
+        sync.enable_undo();
+        self.sync_doc = Some(sync);
     }
 
     /// Load sync state from encoded bytes (join/resync path).
@@ -930,7 +937,8 @@ impl Buffer {
         state_bytes: &[u8],
         client_id: u64,
     ) -> Result<(), mae_sync::SyncError> {
-        let sync = mae_sync::text::TextSync::from_state_with_client_id(state_bytes, client_id)?;
+        let mut sync = mae_sync::text::TextSync::from_state_with_client_id(state_bytes, client_id)?;
+        sync.enable_undo();
         self.rope = sync.rope().clone();
         self.sync_doc = Some(sync);
         self.pending_sync_updates.clear();
@@ -1369,6 +1377,23 @@ impl Buffer {
     }
 
     pub fn undo(&mut self, win: &mut Window) {
+        // When CRDT undo is active, delegate to the yrs UndoManager
+        // which generates proper inverse CRDT operations instead of
+        // replaying EditAction stacks via reconcile_to().
+        if let Some(sync) = &mut self.sync_doc {
+            if sync.undo_mgr_active() {
+                let (ok, updates) = sync.undo();
+                if !ok {
+                    return;
+                }
+                self.rope = sync.rope().clone();
+                self.pending_sync_updates.extend(updates);
+                self.modified = true; // conservative; exact tracking deferred
+                self.bump_generation();
+                win.clamp_cursor(self);
+                return;
+            }
+        }
         let action = match self.undo_stack.pop() {
             Some(a) => a,
             None => return,
@@ -1383,6 +1408,21 @@ impl Buffer {
     }
 
     pub fn redo(&mut self, win: &mut Window) {
+        // When CRDT redo is active, delegate to yrs UndoManager.
+        if let Some(sync) = &mut self.sync_doc {
+            if sync.undo_mgr_active() {
+                let (ok, updates) = sync.redo();
+                if !ok {
+                    return;
+                }
+                self.rope = sync.rope().clone();
+                self.pending_sync_updates.extend(updates);
+                self.modified = true;
+                self.bump_generation();
+                win.clamp_cursor(self);
+                return;
+            }
+        }
         let action = match self.redo_stack.pop() {
             Some(a) => a,
             None => return,
@@ -2756,6 +2796,87 @@ mod tests {
         assert!(
             !buf.text().contains("local content"),
             "local content must be fully replaced"
+        );
+    }
+
+    // --- CRDT undo tests ---
+
+    #[test]
+    fn undo_synced_uses_crdt() {
+        let (mut buf, mut win) = new_buf_win();
+        buf.enable_sync(1);
+        buf.insert_char(&mut win, 'A');
+        buf.insert_char(&mut win, 'B');
+        assert_eq!(buf.text(), "AB");
+
+        // Undo should use CRDT path (not EditAction stack).
+        buf.undo(&mut win);
+        // With capture_timeout=0, each insert is a separate undo item.
+        // UndoManager groups them by txn, and both inserts are separate txns.
+        assert!(buf.text().len() < 2, "at least one char undone");
+    }
+
+    #[test]
+    fn undo_unsynced_unchanged() {
+        // Non-synced buffers should still use the EditAction stack.
+        let (mut buf, mut win) = new_buf_win();
+        buf.insert_char(&mut win, 'X');
+        assert_eq!(buf.text(), "X");
+        buf.undo(&mut win);
+        assert_eq!(buf.text(), "");
+    }
+
+    #[test]
+    fn undo_synced_generates_pending_updates() {
+        let (mut buf, mut win) = new_buf_win();
+        buf.enable_sync(1);
+        buf.insert_char(&mut win, 'A');
+        // Drain the insert's pending update.
+        buf.pending_sync_updates.clear();
+
+        buf.undo(&mut win);
+        // CRDT undo should produce updates for broadcast.
+        assert!(
+            !buf.pending_sync_updates.is_empty(),
+            "CRDT undo should generate broadcast updates"
+        );
+    }
+
+    #[test]
+    fn undo_synced_redo_roundtrip() {
+        let (mut buf, mut win) = new_buf_win();
+        buf.enable_sync(1);
+        buf.insert_text_at(0, "hello");
+        assert_eq!(buf.text(), "hello");
+        buf.pending_sync_updates.clear();
+
+        buf.undo(&mut win);
+        assert_eq!(buf.text(), "");
+
+        buf.redo(&mut win);
+        assert_eq!(buf.text(), "hello");
+    }
+
+    #[test]
+    fn load_sync_state_enables_undo() {
+        let ts = mae_sync::text::TextSync::new("server content");
+        let state = ts.encode_state();
+
+        let mut buf = Buffer::new();
+        buf.load_sync_state(&state, 42).unwrap();
+        assert!(
+            buf.sync_doc.as_ref().unwrap().undo_mgr_active(),
+            "load_sync_state should enable undo"
+        );
+    }
+
+    #[test]
+    fn enable_sync_enables_undo() {
+        let mut buf = Buffer::new();
+        buf.enable_sync(42);
+        assert!(
+            buf.sync_doc.as_ref().unwrap().undo_mgr_active(),
+            "enable_sync should enable undo"
         );
     }
 }

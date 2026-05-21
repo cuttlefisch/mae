@@ -1,8 +1,10 @@
 //! TextSync: YText <-> Rope bridge for collaborative text editing.
 
 use ropey::Rope;
+use std::sync::{Arc, Mutex};
 use yrs::{
-    updates::decoder::Decode, updates::encoder::Encode, Doc, GetString, ReadTxn, Text, Transact,
+    undo::UndoManager, updates::decoder::Decode, updates::encoder::Encode, Doc, GetString, ReadTxn,
+    Subscription, Text, Transact,
 };
 
 use crate::SyncError;
@@ -17,6 +19,14 @@ const TEXT_NAME: &str = "content";
 pub struct TextSync {
     doc: Doc,
     rope: Rope,
+    /// Per-user undo manager. When active, local edits create CRDT-native
+    /// undo operations instead of relying on EditAction stacks + reconcile_to().
+    undo_mgr: Option<UndoManager<()>>,
+    /// Updates generated during undo/redo operations, captured via observe_update_v1.
+    /// Drained after each undo/redo call to produce broadcast bytes.
+    captured_updates: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Subscription for update capture. Kept alive as long as undo is active.
+    _update_sub: Option<Subscription>,
 }
 
 impl TextSync {
@@ -29,7 +39,13 @@ impl TextSync {
             text.insert(&mut txn, 0, content);
         }
         let rope = Rope::from_str(content);
-        Self { doc, rope }
+        Self {
+            doc,
+            rope,
+            undo_mgr: None,
+            captured_updates: Arc::new(Mutex::new(Vec::new())),
+            _update_sub: None,
+        }
     }
 
     /// Create with a specific client ID (for testing deterministic merges).
@@ -41,7 +57,13 @@ impl TextSync {
             text.insert(&mut txn, 0, content);
         }
         let rope = Rope::from_str(content);
-        Self { doc, rope }
+        Self {
+            doc,
+            rope,
+            undo_mgr: None,
+            captured_updates: Arc::new(Mutex::new(Vec::new())),
+            _update_sub: None,
+        }
     }
 
     /// Create an empty relay document. No content is inserted — the Doc starts
@@ -52,7 +74,13 @@ impl TextSync {
         // Do NOT insert anything — the server is a passive relay.
         // The first client to share will provide the initial content.
         let rope = Rope::from_str("");
-        Self { doc, rope }
+        Self {
+            doc,
+            rope,
+            undo_mgr: None,
+            captured_updates: Arc::new(Mutex::new(Vec::new())),
+            _update_sub: None,
+        }
     }
 
     /// Create from an existing yrs document.
@@ -63,13 +91,27 @@ impl TextSync {
             text.get_string(&txn)
         };
         let rope = Rope::from_str(&content);
-        Self { doc, rope }
+        Self {
+            doc,
+            rope,
+            undo_mgr: None,
+            captured_updates: Arc::new(Mutex::new(Vec::new())),
+            _update_sub: None,
+        }
     }
 
     /// Apply a local insert at char offset. Returns encoded update for broadcast.
+    ///
+    /// When undo is active, uses origin-tagged transactions so the UndoManager
+    /// tracks this edit for per-user undo.
     pub fn insert(&mut self, offset: u32, text: &str) -> Vec<u8> {
         let ytext = self.doc.get_or_insert_text(TEXT_NAME);
-        let update = {
+        let update = if self.undo_mgr.is_some() {
+            let origin = self.doc.client_id();
+            let mut txn = self.doc.transact_mut_with(origin);
+            ytext.insert(&mut txn, offset, text);
+            txn.encode_update_v1()
+        } else {
             let mut txn = self.doc.transact_mut();
             ytext.insert(&mut txn, offset, text);
             txn.encode_update_v1()
@@ -79,9 +121,17 @@ impl TextSync {
     }
 
     /// Apply a local delete (char offset + length). Returns encoded update for broadcast.
+    ///
+    /// When undo is active, uses origin-tagged transactions so the UndoManager
+    /// tracks this edit for per-user undo.
     pub fn delete(&mut self, offset: u32, len: u32) -> Vec<u8> {
         let ytext = self.doc.get_or_insert_text(TEXT_NAME);
-        let update = {
+        let update = if self.undo_mgr.is_some() {
+            let origin = self.doc.client_id();
+            let mut txn = self.doc.transact_mut_with(origin);
+            ytext.remove_range(&mut txn, offset, len);
+            txn.encode_update_v1()
+        } else {
             let mut txn = self.doc.transact_mut();
             ytext.remove_range(&mut txn, offset, len);
             txn.encode_update_v1()
@@ -131,7 +181,13 @@ impl TextSync {
             text.get_string(&txn)
         };
         let rope = Rope::from_str(&content);
-        Ok(Self { doc, rope })
+        Ok(Self {
+            doc,
+            rope,
+            undo_mgr: None,
+            captured_updates: Arc::new(Mutex::new(Vec::new())),
+            _update_sub: None,
+        })
     }
 
     /// Load from encoded full state with a specific client ID.
@@ -156,7 +212,13 @@ impl TextSync {
             text.get_string(&txn)
         };
         let rope = Rope::from_str(&content);
-        Ok(Self { doc, rope })
+        Ok(Self {
+            doc,
+            rope,
+            undo_mgr: None,
+            captured_updates: Arc::new(Mutex::new(Vec::new())),
+            _update_sub: None,
+        })
     }
 
     /// Get the rope (for rendering).
@@ -228,6 +290,118 @@ impl TextSync {
         let txn = self.doc.transact();
         let content = text.get_string(&txn);
         self.rope = Rope::from_str(&content);
+    }
+
+    // --- Per-user CRDT undo (yrs UndoManager) ---
+
+    /// Enable per-user undo tracking. Creates a yrs UndoManager scoped to the
+    /// text field, tracking only edits from this client's origin.
+    ///
+    /// `capture_timeout_millis: 0` means every transaction is a separate undo
+    /// item (matches vim operator semantics). The buffer layer calls `undo_reset()`
+    /// for explicit group boundaries.
+    pub fn enable_undo(&mut self) {
+        use yrs::undo::Options;
+
+        let text = self.doc.get_or_insert_text(TEXT_NAME);
+        let origin = self.doc.client_id();
+
+        let options = Options {
+            capture_timeout_millis: 0,
+            tracked_origins: [origin.into()].into_iter().collect(),
+            ..Default::default()
+        };
+
+        let mgr = UndoManager::with_scope_and_options(&self.doc, &text, options);
+
+        // Subscribe to updates so we can capture undo/redo-generated deltas.
+        let captured = self.captured_updates.clone();
+        let sub = self
+            .doc
+            .observe_update_v1(move |_txn, event| {
+                if let Ok(mut buf) = captured.lock() {
+                    buf.push(event.update.clone());
+                }
+            })
+            .expect("observe_update_v1 should not fail on owned doc");
+
+        self.undo_mgr = Some(mgr);
+        self._update_sub = Some(sub);
+    }
+
+    /// The client ID of the underlying yrs document.
+    pub fn client_id(&self) -> u64 {
+        self.doc.client_id()
+    }
+
+    /// Whether the UndoManager is active.
+    pub fn undo_mgr_active(&self) -> bool {
+        self.undo_mgr.is_some()
+    }
+
+    /// Whether there are undoable operations.
+    pub fn can_undo(&self) -> bool {
+        self.undo_mgr.as_ref().is_some_and(|m| m.can_undo())
+    }
+
+    /// Whether there are redoable operations.
+    pub fn can_redo(&self) -> bool {
+        self.undo_mgr.as_ref().is_some_and(|m| m.can_redo())
+    }
+
+    /// Undo the last local operation. Returns `(success, update_bytes)`.
+    ///
+    /// `update_bytes` contains the CRDT updates generated by the undo,
+    /// ready for broadcast to peers. The rope is rebuilt from YText.
+    pub fn undo(&mut self) -> (bool, Vec<Vec<u8>>) {
+        let Some(mgr) = &mut self.undo_mgr else {
+            return (false, Vec::new());
+        };
+        // Clear captured updates before undo so we only collect undo's deltas.
+        if let Ok(mut buf) = self.captured_updates.lock() {
+            buf.clear();
+        }
+        let ok = mgr.undo_blocking();
+        self.rebuild_rope();
+        let updates = if let Ok(mut buf) = self.captured_updates.lock() {
+            std::mem::take(&mut *buf)
+        } else {
+            Vec::new()
+        };
+        (ok, updates)
+    }
+
+    /// Redo the last undone operation. Returns `(success, update_bytes)`.
+    pub fn redo(&mut self) -> (bool, Vec<Vec<u8>>) {
+        let Some(mgr) = &mut self.undo_mgr else {
+            return (false, Vec::new());
+        };
+        if let Ok(mut buf) = self.captured_updates.lock() {
+            buf.clear();
+        }
+        let ok = mgr.redo_blocking();
+        self.rebuild_rope();
+        let updates = if let Ok(mut buf) = self.captured_updates.lock() {
+            std::mem::take(&mut *buf)
+        } else {
+            Vec::new()
+        };
+        (ok, updates)
+    }
+
+    /// Insert an explicit undo group boundary. The next edit starts a new
+    /// undo stack item regardless of timing.
+    pub fn undo_reset(&mut self) {
+        if let Some(mgr) = &mut self.undo_mgr {
+            mgr.reset();
+        }
+    }
+
+    /// Clear all undo/redo history.
+    pub fn clear_undo(&mut self) {
+        if let Some(mgr) = &mut self.undo_mgr {
+            mgr.clear();
+        }
     }
 }
 
@@ -477,5 +651,160 @@ mod tests {
         assert!(!update.is_empty());
         assert_eq!(ts.content(), "world");
         assert_eq!(ts.rope().to_string(), "world");
+    }
+
+    // --- Per-user CRDT undo tests ---
+
+    #[test]
+    fn undo_single_insert() {
+        let mut ts = TextSync::with_client_id("hello", 1);
+        ts.enable_undo();
+        ts.insert(5, " world");
+        assert_eq!(ts.content(), "hello world");
+        let (ok, updates) = ts.undo();
+        assert!(ok);
+        assert_eq!(ts.content(), "hello");
+        assert!(!updates.is_empty(), "undo should produce broadcast updates");
+    }
+
+    #[test]
+    fn redo_after_undo() {
+        let mut ts = TextSync::with_client_id("hello", 1);
+        ts.enable_undo();
+        ts.insert(5, " world");
+        assert_eq!(ts.content(), "hello world");
+        ts.undo();
+        assert_eq!(ts.content(), "hello");
+        let (ok, updates) = ts.redo();
+        assert!(ok);
+        assert_eq!(ts.content(), "hello world");
+        assert!(!updates.is_empty());
+    }
+
+    #[test]
+    fn undo_produces_update_bytes() {
+        let mut ts = TextSync::with_client_id("", 1);
+        ts.enable_undo();
+        ts.insert(0, "abc");
+        let (_, updates) = ts.undo();
+        // Updates should be non-empty and decodable.
+        assert!(!updates.is_empty());
+        for u in &updates {
+            yrs::Update::decode_v1(u).expect("update bytes should be valid");
+        }
+    }
+
+    #[test]
+    fn undo_remote_excluded() {
+        // Remote edits (no origin) should NOT be undone by local undo.
+        let mut doc_a = TextSync::with_client_id("hello", 1);
+        doc_a.enable_undo();
+
+        let mut doc_b = TextSync::with_client_id("", 2);
+        // Sync initial state from A to B.
+        let state = doc_a.encode_state();
+        doc_b.apply_update(&state).unwrap();
+
+        // B inserts (remote from A's perspective).
+        let remote_update = doc_b.insert(5, " world");
+        doc_a.apply_update(&remote_update).unwrap();
+        assert_eq!(doc_a.content(), "hello world");
+
+        // A's undo should NOT undo B's edit (no local ops to undo).
+        let (ok, _) = doc_a.undo();
+        assert!(!ok, "nothing to undo — remote edits excluded");
+        assert_eq!(doc_a.content(), "hello world");
+    }
+
+    #[test]
+    fn undo_group_boundary() {
+        let mut ts = TextSync::with_client_id("", 1);
+        ts.enable_undo();
+        ts.insert(0, "aaa");
+        ts.undo_reset(); // explicit boundary
+        ts.insert(3, "bbb");
+        assert_eq!(ts.content(), "aaabbb");
+
+        // First undo removes "bbb" (second group).
+        ts.undo();
+        assert_eq!(ts.content(), "aaa");
+
+        // Second undo removes "aaa" (first group).
+        ts.undo();
+        assert_eq!(ts.content(), "");
+    }
+
+    #[test]
+    fn two_clients_independent_undo() {
+        let mut doc_a = TextSync::with_client_id("base", 1);
+        doc_a.enable_undo();
+
+        let mut doc_b = TextSync::with_client_id("", 2);
+        doc_b.enable_undo();
+
+        // Sync initial state.
+        let state = doc_a.encode_state();
+        doc_b.apply_update(&state).unwrap();
+        assert_eq!(doc_b.content(), "base");
+
+        // Both insert.
+        let update_a = doc_a.insert(4, "-A");
+        let update_b = doc_b.insert(4, "-B");
+
+        // Exchange updates.
+        doc_a.apply_update(&update_b).unwrap();
+        doc_b.apply_update(&update_a).unwrap();
+
+        // Both should have same content.
+        assert_eq!(doc_a.content(), doc_b.content());
+        let converged = doc_a.content();
+        assert!(converged.contains("-A"));
+        assert!(converged.contains("-B"));
+
+        // A undoes only A's insert.
+        let (ok_a, updates_a) = doc_a.undo();
+        assert!(ok_a);
+        assert!(
+            doc_a.content().contains("-B"),
+            "B's edit preserved after A's undo"
+        );
+        assert!(!doc_a.content().contains("-A"), "A's edit reversed");
+
+        // Apply A's undo to B so they converge again.
+        for u in &updates_a {
+            doc_b.apply_update(u).unwrap();
+        }
+        assert_eq!(doc_a.content(), doc_b.content());
+    }
+
+    #[test]
+    fn can_undo_empty() {
+        let mut ts = TextSync::with_client_id("", 1);
+        ts.enable_undo();
+        assert!(!ts.can_undo());
+        assert!(!ts.can_redo());
+        ts.insert(0, "x");
+        assert!(ts.can_undo());
+    }
+
+    #[test]
+    fn undo_clear() {
+        let mut ts = TextSync::with_client_id("", 1);
+        ts.enable_undo();
+        ts.insert(0, "abc");
+        assert!(ts.can_undo());
+        ts.clear_undo();
+        assert!(!ts.can_undo());
+    }
+
+    #[test]
+    fn undo_delete_restores() {
+        let mut ts = TextSync::with_client_id("hello world", 1);
+        ts.enable_undo();
+        ts.delete(5, 6); // remove " world"
+        assert_eq!(ts.content(), "hello");
+        let (ok, _) = ts.undo();
+        assert!(ok);
+        assert_eq!(ts.content(), "hello world");
     }
 }

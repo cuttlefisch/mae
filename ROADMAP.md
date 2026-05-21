@@ -34,7 +34,7 @@
 - [x] **One-directional sync**: cli1→cli2 works but cli2→cli1 does not. Root cause: `biased` tokio::select starved TCP reads. Fix: remove `biased;` from connected select loop.
 - [x] **First `SPC C j` unresponsive from Dashboard**: Join only works after a `SPC C D`/`SPC C i` round-trip. Root cause: splash screen intercept swallows `j` during multi-key sequences. Fix: add `pending_keys.is_empty()` guard.
 - [x] **Syntax highlighting differs on join**: Joiner sees wrong colors (purple bullets, green title). Root cause: `set_language` without `invalidate()` leaves no tree-sitter parse tree. Fix: call `syntax.invalidate(idx)` after join.
-- [ ] **Large undo produces heavy sync updates**: `reconcile_to()` uses a single yrs transaction with LCS diff — updates are minimal and correct, not full-buffer replacements. However, undoing deletion of N lines means N lines of insert ops in one update, which can be heavy for large undos. Full fix requires yrs `UndoManager` integration (Phase F) — per-user undo stacks that generate CRDT-native inverse operations.
+- [x] **Per-user CRDT undo**: yrs `UndoManager` with per-origin undo stacks. Local edits use origin-tagged transactions; `undo()`/`redo()` generate CRDT-native inverse operations (no more `reconcile_to()` round-trip). Remote edits excluded from local undo stack. `enable_undo()` called in `enable_sync()`/`load_sync_state()`. `capture_timeout_millis: 0` (every txn = separate item, matches vim operator semantics). `undo_reset()` for explicit group boundaries.
 - [x] **`:w` fails on non-sharer clients**: Save works only for the client that originally opened and shared the file. Other clients (including those that outlive the sharer) get errors. Root cause: `file_path` not properly resolved on join, or save protocol assumes original sharer identity. *(8de53b8)*
 - [x] **Sharer quit doesn't notify peers or stop sharing**: When the client that triggered the share disconnects, peers are not notified and the shared document lingers. Need graceful disconnect protocol: server detects client drop → notifies remaining peers → optionally promotes new owner or marks doc read-only. *(8de53b8)*
 - [x] **Client disconnect lifecycle undefined**: No documented or tested behavior for: client crash, network drop, graceful quit, last-client-leaves. Must define and implement industry-standard behavior (cf. VS Code Live Share, Google Docs). Document in `docs/COLLABORATION.md`. *(8de53b8)*
@@ -50,6 +50,9 @@
 - [x] **Offline edit recovery**: Preserve `sync_doc` during disconnect, reconcile on rejoin instead of full-state overwrite. *(b8d4b6a)*
 - [x] **Client-side gap detection**: Track `wal_seq` from notifications, trigger auto-resync on gaps. *(b8d4b6a)*
 - [x] **Save protocol wiring**: Call `docs/save_intent` + `docs/save_committed` from editor's `:w` for synced buffers.
+- [ ] **Cursor positioning after CRDT undo**: Track cursor pos in `StackItem.meta` via `observe_item_added` — currently uses `clamp_cursor()` (safe but imprecise after multi-line undo).
+- [ ] **Undo capture timeout tuning**: `capture_timeout_millis` is 0 (every txn = separate item). Tune to 500ms for smoother typing undo, needs testing with vim operator semantics (`ciw`, `dd`, etc.).
+- [ ] **Undo stack size limit for CRDT**: yrs UndoManager has no built-in limit. Add `observe_item_added` callback to evict old items beyond threshold (cf. Emacs `undo-limit`).
 - [ ] **Awareness protocol**: Cursor/selection sharing via yrs awareness (y-websocket compatible).
 - [x] **Heartbeat/keepalive**: Detect silent client death, clean up stale `connected_clients`. *(b8d4b6a)*
 
@@ -97,7 +100,7 @@
   - `docs/metadata` endpoint added to state server ✅
   - `WalEntry::client_id` stored but never read for audit/attribution (deferred — needs Phase F auth)
   - `StorageError::Io` variant reserved but unused (pluggable backends — by design)
-- [ ] **State server v2** (Phase F): Awareness protocol (cursor sharing), per-user undo (yrs `UndoManager`), auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. E1 (git-based identity), heartbeat/keepalive, E8 (buffer status indicators), and Bugs 2-4 (save guard, sharer notifications, disconnect lifecycle) are complete *(8de53b8)*. Priority next-round items: awareness protocol, per-user undo.
+- [ ] **State server v2** (Phase F): Awareness protocol (cursor sharing), auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Per-user undo ✅ (yrs `UndoManager`). E1 (git-based identity), heartbeat/keepalive, E8 (buffer status indicators), and Bugs 2-4 (save guard, sharer notifications, disconnect lifecycle) are complete *(8de53b8)*. Priority next-round item: awareness protocol.
 - [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
   - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
   - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
