@@ -38,4 +38,3 @@
         (should (number? *buffer-count*))
         (should (>= *buffer-count* 1))))))
 
-(run-tests)

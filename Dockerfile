@@ -39,6 +39,13 @@ COPY crates/shell/Cargo.toml crates/shell/Cargo.toml
 COPY crates/mcp/Cargo.toml crates/mcp/Cargo.toml
 COPY crates/sync/Cargo.toml crates/sync/Cargo.toml
 COPY crates/state-server/Cargo.toml crates/state-server/Cargo.toml
+COPY crates/babel/Cargo.toml crates/babel/Cargo.toml
+COPY crates/export/Cargo.toml crates/export/Cargo.toml
+COPY crates/snippets/Cargo.toml crates/snippets/Cargo.toml
+COPY crates/format/Cargo.toml crates/format/Cargo.toml
+COPY crates/make/Cargo.toml crates/make/Cargo.toml
+COPY crates/lookup/Cargo.toml crates/lookup/Cargo.toml
+COPY crates/spell/Cargo.toml crates/spell/Cargo.toml
 COPY test_fixtures/Cargo.toml test_fixtures/Cargo.toml
 
 # Create dummy source files so cargo can resolve the dependency graph
@@ -56,6 +63,13 @@ RUN mkdir -p crates/core/src && echo "" > crates/core/src/lib.rs && \
     echo "fn main() {}" > crates/mcp/src/shim.rs && \
     mkdir -p crates/sync/src && echo "" > crates/sync/src/lib.rs && \
     mkdir -p crates/state-server/src && echo "fn main() {}" > crates/state-server/src/main.rs && \
+    mkdir -p crates/babel/src && echo "" > crates/babel/src/lib.rs && \
+    mkdir -p crates/export/src && echo "" > crates/export/src/lib.rs && \
+    mkdir -p crates/snippets/src && echo "" > crates/snippets/src/lib.rs && \
+    mkdir -p crates/format/src && echo "" > crates/format/src/lib.rs && \
+    mkdir -p crates/make/src && echo "" > crates/make/src/lib.rs && \
+    mkdir -p crates/lookup/src && echo "" > crates/lookup/src/lib.rs && \
+    mkdir -p crates/spell/src && echo "" > crates/spell/src/lib.rs && \
     mkdir -p test_fixtures/src && echo "" > test_fixtures/src/lib.rs
 
 # Build dependencies only (will fail on our dummy sources, but deps get cached)
