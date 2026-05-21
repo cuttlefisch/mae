@@ -139,7 +139,7 @@ jobs:
 
   collab-e2e:
     name: collab / docker e2e
-    if: false # temporarily disabled during struct-extraction refactor
+    # Re-enabled: Dockerfile fixed (7 missing crates), per-user CRDT undo wired
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
