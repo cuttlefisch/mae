@@ -99,6 +99,10 @@ pub async fn handle_client<R, W>(
 
                 session.touch();
                 session.messages_received += 1;
+                // Log every incoming message at debug level for diagnostics.
+                debug!(session = session_id, msg_len = msg.len(),
+                    preview = &msg[..msg.len().min(120)],
+                    "incoming message");
 
                 // Check if this is a sync/* method we handle differently.
                 let mut response = if is_doc_method(&msg) {

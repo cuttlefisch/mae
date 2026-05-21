@@ -341,7 +341,13 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
     }
 
     // Check if this looks like Content-Length framing.
-    if buf.len() >= 15 && buf.starts_with(b"Content-Length:") {
+    // Use a prefix check that works even with small initial reads: if the
+    // buffer starts with any prefix of "Content-Length:", assume CL framing.
+    // The header-reading loop below will read more bytes as needed.
+    let cl_prefix = b"Content-Length:";
+    let peek_len = buf.len().min(cl_prefix.len());
+    let looks_like_cl = peek_len > 0 && buf[..peek_len] == cl_prefix[..peek_len];
+    if looks_like_cl {
         // Read header lines until we hit the empty \r\n separator.
         let mut content_length: Option<usize> = None;
         let mut header_bytes: usize = 0;
@@ -2265,5 +2271,44 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("header too large"));
+    }
+
+    /// Regression: read_message must handle Content-Length framing even when
+    /// the initial fill_buf returns fewer than 15 bytes (partial TCP read).
+    /// A BufReader with a 1-byte buffer forces byte-by-byte reads.
+    #[tokio::test]
+    async fn read_message_partial_peek_content_length() {
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"sync/share"}"#;
+        let framed = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+
+        // Use a BufReader with capacity=1 to simulate partial TCP reads.
+        let cursor = std::io::Cursor::new(framed.into_bytes());
+        let mut reader = tokio::io::BufReader::with_capacity(1, cursor);
+
+        let msg = read_message(&mut reader).await.unwrap().unwrap();
+        assert_eq!(msg, body);
+    }
+
+    /// Regression: two back-to-back Content-Length messages with tiny buffer.
+    #[tokio::test]
+    async fn read_message_two_messages_tiny_buffer() {
+        let body1 = r#"{"id":1}"#;
+        let body2 = r#"{"id":2}"#;
+        let data = format!(
+            "Content-Length: {}\r\n\r\n{}Content-Length: {}\r\n\r\n{}",
+            body1.len(),
+            body1,
+            body2.len(),
+            body2
+        );
+
+        let cursor = std::io::Cursor::new(data.into_bytes());
+        let mut reader = tokio::io::BufReader::with_capacity(4, cursor);
+
+        let msg1 = read_message(&mut reader).await.unwrap().unwrap();
+        assert_eq!(msg1, body1);
+
+        let msg2 = read_message(&mut reader).await.unwrap().unwrap();
+        assert_eq!(msg2, body2);
     }
 }

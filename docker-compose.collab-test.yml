@@ -14,6 +14,8 @@ services:
       dockerfile: Dockerfile
       target: runtime
     entrypoint: ["mae-state-server", "--bind", "0.0.0.0:9473"]
+    environment:
+      MAE_LOG: "mae_state_server::handler=debug,info"
     healthcheck:
       test: ["CMD-SHELL", "echo '{}' | timeout 2 nc -w1 localhost 9473 || exit 1"]
       interval: 2s

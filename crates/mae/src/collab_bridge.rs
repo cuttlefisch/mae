@@ -936,12 +936,19 @@ async fn run_collab_task(
                                     Ok(b) => b,
                                     Err(e) => { error!("collab serialize error: {e}"); continue; }
                                 };
-                                if write_framed(w, &body, write_timeout).await.is_ok() {
-                                    pending_responses.insert(req_id, PendingResponseKind::ShareBuffer { doc_id });
-                                } else {
-                                    let _ = evt_tx.send(CollabEvent::Error {
-                                        message: format!("Failed to share {}", doc_id),
-                                    }).await;
+                                match write_framed(w, &body, write_timeout).await {
+                                    Ok(()) => {
+                                        info!(doc = %doc_id, req_id, body_len = body.len(),
+                                            "share: write_framed completed successfully");
+                                        pending_responses.insert(req_id, PendingResponseKind::ShareBuffer { doc_id });
+                                    }
+                                    Err(e) => {
+                                        error!(doc = %doc_id, error = %e,
+                                            "share: write_framed failed");
+                                        let _ = evt_tx.send(CollabEvent::Error {
+                                            message: format!("Failed to share {}", doc_id),
+                                        }).await;
+                                    }
                                 }
                             }
                         }
