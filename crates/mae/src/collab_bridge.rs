@@ -874,6 +874,8 @@ async fn run_collab_task(
 
             tokio::select! {
                 Some(cmd) = cmd_rx.recv() => {
+                    debug!(cmd = ?std::mem::discriminant(&cmd),
+                        "bridge: received command");
                     match cmd {
                         CollabCommand::Disconnect => {
                             tear_down(&mut reader, &mut writer);
@@ -1125,6 +1127,9 @@ async fn run_collab_task(
                 msg = read_message(buf_reader) => {
                     match msg {
                         Ok(Some(text)) => {
+                            debug!(msg_len = text.len(),
+                                preview = &text[..text.len().min(120)],
+                                "bridge: incoming server message");
                             handle_incoming_message(
                                 &text,
                                 &evt_tx,
@@ -1320,7 +1325,12 @@ pub(crate) async fn handle_incoming_message(
     if let Some(id) = val.get("id").and_then(|v| v.as_u64()) {
         if val.get("method").is_none() {
             if let Some(kind) = pending_responses.remove(&id) {
+                let has_error = val.get("error").is_some();
+                debug!(id, has_error, kind = ?std::mem::discriminant(&kind),
+                    "bridge: matched response to pending request");
                 handle_response(&val, kind, evt_tx, shared_docs).await;
+            } else {
+                debug!(id, "bridge: response for unknown/expired request id");
             }
             return;
         }

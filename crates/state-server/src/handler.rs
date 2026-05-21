@@ -150,6 +150,8 @@ pub async fn handle_client<R, W>(
 
             Some(event) = event_rx.recv() => {
                 let method = format!("notifications/{}", event.event_type());
+                debug!(session = session_id, event_type = %method,
+                    "broadcasting event to client");
                 let notification = serde_json::json!({
                     "jsonrpc": "2.0",
                     "method": method,
