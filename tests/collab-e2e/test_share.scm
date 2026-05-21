@@ -23,6 +23,11 @@
     ;; Each pending op (open-file, buffer-insert, run-command) is processed
     ;; by apply_to_editor AFTER the test step. Split into separate steps so
     ;; open-file completes before buffer-insert targets the new buffer.
+    ;; Create the file first (open-file fails on non-existent files).
+    (it-test "creates test file"
+      (lambda ()
+        (write-file "/workspace/test.txt" "")))
+
     (it-test "opens test file"
       (lambda ()
         (open-file "/workspace/test.txt")))

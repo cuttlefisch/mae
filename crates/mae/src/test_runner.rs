@@ -18,6 +18,8 @@ use mae_scheme::SchemeRuntime;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
+
 use crate::collab_bridge::{CollabCommand, CollabEvent};
 
 /// Run the Scheme test runner in headless mode.
@@ -34,6 +36,11 @@ pub(crate) async fn run_scheme_tests(
 ) -> i32 {
     info!(path = test_path, "starting scheme test runner");
 
+    // Create a no-op broadcaster for drain_and_broadcast (no MCP clients in tests,
+    // but the function needs it to forward pending_sync_updates to collab_command_tx).
+    let broadcaster: SharedBroadcaster =
+        std::sync::Arc::new(std::sync::Mutex::new(EventBroadcaster::new()));
+
     // Load the mae-test.scm library.
     let lib_path = find_test_library();
     match &lib_path {
@@ -45,7 +52,14 @@ pub(crate) async fn run_scheme_tests(
                 return 2;
             }
             scheme.apply_to_editor(editor);
-            process_side_effects(editor, scheme, collab_event_rx, collab_command_tx).await;
+            process_side_effects(
+                editor,
+                scheme,
+                collab_event_rx,
+                collab_command_tx,
+                &broadcaster,
+            )
+            .await;
         }
         None => {
             eprintln!("mae-test: cannot find mae-test.scm library");
@@ -87,7 +101,14 @@ pub(crate) async fn run_scheme_tests(
 
         // Process side effects after loading (runs describe/it registrations).
         scheme.apply_to_editor(editor);
-        process_side_effects(editor, scheme, collab_event_rx, collab_command_tx).await;
+        process_side_effects(
+            editor,
+            scheme,
+            collab_event_rx,
+            collab_command_tx,
+            &broadcaster,
+        )
+        .await;
 
         // Check for exit request.
         if let Some(code) = scheme.take_exit_code() {
@@ -102,7 +123,14 @@ pub(crate) async fn run_scheme_tests(
 
     // Rust-side test iteration: run each test with inject/apply between them.
     // This ensures buffer-string/buffer-text see fresh state after mutations.
-    run_tests_iteratively(editor, scheme, collab_event_rx, collab_command_tx).await
+    run_tests_iteratively(
+        editor,
+        scheme,
+        collab_event_rx,
+        collab_command_tx,
+        &broadcaster,
+    )
+    .await
 }
 
 /// Run all registered tests one-by-one from the Rust side.
@@ -114,6 +142,7 @@ async fn run_tests_iteratively(
     scheme: &mut SchemeRuntime,
     collab_event_rx: &mut mpsc::Receiver<CollabEvent>,
     collab_command_tx: &mpsc::Sender<CollabCommand>,
+    broadcaster: &SharedBroadcaster,
 ) -> i32 {
     // Query test count. Do NOT call inject_editor_state here — it would create
     // new bindings that shadow the ones test thunks captured at file-load time.
@@ -158,7 +187,14 @@ async fn run_tests_iteratively(
 
         // Apply side effects (buffer mutations, commands, sleeps, writes).
         scheme.apply_to_editor(editor);
-        process_side_effects(editor, scheme, collab_event_rx, collab_command_tx).await;
+        process_side_effects(
+            editor,
+            scheme,
+            collab_event_rx,
+            collab_command_tx,
+            broadcaster,
+        )
+        .await;
 
         // Sync Scheme state variables via set! — register_value creates new bindings
         // that aren't visible to closures captured in previous evals. set! mutates
@@ -359,6 +395,7 @@ async fn process_side_effects(
     scheme: &mut SchemeRuntime,
     collab_event_rx: &mut mpsc::Receiver<CollabEvent>,
     collab_command_tx: &mpsc::Sender<CollabCommand>,
+    broadcaster: &SharedBroadcaster,
 ) {
     // Handle pending write-file operations.
     for (path, content) in scheme.drain_write_files() {
@@ -373,7 +410,7 @@ async fn process_side_effects(
 
     // Handle pending sleep-ms: sleep while draining collab events.
     if let Some(ms) = scheme.take_sleep_ms() {
-        drain_events_for(editor, collab_event_rx, collab_command_tx, ms).await;
+        drain_events_for(editor, collab_event_rx, collab_command_tx, broadcaster, ms).await;
     }
 
     // Drain any collab events that arrived.
@@ -381,6 +418,9 @@ async fn process_side_effects(
 
     // Drain collab intents from editor to background task.
     crate::collab_bridge::drain_collab_intents(editor, collab_command_tx);
+
+    // Forward pending sync updates to state server (mirrors IdleTick in main loop).
+    crate::sync_broadcast::drain_and_broadcast(editor, broadcaster, Some(collab_command_tx));
 }
 
 /// Sleep for the given duration while draining collab events at 100Hz.
@@ -388,6 +428,7 @@ async fn drain_events_for(
     editor: &mut Editor,
     collab_event_rx: &mut mpsc::Receiver<CollabEvent>,
     collab_command_tx: &mpsc::Sender<CollabCommand>,
+    broadcaster: &SharedBroadcaster,
     ms: u64,
 ) {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
@@ -411,6 +452,8 @@ async fn drain_events_for(
 
         // Drain intents generated by event handling.
         crate::collab_bridge::drain_collab_intents(editor, collab_command_tx);
+        // Forward pending sync updates to state server (mirrors IdleTick).
+        crate::sync_broadcast::drain_and_broadcast(editor, broadcaster, Some(collab_command_tx));
     }
 }
 

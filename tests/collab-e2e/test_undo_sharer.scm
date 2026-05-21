@@ -18,7 +18,12 @@
         (let ((status (collab-status)))
           (should (pair? status)))))
 
-    (it-test "creates and saves file"
+    ;; Create the file first (open-file fails on non-existent files).
+    (it-test "creates test file"
+      (lambda ()
+        (write-file "/workspace/undo-test.txt" "")))
+
+    (it-test "opens test file"
       (lambda ()
         (open-file "/workspace/undo-test.txt")))
 
