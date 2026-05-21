@@ -215,7 +215,7 @@
 
 ### Architecture Debt (v0.9.1+)
 
-- [x] **Editor struct field extraction**: ~40 fields after 4 extractions — `CollabState` (18), `ShellIntents` (12), `ViState` (41), `AiState` (34). Remaining candidates: `LspContext` (7 fields), `DapContext` (3+ fields), `KbContext` (15+ fields).
+- [x] **Editor struct field extraction**: ~69 fields after 6 extractions — `CollabState` (18), `ShellIntents` (12), `ViState` (41), `AiState` (34), `KbContext` (21), `DapContext` (2). Remaining candidate: `LspContext` (7 fields).
 - [x] **dispatch/ui.rs split**: Split into dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs, dispatch/help.rs, dispatch/kb.rs. *(0829dd5)*
 - [ ] **Custom theme filesystem loading**: Only bundled themes work. No user theme search path (~/.config/mae/themes/). Emacs, Vim, Helix all support this.
 - [ ] **Binding ownership audit**: Every kernel-dispatched command should have a kernel default binding. Module bindings are for module-specific commands or user-facing overrides only.
