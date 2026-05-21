@@ -111,9 +111,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Non-root user (UID 1000 matches typical host user for volume mounts)
 RUN useradd -m -u 1000 -s /bin/bash mae
 
-# Pre-create XDG dirs and shared sync directory
-RUN mkdir -p /home/mae/.config/mae /home/mae/.local/share/mae /home/mae/.local/state/mae /sync \
-  && chown -R mae:mae /home/mae /sync
+# Pre-create XDG dirs, workspace, shared, and sync directories
+RUN mkdir -p /home/mae/.config/mae /home/mae/.local/share/mae /home/mae/.local/state/mae \
+    /sync /workspace /shared \
+  && chown -R mae:mae /home/mae /sync /workspace /shared
 
 COPY --from=builder /mae/target/release/mae /usr/local/bin/mae
 COPY --from=builder /mae/target/release/mae-mcp-shim /usr/local/bin/mae-mcp-shim
