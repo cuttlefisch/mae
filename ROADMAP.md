@@ -34,10 +34,10 @@
 - [x] **One-directional sync**: cli1→cli2 works but cli2→cli1 does not. Root cause: `biased` tokio::select starved TCP reads. Fix: remove `biased;` from connected select loop.
 - [x] **First `SPC C j` unresponsive from Dashboard**: Join only works after a `SPC C D`/`SPC C i` round-trip. Root cause: splash screen intercept swallows `j` during multi-key sequences. Fix: add `pending_keys.is_empty()` guard.
 - [x] **Syntax highlighting differs on join**: Joiner sees wrong colors (purple bullets, green title). Root cause: `set_language` without `invalidate()` leaves no tree-sitter parse tree. Fix: call `syntax.invalidate(idx)` after join.
-- [ ] **Undo broadcasts full buffer to peers**: Undo on one client inserts entire buffer contents at point on other clients. Root cause: `reconcile_to()` after undo generates a full-state replacement delta instead of a targeted reversal. Full fix requires yrs `UndoManager` integration (Phase F) — per-user undo stacks that generate CRDT-safe inverse operations. Current workaround: none (known limitation).
-- [ ] **`:w` fails on non-sharer clients**: Save works only for the client that originally opened and shared the file. Other clients (including those that outlive the sharer) get errors. Root cause: `file_path` not properly resolved on join, or save protocol assumes original sharer identity.
-- [ ] **Sharer quit doesn't notify peers or stop sharing**: When the client that triggered the share disconnects, peers are not notified and the shared document lingers. Need graceful disconnect protocol: server detects client drop → notifies remaining peers → optionally promotes new owner or marks doc read-only.
-- [ ] **Client disconnect lifecycle undefined**: No documented or tested behavior for: client crash, network drop, graceful quit, last-client-leaves. Must define and implement industry-standard behavior (cf. VS Code Live Share, Google Docs). Document in `docs/COLLABORATION.md`.
+- [ ] **Large undo produces heavy sync updates**: `reconcile_to()` uses a single yrs transaction with LCS diff — updates are minimal and correct, not full-buffer replacements. However, undoing deletion of N lines means N lines of insert ops in one update, which can be heavy for large undos. Full fix requires yrs `UndoManager` integration (Phase F) — per-user undo stacks that generate CRDT-native inverse operations.
+- [x] **`:w` fails on non-sharer clients**: Save works only for the client that originally opened and shared the file. Other clients (including those that outlive the sharer) get errors. Root cause: `file_path` not properly resolved on join, or save protocol assumes original sharer identity. *(8de53b8)*
+- [x] **Sharer quit doesn't notify peers or stop sharing**: When the client that triggered the share disconnects, peers are not notified and the shared document lingers. Need graceful disconnect protocol: server detects client drop → notifies remaining peers → optionally promotes new owner or marks doc read-only. *(8de53b8)*
+- [x] **Client disconnect lifecycle undefined**: No documented or tested behavior for: client crash, network drop, graceful quit, last-client-leaves. Must define and implement industry-standard behavior (cf. VS Code Live Share, Google Docs). Document in `docs/COLLABORATION.md`. *(8de53b8)*
 - [x] **Collab e2e test harness missing**: 15 E2E tests (in-memory Client harness + 9 TCP network tests) covering share/join/edit/sync/disconnect/eviction/convergence.
 - [x] **Edits lost during share round-trip (BUG A)**: Optimistically track doc in `collab_synced_buffers` immediately, with `ShareFailed` rollback on server error.
 - [x] **Eviction doesn't delete from SQLite (BUG B)**: `evict_idle()` now deletes from storage after removing from HashMap.
@@ -97,7 +97,7 @@
   - `docs/metadata` endpoint added to state server ✅
   - `WalEntry::client_id` stored but never read for audit/attribution (deferred — needs Phase F auth)
   - `StorageError::Io` variant reserved but unused (pluggable backends — by design)
-- [ ] **State server v2** (Phase F): Awareness protocol (cursor sharing), per-user undo (yrs `UndoManager`), auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. E1 (git-based identity) and heartbeat/keepalive are complete. Priority next-round items: E8 (buffer status indicators), awareness protocol.
+- [ ] **State server v2** (Phase F): Awareness protocol (cursor sharing), per-user undo (yrs `UndoManager`), auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. E1 (git-based identity), heartbeat/keepalive, E8 (buffer status indicators), and Bugs 2-4 (save guard, sharer notifications, disconnect lifecycle) are complete *(8de53b8)*. Priority next-round items: awareness protocol, per-user undo.
 - [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
   - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
   - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
@@ -265,7 +265,7 @@ Items E1–E8 track open design questions and planned improvements for the colla
 - [ ] **E7. Operation-based version control** *(Future)*
   Inspired by Zed DeltaDB ($32M Series B) — every keystroke tracked, character-level permalinks. yrs already stores operations; annotate with timestamp/user_id/commit message. Timeline scrubber UI showing who changed what.
 
-- [ ] **E8. Collab buffer status indicators** *(Planned)*
+- [x] **E8. Collab buffer status indicators** *(8de53b8)*
   - Visual distinction for pathless vs mapped collab buffers in status bar
   - Show sync state (in-sync, pending, disconnected) per buffer
   - Show peer count

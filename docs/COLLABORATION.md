@@ -531,6 +531,17 @@ When the last client disconnects (`peer_count` reaches 0):
 
 ---
 
+## Known Limitations
+
+- **Large undo produces heavy sync updates.** `reconcile_to()` uses a single yrs
+  transaction with an LCS diff — the update is minimal and correct, not a
+  full-buffer replacement. However, undoing deletion of N lines means N lines of
+  insert ops in a single update, which can be heavy for large undos. Full fix
+  requires yrs `UndoManager` integration (Phase F) for CRDT-native inverse
+  operations.
+
+---
+
 ## See Also
 
 - `docs/adr/002-text-sync-model.md` — text sync decision (ADR-002)
