@@ -256,6 +256,7 @@ async fn handle_doc_request(
     let id = request.id.clone();
     let params = request.params.unwrap_or(serde_json::Value::Null);
 
+    info!(session = session_id, method = %request.method, "doc request");
     match request.method.as_str() {
         "sync/state_vector" => {
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
@@ -272,6 +273,7 @@ async fn handle_doc_request(
         }
 
         "sync/update" => {
+            info!(session = session_id, "sync/update: processing");
             let doc_name = match params["doc"].as_str() {
                 Some(d) => d.to_string(),
                 None => {
@@ -421,6 +423,7 @@ async fn handle_doc_request(
             // Full resync: returns full state + state vector for a document.
             // BUG C fix: atomic state + sv under single lock (INV-2).
             let raw_name = params["doc"].as_str().unwrap_or("default").to_string();
+            info!(session = session_id, doc = %raw_name, "sync/resync: processing");
             // Resolve bare filenames via suffix matching (e.g. "test.txt" finds "file:no-project/test.txt").
             let doc_name = if doc_store.has_doc(&raw_name).await {
                 raw_name
@@ -435,14 +438,17 @@ async fn handle_doc_request(
                 let _ = doc_store.track_client_connect(&doc_name).await;
             }
             match doc_store.encode_state_and_sv(&doc_name).await {
-                Ok((state, sv)) => JsonRpcResponse::success(
-                    id,
-                    serde_json::json!({
-                        "doc": doc_name,
-                        "state": update_to_base64(&state),
-                        "sv": update_to_base64(&sv),
-                    }),
-                ),
+                Ok((state, sv)) => {
+                    info!(session = session_id, doc = %doc_name, state_len = state.len(), sv_len = sv.len(), "sync/resync: returning state");
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({
+                            "doc": doc_name,
+                            "state": update_to_base64(&state),
+                            "sv": update_to_base64(&sv),
+                        }),
+                    )
+                }
                 Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
             }
         }
@@ -535,6 +541,7 @@ async fn handle_doc_request(
         "sync/share" => {
             // BUG D fix: use atomic share_doc (delete + create + connected_clients=1).
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            info!(session = session_id, doc = %doc_name, "sync/share: processing");
             // Track this doc for disconnect cleanup.
             session_docs.insert(doc_name.clone());
             let update_b64 = match params["update"].as_str() {
@@ -558,6 +565,8 @@ async fn handle_doc_request(
 
             match doc_store.share_doc(&doc_name, &update_bytes).await {
                 Ok(result) => {
+                    info!(session = session_id, doc = %doc_name, wal_seq = result.wal_seq,
+                        update_len = result.update.len(), "sync/share: accepted");
                     // Record this session as the sharer for disconnect notifications.
                     doc_store.set_sharer_session(&doc_name, session_id).await;
                     // Broadcast to all OTHER subscribers (not the sharer).

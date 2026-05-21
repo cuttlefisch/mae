@@ -391,7 +391,8 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
                 match editor.buffers[idx].apply_sync_update(&update_bytes) {
                     Ok(()) => {
-                        debug!(doc = %doc_id, update_bytes = update_bytes.len(), "applied remote sync update");
+                        info!(doc = %doc_id, update_len = update_bytes.len(), buf_idx = idx,
+                            text_len = editor.buffers[idx].text().len(), "applied remote sync update");
                         // Clear offline flag on successful remote update.
                         editor.buffers[idx].collab_offline = false;
                         editor.mark_full_redraw();
@@ -524,7 +525,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             doc_id,
             state_bytes,
         } => {
-            debug!(doc = %doc_id, state_bytes = state_bytes.len(), "buffer joined");
+            info!(doc = %doc_id, state_bytes = state_bytes.len(), "buffer joined event received");
             // Parse DocAddress from doc_id for structured addressing.
             let doc_addr = mae_sync::DocAddress::parse(&doc_id);
             // Use a display-friendly name for the buffer.
@@ -561,6 +562,10 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             };
             match load_ok {
                 Ok(()) => {
+                    let text_preview: String =
+                        editor.buffers[idx].text().chars().take(200).collect();
+                    info!(doc = %doc_id, buf_idx = idx, text_len = editor.buffers[idx].text().len(),
+                        text_preview = %text_preview, "buffer joined: sync state loaded");
                     // Store doc_id on buffer only after successful load — prevents
                     // RemoteUpdate from targeting a buffer with no valid sync_doc.
                     editor.buffers[idx].collab_doc_id = Some(doc_id.clone());
@@ -915,6 +920,7 @@ async fn run_collab_task(
                             if let Some(ref mut w) = writer {
                                 // Atomic share: server deletes old doc + applies update in one step.
                                 let update_b64 = mae_sync::encoding::update_to_base64(&state_bytes);
+                                info!(doc = %doc_id, state_len = state_bytes.len(), b64_len = update_b64.len(), "share: sending sync/share");
                                 let req_id = next_request_id;
                                 next_request_id += 1;
                                 let req = serde_json::json!({
@@ -1016,6 +1022,7 @@ async fn run_collab_task(
                             }
                         }
                         CollabCommand::JoinDoc { doc_id } => {
+                            info!(doc = %doc_id, "join: sending sync/resync");
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
                                 next_request_id += 1;
@@ -1460,6 +1467,7 @@ async fn handle_response(
                     .and_then(|m| m.as_str())
                     .unwrap_or("unknown error")
                     .to_string();
+                error!(doc = %doc_id, error = %err_msg, "share: server rejected");
                 let _ = evt_tx
                     .send(CollabEvent::ShareFailed {
                         doc_id,
@@ -1467,6 +1475,7 @@ async fn handle_response(
                     })
                     .await;
             } else {
+                info!(doc = %doc_id, "share: server accepted sync/share");
                 if !shared_docs.contains(&doc_id) {
                     shared_docs.push(doc_id.clone());
                 }
@@ -1483,6 +1492,7 @@ async fn handle_response(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            info!(count = documents.len(), for_join, docs = ?documents, "docs/list response");
             let _ = evt_tx
                 .send(CollabEvent::DocList {
                     documents,
@@ -1496,8 +1506,10 @@ async fn handle_response(
                 .and_then(|r| r.get("state"))
                 .and_then(|s| s.as_str())
                 .unwrap_or("");
+            info!(doc = %doc_id, b64_len = state_b64.len(), "join: received sync/resync response");
             match mae_sync::encoding::base64_to_update(state_b64) {
                 Ok(state_bytes) => {
+                    info!(doc = %doc_id, state_len = state_bytes.len(), "join: decoded state, sending BufferJoined");
                     let _ = evt_tx
                         .send(CollabEvent::BufferJoined {
                             doc_id,
@@ -1506,6 +1518,7 @@ async fn handle_response(
                         .await;
                 }
                 Err(e) => {
+                    error!(doc = %doc_id, error = %e, b64_preview = &state_b64[..state_b64.len().min(100)], "join: failed to decode state");
                     let _ = evt_tx
                         .send(CollabEvent::Error {
                             message: format!("Failed to decode state for {}: {}", doc_id, e),

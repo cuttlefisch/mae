@@ -3,7 +3,7 @@
 
 use mae_core::Editor;
 use mae_mcp::broadcast::{EditorEvent, SharedBroadcaster};
-use tracing::{debug, trace, warn};
+use tracing::{info, trace, warn};
 
 /// Drain all pending yrs sync updates from editor buffers and broadcast
 /// them to subscribed MCP clients. If `collab_tx` is provided and the
@@ -50,7 +50,7 @@ pub fn drain_and_broadcast(
             );
             if is_collab_synced {
                 if let Some(tx) = collab_tx {
-                    debug!(doc = %doc_id, update_bytes = update_b64.len(), "forwarding sync update to server");
+                    info!(doc = %doc_id, update_b64_len = update_b64.len(), "forwarding sync update to state server");
                     if tx
                         .try_send(crate::collab_bridge::CollabCommand::SendUpdate {
                             doc_id: doc_id.clone(),

@@ -1323,7 +1323,7 @@ pub fn render_blame_gutter(
         if let Some(entry) = overlay.entries.iter().find(|e| e.final_line == line) {
             let age = format_relative_time(entry.timestamp);
             let author: String = entry.author.chars().take(10).collect();
-            let text = format!("{} {} {}", &entry.commit_hash, author, age);
+            let text = format!("{} {} {}", entry.commit_hash, author, age);
             let display: String = text.chars().take(gutter_width).collect();
             // Draw at the right side of the window.
             let col = win_col_offset.saturating_sub(gutter_width + 1);
