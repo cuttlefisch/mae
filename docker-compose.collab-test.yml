@@ -38,6 +38,7 @@ services:
       MAE_COLLAB_SERVER: "state-server:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
+      MAE_LOG: "info"
     depends_on:
       state-server:
         condition: service_healthy
@@ -60,6 +61,7 @@ services:
       MAE_COLLAB_SERVER: "state-server:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
+      MAE_LOG: "info"
     depends_on:
       state-server:
         condition: service_healthy
@@ -81,6 +83,7 @@ services:
       MAE_COLLAB_SERVER: "state-server:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
+      MAE_LOG: "info"
     depends_on:
       state-server:
         condition: service_healthy
@@ -102,6 +105,7 @@ services:
       MAE_COLLAB_SERVER: "state-server:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
+      MAE_LOG: "info"
     depends_on:
       state-server:
         condition: service_healthy

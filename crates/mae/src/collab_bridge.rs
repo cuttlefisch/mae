@@ -1502,17 +1502,32 @@ async fn handle_response(
         }
         PendingResponseKind::JoinDoc { doc_id } => {
             // sync/resync response: {"result": {"doc": "...", "state": "<base64>", "sv": "<base64>"}}
+            // Use server-resolved doc_id (suffix matching may have expanded bare
+            // filenames like "test.txt" → "file:no-project/test.txt").
+            let resolved_doc_id = result
+                .and_then(|r| r.get("doc"))
+                .and_then(|d| d.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| doc_id.clone());
             let state_b64 = result
                 .and_then(|r| r.get("state"))
                 .and_then(|s| s.as_str())
                 .unwrap_or("");
-            info!(doc = %doc_id, b64_len = state_b64.len(), "join: received sync/resync response");
+            info!(doc = %resolved_doc_id, b64_len = state_b64.len(), "join: received sync/resync response");
+            // Update shared_docs to use the resolved name (replace unresolved if present).
+            if resolved_doc_id != doc_id {
+                if let Some(pos) = shared_docs.iter().position(|d| d == &doc_id) {
+                    shared_docs[pos] = resolved_doc_id.clone();
+                } else if !shared_docs.contains(&resolved_doc_id) {
+                    shared_docs.push(resolved_doc_id.clone());
+                }
+            }
             match mae_sync::encoding::base64_to_update(state_b64) {
                 Ok(state_bytes) => {
-                    info!(doc = %doc_id, state_len = state_bytes.len(), "join: decoded state, sending BufferJoined");
+                    info!(doc = %resolved_doc_id, state_len = state_bytes.len(), "join: decoded state, sending BufferJoined");
                     let _ = evt_tx
                         .send(CollabEvent::BufferJoined {
-                            doc_id,
+                            doc_id: resolved_doc_id,
                             state_bytes,
                         })
                         .await;
