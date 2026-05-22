@@ -76,8 +76,15 @@ jobs:
         run: cargo test --package mae-core --lib -- content_hash file_lock --test-threads=1
         timeout-minutes: 3
       - name: State server tests
-        run: cargo test --package mae-state-server -- --test-threads=1
-        timeout-minutes: 3
+        run: cargo test --package mae-state-server -- --test-threads=1 --nocapture
+        timeout-minutes: 5
+        env:
+          RUST_LOG: "mae_state_server=debug,mae_sync=debug,warn"
+      - name: Collab bridge integration tests
+        run: cargo test --package mae --test collab_bridge_integration -- --test-threads=1 --nocapture
+        timeout-minutes: 5
+        env:
+          RUST_LOG: "mae_state_server=debug,mae_sync=debug,warn"
       - name: State server check-config
         run: cargo run --package mae-state-server -- --check-config
         timeout-minutes: 1

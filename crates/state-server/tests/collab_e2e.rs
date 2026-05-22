@@ -3,7 +3,7 @@
 //! Tests exercise the full multi-client flow using duplex pipes (no TCP,
 //! no env gating). Each test spawns server handlers + simulated clients.
 
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
 use mae_state_server::doc_store::DocStore;
@@ -12,6 +12,22 @@ use mae_state_server::storage::SqliteBackend;
 use mae_sync::encoding::{base64_to_update, update_to_base64};
 use mae_sync::text::TextSync;
 use tokio::io::{AsyncWriteExt, BufReader};
+
+// --- Tracing ---
+
+static INIT_TRACING: Once = Once::new();
+
+fn init_tracing() {
+    INIT_TRACING.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+            )
+            .with_test_writer()
+            .try_init();
+    });
+}
 
 // --- Helpers ---
 
@@ -28,6 +44,8 @@ struct Client {
     writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
     reader: BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
     next_id: u64,
+    /// Notifications buffered while waiting for responses in recv().
+    notification_buffer: Vec<serde_json::Value>,
 }
 
 impl Client {
@@ -56,6 +74,7 @@ impl Client {
             writer: client_write,
             reader: client_reader,
             next_id: 1,
+            notification_buffer: Vec::new(),
         };
 
         // Handshake: initialize + subscribe to sync_update + peer events
@@ -70,7 +89,7 @@ impl Client {
         self.writer.flush().await.unwrap();
     }
 
-    /// Read the next JSON-RPC response, skipping notifications.
+    /// Read the next JSON-RPC response, buffering notifications encountered along the way.
     async fn recv(&mut self) -> serde_json::Value {
         loop {
             let text = mae_mcp::read_message(&mut self.reader)
@@ -78,19 +97,24 @@ impl Client {
                 .unwrap()
                 .unwrap();
             let val: serde_json::Value = serde_json::from_str(&text).unwrap();
-            // Skip notifications (have "method" but no response "id" with result/error).
+            // Buffer notifications (have "method" but no response "id" with result/error).
             if val.get("method").is_some()
                 && val.get("result").is_none()
                 && val.get("error").is_none()
             {
-                continue; // notification, skip
+                self.notification_buffer.push(val);
+                continue;
             }
             return val;
         }
     }
 
-    /// Try to read a message with timeout. Returns None if no message within duration.
+    /// Try to read a message with timeout. Returns buffered notifications first.
     async fn recv_timeout(&mut self, ms: u64) -> Option<serde_json::Value> {
+        // Return buffered notifications first.
+        if !self.notification_buffer.is_empty() {
+            return Some(self.notification_buffer.remove(0));
+        }
         match tokio::time::timeout(
             std::time::Duration::from_millis(ms),
             mae_mcp::read_message(&mut self.reader),
@@ -215,9 +239,10 @@ impl Client {
         self.recv().await
     }
 
-    /// Drain any pending notifications (non-blocking).
+    /// Drain any pending notifications (non-blocking). Includes buffered ones.
     async fn drain_notifications(&mut self) -> Vec<serde_json::Value> {
-        let mut notifications = Vec::new();
+        let mut notifications: Vec<serde_json::Value> =
+            self.notification_buffer.drain(..).collect();
         while let Some(msg) = self.recv_timeout(50).await {
             if msg.get("method").is_some() {
                 notifications.push(msg);
@@ -266,6 +291,7 @@ fn sha256(content: &str) -> String {
 
 #[tokio::test]
 async fn two_clients_bidirectional_sync() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -297,6 +323,7 @@ async fn two_clients_bidirectional_sync() {
 
 #[tokio::test]
 async fn undo_does_not_corrupt_peer() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -365,6 +392,7 @@ async fn undo_does_not_corrupt_peer() {
 
 #[tokio::test]
 async fn save_intent_matches_crdt_content() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -399,6 +427,7 @@ async fn save_intent_matches_crdt_content() {
 
 #[tokio::test]
 async fn save_intent_detects_conflict() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -416,6 +445,7 @@ async fn save_intent_detects_conflict() {
 
 #[tokio::test]
 async fn client_disconnect_notifies_peers() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -437,6 +467,7 @@ async fn client_disconnect_notifies_peers() {
 
 #[tokio::test]
 async fn concurrent_edits_converge() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -475,6 +506,7 @@ async fn concurrent_edits_converge() {
 
 #[tokio::test]
 async fn rejoin_after_disconnect() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -504,6 +536,7 @@ async fn rejoin_after_disconnect() {
 
 #[tokio::test]
 async fn save_committed_broadcasts_to_peers() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -538,6 +571,7 @@ async fn save_committed_broadcasts_to_peers() {
 
 #[tokio::test]
 async fn sync_update_echo_filtered() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -562,6 +596,7 @@ async fn sync_update_echo_filtered() {
 
 #[tokio::test]
 async fn share_then_immediate_edit_syncs() {
+    init_tracing();
     // BUG A regression test: edits during share round-trip must be forwarded.
     let store = test_doc_store();
     let bc = test_broadcaster();
@@ -588,6 +623,7 @@ async fn share_then_immediate_edit_syncs() {
 
 #[tokio::test]
 async fn eviction_removes_from_list() {
+    init_tracing();
     // BUG B regression test: evicted docs should not appear in docs/list.
     let store = test_doc_store();
     let bc = test_broadcaster();
@@ -622,6 +658,7 @@ async fn eviction_removes_from_list() {
 
 #[tokio::test]
 async fn reshare_replaces_content() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -640,6 +677,7 @@ async fn reshare_replaces_content() {
 
 #[tokio::test]
 async fn three_client_convergence() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -683,6 +721,7 @@ async fn three_client_convergence() {
 
 #[tokio::test]
 async fn large_document_sync() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -717,6 +756,7 @@ async fn large_document_sync() {
 /// Server relays awareness between two clients on the same document.
 #[tokio::test]
 async fn awareness_relay_to_peers() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -725,6 +765,10 @@ async fn awareness_relay_to_peers() {
 
     alice.share("awareness-test", "content").await;
     bob.share("awareness-test", "content").await;
+
+    // Drain any sync_update notifications from the share operations.
+    let _ = alice.drain_notifications().await;
+    let _ = bob.drain_notifications().await;
 
     // Alice sends awareness update.
     let msg = serde_json::json!({
@@ -765,6 +809,7 @@ async fn awareness_relay_to_peers() {
 /// WU2a: Compaction reduces WAL entries after many updates.
 #[tokio::test]
 async fn compaction_reduces_wal_entries() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -828,6 +873,7 @@ async fn compaction_reduces_wal_entries() {
 /// WU2b: Client connect/disconnect updates stats.connected_clients.
 #[tokio::test]
 async fn client_connect_disconnect_updates_stats() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -887,6 +933,7 @@ async fn client_connect_disconnect_updates_stats() {
 /// WU2c: sync/full_state on nonexistent doc returns error (not auto-creation).
 #[tokio::test]
 async fn full_state_on_nonexistent_doc() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -919,6 +966,7 @@ async fn full_state_on_nonexistent_doc() {
 /// WU2d: save_epoch prevents stale save_committed.
 #[tokio::test]
 async fn save_epoch_prevents_stale_committed() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -967,6 +1015,7 @@ async fn save_epoch_prevents_stale_committed() {
 /// Awareness updates don't produce WAL entries (ephemeral protocol).
 #[tokio::test]
 async fn awareness_not_in_wal() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -1007,5 +1056,463 @@ async fn awareness_not_in_wal() {
     assert!(
         wal <= 1,
         "Awareness must not produce WAL entries (got {wal})"
+    );
+}
+
+// ============================================================================
+// WU3 — Long-Lived Session Tests
+// ============================================================================
+
+// --- WU4 helpers: convergence assertion + remote update drain ---
+
+/// Assert all three views of a document are identical.
+/// Panics with a diagnostic message showing which view diverged.
+async fn assert_convergence(
+    label: &str,
+    client_a: &mut Client,
+    _client_b: &mut Client,
+    ts_a: &TextSync,
+    ts_b: &TextSync,
+    doc: &str,
+) {
+    let server_content = client_a.content(doc).await;
+    let a_content = ts_a.content();
+    let b_content = ts_b.content();
+
+    assert_eq!(
+        a_content,
+        b_content,
+        "[{label}] LOCAL DIVERGENCE: A({} chars) != B({} chars)\n  A: {:?}\n  B: {:?}",
+        a_content.len(),
+        b_content.len(),
+        &a_content[..a_content.len().min(200)],
+        &b_content[..b_content.len().min(200)],
+    );
+    assert_eq!(
+        a_content, server_content,
+        "[{label}] SERVER DIVERGENCE: local({} chars) != server({} chars)\n  local: {:?}\n  server: {:?}",
+        a_content.len(),
+        server_content.len(),
+        &a_content[..a_content.len().min(200)],
+        &server_content[..server_content.len().min(200)],
+    );
+}
+
+/// Drain notifications and apply any sync_update to the local TextSync.
+/// Returns the number of updates applied.
+async fn apply_remote_updates(
+    client: &mut Client,
+    ts: &mut TextSync,
+    doc: &str,
+    timeout_ms: u64,
+) -> u32 {
+    let mut applied = 0;
+    loop {
+        let notif = match client.recv_timeout(timeout_ms).await {
+            Some(n) => n,
+            None => break,
+        };
+        if notif.get("method").and_then(|m| m.as_str()) == Some("notifications/sync_update") {
+            if let Some(update_b64) = notif
+                .pointer("/params/event/data/update_base64")
+                .and_then(|v| v.as_str())
+            {
+                if let Some(buf_name) = notif
+                    .pointer("/params/event/data/buffer_name")
+                    .and_then(|v| v.as_str())
+                {
+                    if buf_name == doc {
+                        let bytes = base64_to_update(update_b64).unwrap();
+                        ts.apply_update(&bytes).unwrap();
+                        applied += 1;
+                    }
+                }
+            }
+        }
+    }
+    applied
+}
+
+// --- Test 1: Sustained bidirectional editing ---
+
+/// Models a real collaborative editing session: two clients connected for 50+
+/// round-trip edits with interleaved operations and periodic convergence checks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sustained_bidirectional_editing() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Step 1: A shares doc with initial content.
+    client_a.share("session.txt", "hello").await;
+
+    // Step 2: Both get initial state and build local TextSync mirrors.
+    let state_a = client_a.full_state("session.txt").await;
+    let mut ts_a = TextSync::from_state(&state_a).unwrap();
+    let state_b = client_b.full_state("session.txt").await;
+    let mut ts_b = TextSync::from_state(&state_b).unwrap();
+    assert_eq!(ts_a.content(), "hello");
+    assert_eq!(ts_b.content(), "hello");
+
+    // PHASE 1: Interleaved typing (20 rounds).
+    for round in 0..20 {
+        // A inserts at end.
+        let a_text = format!("A{round}");
+        let a_offset = ts_a.content().len() as u32;
+        let update_a = ts_a.insert(a_offset, &a_text);
+        client_a.send_update("session.txt", &update_a).await;
+
+        // B receives and applies A's update.
+        apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", 200).await;
+
+        // B inserts at end.
+        let b_text = format!("B{round}");
+        let b_offset = ts_b.content().len() as u32;
+        let update_b = ts_b.insert(b_offset, &b_text);
+        client_b.send_update("session.txt", &update_b).await;
+
+        // A receives and applies B's update.
+        apply_remote_updates(&mut client_a, &mut ts_a, "session.txt", 200).await;
+
+        // Validate convergence every 5 rounds.
+        if round % 5 == 4 {
+            assert_convergence(
+                &format!("phase1-round{round}"),
+                &mut client_a,
+                &mut client_b,
+                &ts_a,
+                &ts_b,
+                "session.txt",
+            )
+            .await;
+        }
+    }
+
+    // PHASE 2: Concurrent edits (10 rounds).
+    for round in 0..10 {
+        // Both insert at different offsets simultaneously.
+        let a_offset = 5.min(ts_a.content().len() as u32); // near start
+        let b_offset = ts_b.content().len() as u32; // at end
+        let update_a = ts_a.insert(a_offset, &format!("[A{round}]"));
+        let update_b = ts_b.insert(b_offset, &format!("[B{round}]"));
+
+        // Send both without waiting.
+        client_a.send_update("session.txt", &update_a).await;
+        client_b.send_update("session.txt", &update_b).await;
+
+        // Allow server to process both updates before draining.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Both drain and apply remote updates. Drain twice — each client
+        // needs to receive the OTHER client's update (which goes through
+        // server broadcast). First drain may only get one update.
+        apply_remote_updates(&mut client_a, &mut ts_a, "session.txt", 200).await;
+        apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", 200).await;
+
+        // Validate every round — concurrent edits are the risky case.
+        assert_convergence(
+            &format!("phase2-round{round}"),
+            &mut client_a,
+            &mut client_b,
+            &ts_a,
+            &ts_b,
+            "session.txt",
+        )
+        .await;
+    }
+
+    // PHASE 3: Delete operations (10 rounds).
+    for round in 0..10 {
+        let content_len = ts_a.content().len() as u32;
+        if content_len > 10 {
+            // A deletes 2 chars from the start.
+            let update_a = ts_a.delete(0, 2.min(content_len));
+            client_a.send_update("session.txt", &update_a).await;
+        }
+
+        // B inserts at end.
+        let b_offset = ts_b.content().len() as u32;
+        let update_b = ts_b.insert(b_offset, &format!("d{round}"));
+        client_b.send_update("session.txt", &update_b).await;
+
+        // Both drain.
+        apply_remote_updates(&mut client_a, &mut ts_a, "session.txt", 200).await;
+        apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", 200).await;
+
+        if round % 3 == 2 {
+            assert_convergence(
+                &format!("phase3-round{round}"),
+                &mut client_a,
+                &mut client_b,
+                &ts_a,
+                &ts_b,
+                "session.txt",
+            )
+            .await;
+        }
+    }
+
+    // PHASE 4: Save round-trip mid-session.
+    let content = client_a.content("session.txt").await;
+    let hash = sha256(&content);
+    let intent_resp = client_a.save_intent("session.txt", &hash).await;
+    let epoch = intent_resp["result"]["result"]["save_epoch"]
+        .as_u64()
+        .unwrap();
+    assert!(epoch > 0, "save_intent should return valid epoch");
+    client_a
+        .save_committed("session.txt", epoch, &hash, "alice")
+        .await;
+
+    // Continue editing after save — save must not disrupt sync.
+    let update_post_save = ts_a.insert(0, "POST_SAVE:");
+    client_a.send_update("session.txt", &update_post_save).await;
+    apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", 200).await;
+
+    // Final convergence check.
+    assert_convergence(
+        "final",
+        &mut client_a,
+        &mut client_b,
+        &ts_a,
+        &ts_b,
+        "session.txt",
+    )
+    .await;
+
+    // Content must be non-empty.
+    let final_content = ts_a.content();
+    assert!(!final_content.is_empty(), "final content must not be empty");
+    assert!(
+        final_content.contains("POST_SAVE:"),
+        "post-save edit must be present"
+    );
+}
+
+// --- Test 2: Non-sharer extended editing ---
+
+/// Specifically targets the divergence bug: a sharer creates a doc, a joiner
+/// connects and does 30 edits while receiving updates from the sharer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_sharer_extended_editing() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut sharer = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut joiner = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Step 1: Sharer creates doc.
+    sharer.share("joiner.txt", "line 1\nline 2\nline 3\n").await;
+
+    // Step 2: Both build local mirrors.
+    let state_s = sharer.full_state("joiner.txt").await;
+    let mut ts_s = TextSync::from_state(&state_s).unwrap();
+    let state_j = joiner.full_state("joiner.txt").await;
+    let mut ts_j = TextSync::from_state(&state_j).unwrap();
+    assert_eq!(ts_s.content(), ts_j.content());
+
+    // PHASE 1: Joiner-only edits (10 rounds).
+    for round in 0..10 {
+        let offset = ts_j.content().len() as u32;
+        let update = ts_j.insert(offset, &format!("joiner-{round}\n"));
+        joiner.send_update("joiner.txt", &update).await;
+
+        // Sharer receives and applies.
+        apply_remote_updates(&mut sharer, &mut ts_s, "joiner.txt", 200).await;
+
+        if round % 3 == 2 {
+            assert_convergence(
+                &format!("phase1-joiner-only-round{round}"),
+                &mut sharer,
+                &mut joiner,
+                &ts_s,
+                &ts_j,
+                "joiner.txt",
+            )
+            .await;
+        }
+    }
+
+    // PHASE 2: Sharer edits while joiner is idle (10 rounds).
+    for round in 0..10 {
+        let offset = ts_s.content().len() as u32;
+        let update = ts_s.insert(offset, &format!("sharer-{round}\n"));
+        sharer.send_update("joiner.txt", &update).await;
+
+        // Joiner receives and applies.
+        apply_remote_updates(&mut joiner, &mut ts_j, "joiner.txt", 200).await;
+
+        if round % 3 == 2 {
+            assert_convergence(
+                &format!("phase2-sharer-only-round{round}"),
+                &mut sharer,
+                &mut joiner,
+                &ts_s,
+                &ts_j,
+                "joiner.txt",
+            )
+            .await;
+        }
+    }
+
+    // PHASE 3: Both edit concurrently (10 rounds).
+    for round in 0..10 {
+        let s_offset = ts_s.content().len() as u32;
+        let j_offset = 0u32; // joiner inserts at start
+        let update_s = ts_s.insert(s_offset, &format!("S{round}"));
+        let update_j = ts_j.insert(j_offset, &format!("J{round}"));
+
+        sharer.send_update("joiner.txt", &update_s).await;
+        joiner.send_update("joiner.txt", &update_j).await;
+
+        // Allow server to process both updates before draining.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        apply_remote_updates(&mut sharer, &mut ts_s, "joiner.txt", 200).await;
+        apply_remote_updates(&mut joiner, &mut ts_j, "joiner.txt", 200).await;
+
+        assert_convergence(
+            &format!("phase3-concurrent-round{round}"),
+            &mut sharer,
+            &mut joiner,
+            &ts_s,
+            &ts_j,
+            "joiner.txt",
+        )
+        .await;
+    }
+
+    // PHASE 4: Joiner initiates save.
+    let content = joiner.content("joiner.txt").await;
+    let hash = sha256(&content);
+    let intent_resp = joiner.save_intent("joiner.txt", &hash).await;
+    // Should succeed (server allows any client to save).
+    assert!(
+        intent_resp.get("error").is_none(),
+        "joiner save_intent should succeed: {intent_resp}"
+    );
+
+    // Final convergence.
+    assert_convergence(
+        "final-non-sharer",
+        &mut sharer,
+        &mut joiner,
+        &ts_s,
+        &ts_j,
+        "joiner.txt",
+    )
+    .await;
+}
+
+// --- Test 3: Session lifecycle equivalence ---
+
+/// Validates that N short sessions produce the same server state as 1 long
+/// session doing the same operations.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_lifecycle_equivalence() {
+    init_tracing();
+    // Two separate doc stores (independent backends).
+    let store_long = test_doc_store();
+    let bc_long = test_broadcaster();
+    let store_short = test_doc_store();
+    let bc_short = test_broadcaster();
+
+    let edits: Vec<String> = (0..20).map(|i| format!("edit-{i}\n")).collect();
+
+    // --- LONG SESSION: One client, 20 sequential updates. ---
+    {
+        let mut client = Client::connect(Arc::clone(&store_long), Arc::clone(&bc_long)).await;
+        client.share("equiv.txt", "").await;
+        let state = client.full_state("equiv.txt").await;
+        let mut ts = TextSync::from_state(&state).unwrap();
+
+        for text in &edits {
+            let offset = ts.content().len() as u32;
+            let update = ts.insert(offset, text);
+            client.send_update("equiv.txt", &update).await;
+        }
+    }
+
+    // --- SHORT SESSIONS: 20 clients, each sends 1 update. ---
+    // First client shares empty doc.
+    {
+        let mut first = Client::connect(Arc::clone(&store_short), Arc::clone(&bc_short)).await;
+        first.share("equiv.txt", "").await;
+    }
+
+    for text in &edits {
+        let mut client = Client::connect(Arc::clone(&store_short), Arc::clone(&bc_short)).await;
+        // Get current state, apply one edit.
+        let state = client.full_state("equiv.txt").await;
+        let mut ts = TextSync::from_state(&state).unwrap();
+        let offset = ts.content().len() as u32;
+        let update = ts.insert(offset, text);
+        client.send_update("equiv.txt", &update).await;
+        // Client disconnects at end of loop iteration (dropped).
+    }
+
+    // Allow final disconnects to propagate.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // --- VALIDATE equivalence. ---
+    let mut long_client = Client::connect(Arc::clone(&store_long), Arc::clone(&bc_long)).await;
+    let mut short_client = Client::connect(Arc::clone(&store_short), Arc::clone(&bc_short)).await;
+
+    let long_content = long_client.content("equiv.txt").await;
+    let short_content = short_client.content("equiv.txt").await;
+
+    assert_eq!(
+        long_content,
+        short_content,
+        "long-session and short-session content must match\n  long: {:?}\n  short: {:?}",
+        &long_content[..long_content.len().min(300)],
+        &short_content[..short_content.len().min(300)],
+    );
+
+    // Both should have the same content hash.
+    assert_eq!(
+        sha256(&long_content),
+        sha256(&short_content),
+        "content hashes must match"
+    );
+
+    // Long session: connected_clients should be 1 (the client we just connected).
+    let long_stats_msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": long_client.next_id,
+        "method": "docs/stats",
+        "params": { "doc": "equiv.txt" }
+    });
+    long_client.next_id += 1;
+    long_client.send(&long_stats_msg).await;
+    let long_stats = long_client.recv().await;
+
+    // Short session: all previous clients disconnected, only the stats-checking
+    // client connected (may or may not have triggered track_client_connect
+    // depending on whether content() does).
+    let short_stats_msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": short_client.next_id,
+        "method": "docs/stats",
+        "params": { "doc": "equiv.txt" }
+    });
+    short_client.next_id += 1;
+    short_client.send(&short_stats_msg).await;
+    let short_stats = short_client.recv().await;
+
+    // Both should report update_count (may differ due to compaction timing,
+    // but both should be non-negative and the content must match).
+    let long_count = long_stats["result"]["stats"]["update_count"]
+        .as_u64()
+        .unwrap_or(0);
+    let short_count = short_stats["result"]["stats"]["update_count"]
+        .as_u64()
+        .unwrap_or(0);
+    // Content match is the critical assertion — update_count is informational.
+    assert!(
+        long_count > 0 || short_count > 0,
+        "at least one store should have tracked updates"
     );
 }

@@ -212,6 +212,7 @@ pub async fn handle_client<R, W>(
 
     // Track client disconnect for all docs this session touched.
     for doc_name in &session_docs {
+        debug!(session = session_id, doc = %doc_name, "disconnect: cleanup for doc");
         if let Err(e) = doc_store.track_client_disconnect(doc_name).await {
             warn!(session = session_id, doc = %doc_name, error = %e, "disconnect tracking failed");
         }
@@ -220,6 +221,7 @@ pub async fn handle_client<R, W>(
     // Check if this session was the sharer for any docs and broadcast SharerLeft.
     for doc_name in &session_docs {
         if doc_store.is_sharer(doc_name, session_id).await {
+            debug!(session = session_id, doc = %doc_name, "disconnect: was sharer, broadcasting SharerLeft");
             doc_store.clear_sharer(doc_name).await;
             let mut bc = broadcaster.lock().unwrap();
             let remaining = bc.client_count().saturating_sub(1);
@@ -327,6 +329,7 @@ async fn handle_doc_request(
             if session_docs.insert(doc_name.clone()) {
                 // First interaction — track client connect.
                 let _ = doc_store.track_client_connect(&doc_name).await;
+                debug!(session = session_id, doc = %doc_name, "sync/update: first interaction, tracking connect");
             }
             let update_b64 = match params["update"].as_str() {
                 Some(s) => s,
@@ -375,6 +378,7 @@ async fn handle_doc_request(
                             session_id,
                         );
                     }
+                    debug!(session = session_id, doc = %doc_name, wal_seq = result.wal_seq, update_len = result.update.len(), "sync/update: applied");
                     JsonRpcResponse::success(
                         id,
                         serde_json::json!({
@@ -443,10 +447,12 @@ async fn handle_doc_request(
             // Track this doc for disconnect cleanup (joiners use full_state).
             if session_docs.insert(doc_name.clone()) {
                 let _ = doc_store.track_client_connect(&doc_name).await;
+                debug!(session = session_id, doc = %doc_name, "sync/full_state: first interaction, tracking connect");
             }
             match doc_store.encode_state(&doc_name).await {
                 Ok(state) => {
                     let state_b64 = update_to_base64(&state);
+                    debug!(session = session_id, doc = %doc_name, state_len = state.len(), "sync/full_state: returning state");
                     JsonRpcResponse::success(
                         id,
                         serde_json::json!({ "doc": doc_name, "state": state_b64 }),
@@ -590,10 +596,13 @@ async fn handle_doc_request(
                 }
             };
             match doc_store.check_save_intent(&doc_name, expected_hash).await {
-                Ok(result) => JsonRpcResponse::success(
-                    id,
-                    serde_json::json!({ "doc": doc_name, "result": result }),
-                ),
+                Ok(result) => {
+                    debug!(session = session_id, doc = %doc_name, result = ?result, "docs/save_intent: checked");
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({ "doc": doc_name, "result": result }),
+                    )
+                }
                 Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
             }
         }
@@ -603,6 +612,8 @@ async fn handle_doc_request(
             let saved_by = params["saved_by"].as_str().unwrap_or("unknown").to_string();
             let save_epoch = params["save_epoch"].as_u64().unwrap_or(0);
             let content_hash = params["content_hash"].as_str().unwrap_or("").to_string();
+
+            debug!(session = session_id, doc = %doc_name, saved_by = %saved_by, save_epoch, "docs/save_committed: recording");
 
             // Record save metadata on the document.
             if let Err(e) = doc_store.record_save(&doc_name, &saved_by).await {
@@ -671,6 +682,8 @@ async fn handle_doc_request(
                             },
                             session_id,
                         );
+                        let subscriber_count = bc.client_count().saturating_sub(1);
+                        debug!(session = session_id, doc = %doc_name, subscriber_count, "sync/share: broadcast sent");
                     }
                     JsonRpcResponse::success(
                         id,
@@ -683,6 +696,7 @@ async fn handle_doc_request(
 
         "docs/delete" => {
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            debug!(session = session_id, doc = %doc_name, "docs/delete: processing");
             match doc_store.delete_doc(&doc_name).await {
                 Ok(()) => JsonRpcResponse::success(
                     id,

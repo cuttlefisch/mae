@@ -4,7 +4,7 @@
 //! a real `handle_client` server handler via duplex pipes (no TCP).
 //! Additional buffer-level and editor-level tests are in their respective crate tests.
 
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use mae_core::Buffer;
 use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
@@ -15,6 +15,22 @@ use mae_sync::encoding::{base64_to_update, update_to_base64};
 use mae_sync::text::TextSync;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncWriteExt, BufReader};
+
+// --- Tracing ---
+
+static INIT_TRACING: Once = Once::new();
+
+fn init_tracing() {
+    INIT_TRACING.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+            )
+            .with_test_writer()
+            .try_init();
+    });
+}
 
 // --- Test Infrastructure ---
 
@@ -230,6 +246,7 @@ impl Client {
 
 #[tokio::test]
 async fn share_edit_roundtrip() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -245,6 +262,7 @@ async fn share_edit_roundtrip() {
 
 #[tokio::test]
 async fn remote_update_applies_to_buffer() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -273,6 +291,7 @@ async fn remote_update_applies_to_buffer() {
 
 #[tokio::test]
 async fn two_editors_converge() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -296,6 +315,7 @@ async fn two_editors_converge() {
 
 #[tokio::test]
 async fn doc_id_differs_from_buffer_name() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -312,6 +332,7 @@ async fn doc_id_differs_from_buffer_name() {
 
 #[tokio::test]
 async fn drain_and_broadcast_uses_collab_doc_id() {
+    init_tracing();
     use mae_core::Editor;
 
     let mut editor = Editor::default();
@@ -342,6 +363,7 @@ async fn drain_and_broadcast_uses_collab_doc_id() {
 
 #[tokio::test]
 async fn undo_through_bridge() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -384,6 +406,7 @@ async fn undo_through_bridge() {
 
 #[tokio::test]
 async fn replace_contents_queues_sync_updates() {
+    init_tracing();
     let mut buf = Buffer::new();
     buf.name = "replace.rs".to_string();
     buf.insert_text_at(0, "old content");
@@ -399,6 +422,7 @@ async fn replace_contents_queues_sync_updates() {
 
 #[tokio::test]
 async fn apply_sync_update_when_sync_none() {
+    init_tracing();
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "hello");
     let result = buf.apply_sync_update(&[1, 2, 3]);
@@ -408,6 +432,7 @@ async fn apply_sync_update_when_sync_none() {
 
 #[tokio::test]
 async fn echo_filtering() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -426,6 +451,7 @@ async fn echo_filtering() {
 
 #[tokio::test]
 async fn share_edits_during_roundtrip() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -443,6 +469,7 @@ async fn share_edits_during_roundtrip() {
 
 #[tokio::test]
 async fn reshare_replaces_not_appends() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -466,6 +493,7 @@ fn sha256_hash(content: &str) -> String {
 /// WU3: Save intent → committed round-trip with broadcast to second client.
 #[tokio::test]
 async fn save_intent_to_committed_roundtrip() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -512,6 +540,7 @@ async fn save_intent_to_committed_roundtrip() {
 /// WU3 (variant): Save intent with wrong hash returns conflict.
 #[tokio::test]
 async fn save_intent_conflict_on_hash_mismatch() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -532,6 +561,7 @@ async fn save_intent_conflict_on_hash_mismatch() {
 /// WU4: Heartbeat ping/pong and server-drop EOF detection.
 #[tokio::test]
 async fn heartbeat_ping_pong_and_server_drop() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -575,6 +605,7 @@ async fn heartbeat_ping_pong_and_server_drop() {
 /// WU5: Client reconnects to fresh server and re-shares — CRDT content preserved.
 #[tokio::test]
 async fn reconnect_reshare_preserves_crdt_state() {
+    init_tracing();
     // Phase 1: Share and edit.
     let store1 = test_doc_store();
     let bc1 = test_broadcaster();
@@ -644,6 +675,7 @@ async fn reconnect_reshare_preserves_crdt_state() {
 
 #[tokio::test]
 async fn fault_server_drop_mid_session() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let (client_stream, server_stream) = tokio::io::duplex(8192);
@@ -686,6 +718,7 @@ async fn fault_server_drop_mid_session() {
 
 #[tokio::test]
 async fn fault_invalid_json() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let (client_stream, server_stream) = tokio::io::duplex(8192);
@@ -727,6 +760,7 @@ async fn fault_invalid_json() {
 
 #[tokio::test]
 async fn fault_invalid_base64_in_update() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -747,6 +781,7 @@ async fn fault_invalid_base64_in_update() {
 
 #[tokio::test]
 async fn fault_concurrent_share_same_doc() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -763,6 +798,7 @@ async fn fault_concurrent_share_same_doc() {
 
 #[tokio::test]
 async fn fault_stale_sync_after_reconnect() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -780,6 +816,7 @@ async fn fault_stale_sync_after_reconnect() {
 
 #[tokio::test]
 async fn debug_response_shape_matches_doctor() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -809,6 +846,7 @@ async fn debug_response_shape_matches_doctor() {
 /// receives subsequent sync/update broadcasts from other clients.
 #[tokio::test]
 async fn join_via_resync_receives_subsequent_updates() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -851,6 +889,7 @@ async fn join_via_resync_receives_subsequent_updates() {
 /// BUG 1 (variant): After resync, remote edits apply correctly.
 #[tokio::test]
 async fn remote_update_after_resync_applies() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -890,6 +929,7 @@ async fn remote_update_after_resync_applies() {
 /// BUG 2: If load_sync_state fails, collab_doc_id must NOT be set on the buffer.
 #[tokio::test]
 async fn join_failed_buffer_stays_clean() {
+    init_tracing();
     let mut buf = Buffer::new();
 
     // Try to load garbage state bytes — should fail.
@@ -910,6 +950,7 @@ async fn join_failed_buffer_stays_clean() {
 /// BUG 6: load_sync_state replaces buffer content from server (no duplication).
 #[tokio::test]
 async fn load_sync_replaces_existing_content() {
+    init_tracing();
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "local content that should be replaced");
 
@@ -935,6 +976,7 @@ async fn load_sync_replaces_existing_content() {
 /// BUG 3: ShareFailed cleanup must clear sync_doc so re-share starts fresh.
 #[tokio::test]
 async fn share_failed_allows_clean_reshare() {
+    init_tracing();
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "test content");
 
@@ -958,6 +1000,7 @@ async fn share_failed_allows_clean_reshare() {
 /// BUG 5: Channel capacity is sufficient for burst editing.
 #[tokio::test]
 async fn collab_channel_capacity_sufficient() {
+    init_tracing();
     // The production channel is 256 — verify it can absorb a burst.
     let (tx, _rx) = tokio::sync::mpsc::channel::<u8>(256);
     for i in 0..200u8 {
@@ -973,6 +1016,7 @@ async fn collab_channel_capacity_sufficient() {
 /// Awareness update roundtrip: client A sends awareness, client B receives.
 #[tokio::test]
 async fn awareness_update_roundtrip() {
+    init_tracing();
     let store = test_doc_store();
     let broadcaster = test_broadcaster();
 
@@ -1026,6 +1070,7 @@ async fn awareness_update_roundtrip() {
 /// Awareness echo filter: sender does NOT receive own awareness update.
 #[tokio::test]
 async fn awareness_echo_filtered() {
+    init_tracing();
     let store = test_doc_store();
     let broadcaster = test_broadcaster();
 
@@ -1070,6 +1115,7 @@ async fn awareness_echo_filtered() {
 /// Awareness is NOT persisted — it's ephemeral.
 #[tokio::test]
 async fn awareness_not_persisted() {
+    init_tracing();
     let store = test_doc_store();
     let broadcaster = test_broadcaster();
 
@@ -1152,6 +1198,7 @@ fn awareness_color_index_deterministic() {
 /// WU1a: sync/state_vector returns a valid state vector.
 #[tokio::test]
 async fn sync_state_vector_returns_valid_sv() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -1182,6 +1229,7 @@ async fn sync_state_vector_returns_valid_sv() {
 /// WU1b: sync/diff computes an incremental update between two states.
 #[tokio::test]
 async fn sync_diff_computes_incremental_update() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -1231,6 +1279,7 @@ async fn sync_diff_computes_incremental_update() {
 /// WU1c: docs/delete removes a document from the server.
 #[tokio::test]
 async fn docs_delete_removes_document() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -1297,6 +1346,7 @@ async fn docs_delete_removes_document() {
 /// WU1d: docs/metadata returns save info after a save round-trip.
 #[tokio::test]
 async fn docs_metadata_returns_save_info() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -1346,6 +1396,7 @@ async fn docs_metadata_returns_save_info() {
 /// WU1e: Concurrent save intents — one succeeds, other gets conflict.
 #[tokio::test]
 async fn concurrent_save_intents_same_doc() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -1404,6 +1455,7 @@ async fn concurrent_save_intents_same_doc() {
 /// WU1f: Sharer disconnect notifies peers (sharer_left event).
 #[tokio::test]
 async fn sharer_disconnect_notifies_peers() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
 
@@ -1445,6 +1497,7 @@ async fn sharer_disconnect_notifies_peers() {
 /// WU3a: Invalid CRDT bytes (valid base64 but garbage) are rejected.
 #[tokio::test]
 async fn invalid_crdt_bytes_rejected() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -1480,6 +1533,7 @@ async fn invalid_crdt_bytes_rejected() {
 /// WU3b: Concurrent share of same doc_id converges deterministically.
 #[tokio::test]
 async fn concurrent_share_same_doc_converges() {
+    init_tracing();
     let store = test_doc_store();
     let bc = test_broadcaster();
     let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;

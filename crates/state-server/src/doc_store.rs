@@ -193,6 +193,12 @@ impl DocStore {
 
         // WAL append first (durability).
         let wal_id = self.storage.wal_append(doc_name, update, client_id).await?;
+        debug!(
+            doc = doc_name,
+            update_len = update.len(),
+            wal_id,
+            "apply_update: WAL appended"
+        );
 
         // Apply to in-memory document.
         let entry = self.get_or_create(doc_name).await?;
@@ -225,6 +231,7 @@ impl DocStore {
 
         if should_compact {
             self.compact(doc_name).await?;
+            debug!(doc = doc_name, "apply_update: compacted");
         }
 
         Ok(ApplyResult {
@@ -403,6 +410,11 @@ impl DocStore {
         let mut doc = entry.lock().await;
         doc.connected_clients += 1;
         doc.last_activity = std::time::Instant::now();
+        debug!(
+            doc = doc_name,
+            connected_clients = doc.connected_clients,
+            "track_client_connect"
+        );
         Ok(())
     }
 
@@ -411,6 +423,11 @@ impl DocStore {
         let entry = self.get_or_create(doc_name).await?;
         let mut doc = entry.lock().await;
         doc.connected_clients = doc.connected_clients.saturating_sub(1);
+        debug!(
+            doc = doc_name,
+            connected_clients = doc.connected_clients,
+            "track_client_disconnect"
+        );
         Ok(())
     }
 
@@ -452,6 +469,7 @@ impl DocStore {
                 if doc.connected_clients == 0
                     && doc.last_activity.elapsed().as_secs() >= max_idle_secs
                 {
+                    info!(doc = %name, idle_secs = doc.last_activity.elapsed().as_secs(), "evict_idle: evicting document");
                     drop(doc);
                     docs.remove(name);
                     evicted.push(name.clone());
@@ -540,6 +558,12 @@ impl DocStore {
             doc.last_activity = std::time::Instant::now();
             doc.connected_clients = 1; // BUG D fix: sharer is connected
         }
+        info!(
+            doc = doc_name,
+            wal_seq = wal_id,
+            update_len = update.len(),
+            "share_doc: document shared"
+        );
 
         Ok(ApplyResult {
             update: update.to_vec(),
@@ -587,6 +611,12 @@ impl DocStore {
             (state, seq)
         };
         self.storage.compact(doc_name, &state, wal_seq).await?;
+        info!(
+            doc = doc_name,
+            wal_seq,
+            state_len = state.len(),
+            "compact_doc: snapshot written"
+        );
         Ok(())
     }
 }

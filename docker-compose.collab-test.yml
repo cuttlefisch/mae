@@ -14,8 +14,9 @@ services:
       dockerfile: Dockerfile
       target: runtime
     entrypoint: ["mae-state-server", "--bind", "0.0.0.0:9473"]
+    stop_grace_period: 10s
     environment:
-      RUST_LOG: "mae_mcp=warn,mae_state_server::handler=debug,info"
+      RUST_LOG: "mae_mcp=warn,mae_state_server=debug,mae_sync=debug,info"
     healthcheck:
       # Use a non-intrusive TCP check: connect + immediate close.
       # Previous check (echo '{}' | nc) created full sessions every 2s,
@@ -34,6 +35,7 @@ services:
       dockerfile: Dockerfile
       target: runtime
     entrypoint: ["mae", "--test", "/tests/test_share.scm"]
+    stop_grace_period: 120s
     volumes:
       - workspace-a:/workspace
       - ./tests/collab-e2e:/tests:ro
@@ -57,6 +59,7 @@ services:
       dockerfile: Dockerfile
       target: runtime
     entrypoint: ["mae", "--test", "/tests/test_join.scm"]
+    stop_grace_period: 120s
     volumes:
       - workspace-b:/workspace
       - ./tests/collab-e2e:/tests:ro
@@ -80,6 +83,7 @@ services:
       dockerfile: Dockerfile
       target: runtime
     entrypoint: ["mae", "--test", "/tests/test_undo_sharer.scm"]
+    stop_grace_period: 120s
     volumes:
       - workspace-undo-a:/workspace
       - ./tests/collab-e2e:/tests:ro
@@ -102,6 +106,7 @@ services:
       dockerfile: Dockerfile
       target: runtime
     entrypoint: ["mae", "--test", "/tests/test_undo_joiner.scm"]
+    stop_grace_period: 120s
     volumes:
       - workspace-undo-b:/workspace
       - ./tests/collab-e2e:/tests:ro
