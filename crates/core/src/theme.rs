@@ -937,6 +937,38 @@ red = "#ff0000"
     }
 
     #[test]
+    fn collab_palette_resolves_dark() {
+        let resolver = BundledResolver;
+        let theme = Theme::load("default", &resolver).unwrap();
+        for i in 0..8 {
+            let key = format!("ui.collab.cursor.{}", i);
+            let style = theme.style_exact(&key);
+            assert!(style.is_some(), "default theme must define {}", key,);
+            assert!(style.unwrap().fg.is_some(), "{} must have fg", key);
+        }
+    }
+
+    #[test]
+    fn collab_palette_resolves_light() {
+        let resolver = BundledResolver;
+        let theme = Theme::load("light-ansi", &resolver).unwrap();
+        for i in 0..8 {
+            let key = format!("ui.collab.cursor.{}", i);
+            let style = theme.style_exact(&key);
+            assert!(style.is_some(), "light-ansi theme must define {}", key,);
+        }
+    }
+
+    #[test]
+    fn collab_label_style_exists() {
+        let resolver = BundledResolver;
+        let theme = Theme::load("default", &resolver).unwrap();
+        let label = theme.style_exact("ui.collab.label");
+        assert!(label.is_some(), "default theme must define ui.collab.label");
+        assert!(label.unwrap().bold);
+    }
+
+    #[test]
     fn to_ansi_colors_bg_fallback_is_black() {
         // Regression: default bg fallback should be (0,0,0), not (40,40,40).
         let toml = r#"

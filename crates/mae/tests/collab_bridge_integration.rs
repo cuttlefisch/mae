@@ -107,7 +107,7 @@ impl Client {
     }
 
     async fn subscribe(&mut self) {
-        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"notifications/subscribe","params":{"types":["sync_update","peer_joined","peer_left","save_committed"]}});
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":self.next_id,"method":"notifications/subscribe","params":{"types":["sync_update","peer_joined","peer_left","save_committed","awareness_update"]}});
         self.next_id += 1;
         self.send(&msg).await;
         let resp = self.recv().await;
@@ -964,4 +964,182 @@ async fn collab_channel_capacity_sufficient() {
         tx.try_send(i)
             .expect("channel should absorb 200 messages without dropping");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Awareness protocol tests
+// ---------------------------------------------------------------------------
+
+/// Awareness update roundtrip: client A sends awareness, client B receives.
+#[tokio::test]
+async fn awareness_update_roundtrip() {
+    let store = test_doc_store();
+    let broadcaster = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&broadcaster)).await;
+    let mut bob = Client::connect(Arc::clone(&store), Arc::clone(&broadcaster)).await;
+
+    // Both clients share the same document.
+    alice.share("test-awareness", "hello").await;
+    bob.share("test-awareness", "hello").await;
+
+    // Alice sends an awareness update.
+    let awareness_msg = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": alice.next_id,
+        "method": "sync/awareness",
+        "params": {
+            "doc": "test-awareness",
+            "state": {
+                "user_name": "Alice",
+                "cursor_row": 5,
+                "cursor_col": 10,
+                "selection": null,
+                "mode": "normal"
+            }
+        }
+    });
+    alice.next_id += 1;
+    alice.send(&awareness_msg).await;
+
+    // Alice gets the ack response.
+    let ack = alice.recv().await;
+    assert!(ack.get("error").is_none(), "awareness ack failed: {ack}");
+
+    // Bob should receive a notification with Alice's awareness.
+    let notification = bob.recv_timeout(2000).await;
+    assert!(
+        notification.is_some(),
+        "Bob should receive awareness notification"
+    );
+    let notif = notification.unwrap();
+    assert_eq!(
+        notif["method"].as_str(),
+        Some("notifications/awareness_update")
+    );
+    let event_data = &notif["params"]["event"]["data"];
+    assert_eq!(event_data["user_name"].as_str(), Some("Alice"));
+    assert_eq!(event_data["cursor_row"].as_u64(), Some(5));
+    assert_eq!(event_data["cursor_col"].as_u64(), Some(10));
+}
+
+/// Awareness echo filter: sender does NOT receive own awareness update.
+#[tokio::test]
+async fn awareness_echo_filtered() {
+    let store = test_doc_store();
+    let broadcaster = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&broadcaster)).await;
+
+    alice.share("test-echo", "hello").await;
+
+    let awareness_msg = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": alice.next_id,
+        "method": "sync/awareness",
+        "params": {
+            "doc": "test-echo",
+            "state": {
+                "user_name": "Alice",
+                "cursor_row": 0,
+                "cursor_col": 0,
+                "selection": null,
+                "mode": "normal"
+            }
+        }
+    });
+    alice.next_id += 1;
+    alice.send(&awareness_msg).await;
+
+    // Alice gets the ack.
+    let ack = alice.recv().await;
+    assert!(ack.get("error").is_none());
+
+    // Alice should NOT receive a notification about her own awareness.
+    let notification = alice.recv_timeout(500).await;
+    // If we get a notification, it should NOT be awareness_update.
+    if let Some(notif) = notification {
+        assert_ne!(
+            notif["method"].as_str(),
+            Some("notifications/awareness_update"),
+            "Sender should not receive own awareness"
+        );
+    }
+}
+
+/// Awareness is NOT persisted — it's ephemeral.
+#[tokio::test]
+async fn awareness_not_persisted() {
+    let store = test_doc_store();
+    let broadcaster = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&broadcaster)).await;
+
+    alice.share("test-persist", "hello").await;
+
+    // Send awareness.
+    let awareness_msg = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": alice.next_id,
+        "method": "sync/awareness",
+        "params": {
+            "doc": "test-persist",
+            "state": {
+                "user_name": "Alice",
+                "cursor_row": 0,
+                "cursor_col": 0,
+                "selection": null,
+                "mode": "normal"
+            }
+        }
+    });
+    alice.next_id += 1;
+    alice.send(&awareness_msg).await;
+    let _ = alice.recv().await;
+
+    // Check document stats — awareness should not appear in WAL.
+    let stats_msg = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": alice.next_id,
+        "method": "docs/stats",
+        "params": {"doc": "test-persist"}
+    });
+    alice.next_id += 1;
+    alice.send(&stats_msg).await;
+    let stats = alice.recv().await;
+    // WAL entries should be from the initial share only, not from awareness.
+    let wal_entries = stats["result"]["wal_entries"].as_u64().unwrap_or(0);
+    assert!(
+        wal_entries <= 1,
+        "Awareness should NOT produce WAL entries (got {wal_entries})"
+    );
+}
+
+/// AwarenessState serialization unit test (sync crate).
+#[test]
+fn awareness_state_schema_valid() {
+    let state = mae_sync::awareness::AwarenessState {
+        user_name: "Test User".to_string(),
+        cursor_row: 42,
+        cursor_col: 10,
+        selection: Some((1, 0, 5, 20)),
+        mode: "visual".to_string(),
+    };
+    let json = serde_json::to_string(&state).unwrap();
+    assert!(json.contains("\"user_name\":\"Test User\""));
+    assert!(json.contains("\"cursor_row\":42"));
+    assert!(json.contains("\"selection\":[1,0,5,20]"));
+
+    let parsed: mae_sync::awareness::AwarenessState = serde_json::from_str(&json).unwrap();
+    assert_eq!(state, parsed);
+}
+
+/// AwarenessMap color index is deterministic.
+#[test]
+fn awareness_color_index_deterministic() {
+    use mae_core::render_common::collab_colors::collab_color_index;
+    let idx1 = collab_color_index(12345);
+    let idx2 = collab_color_index(12345);
+    assert_eq!(idx1, idx2, "Same client_id must produce same color index");
+    assert!(idx1 < 8, "Color index must be in [0, 8)");
 }

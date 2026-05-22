@@ -53,7 +53,7 @@
 - [ ] **Cursor positioning after CRDT undo**: Track cursor pos in `StackItem.meta` via `observe_item_added` — currently uses `clamp_cursor()` (safe but imprecise after multi-line undo).
 - [ ] **Undo capture timeout tuning**: `capture_timeout_millis` is 0 (every txn = separate item). Tune to 500ms for smoother typing undo, needs testing with vim operator semantics (`ciw`, `dd`, etc.).
 - [ ] **Undo stack size limit for CRDT**: yrs UndoManager has no built-in limit. Add `observe_item_added` callback to evict old items beyond threshold (cf. Emacs `undo-limit`).
-- [ ] **Awareness protocol**: Cursor/selection sharing via yrs awareness (y-websocket compatible).
+- [x] **Awareness protocol**: Cursor/selection sharing via `sync/awareness` JSON-RPC relay. 8-color WCAG AA palette, 50ms throttle, 30s timeout, echo filtering. GUI (2px bar + labels + off-screen ▲/▼) and TUI (underline + initial + ▲/▼) rendering. Status bar presence. Auto-derived user identity (git → $USER → hostname). 12 tests.
 - [x] **Heartbeat/keepalive**: Detect silent client death, clean up stale `connected_clients`. *(b8d4b6a)*
 
 ### Org-Mode Rendering
@@ -100,7 +100,7 @@
   - `docs/metadata` endpoint added to state server ✅
   - `WalEntry::client_id` stored but never read for audit/attribution (deferred — needs Phase F auth)
   - `StorageError::Io` variant reserved but unused (pluggable backends — by design)
-- [ ] **State server v2** (Phase F): Awareness protocol (cursor sharing), auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Per-user undo ✅ (yrs `UndoManager`). E1 (git-based identity), heartbeat/keepalive, E8 (buffer status indicators), and Bugs 2-4 (save guard, sharer notifications, disconnect lifecycle) are complete *(8de53b8)*. Priority next-round item: awareness protocol.
+- [ ] **State server v2** (Phase F): Auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Completed: awareness protocol ✅, per-user undo ✅ (yrs `UndoManager`), git-based identity ✅, heartbeat/keepalive ✅, buffer status indicators ✅, Bugs 2-4 ✅ *(8de53b8)*. Priority next-round item: auth tiers.
 - [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
   - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
   - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
@@ -112,7 +112,7 @@
   - Phase C: MCP sync methods (state_vector, apply_update) ✅
   - Phase D: Push-based sync event broadcasting ✅
   - Phase E (state-server): TCP transport, WAL persistence, per-doc locking ✅
-  - Phase F: Awareness protocol, per-user undo, multi-machine sync
+  - Phase F: Awareness protocol ✅, per-user undo ✅, multi-machine sync
 - [ ] **Networked feature E2E coverage gate**: Every networked feature (sync, save, awareness, auth) requires E2E test coverage before release. Coverage targets:
   - Save protocol: save_intent → hash check → save_committed → peer notification (0% today)
   - WAL gap recovery: trigger gap via server restart, verify ForceSync completes (30% today)

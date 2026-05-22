@@ -539,6 +539,15 @@ pub fn format_collab_status(editor: &Editor) -> String {
             if !is_synced {
                 return format!(" [C:{}]", peer_count);
             }
+
+            // Show remote user names if awareness data is available.
+            let doc_id = buf.collab_doc_id.as_deref().unwrap_or(&buf.name);
+            let remote_users = editor.collab.remote_users.users_for_doc(doc_id);
+            if !remote_users.is_empty() {
+                let names: Vec<&str> = remote_users.iter().map(|u| u.user_name.as_str()).collect();
+                return format!(" [C:{}|{}]", peer_count, names.join(" "),);
+            }
+
             let role = if buf.collab_is_sharer {
                 "sharer"
             } else if pending > 0 {

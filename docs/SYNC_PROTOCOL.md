@@ -255,6 +255,84 @@ Evicted ──sync/share──> Active (fresh)
 3. Editor: For all synced buffers: clear `sync_doc`, `collab_doc_id`, `pending_sync_updates`.
 4. Editor: Clear `collab_synced_buffers`, set `collab_synced_docs = 0`.
 
+### 6.6 Awareness (Cursor/Selection/Presence)
+
+Awareness is a lightweight, **ephemeral** protocol layer for sharing cursor position,
+selection ranges, and user presence. It is NOT persisted — no WAL, no SQLite.
+
+**Method:** `sync/awareness`
+
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "sync/awareness",
+  "params": {
+    "doc": "file:project/main.rs",
+    "state": {
+      "user_name": "Alice",
+      "cursor_row": 42,
+      "cursor_col": 10,
+      "selection": [1, 0, 3, 15],
+      "mode": "visual"
+    }
+  }
+}
+```
+
+**Response (ack):** `{ "result": { "doc": "file:project/main.rs" } }`
+
+**Relay:** Server broadcasts to all other clients on the same document via
+`broadcast_except(EditorEvent::AwarenessUpdate, sender_session_id)`. The sender
+is echo-filtered — they never receive their own awareness updates.
+
+**Notification (to peers):**
+```json
+{
+  "method": "notifications/awareness_update",
+  "params": {
+    "seq": 5,
+    "event": {
+      "type": "awareness_update",
+      "data": {
+        "doc_id": "file:project/main.rs",
+        "client_id": 42,
+        "user_name": "Alice",
+        "cursor_row": 42,
+        "cursor_col": 10,
+        "selection": [1, 0, 3, 15]
+      }
+    }
+  }
+}
+```
+
+**AwarenessState schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_name` | string | Display name (from config, git, $USER, or hostname) |
+| `cursor_row` | integer | Zero-indexed cursor line |
+| `cursor_col` | integer | Zero-indexed cursor column |
+| `selection` | `[sr, sc, er, ec]` or null | Selection range (visual mode), null otherwise |
+| `mode` | string | Editor mode: "normal", "insert", "visual" |
+
+**Guarantees:**
+
+- **Throttle:** Clients SHOULD send at most 20 Hz (50ms minimum interval).
+- **Timeout:** Clients remove stale remote users after 30s with no update.
+- **No persistence:** Awareness is purely ephemeral. It does not appear in WAL or SQLite.
+- **Echo filtering:** Same mechanism as `sync/update` — `broadcast_except` with sender's session ID.
+- **Subscription:** Clients must subscribe to `"awareness_update"` event type to receive notifications.
+
+**User identity resolution order:**
+1. `config.toml` → `[collaboration] user_name = "Alice"`
+2. `git config user.name`
+3. `$USER` environment variable
+4. `hostname`
+5. `"anonymous"` fallback
+
 ---
 
 ## 7. Known Limitations
@@ -265,8 +343,11 @@ Completed in v0.11.0:
 3. ~~Save protocol not wired to `:w`~~ — save_intent/save_committed called from editor save *(ca6c202)*
 4. ~~No heartbeat/keepalive~~ — 30s `$/ping` (configurable via `collab_heartbeat_interval`), latency logging, missed pong → disconnect *(b8d4b6a)*
 
+5. ~~No awareness protocol~~ — `sync/awareness` JSON-RPC relay with 50ms throttle, 30s timeout, echo filtering, 8-color theme palette, GUI+TUI rendering *(v0.11.0)*
+
 Still deferred:
-5. **No awareness protocol.** Cursor/selection sharing via yrs awareness. Tracked in ROADMAP Phase F.
+6. **No P2P transport.** All sync goes through the state server. mDNS LAN discovery planned.
+7. **No E2E encryption.** Transport is plaintext TCP. TLS planned.
 
 ---
 

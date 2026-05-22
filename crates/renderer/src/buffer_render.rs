@@ -1,6 +1,7 @@
 //! Text buffer rendering: gutter, syntax spans, hex color preview,
 //! search/selection highlights, cursorline, diagnostics, breakpoints.
 
+use mae_core::render_common::collab_colors;
 use mae_core::render_common::gutter::{
     self as gutter_common, collect_breakpoints, collect_line_severities, gutter_width,
 };
@@ -688,6 +689,145 @@ fn contrast_fg(r: u8, g: u8, b: u8) -> Color {
         Color::Black
     } else {
         Color::White
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Remote collaborative cursor overlay
+// ---------------------------------------------------------------------------
+
+/// Overlay remote collaborative cursors on a buffer window in the TUI.
+///
+/// For each remote user on this buffer's document:
+/// - Underline + color on the cursor cell
+/// - User initial in the adjacent cell (bold + color)
+/// - Selection: background color on selected cells
+pub(crate) fn render_remote_cursors(
+    frame: &mut Frame,
+    area: Rect,
+    editor: &Editor,
+    win: &Window,
+    buf: &mae_core::Buffer,
+    gutter_w: usize,
+) {
+    let doc_id = match &buf.collab_doc_id {
+        Some(id) => id.as_str(),
+        None => return,
+    };
+
+    let remote_users = editor.collab.remote_users.users_for_doc(doc_id);
+    if remote_users.is_empty() {
+        return;
+    }
+
+    let viewport_height = area.height as usize;
+
+    for user in &remote_users {
+        let color_idx = user.color_index;
+        let palette = if editor.theme.is_dark() {
+            &collab_colors::DARK_PALETTE
+        } else {
+            &collab_colors::LIGHT_PALETTE
+        };
+        let (r, g, b) = palette[color_idx % collab_colors::COLLAB_PALETTE_SIZE];
+        let color = Color::Rgb(r, g, b);
+
+        // Render selection background.
+        if let Some((sr, sc, er, ec)) = user.selection {
+            let (sr, sc, er, ec) = if (sr, sc) <= (er, ec) {
+                (sr, sc, er, ec)
+            } else {
+                (er, ec, sr, sc)
+            };
+
+            for row in sr..=er {
+                let screen_row = row.saturating_sub(win.scroll_offset);
+                if screen_row >= viewport_height {
+                    continue;
+                }
+
+                let col_start = if row == sr { sc } else { 0 };
+                let col_end = if row == er { ec } else { buf.line_len(row) };
+                let vis_start = col_start.saturating_sub(win.col_offset);
+                let vis_end = col_end.saturating_sub(win.col_offset);
+
+                for col in vis_start..vis_end {
+                    let x = area.x + gutter_w as u16 + col as u16;
+                    let y = area.y + screen_row as u16;
+                    if x < area.x + area.width && y < area.y + area.height {
+                        let cell = &mut frame.buffer_mut()[(x, y)];
+                        cell.set_bg(color);
+                    }
+                }
+            }
+        }
+
+        // Render cursor: underline the cell at cursor position.
+        let screen_row = user.cursor_row.saturating_sub(win.scroll_offset);
+        if screen_row >= viewport_height {
+            continue;
+        }
+        let vis_col = user.cursor_col.saturating_sub(win.col_offset);
+        let x = area.x + gutter_w as u16 + vis_col as u16;
+        let y = area.y + screen_row as u16;
+        if x < area.x + area.width && y < area.y + area.height {
+            let cell = &mut frame.buffer_mut()[(x, y)];
+            cell.set_style(
+                Style::default()
+                    .fg(color)
+                    .add_modifier(Modifier::UNDERLINED),
+            );
+        }
+
+        // Render user initial in the next cell (if space).
+        let initial_x = x + 1;
+        if initial_x < area.x + area.width && y < area.y + area.height {
+            let initial = user.user_name.chars().next().unwrap_or('?');
+            let cell = &mut frame.buffer_mut()[(initial_x, y)];
+            cell.set_char(initial);
+            cell.set_style(Style::default().fg(color).add_modifier(Modifier::BOLD));
+        }
+    }
+
+    // Off-screen indicators: ▲/▼ arrows in the gutter for remote users
+    // whose cursors are above or below the viewport.
+    let mut above_colors: Vec<Color> = Vec::new();
+    let mut below_colors: Vec<Color> = Vec::new();
+    for user in &remote_users {
+        let palette = if editor.theme.is_dark() {
+            &collab_colors::DARK_PALETTE
+        } else {
+            &collab_colors::LIGHT_PALETTE
+        };
+        let (r, g, b) = palette[user.color_index % collab_colors::COLLAB_PALETTE_SIZE];
+        let color = Color::Rgb(r, g, b);
+
+        if user.cursor_row < win.scroll_offset {
+            above_colors.push(color);
+        } else if user.cursor_row >= win.scroll_offset + viewport_height {
+            below_colors.push(color);
+        }
+    }
+
+    // Draw ▲ indicators at the top-right of viewport, stacked horizontally.
+    for (i, &color) in above_colors.iter().enumerate() {
+        let x = area.x + area.width.saturating_sub(1 + above_colors.len() as u16) + i as u16;
+        if x < area.x + area.width {
+            let cell = &mut frame.buffer_mut()[(x, area.y)];
+            cell.set_char('▲');
+            cell.set_style(Style::default().fg(color).add_modifier(Modifier::BOLD));
+        }
+    }
+
+    // Draw ▼ indicators at the bottom-right of viewport.
+    let bottom_y = area.y + area.height.saturating_sub(1);
+    for (i, &color) in below_colors.iter().enumerate() {
+        let x = area.x + area.width.saturating_sub(1 + below_colors.len() as u16) + i as u16;
+        if x < area.x + area.width {
+            let cell = &mut frame.buffer_mut()[(x, bottom_y)];
+            cell.set_char('▼');
+            cell.set_style(Style::default().fg(color).add_modifier(Modifier::BOLD));
+        }
     }
 }
 

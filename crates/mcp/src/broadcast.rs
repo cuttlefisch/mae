@@ -75,6 +75,16 @@ pub enum EditorEvent {
         save_epoch: u64,
         content_hash: String,
     },
+    /// A remote user's awareness state changed (cursor/selection/presence).
+    #[serde(rename = "awareness_update")]
+    AwarenessUpdate {
+        doc_id: String,
+        client_id: u64,
+        user_name: String,
+        cursor_row: usize,
+        cursor_col: usize,
+        selection: Option<(usize, usize, usize, usize)>,
+    },
 }
 
 impl EditorEvent {
@@ -92,6 +102,7 @@ impl EditorEvent {
             EditorEvent::PeerLeft { .. } => "peer_left",
             EditorEvent::SharerLeft { .. } => "sharer_left",
             EditorEvent::SaveCommitted { .. } => "save_committed",
+            EditorEvent::AwarenessUpdate { .. } => "awareness_update",
         }
     }
 }

@@ -1345,6 +1345,38 @@ fn render_gui_cursor(
             cursor::render_cursor(canvas, editor, cursor_pixel_y, cursor_pixel_x, pos.scale);
         }
 
+        // Render remote collaborative selections (underneath local).
+        cursor::render_remote_selections(
+            canvas,
+            editor,
+            frame_layout,
+            inner_row,
+            inner_col,
+            inner_height,
+            gutter_w,
+        );
+
+        // Render remote collaborative cursors with labels.
+        cursor::render_remote_cursors(
+            canvas,
+            editor,
+            frame_layout,
+            inner_row,
+            inner_col,
+            inner_height,
+            gutter_w,
+        );
+
+        // Off-screen indicators for remote users above/below viewport.
+        cursor::render_remote_offscreen_indicators(
+            canvas,
+            editor,
+            frame_layout,
+            inner_row,
+            inner_col,
+            inner_height,
+        );
+
         // Render secondary cursors (multi-cursor mode).
         cursor::render_secondary_cursors(
             canvas,

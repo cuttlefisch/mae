@@ -262,6 +262,7 @@ fn is_doc_method(msg: &str) -> bool {
         || msg.contains("\"sync/full_state\"")
         || msg.contains("\"sync/diff\"")
         || msg.contains("\"sync/resync\"")
+        || msg.contains("\"sync/awareness\"")
         || msg.contains("\"docs/list\"")
         || msg.contains("\"docs/content\"")
         || msg.contains("\"docs/stats\"")
@@ -384,6 +385,57 @@ async fn handle_doc_request(
                 }
                 Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
             }
+        }
+
+        "sync/awareness" => {
+            // Pure relay: broadcast awareness to all other clients on same doc.
+            // No persistence — awareness is ephemeral.
+            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            let state = &params["state"];
+            debug!(
+                session = session_id,
+                doc = %doc_name,
+                "sync/awareness: relaying"
+            );
+            {
+                let mut bc = broadcaster.lock().unwrap();
+                bc.broadcast_except(
+                    &EditorEvent::AwarenessUpdate {
+                        doc_id: doc_name.clone(),
+                        client_id: session_id,
+                        user_name: state
+                            .get("user_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        cursor_row: state
+                            .get("cursor_row")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as usize,
+                        cursor_col: state
+                            .get("cursor_col")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as usize,
+                        selection: state.get("selection").and_then(|v| {
+                            let arr = v.as_array()?;
+                            if arr.len() == 4 {
+                                Some((
+                                    arr[0].as_u64()? as usize,
+                                    arr[1].as_u64()? as usize,
+                                    arr[2].as_u64()? as usize,
+                                    arr[3].as_u64()? as usize,
+                                ))
+                            } else {
+                                None
+                            }
+                        }),
+                    },
+                    session_id,
+                );
+            }
+            // Awareness is a notification (no `id` field), so if it has an id,
+            // respond with a simple ack.
+            JsonRpcResponse::success(id, serde_json::json!({ "doc": doc_name }))
         }
 
         "sync/full_state" => {

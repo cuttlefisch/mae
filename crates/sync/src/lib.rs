@@ -3,6 +3,7 @@
 //! Wraps yrs with MAE-specific document schemas and provides a bridge
 //! between yrs YText and ropey Rope for rendering.
 
+pub mod awareness;
 pub mod encoding;
 pub mod kb;
 pub mod text;

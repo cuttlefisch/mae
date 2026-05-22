@@ -118,7 +118,7 @@ impl Client {
         let msg = serde_json::json!({
             "jsonrpc": "2.0", "id": self.next_id,
             "method": "notifications/subscribe",
-            "params": {"types": ["sync_update", "peer_joined", "peer_left", "save_committed"]}
+            "params": {"types": ["sync_update", "peer_joined", "peer_left", "save_committed", "awareness_update"]}
         });
         self.next_id += 1;
         self.send(&msg).await;
@@ -708,4 +708,98 @@ async fn large_document_sync() {
         "content length should match"
     );
     assert_eq!(content, large_content, "content should match exactly");
+}
+
+// ---------------------------------------------------------------------------
+// Awareness protocol tests
+// ---------------------------------------------------------------------------
+
+/// Server relays awareness between two clients on the same document.
+#[tokio::test]
+async fn awareness_relay_to_peers() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut bob = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    alice.share("awareness-test", "content").await;
+    bob.share("awareness-test", "content").await;
+
+    // Alice sends awareness update.
+    let msg = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": alice.next_id,
+        "method": "sync/awareness",
+        "params": {
+            "doc": "awareness-test",
+            "state": {
+                "user_name": "Alice",
+                "cursor_row": 3,
+                "cursor_col": 7,
+                "selection": [1, 0, 3, 7],
+                "mode": "visual"
+            }
+        }
+    });
+    alice.next_id += 1;
+    alice.send(&msg).await;
+    let ack = alice.recv().await;
+    assert!(ack.get("error").is_none(), "awareness should succeed");
+
+    // Bob receives the notification.
+    let notif = bob.recv_timeout(2000).await;
+    assert!(notif.is_some(), "Bob should receive awareness notification");
+    let n = notif.unwrap();
+    assert_eq!(n["method"].as_str(), Some("notifications/awareness_update"));
+    let event_data = &n["params"]["event"]["data"];
+    assert_eq!(event_data["user_name"].as_str(), Some("Alice"));
+    assert_eq!(event_data["cursor_row"].as_u64(), Some(3));
+    assert_eq!(event_data["cursor_col"].as_u64(), Some(7));
+}
+
+/// Awareness updates don't produce WAL entries (ephemeral protocol).
+#[tokio::test]
+async fn awareness_not_in_wal() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    client.share("wal-test", "hello").await;
+
+    // Send awareness.
+    let msg = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": client.next_id,
+        "method": "sync/awareness",
+        "params": {
+            "doc": "wal-test",
+            "state": {
+                "user_name": "Test",
+                "cursor_row": 0,
+                "cursor_col": 0,
+                "selection": null,
+                "mode": "normal"
+            }
+        }
+    });
+    client.next_id += 1;
+    client.send(&msg).await;
+    let _ = client.recv().await;
+
+    // Check stats — WAL entries from share only (1), not from awareness.
+    let stats_msg = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": client.next_id,
+        "method": "docs/stats",
+        "params": {"doc": "wal-test"}
+    });
+    client.next_id += 1;
+    client.send(&stats_msg).await;
+    let stats = client.recv().await;
+    let wal = stats["result"]["wal_entries"].as_u64().unwrap_or(0);
+    assert!(
+        wal <= 1,
+        "Awareness must not produce WAL entries (got {wal})"
+    );
 }

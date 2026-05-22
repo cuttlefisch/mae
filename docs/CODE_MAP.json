@@ -832,6 +832,10 @@
       "dependencies": [],
       "public_items": [
         {
+          "name": "awareness",
+          "kind": "mod"
+        },
+        {
           "name": "encoding",
           "kind": "mod"
         },

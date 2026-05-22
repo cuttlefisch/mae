@@ -471,6 +471,16 @@ fn render_window_area(
                         editor,
                         spans,
                     );
+                    // Overlay remote collaborative cursors/selections.
+                    if buf.collab_doc_id.is_some() {
+                        use ratatui::widgets::{Block, Borders};
+                        let inner = Block::default().borders(Borders::ALL).inner(ratatui_rect);
+                        let gutter_w =
+                            mae_core::render_common::gutter::gutter_width(buf.rope().len_lines());
+                        buffer_render::render_remote_cursors(
+                            frame, inner, editor, win, buf, gutter_w,
+                        );
+                    }
                 }
             }
         }

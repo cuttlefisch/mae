@@ -194,6 +194,12 @@ pub struct CollabState {
     /// Pending save_committed to send on next drain tick.
     /// Format: (doc_id, save_epoch, content_hash, saved_by).
     pub pending_save_committed: Option<(String, u64, String, String)>,
+    /// Remote user awareness state (cursors, selections, presence).
+    pub remote_users: mae_sync::awareness::AwarenessMap,
+    /// Pending awareness update to send (throttled at 50ms).
+    pub pending_awareness: Option<(String, String)>, // (doc_id, state_json)
+    /// Timestamp of last awareness send (for throttling).
+    pub last_awareness_sent: std::time::Instant,
 }
 
 impl CollabState {
@@ -218,6 +224,9 @@ impl CollabState {
             save_on_remote_update: false,
             heartbeat_interval: 30,
             pending_save_committed: None,
+            remote_users: mae_sync::awareness::AwarenessMap::new(),
+            pending_awareness: None,
+            last_awareness_sent: std::time::Instant::now(),
         }
     }
 }

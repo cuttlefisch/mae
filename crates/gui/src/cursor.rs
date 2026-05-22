@@ -383,6 +383,259 @@ pub fn render_secondary_cursors(
     }
 }
 
+/// Render remote collaborative cursors and labels within the visible viewport.
+///
+/// Draws a 2px-wide colored bar at each remote user's cursor position,
+/// plus a username label above the cursor. Labels auto-hide after 3s.
+/// Only draws cursors within the current viewport bounds.
+pub fn render_remote_cursors(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    frame_layout: Option<&FrameLayout>,
+    inner_row: usize,
+    inner_col: usize,
+    inner_height: usize,
+    gutter_w: usize,
+) {
+    let win = editor.window_mgr.focused_window();
+    let buf = &editor.buffers[win.buffer_idx];
+
+    let doc_id = match &buf.collab_doc_id {
+        Some(id) => id.as_str(),
+        None => return,
+    };
+
+    let remote_users = editor.collab.remote_users.users_for_doc(doc_id);
+    if remote_users.is_empty() {
+        return;
+    }
+
+    let (cw, ch) = canvas.cell_size();
+    let now = std::time::Instant::now();
+
+    for user in &remote_users {
+        // Compute screen row from frame layout (fold-aware).
+        let screen_row = if let Some(layout) = frame_layout {
+            match layout.display_row_of(user.cursor_row) {
+                Some(r) => r,
+                None => continue, // off-screen or folded
+            }
+        } else {
+            let r = user.cursor_row.saturating_sub(win.scroll_offset);
+            if r >= inner_height {
+                continue;
+            }
+            r
+        };
+
+        if screen_row >= inner_height {
+            continue;
+        }
+
+        // Get cursor color from theme.
+        let color_key =
+            mae_core::render_common::collab_colors::collab_cursor_style_key(user.color_index);
+        let cursor_style = editor.theme.style(&color_key);
+        let cursor_color = theme::color_or(cursor_style.fg, Color4f::new(0.8, 0.8, 0.8, 1.0));
+
+        // Compute pixel position.
+        let visible_col = user.cursor_col.saturating_sub(win.col_offset);
+        let pixel_y = if let Some(layout) = frame_layout {
+            layout
+                .pixel_y_for_row(user.cursor_row)
+                .unwrap_or((inner_row + screen_row) as f32 * ch)
+        } else {
+            (inner_row + screen_row) as f32 * ch
+        };
+        let pixel_x = (inner_col + gutter_w + visible_col) as f32 * cw;
+
+        // Draw 2px thin bar (visually distinct from primary block cursor).
+        canvas.draw_pixel_rect(pixel_x, pixel_y, 2.0, ch, cursor_color);
+
+        // Draw username label above cursor (auto-hide after 3s of no movement).
+        let elapsed = now.duration_since(user.last_seen).as_secs();
+        if elapsed < 3 {
+            let label_style = editor.theme.style("ui.collab.label");
+            let label_color = theme::color_or(
+                label_style.fg.or(cursor_style.fg),
+                Color4f::new(1.0, 1.0, 1.0, 1.0),
+            );
+            let label_bg = cursor_color;
+
+            // Draw label background + text above cursor.
+            let label = &user.user_name;
+            let label_width = label.len() as f32 * cw * 0.75; // slightly smaller font
+            let label_height = ch * 0.8;
+            let label_y = pixel_y - label_height - 2.0;
+
+            if label_y >= 0.0 {
+                canvas.draw_pixel_rect(pixel_x, label_y, label_width, label_height, label_bg);
+                // Draw each character of the label.
+                let mut char_x = pixel_x;
+                for c in label.chars() {
+                    canvas.draw_char_at_pixel(char_x, label_y, c, label_color, true, 0.75);
+                    char_x += cw * 0.75;
+                }
+            }
+        }
+    }
+}
+
+/// Render remote users' selections (semi-transparent colored fills).
+///
+/// Draws selection spans with user's color at 20% opacity, BEFORE local
+/// selection so remote selections appear underneath.
+pub fn render_remote_selections(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    frame_layout: Option<&FrameLayout>,
+    inner_row: usize,
+    inner_col: usize,
+    inner_height: usize,
+    gutter_w: usize,
+) {
+    let win = editor.window_mgr.focused_window();
+    let buf = &editor.buffers[win.buffer_idx];
+
+    let doc_id = match &buf.collab_doc_id {
+        Some(id) => id.as_str(),
+        None => return,
+    };
+
+    let remote_users = editor.collab.remote_users.users_for_doc(doc_id);
+    let (cw, ch) = canvas.cell_size();
+
+    for user in &remote_users {
+        let (start_row, start_col, end_row, end_col) = match user.selection {
+            Some(sel) => sel,
+            None => continue,
+        };
+
+        // Normalize selection direction.
+        let (sr, sc, er, ec) = if (start_row, start_col) <= (end_row, end_col) {
+            (start_row, start_col, end_row, end_col)
+        } else {
+            (end_row, end_col, start_row, start_col)
+        };
+
+        let color_key =
+            mae_core::render_common::collab_colors::collab_cursor_style_key(user.color_index);
+        let cursor_style = editor.theme.style(&color_key);
+        let base_color = theme::color_or(cursor_style.fg, Color4f::new(0.8, 0.8, 0.8, 1.0));
+        // 20% opacity selection.
+        let sel_color = Color4f::new(base_color.r, base_color.g, base_color.b, 0.2);
+
+        for row in sr..=er {
+            let screen_row = if let Some(layout) = frame_layout {
+                match layout.display_row_of(row) {
+                    Some(r) => r,
+                    None => continue,
+                }
+            } else {
+                let r = row.saturating_sub(win.scroll_offset);
+                if r >= inner_height {
+                    continue;
+                }
+                r
+            };
+
+            if screen_row >= inner_height {
+                continue;
+            }
+
+            let col_start = if row == sr { sc } else { 0 };
+            let col_end = if row == er { ec } else { buf.line_len(row) };
+
+            let vis_start = col_start.saturating_sub(win.col_offset);
+            let vis_end = col_end.saturating_sub(win.col_offset);
+            let width = vis_end.saturating_sub(vis_start);
+
+            if width == 0 {
+                continue;
+            }
+
+            let pixel_y = if let Some(layout) = frame_layout {
+                layout
+                    .pixel_y_for_row(row)
+                    .unwrap_or((inner_row + screen_row) as f32 * ch)
+            } else {
+                (inner_row + screen_row) as f32 * ch
+            };
+            let pixel_x = (inner_col + gutter_w + vis_start) as f32 * cw;
+
+            canvas.draw_pixel_rect(pixel_x, pixel_y, width as f32 * cw, ch, sel_color);
+        }
+    }
+}
+
+/// Render off-screen indicators (▲/▼ arrows) for remote users whose cursors
+/// are above or below the current viewport. Arrows are drawn at the top/bottom
+/// edge of the gutter area, stacked horizontally, using each user's color.
+pub fn render_remote_offscreen_indicators(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    frame_layout: Option<&FrameLayout>,
+    inner_row: usize,
+    inner_col: usize,
+    inner_height: usize,
+) {
+    let win = editor.window_mgr.focused_window();
+    let buf = &editor.buffers[win.buffer_idx];
+
+    let doc_id = match &buf.collab_doc_id {
+        Some(id) => id.as_str(),
+        None => return,
+    };
+
+    let remote_users = editor.collab.remote_users.users_for_doc(doc_id);
+    if remote_users.is_empty() {
+        return;
+    }
+
+    let (cw, ch) = canvas.cell_size();
+    let mut above: Vec<Color4f> = Vec::new();
+    let mut below: Vec<Color4f> = Vec::new();
+
+    for user in &remote_users {
+        let is_above = if let Some(layout) = frame_layout {
+            layout.display_row_of(user.cursor_row).is_none() && user.cursor_row < win.scroll_offset
+        } else {
+            user.cursor_row < win.scroll_offset
+        };
+
+        let is_below = if let Some(layout) = frame_layout {
+            layout.display_row_of(user.cursor_row).is_none() && user.cursor_row >= win.scroll_offset
+        } else {
+            user.cursor_row >= win.scroll_offset + inner_height
+        };
+
+        let color_key =
+            mae_core::render_common::collab_colors::collab_cursor_style_key(user.color_index);
+        let cursor_style = editor.theme.style(&color_key);
+        let color = theme::color_or(cursor_style.fg, Color4f::new(0.8, 0.8, 0.8, 1.0));
+
+        if is_above {
+            above.push(color);
+        } else if is_below {
+            below.push(color);
+        }
+    }
+
+    // Draw ▲ at top-left of gutter, stacked horizontally.
+    let top_y = inner_row as f32 * ch;
+    for (i, &color) in above.iter().enumerate() {
+        let x = (inner_col + i) as f32 * cw;
+        canvas.draw_char_at_pixel(x, top_y, '▲', color, true, 1.0);
+    }
+
+    // Draw ▼ at bottom-left of gutter.
+    let bottom_y = (inner_row + inner_height.saturating_sub(1)) as f32 * ch;
+    for (i, &color) in below.iter().enumerate() {
+        let x = (inner_col + i) as f32 * cw;
+        canvas.draw_char_at_pixel(x, bottom_y, '▼', color, true, 1.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -359,6 +359,7 @@ Source: `crates/sync/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `awareness` | mod |
 | `encoding` | mod |
 | `kb` | mod |
 | `text` | mod |

@@ -8,7 +8,7 @@
 
 use mae_core::{CollabIntent, CollabStatus, Editor};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 /// Capacity for the command channel (main thread -> collab background task).
 const COLLAB_CMD_CHANNEL_CAP: usize = 256;
@@ -54,6 +54,12 @@ pub enum CollabCommand {
     SendSaveIntent {
         doc_id: String,
         expected_hash: String,
+    },
+    /// Send awareness state (cursor/selection) to the state server.
+    /// Throttled at 50ms by the caller.
+    SendAwareness {
+        doc_id: String,
+        state_json: String,
     },
     /// Confirm save completed (docs/save_committed).
     SendSaveCommitted {
@@ -147,6 +153,12 @@ pub enum CollabEvent {
         doc: String,
         saved_by: String,
     },
+    /// Remote awareness update (cursor/selection/presence from another peer).
+    AwarenessUpdate {
+        client_id: u64,
+        doc_id: String,
+        state: mae_sync::awareness::AwarenessState,
+    },
 }
 
 // --- Intent drain (called every tick) ---
@@ -154,6 +166,14 @@ pub enum CollabEvent {
 /// Drain the pending collab intent from the editor and forward to the background task.
 /// Safe to call every loop iteration.
 pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender<CollabCommand>) {
+    // Drain pending awareness update (throttled at 50ms).
+    if let Some((doc_id, state_json)) = editor.collab.pending_awareness.take() {
+        let cmd = CollabCommand::SendAwareness { doc_id, state_json };
+        if collab_tx.try_send(cmd).is_err() {
+            trace!("collab command channel full — awareness dropped");
+        }
+    }
+
     // Drain pending save_committed first (queued by SaveIntentOk handler).
     if let Some((doc_id, save_epoch, content_hash, saved_by)) =
         editor.collab.pending_save_committed.take()
@@ -299,6 +319,77 @@ fn compute_doc_address(
     }
 }
 
+/// Awareness throttle interval (50ms = 20 Hz).
+const AWARENESS_THROTTLE_MS: u64 = 50;
+
+/// Queue an awareness update if the active buffer is synced and throttle allows.
+///
+/// Call this from the event loop after cursor/mode/selection changes.
+pub(crate) fn queue_awareness_update(editor: &mut Editor) {
+    // Only send if connected and we have synced buffers.
+    if !matches!(editor.collab.status, CollabStatus::Connected { .. }) {
+        return;
+    }
+
+    // Throttle: skip if < 50ms since last send.
+    let now = std::time::Instant::now();
+    if now
+        .duration_since(editor.collab.last_awareness_sent)
+        .as_millis()
+        < AWARENESS_THROTTLE_MS as u128
+    {
+        return;
+    }
+
+    let win = editor.window_mgr.focused_window();
+    let buf = &editor.buffers[win.buffer_idx];
+
+    // Only for synced buffers.
+    let doc_id = match &buf.collab_doc_id {
+        Some(id) if editor.collab.synced_buffers.contains(id) => id.clone(),
+        _ => return,
+    };
+
+    let selection = if matches!(editor.mode, mae_core::Mode::Visual(_)) {
+        Some((
+            editor.vi.visual_anchor_row,
+            editor.vi.visual_anchor_col,
+            win.cursor_row,
+            win.cursor_col,
+        ))
+    } else {
+        None
+    };
+
+    let state = mae_sync::awareness::AwarenessState {
+        user_name: editor.collab.user_name.clone(),
+        cursor_row: win.cursor_row,
+        cursor_col: win.cursor_col,
+        selection,
+        mode: format!("{:?}", editor.mode).to_lowercase(),
+    };
+
+    match serde_json::to_string(&state) {
+        Ok(json) => {
+            trace!(doc = %doc_id, row = win.cursor_row, col = win.cursor_col, "queuing awareness update");
+            editor.collab.pending_awareness = Some((doc_id, json));
+            editor.collab.last_awareness_sent = now;
+        }
+        Err(e) => {
+            debug!(error = %e, "failed to serialize awareness state");
+        }
+    }
+}
+
+/// Clean up stale remote users (call periodically, e.g. every few seconds).
+pub(crate) fn cleanup_stale_awareness(editor: &mut Editor) {
+    let removed = editor.collab.remote_users.cleanup_stale();
+    if removed > 0 {
+        debug!(removed, "cleaned up stale awareness users");
+        editor.mark_full_redraw();
+    }
+}
+
 fn collab_command_name(cmd: &CollabCommand) -> &'static str {
     match cmd {
         CollabCommand::Connect { .. } => "connect",
@@ -310,6 +401,7 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::StartServer => "start-server",
         CollabCommand::SendUpdate { .. } => "send-update",
         CollabCommand::SendSaveIntent { .. } => "send-save-intent",
+        CollabCommand::SendAwareness { .. } => "send-awareness",
         CollabCommand::SendSaveCommitted { .. } => "send-save-committed",
         CollabCommand::ListDocs { .. } => "list-docs",
         CollabCommand::JoinDoc { .. } => "join-doc",
@@ -723,6 +815,26 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             }
             editor.mark_full_redraw();
         }
+        CollabEvent::AwarenessUpdate {
+            client_id,
+            doc_id,
+            state,
+        } => {
+            let color_index = mae_core::render_common::collab_colors::collab_color_index(client_id);
+            debug!(
+                client_id,
+                doc = %doc_id,
+                user = %state.user_name,
+                row = state.cursor_row,
+                col = state.cursor_col,
+                "awareness update received"
+            );
+            editor
+                .collab
+                .remote_users
+                .update(client_id, doc_id, state, color_index);
+            editor.mark_full_redraw();
+        }
     }
 }
 
@@ -1022,6 +1134,30 @@ async fn run_collab_task(
                                 };
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
                                     pending_responses.insert(req_id, PendingResponseKind::SyncUpdate { doc_id });
+                                }
+                            }
+                        }
+                        CollabCommand::SendAwareness { doc_id, state_json } => {
+                            // Fire-and-forget: awareness is ephemeral, no response needed.
+                            if let Some(ref mut w) = writer {
+                                let state_val: serde_json::Value = match serde_json::from_str(&state_json) {
+                                    Ok(v) => v,
+                                    Err(e) => { error!("awareness parse error: {e}"); continue; }
+                                };
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "method": "sync/awareness",
+                                    "params": {
+                                        "doc": doc_id,
+                                        "state": state_val,
+                                    }
+                                });
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("awareness serialize error: {e}"); continue; }
+                                };
+                                if let Err(e) = write_framed(w, &body, write_timeout).await {
+                                    debug!(error = %e, "awareness send failed (non-fatal)");
                                 }
                             }
                         }
@@ -1472,6 +1608,40 @@ pub(crate) async fn handle_incoming_message(
                     let _ = evt_tx.send(CollabEvent::SharerLeft { doc_id }).await;
                 }
             }
+            "notifications/awareness_update" | "sync/awareness" => {
+                if let Some(params) = val.get("params") {
+                    let event = params.get("event").unwrap_or(params);
+                    let data = event.get("data").unwrap_or(event);
+                    let client_id = data.get("client_id").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let doc_id = data
+                        .get("doc")
+                        .or_else(|| data.get("doc_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let state_json = data
+                        .get("state")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    if let Ok(state) =
+                        serde_json::from_value::<mae_sync::awareness::AwarenessState>(state_json)
+                    {
+                        debug!(
+                            client_id,
+                            doc = %doc_id,
+                            user = %state.user_name,
+                            "received awareness update"
+                        );
+                        let _ = evt_tx
+                            .send(CollabEvent::AwarenessUpdate {
+                                client_id,
+                                doc_id,
+                                state,
+                            })
+                            .await;
+                    }
+                }
+            }
             "notifications/save_committed" => {
                 if let Some(params) = val.get("params") {
                     let event = params.get("event").unwrap_or(params);
@@ -1892,6 +2062,9 @@ async fn handle_disconnected_cmd(
                     message: format!("Not connected \u{2014} cannot save '{}'", doc_id),
                 })
                 .await;
+        }
+        CollabCommand::SendAwareness { .. } => {
+            // Silently drop — not connected.
         }
         CollabCommand::SendSaveCommitted { .. } => {
             // Silently drop — not connected.

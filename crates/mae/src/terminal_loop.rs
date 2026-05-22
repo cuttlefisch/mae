@@ -330,6 +330,8 @@ pub(crate) async fn run_terminal_loop(
         drain_lsp_intents(editor, lsp_command_tx);
         drain_dap_intents(editor, dap_command_tx);
         crate::collab_bridge::drain_collab_intents(editor, collab_command_tx);
+        crate::collab_bridge::queue_awareness_update(editor);
+        crate::collab_bridge::cleanup_stale_awareness(editor);
 
         shell_lifecycle::drain_agent_setup(editor);
         shell_lifecycle::spawn_pending_shells(

@@ -468,6 +468,13 @@ fn main() -> io::Result<()> {
         let _ = editor.set_option("collab_heartbeat_interval", &secs.to_string());
     }
 
+    // Auto-derive collab user name if not set via config.
+    if editor.collab.user_name.is_empty() {
+        let (resolved, source) = resolve_collab_user_name();
+        info!(name = %resolved, source = %source, "collab identity resolved");
+        let _ = editor.set_option("collab_user_name", &resolved);
+    }
+
     // --connect overrides collab options: auto-connect to the given address.
     if let Some(ref addr) = connect_addr {
         let _ = editor.set_option("collab_server_address", addr);
@@ -814,6 +821,53 @@ fn main() -> io::Result<()> {
 // GUI event loop (Phase 8 M4: run_app + EventLoopProxy)
 // ---------------------------------------------------------------------------
 //
+/// Resolve collaborative user name from available sources.
+///
+/// Resolution order:
+/// 1. `git config user.name`
+/// 2. `$USER` environment variable
+/// 3. hostname
+/// 4. "anonymous"
+///
+/// Returns `(name, source)` for logging.
+fn resolve_collab_user_name() -> (String, &'static str) {
+    // 1. git config user.name
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["config", "user.name"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    {
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return (name, "git config");
+            }
+        }
+    }
+    // 2. $USER env var
+    if let Ok(user) = std::env::var("USER") {
+        if !user.is_empty() {
+            return (user, "$USER");
+        }
+    }
+    // 3. hostname
+    if let Ok(output) = std::process::Command::new("hostname")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    {
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return (name, "hostname");
+            }
+        }
+    }
+    // 4. fallback
+    ("anonymous".to_string(), "fallback")
+}
+
 // Architecture: main thread runs EventLoop::run_app(&mut GuiApp) (blocking).
 // Background thread runs a tokio current_thread runtime with the bridge_task
 // that reads AI/LSP/DAP/MCP channels and forwards events via EventLoopProxy.
@@ -1117,6 +1171,8 @@ impl GuiApp {
         lsp_bridge::drain_lsp_intents(&mut self.editor, &self.lsp_command_tx);
         dap_bridge::drain_dap_intents(&mut self.editor, &self.dap_command_tx);
         collab_bridge::drain_collab_intents(&mut self.editor, &self.collab_command_tx);
+        collab_bridge::queue_awareness_update(&mut self.editor);
+        collab_bridge::cleanup_stale_awareness(&mut self.editor);
 
         shell_lifecycle::drain_agent_setup(&mut self.editor);
         shell_lifecycle::spawn_pending_shells(
