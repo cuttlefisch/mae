@@ -394,19 +394,20 @@ test-scheme-all: build-tui
 test-scheme-ci: test-scheme-all
 
 ## docker-collab-test: run collab CRDT E2E tests in Docker containers
-## Uses `docker compose wait` (Compose v2.21+) to block until the verifier
-## exits. The verifier has depends_on: service_completed_successfully for
-## all 4 test containers, so it starts only after they all exit 0.
-## Previous approach (polling `ps -q` + `docker wait`) was flaky because
-## `ps -q` only shows running containers — the verifier could start and
-## exit between 5s poll intervals, causing "never started" false failures.
+## Runs foreground (no -d), then inspects verifier exit code from stopped
+## container. Previous approaches failed:
+##   - `docker compose wait`: requires running container, races with fast verifier
+##   - Polling `ps -q`: only shows running containers, same race
+##   - `--exit-code-from`: implies --abort-on-container-exit, kills tests early
+## The verifier has depends_on: service_completed_successfully for all 4
+## test containers, so it starts only after they all exit 0.
 docker-collab-test:
-	docker compose -f docker-compose.collab-test.yml up --build -d
-	@echo "Waiting for verifier to complete (docker compose wait)..."
-	@RC=0; docker compose -f docker-compose.collab-test.yml wait verifier || RC=$$?; \
+	@echo "Running collab E2E tests (docker compose foreground)..."
+	@docker compose -f docker-compose.collab-test.yml up --build; \
+	RC=$$(docker compose -f docker-compose.collab-test.yml ps -a verifier --format '{{.ExitCode}}' 2>/dev/null); \
 	docker compose -f docker-compose.collab-test.yml logs --no-log-prefix; \
 	docker compose -f docker-compose.collab-test.yml down --volumes; \
-	exit $$RC
+	exit $${RC:-1}
 
 ## docker-network-test: run state-server network E2E tests in Docker
 docker-network-test:

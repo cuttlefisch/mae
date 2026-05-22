@@ -114,13 +114,13 @@
   - Phase E (state-server): TCP transport, WAL persistence, per-doc locking ✅
   - Phase F: Awareness protocol ✅, per-user undo ✅, multi-machine sync
 - [ ] **Networked feature E2E coverage gate**: Every networked feature (sync, save, awareness, auth) requires E2E test coverage before release. Coverage targets:
-  - Save protocol: save_intent → hash check → save_committed → peer notification (0% today)
-  - WAL gap recovery: trigger gap via server restart, verify ForceSync completes (30% today)
-  - Disconnect/reconnect: pending sends, timeout, partition, duplicate updates (50% today)
+  - Save protocol: save_intent → hash check → save_committed → peer notification (~80% — concurrent save, epoch validation, metadata round-trip)
+  - WAL gap recovery: trigger gap via server restart, verify ForceSync completes (~50% — compaction verified, WAL stats tracked)
+  - Disconnect/reconnect: pending sends, timeout, partition, duplicate updates (~80% — sharer disconnect, client stats, peer notification)
   - Multi-document: doc ID collisions, focus switching, cross-doc isolation (40% today)
-  - Error paths: oversized updates, malformed CRDT, server errors (40% today)
+  - Error paths: oversized updates, malformed CRDT, server errors (~70% — invalid CRDT bytes, concurrent share, nonexistent doc)
   - Notifications: sharer_left, peer_count_changed, peer_saved (60% today)
-  - SQLite persistence: WAL durability, crash recovery (0% today)
+  - SQLite persistence: WAL durability, crash recovery (~40% — compaction reduces WAL, epoch persistence)
   Methodology: verify protocol soundness → validate test methodology → ensure containers work without tests → wire tests one by one. Same approach as the collab E2E suite (afae68a).
 
 ### KB Enterprise Readiness & Hardening
