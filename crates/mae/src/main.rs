@@ -464,6 +464,9 @@ fn main() -> io::Result<()> {
     if let Some(ref name) = app_config.collaboration.user_name {
         let _ = editor.set_option("collab_user_name", name);
     }
+    if let Some(secs) = app_config.collaboration.heartbeat_interval_secs {
+        let _ = editor.set_option("collab_heartbeat_interval", &secs.to_string());
+    }
 
     // --connect overrides collab options: auto-connect to the given address.
     if let Some(ref addr) = connect_addr {

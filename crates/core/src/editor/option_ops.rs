@@ -158,6 +158,7 @@ impl super::Editor {
             "collab_auto_resolve_paths" => self.collab.auto_resolve_paths.to_string(),
             "collab_default_save_dir" => self.collab.default_save_dir.clone(),
             "collab_save_on_remote_update" => self.collab.save_on_remote_update.to_string(),
+            "collab_heartbeat_interval" => self.collab.heartbeat_interval.to_string(),
             "fill_column" => self.fill_column.to_string(),
             _ => return None,
         };
@@ -625,6 +626,9 @@ impl super::Editor {
             }
             "collab_save_on_remote_update" => {
                 self.collab.save_on_remote_update = parse_option_bool(value)?;
+            }
+            "collab_heartbeat_interval" => {
+                self.collab.heartbeat_interval = parse_option_int(value)? as u64;
             }
             "fill_column" => {
                 let v: usize = value

@@ -739,6 +739,7 @@ pub(crate) struct CollabSpawn {
     cmd_tx_clone: mpsc::Sender<CollabCommand>,
     backoff_factor: u64,
     max_reconnect_attempts: u64,
+    heartbeat_secs: u64,
 }
 
 /// Create collab channels and read config. Does NOT require a tokio runtime.
@@ -766,6 +767,7 @@ pub(crate) fn setup_collab_channels(
 
     let backoff_factor = editor.collab.reconnect_backoff_factor;
     let max_reconnect_attempts = editor.collab.max_reconnect_attempts;
+    let heartbeat_secs = editor.collab.heartbeat_interval;
 
     let spawn = CollabSpawn {
         cmd_rx,
@@ -776,6 +778,7 @@ pub(crate) fn setup_collab_channels(
         cmd_tx_clone: cmd_tx.clone(),
         backoff_factor,
         max_reconnect_attempts,
+        heartbeat_secs,
     };
 
     (evt_rx, cmd_tx, spawn)
@@ -791,6 +794,7 @@ pub(crate) fn spawn_collab_task(spawn: CollabSpawn) {
         write_timeout,
         spawn.backoff_factor,
         spawn.max_reconnect_attempts,
+        spawn.heartbeat_secs,
     ));
 
     // Auto-connect if configured
@@ -840,6 +844,7 @@ async fn run_collab_task(
     write_timeout: std::time::Duration,
     backoff_factor: u64,
     max_reconnect_attempts: u64,
+    heartbeat_secs: u64,
 ) {
     use mae_mcp::{read_message, write_framed};
     use std::collections::HashMap;
@@ -860,8 +865,7 @@ async fn run_collab_task(
     let mut pending_responses: HashMap<u64, PendingResponseKind> = HashMap::new();
     // WU1: Track wal_seq per doc for gap detection.
     let mut seq_tracker: HashMap<String, u64> = HashMap::new();
-    // WU2: Heartbeat interval (30s default, disabled if 0).
-    let heartbeat_secs = 30u64; // TODO: read from option via spawn config
+    // WU2: Heartbeat interval (from collab_heartbeat_interval option, disabled if 0).
     let mut heartbeat_interval =
         tokio::time::interval(std::time::Duration::from_secs(if heartbeat_secs > 0 {
             heartbeat_secs

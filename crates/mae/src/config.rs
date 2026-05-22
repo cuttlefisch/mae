@@ -171,6 +171,8 @@ pub struct CollaborationSection {
     pub reconnect_interval_secs: Option<u64>,
     /// Display name for collaborative edits (shown to peers).
     pub user_name: Option<String>,
+    /// Seconds between heartbeat pings to the state server (0 = disabled, default: 30).
+    pub heartbeat_interval_secs: Option<u64>,
 }
 
 fn default_true() -> bool {

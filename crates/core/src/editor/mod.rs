@@ -189,6 +189,8 @@ pub struct CollabState {
     pub default_save_dir: String,
     /// Auto-save local file when CRDT update arrives.
     pub save_on_remote_update: bool,
+    /// Seconds between heartbeat pings to the state server (0 = disabled).
+    pub heartbeat_interval: u64,
     /// Pending save_committed to send on next drain tick.
     /// Format: (doc_id, save_epoch, content_hash, saved_by).
     pub pending_save_committed: Option<(String, u64, String, String)>,
@@ -214,6 +216,7 @@ impl CollabState {
             auto_resolve_paths: false,
             default_save_dir: String::new(),
             save_on_remote_update: false,
+            heartbeat_interval: 30,
             pending_save_committed: None,
         }
     }

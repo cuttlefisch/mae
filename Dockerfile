@@ -73,7 +73,7 @@ RUN mkdir -p crates/core/src && echo "" > crates/core/src/lib.rs && \
     mkdir -p test_fixtures/src && echo "" > test_fixtures/src/lib.rs
 
 # Build dependencies only (will fail on our dummy sources, but deps get cached)
-RUN cargo build --release --workspace --exclude mae-gui --exclude mae-test-fixtures 2>/dev/null || true
+RUN cargo build --release --workspace --exclude mae-gui 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Stage: builder — full source compile
@@ -86,7 +86,7 @@ COPY . .
 # Touch all source files so cargo knows they changed vs the dummy stubs
 RUN find crates/ test_fixtures/ -name '*.rs' -exec touch {} +
 
-RUN cargo build --release --workspace --exclude mae-gui --exclude mae-test-fixtures
+RUN cargo build --release --workspace --exclude mae-gui
 
 # ---------------------------------------------------------------------------
 # Stage: ci — lint + test (build failure = image build failure)
@@ -94,8 +94,8 @@ RUN cargo build --release --workspace --exclude mae-gui --exclude mae-test-fixtu
 FROM builder AS ci
 
 RUN cargo fmt --all --check
-RUN cargo clippy --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures -- -D warnings
-RUN cargo test --workspace --exclude mae-gui --exclude mae-test-fixtures
+RUN cargo clippy --workspace --all-targets --exclude mae-gui -- -D warnings
+RUN cargo test --workspace --exclude mae-gui
 
 # No CMD — this stage exists only to validate. `docker compose build ci` IS the test.
 
