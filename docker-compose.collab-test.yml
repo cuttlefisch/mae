@@ -4,8 +4,8 @@
 # Scenarios: separate filesystems + shared filesystem convergence + two-client CRDT undo
 #
 # Usage:
-#   docker compose -f docker-compose.collab-test.yml up --build --abort-on-container-exit
 #   make docker-collab-test
+#   (starts detached, uses `docker wait` on verifier for exit code)
 
 services:
   state-server:

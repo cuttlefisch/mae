@@ -53,11 +53,7 @@
       (lambda ()
         (should-equal (buffer-string) "hello from A and B")))
 
-    (it-test "request drain of B's updates"
-      (lambda ()
-        (buffer-drain-updates)))
-
-    (it-test "retrieve B's drained updates"
+    (it-test "retrieve B's updates"
       (lambda ()
         (set! *test-updates-b* (buffer-drain-updates))
         (should (> (length *test-updates-b*) 0))))

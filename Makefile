@@ -394,12 +394,29 @@ test-scheme-all: build-tui
 test-scheme-ci: test-scheme-all
 
 ## docker-collab-test: run collab CRDT E2E tests in Docker containers
-## Two-step: start detached, wait for verifier exit code, dump logs, tear down.
-## We avoid --abort-on-container-exit because it kills slow containers before
-## the verifier (which depends_on service_completed_successfully) can start.
+## Start detached, then use `docker wait` (Docker CLI) to block until the
+## verifier container exits. The verifier has depends_on:
+## service_completed_successfully for all 4 test containers, so it starts
+## only after they all exit 0. The state-server runs forever; tear down after.
 docker-collab-test:
 	docker compose -f docker-compose.collab-test.yml up --build -d
-	RC=0; docker compose -f docker-compose.collab-test.yml wait verifier || RC=$$?; \
+	@VERIFIER=$$(docker compose -f docker-compose.collab-test.yml ps -q verifier); \
+	if [ -z "$$VERIFIER" ]; then \
+		echo "Waiting for verifier container to start..."; \
+		for i in $$(seq 1 60); do \
+			VERIFIER=$$(docker compose -f docker-compose.collab-test.yml ps -q verifier); \
+			[ -n "$$VERIFIER" ] && break; \
+			sleep 5; \
+		done; \
+	fi; \
+	if [ -z "$$VERIFIER" ]; then \
+		echo "ERROR: verifier container never started"; \
+		docker compose -f docker-compose.collab-test.yml logs; \
+		docker compose -f docker-compose.collab-test.yml down --volumes; \
+		exit 1; \
+	fi; \
+	echo "Waiting for verifier container $$VERIFIER..."; \
+	RC=$$(docker wait $$VERIFIER); \
 	docker compose -f docker-compose.collab-test.yml logs --no-log-prefix; \
 	docker compose -f docker-compose.collab-test.yml down --volumes; \
 	exit $$RC

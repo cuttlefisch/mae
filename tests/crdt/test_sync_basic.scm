@@ -29,14 +29,6 @@
       (lambda ()
         (should-equal (buffer-sync-content) (buffer-string))))
 
-    (it-test "pending updates exist after insert"
-      (lambda ()
-        (should (> (buffer-pending-updates) 0))))
-
-    (it-test "request drain of updates"
-      (lambda ()
-        (buffer-drain-updates)))
-
     (it-test "drain returns base64 updates"
       (lambda ()
         (define updates (buffer-drain-updates))

@@ -444,6 +444,11 @@ async fn process_side_effects(
     // test step are sent to the collab bridge before any event handling.
     crate::collab_bridge::drain_collab_intents(editor, collab_command_tx);
 
+    // Capture pending sync updates for Scheme (buffer-drain-updates) BEFORE
+    // drain_and_broadcast consumes them. This preserves updates for test
+    // assertions while still forwarding remaining updates to the collab bridge.
+    scheme.capture_pending_sync_updates(editor);
+
     // Forward pending sync updates to state server (mirrors IdleTick in main loop).
     crate::sync_broadcast::drain_and_broadcast(editor, broadcaster, Some(collab_command_tx));
 

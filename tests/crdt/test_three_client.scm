@@ -72,11 +72,7 @@
       (lambda ()
         (buffer-insert "-editA")))
 
-    ;; Drain A's updates (two-step)
-    (it-test "request drain of A's updates"
-      (lambda ()
-        (buffer-drain-updates)))
-
+    ;; Drain A's updates
     (it-test "retrieve A's updates"
       (lambda ()
         (set! *three-updates-a* (buffer-drain-updates))
@@ -94,11 +90,7 @@
       (lambda ()
         (buffer-insert "-editB")))
 
-    ;; Drain B's updates (two-step)
-    (it-test "request drain of B's updates"
-      (lambda ()
-        (buffer-drain-updates)))
-
+    ;; Drain B's updates
     (it-test "retrieve B's updates"
       (lambda ()
         (set! *three-updates-b* (buffer-drain-updates))
@@ -116,11 +108,7 @@
       (lambda ()
         (buffer-insert "-editC")))
 
-    ;; Drain C's updates (two-step)
-    (it-test "request drain of C's updates"
-      (lambda ()
-        (buffer-drain-updates)))
-
+    ;; Drain C's updates
     (it-test "retrieve C's updates"
       (lambda ()
         (set! *three-updates-c* (buffer-drain-updates))

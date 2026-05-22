@@ -63,11 +63,7 @@
       (lambda ()
         (should-equal (buffer-string) "hello world")))
 
-    ;; Drain B's updates (two-step pattern)
-    (it-test "request drain of B's updates"
-      (lambda ()
-        (buffer-drain-updates)))
-
+    ;; Drain B's updates
     (it-test "retrieve B's updates"
       (lambda ()
         (set! *undo-updates-b* (buffer-drain-updates))
@@ -86,11 +82,7 @@
       (lambda ()
         (should-equal (buffer-string) "")))
 
-    ;; Drain A's post-undo updates (two-step pattern)
-    (it-test "request drain of A's post-undo updates"
-      (lambda ()
-        (buffer-drain-updates)))
-
+    ;; Drain A's post-undo updates
     (it-test "retrieve A's post-undo updates"
       (lambda ()
         (set! *undo-updates-a-after-undo* (buffer-drain-updates))

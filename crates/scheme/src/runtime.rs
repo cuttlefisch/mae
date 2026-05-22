@@ -150,10 +150,9 @@ struct SharedState {
     pending_sync_applies: Vec<(String, Vec<u8>)>,
     /// Pending load-sync-state: (base64-decoded state bytes, client_id).
     pending_load_sync_state: Option<(Vec<u8>, u64)>,
-    /// Flag: drain pending_sync_updates on active buffer after next apply.
-    pending_drain_sync_updates: bool,
-    /// Drained sync updates (stored here so Scheme can retrieve them).
-    drained_sync_updates: Vec<String>,
+    /// Accumulated sync updates from pending_sync_updates (base64-encoded).
+    /// Always captured after each apply cycle; drained by `(buffer-drain-updates)`.
+    accumulated_sync_updates: Vec<String>,
     /// Current mode string for test inspection (updated by test runner).
     current_mode: String,
     /// Active buffer text for test inspection (updated by test runner).
@@ -1638,6 +1637,21 @@ impl SchemeRuntime {
         self.shared.lock().unwrap().pending_sleep_ms.take()
     }
 
+    /// Always accumulate pending sync updates from the active buffer into
+    /// SharedState. Called before `drain_and_broadcast` so Scheme tests can
+    /// retrieve updates via `(buffer-drain-updates)` without a two-step flag
+    /// dance. Clones (not drains) so `drain_and_broadcast` still forwards them.
+    pub fn capture_pending_sync_updates(&mut self, editor: &mae_core::Editor) {
+        let mut state = self.shared.lock().unwrap();
+        let idx = editor.active_buffer_idx();
+        for u in &editor.buffers[idx].pending_sync_updates {
+            use base64::Engine as _;
+            state
+                .accumulated_sync_updates
+                .push(base64::engine::general_purpose::STANDARD.encode(u));
+        }
+    }
+
     /// Evaluate a Scheme expression and return the result as a string.
     /// Errors are recorded in the error history for debugger introspection.
     pub fn eval(&mut self, code: &str) -> Result<String, SchemeError> {
@@ -2167,16 +2181,14 @@ impl SchemeRuntime {
                 }
             });
 
-        // (buffer-drain-updates) — request drain of pending sync updates.
-        // Sets a flag in SharedState; apply_to_editor drains the actual updates
-        // and stores them as base64 strings. Returns the previously drained list.
+        // (buffer-drain-updates) — take and return all accumulated sync updates.
+        // Updates are accumulated by capture_pending_sync_updates() after each
+        // apply cycle, so this is a simple take-and-return (no flag dance needed).
         let s = self.shared.clone();
         self.engine
             .register_fn("buffer-drain-updates", move || -> SteelVal {
                 let mut state = s.lock().unwrap();
-                state.pending_drain_sync_updates = true;
-                // Return previously drained updates (from last apply cycle).
-                let updates = std::mem::take(&mut state.drained_sync_updates);
+                let updates = std::mem::take(&mut state.accumulated_sync_updates);
                 SteelVal::ListV(
                     updates
                         .into_iter()
@@ -2547,20 +2559,8 @@ impl SchemeRuntime {
             }
         }
 
-        // (buffer-drain-updates) — drain pending sync updates from active buffer
-        if state.pending_drain_sync_updates {
-            state.pending_drain_sync_updates = false;
-            let idx = editor.active_buffer_idx();
-            let updates: Vec<String> = editor.buffers[idx]
-                .pending_sync_updates
-                .drain(..)
-                .map(|u| {
-                    use base64::Engine as _;
-                    base64::engine::general_purpose::STANDARD.encode(&u)
-                })
-                .collect();
-            state.drained_sync_updates = updates;
-        }
+        // (buffer-drain-updates) — now handled by capture_pending_sync_updates(),
+        // which must run before drain_and_broadcast in the test runner.
 
         // (buffer-apply-update BUFFER-NAME UPDATE-BYTES)
         let sync_applies: Vec<(String, Vec<u8>)> = state.pending_sync_applies.drain(..).collect();

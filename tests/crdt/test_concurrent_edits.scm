@@ -52,12 +52,8 @@
       (lambda ()
         (buffer-insert "B:")))
 
-    ;; Drain B's updates (two-step pattern)
-    (it-test "request drain of B's updates"
-      (lambda ()
-        (buffer-drain-updates)))
-
-    (it-test "retrieve B's drained updates"
+    ;; Drain B's updates
+    (it-test "retrieve B's updates"
       (lambda ()
         (set! *concurrent-updates-b* (buffer-drain-updates))
         (should (> (length *concurrent-updates-b*) 0))))
@@ -75,12 +71,8 @@
       (lambda ()
         (buffer-insert "A:")))
 
-    ;; Drain A's updates (two-step pattern)
-    (it-test "request drain of A's updates"
-      (lambda ()
-        (buffer-drain-updates)))
-
-    (it-test "retrieve A's drained updates"
+    ;; Drain A's updates
+    (it-test "retrieve A's updates"
       (lambda ()
         (set! *concurrent-updates-a* (buffer-drain-updates))
         (should (> (length *concurrent-updates-a*) 0))))
