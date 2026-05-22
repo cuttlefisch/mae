@@ -257,13 +257,16 @@ Evicted ──sync/share──> Active (fresh)
 
 ---
 
-## 7. Known Limitations (Deferred)
+## 7. Known Limitations
 
-1. **No offline edit recovery.** Edits during disconnect are lost on rejoin (full-state overwrite). Tracked in ROADMAP.
-2. **No client-side gap detection.** Missed `wal_seq` broadcasts cause silent divergence. Tracked in ROADMAP.
-3. **Save protocol not wired to `:w`.** `docs/save_intent` + `docs/save_committed` are implemented but not called from editor save. Tracked in ROADMAP.
-4. **No awareness protocol.** Cursor/selection sharing via yrs awareness is not implemented. Tracked in ROADMAP.
-5. **No heartbeat/keepalive.** Silent client death leaves stale `connected_clients`. Tracked in ROADMAP.
+Completed in v0.11.0:
+1. ~~No offline edit recovery~~ — sync_doc preserved on disconnect, reconcile_to on reconnect *(b8d4b6a)*
+2. ~~No client-side gap detection~~ — wal_seq tracking per doc, ForceSync on gap *(b8d4b6a)*
+3. ~~Save protocol not wired to `:w`~~ — save_intent/save_committed called from editor save *(ca6c202)*
+4. ~~No heartbeat/keepalive~~ — 30s `$/ping` (configurable via `collab_heartbeat_interval`), latency logging, missed pong → disconnect *(b8d4b6a)*
+
+Still deferred:
+5. **No awareness protocol.** Cursor/selection sharing via yrs awareness. Tracked in ROADMAP Phase F.
 
 ---
 
