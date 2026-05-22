@@ -536,6 +536,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 None => doc_id.clone(),
             };
             // Find or create buffer, load sync state directly (no merge).
+            let already_existed = editor.find_buffer_by_name(&buf_name).is_some();
             let idx = editor.find_or_create_buffer(&buf_name, || {
                 let mut buf = mae_core::Buffer::new();
                 buf.name = buf_name.clone();
@@ -548,16 +549,33 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             let client_id = (std::process::id() as u64) << 16 | (idx as u64);
             let load_ok = {
                 let buf = &mut editor.buffers[idx];
-                match buf.load_sync_state(&state_bytes, client_id) {
-                    Ok(()) => {
-                        // Set doc_address for save policy resolution.
-                        buf.doc_address = doc_addr.clone();
-                        // Joined buffers have NO auto file_path. Users must :saveas
-                        // to create a local copy. This matches industry standard
-                        // (VS Code Live Share, Zed — guests get no local files).
-                        Ok(())
+                if already_existed && buf.sync_doc.is_some() {
+                    // Existing synced buffer (ForceSync resync): merge state via
+                    // apply_update to preserve undo/redo history. yrs handles
+                    // already-applied operations idempotently via vector clocks.
+                    info!(doc = %doc_id, "resync: merging state into existing buffer (preserving undo history)");
+                    match buf.apply_sync_update(&state_bytes) {
+                        Ok(()) => Ok(()),
+                        Err(e) => {
+                            warn!(doc = %doc_id, error = %e, "resync merge failed, falling back to full load");
+                            buf.load_sync_state(&state_bytes, client_id).map(|()| {
+                                buf.doc_address = doc_addr.clone();
+                            })
+                        }
                     }
-                    Err(e) => Err(e),
+                } else {
+                    // New buffer (explicit join): full state load.
+                    match buf.load_sync_state(&state_bytes, client_id) {
+                        Ok(()) => {
+                            // Set doc_address for save policy resolution.
+                            buf.doc_address = doc_addr.clone();
+                            // Joined buffers have NO auto file_path. Users must :saveas
+                            // to create a local copy. This matches industry standard
+                            // (VS Code Live Share, Zed — guests get no local files).
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
             };
             match load_ok {
@@ -587,8 +605,14 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     }
                     editor.collab.synced_buffers.insert(doc_id.clone());
                     editor.collab.synced_docs = editor.collab.synced_buffers.len();
-                    editor.switch_to_buffer(idx);
-                    editor.set_status(format!("Joined: {}", doc_id));
+                    // Only switch active buffer for newly created buffers (explicit join).
+                    // For existing buffers (ForceSync resync), don't steal focus.
+                    if !already_existed {
+                        editor.switch_to_buffer(idx);
+                        editor.set_status(format!("Joined: {}", doc_id));
+                    } else {
+                        info!(doc = %doc_id, buf_idx = idx, "buffer resync complete (no focus switch)");
+                    }
                     editor.mark_full_redraw();
 
                     // Opt-in: if collab_auto_resolve_paths is enabled and the
@@ -848,17 +872,6 @@ async fn run_collab_task(
     // Skip the first immediate tick.
     heartbeat_interval.tick().await;
     let mut ping_pending = false;
-
-    /// Helper: set up owned read/write halves from a fresh TCP stream.
-    fn install_connection(
-        stream: TcpStream,
-        rd: &mut Option<BufReader<OwnedReadHalf>>,
-        wr: &mut Option<OwnedWriteHalf>,
-    ) {
-        let (r, w) = stream.into_split();
-        *rd = Some(BufReader::new(r));
-        *wr = Some(w);
-    }
 
     /// Helper: tear down connection.
     fn tear_down(rd: &mut Option<BufReader<OwnedReadHalf>>, wr: &mut Option<OwnedWriteHalf>) {
@@ -1232,9 +1245,12 @@ async fn run_collab_task(
                                 continue;
                             }
                             reconnect_attempt += 1;
-                            if let Ok(mut stream) = TcpStream::connect(&addr_clone).await {
-                                if let Some(peer_count) = send_initialize(&mut stream, write_timeout).await {
-                                    install_connection(stream, &mut reader, &mut writer);
+                            if let Ok(stream) = TcpStream::connect(&addr_clone).await {
+                                let (r, mut w) = stream.into_split();
+                                let mut buf_reader = BufReader::new(r);
+                                if let Some(peer_count) = send_initialize(&mut w, &mut buf_reader, write_timeout).await {
+                                    reader = Some(buf_reader);
+                                    writer = Some(w);
                                     reconnect_attempt = 0; // Reset on success.
                                     // Subscribe to sync_update events (B4 fix).
                                     if let Some(ref mut w) = writer {
@@ -1358,19 +1374,25 @@ pub(crate) async fn handle_incoming_message(
                             .get("update_base64")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        debug!(doc = %buffer_name, wal_seq, update_bytes = update_b64.len(), "received sync_update");
-                        // Gap detection: check wal_seq continuity per doc.
-                        if wal_seq > 0 {
-                            check_seq_gap(&buffer_name, wal_seq, seq_tracker, evt_tx).await;
-                        }
-                        if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
-                            let _ = evt_tx
-                                .send(CollabEvent::RemoteUpdate {
-                                    doc_id: buffer_name,
-                                    update_bytes: bytes,
-                                    wal_seq,
-                                })
-                                .await;
+                        // Only process updates for docs this client has shared/joined.
+                        // The server broadcasts to ALL clients; we filter client-side.
+                        if !shared_docs.contains(&buffer_name) {
+                            debug!(doc = %buffer_name, "ignoring sync_update for unsubscribed doc");
+                        } else {
+                            debug!(doc = %buffer_name, wal_seq, update_bytes = update_b64.len(), "received sync_update");
+                            // Gap detection: check wal_seq continuity per doc.
+                            if wal_seq > 0 {
+                                check_seq_gap(&buffer_name, wal_seq, seq_tracker, evt_tx).await;
+                            }
+                            if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
+                                let _ = evt_tx
+                                    .send(CollabEvent::RemoteUpdate {
+                                        doc_id: buffer_name,
+                                        update_bytes: bytes,
+                                        wal_seq,
+                                    })
+                                    .await;
+                            }
                         }
                     }
                 }
@@ -1384,23 +1406,28 @@ pub(crate) async fn handle_incoming_message(
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let wal_seq = params.get("wal_seq").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let update_b64 = params
-                        .get("update")
-                        .or_else(|| params.get("update_base64"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    if wal_seq > 0 {
-                        check_seq_gap(&doc_id, wal_seq, seq_tracker, evt_tx).await;
-                    }
-                    if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
-                        let _ = evt_tx
-                            .send(CollabEvent::RemoteUpdate {
-                                doc_id,
-                                update_bytes: bytes,
-                                wal_seq,
-                            })
-                            .await;
+                    // Only process updates for docs this client has shared/joined.
+                    if !shared_docs.contains(&doc_id) {
+                        debug!(doc = %doc_id, "ignoring sync/update for unsubscribed doc");
+                    } else {
+                        let wal_seq = params.get("wal_seq").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let update_b64 = params
+                            .get("update")
+                            .or_else(|| params.get("update_base64"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if wal_seq > 0 {
+                            check_seq_gap(&doc_id, wal_seq, seq_tracker, evt_tx).await;
+                        }
+                        if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
+                            let _ = evt_tx
+                                .send(CollabEvent::RemoteUpdate {
+                                    doc_id,
+                                    update_bytes: bytes,
+                                    wal_seq,
+                                })
+                                .await;
+                        }
                     }
                 }
             }
@@ -1692,10 +1719,13 @@ async fn handle_disconnected_cmd(
         CollabCommand::Connect { address } => {
             *target_address = Some(address.clone());
             match tokio::net::TcpStream::connect(&address).await {
-                Ok(mut stream) => {
-                    if let Some(peer_count) = send_initialize(&mut stream, write_timeout).await {
-                        let (r, w) = stream.into_split();
-                        *reader = Some(BufReader::new(r));
+                Ok(stream) => {
+                    let (r, mut w) = stream.into_split();
+                    let mut buf_reader = BufReader::new(r);
+                    if let Some(peer_count) =
+                        send_initialize(&mut w, &mut buf_reader, write_timeout).await
+                    {
+                        *reader = Some(buf_reader);
                         *writer = Some(w);
                         *reconnect_enabled = true;
                         // Subscribe to sync_update events (B4 fix).
@@ -1747,12 +1777,13 @@ async fn handle_disconnected_cmd(
                         .unwrap_or_else(|| default_addr.clone());
                     *target_address = Some(addr.clone());
                     match tokio::net::TcpStream::connect(&addr).await {
-                        Ok(mut stream) => {
+                        Ok(stream) => {
+                            let (r, mut w) = stream.into_split();
+                            let mut buf_reader = BufReader::new(r);
                             if let Some(peer_count) =
-                                send_initialize(&mut stream, write_timeout).await
+                                send_initialize(&mut w, &mut buf_reader, write_timeout).await
                             {
-                                let (r, w) = stream.into_split();
-                                *reader = Some(BufReader::new(r));
+                                *reader = Some(buf_reader);
                                 *writer = Some(w);
                                 *reconnect_enabled = true;
                                 // Subscribe after server start too.
@@ -1867,10 +1898,19 @@ async fn handle_disconnected_cmd(
 /// Send JSON-RPC `initialize` handshake to the state server.
 /// Returns `Some(peer_count)` on success, `None` on failure.
 /// Reads the response to extract `serverInfo.connections`.
-async fn send_initialize(
-    stream: &mut tokio::net::TcpStream,
+///
+/// IMPORTANT: Takes already-split writer + BufReader to avoid creating a
+/// temporary BufReader that could over-read and drop bytes from the TCP
+/// stream, breaking Content-Length framing for subsequent messages.
+async fn send_initialize<W, R>(
+    writer: &mut W,
+    reader: &mut R,
     timeout: std::time::Duration,
-) -> Option<usize> {
+) -> Option<usize>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    R: tokio::io::AsyncBufRead + Unpin,
+{
     use mae_mcp::write_framed;
 
     let init_req = serde_json::json!({
@@ -1883,13 +1923,11 @@ async fn send_initialize(
         }
     });
     let body = serde_json::to_vec(&init_req).unwrap();
-    if write_framed(stream, &body, timeout).await.is_err() {
+    if write_framed(writer, &body, timeout).await.is_err() {
         return None;
     }
 
-    // Read the initialize response before the stream is split.
-    let mut buf_reader = tokio::io::BufReader::new(&mut *stream);
-    match mae_mcp::read_message(&mut buf_reader).await {
+    match mae_mcp::read_message(reader).await {
         Ok(Some(text)) => {
             let peer_count = serde_json::from_str::<serde_json::Value>(&text)
                 .ok()
@@ -2390,7 +2428,7 @@ mod tests {
         // Test the actual serde format: #[serde(tag = "type", content = "data")]
         let (tx, mut rx) = mpsc::channel(8);
         let mut pending = std::collections::HashMap::new();
-        let mut shared = Vec::new();
+        let mut shared = vec!["test.rs".to_string()];
 
         let msg = serde_json::json!({
             "jsonrpc": "2.0",
@@ -2429,7 +2467,7 @@ mod tests {
         // Test backward compat with the old "sync_update" key format.
         let (tx, mut rx) = mpsc::channel(8);
         let mut pending = std::collections::HashMap::new();
-        let mut shared = Vec::new();
+        let mut shared = vec!["legacy.rs".to_string()];
 
         let msg = serde_json::json!({
             "jsonrpc": "2.0",
@@ -2803,7 +2841,8 @@ mod tests {
     async fn server_notification_processed_after_command_burst() {
         let (tx, mut rx) = mpsc::channel(32);
         let mut pending = std::collections::HashMap::new();
-        let mut shared = Vec::new();
+        // Pre-subscribe to all docs so the filter passes.
+        let mut shared: Vec<String> = (0..5).map(|i| format!("file{}.rs", i)).collect();
 
         // Simulate N sync_update notifications arriving in quick succession
         // (as would happen when they pile up during biased starvation).
@@ -2845,6 +2884,42 @@ mod tests {
             5,
             "all queued server notifications must be processed; got {:?}",
             received
+        );
+    }
+
+    #[tokio::test]
+    async fn unsubscribed_doc_sync_update_ignored() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut pending = std::collections::HashMap::new();
+        let mut shared = vec!["subscribed.rs".to_string()]; // Only subscribed to one doc.
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/sync_update",
+            "params": {
+                "seq": 1,
+                "event": {
+                    "type": "sync_update",
+                    "data": {
+                        "buffer_name": "other-client.rs",
+                        "update_base64": "AQIDBA==",
+                        "wal_seq": 1
+                    }
+                }
+            }
+        });
+        handle_incoming_message(
+            &msg.to_string(),
+            &tx,
+            &mut pending,
+            &mut shared,
+            &mut std::collections::HashMap::new(),
+        )
+        .await;
+        // No event should be emitted for the unsubscribed doc.
+        assert!(
+            rx.try_recv().is_err(),
+            "sync_update for unsubscribed doc should be ignored"
         );
     }
 

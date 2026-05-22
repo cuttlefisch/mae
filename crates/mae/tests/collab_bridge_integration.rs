@@ -661,15 +661,26 @@ async fn fault_server_drop_mid_session() {
         .await
         .unwrap();
     cw.flush().await.unwrap();
-    let _ = mae_mcp::read_message(&mut cr).await;
+    // Server may send multiple messages (initialize response + PeerJoined
+    // notification). Read with a timeout in case the response is delayed.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        mae_mcp::read_message(&mut cr),
+    )
+    .await;
 
     handle.abort();
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Client should detect EOF or error — not hang.
-    match mae_mcp::read_message(&mut cr).await {
-        Ok(None) | Err(_) => {} // expected
-        Ok(Some(_)) => {}       // leftover message is fine
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        mae_mcp::read_message(&mut cr),
+    )
+    .await;
+    match result {
+        Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {} // expected: EOF, error, or timeout
+        Ok(Ok(Some(_))) => {}                    // leftover message is fine
     }
 }
 

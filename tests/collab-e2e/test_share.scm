@@ -76,4 +76,9 @@
 
     (it-test "signals save complete"
       (lambda ()
-        (write-file "/sync/a-saved-shared" "done")))))
+        (write-file "/sync/a-saved-shared" "done")))
+
+    ;; Signal that this client is done.
+    (it-test "signals client-a done"
+      (lambda ()
+        (write-file "/sync/client-a-done" "done")))))

@@ -30,6 +30,12 @@ const MAX_UPDATE_SIZE: usize = 1_048_576; // 1 MB
 /// Run the client handler loop for a single connection.
 ///
 /// Generic over reader/writer — works with TCP, Unix, or any async stream.
+///
+/// CANCEL-SAFETY: `read_message` uses `read_line` / `read_exact` internally,
+/// which are NOT cancel-safe — if a `tokio::select!` cancels them mid-read the
+/// BufReader is left in a corrupted state (header consumed, body still pending).
+/// To avoid this, we spawn a dedicated reader task that feeds complete messages
+/// into an mpsc channel, so `read_message` always runs to completion.
 pub async fn handle_client<R, W>(
     reader: R,
     mut writer: W,
@@ -37,10 +43,9 @@ pub async fn handle_client<R, W>(
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
 ) where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
 {
-    let mut reader = reader;
     let write_timeout = std::time::Duration::from_secs(WRITE_TIMEOUT_SECS);
 
     let mut session = ClientSession::new();
@@ -71,6 +76,30 @@ pub async fn handle_client<R, W>(
         }
     });
 
+    // Spawn a dedicated reader task so read_message always runs to completion
+    // (never cancelled by select!).  Messages arrive via an mpsc channel.
+    let (msg_tx, mut msg_rx) = mpsc::channel::<Result<String, String>>(32);
+    tokio::spawn(async move {
+        let mut reader = reader;
+        loop {
+            match mae_mcp::read_message(&mut reader).await {
+                Ok(Some(msg)) => {
+                    if msg_tx.send(Ok(msg)).await.is_err() {
+                        break; // handler dropped
+                    }
+                }
+                Ok(None) => {
+                    let _ = msg_tx.send(Err("EOF".to_string())).await;
+                    break;
+                }
+                Err(e) => {
+                    let _ = msg_tx.send(Err(e.to_string())).await;
+                    break;
+                }
+            }
+        }
+    });
+
     // Subscribe with empty subs — client opts in later.
     let mut event_rx = {
         let mut bc = broadcaster.lock().unwrap();
@@ -84,15 +113,19 @@ pub async fn handle_client<R, W>(
         tokio::select! {
             biased;
 
-            msg = mae_mcp::read_message(&mut reader) => {
+            msg = msg_rx.recv() => {
                 let msg = match msg {
-                    Ok(Some(msg)) => msg,
-                    Ok(None) => {
+                    Some(Ok(msg)) => msg,
+                    Some(Err(e)) if e == "EOF" => {
                         debug!(session = session_id, "client disconnected (EOF)");
                         break;
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         error!(session = session_id, error = %e, "read error");
+                        break;
+                    }
+                    None => {
+                        debug!(session = session_id, "reader task ended");
                         break;
                     }
                 };

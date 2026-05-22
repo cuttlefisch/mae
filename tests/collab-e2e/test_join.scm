@@ -66,4 +66,9 @@
     (it-test "saves to shared disk"
       (lambda ()
         (execute-ex "saveas /shared/test.txt")
-        (sleep-ms 500)))))
+        (sleep-ms 500)))
+
+    ;; Signal that this client is done.
+    (it-test "signals client-b done"
+      (lambda ()
+        (write-file "/sync/client-b-done" "done")))))

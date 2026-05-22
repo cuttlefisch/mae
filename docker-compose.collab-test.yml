@@ -15,7 +15,7 @@ services:
       target: runtime
     entrypoint: ["mae-state-server", "--bind", "0.0.0.0:9473"]
     environment:
-      RUST_LOG: "mae_state_server::handler=debug,info"
+      RUST_LOG: "mae_mcp=warn,mae_state_server::handler=debug,info"
     healthcheck:
       # Use a non-intrusive TCP check: connect + immediate close.
       # Previous check (echo '{}' | nc) created full sessions every 2s,
@@ -44,7 +44,7 @@ services:
       MAE_COLLAB_SERVER: "state-server:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
-      MAE_LOG: "mae::collab_bridge=debug,info"
+      MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,info"
     depends_on:
       state-server:
         condition: service_healthy
@@ -67,7 +67,7 @@ services:
       MAE_COLLAB_SERVER: "state-server:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
-      MAE_LOG: "mae::collab_bridge=debug,info"
+      MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,info"
     depends_on:
       state-server:
         condition: service_healthy
@@ -89,7 +89,7 @@ services:
       MAE_COLLAB_SERVER: "state-server:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
-      MAE_LOG: "mae::collab_bridge=debug,info"
+      MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,info"
     depends_on:
       state-server:
         condition: service_healthy
@@ -111,7 +111,7 @@ services:
       MAE_COLLAB_SERVER: "state-server:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
-      MAE_LOG: "mae::collab_bridge=debug,info"
+      MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,info"
     depends_on:
       state-server:
         condition: service_healthy

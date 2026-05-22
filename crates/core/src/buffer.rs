@@ -2858,6 +2858,70 @@ mod tests {
     }
 
     #[test]
+    fn redo_survives_remote_update_through_buffer() {
+        // Simulate the E2E scenario: A inserts, B inserts, A undoes,
+        // B's undo arrives as remote update, then A redoes.
+        let (mut buf_a, mut win_a) = new_buf_win();
+        buf_a.enable_sync(1);
+
+        // A inserts "base\n"
+        buf_a.insert_text_at(0, "base\n");
+        buf_a.pending_sync_updates.clear();
+
+        // Create B's doc with A's state
+        let mut doc_b = mae_sync::text::TextSync::from_state_with_client_id(
+            &buf_a.sync_doc.as_ref().unwrap().encode_state(),
+            2,
+        )
+        .unwrap();
+        doc_b.enable_undo();
+
+        // A inserts "from-A\n"
+        buf_a.insert_text_at(5, "from-A\n");
+        assert!(buf_a.text().contains("from-A"));
+        // Send A's update to B
+        for u in &buf_a.pending_sync_updates {
+            doc_b.apply_update(u).unwrap();
+        }
+        buf_a.pending_sync_updates.clear();
+
+        // B inserts "from-B\n"
+        let update_b = doc_b.insert(5, "from-B\n");
+        buf_a.apply_sync_update(&update_b).unwrap();
+        assert!(buf_a.text().contains("from-A"));
+        assert!(buf_a.text().contains("from-B"));
+
+        // A undoes its insert
+        buf_a.undo(&mut win_a);
+        assert!(!buf_a.text().contains("from-A"), "from-A should be gone");
+        assert!(buf_a.text().contains("from-B"), "from-B should survive");
+        // Send A's undo to B
+        for u in &buf_a.pending_sync_updates {
+            doc_b.apply_update(u).unwrap();
+        }
+        buf_a.pending_sync_updates.clear();
+
+        // B undoes its insert → remote update arrives at A
+        let (_ok, b_undo_updates) = doc_b.undo();
+        for u in &b_undo_updates {
+            buf_a.apply_sync_update(u).unwrap();
+        }
+        assert!(
+            !buf_a.text().contains("from-B"),
+            "from-B gone after B's undo"
+        );
+        assert_eq!(buf_a.text(), "base\n");
+
+        // A redoes — should restore from-A
+        buf_a.redo(&mut win_a);
+        assert!(
+            buf_a.text().contains("from-A"),
+            "redo should restore from-A; got: {:?}",
+            buf_a.text()
+        );
+    }
+
+    #[test]
     fn load_sync_state_enables_undo() {
         let ts = mae_sync::text::TextSync::new("server content");
         let state = ts.encode_state();

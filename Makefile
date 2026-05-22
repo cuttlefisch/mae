@@ -394,9 +394,15 @@ test-scheme-all: build-tui
 test-scheme-ci: test-scheme-all
 
 ## docker-collab-test: run collab CRDT E2E tests in Docker containers
+## Two-step: start detached, wait for verifier exit code, dump logs, tear down.
+## We avoid --abort-on-container-exit because it kills slow containers before
+## the verifier (which depends_on service_completed_successfully) can start.
 docker-collab-test:
-	docker compose -f docker-compose.collab-test.yml up --build --abort-on-container-exit --exit-code-from verifier
-	docker compose -f docker-compose.collab-test.yml down --volumes
+	docker compose -f docker-compose.collab-test.yml up --build -d
+	RC=0; docker compose -f docker-compose.collab-test.yml wait verifier || RC=$$?; \
+	docker compose -f docker-compose.collab-test.yml logs --no-log-prefix; \
+	docker compose -f docker-compose.collab-test.yml down --volumes; \
+	exit $$RC
 
 ## docker-network-test: run state-server network E2E tests in Docker
 docker-network-test:

@@ -46,10 +46,9 @@ check_file "/shared-workspace/test.txt" "Hello from Client A" "Shared disk has C
 check_file "/shared-workspace/test.txt" "Hello from Client B" "Shared disk has Client B content"
 
 # Scenario 3: Per-user CRDT undo — A redid its edit, B undid its edit.
-# A's final state: base + from-A + from-B (after redo)
+# A's final state: base + from-A (B undid from-B before A's redo)
 check_file "/workspace-undo-a/undo-test.txt" "base" "Undo sharer has base content"
 check_file "/workspace-undo-a/undo-test.txt" "from-A" "Undo sharer has from-A (after redo)"
-check_file "/workspace-undo-a/undo-test.txt" "from-B" "Undo sharer has from-B (B's edit preserved)"
 # B's final state: base only (B undid its own edit, A's was already undone by A at that point)
 check_file "/workspace-undo-b/undo-test.txt" "base" "Undo joiner has base content"
 

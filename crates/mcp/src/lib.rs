@@ -323,6 +323,15 @@ async fn write_notification<W: tokio::io::AsyncWrite + Unpin>(
 // Message framing (Content-Length + line-based fallback)
 // ---------------------------------------------------------------------------
 
+/// Format bytes as hex for diagnostic logging.
+fn hex_preview(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Read a single JSON-RPC message from the stream.
 ///
 /// Auto-detects framing:
@@ -347,6 +356,13 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
     let cl_prefix = b"Content-Length:";
     let peek_len = buf.len().min(cl_prefix.len());
     let looks_like_cl = peek_len > 0 && buf[..peek_len] == cl_prefix[..peek_len];
+    tracing::trace!(
+        peek_first_byte = buf[0],
+        peek_len = buf.len(),
+        looks_like_cl,
+        peek_hex = %hex_preview(&buf[..buf.len().min(30)]),
+        "read_message: peek"
+    );
     if looks_like_cl {
         // Read header lines until we hit the empty \r\n separator.
         let mut content_length: Option<usize> = None;
@@ -401,9 +417,20 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
         tokio::io::AsyncReadExt::read_exact(reader, &mut body).await?;
         let msg = String::from_utf8(body)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        tracing::trace!(
+            content_length = len,
+            msg_len = msg.len(),
+            "read_message: CL framing"
+        );
         Ok(Some(msg))
     } else {
         // Legacy line-based framing. Skip blank lines.
+        let peek_bytes = &buf[..buf.len().min(40)];
+        tracing::warn!(
+            peek_hex = %hex_preview(peek_bytes),
+            peek_len = buf.len(),
+            "read_message: falling back to line-based framing"
+        );
         loop {
             let mut line = String::new();
             let n = reader.read_line(&mut line).await?;
@@ -412,6 +439,10 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
             }
             let trimmed = line.trim().to_string();
             if !trimmed.is_empty() {
+                tracing::warn!(
+                    line_len = trimmed.len(),
+                    "read_message: line-based message read"
+                );
                 return Ok(Some(trimmed));
             }
         }

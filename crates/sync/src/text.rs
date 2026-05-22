@@ -717,6 +717,61 @@ mod tests {
     }
 
     #[test]
+    fn redo_survives_remote_update() {
+        // Verify that applying a remote update between undo and redo
+        // does NOT clear the redo stack.
+        let mut doc_a = TextSync::with_client_id("base\n", 1);
+        doc_a.enable_undo();
+
+        let mut doc_b = TextSync::with_client_id("", 2);
+        let state = doc_a.encode_state();
+        doc_b.apply_update(&state).unwrap();
+        doc_b.enable_undo();
+
+        // A inserts "from-A"
+        let _update_a = doc_a.insert(5, "from-A\n");
+        assert_eq!(doc_a.content(), "base\nfrom-A\n");
+
+        // B inserts "from-B" and sends to A
+        let update_b = doc_b.insert(5, "from-B\n");
+        doc_a.apply_update(&update_b).unwrap();
+        // A now has both
+        assert!(doc_a.content().contains("from-A"));
+        assert!(doc_a.content().contains("from-B"));
+
+        // A undoes its own edit
+        let (ok, _) = doc_a.undo();
+        assert!(ok, "A should be able to undo its insert");
+        assert!(
+            !doc_a.content().contains("from-A"),
+            "from-A should be gone after undo"
+        );
+        assert!(
+            doc_a.content().contains("from-B"),
+            "from-B should survive A's undo"
+        );
+
+        // B undoes its own edit and sends the update to A (simulates remote undo)
+        let (b_ok, b_updates) = doc_b.undo();
+        assert!(b_ok);
+        for u in &b_updates {
+            doc_a.apply_update(u).unwrap();
+        }
+        assert!(
+            !doc_a.content().contains("from-B"),
+            "from-B should be gone after B's undo"
+        );
+
+        // A redoes its own edit — this should work even after receiving B's remote undo
+        let (redo_ok, _) = doc_a.redo();
+        assert!(redo_ok, "A should be able to redo after remote update");
+        assert!(
+            doc_a.content().contains("from-A"),
+            "from-A should be restored by redo"
+        );
+    }
+
+    #[test]
     fn undo_group_boundary() {
         let mut ts = TextSync::with_client_id("", 1);
         ts.enable_undo();

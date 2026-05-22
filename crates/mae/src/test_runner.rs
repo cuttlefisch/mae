@@ -217,6 +217,27 @@ async fn run_tests_iteratively(
             println!("not ok {} - {}", test_num, name);
             println!("  ---");
             println!("  message: {}", msg);
+            // Dump active buffer state on failure for diagnostics.
+            let ab = editor.active_buffer();
+            println!("  active_buffer: {}", ab.name);
+            println!("  text_len: {}", ab.text().len());
+            println!(
+                "  text_preview: {:?}",
+                ab.text().chars().take(200).collect::<String>()
+            );
+            println!("  sync_enabled: {}", ab.sync_doc.is_some());
+            println!("  collab_doc_id: {:?}", ab.collab_doc_id);
+            println!("  buffer_count: {}", editor.buffers.len());
+            for (bi, b) in editor.buffers.iter().enumerate() {
+                println!(
+                    "  buf[{}]: name={:?} text_len={} sync={} collab_id={:?}",
+                    bi,
+                    b.name,
+                    b.text().len(),
+                    b.sync_doc.is_some(),
+                    b.collab_doc_id
+                );
+            }
             println!("  ...");
         }
     }
@@ -315,8 +336,17 @@ fn sync_scheme_state(editor: &Editor, scheme: &mut SchemeRuntime) {
     );
 
     // Update SharedState for Rust-backed test functions (current-mode, buffer-string, etc.)
+    let buf_text = buf.text();
+    debug!(
+        active_buf_name = %name,
+        active_buf_idx = editor.window_mgr.focused_window().buffer_idx,
+        text_len = buf_text.len(),
+        text_preview = %buf_text.chars().take(200).collect::<String>(),
+        sync_enabled = sync_enabled,
+        "sync_scheme_state: copying active buffer text to SharedState"
+    );
     scheme.set_current_mode(mode_str);
-    scheme.set_current_buffer_text(&buf.text());
+    scheme.set_current_buffer_text(&buf_text);
     scheme.set_cursor_position(win.cursor_row, win.cursor_col);
     scheme.set_last_status_message(&editor.status_msg);
 
@@ -442,6 +472,9 @@ async fn drain_events_for(
 ) {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
     let tick_interval = Duration::from_millis(10);
+    let mut event_count = 0u64;
+
+    debug!(ms, "drain_events_for: starting sleep loop");
 
     loop {
         let now = tokio::time::Instant::now();
@@ -454,7 +487,17 @@ async fn drain_events_for(
 
         tokio::select! {
             Some(event) = collab_event_rx.recv() => {
+                event_count += 1;
+                debug!(event_count, event = ?event, "drain_events_for: received collab event");
                 crate::collab_bridge::handle_collab_event(editor, event);
+                // Log active buffer state after event handling.
+                let ab = editor.active_buffer();
+                debug!(
+                    active_buf = %ab.name,
+                    text_len = ab.text().len(),
+                    text_preview = %ab.text().chars().take(100).collect::<String>(),
+                    "drain_events_for: buffer state after event"
+                );
             }
             _ = tokio::time::sleep(wait) => {}
         }
@@ -464,6 +507,8 @@ async fn drain_events_for(
         // Forward pending sync updates to state server (mirrors IdleTick).
         crate::sync_broadcast::drain_and_broadcast(editor, broadcaster, Some(collab_command_tx));
     }
+
+    debug!(ms, event_count, "drain_events_for: sleep loop complete");
 }
 
 /// Non-blocking drain of all pending collab events.
