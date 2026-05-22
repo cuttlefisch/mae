@@ -5,7 +5,7 @@
 #
 # Usage:
 #   make docker-collab-test
-#   (starts detached, uses `docker wait` on verifier for exit code)
+#   (starts detached, uses `docker compose wait verifier` for exit code)
 
 services:
   state-server:

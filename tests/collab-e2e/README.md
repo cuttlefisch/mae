@@ -123,11 +123,11 @@ Timeline:
 
 ## Orchestration
 
-The Makefile target `docker-collab-test` uses a two-step approach:
+The Makefile target `docker-collab-test` uses `docker compose wait` (Compose v2.21+):
 
 ```makefile
 docker compose up --build -d            # start all services detached
-docker wait $(docker compose ps -q verifier)  # block until verifier exits
+docker compose wait verifier            # block until verifier exits
 docker compose logs --no-log-prefix     # dump all logs
 docker compose down --volumes           # tear down
 ```
