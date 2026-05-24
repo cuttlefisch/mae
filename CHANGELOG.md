@@ -2,16 +2,135 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.10.2] - 2026-05-20
+## [Unreleased]
+
+### Bug Fixes
+
+- *(collab)* Buffer status indicators, save guard, sharer notifications, reconnect backoff ([8de53b8](https://github.com/cuttlefisch/mae/commit/8de53b817c36fd4ec3302162d40d682f9118013e))
+- *(docker)* Add 7 missing crates to Dockerfile, fix collab E2E test_smoke ([b765978](https://github.com/cuttlefisch/mae/commit/b765978fc2857ea3bf332a9e6c6f4712ca92335b))
+- *(collab)* Remove (load) from undo E2E tests, fix verifier mounts ([ba3faa2](https://github.com/cuttlefisch/mae/commit/ba3faa2947bff91fb649d78ea919471e4b550205))
+- *(gui)* Nightly clippy redundant reference + collab diagnostic logging ([968c6d6](https://github.com/cuttlefisch/mae/commit/968c6d649acfd0da589150705d00fa4ae61229ed))
+- *(collab)* Headless test runner missing drain_and_broadcast — local CRDT edits never forwarded ([5cf6250](https://github.com/cuttlefisch/mae/commit/5cf6250c9ba23769c8ef826c3e60afd4298d8300))
+- *(docker)* Pre-create /workspace and /shared with mae user ownership ([d1f5395](https://github.com/cuttlefisch/mae/commit/d1f5395323d1a495b2f9a9e460746c35b0afdcba))
+- *(collab)* Use server-resolved doc_id in join response, not client-supplied ([8b0e3fd](https://github.com/cuttlefisch/mae/commit/8b0e3fdaaabeb58bf72951ce3e036ea1adde839f))
+- *(collab)* Read_message partial-peek framing, intent drain ordering, diagnostics ([4be3b61](https://github.com/cuttlefisch/mae/commit/4be3b61b429114ae07d4a1650488728771777fbb))
+- *(collab)* Structured diagnostic logging + healthcheck noise fix ([2b0887c](https://github.com/cuttlefisch/mae/commit/2b0887c3d9f645611bb11f7036fafbe1d6d64f36))
+- *(collab)* Cross-client crosstalk, ForceSync undo wipe, Docker E2E orchestration ([afae68a](https://github.com/cuttlefisch/mae/commit/afae68af5929af1a1aaee93fef91b8a48d0116d4))
+- *(test)* Buffer-drain-updates always-accumulate + Docker orchestration cleanup ([baa30ca](https://github.com/cuttlefisch/mae/commit/baa30ca458b734508091a7fd4b5f713a6ca333c1))
+- *(ci)* Remove stale mae-test-fixtures exclude from Dockerfile, wire collab_heartbeat_interval option ([59e681c](https://github.com/cuttlefisch/mae/commit/59e681c03f1a6e49b1721be1ed10a4c3f65a5053))
+- *(ci)* Replace flaky verifier poll with docker compose wait ([ba8b12e](https://github.com/cuttlefisch/mae/commit/ba8b12e6885f046f5605ce46b342e871a574367b))
+- *(ci)* Foreground docker-compose + 13 protocol E2E coverage tests ([6e47801](https://github.com/cuttlefisch/mae/commit/6e47801663609a9c0fc3793d3996dbb8e36f84ad))
+- *(collab)* Awareness notification parse error + seq_tracker seeding + observability ([3ef1055](https://github.com/cuttlefisch/mae/commit/3ef1055de92ab2c91989fe0213eec7339dd8cb67))
+- *(crdt)* Vim-style undo grouping for CRDT sync ([12f8ce4](https://github.com/cuttlefisch/mae/commit/12f8ce454a417dcd2993eda85ca5b4d269921089))
 
 ### CI
 
-- *(deps)* Bump schneegans/dynamic-badges-action ([eab0672](https://github.com/cuttlefisch/mae/commit/eab067296d8a4a23d50895f1403920fe1ece5c79))
+- Re-enable collab Docker E2E tests ([1e8c6bc](https://github.com/cuttlefisch/mae/commit/1e8c6bc85ed081f0d44ccefe4174396150158553))
+- Unify local/remote CI — include mae-gui in workspace, 15m collab timeout ([de157c9](https://github.com/cuttlefisch/mae/commit/de157c966d5baa9cbe330976d77fef6f6d1ec3e2))
+- Disable Docker collab E2E (blocked on Phase 13 Scheme runtime) ([068309a](https://github.com/cuttlefisch/mae/commit/068309a07c7052c7f1bb4e7429f15948ebdce00e))
+
+### Documentation
+
+- Update ROADMAP — editor struct at ~69 fields after 6 extractions ([3201b92](https://github.com/cuttlefisch/mae/commit/3201b92d1ce8ecb50979cbee09d0177c6b0e37dd))
+- Mark collab bugs 2-4 + E8 complete, clarify Bug 1 status in ROADMAP ([1c16230](https://github.com/cuttlefisch/mae/commit/1c162308024bf761dd491796830c7d26714e08a4))
+- Update SYNC_PROTOCOL known-limitations, refresh RoamNotes test infra ([ca5879f](https://github.com/cuttlefisch/mae/commit/ca5879fb9300ef8459379d4cffd2bc5451e36f43))
+
+### Features
+
+- *(sync)* Per-user CRDT undo via yrs UndoManager ([9d8f169](https://github.com/cuttlefisch/mae/commit/9d8f169aaf3bdede4ca7bc269fa5736fb23dcbef))
+- *(collab)* Awareness protocol — cursor/selection/presence sharing ([b6d3c1c](https://github.com/cuttlefisch/mae/commit/b6d3c1cbc4df8fa78d94707c59b8dbee64c8c3bc))
+- *(collab)* Long-lived session tests + debug observability ([5fa8d3c](https://github.com/cuttlefisch/mae/commit/5fa8d3c5c0624d5f8a187d1583b1390e7f1b4ead))
+
+### Refactor
+
+- *(core)* Extract DapContext sub-struct from Editor (2 fields) ([7ba8242](https://github.com/cuttlefisch/mae/commit/7ba82425334022550da49cc30dca2708a4b6a0d3))
+
+### Testing
+
+- *(collab)* Two-client CRDT undo E2E test in Docker ([69c746b](https://github.com/cuttlefisch/mae/commit/69c746bd92de180f7d5894867da36fb260df152d))
+- Collab hardening — 21 new tests, encode_diff API, v0.10.4 ([36dd0b7](https://github.com/cuttlefisch/mae/commit/36dd0b77731d71415b17a90dacc6fbf7bca17fc0))
+
+### Roadmap
+
+- Networked feature E2E coverage gate — no ship without tests ([167df56](https://github.com/cuttlefisch/mae/commit/167df5613120aa71f96f8b25dc634afb73eb8aee))
+- Track cursor drift, modified flag, Docker E2E timeout bugs ([f6e17fa](https://github.com/cuttlefisch/mae/commit/f6e17fa68af0096e4953f1e63e95abe4255d32f7))
+
+## [0.10.3] - 2026-05-20
 
 ### Miscellaneous
 
+- Bump version to 0.10.3 ([5dc980d](https://github.com/cuttlefisch/mae/commit/5dc980d9c792636107adc13126dcb4a2eccdc063))
+
+## [0.10.2] - 2026-05-20
+
+### Bug Fixes
+
+- CI state-server test (binary crate, no --lib) + regenerate code map ([597c91d](https://github.com/cuttlefisch/mae/commit/597c91da8bc36d76519a1ae263960d134b11d36d))
+- :q closes window not app, C-c cancels not kills, keymap-doom auto-loads ([c3aa80b](https://github.com/cuttlefisch/mae/commit/c3aa80b0b5eba17824c3caeb5d97da49716a3782))
+- Add missing untracked files (collab_bridge.rs, mae-connect.desktop) ([8d66046](https://github.com/cuttlefisch/mae/commit/8d66046f21a38079011ba3843cb14e8a98efec21))
+- Share duplication, echo filtering, peer count + README refresh ([0d19003](https://github.com/cuttlefisch/mae/commit/0d19003a33d251622d469cdff4f98a6129500539))
+- 4 MCP protocol bugs + architecture spec ([d0bf7f0](https://github.com/cuttlefisch/mae/commit/d0bf7f06e1fe9b7a131fa866b140905f57d9a9af))
+- MCP shim stdio framing + protocol version negotiation ([d3aa424](https://github.com/cuttlefisch/mae/commit/d3aa424bde38ce543d3fb19614b94ed82707558a))
+- Org-mode parity restoration + 46 regression guard tests ([12abab8](https://github.com/cuttlefisch/mae/commit/12abab8003895763bf3c8a411bc0168d17c669d0))
+- File mode system — lang module auto-load + language detection + describe-mode parity ([4183c14](https://github.com/cuttlefisch/mae/commit/4183c14e242edb7537d4e7198d0bd47d4ab7289a))
+- Scheme test framework — 5 gap fixes + execute-ex + Rust-side iteration ([13518ad](https://github.com/cuttlefisch/mae/commit/13518ad80776f572f520815678121cf67184c802))
+- CI workflow YAML — restore newlines after exclude removal ([f44656b](https://github.com/cuttlefisch/mae/commit/f44656b06fd3a15b2ad49cc2d2c8aa7a8716d071))
+- CI consolidation (17→13 jobs) + docker e2e /sync permissions ([1cbbf86](https://github.com/cuttlefisch/mae/commit/1cbbf860c3945ba670a497b91406c547fdb3e225))
+- Collab test failures (get-option freshness, missing option arms) + tiered CI ([1b47fcd](https://github.com/cuttlefisch/mae/commit/1b47fcdc62f851ed671bac2367999ea965a028a5))
+- Keybinding conflicts (kernel→module migration) + buffer-text freshness for collab E2E ([e9f7569](https://github.com/cuttlefisch/mae/commit/e9f75698abaaa65130c6000740a60f6e58d4bea9))
+- Split collab E2E test steps for pending op ordering ([ab7bff5](https://github.com/cuttlefisch/mae/commit/ab7bff53dc3eec3fb6647f81273ba4fb23ec7bcc))
+- *(gui)* Suppress field_reassign_with_default in cursor test ([39e8a0a](https://github.com/cuttlefisch/mae/commit/39e8a0a7513afa8518c78bac61118ca076d4879f))
+
+### CI
+
+- Add GUI tests + clippy to CI, include in badge count ([bbebf1a](https://github.com/cuttlefisch/mae/commit/bbebf1aeb891ffcdc84112e38f6669c2f569d8f8))
+- Disable docker collab E2E during struct-extraction refactor ([f09ef0a](https://github.com/cuttlefisch/mae/commit/f09ef0ab3856f3d547d5ac6e5b10bd27dd0b4716))
+- *(deps)* Bump schneegans/dynamic-badges-action ([eab0672](https://github.com/cuttlefisch/mae/commit/eab067296d8a4a23d50895f1403920fe1ece5c79))
+
+### Documentation
+
+- Update ROADMAP — mark 7 completed items + document extraction roadmap ([e08a5f1](https://github.com/cuttlefisch/mae/commit/e08a5f13a6ffc2a1cdefc7ba0d6e6f371a642170))
+- Update ROADMAP — editor struct at ~40 fields after 4 extractions ([649914f](https://github.com/cuttlefisch/mae/commit/649914fcd200e3bef1f5c2e2c1b60a169720dcde))
+- Add naming conventions to CONTRIBUTING.md ([dd41a12](https://github.com/cuttlefisch/mae/commit/dd41a128f69d06a42d2d91b8ea7ac0c41ba3aa4e))
+
+### Features
+
+- Collaborative editing — scalability, UX commands, AI tools, observability ([7e200e3](https://github.com/cuttlefisch/mae/commit/7e200e3f8d8c307e8bb603b909496a6ace753e50))
+- Observability, KB docs, E2E tests for collaborative editing ([31058c2](https://github.com/cuttlefisch/mae/commit/31058c227537eabd9ab50ccc1ce04fbb9f1e9eed))
+- KB CRDT integration — schema v7, Node↔KbNodeDoc bridge ([34dc95a](https://github.com/cuttlefisch/mae/commit/34dc95a92d5efb22cb69f4683ea365762b3f35f1))
+- Add `make install-upgrade` + help/KB terminology audit ([dd32984](https://github.com/cuttlefisch/mae/commit/dd32984821c8d130e8e95ed3ec1376a01d06e836))
+- Collab correctness + save protocol + org rendering fixes ([9fc93e7](https://github.com/cuttlefisch/mae/commit/9fc93e7abfe38b5cc2f1e95380698c6eba748d2c))
+- 3-tier collab E2E test suite + 4 bug fixes + MCP shim framing ([c85dbd3](https://github.com/cuttlefisch/mae/commit/c85dbd346bdb62ff6a7299ee35f39152e050a56b))
+- CRDT test primitives + editor tests + testing framework docs ([8db90c9](https://github.com/cuttlefisch/mae/commit/8db90c90f0a2f9b55f6c4ca46fd89f65f3813ea5))
+- Scheme test library v2 — 310 tests, CI integration, CRDT lifecycle, user story E2E ([242d45f](https://github.com/cuttlefisch/mae/commit/242d45f0c35a7f9ee977d3e2decc6685af3b8849))
+- CRDT robustness hardening — ADR-008, runtime limits, CI fixes, 3,629 tests ([3e51263](https://github.com/cuttlefisch/mae/commit/3e51263d33b86813c0889a1d0d6dda829fa07565))
+- Join-save model, suffix matching, CI warning fixes — 3,639 tests ([782d54f](https://github.com/cuttlefisch/mae/commit/782d54fb524921dd5bd247ff983bf7ea10862cb1))
+- KB search body matching + recency sorting (kb_search_sort option) ([cb37a20](https://github.com/cuttlefisch/mae/commit/cb37a2060645b3ee40961cf8add2d644fe352473))
+- Save protocol wiring + disconnect lifecycle + stub audit — collab data model v2 ([ca6c202](https://github.com/cuttlefisch/mae/commit/ca6c202a87c890a8f32a44673d5ab9c630c9093c))
+- Protocol resilience — gap detection, heartbeat, offline recovery, git identity ([b8d4b6a](https://github.com/cuttlefisch/mae/commit/b8d4b6aa5953dd593952703dbe07325bf7433d09))
+- Benchmark suite + dispatch/ui.rs split — foundational testing + architecture ([0829dd5](https://github.com/cuttlefisch/mae/commit/0829dd5d7d18a1db1b1b4dcb6a2141dd87a9ce52))
+
+### Miscellaneous
+
+- Backmerge main + update README screenshot ([9f67929](https://github.com/cuttlefisch/mae/commit/9f67929bfcfb0688b22ea569f8db89981b9d8952))
+- Update CLAUDE.md, ADR-006, code map for collab features ([f21a68f](https://github.com/cuttlefisch/mae/commit/f21a68fe4d04e2e96c074eb1bd0726e5f0b45744))
+- Regenerate code map after KB CRDT integration ([53f7d7c](https://github.com/cuttlefisch/mae/commit/53f7d7c41a85e1f8fecd35ae0f1352a08277f118))
+- Regenerate code map after terminology audit ([85a3f89](https://github.com/cuttlefisch/mae/commit/85a3f892519d5591cbee2c44a757e77f893ccc01))
 - *(deps)* Bump the rust-dependencies group with 12 updates ([fb4c506](https://github.com/cuttlefisch/mae/commit/fb4c5066868a912a28b3cf12198d5aee33eb5e79))
 - Bump version to 0.10.2 ([8eee744](https://github.com/cuttlefisch/mae/commit/8eee74465af45405789de19b1d006cc31de17535))
+
+### Refactor
+
+- Extract CollabState + ShellIntents sub-structs from Editor (30 fields) ([2e17808](https://github.com/cuttlefisch/mae/commit/2e17808effa410a0df0968817706336161b0a222))
+- Extract ViState + AiState sub-structs from Editor (75 fields) ([d344094](https://github.com/cuttlefisch/mae/commit/d3440949ff405bebebf739238339406c41f8e20c))
+- *(core)* Standardize test variable names to `editor` ([7561af3](https://github.com/cuttlefisch/mae/commit/7561af3133e179dbafadfd292567575491348a5c))
+- *(core)* Extract KbContext sub-struct from Editor (21 fields) ([19283ae](https://github.com/cuttlefisch/mae/commit/19283aee777ea0450e1fb50bdb0c4df21b00df34))
+
+### Testing
+
+- MCP protocol audit — 8 new tests + header guard + code-map precommit ([7867846](https://github.com/cuttlefisch/mae/commit/7867846bfed942ac47af74112996e4501dc82cbf))
+- Collab E2E — save round-trip, heartbeat, reconnect re-share ([ec5c06e](https://github.com/cuttlefisch/mae/commit/ec5c06eaa2231805f405aae842c387ab21038c41))
+- TCP E2E — offline reconnect resync + peer notifications ([a5ec70f](https://github.com/cuttlefisch/mae/commit/a5ec70fcdf8a717c26c2b4e139847d2b8ead1d44))
 
 ## [0.10.1] - 2026-05-15
 
@@ -31,9 +150,42 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.0] - 2026-05-15
 
+### Bug Fixes
+
+- Kernel dailies bindings + set-group-name Scheme API + introspect version ([d812323](https://github.com/cuttlefisch/mae/commit/d812323cc9ad6f643d4aaca10a3bdce412b24a41))
+- Audit fixes for sync/MCP push architecture ([9c7fd7e](https://github.com/cuttlefisch/mae/commit/9c7fd7e8224c19712a6564d0f9f125c732ac2bdc))
+
+### Features
+
+- KB node creation UX — org-roam parity (SPC n c, SPC n i) ([7d4a0f3](https://github.com/cuttlefisch/mae/commit/7d4a0f37c242e78f0906b2eb5479f60659fd6e58))
+- Replaceable window policy + buffer type audit (Doom real-buffer-p parity) ([eb751b9](https://github.com/cuttlefisch/mae/commit/eb751b909b86f259f1ca7b5264595c83194e9dfc))
+- Full property drawer parsing + schema v5 (Part 1) ([9f265cd](https://github.com/cuttlefisch/mae/commit/9f265cd63843bd1cd63c8204ad9eaa9e9fa26343))
+- Write-through safety — kb_write_guard anti-cascade (Part 2) ([2b7a0e5](https://github.com/cuttlefisch/mae/commit/2b7a0e5f72c3a13413a2486ccfc438d3d0d73a46))
+- Activity tracking + activity-sorted search (Part 3) ([b7da1be](https://github.com/cuttlefisch/mae/commit/b7da1be944a57e7f1014efd3c61d33266f8cd8be))
+- Org-dailies core — chain-fill, navigation, audit report (Part 4) ([40cd8d2](https://github.com/cuttlefisch/mae/commit/40cd8d22f0733af79a34aca0e41ebf3382338f33))
+- Dailies module — SPC n d keybindings + concept:dailies help node (Part 5) ([e23bd5a](https://github.com/cuttlefisch/mae/commit/e23bd5a26801a2db3021c3031865b37fae5e3cd7))
+- KB integrity pipeline — stale detection, link validation, orphan cleanup, metrics (Part 6) ([649790b](https://github.com/cuttlefisch/mae/commit/649790b979b94e8898c251c96a87866e0f90d72d))
+- Keymap flavor infrastructure + keybinding reference docs ([7064565](https://github.com/cuttlefisch/mae/commit/70645652636e018fa5d7b18098a28207f23a7a35))
+- Which-key scrolling, height config, sort order, group labels ([ca9170d](https://github.com/cuttlefisch/mae/commit/ca9170d15adde565246af1a919f081440dd08d55))
+- Server-client M1 — multi-client MCP, file safety, KB WAL, ADRs ([6d77970](https://github.com/cuttlefisch/mae/commit/6d77970315c6d39ed04590dc09a0e98e0626a98b))
+- Mae-sync crate — yrs CRDT text bridge + KB node schema (20 tests) ([a089796](https://github.com/cuttlefisch/mae/commit/a08979676db339ae5d554f59eb2d8ac88115822b))
+- Phase B — wire TextSync into Buffer for collaborative edits ([5f09553](https://github.com/cuttlefisch/mae/commit/5f09553f71a88e31abd4fd4150ad6eb1c58fb73c))
+- Phase C — MCP sync method handlers (pull-based) ([70c7811](https://github.com/cuttlefisch/mae/commit/70c7811cea80b3d9217528be5f1698e6d7b58d2b))
+- Phase D — push-based sync event broadcasting (11 tests) ([0bab9d2](https://github.com/cuttlefisch/mae/commit/0bab9d22081891845587ee8aef7329a1692badb6))
+- Generalize MCP transport for TCP + pub API for state-server ([32a4bf8](https://github.com/cuttlefisch/mae/commit/32a4bf8cae081d26152a5deb2580f013017d875b))
+- Mae-state-server — collaborative state server with WAL persistence ([56fbc71](https://github.com/cuttlefisch/mae/commit/56fbc7185b817c2bbf3d09b531f49e721634a020))
+
 ### Miscellaneous
 
+- Regenerate code map (new activity + properties APIs) ([27e1697](https://github.com/cuttlefisch/mae/commit/27e1697c3a5039f165ef28c625f856f36f41b271))
+- Regenerate code map (dailies + keymap_query APIs) ([ad1eac1](https://github.com/cuttlefisch/mae/commit/ad1eac109b93151f3c0b3ea126d5845da6a7b1dc))
+- Regenerate code map (KB integrity + keymap flavor APIs) ([0bd289e](https://github.com/cuttlefisch/mae/commit/0bd289ea3fee20d2da2e0a53179d67067053ef3b))
 - Bump version to 0.10.0 ([2d94d0e](https://github.com/cuttlefisch/mae/commit/2d94d0e12d22bcf111e9496b5e3222fc2d770e35))
+
+### Testing
+
+- Multi-client MCP integration tests ([b65e6c8](https://github.com/cuttlefisch/mae/commit/b65e6c860e19cf8dcb6735a4096e2df9196f7079))
+- Fill M1 hardening coverage gaps (9 new tests) ([f81c6bc](https://github.com/cuttlefisch/mae/commit/f81c6bc769f613fe412a6515dcc3f76096534dd4))
 
 ## [0.9.0] - 2026-05-14
 
@@ -55,8 +207,6 @@ All notable changes to this project will be documented in this file.
 - MCP client, tool search, model exam, verifier agent + fix shell buffer corruption ([8ac8803](https://github.com/cuttlefisch/mae/commit/8ac8803d1ae356401f51ea6618f072cad065f7cb))
 - Model exam persistence, docs refresh, CI fix ([496ef35](https://github.com/cuttlefisch/mae/commit/496ef35771248b46f79b4c79b24053bc37f0332b))
 - Unified test system (sandbox+grading) + LSP readiness probe ([bc201e9](https://github.com/cuttlefisch/mae/commit/bc201e9abe70b7ce337b03cec4c67857e9f2defe))
-- KB node creation UX — org-roam parity (SPC n c, SPC n i) ([7d4a0f3](https://github.com/cuttlefisch/mae/commit/7d4a0f37c242e78f0906b2eb5479f60659fd6e58))
-- Replaceable window policy + buffer type audit (Doom real-buffer-p parity) ([eb751b9](https://github.com/cuttlefisch/mae/commit/eb751b909b86f259f1ca7b5264595c83194e9dfc))
 
 ### Miscellaneous
 
