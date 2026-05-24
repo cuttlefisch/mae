@@ -761,6 +761,30 @@
         {
           "name": "runtime",
           "kind": "mod"
+        },
+        {
+          "name": "compiler",
+          "kind": "mod"
+        },
+        {
+          "name": "env",
+          "kind": "mod"
+        },
+        {
+          "name": "lisp_error",
+          "kind": "mod"
+        },
+        {
+          "name": "reader",
+          "kind": "mod"
+        },
+        {
+          "name": "value",
+          "kind": "mod"
+        },
+        {
+          "name": "vm",
+          "kind": "mod"
         }
       ]
     },

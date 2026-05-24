@@ -315,6 +315,12 @@ Source: `crates/scheme/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `runtime` | mod |
+| `compiler` | mod |
+| `env` | mod |
+| `lisp_error` | mod |
+| `reader` | mod |
+| `value` | mod |
+| `vm` | mod |
 
 ## mae-shell
 

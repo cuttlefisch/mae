@@ -1020,6 +1020,7 @@ fn run_gui(
 /// This is the Alacritty pattern: the event loop sleeps until an OS event
 /// *or* a proxy wakeup. No polling, no 16ms fallback sleep needed.
 #[cfg(feature = "gui")]
+#[allow(clippy::too_many_arguments)]
 async fn bridge_task(
     proxy: winit::event_loop::EventLoopProxy<gui_event::MaeEvent>,
     mut ai_rx: tokio::sync::mpsc::Receiver<AiEvent>,
