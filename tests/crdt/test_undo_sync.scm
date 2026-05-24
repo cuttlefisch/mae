@@ -18,6 +18,10 @@
       (lambda ()
         (should-contain (buffer-string) "line 1")))
 
+    (it-test "mark undo boundary"
+      (lambda ()
+        (buffer-undo-boundary)))
+
     (it-test "insert second line"
       (lambda ()
         (buffer-insert "line 2\n")))

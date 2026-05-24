@@ -2,6 +2,9 @@
 ;;;
 ;;; Validates that undo on a synced buffer properly reverts both the rope
 ;;; and the CRDT document, keeping them in sync.
+;;;
+;;; With capture_timeout_millis = u64::MAX, sequential inserts merge into
+;;; one undo item unless separated by an explicit boundary.
 
 (describe-group "Undo with sync"
   (lambda ()
@@ -15,6 +18,9 @@
     (it-test "verify first"
       (lambda ()
         (should-equal (buffer-string) "first")))
+    (it-test "mark undo boundary"
+      (lambda ()
+        (buffer-undo-boundary)))
     (it-test "insert second"
       (lambda ()
         (buffer-insert " second")))

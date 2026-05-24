@@ -307,7 +307,12 @@ impl TextSync {
         let origin = self.doc.client_id();
 
         let options = Options {
-            capture_timeout_millis: 0,
+            // Use u64::MAX so all edits within a vim undo group merge into
+            // one UndoManager item.  Explicit `undo_reset()` calls at group
+            // boundaries (end_undo_group, each normal-mode dispatch) separate
+            // items.  With 0 every transaction was a separate undo step,
+            // breaking vim's "undo all of insert mode" contract.
+            capture_timeout_millis: u64::MAX,
             tracked_origins: [origin.into()].into_iter().collect(),
             ..Default::default()
         };

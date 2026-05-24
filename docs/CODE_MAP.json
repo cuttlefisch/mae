@@ -1016,6 +1016,10 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "buffer-undo-boundary",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "switch-to-buffer",
       "source": "crates/scheme/src/runtime.rs"
     },

@@ -29,6 +29,19 @@ impl Editor {
     pub fn dispatch_builtin(&mut self, name: &str) -> bool {
         let _cmd_start = std::time::Instant::now();
         let _cmd_name = name;
+
+        // Mark a CRDT undo boundary before each dispatch so consecutive
+        // normal-mode operations become separate undo items.  Inside an
+        // explicit undo group (insert mode, compound ops) we skip this so
+        // all edits merge into one item.
+        {
+            let idx = self.active_buffer_idx();
+            let buf = &mut self.buffers[idx];
+            if !buf.in_undo_group() {
+                buf.sync_undo_boundary();
+            }
+        }
+
         let result = self.dispatch_builtin_inner(name);
         let elapsed_us = _cmd_start.elapsed().as_micros() as u64;
         self.perf_stats.record_command(_cmd_name, elapsed_us);

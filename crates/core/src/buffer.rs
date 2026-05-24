@@ -898,6 +898,19 @@ impl Buffer {
         // reset() is called in end_undo_group to mark the boundary.
     }
 
+    /// Whether we're inside a begin_undo_group/end_undo_group block.
+    pub fn in_undo_group(&self) -> bool {
+        self.undo_group_acc.is_some()
+    }
+
+    /// Mark a CRDT undo boundary on the active sync doc (if any).
+    /// Called at normal-mode dispatch boundaries to separate undo items.
+    pub fn sync_undo_boundary(&mut self) {
+        if let Some(sync) = &mut self.sync_doc {
+            sync.undo_reset();
+        }
+    }
+
     /// Flush the accumulated edits as a single undo entry.
     pub fn end_undo_group(&mut self) {
         if let Some(actions) = self.undo_group_acc.take() {
@@ -2811,9 +2824,9 @@ mod tests {
 
         // Undo should use CRDT path (not EditAction stack).
         buf.undo(&mut win);
-        // With capture_timeout=0, each insert is a separate undo item.
-        // UndoManager groups them by txn, and both inserts are separate txns.
-        assert!(buf.text().len() < 2, "at least one char undone");
+        // With capture_timeout=u64::MAX and no undo_reset between inserts,
+        // both chars merge into one undo item.  Undo removes both.
+        assert_eq!(buf.text(), "");
     }
 
     #[test]
@@ -2867,6 +2880,8 @@ mod tests {
         // A inserts "base\n"
         buf_a.insert_text_at(0, "base\n");
         buf_a.pending_sync_updates.clear();
+        // Explicit boundary so "base\n" and "from-A\n" are separate undo items.
+        buf_a.sync_undo_boundary();
 
         // Create B's doc with A's state
         let mut doc_b = mae_sync::text::TextSync::from_state_with_client_id(

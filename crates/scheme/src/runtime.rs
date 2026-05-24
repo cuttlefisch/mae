@@ -65,6 +65,8 @@ struct SharedState {
     pending_undo: bool,
     /// Pending redo
     pending_redo: bool,
+    /// Pending undo boundary (sync_undo_boundary)
+    pending_undo_boundary: bool,
     /// Pending switch-to-buffer index
     pending_switch_buffer: Option<usize>,
     /// Key removals: (keymap_name, key_string)
@@ -615,6 +617,14 @@ impl SchemeRuntime {
         let s = shared.clone();
         engine.register_fn("buffer-redo", move || {
             s.lock().unwrap().pending_redo = true;
+            SteelVal::Void
+        });
+
+        // (buffer-undo-boundary) — mark an explicit CRDT undo boundary.
+        // Subsequent edits start a new undo item.
+        let s = shared.clone();
+        engine.register_fn("buffer-undo-boundary", move || {
+            s.lock().unwrap().pending_undo_boundary = true;
             SteelVal::Void
         });
 
@@ -2543,6 +2553,13 @@ impl SchemeRuntime {
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].redo(win);
+        }
+
+        // (buffer-undo-boundary)
+        if state.pending_undo_boundary {
+            state.pending_undo_boundary = false;
+            let idx = editor.active_buffer_idx();
+            editor.buffers[idx].sync_undo_boundary();
         }
 
         // --- CRDT/sync operations ---

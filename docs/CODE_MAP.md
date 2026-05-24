@@ -411,6 +411,7 @@ Source: `crates/sync/src/lib.rs`
 | `buffer-replace-range` | `crates/scheme/src/runtime.rs` |
 | `buffer-undo` | `crates/scheme/src/runtime.rs` |
 | `buffer-redo` | `crates/scheme/src/runtime.rs` |
+| `buffer-undo-boundary` | `crates/scheme/src/runtime.rs` |
 | `switch-to-buffer` | `crates/scheme/src/runtime.rs` |
 | `undefine-key!` | `crates/scheme/src/runtime.rs` |
 | `set-group-name` | `crates/scheme/src/runtime.rs` |
