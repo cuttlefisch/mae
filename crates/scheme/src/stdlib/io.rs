@@ -3,16 +3,54 @@
 use std::rc::Rc;
 
 use crate::lisp_error::{Arity, LispError};
-use crate::value::{display_value, Value};
+use crate::value::{display_value, Port, Value};
 use crate::vm::Vm;
+
+/// Write a string to a port value.
+fn write_to_port(port_val: &Value, text: &str) -> Result<(), LispError> {
+    match port_val {
+        Value::Port(port_cell) => {
+            let mut port = port_cell.borrow_mut();
+            match &mut *port {
+                Port::StringOutput { buf } => {
+                    buf.push_str(text);
+                    Ok(())
+                }
+                Port::Stdout => {
+                    print!("{text}");
+                    Ok(())
+                }
+                Port::Stderr => {
+                    eprint!("{text}");
+                    Ok(())
+                }
+                Port::FileOutput { writer, .. } => {
+                    use std::io::Write;
+                    writer
+                        .write_all(text.as_bytes())
+                        .map_err(|e| LispError::internal(format!("write error: {e}")))?;
+                    Ok(())
+                }
+                _ => Err(LispError::type_error("output-port", "input-port")),
+            }
+        }
+        _ => Err(LispError::type_error("port", port_val.type_name())),
+    }
+}
 
 pub fn register(vm: &mut Vm) {
     vm.register_fn(
         "display",
         "Display value (human-readable, no quotes on strings)",
-        Arity::Fixed(1),
+        Arity::Variadic(1),
         |args| {
-            print!("{}", display_value(&args[0]));
+            let text = display_value(&args[0]);
+            if args.len() > 1 {
+                // Write to port
+                write_to_port(&args[1], &text)?;
+            } else {
+                print!("{text}");
+            }
             Ok(Value::Void)
         },
     );
@@ -20,15 +58,24 @@ pub fn register(vm: &mut Vm) {
     vm.register_fn(
         "write",
         "Write value (machine-readable, with quotes)",
-        Arity::Fixed(1),
+        Arity::Variadic(1),
         |args| {
-            print!("{}", args[0]);
+            let text = format!("{}", args[0]);
+            if args.len() > 1 {
+                write_to_port(&args[1], &text)?;
+            } else {
+                print!("{text}");
+            }
             Ok(Value::Void)
         },
     );
 
-    vm.register_fn("newline", "Print newline", Arity::Fixed(0), |_args| {
-        println!();
+    vm.register_fn("newline", "Print newline", Arity::Variadic(0), |args| {
+        if !args.is_empty() {
+            write_to_port(&args[0], "\n")?;
+        } else {
+            println!();
+        }
         Ok(Value::Void)
     });
 

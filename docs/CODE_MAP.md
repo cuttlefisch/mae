@@ -317,7 +317,9 @@ Source: `crates/scheme/src/lib.rs`
 | `runtime` | mod |
 | `compiler` | mod |
 | `env` | mod |
+| `library` | mod |
 | `lisp_error` | mod |
+| `macros` | mod |
 | `reader` | mod |
 | `stdlib` | mod |
 | `value` | mod |

@@ -8,11 +8,15 @@
 //! @stability: unstable (Phase 13)
 //! @since: 0.12.0
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::compiler::{CodeObject, Compiler, Op, UpvalueDesc};
+use std::collections::HashMap;
+
+use crate::compiler::{CodeObject, Compiler, MacroDef, Op, UpvalueDesc};
 use crate::env::Env;
+use crate::library::{self, LibraryRegistry};
 use crate::lisp_error::{Arity, LispError};
 use crate::reader;
 use crate::value::{CallFrame, Closure, Continuation, ForeignFn, Value};
@@ -47,9 +51,26 @@ pub struct Frame {
     /// Base pointer (start of locals on the value stack).
     pub bp: usize,
     /// Captured upvalues for this closure invocation.
-    pub upvalues: Vec<Value>,
+    pub upvalues: Vec<Rc<RefCell<Value>>>,
     /// Function name for stack traces.
     pub name: Option<String>,
+    /// Cells for locals that have been captured as upvalues.
+    /// Maps local index → shared cell. Ensures multiple closures
+    /// capturing the same local share the same mutable cell.
+    pub local_cells: HashMap<usize, Rc<RefCell<Value>>>,
+}
+
+/// An exception handler entry on the handler stack.
+#[derive(Clone, Debug)]
+struct ExceptionHandler {
+    /// Code offset to jump to when an exception is raised.
+    handler_ip: usize,
+    /// Code ID of the frame containing the handler.
+    code_id: usize,
+    /// Stack depth at time of PushHandler (restore on exception).
+    stack_depth: usize,
+    /// Frame depth at time of PushHandler.
+    frame_depth: usize,
 }
 
 /// The virtual machine.
@@ -64,6 +85,12 @@ pub struct Vm {
     pub code_pool: Vec<CodeObject>,
     /// Maximum stack depth (prevent infinite recursion crashes).
     max_frames: usize,
+    /// Macro definitions persisted across eval calls.
+    macros: HashMap<String, MacroDef>,
+    /// Library registry for the module system.
+    pub libraries: LibraryRegistry,
+    /// Exception handler stack.
+    handlers: Vec<ExceptionHandler>,
 }
 
 impl Vm {
@@ -74,6 +101,9 @@ impl Vm {
             globals: Env::new(),
             code_pool: Vec::new(),
             max_frames: 10_000,
+            macros: HashMap::new(),
+            libraries: LibraryRegistry::new(),
+            handlers: Vec::new(),
         }
     }
 
@@ -104,8 +134,31 @@ impl Vm {
             return Ok(Value::Void);
         }
 
+        // Pre-process top-level forms: handle import and define-library
+        // before compilation, as they affect the global environment.
+        let mut to_compile = Vec::new();
+        for datum in &datums {
+            if self.is_top_level_import(datum) {
+                self.process_import(datum)?;
+            } else if self.is_define_library(datum) {
+                self.process_define_library(datum)?;
+            } else {
+                to_compile.push(datum.clone());
+            }
+        }
+
+        if to_compile.is_empty() {
+            return Ok(Value::Void);
+        }
+
         let mut compiler = Compiler::new();
-        let code_id = compiler.compile_top_level(&datums)?;
+        // Seed compiler with macros from previous evals
+        compiler.macros = self.macros.clone();
+
+        let code_id = compiler.compile_top_level(&to_compile)?;
+
+        // Persist any new macro definitions back to the VM
+        self.macros = compiler.macros;
 
         // Merge compiled code into VM's pool
         let base = self.code_pool.len();
@@ -123,6 +176,133 @@ impl Vm {
         self.execute(base + code_id)
     }
 
+    /// Check if a datum is a top-level `(import ...)` form.
+    fn is_top_level_import(&self, datum: &Value) -> bool {
+        if let Ok(items) = datum.to_vec() {
+            if let Some(Value::Symbol(s)) = items.first() {
+                return s.name() == "import";
+            }
+        }
+        false
+    }
+
+    /// Check if a datum is a `(define-library ...)` form.
+    fn is_define_library(&self, datum: &Value) -> bool {
+        if let Ok(items) = datum.to_vec() {
+            if let Some(Value::Symbol(s)) = items.first() {
+                return s.name() == "define-library";
+            }
+        }
+        false
+    }
+
+    /// Process a top-level `(import <import-set> ...)` form.
+    /// Resolves each import set and binds imported names into globals.
+    fn process_import(&mut self, datum: &Value) -> Result<(), LispError> {
+        let items = datum
+            .to_vec()
+            .map_err(|_| LispError::syntax("import must be a list", format!("{datum}")))?;
+        let import_sets = library::parse_top_level_import(&items)?;
+
+        for import_set in &import_sets {
+            let lib = self.libraries.get(&import_set.library).ok_or_else(|| {
+                LispError::syntax(format!("unknown library: {}", import_set.library), "")
+            })?;
+            let resolved = library::resolve_import(import_set, lib)?;
+            for (name, value) in resolved {
+                self.globals.define(name, value);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Process a `(define-library ...)` form.
+    /// Evaluates the library body in a fresh scope and registers exports.
+    fn process_define_library(&mut self, datum: &Value) -> Result<(), LispError> {
+        let items = datum
+            .to_vec()
+            .map_err(|_| LispError::syntax("define-library must be a list", format!("{datum}")))?;
+        let lib_def = library::parse_define_library(&items)?;
+
+        // Check for circular dependency
+        if self.libraries.contains(&lib_def.name) {
+            return Err(LispError::syntax(
+                format!("library already defined: {}", lib_def.name),
+                "",
+            ));
+        }
+
+        // Process imports for the library
+        for import_set in &lib_def.imports {
+            let lib = self.libraries.get(&import_set.library).ok_or_else(|| {
+                LispError::syntax(
+                    format!(
+                        "library {} requires unknown library: {}",
+                        lib_def.name, import_set.library
+                    ),
+                    "",
+                )
+            })?;
+            let resolved = library::resolve_import(import_set, lib)?;
+            for (name, value) in resolved {
+                self.globals.define(name, value);
+            }
+        }
+
+        // Save globals before library body evaluation to isolate internal defs.
+        let saved_globals = self.globals.clone();
+
+        // Evaluate the library body
+        if !lib_def.body.is_empty() {
+            let mut compiler = Compiler::new();
+            compiler.macros = self.macros.clone();
+            let code_id = compiler.compile_top_level(&lib_def.body)?;
+            self.macros = compiler.macros;
+
+            let base = self.code_pool.len();
+            for mut code_obj in compiler.code_pool {
+                for op in &mut code_obj.ops {
+                    if let Op::MakeClosure(ref mut idx, _) = op {
+                        *idx += base;
+                    }
+                }
+                self.code_pool.push(code_obj);
+            }
+
+            self.execute(base + code_id)?;
+        }
+
+        // Collect exports from the global environment (includes library-defined bindings)
+        let mut exports = HashMap::new();
+        for (export_name, internal_name) in &lib_def.exports {
+            if let Some(value) = self.globals.get(internal_name) {
+                exports.insert(export_name.clone(), value.clone());
+            } else {
+                // Restore globals before returning error
+                self.globals = saved_globals;
+                return Err(LispError::syntax(
+                    format!(
+                        "library {}: exported name '{}' not defined",
+                        lib_def.name, internal_name
+                    ),
+                    "",
+                ));
+            }
+        }
+
+        // Restore globals — library body definitions don't leak into the global scope.
+        // Only exported bindings are available via (import ...).
+        self.globals = saved_globals;
+
+        self.libraries.register(library::Library {
+            name: lib_def.name,
+            exports,
+        });
+
+        Ok(())
+    }
+
     /// Execute a code object by index.
     fn execute(&mut self, code_id: usize) -> Result<Value, LispError> {
         // Push initial frame
@@ -132,6 +312,7 @@ impl Vm {
             bp: self.stack.len(),
             upvalues: Vec::new(),
             name: self.code_pool[code_id].name.clone(),
+            local_cells: HashMap::new(),
         });
 
         self.run()
@@ -199,9 +380,11 @@ impl Vm {
                     let val = self.stack.pop().unwrap_or(Value::Void);
                     let bp = self.frames.last().unwrap().bp;
                     let abs_idx = bp + idx;
-                    if abs_idx < self.stack.len() {
-                        self.stack[abs_idx] = val;
+                    // Extend stack if needed (internal defines create new locals)
+                    while abs_idx >= self.stack.len() {
+                        self.stack.push(Value::Undefined);
                     }
+                    self.stack[abs_idx] = val;
                 }
 
                 Op::LoadUpvalue(idx) => {
@@ -211,7 +394,7 @@ impl Vm {
                         .unwrap()
                         .upvalues
                         .get(idx)
-                        .cloned()
+                        .map(|cell| cell.borrow().clone())
                         .unwrap_or(Value::Undefined);
                     self.stack.push(val);
                 }
@@ -220,17 +403,21 @@ impl Vm {
                     let val = self.stack.pop().unwrap_or(Value::Void);
                     if let Some(frame) = self.frames.last_mut() {
                         if idx < frame.upvalues.len() {
-                            frame.upvalues[idx] = val;
+                            *frame.upvalues[idx].borrow_mut() = val;
                         }
                     }
                 }
 
                 Op::Call(argc) => {
-                    self.do_call(argc, false)?;
+                    if let Err(e) = self.do_call(argc, false) {
+                        self.handle_exception(e)?;
+                    }
                 }
 
                 Op::TailCall(argc) => {
-                    self.do_call(argc, true)?;
+                    if let Err(e) = self.do_call(argc, true) {
+                        self.handle_exception(e)?;
+                    }
                 }
 
                 Op::Return => {
@@ -271,29 +458,45 @@ impl Vm {
                         Arity::Fixed(code.arity)
                     };
 
-                    // Capture upvalues
-                    let mut upvalues = Vec::with_capacity(upvalue_descs.len());
+                    // Capture upvalues as shared mutable cells.
+                    // When capturing a local, check if it's already been captured
+                    // by another closure in the same scope (local_cells map).
+                    // If so, share the same cell so set! is visible to all.
+                    let mut upvalues: Vec<Rc<RefCell<Value>>> =
+                        Vec::with_capacity(upvalue_descs.len());
                     for desc in &upvalue_descs {
-                        let val = match desc {
+                        let cell = match desc {
                             UpvalueDesc::Local(idx) => {
-                                let bp = self.frames.last().unwrap().bp;
-                                let abs_idx = bp + idx;
-                                if abs_idx < self.stack.len() {
-                                    self.stack[abs_idx].clone()
+                                let frame = self.frames.last_mut().unwrap();
+                                if let Some(existing) = frame.local_cells.get(idx) {
+                                    // Reuse existing cell (shared mutation between
+                                    // closures in the same scope)
+                                    existing.clone()
                                 } else {
-                                    Value::Undefined
+                                    let bp = frame.bp;
+                                    let abs_idx = bp + idx;
+                                    let val = if abs_idx < self.stack.len() {
+                                        self.stack[abs_idx].clone()
+                                    } else {
+                                        Value::Undefined
+                                    };
+                                    let new_cell = Rc::new(RefCell::new(val));
+                                    frame.local_cells.insert(*idx, new_cell.clone());
+                                    new_cell
                                 }
                             }
-                            UpvalueDesc::Upvalue(idx) => self
-                                .frames
-                                .last()
-                                .unwrap()
-                                .upvalues
-                                .get(*idx)
-                                .cloned()
-                                .unwrap_or(Value::Undefined),
+                            UpvalueDesc::Upvalue(idx) => {
+                                // Share the same cell from the enclosing closure
+                                self.frames
+                                    .last()
+                                    .unwrap()
+                                    .upvalues
+                                    .get(*idx)
+                                    .cloned()
+                                    .unwrap_or_else(|| Rc::new(RefCell::new(Value::Undefined)))
+                            }
                         };
-                        upvalues.push(val);
+                        upvalues.push(cell);
                     }
 
                     let closure = Closure {
@@ -307,20 +510,42 @@ impl Vm {
                 }
 
                 Op::CaptureCc => {
+                    // CaptureCc is emitted before Call(1) by compile_call_cc.
+                    // We capture a continuation that, when invoked with a value,
+                    // restores state so the value becomes the result of the
+                    // call/cc expression (i.e., skipping the Call(1) that follows).
+                    //
+                    // The current frame IP has already advanced past CaptureCc.
+                    // The next instruction will be Call(1) or TailCall(1).
+                    // We need the continuation to skip that Call, so we advance
+                    // the captured IP by 1 more instruction.
+                    let mut captured_frames: Vec<CallFrame> = self
+                        .frames
+                        .iter()
+                        .map(|f| CallFrame {
+                            code_id: f.code_id,
+                            ip: f.ip,
+                            bp: f.bp,
+                            function_name: f.name.clone(),
+                        })
+                        .collect();
+
+                    // Advance the top frame's IP past the upcoming Call(1)/TailCall(1)
+                    if let Some(top) = captured_frames.last_mut() {
+                        top.ip += 1; // skip the Call(1) that follows CaptureCc
+                    }
+
+                    // Capture stack WITHOUT the function that's on top
+                    // (the fn is for Call(1) to consume, not part of the continuation)
+                    let fn_on_stack = self.stack.len(); // fn is at top
+                    let captured_stack = self.stack[..fn_on_stack - 1].to_vec();
+
                     let cont = Continuation {
-                        stack: self.stack.clone(),
-                        frames: self
-                            .frames
-                            .iter()
-                            .map(|f| CallFrame {
-                                code_id: f.code_id,
-                                ip: f.ip,
-                                bp: f.bp,
-                                function_name: f.name.clone(),
-                            })
-                            .collect(),
+                        stack: captured_stack,
+                        frames: captured_frames,
                         invoked: false,
                     };
+                    // Push continuation as argument to the function (for Call(1))
                     self.stack.push(Value::Continuation(Rc::new(cont)));
                 }
 
@@ -346,10 +571,102 @@ impl Vm {
 
                 Op::Nop => {}
 
-                Op::Apply | Op::Values | Op::CallWithValues => {
+                Op::Apply => {
+                    // Stack: [fn, args-list]
+                    let args_list = self.stack.pop().unwrap_or(Value::Void);
+                    let func = self.stack.pop().unwrap_or(Value::Void);
+
+                    // Convert the args list to a vector
+                    let mut args = Vec::new();
+                    let mut current = args_list;
+                    loop {
+                        match current {
+                            Value::Pair(pair) => {
+                                args.push(pair.0.clone());
+                                current = pair.1.clone();
+                            }
+                            Value::Null => break,
+                            Value::Void => break,
+                            _ => {
+                                return Err(LispError::type_error(
+                                    "proper list",
+                                    current.type_name(),
+                                ));
+                            }
+                        }
+                    }
+
+                    // Push function and args onto stack, then call
+                    let argc = args.len();
+                    self.stack.push(func);
+                    for a in args {
+                        self.stack.push(a);
+                    }
+                    self.do_call(argc, false)?;
+                }
+
+                Op::PushHandler(offset) => {
+                    let frame = self.frames.last().unwrap();
+                    let handler_ip = (frame.ip as i32 + offset) as usize;
+                    self.handlers.push(ExceptionHandler {
+                        handler_ip,
+                        code_id: frame.code_id,
+                        stack_depth: self.stack.len(),
+                        frame_depth: self.frames.len(),
+                    });
+                }
+
+                Op::PopHandler => {
+                    self.handlers.pop();
+                }
+
+                Op::Raise => {
+                    let exception = self.stack.pop().unwrap_or(Value::Void);
+                    if let Some(handler) = self.handlers.pop() {
+                        // Unwind stack and frames to handler's state
+                        self.stack.truncate(handler.stack_depth);
+                        self.frames.truncate(handler.frame_depth);
+                        // Push exception value for the handler code
+                        self.stack.push(exception);
+                        // Jump to handler
+                        if let Some(frame) = self.frames.last_mut() {
+                            frame.ip = handler.handler_ip;
+                            frame.code_id = handler.code_id;
+                        }
+                    } else {
+                        // No handler — convert to Rust error
+                        let msg = match &exception {
+                            Value::String(s) => s.to_string(),
+                            other => format!("{other}"),
+                        };
+                        return Err(LispError::internal(format!("unhandled exception: {msg}")));
+                    }
+                }
+
+                Op::Values | Op::CallWithValues => {
                     return Err(LispError::internal(format!("unimplemented opcode: {op:?}")));
                 }
             }
+        }
+    }
+
+    /// Handle a Rust-level error by dispatching to exception handlers or propagating.
+    fn handle_exception(&mut self, err: LispError) -> Result<(), LispError> {
+        if let Some(handler) = self.handlers.pop() {
+            // Unwind to handler state
+            self.stack.truncate(handler.stack_depth);
+            self.frames.truncate(handler.frame_depth);
+            // Push the error message as the exception value
+            let exception = Value::string(err.message());
+            self.stack.push(exception);
+            // Jump to handler code
+            if let Some(frame) = self.frames.last_mut() {
+                frame.ip = handler.handler_ip;
+                frame.code_id = handler.code_id;
+            }
+            Ok(())
+        } else {
+            Err(err)
         }
     }
 
@@ -418,6 +735,7 @@ impl Vm {
                         };
                     frame.upvalues = closure.upvalues.clone();
                     frame.name = closure.name.clone();
+                    frame.local_cells.clear(); // Reset for new invocation
 
                     // Fix bp: it should be the start of args on the stack
                     frame.bp = self.stack.len()
@@ -459,6 +777,7 @@ impl Vm {
                         bp,
                         upvalues: closure.upvalues.clone(),
                         name: closure.name.clone(),
+                        local_cells: HashMap::new(),
                     });
                 }
             }
@@ -488,6 +807,7 @@ impl Vm {
                         ip: cf.ip,
                         bp: cf.bp,
                         upvalues: Vec::new(),
+                        local_cells: HashMap::new(),
                         name: cf.function_name.clone(),
                     })
                     .collect();
@@ -1075,5 +1395,133 @@ mod tests {
              (fold + 0 '(1 2 3 4 5))",
         );
         assert_eq!(result, Value::Int(15));
+    }
+
+    // --- Module system ---
+
+    #[test]
+    fn test_define_library_and_import() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (test math)
+               (export square cube)
+               (begin
+                 (define (square x) (* x x))
+                 (define (cube x) (* x x x))))",
+        )
+        .unwrap();
+        vm.eval("(import (test math))").unwrap();
+        assert_eq!(vm.eval("(square 5)").unwrap(), Value::Int(25));
+        assert_eq!(vm.eval("(cube 3)").unwrap(), Value::Int(27));
+    }
+
+    #[test]
+    fn test_import_only() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (test stuff)
+               (export a b c)
+               (begin
+                 (define a 1) (define b 2) (define c 3)))",
+        )
+        .unwrap();
+        vm.eval("(import (only (test stuff) a c))").unwrap();
+        assert_eq!(vm.eval("a").unwrap(), Value::Int(1));
+        assert_eq!(vm.eval("c").unwrap(), Value::Int(3));
+        // b should not be imported
+        assert!(vm.eval("b").is_err());
+    }
+
+    #[test]
+    fn test_import_rename() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (test stuff)
+               (export a)
+               (begin (define a 42)))",
+        )
+        .unwrap();
+        vm.eval("(import (rename (test stuff) (a my-a)))").unwrap();
+        assert_eq!(vm.eval("my-a").unwrap(), Value::Int(42));
+    }
+
+    #[test]
+    fn test_import_prefix() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (test stuff)
+               (export x)
+               (begin (define x 99)))",
+        )
+        .unwrap();
+        vm.eval("(import (prefix (test stuff) t:))").unwrap();
+        assert_eq!(vm.eval("t:x").unwrap(), Value::Int(99));
+    }
+
+    #[test]
+    fn test_library_export_rename() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (test rename)
+               (export (rename internal-fn public-fn))
+               (begin (define (internal-fn x) (+ x 1))))",
+        )
+        .unwrap();
+        vm.eval("(import (test rename))").unwrap();
+        assert_eq!(vm.eval("(public-fn 10)").unwrap(), Value::Int(11));
+    }
+
+    #[test]
+    fn test_library_depends_on_library() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (base-lib)
+               (export add1)
+               (begin (define (add1 x) (+ x 1))))",
+        )
+        .unwrap();
+        vm.eval(
+            "(define-library (higher-lib)
+               (export add2)
+               (import (base-lib))
+               (begin (define (add2 x) (add1 (add1 x)))))",
+        )
+        .unwrap();
+        vm.eval("(import (higher-lib))").unwrap();
+        assert_eq!(vm.eval("(add2 10)").unwrap(), Value::Int(12));
+    }
+
+    #[test]
+    fn test_unknown_library_error() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        let err = vm.eval("(import (nonexistent lib))").unwrap_err();
+        assert!(err.message().contains("unknown library"));
+    }
+
+    #[test]
+    fn test_duplicate_library_error() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (dup)
+               (export a)
+               (begin (define a 1)))",
+        )
+        .unwrap();
+        let err = vm
+            .eval(
+                "(define-library (dup)
+               (export b)
+               (begin (define b 2)))",
+            )
+            .unwrap_err();
+        assert!(err.message().contains("already defined"));
     }
 }

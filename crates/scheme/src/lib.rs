@@ -12,7 +12,9 @@ pub mod runtime;
 // Phase 13: mae-scheme R7RS-small runtime (building alongside Steel)
 pub mod compiler;
 pub mod env;
+pub mod library;
 pub mod lisp_error;
+pub mod macros;
 pub mod reader;
 pub mod stdlib;
 pub mod value;

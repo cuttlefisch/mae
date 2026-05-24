@@ -18,6 +18,8 @@ pub fn register(vm: &mut Vm) {
     register_control(vm);
     register_exceptions(vm);
     register_type_predicates(vm);
+    register_list_ops(vm);
+    register_extra_numeric(vm);
 }
 
 // -- §6.1 Equivalence predicates --
@@ -256,11 +258,30 @@ fn register_arithmetic(vm: &mut Vm) {
 
     vm.register_fn(
         "round",
-        "Round to nearest integer",
+        "Round to nearest integer (banker's rounding: half to even)",
         Arity::Fixed(1),
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(*n)),
-            Value::Float(f) => Ok(Value::Int(f.round() as i64)),
+            Value::Float(f) => {
+                // R7RS requires banker's rounding (round half to even)
+                let rounded = {
+                    let v = *f;
+                    let floor = v.floor();
+                    let frac = v - floor;
+                    if (frac - 0.5).abs() < f64::EPSILON {
+                        // Exactly halfway — round to even
+                        let fl = floor as i64;
+                        if fl % 2 == 0 {
+                            fl
+                        } else {
+                            fl + 1
+                        }
+                    } else {
+                        v.round() as i64
+                    }
+                };
+                Ok(Value::Int(rounded))
+            }
             _ => Err(LispError::type_error("number", format!("{}", args[0]))),
         },
     );
@@ -799,6 +820,128 @@ fn register_control(vm: &mut Vm) {
             }
         },
     );
+
+    // call-with-values: since our `values` returns a list for multiple values,
+    // we apply the consumer to the list elements.
+    vm.register_fn(
+        "call-with-values",
+        "Call consumer with values from producer",
+        Arity::Fixed(2),
+        |_args| {
+            Err(LispError::internal(
+                "call-with-values requires VM-level implementation",
+            ))
+        },
+    );
+}
+
+// -- §6.10 Higher-order list operations --
+
+fn register_list_ops(vm: &mut Vm) {
+    // map and for-each require calling Scheme closures, so they're
+    // implemented as Scheme code rather than foreign functions.
+    // This follows the Chibi-Scheme pattern (init-7.scm).
+    let bootstrap = r#"
+        (define (map f lst)
+          (if (null? lst)
+              '()
+              (cons (f (car lst)) (map f (cdr lst)))))
+
+        (define (for-each f lst)
+          (if (null? lst)
+              (void)
+              (begin (f (car lst)) (for-each f (cdr lst)))))
+
+        (define (filter pred lst)
+          (cond ((null? lst) '())
+                ((pred (car lst)) (cons (car lst) (filter pred (cdr lst))))
+                (else (filter pred (cdr lst)))))
+
+        (define (fold-left f init lst)
+          (if (null? lst)
+              init
+              (fold-left f (f init (car lst)) (cdr lst))))
+
+        (define (fold-right f init lst)
+          (if (null? lst)
+              init
+              (f (car lst) (fold-right f init (cdr lst)))))
+
+        (define (call-with-values producer consumer)
+          (let ((vals (producer)))
+            (if (list? vals)
+                (apply consumer vals)
+                (consumer vals))))
+    "#;
+    vm.eval(bootstrap)
+        .unwrap_or_else(|e| panic!("failed to bootstrap list ops: {e}"));
+}
+
+// -- §6.2 Additional numeric operations --
+
+fn register_extra_numeric(vm: &mut Vm) {
+    vm.register_fn(
+        "gcd",
+        "Greatest common divisor",
+        Arity::Variadic(0),
+        |args| {
+            if args.is_empty() {
+                return Ok(Value::Int(0));
+            }
+            let mut result = args[0].as_int()?.unsigned_abs();
+            for arg in &args[1..] {
+                let b = arg.as_int()?.unsigned_abs();
+                result = gcd_u64(result, b);
+            }
+            Ok(Value::Int(result as i64))
+        },
+    );
+
+    vm.register_fn("lcm", "Least common multiple", Arity::Variadic(0), |args| {
+        if args.is_empty() {
+            return Ok(Value::Int(1));
+        }
+        let mut result = args[0].as_int()?.unsigned_abs();
+        for arg in &args[1..] {
+            let b = arg.as_int()?.unsigned_abs();
+            if result == 0 || b == 0 {
+                result = 0;
+            } else {
+                result = result / gcd_u64(result, b) * b;
+            }
+        }
+        Ok(Value::Int(result as i64))
+    });
+
+    vm.register_fn("expt", "Raise to power", Arity::Fixed(2), |args| {
+        let base = require_f64(&args[0])?;
+        let exp = require_f64(&args[1])?;
+        let result = base.powf(exp);
+        if args[0].is_exact() && args[1].is_exact() && exp >= 0.0 && exp == exp.floor() {
+            Ok(Value::Int(result as i64))
+        } else {
+            Ok(Value::Float(result))
+        }
+    });
+
+    vm.register_fn("sqrt", "Square root", Arity::Fixed(1), |args| {
+        let n = require_f64(&args[0])?;
+        let result = n.sqrt();
+        if args[0].is_exact() && result == result.floor() && result >= 0.0 {
+            Ok(Value::Int(result as i64))
+        } else {
+            Ok(Value::Float(result))
+        }
+    });
+}
+
+fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
 }
 
 // -- §6.11 Exceptions --
@@ -1023,7 +1166,7 @@ mod tests {
     fn test_rounding() {
         assert_eq!(eval("(floor 2.7)"), Value::Int(2));
         assert_eq!(eval("(ceiling 2.3)"), Value::Int(3));
-        assert_eq!(eval("(round 2.5)"), Value::Int(3));
+        assert_eq!(eval("(round 2.5)"), Value::Int(2)); // banker's rounding (R7RS)
         assert_eq!(eval("(truncate -2.7)"), Value::Int(-2));
     }
 

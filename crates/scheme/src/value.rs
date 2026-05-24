@@ -196,8 +196,8 @@ impl fmt::Debug for ForeignFn {
 pub struct Closure {
     /// Index into the code pool.
     pub code_id: usize,
-    /// Captured upvalues from enclosing scope.
-    pub upvalues: Vec<Value>,
+    /// Captured upvalues from enclosing scope (mutable cells for set! support).
+    pub upvalues: Vec<Rc<RefCell<Value>>>,
     /// Arity for argument checking.
     pub arity: Arity,
     /// Name (for debugging/describe-function).
@@ -334,6 +334,22 @@ impl Value {
                 Value::Null => return true,
                 Value::Pair(p) => cur = p.1.clone(),
                 _ => return false,
+            }
+        }
+    }
+
+    /// Convert a Scheme list to a Vec of Values. Returns None for non-lists.
+    pub fn to_list(&self) -> Option<Vec<Value>> {
+        let mut result = Vec::new();
+        let mut cur = self.clone();
+        loop {
+            match cur {
+                Value::Null => return Some(result),
+                Value::Pair(p) => {
+                    result.push(p.0.clone());
+                    cur = p.1.clone();
+                }
+                _ => return None,
             }
         }
     }
@@ -508,6 +524,11 @@ impl Value {
             }
             _ => self.is_eqv(other),
         }
+    }
+
+    /// Check if this is an exact number (integer).
+    pub fn is_exact(&self) -> bool {
+        matches!(self, Value::Int(_))
     }
 
     /// Returns true only for `#f`.
@@ -695,8 +716,8 @@ impl Trace for Value {
                 }
             }
             Value::Closure(c) => {
-                for val in &c.upvalues {
-                    tracer.trace_value(val);
+                for cell in &c.upvalues {
+                    tracer.trace_value(&cell.borrow());
                 }
             }
             Value::Continuation(cont) => {

@@ -226,9 +226,9 @@ fmt:
 fmt-check:
 	$(CARGO) fmt -- --check
 
-## clippy: run linter across the whole workspace
+## clippy: run linter across the whole workspace (matches CI + pre-commit hook)
 clippy:
-	$(CARGO) clippy $(FEAT_FLAG) -- -D warnings
+	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 ## ci: run the full CI pipeline locally (fmt + clippy + check + test + scheme tests)
 ci: fmt-check

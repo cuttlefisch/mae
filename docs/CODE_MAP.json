@@ -771,7 +771,15 @@
           "kind": "mod"
         },
         {
+          "name": "library",
+          "kind": "mod"
+        },
+        {
           "name": "lisp_error",
+          "kind": "mod"
+        },
+        {
+          "name": "macros",
           "kind": "mod"
         },
         {
