@@ -66,7 +66,7 @@ impl BufferMode for BufferKind {
         match self {
             Self::Text => "Text",
             Self::Conversation => "Conversation",
-            Self::Help => "Help",
+            Self::Kb => "Help",
             Self::Messages => "Messages",
             Self::Debug => "Debug",
             Self::GitStatus => "Git Status",
@@ -87,7 +87,7 @@ impl BufferMode for BufferKind {
         match self {
             Self::GitStatus => Some("git-status"),
             Self::FileTree => Some("file-tree"),
-            Self::Help => Some("help"),
+            Self::Kb => Some("help"),
             Self::Debug => Some("debug"),
             Self::Agenda => Some("agenda"),
             Self::Shell => Some("shell-normal"),
@@ -131,19 +131,19 @@ impl BufferMode for BufferKind {
 
     fn markup_flavor(&self) -> Option<crate::syntax::MarkupFlavor> {
         match self {
-            Self::Help | Self::Conversation => Some(crate::syntax::MarkupFlavor::Markdown),
+            Self::Kb | Self::Conversation => Some(crate::syntax::MarkupFlavor::Markdown),
             _ => None,
         }
     }
 
     fn normal_mode_only(&self) -> bool {
-        matches!(self, Self::Dashboard | Self::Modules | Self::Help)
+        matches!(self, Self::Dashboard | Self::Modules | Self::Kb)
     }
 
     fn read_only(&self) -> bool {
         matches!(
             self,
-            Self::Help
+            Self::Kb
                 | Self::Messages
                 | Self::Debug
                 | Self::Dashboard
@@ -158,7 +158,7 @@ impl BufferMode for BufferKind {
     }
 
     fn default_word_wrap(&self) -> bool {
-        matches!(self, Self::Conversation | Self::Help | Self::Messages)
+        matches!(self, Self::Conversation | Self::Kb | Self::Messages)
     }
 }
 
@@ -170,7 +170,7 @@ mod tests {
     fn buffer_mode_read_only() {
         assert!(!BufferKind::Text.read_only());
         assert!(!BufferKind::Conversation.read_only());
-        assert!(BufferKind::Help.read_only());
+        assert!(BufferKind::Kb.read_only());
         assert!(BufferKind::Messages.read_only());
         assert!(BufferKind::Debug.read_only());
         assert!(BufferKind::Dashboard.read_only());
@@ -185,7 +185,7 @@ mod tests {
     fn buffer_mode_keymap() {
         assert_eq!(BufferKind::GitStatus.keymap_name(), Some("git-status"));
         assert_eq!(BufferKind::FileTree.keymap_name(), Some("file-tree"));
-        assert_eq!(BufferKind::Help.keymap_name(), Some("help"));
+        assert_eq!(BufferKind::Kb.keymap_name(), Some("help"));
         assert_eq!(BufferKind::Debug.keymap_name(), Some("debug"));
         assert_eq!(BufferKind::Shell.keymap_name(), Some("shell-normal"));
         assert_eq!(BufferKind::ShellSelect.keymap_name(), Some("shell-select"));
@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn buffer_mode_word_wrap() {
         assert!(BufferKind::Conversation.default_word_wrap());
-        assert!(BufferKind::Help.default_word_wrap());
+        assert!(BufferKind::Kb.default_word_wrap());
         assert!(BufferKind::Messages.default_word_wrap());
         assert!(!BufferKind::Text.default_word_wrap());
         assert!(!BufferKind::Shell.default_word_wrap());
@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn buffer_mode_has_gutter() {
         assert!(BufferKind::Text.has_gutter());
-        assert!(BufferKind::Help.has_gutter());
+        assert!(BufferKind::Kb.has_gutter());
         assert!(BufferKind::GitStatus.has_gutter());
         assert!(!BufferKind::Conversation.has_gutter());
         assert!(!BufferKind::Messages.has_gutter());
@@ -263,10 +263,7 @@ mod tests {
     #[test]
     fn buffer_mode_markup_flavor() {
         use crate::syntax::MarkupFlavor;
-        assert_eq!(
-            BufferKind::Help.markup_flavor(),
-            Some(MarkupFlavor::Markdown)
-        );
+        assert_eq!(BufferKind::Kb.markup_flavor(), Some(MarkupFlavor::Markdown));
         assert_eq!(
             BufferKind::Conversation.markup_flavor(),
             Some(MarkupFlavor::Markdown)
@@ -296,7 +293,7 @@ mod tests {
         assert!(BufferKind::Dashboard.normal_mode_only());
         assert!(BufferKind::Modules.normal_mode_only());
         assert!(!BufferKind::Text.normal_mode_only());
-        assert!(BufferKind::Help.normal_mode_only());
+        assert!(BufferKind::Kb.normal_mode_only());
         assert!(!BufferKind::GitStatus.normal_mode_only());
         assert!(!BufferKind::Shell.normal_mode_only());
     }

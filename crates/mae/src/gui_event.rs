@@ -27,4 +27,6 @@ pub enum MaeEvent {
     /// Idle tick — fired when no input received for ~100ms.
     /// Used for deferred background work (syntax reparse, swap files).
     IdleTick,
+    /// A collaborative editing event from the collab background task.
+    CollabEvent(crate::collab_bridge::CollabEvent),
 }

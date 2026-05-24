@@ -129,7 +129,7 @@ impl Editor {
                             format!("tutorial:{}", topic),
                             format!("category:{}", topic),
                         ];
-                        let found = candidates.iter().find(|id| self.kb.contains(id));
+                        let found = candidates.iter().find(|id| self.kb.primary.contains(id));
                         match found {
                             Some(id) => self.open_help_at(id),
                             None => self.set_status(format!("No help for: {}", topic)),
@@ -144,7 +144,7 @@ impl Editor {
                     return true;
                 };
                 let id = format!("cmd:{}", name);
-                if self.kb.contains(&id) {
+                if self.kb.primary.contains(&id) {
                     self.open_help_at(&id);
                 } else {
                     self.set_status(format!("Unknown command: {}", name));
@@ -172,7 +172,7 @@ impl Editor {
                 match args.map(str::trim).filter(|s| !s.is_empty()) {
                     None => self.set_status("Usage: :kb-ingest <directory>"),
                     Some(dir) => {
-                        let report = self.kb.ingest_org_dir(dir);
+                        let report = self.kb.primary.ingest_org_dir(dir);
                         self.set_status(format!(
                             "kb: indexed {}, skipped {} (no :ID:), errors {}",
                             report.indexed,
@@ -253,10 +253,12 @@ impl Editor {
                 self.dispatch_path_op(
                     args,
                     "kb-save",
-                    |ed, p| {
-                        ed.kb
+                    |editor, p| {
+                        editor
+                            .kb
+                            .primary
                             .save_to_sqlite(p)
-                            .map(|()| ed.kb.len())
+                            .map(|()| editor.kb.primary.len())
                             .map_err(|e| format!("kb save failed: {}", e))
                     },
                     "Saved",
@@ -268,8 +270,10 @@ impl Editor {
                 self.dispatch_path_op(
                     args,
                     "kb-load",
-                    |ed, p| {
-                        ed.kb
+                    |editor, p| {
+                        editor
+                            .kb
+                            .primary
                             .load_from_sqlite(p)
                             .map_err(|e| format!("kb load failed: {}", e))
                     },
@@ -463,7 +467,7 @@ impl Editor {
             "agent-setup" => {
                 match args.map(str::trim).filter(|s| !s.is_empty()) {
                     Some(name) => {
-                        self.pending_agent_setup = Some(name.to_string());
+                        self.ai.pending_agent_setup = Some(name.to_string());
                     }
                     None => {
                         self.set_status(
@@ -474,7 +478,7 @@ impl Editor {
                 true
             }
             "agent-list" => {
-                self.pending_agent_setup = Some("__list__".to_string());
+                self.ai.pending_agent_setup = Some("__list__".to_string());
                 true
             }
             "read" | "r" => {
@@ -718,7 +722,7 @@ impl Editor {
                         // Try to find the option and open its KB node
                         if let Some((_, def)) = self.get_option(n) {
                             let id = format!("option:{}", def.name);
-                            if self.kb.contains(&id) {
+                            if self.kb.primary.contains(&id) {
                                 self.open_help_at(&id);
                             } else {
                                 // Fallback: show inline
@@ -771,11 +775,23 @@ impl Editor {
                 true
             }
             "ai-save" => {
-                self.dispatch_path_op(args, "ai-save", |ed, p| ed.ai_save(p), "Saved", "to");
+                self.dispatch_path_op(
+                    args,
+                    "ai-save",
+                    |editor, p| editor.ai_save(p),
+                    "Saved",
+                    "to",
+                );
                 true
             }
             "ai-load" => {
-                self.dispatch_path_op(args, "ai-load", |ed, p| ed.ai_load(p), "Loaded", "from");
+                self.dispatch_path_op(
+                    args,
+                    "ai-load",
+                    |editor, p| editor.ai_load(p),
+                    "Loaded",
+                    "from",
+                );
                 true
             }
             "ai-set-mode" => {
@@ -854,7 +870,7 @@ impl Editor {
                 let expression = args.unwrap_or("").trim();
                 if expression.is_empty() {
                     self.set_status("Usage: :debug-eval <expression>");
-                } else if self.debug_state.is_none() {
+                } else if self.dap.state.is_none() {
                     self.set_status("No active debug session");
                 } else {
                     self.dap_evaluate(expression, None, Some("repl"));
@@ -957,7 +973,7 @@ impl Editor {
                 self.dispatch_path_op(
                     args,
                     "record-save",
-                    |ed, p| ed.event_recorder.save(p),
+                    |editor, p| editor.event_recorder.save(p),
                     "Saved",
                     "to",
                 );
@@ -1052,6 +1068,17 @@ impl Editor {
                         return true;
                     }
                 }
+                // collab-join with a doc name argument: join directly.
+                if command == "collab-join" {
+                    if let Some(doc_name) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                        self.collab.pending_intent = Some(super::CollabIntent::JoinDoc {
+                            doc_id: doc_name.to_string(),
+                        });
+                        self.set_status(format!("Joining: {}...", doc_name));
+                        return true;
+                    }
+                    // No arg: open palette picker (falls through to dispatch_builtin)
+                }
                 // Final fallback: dispatch any registered builtin command by
                 // name. This lets `:debug-stop`, `:debug-continue`, etc. work
                 // without explicit `:`-arms, and is the foundation for making
@@ -1107,12 +1134,22 @@ impl Editor {
                             self.set_status("No write since last change (add ! to override)");
                             return true;
                         }
-                    } else if !force && self.active_buffer().modified {
-                        self.set_status("No write since last change (add ! to override)");
-                        return true;
+                        self.on_quit();
+                        self.running = false;
+                    } else {
+                        // :q without ! — close current window if multiple exist
+                        if !force && self.active_buffer().modified {
+                            self.set_status("No write since last change (add ! to override)");
+                            return true;
+                        }
+                        if self.window_mgr.window_count() > 1 {
+                            // Close focused window, don't exit the editor
+                            self.dispatch_builtin("close-window");
+                        } else {
+                            self.on_quit();
+                            self.running = false;
+                        }
                     }
-                    self.on_quit();
-                    self.running = false;
                 }
             }
         }
@@ -1156,47 +1193,47 @@ mod tests {
 
     #[test]
     fn debug_start_command_without_args_shows_usage() {
-        let mut ed = Editor::new();
-        ed.execute_command("debug-start");
-        assert!(ed.status_msg.to_lowercase().contains("usage"));
-        assert!(ed.pending_dap_intents.is_empty());
+        let mut editor = Editor::new();
+        editor.execute_command("debug-start");
+        assert!(editor.status_msg.to_lowercase().contains("usage"));
+        assert!(editor.dap.pending_intents.is_empty());
     }
 
     #[test]
     fn debug_start_command_queues_intent() {
-        let mut ed = Editor::new();
-        ed.execute_command("debug-start lldb /bin/ls");
-        assert_eq!(ed.pending_dap_intents.len(), 1);
+        let mut editor = Editor::new();
+        editor.execute_command("debug-start lldb /bin/ls");
+        assert_eq!(editor.dap.pending_intents.len(), 1);
     }
 
     #[test]
     fn debug_start_command_unknown_adapter_sets_status() {
-        let mut ed = Editor::new();
-        ed.execute_command("debug-start bogus /bin/ls");
-        assert!(ed.status_msg.contains("Unknown adapter"));
-        assert!(ed.pending_dap_intents.is_empty());
+        let mut editor = Editor::new();
+        editor.execute_command("debug-start bogus /bin/ls");
+        assert!(editor.status_msg.contains("Unknown adapter"));
+        assert!(editor.dap.pending_intents.is_empty());
     }
 
     #[test]
     fn ai_save_without_args_shows_usage() {
-        let mut ed = Editor::new();
-        ed.execute_command("ai-save");
-        assert!(ed.status_msg.to_lowercase().contains("usage"));
+        let mut editor = Editor::new();
+        editor.execute_command("ai-save");
+        assert!(editor.status_msg.to_lowercase().contains("usage"));
     }
 
     #[test]
     fn ai_save_without_conversation_sets_error() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        ed.execute_command(&format!("ai-save {}", tmp.path().display()));
-        assert!(ed.status_msg.contains("No conversation"));
+        editor.execute_command(&format!("ai-save {}", tmp.path().display()));
+        assert!(editor.status_msg.contains("No conversation"));
     }
 
     #[test]
     fn ai_load_without_args_shows_usage() {
-        let mut ed = Editor::new();
-        ed.execute_command("ai-load");
-        assert!(ed.status_msg.to_lowercase().contains("usage"));
+        let mut editor = Editor::new();
+        editor.execute_command("ai-load");
+        assert!(editor.status_msg.to_lowercase().contains("usage"));
     }
 
     #[test]
@@ -1204,34 +1241,37 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("conv.json");
 
-        let mut ed = Editor::new();
-        ed.open_conversation_buffer();
-        ed.conversation_mut().unwrap().push_user("round-trip");
+        let mut editor = Editor::new();
+        editor.open_conversation_buffer();
+        editor.conversation_mut().unwrap().push_user("round-trip");
 
-        ed.execute_command(&format!("ai-save {}", path.display()));
-        assert!(ed.status_msg.contains("Saved 1 entries"));
+        editor.execute_command(&format!("ai-save {}", path.display()));
+        assert!(editor.status_msg.contains("Saved 1 entries"));
         assert!(std::fs::read_to_string(&path)
             .unwrap()
             .contains("round-trip"));
 
         // Mutate, then reload: load must replace, not merge.
-        ed.conversation_mut().unwrap().push_user("to-be-replaced");
-        assert_eq!(ed.conversation().unwrap().entries.len(), 2);
+        editor
+            .conversation_mut()
+            .unwrap()
+            .push_user("to-be-replaced");
+        assert_eq!(editor.conversation().unwrap().entries.len(), 2);
 
-        ed.execute_command(&format!("ai-load {}", path.display()));
-        assert!(ed.status_msg.contains("Loaded 1 entries"));
-        assert_eq!(ed.conversation().unwrap().entries.len(), 1);
+        editor.execute_command(&format!("ai-load {}", path.display()));
+        assert!(editor.status_msg.contains("Loaded 1 entries"));
+        assert_eq!(editor.conversation().unwrap().entries.len(), 1);
     }
 
     #[test]
     fn read_command_shell_inserts_output() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         // Put some content in the buffer so cursor is on a real line
-        ed.active_buffer_mut().insert_text_at(0, "first line\n");
-        ed.execute_command("read !echo hello");
-        let content = ed.active_buffer().rope().to_string();
+        editor.active_buffer_mut().insert_text_at(0, "first line\n");
+        editor.execute_command("read !echo hello");
+        let content = editor.active_buffer().rope().to_string();
         assert!(content.contains("hello"), "content was: {}", content);
-        assert!(ed.status_msg.contains("1 lines inserted"));
+        assert!(editor.status_msg.contains("1 lines inserted"));
     }
 
     #[test]
@@ -1239,28 +1279,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.txt");
         std::fs::write(&path, "file content\n").unwrap();
-        let mut ed = Editor::new();
-        ed.execute_command(&format!("read {}", path.display()));
-        let content = ed.active_buffer().rope().to_string();
+        let mut editor = Editor::new();
+        editor.execute_command(&format!("read {}", path.display()));
+        let content = editor.active_buffer().rope().to_string();
         assert!(content.contains("file content"), "content was: {}", content);
     }
 
     #[test]
     fn read_command_no_args_shows_usage() {
-        let mut ed = Editor::new();
-        ed.execute_command("read");
+        let mut editor = Editor::new();
+        editor.execute_command("read");
         assert!(
-            ed.status_msg.to_lowercase().contains("usage"),
+            editor.status_msg.to_lowercase().contains("usage"),
             "status was: {}",
-            ed.status_msg
+            editor.status_msg
         );
     }
 
     #[test]
     fn r_alias_works() {
-        let mut ed = Editor::new();
-        ed.execute_command("r !echo test");
-        let content = ed.active_buffer().rope().to_string();
+        let mut editor = Editor::new();
+        editor.execute_command("r !echo test");
+        let content = editor.active_buffer().rope().to_string();
         assert!(content.contains("test"), "content was: {}", content);
     }
 }

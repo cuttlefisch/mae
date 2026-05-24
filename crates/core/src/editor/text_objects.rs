@@ -17,7 +17,7 @@ impl Editor {
                 self.buffers[idx].insert_text_at(offset, &ch.to_string());
                 self.buffers[idx].end_undo_group();
                 // Record for dot-repeat
-                self.last_edit = Some(EditRecord {
+                self.vi.last_edit = Some(EditRecord {
                     command: "replace-char".to_string(),
                     inserted_text: None,
                     char_arg: Some(ch),
@@ -35,7 +35,7 @@ impl Editor {
                 Ok(()) => self.set_status(format!("Mark '{}' set", ch)),
                 Err(e) => self.set_status(e),
             }
-            self.pending_char_count = 1;
+            self.vi.pending_char_count = 1;
             return true;
         }
         if command == "jump-mark" {
@@ -43,7 +43,7 @@ impl Editor {
             if let Err(e) = self.jump_to_mark(ch) {
                 self.set_status(e);
             }
-            self.pending_char_count = 1;
+            self.vi.pending_char_count = 1;
             return true;
         }
 
@@ -55,13 +55,13 @@ impl Editor {
         }
 
         if command == "replay-macro" {
-            let count = self.pending_char_count;
-            self.pending_char_count = 1;
+            let count = self.vi.pending_char_count;
+            self.vi.pending_char_count = 1;
             // `@:` — repeat the last ex (`:`) command. The command line
             // history already dedupes consecutive entries, so this
             // naturally "repeats last" even after recall/editing.
             if ch == ':' {
-                let last_cmd = self.command_history.last().cloned();
+                let last_cmd = self.vi.command_history.last().cloned();
                 match last_cmd {
                     Some(cmd) => {
                         for _ in 0..count {
@@ -74,7 +74,7 @@ impl Editor {
             }
             // `@@` arrives as ch == '@': use the last-replayed register.
             let target = if ch == '@' {
-                self.last_macro_register
+                self.vi.last_macro_register
             } else {
                 Some(ch)
             };
@@ -89,8 +89,8 @@ impl Editor {
             return true;
         }
 
-        let repeat = self.pending_char_count;
-        self.pending_char_count = 1;
+        let repeat = self.vi.pending_char_count;
+        self.vi.pending_char_count = 1;
         let buf = &self.buffers[self.active_buffer_idx()];
         let win = self.window_mgr.focused_window_mut();
         match command {
@@ -117,7 +117,7 @@ impl Editor {
             _ => return false,
         }
         // Stash for `;` / `,` repeat-find.
-        self.last_find_char = Some((ch, command.to_string()));
+        self.vi.last_find_char = Some((ch, command.to_string()));
         true
     }
 
@@ -222,8 +222,8 @@ impl Editor {
             // Set anchor to start
             let start_row = rope.char_to_line(start);
             let start_line = rope.line_to_char(start_row);
-            self.visual_anchor_row = start_row;
-            self.visual_anchor_col = start - start_line;
+            self.vi.visual_anchor_row = start_row;
+            self.vi.visual_anchor_col = start - start_line;
             // Set cursor to end - 1 (since visual selection is inclusive)
             let end_char = end.saturating_sub(1);
             let end_row = rope.char_to_line(end_char);

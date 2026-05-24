@@ -243,8 +243,8 @@ fn block_visual_delete_removes_column() {
     let mut editor = editor_with_text("abcde\nfghij\nklmno\n");
     // Select block: rows 0-1, cols 1-2
     editor.enter_visual_mode(crate::VisualType::Block);
-    editor.visual_anchor_row = 0;
-    editor.visual_anchor_col = 1;
+    editor.vi.visual_anchor_row = 0;
+    editor.vi.visual_anchor_col = 1;
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 1;
     win.cursor_col = 2;
@@ -258,13 +258,13 @@ fn block_visual_delete_removes_column() {
 fn block_visual_yank_captures_columns() {
     let mut editor = editor_with_text("abcde\nfghij\n");
     editor.enter_visual_mode(crate::VisualType::Block);
-    editor.visual_anchor_row = 0;
-    editor.visual_anchor_col = 1;
+    editor.vi.visual_anchor_row = 0;
+    editor.vi.visual_anchor_col = 1;
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 1;
     win.cursor_col = 2;
     editor.block_visual_yank();
-    let yanked = editor.registers.get(&'"').cloned().unwrap_or_default();
+    let yanked = editor.vi.registers.get(&'"').cloned().unwrap_or_default();
     assert_eq!(yanked, "bc\ngh");
 }
 
@@ -272,8 +272,8 @@ fn block_visual_yank_captures_columns() {
 fn block_visual_insert_on_all_lines() {
     let mut editor = editor_with_text("abc\ndef\nghi\n");
     editor.enter_visual_mode(crate::VisualType::Block);
-    editor.visual_anchor_row = 0;
-    editor.visual_anchor_col = 1;
+    editor.vi.visual_anchor_row = 0;
+    editor.vi.visual_anchor_col = 1;
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 2;
     win.cursor_col = 1;
@@ -288,15 +288,15 @@ fn block_visual_insert_on_all_lines() {
 fn block_visual_append_on_all_lines() {
     let mut editor = editor_with_text("abc\ndef\nghi\n");
     editor.enter_visual_mode(crate::VisualType::Block);
-    editor.visual_anchor_row = 0;
-    editor.visual_anchor_col = 1;
+    editor.vi.visual_anchor_row = 0;
+    editor.vi.visual_anchor_col = 1;
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 2;
     win.cursor_col = 2;
     // Dispatch block-visual-append: should enter insert at max_col+1 = 3.
     editor.dispatch_builtin("block-visual-append");
     assert_eq!(editor.mode, crate::Mode::Insert);
-    assert_eq!(editor.pending_block_insert, Some((0, 2, 3)));
+    assert_eq!(editor.vi.pending_block_insert, Some((0, 2, 3)));
     // Simulate typing "XX" in insert mode on the first row (char at a time
     // so finalize_insert_for_repeat can capture the inserted text range).
     let idx = editor.active_buffer_idx();
@@ -348,8 +348,8 @@ fn ignorecase_smartcase_options() {
 fn block_visual_delete_undoes_as_one_group() {
     let mut editor = editor_with_text("abcd\nefgh\nijkl\n");
     editor.enter_visual_mode(crate::VisualType::Block);
-    editor.visual_anchor_row = 0;
-    editor.visual_anchor_col = 1;
+    editor.vi.visual_anchor_row = 0;
+    editor.vi.visual_anchor_col = 1;
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 2;
     win.cursor_col = 2;
@@ -368,8 +368,8 @@ fn block_visual_delete_undoes_as_one_group() {
 fn block_visual_insert_undoes_as_one_group() {
     let mut editor = editor_with_text("abc\ndef\nghi\n");
     editor.enter_visual_mode(crate::VisualType::Block);
-    editor.visual_anchor_row = 0;
-    editor.visual_anchor_col = 0;
+    editor.vi.visual_anchor_row = 0;
+    editor.vi.visual_anchor_col = 0;
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 2;
     win.cursor_col = 0;
@@ -385,8 +385,8 @@ fn block_visual_insert_undoes_as_one_group() {
 fn block_visual_insert_dispatch_undoes_as_one_group() {
     let mut editor = editor_with_text("abc\ndef\nghi\n");
     editor.enter_visual_mode(crate::VisualType::Block);
-    editor.visual_anchor_row = 0;
-    editor.visual_anchor_col = 0;
+    editor.vi.visual_anchor_row = 0;
+    editor.vi.visual_anchor_col = 0;
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = 2;
     win.cursor_col = 0;
@@ -461,8 +461,8 @@ fn range_substitute_absolute_lines() {
 fn set_tab_completes_option_names() {
     let editor = Editor::new();
     let mut e = editor;
-    e.command_line = "set ignore".to_string();
-    e.command_cursor = e.command_line.len();
+    e.vi.command_line = "set ignore".to_string();
+    e.vi.command_cursor = e.vi.command_line.len();
     let completions = e.cmdline_completions();
     assert!(completions.contains(&"ignorecase".to_string()));
 }

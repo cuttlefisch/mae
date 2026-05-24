@@ -130,7 +130,7 @@ impl Editor {
     /// `apply_pending_operator_for_motion` stashes the range in
     /// `pending_surround_range`.
     pub fn surround_motion(&mut self, ch: char) {
-        let Some((from, to)) = self.pending_surround_range.take() else {
+        let Some((from, to)) = self.vi.pending_surround_range.take() else {
             return;
         };
         let (open, close) = Self::surround_pair(ch);
@@ -150,11 +150,11 @@ impl Editor {
             "delete-surround" => self.delete_surround(ch),
             "change-surround-1" => {
                 // First char captured; stash and re-arm for the second.
-                self.pending_surround_from = Some(ch);
-                self.pending_char_command = Some("change-surround-2".to_string());
+                self.vi.pending_surround_from = Some(ch);
+                self.vi.pending_char_command = Some("change-surround-2".to_string());
             }
             "change-surround-2" => {
-                if let Some(from) = self.pending_surround_from.take() {
+                if let Some(from) = self.vi.pending_surround_from.take() {
                     self.change_surround(from, ch);
                 }
             }
@@ -178,127 +178,127 @@ mod tests {
         Editor::with_buffer(buf)
     }
 
-    fn set_cursor(ed: &mut Editor, row: usize, col: usize) {
-        let win = ed.window_mgr.focused_window_mut();
+    fn set_cursor(editor: &mut Editor, row: usize, col: usize) {
+        let win = editor.window_mgr.focused_window_mut();
         win.cursor_row = row;
         win.cursor_col = col;
     }
 
     #[test]
     fn delete_surround_parens() {
-        let mut ed = ed_with("hello (world)");
-        set_cursor(&mut ed, 0, 8); // inside the parens
-        ed.delete_surround('(');
-        assert_eq!(ed.buffers[0].text(), "hello world");
+        let mut editor = ed_with("hello (world)");
+        set_cursor(&mut editor, 0, 8); // inside the parens
+        editor.delete_surround('(');
+        assert_eq!(editor.buffers[0].text(), "hello world");
     }
 
     #[test]
     fn delete_surround_quotes() {
-        let mut ed = ed_with("a \"quoted\" b");
-        set_cursor(&mut ed, 0, 5);
-        ed.delete_surround('"');
-        assert_eq!(ed.buffers[0].text(), "a quoted b");
+        let mut editor = ed_with("a \"quoted\" b");
+        set_cursor(&mut editor, 0, 5);
+        editor.delete_surround('"');
+        assert_eq!(editor.buffers[0].text(), "a quoted b");
     }
 
     #[test]
     fn delete_surround_missing_sets_status() {
-        let mut ed = ed_with("plain text");
-        set_cursor(&mut ed, 0, 3);
-        ed.delete_surround('(');
-        assert!(ed.status_msg.contains("No surrounding"));
-        assert_eq!(ed.buffers[0].text(), "plain text");
+        let mut editor = ed_with("plain text");
+        set_cursor(&mut editor, 0, 3);
+        editor.delete_surround('(');
+        assert!(editor.status_msg.contains("No surrounding"));
+        assert_eq!(editor.buffers[0].text(), "plain text");
     }
 
     #[test]
     fn change_surround_parens_to_brackets() {
-        let mut ed = ed_with("hello (world)");
-        set_cursor(&mut ed, 0, 8);
-        ed.change_surround('(', '[');
-        assert_eq!(ed.buffers[0].text(), "hello [world]");
+        let mut editor = ed_with("hello (world)");
+        set_cursor(&mut editor, 0, 8);
+        editor.change_surround('(', '[');
+        assert_eq!(editor.buffers[0].text(), "hello [world]");
     }
 
     #[test]
     fn change_surround_quotes_to_parens() {
-        let mut ed = ed_with("say \"hi\" now");
-        set_cursor(&mut ed, 0, 5);
-        ed.change_surround('"', '(');
-        assert_eq!(ed.buffers[0].text(), "say (hi) now");
+        let mut editor = ed_with("say \"hi\" now");
+        set_cursor(&mut editor, 0, 5);
+        editor.change_surround('"', '(');
+        assert_eq!(editor.buffers[0].text(), "say (hi) now");
     }
 
     #[test]
     fn surround_line_parens() {
-        let mut ed = ed_with("hello");
-        set_cursor(&mut ed, 0, 2);
-        ed.surround_line('(');
-        assert_eq!(ed.buffers[0].text(), "(hello)");
+        let mut editor = ed_with("hello");
+        set_cursor(&mut editor, 0, 2);
+        editor.surround_line('(');
+        assert_eq!(editor.buffers[0].text(), "(hello)");
     }
 
     #[test]
     fn surround_line_preserves_trailing_newline() {
-        let mut ed = ed_with("hello\nworld\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.surround_line('"');
-        assert_eq!(ed.buffers[0].text(), "\"hello\"\nworld\n");
+        let mut editor = ed_with("hello\nworld\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.surround_line('"');
+        assert_eq!(editor.buffers[0].text(), "\"hello\"\nworld\n");
     }
 
     #[test]
     fn change_surround_state_machine() {
-        let mut ed = ed_with("x (y) z");
-        set_cursor(&mut ed, 0, 3);
+        let mut editor = ed_with("x (y) z");
+        set_cursor(&mut editor, 0, 3);
         // First char: arms state for second char.
-        assert!(ed.dispatch_surround("change-surround-1", '('));
-        assert_eq!(ed.pending_surround_from, Some('('));
+        assert!(editor.dispatch_surround("change-surround-1", '('));
+        assert_eq!(editor.vi.pending_surround_from, Some('('));
         assert_eq!(
-            ed.pending_char_command.as_deref(),
+            editor.vi.pending_char_command.as_deref(),
             Some("change-surround-2")
         );
         // Second char: performs the swap.
-        assert!(ed.dispatch_surround("change-surround-2", '['));
-        assert_eq!(ed.buffers[0].text(), "x [y] z");
-        assert_eq!(ed.pending_surround_from, None);
+        assert!(editor.dispatch_surround("change-surround-2", '['));
+        assert_eq!(editor.buffers[0].text(), "x [y] z");
+        assert_eq!(editor.vi.pending_surround_from, None);
     }
 
     #[test]
     fn surround_visual_wraps_selection() {
-        let mut ed = ed_with("abcdef");
+        let mut editor = ed_with("abcdef");
         // Visual-char: anchor at col 1, cursor at col 3 (selecting "bcd").
-        ed.mode = Mode::Visual(crate::VisualType::Char);
-        ed.visual_anchor_row = 0;
-        ed.visual_anchor_col = 1;
-        set_cursor(&mut ed, 0, 3);
-        ed.surround_visual('(');
-        assert_eq!(ed.buffers[0].text(), "a(bcd)ef");
-        assert_eq!(ed.mode, Mode::Normal);
+        editor.mode = Mode::Visual(crate::VisualType::Char);
+        editor.vi.visual_anchor_row = 0;
+        editor.vi.visual_anchor_col = 1;
+        set_cursor(&mut editor, 0, 3);
+        editor.surround_visual('(');
+        assert_eq!(editor.buffers[0].text(), "a(bcd)ef");
+        assert_eq!(editor.mode, Mode::Normal);
     }
 
     #[test]
     fn surround_motion_wraps_range() {
-        let mut ed = ed_with("hello world");
+        let mut editor = ed_with("hello world");
         // Simulate ys{motion}( wrapping chars 0..5 ("hello") with parens
-        ed.pending_surround_range = Some((0, 5));
-        ed.surround_motion('(');
-        assert_eq!(ed.buffers[0].text(), "(hello) world");
+        editor.vi.pending_surround_range = Some((0, 5));
+        editor.surround_motion('(');
+        assert_eq!(editor.buffers[0].text(), "(hello) world");
     }
 
     #[test]
     fn surround_motion_brackets() {
-        let mut ed = ed_with("foo bar baz");
-        ed.pending_surround_range = Some((4, 7));
-        ed.surround_motion('[');
-        assert_eq!(ed.buffers[0].text(), "foo [bar] baz");
+        let mut editor = ed_with("foo bar baz");
+        editor.vi.pending_surround_range = Some((4, 7));
+        editor.surround_motion('[');
+        assert_eq!(editor.buffers[0].text(), "foo [bar] baz");
     }
 
     #[test]
     fn dispatch_surround_motion() {
-        let mut ed = ed_with("test");
-        ed.pending_surround_range = Some((0, 4));
-        assert!(ed.dispatch_surround("surround-motion", '"'));
-        assert_eq!(ed.buffers[0].text(), "\"test\"");
+        let mut editor = ed_with("test");
+        editor.vi.pending_surround_range = Some((0, 4));
+        assert!(editor.dispatch_surround("surround-motion", '"'));
+        assert_eq!(editor.buffers[0].text(), "\"test\"");
     }
 
     #[test]
     fn dispatch_surround_unknown_returns_false() {
-        let mut ed = Editor::new();
-        assert!(!ed.dispatch_surround("not-a-surround", 'x'));
+        let mut editor = Editor::new();
+        assert!(!editor.dispatch_surround("not-a-surround", 'x'));
     }
 }

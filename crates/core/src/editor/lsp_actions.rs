@@ -165,17 +165,17 @@ impl Editor {
 
         if let crate::Mode::Visual(_) = self.mode {
             let win = self.window_mgr.focused_window();
-            let start_row = self.visual_anchor_row.min(win.cursor_row);
-            let end_row = self.visual_anchor_row.max(win.cursor_row);
-            let start_col = if start_row == self.visual_anchor_row {
-                self.visual_anchor_col
+            let start_row = self.vi.visual_anchor_row.min(win.cursor_row);
+            let end_row = self.vi.visual_anchor_row.max(win.cursor_row);
+            let start_col = if start_row == self.vi.visual_anchor_row {
+                self.vi.visual_anchor_col
             } else {
                 win.cursor_col
             };
             let end_col = if end_row == win.cursor_row {
                 win.cursor_col
             } else {
-                self.visual_anchor_col
+                self.vi.visual_anchor_col
             };
             self.pending_lsp_requests
                 .push(crate::LspIntent::RangeFormat {
@@ -358,8 +358,8 @@ mod tests {
     #[test]
     fn code_action_menu_navigation() {
         use crate::editor::CodeActionItem;
-        let mut ed = Editor::new();
-        ed.apply_code_action_result_items(vec![
+        let mut editor = Editor::new();
+        editor.apply_code_action_result_items(vec![
             CodeActionItem {
                 title: "Import foo".into(),
                 kind: Some("quickfix".into()),
@@ -376,31 +376,31 @@ mod tests {
                 edit_json: None,
             },
         ]);
-        assert!(ed.code_action_menu.is_some());
-        let menu = ed.code_action_menu.as_ref().unwrap();
+        assert!(editor.code_action_menu.is_some());
+        let menu = editor.code_action_menu.as_ref().unwrap();
         assert_eq!(menu.selected, 0);
         assert_eq!(menu.items.len(), 3);
 
-        ed.code_action_next();
-        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 1);
+        editor.code_action_next();
+        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 1);
 
-        ed.code_action_next();
-        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 2);
+        editor.code_action_next();
+        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 2);
 
-        ed.code_action_next(); // wraps
-        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 0);
+        editor.code_action_next(); // wraps
+        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 0);
 
-        ed.code_action_prev(); // wraps back
-        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 2);
+        editor.code_action_prev(); // wraps back
+        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 2);
 
-        ed.code_action_dismiss();
-        assert!(ed.code_action_menu.is_none());
+        editor.code_action_dismiss();
+        assert!(editor.code_action_menu.is_none());
     }
 
     #[test]
     fn code_action_select_applies_workspace_edit() {
         use crate::editor::CodeActionItem;
-        let mut ed = editor_with_file("/tmp/a.rs", "hello world\n");
+        let mut editor = editor_with_file("/tmp/a.rs", "hello world\n");
         // Format: Vec<(uri, Vec<TextEdit>)>
         let edit_json = serde_json::json!([
             ["file:///tmp/a.rs", [{
@@ -412,36 +412,36 @@ mod tests {
             }]]
         ])
         .to_string();
-        ed.apply_code_action_result_items(vec![CodeActionItem {
+        editor.apply_code_action_result_items(vec![CodeActionItem {
             title: "Replace hello".into(),
             kind: Some("quickfix".into()),
             edit_json: Some(edit_json),
         }]);
-        ed.code_action_select();
-        let text = ed.active_buffer().text();
+        editor.code_action_select();
+        let text = editor.active_buffer().text();
         assert!(text.starts_with("goodbye world"));
-        assert!(ed.code_action_menu.is_none());
+        assert!(editor.code_action_menu.is_none());
     }
 
     #[test]
     fn code_action_menu_auto_dismiss_on_motion() {
         use crate::editor::CodeActionItem;
-        let mut ed = Editor::new();
-        ed.apply_code_action_result_items(vec![CodeActionItem {
+        let mut editor = Editor::new();
+        editor.apply_code_action_result_items(vec![CodeActionItem {
             title: "Fix".into(),
             kind: None,
             edit_json: None,
         }]);
-        assert!(ed.code_action_menu.is_some());
-        ed.dispatch_builtin("move-down");
-        assert!(ed.code_action_menu.is_none());
+        assert!(editor.code_action_menu.is_some());
+        editor.dispatch_builtin("move-down");
+        assert!(editor.code_action_menu.is_none());
     }
 
     #[test]
     fn code_action_dispatch_navigation() {
         use crate::editor::CodeActionItem;
-        let mut ed = Editor::new();
-        ed.apply_code_action_result_items(vec![
+        let mut editor = Editor::new();
+        editor.apply_code_action_result_items(vec![
             CodeActionItem {
                 title: "A".into(),
                 kind: None,
@@ -453,24 +453,24 @@ mod tests {
                 edit_json: None,
             },
         ]);
-        ed.dispatch_builtin("lsp-code-action-next");
-        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 1);
-        ed.dispatch_builtin("lsp-code-action-prev");
-        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 0);
-        ed.dispatch_builtin("lsp-code-action-dismiss");
-        assert!(ed.code_action_menu.is_none());
+        editor.dispatch_builtin("lsp-code-action-next");
+        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 1);
+        editor.dispatch_builtin("lsp-code-action-prev");
+        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 0);
+        editor.dispatch_builtin("lsp-code-action-dismiss");
+        assert!(editor.code_action_menu.is_none());
     }
 
     #[test]
     fn code_action_menu_shows_hint() {
         use crate::editor::CodeActionItem;
-        let mut ed = Editor::new();
-        ed.apply_code_action_result_items(vec![CodeActionItem {
+        let mut editor = Editor::new();
+        editor.apply_code_action_result_items(vec![CodeActionItem {
             title: "Fix".into(),
             kind: None,
             edit_json: None,
         }]);
-        assert!(ed.status_msg.contains("j/k navigate"));
-        assert!(ed.status_msg.contains("Esc dismiss"));
+        assert!(editor.status_msg.contains("j/k navigate"));
+        assert!(editor.status_msg.contains("Esc dismiss"));
     }
 }

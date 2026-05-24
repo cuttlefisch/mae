@@ -1,4 +1,4 @@
-use crate::options::{parse_option_bool, OptionKind};
+use crate::options::{parse_option_bool, parse_option_int, OptionKind};
 
 impl super::Editor {
     pub fn set_local_option(&mut self, name: &str, value: &str) -> Result<String, String> {
@@ -69,14 +69,14 @@ impl super::Editor {
             "splash_show_logo" => self.splash_show_logo.to_string(),
             "debug_mode" => self.debug_mode.to_string(),
             "clipboard" => self.clipboard.clone(),
-            "ai_tier" => self.ai_permission_tier.clone(),
-            "ai_editor" => self.ai_editor.clone(),
-            "ai_provider" => self.ai_provider.clone(),
-            "ai_model" => self.ai_model.clone(),
-            "ai_api_key_command" => self.ai_api_key_command.clone(),
-            "ai_base_url" => self.ai_base_url.clone(),
-            "ai_mode" => self.ai_mode.clone(),
-            "ai_profile" => self.ai_profile.clone(),
+            "ai_tier" => self.ai.permission_tier.clone(),
+            "ai_editor" => self.ai.editor_name.clone(),
+            "ai_provider" => self.ai.provider.clone(),
+            "ai_model" => self.ai.model.clone(),
+            "ai_api_key_command" => self.ai.api_key_command.clone(),
+            "ai_base_url" => self.ai.base_url.clone(),
+            "ai_mode" => self.ai.mode.clone(),
+            "ai_profile" => self.ai.profile.clone(),
             "restore_session" => self.restore_session.to_string(),
             "insert_ctrl_d" => self.insert_ctrl_d.clone(),
             "heading_scale" => self.heading_scale.to_string(),
@@ -120,19 +120,46 @@ impl super::Editor {
             "display_region_debounce_ms" => self.display_region_debounce_ms.to_string(),
             "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
             "org_agenda_files" => self.org_agenda_files.join(", "),
-            "kb_watcher_enabled" => self.kb_watcher_enabled.to_string(),
-            "kb_watcher_debounce_ms" => self.kb_watcher_debounce_ms.to_string(),
-            "kb_max_drain_events" => self.kb_max_drain_events.to_string(),
-            "kb_search_excerpt_length" => self.kb_search_excerpt_length.to_string(),
-            "kb_search_max_results" => self.kb_search_max_results.to_string(),
-            "kb_auto_register" => self.kb_auto_register.to_string(),
+            "kb_watcher_enabled" => self.kb.watcher_enabled.to_string(),
+            "kb_watcher_debounce_ms" => self.kb.watcher_debounce_ms.to_string(),
+            "kb_max_drain_events" => self.kb.max_drain_events.to_string(),
+            "kb_search_excerpt_length" => self.kb.search_excerpt_length.to_string(),
+            "kb_search_max_results" => self.kb.search_max_results.to_string(),
+            "kb_auto_register" => self.kb.auto_register.to_string(),
             "kb_notes_dir" => self
-                .kb_notes_dir
+                .kb
+                .notes_dir
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
+            "kb_activity_tracking" => self.kb.activity_tracking.to_string(),
+            "kb_activity_decay" => self.kb.activity_decay.to_string(),
+            "kb_search_sort" => self.kb.search_sort.clone(),
+            "kb_dailies_dir" => self
+                .kb
+                .dailies_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            "kb_daily_chain_gap_max" => self.kb.daily_chain_gap_max.to_string(),
             "format_on_save" => self.format_on_save.to_string(),
             "spell_enabled" => self.spell_enabled.to_string(),
+            "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
+            "collab_server_address" => self.collab.server_address.clone(),
+            "collab_auto_connect" => self.collab.auto_connect.to_string(),
+            "collab_auto_share" => self.collab.auto_share.to_string(),
+            "collab_reconnect_interval" => self.collab.reconnect_interval.to_string(),
+            "collab_user_name" => self.collab.user_name.clone(),
+            "collab_write_timeout_ms" => self.collab.write_timeout_ms.to_string(),
+            "collab_max_pending_updates" => self.collab.max_pending_updates.to_string(),
+            "collab_reconnect_backoff_factor" => self.collab.reconnect_backoff_factor.to_string(),
+            "collab_max_reconnect_attempts" => self.collab.max_reconnect_attempts.to_string(),
+            "collab_batch_update_ms" => self.collab.batch_update_ms.to_string(),
+            "collab_auto_resolve_paths" => self.collab.auto_resolve_paths.to_string(),
+            "collab_default_save_dir" => self.collab.default_save_dir.clone(),
+            "collab_save_on_remote_update" => self.collab.save_on_remote_update.to_string(),
+            "collab_heartbeat_interval" => self.collab.heartbeat_interval.to_string(),
+            "fill_column" => self.fill_column.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -232,7 +259,7 @@ impl super::Editor {
             },
             "ai_tier" => match value {
                 "ReadOnly" | "Write" | "Shell" | "Privileged" => {
-                    self.ai_permission_tier = value.to_string();
+                    self.ai.permission_tier = value.to_string();
                 }
                 _ => {
                     return Err(format!(
@@ -242,19 +269,19 @@ impl super::Editor {
                 }
             },
             "ai_editor" => {
-                self.ai_editor = value.to_string();
+                self.ai.editor_name = value.to_string();
             }
             "ai_provider" => {
-                self.ai_provider = value.to_string();
+                self.ai.provider = value.to_string();
             }
             "ai_model" => {
-                self.ai_model = value.to_string();
+                self.ai.model = value.to_string();
             }
             "ai_api_key_command" => {
-                self.ai_api_key_command = value.to_string();
+                self.ai.api_key_command = value.to_string();
             }
             "ai_base_url" => {
-                self.ai_base_url = value.to_string();
+                self.ai.base_url = value.to_string();
             }
             "ai_mode" => {
                 let valid = ["standard", "plan", "auto-accept"];
@@ -264,10 +291,10 @@ impl super::Editor {
                         value
                     ));
                 }
-                self.ai_mode = value.to_string();
+                self.ai.mode = value.to_string();
             }
             "ai_profile" => {
-                self.ai_profile = value.to_string();
+                self.ai.profile = value.to_string();
             }
             "restore_session" => {
                 self.restore_session = parse_option_bool(value)?;
@@ -474,48 +501,140 @@ impl super::Editor {
                 return Err("Use :agenda-add / :agenda-remove to manage agenda files".to_string());
             }
             "kb_watcher_enabled" => {
-                self.kb_watcher_enabled = parse_option_bool(value)?;
+                self.kb.watcher_enabled = parse_option_bool(value)?;
             }
             "kb_watcher_debounce_ms" => {
                 let v: u64 = value
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.kb_watcher_debounce_ms = v.clamp(0, 60_000);
+                self.kb.watcher_debounce_ms = v.clamp(0, 60_000);
             }
             "kb_max_drain_events" => {
                 let v: usize = value
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.kb_max_drain_events = v.clamp(1, 10_000);
+                self.kb.max_drain_events = v.clamp(1, 10_000);
             }
             "kb_search_excerpt_length" => {
                 let v: usize = value
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.kb_search_excerpt_length = v.clamp(50, 10_000);
+                self.kb.search_excerpt_length = v.clamp(50, 10_000);
             }
             "kb_search_max_results" => {
                 let v: usize = value
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.kb_search_max_results = v.clamp(1, 100);
+                self.kb.search_max_results = v.clamp(1, 100);
             }
             "kb_auto_register" => {
-                self.kb_auto_register = parse_option_bool(value)?;
+                self.kb.auto_register = parse_option_bool(value)?;
             }
             "kb_notes_dir" => {
                 if value.is_empty() {
-                    self.kb_notes_dir = None;
+                    self.kb.notes_dir = None;
                 } else {
                     let expanded = crate::file_picker::expand_tilde(value);
-                    self.kb_notes_dir = Some(std::path::PathBuf::from(expanded));
+                    self.kb.notes_dir = Some(std::path::PathBuf::from(expanded));
                 }
+            }
+            "kb_activity_tracking" => {
+                self.kb.activity_tracking = parse_option_bool(value)?;
+            }
+            "kb_activity_decay" => {
+                let v: f64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb.activity_decay = v.clamp(0.0001, 1.0);
+            }
+            "kb_search_sort" => match value {
+                "relevance" | "activity" | "alphabetical" => {
+                    self.kb.search_sort = value.to_string();
+                }
+                _ => {
+                    return Err(format!(
+                    "Invalid kb_search_sort: '{}' (expected: relevance, activity, alphabetical)",
+                    value
+                ))
+                }
+            },
+            "kb_dailies_dir" => {
+                if value.is_empty() {
+                    self.kb.dailies_dir = None;
+                } else {
+                    let expanded = crate::file_picker::expand_tilde(value);
+                    self.kb.dailies_dir = Some(std::path::PathBuf::from(expanded));
+                }
+            }
+            "kb_daily_chain_gap_max" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb.daily_chain_gap_max = v.clamp(1, 365);
             }
             "format_on_save" => {
                 self.format_on_save = parse_option_bool(value)?;
             }
             "spell_enabled" => {
                 self.spell_enabled = parse_option_bool(value)?;
+            }
+            "file_tree_focus_on_open" => {
+                self.file_tree_focus_on_open = parse_option_bool(value)?;
+            }
+            "collab_server_address" => {
+                self.collab.server_address = value.to_string();
+            }
+            "collab_auto_connect" => {
+                self.collab.auto_connect = parse_option_bool(value)?;
+            }
+            "collab_auto_share" => {
+                self.collab.auto_share = parse_option_bool(value)?;
+            }
+            "collab_reconnect_interval" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.collab.reconnect_interval = v.clamp(1, 300);
+            }
+            "collab_user_name" => {
+                self.collab.user_name = value.to_string();
+            }
+            "collab_write_timeout_ms" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.collab.write_timeout_ms = v.clamp(500, 60_000);
+            }
+            "collab_max_pending_updates" => {
+                self.collab.max_pending_updates = parse_option_int(value)? as u64;
+            }
+            "collab_reconnect_backoff_factor" => {
+                let v = parse_option_int(value)? as u64;
+                self.collab.reconnect_backoff_factor = v.clamp(1, 10);
+            }
+            "collab_max_reconnect_attempts" => {
+                self.collab.max_reconnect_attempts = parse_option_int(value)? as u64;
+            }
+            "collab_batch_update_ms" => {
+                self.collab.batch_update_ms = parse_option_int(value)? as u64;
+            }
+            "collab_auto_resolve_paths" => {
+                self.collab.auto_resolve_paths = parse_option_bool(value)?;
+            }
+            "collab_default_save_dir" => {
+                self.collab.default_save_dir = value.to_string();
+            }
+            "collab_save_on_remote_update" => {
+                self.collab.save_on_remote_update = parse_option_bool(value)?;
+            }
+            "collab_heartbeat_interval" => {
+                self.collab.heartbeat_interval = parse_option_int(value)? as u64;
+            }
+            "fill_column" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.fill_column = v.clamp(20, 200);
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -818,7 +937,8 @@ impl super::Editor {
     }
 
     pub fn show_kb_health_report(&mut self) {
-        let report = self.kb.health_report();
+        let mut report = self.kb.primary.health_report();
+        report.stale_nodes = self.kb.primary.detect_stale_nodes();
         let mut lines = Vec::new();
         lines.push("KB Health Report".to_string());
         lines.push("================".to_string());
@@ -909,6 +1029,49 @@ impl super::Editor {
                 }
             }
         }
+        lines.push(String::new());
+
+        // Stale nodes (source file deleted).
+        lines.push(format!("Stale Nodes ({})", report.stale_nodes.len()));
+        lines.push("-------------------".to_string());
+        if report.stale_nodes.is_empty() {
+            lines.push("  (none)".to_string());
+        } else {
+            for s in &report.stale_nodes {
+                lines.push(format!(
+                    "  {} — {} (was: {})",
+                    s.id,
+                    s.title,
+                    s.source_file.display()
+                ));
+            }
+        }
+        lines.push(String::new());
+
+        // Watcher performance metrics.
+        let ws = &self.kb.watcher_stats;
+        lines.push("Watcher Metrics".to_string());
+        lines.push("---------------".to_string());
+        lines.push(format!("  Reimports total:     {}", ws.reimports_total));
+        lines.push(format!("  Events upserted:     {}", ws.events_upserted));
+        lines.push(format!("  Events removed:      {}", ws.events_removed));
+        lines.push(format!("  Suppressed debounce: {}", ws.suppressed_debounce));
+        lines.push(format!("  Suppressed timebox:  {}", ws.suppressed_timebox));
+        lines.push(format!(
+            "  Suppressed write-guard: {}",
+            ws.events_suppressed
+        ));
+        lines.push(format!("  Errors:              {}", ws.errors));
+        let avg_ms = if ws.drain_count > 0 {
+            format!(
+                "{:.1}ms",
+                ws.drain_us_sum as f64 / ws.drain_count as f64 / 1000.0
+            )
+        } else {
+            "n/a".to_string()
+        };
+        lines.push(format!("  Avg reimport time:   {}", avg_ms));
+        lines.push(format!("  Total drain cycles:  {}", ws.drain_count));
 
         let content = lines.join("\n");
         let mut buf = crate::buffer::Buffer::new();
@@ -943,6 +1106,9 @@ impl super::Editor {
         lines.push(format!("Keymap:    {}", primary_map));
         if let Some(parent) = parent_map {
             lines.push(format!("Parent:    {}", parent));
+        }
+        if let Some(lang) = self.syntax.language_of(buf_idx) {
+            lines.push(format!("Language:  {}", lang.id()));
         }
         lines.push(String::new());
         lines.push("Buffer".to_string());
@@ -1122,10 +1288,10 @@ impl super::Editor {
             String::new(),
             "AI Agent (SPC a a):".to_string(),
         ];
-        let ai_cmd = if self.ai_editor.is_empty() {
+        let ai_cmd = if self.ai.editor_name.is_empty() {
             "claude"
         } else {
-            &self.ai_editor
+            &self.ai.editor_name
         };
         let ai_found = find_on_path(ai_cmd);
         lines.push(format!(
@@ -1141,14 +1307,14 @@ impl super::Editor {
 
         // AI Chat
         lines.push("AI Chat (SPC a p):".to_string());
-        let provider = if self.ai_provider.is_empty() {
+        let provider = if self.ai.provider.is_empty() {
             "(not configured)"
         } else {
-            &self.ai_provider
+            &self.ai.provider
         };
         lines.push(format!("  Provider: {}", provider));
-        if !self.ai_model.is_empty() {
-            lines.push(format!("  Model: {}", self.ai_model));
+        if !self.ai.model.is_empty() {
+            lines.push(format!("  Model: {}", self.ai.model));
         }
         // Check API key from env
         let key_env = match provider {
@@ -1165,10 +1331,10 @@ impl super::Editor {
                 "****".to_string()
             };
             lines.push(format!("  API Key: {}", masked));
-        } else if !self.ai_api_key_command.is_empty() {
+        } else if !self.ai.api_key_command.is_empty() {
             lines.push(format!(
                 "  API Key: via command `{}`",
-                self.ai_api_key_command
+                self.ai.api_key_command
             ));
         } else {
             lines.push("  API Key: [not set]".to_string());

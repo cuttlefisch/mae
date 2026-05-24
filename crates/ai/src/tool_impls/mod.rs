@@ -26,12 +26,12 @@ pub use editor_tools::{
     execute_audit_configuration, execute_babel_execute, execute_babel_tangle, execute_command_list,
     execute_debug_state, execute_editor_restore_state, execute_editor_save_state,
     execute_editor_state, execute_event_recording, execute_get_option, execute_kb_instances,
-    execute_list_modules, execute_mouse_event, execute_org_cycle, execute_org_export,
-    execute_org_open_link, execute_org_todo_cycle, execute_pkg_command, execute_read_messages,
-    execute_render_inspect, execute_set_option, execute_shell_scrollback, execute_theme_inspect,
-    execute_trigger_hook, execute_visual_buffer_add_circle, execute_visual_buffer_add_line,
-    execute_visual_buffer_add_rect, execute_visual_buffer_add_text, execute_visual_buffer_clear,
-    execute_window_layout,
+    execute_keymap_query, execute_list_modules, execute_mouse_event, execute_org_cycle,
+    execute_org_export, execute_org_open_link, execute_org_todo_cycle, execute_pkg_command,
+    execute_read_messages, execute_render_inspect, execute_set_option, execute_shell_scrollback,
+    execute_theme_inspect, execute_trigger_hook, execute_visual_buffer_add_circle,
+    execute_visual_buffer_add_line, execute_visual_buffer_add_rect, execute_visual_buffer_add_text,
+    execute_visual_buffer_clear, execute_window_layout,
 };
 pub use file::{
     execute_ai_load, execute_ai_save, execute_close_buffer, execute_create_file, execute_open_file,
@@ -69,7 +69,8 @@ use mae_core::Editor;
 /// Resolve the window to operate on: explicit AI target > focused window.
 pub fn resolve_active_window_id(editor: &Editor) -> WindowId {
     editor
-        .ai_target_window_id
+        .ai
+        .target_window_id
         .unwrap_or_else(|| editor.window_mgr.focused_id())
 }
 
@@ -82,7 +83,8 @@ pub fn resolve_buffer_idx(editor: &Editor, args: &serde_json::Value) -> Result<u
             .ok_or_else(|| format!("No buffer named '{}'", name))
     } else {
         Ok(editor
-            .ai_target_buffer_idx
+            .ai
+            .target_buffer_idx
             .unwrap_or_else(|| editor.active_buffer_idx()))
     }
 }

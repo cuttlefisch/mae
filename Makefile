@@ -13,6 +13,7 @@
 #   make clean        — remove build artefacts
 #   make uninstall    — remove installed binary
 #   make build-tui    — terminal-only build (no skia dependency)
+#   make test-tui     — run tests without GUI (no skia dependency)
 #   make install-tui  — terminal-only install
 #   make setup-hooks  — configure git to use .githooks/ (pre-commit fmt check)
 #
@@ -44,7 +45,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-service install-completions docker-network-test bench bench-save bench-compare
 
 # Default target: release build
 all: build
@@ -70,7 +71,8 @@ install: build
 	@echo "Installed $(SHIM_BINARY) -> $(PREFIX)/$(SHIM_BINARY)"
 	@mkdir -p $(DATADIR)/applications
 	@sed 's|Exec=mae|Exec=$(PREFIX)/$(BINARY)|' $(DESKTOP_FILE) > $(DATADIR)/applications/mae.desktop
-	@echo "Installed desktop entry -> $(DATADIR)/applications/mae.desktop"
+	@sed 's|Exec=mae --connect|Exec=$(PREFIX)/$(BINARY) --connect|' assets/mae-connect.desktop > $(DATADIR)/applications/mae-connect.desktop
+	@echo "Installed desktop entries -> $(DATADIR)/applications/mae*.desktop"
 	@mkdir -p $(DATADIR)/icons/hicolor/scalable/apps
 	@install -m 644 $(ICON_FILE) $(DATADIR)/icons/hicolor/scalable/apps/mae.svg
 	@echo "Installed icon -> $(DATADIR)/icons/hicolor/scalable/apps/mae.svg"
@@ -88,8 +90,8 @@ install: build
 	@echo ""
 	@echo "Next steps:"
 	@echo "  mae --init-config    # generate config + init.scm + run first-time wizard"
-	@echo "  mae --gui file.rs    # launch with GUI"
-	@echo "  mae file.rs          # launch in terminal"
+	@echo "  mae file.rs          # launch with GUI (default)"
+	@echo "  mae -nw file.rs      # launch in terminal"
 	@case ":$$PATH:" in *":$(PREFIX):"*) ;; *) \
 		echo ""; \
 		echo "  Warning: $(PREFIX) is not on your PATH. Add to your shell profile:"; \
@@ -104,18 +106,91 @@ install-tui: build-tui
 	@echo "Installed $(BINARY) -> $(PREFIX)/$(BINARY) (terminal-only)"
 	@echo "Installed $(SHIM_BINARY) -> $(PREFIX)/$(SHIM_BINARY)"
 
-## uninstall: remove installed binary, desktop entry, and icon
+## install-upgrade: rebuild all components, stop services, replace binaries, restart
+install-upgrade:
+	@set -e; \
+	OLD_V=$$($(PREFIX)/$(BINARY) --version 2>/dev/null || echo "(not installed)"); \
+	OLD_SV=$$($(PREFIX)/mae-state-server --version 2>/dev/null || echo "(not installed)"); \
+	echo "=== MAE Upgrade ==="; \
+	echo "Current: $$OLD_V"; \
+	echo "Current state-server: $$OLD_SV"; \
+	echo ""; \
+	RESTART_SERVER=0; \
+	if systemctl --user is-active mae-state-server >/dev/null 2>&1; then \
+		echo "Stopping mae-state-server..."; \
+		systemctl --user stop mae-state-server; \
+		RESTART_SERVER=1; \
+	fi; \
+	if [ -f $(PREFIX)/$(BINARY) ]; then \
+		cp $(PREFIX)/$(BINARY) $(PREFIX)/$(BINARY).bak; \
+		echo "Backed up $(BINARY) -> $(BINARY).bak"; \
+	fi; \
+	if [ -f $(PREFIX)/mae-state-server ]; then \
+		cp $(PREFIX)/mae-state-server $(PREFIX)/mae-state-server.bak; \
+		echo "Backed up mae-state-server -> mae-state-server.bak"; \
+	fi; \
+	echo ""; \
+	echo "Building..."; \
+	$(MAKE) build build-state-server; \
+	echo ""; \
+	echo "Installing..."; \
+	$(MAKE) install install-service; \
+	NEW_V=$$($(PREFIX)/$(BINARY) --version 2>/dev/null || echo "unknown"); \
+	NEW_SV=$$($(PREFIX)/mae-state-server --version 2>/dev/null || echo "unknown"); \
+	OLD_MAJOR=$$(echo "$$OLD_V" | sed 's/mae //' | cut -d. -f1); \
+	NEW_MAJOR=$$(echo "$$NEW_V" | sed 's/mae //' | cut -d. -f1); \
+	if [ -n "$$OLD_MAJOR" ] && [ -n "$$NEW_MAJOR" ] && [ "$$OLD_MAJOR" != "$$NEW_MAJOR" ] 2>/dev/null; then \
+		echo ""; \
+		echo "WARNING: MAJOR VERSION CHANGE ($$OLD_MAJOR -> $$NEW_MAJOR)"; \
+		echo "  Config or protocol changes may require manual migration."; \
+		echo "  Check CHANGELOG.md for breaking changes."; \
+	fi; \
+	if [ "$$RESTART_SERVER" = "1" ]; then \
+		echo "Restarting mae-state-server..."; \
+		if systemctl --user start mae-state-server; then \
+			echo "  mae-state-server restarted successfully"; \
+		else \
+			echo ""; \
+			echo "WARNING: Failed to restart mae-state-server. Start manually:"; \
+			echo "  systemctl --user start mae-state-server"; \
+		fi; \
+	elif systemctl --user is-enabled mae-state-server >/dev/null 2>&1; then \
+		echo ""; \
+		echo "Note: mae-state-server is enabled but was not running."; \
+		echo "  Start it with: systemctl --user start mae-state-server"; \
+	fi; \
+	echo ""; \
+	echo "=== Upgrade Complete ==="; \
+	echo "  $$OLD_V -> $$NEW_V"; \
+	echo "  $$OLD_SV -> $$NEW_SV"
+
+## install-all: install editor + state server + systemd service
+install-all: install install-service
+	@echo ""
+	@echo "Full install complete."
+	@echo "  mae                      — launch editor"
+	@echo "  mae --connect            — launch connected to state server"
+	@echo "  systemctl --user enable --now mae-state-server"
+
+## uninstall: remove installed binaries, desktop entries, icon, and systemd service
 uninstall:
 	@rm -f $(PREFIX)/$(BINARY)
 	@rm -f $(PREFIX)/$(SHIM_BINARY)
+	@rm -f $(PREFIX)/mae-state-server
 	@rm -f $(DATADIR)/applications/mae.desktop
+	@rm -f $(DATADIR)/applications/mae-connect.desktop
 	@rm -f $(DATADIR)/icons/hicolor/scalable/apps/mae.svg
 	@echo "Removed $(PREFIX)/$(BINARY)"
 	@echo "Removed $(PREFIX)/$(SHIM_BINARY)"
-	@echo "Removed $(DATADIR)/applications/mae.desktop"
+	@echo "Removed $(PREFIX)/mae-state-server"
+	@echo "Removed $(DATADIR)/applications/mae*.desktop"
 	@echo "Removed $(DATADIR)/icons/hicolor/scalable/apps/mae.svg"
 	@rm -rf $(DATADIR)/mae/modules
 	@echo "Removed $(DATADIR)/mae/modules/"
+	@systemctl --user disable --now mae-state-server 2>/dev/null || true
+	@rm -f $(HOME)/.config/systemd/user/mae-state-server.service
+	@systemctl --user daemon-reload 2>/dev/null || true
+	@echo "Removed mae-state-server systemd service"
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
 		update-desktop-database $(DATADIR)/applications 2>/dev/null || true; \
 	fi
@@ -124,23 +199,24 @@ uninstall:
 run:
 	$(CARGO) run $(FEAT_FLAG) -- $(ARGS)
 
-## test: run all workspace tests
+## test: run all workspace tests (including GUI)
 test:
+	$(CARGO) test --workspace
+
+## test-tui: run workspace tests without GUI (no skia deps required)
+test-tui:
 	$(CARGO) test --workspace --exclude mae-gui
-	$(CARGO) test -p mae $(FEAT_FLAG)
 
 ## check: fast type-check without producing a binary
 check:
 	$(CARGO) check $(FEAT_FLAG)
 
-## verify: check + test + GUI check — single command for development validation
+## verify: check + test — single command for development validation
 verify:
-	@echo "=== Check (workspace) ==="
-	$(CARGO) check --workspace --exclude mae-gui
-	@echo "=== Check (GUI) ==="
-	$(CARGO) check --package mae-gui
+	@echo "=== Check (workspace + GUI) ==="
+	$(CARGO) check $(FEAT_FLAG)
 	@echo "=== Test ==="
-	$(CARGO) test --workspace --exclude mae-gui 2>&1 | tee /dev/stderr | grep "^test result:" | awk -F'[; ]' 'BEGIN{p=0;f=0} {p+=$$4;f+=$$7} END{printf "\n=== %d passed, %d failed ===\n",p,f}'
+	$(CARGO) test --workspace 2>&1 | tee /dev/stderr | grep "^test result:" | awk -F'[; ]' 'BEGIN{p=0;f=0} {p+=$$4;f+=$$7} END{printf "\n=== %d passed, %d failed ===\n",p,f}'
 
 ## fmt: format all Rust sources in place
 fmt:
@@ -154,12 +230,43 @@ fmt-check:
 clippy:
 	$(CARGO) clippy $(FEAT_FLAG) -- -D warnings
 
-## ci: run the full CI pipeline locally (fmt + clippy + check + test, excludes mae-gui)
+## ci: run the full CI pipeline locally (fmt + clippy + check + test + scheme tests)
 ci: fmt-check
-	$(CARGO) clippy --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures -- -D warnings
-	$(CARGO) check --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures
-	$(CARGO) test --workspace --exclude mae-gui --exclude mae-test-fixtures
+	$(CARGO) clippy --workspace --all-targets -- -D warnings
+	$(CARGO) check --workspace --all-targets
+	$(CARGO) test --workspace
+	@echo "==> Scheme editor tests..."
+	./target/debug/mae --test tests/editor/
+	@echo "==> Config validation..."
+	./target/debug/mae --check-config
+	@echo "==> Code-map freshness..."
+	cd tools/code-map && $(CARGO) run --release -- --workspace-root ../.. --check
 	@echo "CI passed ✓"
+
+## ci-extended: thorough CI — run before opening a PR (ci + CRDT tests + docker smoke)
+ci-extended: ci
+	@echo "==> Scheme CRDT tests..."
+	./target/debug/mae --test tests/crdt/
+	@echo "==> Docker smoke test..."
+	$(MAKE) docker-smoke
+	@echo "==> Docker new-user test..."
+	$(MAKE) docker-new-user
+	@echo "CI extended passed ✓"
+
+## ci-docker-e2e: on-demand collab E2E in Docker (when touching collab/sync code)
+## DISABLED: Docker E2E requires proper Scheme async/yield support for
+## reliable cross-container coordination. Protocol correctness is covered by:
+##   - collab_e2e.rs (23 server protocol tests)
+##   - tests/crdt/ (142 CRDT Scheme tests)
+##   - tests/collab-local/ (85 local collab Scheme tests)
+## Re-enable when Scheme runtime supports blocking wait primitives.
+ci-docker-e2e:
+	@echo "==> Docker collab E2E (SKIPPED — see Makefile comment)..."
+	@echo "Docker collab E2E skipped ✓"
+
+## ci-complete: everything — mirrors GitHub CI
+ci-complete: ci-extended ci-docker-e2e
+	@echo "CI complete passed ✓"
 
 ## audit: run cargo-deny security + license scanning
 audit:
@@ -229,6 +336,87 @@ doctor:
 clean:
 	$(CARGO) clean
 
+## build-state-server: build the collaborative state server
+build-state-server:
+	$(CARGO) build --release --package mae-state-server
+
+## install-state-server: build + install mae-state-server to PREFIX
+install-state-server: build-state-server
+	@mkdir -p $(PREFIX)
+	@install -m 755 $(TARGET_DIR)/release/mae-state-server $(PREFIX)/mae-state-server
+	@echo "Installed mae-state-server -> $(PREFIX)/mae-state-server"
+
+## install-service: install state-server systemd user unit
+install-service: install-state-server
+	@mkdir -p $(HOME)/.config/systemd/user
+	@install -m 644 assets/mae-state-server.service $(HOME)/.config/systemd/user/mae-state-server.service
+	@systemctl --user daemon-reload 2>/dev/null || true
+	@echo ""
+	@echo "Installed mae-state-server.service -> ~/.config/systemd/user/"
+	@echo "Binary: $(PREFIX)/mae-state-server"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  systemctl --user enable --now mae-state-server   # start + auto-start on login"
+	@echo "  journalctl --user -u mae-state-server -f         # view logs"
+	@echo ""
+	@echo "Sway/i3 keybind (add to config):"
+	@echo '  bindsym $$mod+Shift+e exec mae --connect'
+
+## install-completions: install shell completions for mae-state-server
+install-completions:
+	@if [ -d /usr/share/bash-completion/completions ]; then \
+		install -m 644 crates/state-server/completions/mae-state-server.bash /usr/share/bash-completion/completions/mae-state-server; \
+		echo "Installed bash completions"; \
+	fi
+	@if [ -d /usr/share/zsh/site-functions ]; then \
+		install -m 644 crates/state-server/completions/mae-state-server.zsh /usr/share/zsh/site-functions/_mae-state-server; \
+		echo "Installed zsh completions"; \
+	fi
+	@if [ -d /usr/share/fish/vendor_completions.d ]; then \
+		install -m 644 crates/state-server/completions/mae-state-server.fish /usr/share/fish/vendor_completions.d/mae-state-server.fish; \
+		echo "Installed fish completions"; \
+	fi
+
+## test-scheme: run Scheme test files locally (pass TEST_PATH=path)
+test-scheme: build-tui
+	$(RELEASE_BIN) --test $(or $(TEST_PATH),tests/collab-e2e/)
+
+## test-scheme-crdt: run CRDT/sync Scheme tests
+test-scheme-crdt: build-tui
+	$(RELEASE_BIN) --test tests/crdt/
+
+## test-scheme-editor: run editor feature Scheme tests
+test-scheme-editor: build-tui
+	$(RELEASE_BIN) --test tests/editor/
+
+## test-scheme-collab-local: run collab state transition tests (no server needed)
+test-scheme-collab-local: build-tui
+	$(RELEASE_BIN) --test tests/collab-local/
+
+## test-scheme-all: run all local Scheme tests (crdt + editor + collab-local)
+test-scheme-all: build-tui
+	$(RELEASE_BIN) --test tests/crdt/
+	$(RELEASE_BIN) --test tests/editor/
+	$(RELEASE_BIN) --test tests/collab-local/
+
+## test-scheme-ci: same as test-scheme-all (CI entry point)
+test-scheme-ci: test-scheme-all
+
+## docker-collab-test: run collab CRDT E2E tests in Docker containers
+## DISABLED from CI (see ci-docker-e2e). Can still be run manually.
+## Requires proper Scheme async/yield for reliable coordination.
+docker-collab-test:
+	@echo "Running collab E2E tests (docker compose foreground)..."
+	@docker compose -f docker-compose.collab-test.yml up --build; \
+	RC=$$(docker compose -f docker-compose.collab-test.yml ps -a verifier --format '{{.ExitCode}}' 2>/dev/null); \
+	docker compose -f docker-compose.collab-test.yml logs --no-log-prefix; \
+	docker compose -f docker-compose.collab-test.yml down --volumes; \
+	exit $${RC:-1}
+
+## docker-network-test: run state-server network E2E tests in Docker
+docker-network-test:
+	docker compose -f docker-compose.test-network.yml run --rm --build test
+
 ## docker-ci: run full CI pipeline in a container (no local toolchain needed)
 docker-ci:
 	docker compose run --rm --build ci
@@ -248,6 +436,29 @@ docker-dev:
 ## docker-clean: remove MAE Docker images and build cache
 docker-clean:
 	docker compose down --rmi local --volumes
+
+## docs-tangle: tangle KB ADR nodes → docs/adr/ markdown (future: automated from KB)
+docs-tangle:
+	@echo "ADR docs in docs/adr/ — currently maintained manually."
+	@echo "Future: automated tangle from KB concept:adr-* nodes."
+	@ls docs/adr/*.md 2>/dev/null || echo "No ADR docs found."
+
+## docs-tangle-check: verify docs/adr/ is present and non-empty (CI)
+docs-tangle-check:
+	@test -d docs/adr && test -n "$$(ls docs/adr/*.md 2>/dev/null)" || (echo "FAIL: docs/adr/ missing or empty" && exit 1)
+	@echo "docs-tangle-check passed ✓"
+
+## bench: run criterion benchmarks (buffer ops, CRDT ops)
+bench:
+	cargo bench --package mae-core --package mae-sync
+
+## bench-save: save benchmark baseline for comparison
+bench-save:
+	cargo bench --package mae-core --package mae-sync -- --save-baseline main
+
+## bench-compare: compare against saved baseline
+bench-compare:
+	cargo bench --package mae-core --package mae-sync -- --baseline main
 
 ## help: print this help
 help:

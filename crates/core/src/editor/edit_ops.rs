@@ -80,6 +80,151 @@ impl Editor {
         self.buffers[idx].end_undo_group();
     }
 
+    /// Fill (hard-wrap) the current paragraph at `fill_column`.
+    /// Joins paragraph lines, then re-wraps at the fill column, preserving
+    /// list-item hanging indent (Emacs `fill-paragraph` / `M-q`).
+    pub(crate) fn fill_paragraph(&mut self) {
+        let idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line_count = self.buffers[idx].line_count();
+        let fill_col = self.fill_column;
+
+        // Find paragraph boundaries: contiguous non-blank lines sharing the
+        // same leading indent pattern. A blank line or heading/directive breaks.
+        let is_blank = |r: usize| -> bool {
+            let t = self.buffers[idx].line_text(r);
+            t.trim().is_empty()
+        };
+        let is_boundary = |r: usize| -> bool {
+            let t = self.buffers[idx].line_text(r);
+            let trimmed = t.trim();
+            trimmed.is_empty()
+                || trimmed.starts_with("#+")
+                || trimmed.starts_with("* ")
+                || trimmed.starts_with("** ")
+        };
+
+        if is_blank(row) {
+            return;
+        }
+
+        // Scan backward.
+        let mut para_start = row;
+        while para_start > 0 && !is_boundary(para_start - 1) {
+            para_start -= 1;
+        }
+        // Scan forward.
+        let mut para_end = row; // inclusive
+        while para_end + 1 < line_count && !is_boundary(para_end + 1) {
+            para_end += 1;
+        }
+
+        // Determine indent from first line (detect list markers).
+        let first_line = self.buffers[idx].line_text(para_start);
+        let first_chars: Vec<char> = first_line
+            .chars()
+            .filter(|c| *c != '\n' && *c != '\r')
+            .collect();
+        let content_indent = crate::wrap::content_indent_len(&first_chars);
+        let leading_ws: usize = first_chars
+            .iter()
+            .take_while(|c| **c == ' ' || **c == '\t')
+            .count();
+
+        // Collect paragraph text: first line keeps its full prefix, continuation
+        // lines are stripped of leading whitespace.
+        let mut words = String::new();
+        for r in para_start..=para_end {
+            let text = self.buffers[idx].line_text(r);
+            let trimmed = text.trim_end_matches('\n').trim_end_matches('\r');
+            if r == para_start {
+                words.push_str(trimmed);
+            } else {
+                let stripped = trimmed.trim_start();
+                if !words.is_empty() && !stripped.is_empty() {
+                    words.push(' ');
+                }
+                words.push_str(stripped);
+            }
+        }
+
+        // Re-wrap at fill_column with hanging indent.
+        let _prefix_first = &" ".repeat(leading_ws);
+        let prefix_cont = &" ".repeat(content_indent);
+        let first_line_width = fill_col.saturating_sub(leading_ws);
+        let cont_line_width = fill_col.saturating_sub(content_indent);
+
+        // Split into words and reflow.
+        let content_start = if content_indent > leading_ws {
+            // First line has a list marker — keep it
+            content_indent.min(words.len())
+        } else {
+            leading_ws.min(words.len())
+        };
+
+        let first_prefix_text = &words[..content_start];
+        let body = &words[content_start..];
+        let body_words: Vec<&str> = body.split_whitespace().collect();
+
+        let mut result = String::new();
+        let mut current_line = String::from(first_prefix_text);
+        let mut is_first_line = true;
+
+        for word in &body_words {
+            let avail = if is_first_line {
+                first_line_width
+            } else {
+                cont_line_width
+            };
+            let line_content_len = if is_first_line {
+                current_line.len() - leading_ws
+            } else {
+                current_line.len() - content_indent
+            };
+
+            if line_content_len > 0 && line_content_len + 1 + word.len() > avail {
+                result.push_str(&current_line);
+                result.push('\n');
+                current_line = format!("{}{}", prefix_cont, word);
+                is_first_line = false;
+            } else {
+                if line_content_len > 0 {
+                    current_line.push(' ');
+                }
+                current_line.push_str(word);
+            }
+        }
+        if !current_line.is_empty() || body_words.is_empty() {
+            result.push_str(&current_line);
+        }
+        // Don't add trailing newline — the buffer already has one after the paragraph.
+
+        // Replace the paragraph range in the buffer.
+        let start_char = self.buffers[idx].rope().line_to_char(para_start);
+        let end_char = if para_end + 1 < line_count {
+            self.buffers[idx].rope().line_to_char(para_end + 1)
+        } else {
+            self.buffers[idx].rope().len_chars()
+        };
+        // Include the newline after the last paragraph line if it exists.
+        let replacement = if para_end + 1 < line_count {
+            format!("{}\n", result)
+        } else {
+            result
+        };
+
+        self.buffers[idx].begin_undo_group();
+        self.buffers[idx].delete_range(start_char, end_char);
+        self.buffers[idx].insert_text_at(start_char, &replacement);
+        self.buffers[idx].end_undo_group();
+
+        // Move cursor to start of paragraph.
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = para_start;
+        win.cursor_col = 0;
+        win.clamp_cursor(&self.buffers[idx]);
+    }
+
     /// Toggle the case of the character under the cursor and advance.
     pub(crate) fn toggle_case_at_cursor(&mut self) {
         let idx = self.active_buffer_idx();
@@ -119,8 +264,8 @@ impl Editor {
         }
         let win = self.window_mgr.focused_window();
         let offset = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
-        self.insert_start_offset = Some(offset);
-        self.insert_initiated_by = Some(command.to_string());
+        self.vi.insert_start_offset = Some(offset);
+        self.vi.insert_initiated_by = Some(command.to_string());
         self.buffers[idx].begin_undo_group();
         self.set_mode(Mode::Insert);
     }
@@ -129,8 +274,8 @@ impl Editor {
     /// Captures any text that was typed during the insert session.
     pub fn finalize_insert_for_repeat(&mut self) {
         if let (Some(cmd), Some(start_offset)) = (
-            self.insert_initiated_by.take(),
-            self.insert_start_offset.take(),
+            self.vi.insert_initiated_by.take(),
+            self.vi.insert_start_offset.take(),
         ) {
             let idx = self.active_buffer_idx();
             let win = self.window_mgr.focused_window();
@@ -143,7 +288,7 @@ impl Editor {
             } else {
                 None
             };
-            self.last_edit = Some(EditRecord {
+            self.vi.last_edit = Some(EditRecord {
                 command: cmd,
                 inserted_text: inserted,
                 char_arg: None,
@@ -163,7 +308,7 @@ impl Editor {
     /// the dirty buffer.
     pub fn record_edit(&mut self, command: &str) {
         self.search_state.matches.clear();
-        self.last_edit = Some(EditRecord {
+        self.vi.last_edit = Some(EditRecord {
             command: command.to_string(),
             inserted_text: None,
             char_arg: None,
@@ -178,7 +323,7 @@ impl Editor {
     /// and queues an LSP didChange so language servers stay in sync.
     pub(crate) fn record_edit_with_count(&mut self, command: &str, count: Option<usize>) {
         self.search_state.matches.clear();
-        self.last_edit = Some(EditRecord {
+        self.vi.last_edit = Some(EditRecord {
             command: command.to_string(),
             inserted_text: None,
             char_arg: None,
@@ -190,14 +335,14 @@ impl Editor {
 
     /// Replay the last recorded edit (dot-repeat).
     pub(crate) fn replay_last_edit(&mut self) {
-        let record = match self.last_edit.clone() {
+        let record = match self.vi.last_edit.clone() {
             Some(r) => r,
             None => return,
         };
 
         // Restore count prefix from the recorded edit so the repeated
         // dispatch uses the same count as the original.
-        self.count_prefix = record.count;
+        self.vi.count_prefix = record.count;
 
         match record.command.as_str() {
             "replace-char" => {
@@ -232,11 +377,11 @@ impl Editor {
                 }
                 // Exit insert mode without recording (would overwrite the repeat record)
                 self.set_mode(Mode::Normal);
-                self.insert_initiated_by = None;
-                self.insert_start_offset = None;
+                self.vi.insert_initiated_by = None;
+                self.vi.insert_start_offset = None;
                 // Restore the last_edit since dispatch_builtin would have set up
                 // insert_initiated_by, and we need to preserve the original record
-                self.last_edit = Some(record);
+                self.vi.last_edit = Some(record);
             }
             "open-line-below" | "open-line-above" => {
                 self.dispatch_builtin(&record.command);
@@ -255,9 +400,9 @@ impl Editor {
                     win.cursor_col = new_offset.saturating_sub(line_start);
                 }
                 self.set_mode(Mode::Normal);
-                self.insert_initiated_by = None;
-                self.insert_start_offset = None;
-                self.last_edit = Some(record);
+                self.vi.insert_initiated_by = None;
+                self.vi.insert_start_offset = None;
+                self.vi.last_edit = Some(record);
             }
             _ => {
                 // Simple commands: delete-line, delete-char-forward, paste-after, etc.
@@ -276,14 +421,14 @@ impl Editor {
 
     /// Apply the pending operator with knowledge of which motion triggered it.
     pub fn apply_pending_operator_for_motion(&mut self, motion_cmd: &str) {
-        let Some(op) = self.pending_operator.take() else {
+        let Some(op) = self.vi.pending_operator.take() else {
             return;
         };
-        let Some((start_row, start_col)) = self.operator_start.take() else {
+        let Some((start_row, start_col)) = self.vi.operator_start.take() else {
             return;
         };
-        self.operator_count = None; // consumed — clean up
-        let linewise = self.last_motion_linewise;
+        self.vi.operator_count = None; // consumed — clean up
+        let linewise = self.vi.last_motion_linewise;
         let exclusive = Self::is_exclusive_motion(motion_cmd);
         let idx = self.active_buffer_idx();
         let win = self.window_mgr.focused_window();
@@ -385,8 +530,8 @@ impl Editor {
             "s" => {
                 // ys{motion}: stash the range for the upcoming char-await
                 // that wraps it with a delimiter pair (surround.rs).
-                self.pending_surround_range = Some((from, to));
-                self.pending_char_command = Some("surround-motion".to_string());
+                self.vi.pending_surround_range = Some((from, to));
+                self.vi.pending_char_command = Some("surround-motion".to_string());
             }
             _ => {}
         }

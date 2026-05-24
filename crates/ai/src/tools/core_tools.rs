@@ -1411,5 +1411,41 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- Keymap query ---
+        ToolDefinition {
+            name: "keymap_query".into(),
+            description: "Query keybindings across all keymaps. Filter by keymap name, command substring, or key prefix.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "keymap".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Filter to a specific keymap (e.g. 'normal', 'visual', 'insert')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "command".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Substring filter on command names (e.g. 'daily', 'kb-')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "prefix".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Key prefix filter (e.g. 'SPC n d' returns all bindings under that prefix)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
     ]
 }

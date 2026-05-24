@@ -16,7 +16,10 @@ graph TD
     mae --> mae_renderer
     mae --> mae_scheme
     mae --> mae_shell
+    mae --> mae_sync
+    mae --> mae_state_server
     mae_ai --> mae_core
+    mae_ai --> mae_sync
     mae_babel[mae-babel]
     mae_core --> mae_babel
     mae_core --> mae_export
@@ -26,13 +29,14 @@ graph TD
     mae_core --> mae_make
     mae_core --> mae_snippets
     mae_core --> mae_spell
+    mae_core --> mae_sync
     mae_dap --> mae_core
     mae_export --> mae_babel
     mae_format[mae-format]
     mae_gui --> mae_core
     mae_gui --> mae_renderer
     mae_gui --> mae_shell
-    mae_kb[mae-kb]
+    mae_kb --> mae_sync
     mae_lookup[mae-lookup]
     mae_lsp[mae-lsp]
     mae_make[mae-make]
@@ -40,9 +44,13 @@ graph TD
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
     mae_scheme --> mae_core
+    mae_scheme --> mae_sync
     mae_shell[mae-shell]
     mae_snippets[mae-snippets]
     mae_spell[mae-spell]
+    mae_state_server --> mae_mcp
+    mae_state_server --> mae_sync
+    mae_sync[mae-sync]
 ```
 
 ## mae
@@ -128,16 +136,17 @@ Source: `crates/core/src/lib.rs`
 | `editor` | mod |
 | `event_record` | mod |
 | `file_browser` | mod |
+| `file_lock` | mod |
 | `file_picker` | mod |
 | `file_tree` | mod |
 | `git_status` | mod |
 | `grapheme` | mod |
 | `heading` | mod |
-| `help_view` | mod |
 | `hooks` | mod |
 | `image_meta` | mod |
 | `input` | mod |
 | `kb_seed` | mod |
+| `kb_view` | mod |
 | `keymap` | mod |
 | `link_detect` | mod |
 | `lock_stats` | mod |
@@ -151,6 +160,7 @@ Source: `crates/core/src/lib.rs`
 | `swap` | mod |
 | `syntax` | mod |
 | `table` | mod |
+| `text_utils` | mod |
 | `theme` | mod |
 | `visual_buffer` | mod |
 | `window` | mod |
@@ -222,6 +232,7 @@ Source: `crates/kb/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `activity` | mod |
 | `federation` | mod |
 | `fuzzy` | mod |
 | `org` | mod |
@@ -233,6 +244,7 @@ Source: `crates/kb/src/lib.rs`
 | `parse_links` | fn |
 | `BrokenLinkKind` | enum |
 | `BrokenLink` | struct |
+| `StaleNode` | struct |
 | `KbHealthReport` | struct |
 | `KnowledgeBase` | struct |
 | `slugify` | fn |
@@ -274,12 +286,17 @@ Source: `crates/mcp/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `broadcast` | mod |
 | `client` | mod |
 | `client_mgr` | mod |
 | `protocol` | mod |
+| `session` | mod |
 | `McpToolRequest` | struct |
 | `McpToolResult` | struct |
 | `McpServer` | struct |
+| `write_framed` | fn |
+| `read_message` | fn |
+| `handle_request` | fn |
 
 ## mae-renderer
 
@@ -326,6 +343,35 @@ Source: `crates/spell/src/lib.rs`
 |------|------|
 | `checker` | mod |
 
+## mae-state-server
+
+Source: `crates/state-server/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `doc_store` | mod |
+| `handler` | mod |
+| `storage` | mod |
+
+## mae-sync
+
+Source: `crates/sync/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `awareness` | mod |
+| `encoding` | mod |
+| `kb` | mod |
+| `text` | mod |
+| `SyncError` | enum |
+| `DocAddress` | enum |
+| `SavePolicy` | enum |
+| `ClockStatus` | enum |
+| `SyncDiagnosis` | struct |
+| `SyncOverallStatus` | enum |
+| `compare_state_vectors` | fn |
+| `compute_project_identity` | fn |
+
 ## Scheme API
 
 ### Primitives (Rust -> Scheme)
@@ -341,6 +387,7 @@ Source: `crates/spell/src/lib.rs`
 | `cursor-goto` | `crates/scheme/src/runtime.rs` |
 | `open-file` | `crates/scheme/src/runtime.rs` |
 | `run-command` | `crates/scheme/src/runtime.rs` |
+| `execute-ex` | `crates/scheme/src/runtime.rs` |
 | `message` | `crates/scheme/src/runtime.rs` |
 | `add-hook!` | `crates/scheme/src/runtime.rs` |
 | `remove-hook!` | `crates/scheme/src/runtime.rs` |
@@ -364,8 +411,10 @@ Source: `crates/spell/src/lib.rs`
 | `buffer-replace-range` | `crates/scheme/src/runtime.rs` |
 | `buffer-undo` | `crates/scheme/src/runtime.rs` |
 | `buffer-redo` | `crates/scheme/src/runtime.rs` |
+| `buffer-undo-boundary` | `crates/scheme/src/runtime.rs` |
 | `switch-to-buffer` | `crates/scheme/src/runtime.rs` |
 | `undefine-key!` | `crates/scheme/src/runtime.rs` |
+| `set-group-name` | `crates/scheme/src/runtime.rs` |
 | `read-file` | `crates/scheme/src/runtime.rs` |
 | `file-exists?` | `crates/scheme/src/runtime.rs` |
 | `list-directory` | `crates/scheme/src/runtime.rs` |
@@ -407,6 +456,40 @@ Source: `crates/spell/src/lib.rs`
 | `advice-add!` | `crates/scheme/src/runtime.rs` |
 | `advice-remove!` | `crates/scheme/src/runtime.rs` |
 | `check-deprecated` | `crates/scheme/src/runtime.rs` |
+| `exit` | `crates/scheme/src/runtime.rs` |
+| `write-file` | `crates/scheme/src/runtime.rs` |
+| `sleep-ms` | `crates/scheme/src/runtime.rs` |
+| `file-exists?` | `crates/scheme/src/runtime.rs` |
+| `wait-for-file` | `crates/scheme/src/runtime.rs` |
+| `current-milliseconds` | `crates/scheme/src/runtime.rs` |
+| `goto-char` | `crates/scheme/src/runtime.rs` |
+| `current-mode` | `crates/scheme/src/runtime.rs` |
+| `test-buffer-string` | `crates/scheme/src/runtime.rs` |
+| `test-buffer-text` | `crates/scheme/src/runtime.rs` |
+| `messages-buffer-text` | `crates/scheme/src/runtime.rs` |
+| `test-sync-enabled?` | `crates/scheme/src/runtime.rs` |
+| `test-pending-updates` | `crates/scheme/src/runtime.rs` |
+| `test-sync-content` | `crates/scheme/src/runtime.rs` |
+| `test-encode-state` | `crates/scheme/src/runtime.rs` |
+| `test-get-buffer-by-name` | `crates/scheme/src/runtime.rs` |
+| `test-get-option` | `crates/scheme/src/runtime.rs` |
+| `test-region-active?` | `crates/scheme/src/runtime.rs` |
+| `test-region-start` | `crates/scheme/src/runtime.rs` |
+| `test-region-end` | `crates/scheme/src/runtime.rs` |
+| `test-search-forward` | `crates/scheme/src/runtime.rs` |
+| `test-cursor-row` | `crates/scheme/src/runtime.rs` |
+| `test-cursor-col` | `crates/scheme/src/runtime.rs` |
+| `test-status-message` | `crates/scheme/src/runtime.rs` |
+| `buffer-enable-sync` | `crates/scheme/src/runtime.rs` |
+| `buffer-disable-sync` | `crates/scheme/src/runtime.rs` |
+| `buffer-apply-update` | `crates/scheme/src/runtime.rs` |
+| `buffer-load-sync-state` | `crates/scheme/src/runtime.rs` |
+| `buffer-encode-state-vector` | `crates/scheme/src/runtime.rs` |
+| `buffer-get-state-vector` | `crates/scheme/src/runtime.rs` |
+| `buffer-compute-diff` | `crates/scheme/src/runtime.rs` |
+| `buffer-get-diff` | `crates/scheme/src/runtime.rs` |
+| `buffer-reconcile-to` | `crates/scheme/src/runtime.rs` |
+| `buffer-get-reconcile-result` | `crates/scheme/src/runtime.rs` |
 | `buffer-line` | `crates/scheme/src/runtime.rs` |
 | `shell-cwd` | `crates/scheme/src/runtime.rs` |
 | `shell-read-output` | `crates/scheme/src/runtime.rs` |
@@ -428,8 +511,19 @@ Source: `crates/spell/src/lib.rs`
 | `get-option` | `crates/scheme/src/runtime.rs` |
 | `command-exists?` | `crates/scheme/src/runtime.rs` |
 | `keymap-bindings` | `crates/scheme/src/runtime.rs` |
+| `buffer-string` | `crates/scheme/src/runtime.rs` |
+| `buffer-text` | `crates/scheme/src/runtime.rs` |
+| `collab-status` | `crates/scheme/src/runtime.rs` |
+| `collab-synced-buffers` | `crates/scheme/src/runtime.rs` |
+| `buffer-sync-enabled?` | `crates/scheme/src/runtime.rs` |
+| `buffer-pending-updates` | `crates/scheme/src/runtime.rs` |
+| `buffer-sync-content` | `crates/scheme/src/runtime.rs` |
+| `buffer-drain-updates` | `crates/scheme/src/runtime.rs` |
+| `buffer-encode-state` | `crates/scheme/src/runtime.rs` |
+| `undo-available?` | `crates/scheme/src/runtime.rs` |
+| `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (482 built-in)
+## Commands (504 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -505,6 +599,7 @@ Source: `crates/spell/src/lib.rs`
 | `join-lines` | Join current line with next line (J) |
 | `indent-line` | Indent current line by 4 spaces (>>) |
 | `dedent-line` | Dedent current line by up to 4 spaces (<<) |
+| `fill-paragraph` | Hard-wrap current paragraph at fill-column (M-q) |
 | `toggle-case` | Toggle case of char under cursor (~) |
 | `uppercase-line` | Uppercase current line (gUU) |
 | `lowercase-line` | Lowercase current line (guu) |
@@ -526,6 +621,7 @@ Source: `crates/spell/src/lib.rs`
 | `enter-insert-mode` | Enter insert mode |
 | `enter-insert-mode-after` | Enter insert mode after cursor |
 | `enter-insert-mode-eol` | Enter insert mode at end of line |
+| `enter-insert-mode-bol` | Enter insert mode at first non-blank (I) |
 | `enter-normal-mode` | Return to normal mode |
 | `enter-command-mode` | Enter command-line mode |
 | `save` | Save current buffer |
@@ -544,6 +640,10 @@ Source: `crates/spell/src/lib.rs`
 | `focus-down` | Focus window below |
 | `window-grow` | Increase window size (SPC w +) |
 | `window-shrink` | Decrease window size (SPC w -) |
+| `window-grow-width` | Increase window width (SPC w >) |
+| `window-shrink-width` | Decrease window width (SPC w <) |
+| `window-grow-height` | Increase window height (SPC w +) |
+| `window-shrink-height` | Decrease window height (SPC w -) |
 | `window-balance` | Balance all window sizes (SPC w =) |
 | `window-maximize` | Maximize current window (SPC w m) |
 | `window-move-left` | Move window left (SPC w H) |
@@ -806,6 +906,7 @@ Source: `crates/spell/src/lib.rs`
 | `describe-option` | Show documentation for an editor option (SPC h o) |
 | `describe-configuration` | Show a configuration health report (AI, LSP, DAP status) |
 | `kb-health` | Show KB health report (orphans, broken links, namespace counts) |
+| `kb-cleanup-orphans` | Remove orphan user notes with no links (SPC n C) |
 | `describe-display-policy` | Show the active display policy rules (how buffers are placed in windows) |
 | `describe-bindings` | Show all keybindings for the current mode |
 | `describe-module` | Show module summary or detail (:describe-module [name]) |
@@ -854,7 +955,13 @@ Source: `crates/spell/src/lib.rs`
 | `kb-find` | Search KB nodes (SPC n f) |
 | `kb-edit-source` | Jump to source .org file for current help node (SPC n e) |
 | `kb-create` | Find or create a note — type title, auto-generates ID (SPC n c) |
-| `kb-delete` | Delete a KB node by ID (SPC n d) |
+| `kb-delete` | Delete a KB node by ID (SPC n D) |
+| `daily-goto-today` | Open today's daily note with chain-fill (SPC n d t) |
+| `daily-goto-yesterday` | Open yesterday's daily note (SPC n d y) |
+| `daily-goto-date` | Open daily note for a date (SPC n d d) |
+| `daily-prev` | Navigate to previous daily note (SPC n d p) |
+| `daily-next` | Navigate to next daily note (SPC n d n) |
+| `kb-audit` | Run KB audit report (SPC n H a) |
 | `capture-finalize` | Save note and return from capture (C-c C-c) |
 | `capture-abort` | Abort capture, delete note (C-c C-k) |
 | `kb-insert-link` | Insert org-style link to a KB node at cursor (SPC n i) |
@@ -865,14 +972,14 @@ Source: `crates/spell/src/lib.rs`
 | `help-forward` | Navigate forward in help history (C-i) |
 | `help-next-link` | Focus the next link in the current help page |
 | `help-prev-link` | Focus the previous link in the current help page |
-| `help-close` | Close help buffer |
+| `help-close` | Close KB viewer |
 | `help-search` | Search help topics |
-| `help-reopen` | Reopen the last-closed help buffer |
+| `help-reopen` | Reopen the last-closed KB viewer |
 | `kb-view` | Return to rendered KB view from source editing (SPC n v) |
 | `help-cycle` | Fold/unfold heading at cursor, or next link if not on heading (Tab) |
 | `help-global-cycle` | Cycle global visibility: OVERVIEW → CONTENTS → SHOW ALL (S-Tab) |
-| `help-close-all-folds` | Fold all headings in help buffer (zM) |
-| `help-open-all-folds` | Unfold all headings in help buffer (zR) |
+| `help-close-all-folds` | Fold all headings in KB viewer (zM) |
+| `help-open-all-folds` | Unfold all headings in KB viewer (zR) |
 | `help-edit` | Edit a user help topic in ~/.config/mae/help/ (:help-edit <topic>) |
 | `terminal` | Open a terminal emulator buffer (:terminal) |
 | `terminal-here` | Open terminal in current buffer's file directory (SPC o T) |
@@ -910,6 +1017,15 @@ Source: `crates/spell/src/lib.rs`
 | `record-start` | Start event recording for debugging |
 | `record-stop` | Stop event recording |
 | `record-save` | Save recorded events to JSON file (:record-save <path>) |
+| `collab-start` | Start local state server |
+| `collab-connect` | Connect to collaborative state server |
+| `collab-disconnect` | Disconnect from state server |
+| `collab-status` | Show collaborative editing status |
+| `collab-share` | Share current buffer for collaboration |
+| `collab-sync` | Force sync current buffer |
+| `collab-doctor` | Run collaborative editing diagnostics |
+| `collab-list` | List shared documents on the state server (SPC C l) |
+| `collab-join` | Join a shared document (SPC C j) |
 | `move-down` | Move cursor down |
 | `move-down` | Move down |
 | `zzz` | Last |

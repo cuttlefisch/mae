@@ -365,9 +365,9 @@ fn spc_prefixes_all_have_which_key_group_names() {
 #[test]
 fn prompt_register_arms_flag() {
     let mut editor = Editor::new();
-    assert!(!editor.pending_register_prompt);
+    assert!(!editor.vi.pending_register_prompt);
     assert!(editor.dispatch_builtin("prompt-register"));
-    assert!(editor.pending_register_prompt);
+    assert!(editor.vi.pending_register_prompt);
 }
 
 #[test]
@@ -397,7 +397,7 @@ fn prompt_register_command_registered() {
 #[test]
 fn insert_from_register_inserts_at_cursor() {
     let mut editor = Editor::new();
-    editor.registers.insert('a', "ABC".into());
+    editor.vi.registers.insert('a', "ABC".into());
     let win = editor.window_mgr.focused_window_mut();
     editor.buffers[0].insert_char(win, 'X');
     // Cursor is now at offset 1 (after 'X')
@@ -490,6 +490,7 @@ fn ai_prompt_creates_split_pair() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
     let pair = editor
+        .ai
         .conversation_pair
         .as_ref()
         .expect("pair should exist");
@@ -506,7 +507,7 @@ fn ai_prompt_creates_split_pair() {
 fn ai_prompt_input_cursor_follows_text() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
-    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
 
     // Should be in ConversationInput mode with focus on input window.
     assert_eq!(editor.mode, Mode::ConversationInput);
@@ -539,7 +540,7 @@ fn ai_input_newline_survives_clamp_all_cursors() {
     // trailing phantom line after '\n', clamping cursor from row 1 back to row 0.
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
-    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
     let buf = &mut editor.buffers[pair.input_buffer_idx];
     let win = editor.window_mgr.focused_window_mut();
     buf.insert_char(win, 'h');
@@ -559,7 +560,7 @@ fn ai_input_newline_after_clear_survives_clamp() {
     // cursor must stay on the new line through clamp_all_cursors.
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
-    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
 
     // Simulate what submit_conversation_prompt does: clear the input buffer.
     editor.buffers[pair.input_buffer_idx].replace_contents("");
@@ -588,7 +589,7 @@ fn ai_input_newline_after_clear_survives_clamp() {
 fn ai_prompt_i_in_output_redirects_to_input() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
-    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
     // Switch to normal mode in the output window.
     editor.set_mode(Mode::Normal);
     editor.window_mgr.set_focused(pair.output_window_id);
@@ -601,29 +602,29 @@ fn kill_conversation_buffer_closes_both() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
     assert_eq!(editor.buffers.len(), 3);
-    assert!(editor.conversation_pair.is_some());
+    assert!(editor.ai.conversation_pair.is_some());
     // Kill the output buffer.
     editor.set_mode(Mode::Normal);
     editor.switch_to_buffer(1);
     editor.dispatch_builtin("force-kill-buffer");
     // Both buffers and the pair should be gone.
-    assert!(editor.conversation_pair.is_none());
+    assert!(editor.ai.conversation_pair.is_none());
     assert_eq!(editor.buffers.len(), 1);
 }
 
 #[test]
 fn debug_state_starts_none() {
     let editor = Editor::new();
-    assert!(editor.debug_state.is_none());
+    assert!(editor.dap.state.is_none());
 }
 
 #[test]
 fn debug_self_populates_state() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("debug-self");
-    assert!(editor.debug_state.is_some());
+    assert!(editor.dap.state.is_some());
 
-    let state = editor.debug_state.as_ref().unwrap();
+    let state = editor.dap.state.as_ref().unwrap();
     assert_eq!(state.target, crate::debug::DebugTarget::SelfDebug);
     assert_eq!(state.threads.len(), 2);
     assert_eq!(state.threads[0].name, "Rust Core");
@@ -642,7 +643,7 @@ fn debug_self_captures_correct_values() {
     editor.mode = Mode::Insert;
     editor.dispatch_builtin("debug-self");
 
-    let state = editor.debug_state.as_ref().unwrap();
+    let state = editor.dap.state.as_ref().unwrap();
     let editor_vars = &state.variables["Editor State"];
     let mode_var = editor_vars.iter().find(|v| v.name == "mode").unwrap();
     assert_eq!(mode_var.value, "Insert");
@@ -652,9 +653,9 @@ fn debug_self_captures_correct_values() {
 fn debug_stop_clears_state() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("debug-self");
-    assert!(editor.debug_state.is_some());
+    assert!(editor.dap.state.is_some());
     editor.dispatch_builtin("debug-stop");
-    assert!(editor.debug_state.is_none());
+    assert!(editor.dap.state.is_none());
     assert!(editor.status_msg.contains("ended"));
 }
 
@@ -670,13 +671,13 @@ fn debug_toggle_breakpoint() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("debug-self");
     editor.dispatch_builtin("debug-toggle-breakpoint");
-    let state = editor.debug_state.as_ref().unwrap();
+    let state = editor.dap.state.as_ref().unwrap();
     assert_eq!(state.breakpoint_count(), 1);
     assert!(editor.status_msg.contains("Breakpoint set"));
 
     // Toggle again removes it
     editor.dispatch_builtin("debug-toggle-breakpoint");
-    let state = editor.debug_state.as_ref().unwrap();
+    let state = editor.dap.state.as_ref().unwrap();
     assert_eq!(state.breakpoint_count(), 0);
     assert!(editor.status_msg.contains("Breakpoint removed"));
 }
@@ -753,11 +754,11 @@ fn yank_paste_keybindings() {
 
 #[test]
 fn cmdline_completes_command_names() {
-    let ed = Editor::new();
+    let editor = Editor::new();
     // Simulate typing "set-t" — should match set-theme
-    let mut ed2 = ed;
-    ed2.command_line = "set-t".to_string();
-    let completions = ed2.cmdline_completions();
+    let mut editor2 = editor;
+    editor2.vi.command_line = "set-t".to_string();
+    let completions = editor2.cmdline_completions();
     assert!(
         completions.iter().any(|c| c == "set-theme"),
         "Expected set-theme in completions: {:?}",
@@ -767,17 +768,17 @@ fn cmdline_completes_command_names() {
 
 #[test]
 fn cmdline_completes_command_args() {
-    let mut ed = Editor::new();
-    ed.command_line = "set-splash-art b".to_string();
-    let completions = ed.cmdline_completions();
+    let mut editor = Editor::new();
+    editor.vi.command_line = "set-splash-art b".to_string();
+    let completions = editor.cmdline_completions();
     assert_eq!(completions, vec!["bat"]);
 }
 
 #[test]
 fn cmdline_completes_theme_names() {
-    let mut ed = Editor::new();
-    ed.command_line = "set-theme ".to_string();
-    let completions = ed.cmdline_completions();
+    let mut editor = Editor::new();
+    editor.vi.command_line = "set-theme ".to_string();
+    let completions = editor.cmdline_completions();
     assert!(
         completions.len() > 3,
         "Expected multiple theme completions, got {:?}",
@@ -796,47 +797,47 @@ fn wa_saves_all() {
     fs::write(&p1, "aaa").unwrap();
     fs::write(&p2, "bbb").unwrap();
 
-    let mut ed = Editor::new();
-    ed.open_file(p1.to_str().unwrap());
-    ed.open_file(p2.to_str().unwrap());
+    let mut editor = Editor::new();
+    editor.open_file(p1.to_str().unwrap());
+    editor.open_file(p2.to_str().unwrap());
     // Modify both
-    let idx = ed.active_buffer_idx();
-    let win = ed.window_mgr.focused_window_mut();
-    ed.buffers[idx].insert_char(win, '!');
-    ed.window_mgr.focused_window_mut().buffer_idx = 1;
-    let idx = ed.active_buffer_idx();
-    let win = ed.window_mgr.focused_window_mut();
-    ed.buffers[idx].insert_char(win, '?');
-    ed.execute_command("wa");
-    assert!(!ed.buffers[1].modified);
-    assert!(!ed.buffers[2].modified);
-    assert!(ed.status_msg.contains("Saved 2"));
+    let idx = editor.active_buffer_idx();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[idx].insert_char(win, '!');
+    editor.window_mgr.focused_window_mut().buffer_idx = 1;
+    let idx = editor.active_buffer_idx();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[idx].insert_char(win, '?');
+    editor.execute_command("wa");
+    assert!(!editor.buffers[1].modified);
+    assert!(!editor.buffers[2].modified);
+    assert!(editor.status_msg.contains("Saved 2"));
 }
 
 #[test]
 fn qa_refuses_if_modified() {
-    let mut ed = Editor::new();
-    let win = ed.window_mgr.focused_window_mut();
-    ed.buffers[0].insert_char(win, 'x');
-    ed.execute_command("qa");
-    assert!(ed.running);
-    assert!(ed.status_msg.contains("No write"));
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'x');
+    editor.execute_command("qa");
+    assert!(editor.running);
+    assert!(editor.status_msg.contains("No write"));
 }
 
 #[test]
 fn qa_quits_if_clean() {
-    let mut ed = Editor::new();
-    ed.execute_command("qa");
-    assert!(!ed.running);
+    let mut editor = Editor::new();
+    editor.execute_command("qa");
+    assert!(!editor.running);
 }
 
 #[test]
 fn qa_force_quits() {
-    let mut ed = Editor::new();
-    let win = ed.window_mgr.focused_window_mut();
-    ed.buffers[0].insert_char(win, 'x');
-    ed.execute_command("qa!");
-    assert!(!ed.running);
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'x');
+    editor.execute_command("qa!");
+    assert!(!editor.running);
 }
 
 #[test]
@@ -845,29 +846,29 @@ fn wqa_saves_all_then_quits() {
     let p = dir.path().join("c.txt");
     fs::write(&p, "ccc").unwrap();
 
-    let mut ed = Editor::new();
-    ed.open_file(p.to_str().unwrap());
-    let idx = ed.active_buffer_idx();
-    let win = ed.window_mgr.focused_window_mut();
-    ed.buffers[idx].insert_char(win, '!');
-    ed.execute_command("wqa");
-    assert!(!ed.running);
-    assert!(!ed.buffers[1].modified);
+    let mut editor = Editor::new();
+    editor.open_file(p.to_str().unwrap());
+    let idx = editor.active_buffer_idx();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[idx].insert_char(win, '!');
+    editor.execute_command("wqa");
+    assert!(!editor.running);
+    assert!(!editor.buffers[1].modified);
 }
 
 #[test]
 fn xa_alias() {
-    let mut ed = Editor::new();
-    ed.execute_command("xa");
-    assert!(!ed.running);
+    let mut editor = Editor::new();
+    editor.execute_command("xa");
+    assert!(!editor.running);
 }
 
 // ===== Autosave (v0.6.0) =====
 
 #[test]
 fn autosave_option_registered() {
-    let ed = Editor::new();
-    let (val, def) = ed.get_option("autosave_interval").unwrap();
+    let editor = Editor::new();
+    let (val, def) = editor.get_option("autosave_interval").unwrap();
     assert_eq!(val, "0");
     assert_eq!(def.name, "autosave_interval");
 }
@@ -878,44 +879,44 @@ fn try_autosave_saves_modified() {
     let p = dir.path().join("auto.txt");
     fs::write(&p, "original").unwrap();
 
-    let mut ed = Editor::new();
-    ed.open_file(p.to_str().unwrap());
-    let idx = ed.active_buffer_idx();
-    let win = ed.window_mgr.focused_window_mut();
-    ed.buffers[idx].insert_char(win, '!');
-    assert!(ed.buffers[idx].modified);
+    let mut editor = Editor::new();
+    editor.open_file(p.to_str().unwrap());
+    let idx = editor.active_buffer_idx();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[idx].insert_char(win, '!');
+    assert!(editor.buffers[idx].modified);
 
-    ed.autosave_interval = 1;
+    editor.autosave_interval = 1;
     // Force last_autosave and last_edit_time to be old enough
-    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
-    ed.last_edit_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
-    let saved = ed.try_autosave();
+    editor.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    editor.last_edit_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    let saved = editor.try_autosave();
     assert_eq!(saved, 1);
-    assert!(!ed.buffers[idx].modified);
+    assert!(!editor.buffers[idx].modified);
 }
 
 #[test]
 fn try_autosave_skips_clean() {
-    let mut ed = Editor::new();
-    ed.autosave_interval = 1;
-    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
-    ed.last_edit_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
-    let saved = ed.try_autosave();
+    let mut editor = Editor::new();
+    editor.autosave_interval = 1;
+    editor.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    editor.last_edit_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    let saved = editor.try_autosave();
     assert_eq!(saved, 0);
 }
 
 #[test]
 fn try_autosave_skips_non_file() {
-    let mut ed = Editor::new();
+    let mut editor = Editor::new();
     // Modify the scratch buffer (no file path)
-    let win = ed.window_mgr.focused_window_mut();
-    ed.buffers[0].insert_char(win, 'x');
-    ed.autosave_interval = 1;
-    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
-    ed.last_edit_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
-    let saved = ed.try_autosave();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'x');
+    editor.autosave_interval = 1;
+    editor.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    editor.last_edit_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    let saved = editor.try_autosave();
     assert_eq!(saved, 0);
-    assert!(ed.buffers[0].modified); // still modified, not saved
+    assert!(editor.buffers[0].modified); // still modified, not saved
 }
 
 #[test]
@@ -924,61 +925,64 @@ fn autosave_idle_debounce_skips_during_edit() {
     let p = dir.path().join("debounce.txt");
     fs::write(&p, "original").unwrap();
 
-    let mut ed = Editor::new();
-    ed.open_file(p.to_str().unwrap());
-    let idx = ed.active_buffer_idx();
-    let win = ed.window_mgr.focused_window_mut();
-    ed.buffers[idx].insert_char(win, '!');
+    let mut editor = Editor::new();
+    editor.open_file(p.to_str().unwrap());
+    let idx = editor.active_buffer_idx();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[idx].insert_char(win, '!');
 
-    ed.autosave_interval = 1;
-    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    editor.autosave_interval = 1;
+    editor.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
     // last_edit_time is very recent (just edited above) — should skip
-    let saved = ed.try_autosave();
+    let saved = editor.try_autosave();
     assert_eq!(saved, 0, "should skip autosave when editing recently");
-    assert!(ed.buffers[idx].modified, "buffer should still be modified");
+    assert!(
+        editor.buffers[idx].modified,
+        "buffer should still be modified"
+    );
 }
 
 // ===== Dispatch-level tests for v0.6.0 which-key parity =====
 
 #[test]
 fn focus_next_window_dispatch_cycles_focus() {
-    let mut ed = Editor::new();
-    ed.dispatch_builtin("split-vertical");
-    assert_eq!(ed.window_mgr.window_count(), 2);
-    let first = ed.window_mgr.focused_id();
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("split-vertical");
+    assert_eq!(editor.window_mgr.window_count(), 2);
+    let first = editor.window_mgr.focused_id();
 
-    ed.dispatch_builtin("focus-next-window");
-    let second = ed.window_mgr.focused_id();
+    editor.dispatch_builtin("focus-next-window");
+    let second = editor.window_mgr.focused_id();
     assert_ne!(first, second);
 
     // Wrap around
-    ed.dispatch_builtin("focus-next-window");
-    assert_eq!(ed.window_mgr.focused_id(), first);
+    editor.dispatch_builtin("focus-next-window");
+    assert_eq!(editor.window_mgr.focused_id(), first);
 }
 
 #[test]
 fn focus_next_window_single_window_noop() {
-    let mut ed = Editor::new();
-    let before = ed.window_mgr.focused_id();
-    ed.dispatch_builtin("focus-next-window");
-    assert_eq!(ed.window_mgr.focused_id(), before);
+    let mut editor = Editor::new();
+    let before = editor.window_mgr.focused_id();
+    editor.dispatch_builtin("focus-next-window");
+    assert_eq!(editor.window_mgr.focused_id(), before);
 }
 
 #[test]
 fn file_info_shows_status() {
-    let mut ed = Editor::new();
-    ed.dispatch_builtin("file-info");
-    assert!(ed.status_msg.contains("line 1 of"));
-    assert!(ed.status_msg.contains("[scratch]"));
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("file-info");
+    assert!(editor.status_msg.contains("line 1 of"));
+    assert!(editor.status_msg.contains("[scratch]"));
 }
 
 #[test]
 fn file_info_shows_modified_flag() {
-    let mut ed = Editor::new();
-    let win = ed.window_mgr.focused_window_mut();
-    ed.buffers[0].insert_char(win, 'x');
-    ed.dispatch_builtin("file-info");
-    assert!(ed.status_msg.contains("[+]"));
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'x');
+    editor.dispatch_builtin("file-info");
+    assert!(editor.status_msg.contains("[+]"));
 }
 
 #[test]
@@ -987,10 +991,10 @@ fn file_info_shows_file_path() {
     let path = dir.path().join("test.txt");
     fs::write(&path, "hello\nworld\n").unwrap();
     let buf = Buffer::from_file(&path).unwrap();
-    let mut ed = Editor::with_buffer(buf);
-    ed.dispatch_builtin("file-info");
-    assert!(ed.status_msg.contains("test.txt"));
-    assert!(ed.status_msg.contains("line 1 of"));
+    let mut editor = Editor::with_buffer(buf);
+    editor.dispatch_builtin("file-info");
+    assert!(editor.status_msg.contains("test.txt"));
+    assert!(editor.status_msg.contains("line 1 of"));
 }
 
 #[test]
@@ -999,15 +1003,15 @@ fn save_all_and_quit_saves_then_quits() {
     let path = dir.path().join("a.txt");
     fs::write(&path, "original").unwrap();
     let buf = Buffer::from_file(&path).unwrap();
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     // Modify the buffer
-    let win = ed.window_mgr.focused_window_mut();
-    ed.buffers[0].insert_char(win, '!');
-    assert!(ed.buffers[0].modified);
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, '!');
+    assert!(editor.buffers[0].modified);
 
-    ed.dispatch_builtin("save-all-and-quit");
+    editor.dispatch_builtin("save-all-and-quit");
     // Should have saved and set running = false
-    assert!(!ed.running);
+    assert!(!editor.running);
     let content = fs::read_to_string(&path).unwrap();
     assert!(content.contains("!"));
 }
@@ -1018,19 +1022,19 @@ fn copy_this_file_enters_command_mode() {
     let path = dir.path().join("original.txt");
     fs::write(&path, "content").unwrap();
     let buf = Buffer::from_file(&path).unwrap();
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
 
-    ed.dispatch_builtin("copy-this-file");
-    assert_eq!(ed.mode, Mode::CommandPalette);
+    editor.dispatch_builtin("copy-this-file");
+    assert_eq!(editor.mode, Mode::CommandPalette);
     // Should open a MiniDialog with the source path pre-filled.
-    assert!(ed.mini_dialog.is_some());
+    assert!(editor.mini_dialog.is_some());
 }
 
 #[test]
 fn copy_this_file_no_path_shows_error() {
-    let mut ed = Editor::new();
-    ed.dispatch_builtin("copy-this-file");
-    assert!(ed.status_msg.contains("no file path"));
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("copy-this-file");
+    assert!(editor.status_msg.contains("no file path"));
 }
 
 #[test]
@@ -1039,14 +1043,14 @@ fn copy_ex_command_copies_and_opens() {
     let path = dir.path().join("src.txt");
     fs::write(&path, "hello").unwrap();
     let buf = Buffer::from_file(&path).unwrap();
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
 
     let dest = dir.path().join("dst.txt");
-    ed.execute_command(&format!("copy {}", dest.display()));
+    editor.execute_command(&format!("copy {}", dest.display()));
     assert!(dest.exists());
     assert_eq!(fs::read_to_string(&dest).unwrap(), "hello");
     // Should have opened the copy
-    assert!(ed.buffers.iter().any(|b| {
+    assert!(editor.buffers.iter().any(|b| {
         b.file_path()
             .map(|p| p.ends_with("dst.txt"))
             .unwrap_or(false)
@@ -1057,31 +1061,33 @@ fn copy_ex_command_copies_and_opens() {
 fn file_tree_open_vsplit_opens_in_split() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
-    let mut ed = Editor::new();
+    let mut editor = Editor::new();
 
     // Manually set up a file tree buffer
     let tree_buf = Buffer::new_file_tree(dir.path());
-    let tree_buf_idx = ed.buffers.len();
-    ed.buffers.push(tree_buf);
-    ed.window_mgr.focused_window_mut().buffer_idx = tree_buf_idx;
-    ed.file_tree_window_id = Some(ed.window_mgr.focused_id());
+    let tree_buf_idx = editor.buffers.len();
+    editor.buffers.push(tree_buf);
+    editor.window_mgr.focused_window_mut().buffer_idx = tree_buf_idx;
+    editor.file_tree_window_id = Some(editor.window_mgr.focused_id());
 
     // Split to have a content window
-    ed.dispatch_builtin("split-vertical");
-    let content_win_count = ed.window_mgr.window_count();
+    editor.dispatch_builtin("split-vertical");
+    let content_win_count = editor.window_mgr.window_count();
 
     // Select the test.rs file in the tree
-    let ft = ed.buffers[tree_buf_idx].file_tree_mut().unwrap();
+    let ft = editor.buffers[tree_buf_idx].file_tree_mut().unwrap();
     if let Some(idx) = ft.entries.iter().position(|e| e.name == "test.rs") {
         ft.selected = idx;
     }
 
     // Switch back to tree window for dispatch
-    ed.window_mgr.set_focused(ed.file_tree_window_id.unwrap());
+    editor
+        .window_mgr
+        .set_focused(editor.file_tree_window_id.unwrap());
 
-    ed.dispatch_builtin("file-tree-open-vsplit");
+    editor.dispatch_builtin("file-tree-open-vsplit");
     // Should have created a new split
-    assert!(ed.window_mgr.window_count() > content_win_count);
+    assert!(editor.window_mgr.window_count() > content_win_count);
 }
 
 #[test]
@@ -1092,19 +1098,19 @@ fn file_tree_reveal_on_toggle() {
     fs::write(&file_path, "fn deep() {}").unwrap();
 
     let buf = Buffer::from_file(&file_path).unwrap();
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     // Editor needs a project root for file tree
-    ed.project = Some(crate::project::Project::from_root(dir.path().to_path_buf()));
+    editor.project = Some(crate::project::Project::from_root(dir.path().to_path_buf()));
 
-    ed.dispatch_builtin("file-tree-toggle");
+    editor.dispatch_builtin("file-tree-toggle");
 
     // Find the tree buffer
-    let tree_idx = ed
+    let tree_idx = editor
         .buffers
         .iter()
         .position(|b| b.kind == crate::BufferKind::FileTree);
     if let Some(ti) = tree_idx {
-        let ft = ed.buffers[ti].file_tree().unwrap();
+        let ft = editor.buffers[ti].file_tree().unwrap();
         // Should have expanded src and src/util
         assert!(ft.expanded_dirs.contains(&dir.path().join("src")));
         assert!(ft.expanded_dirs.contains(&dir.path().join("src/util")));

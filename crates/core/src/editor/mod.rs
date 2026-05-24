@@ -1,20 +1,23 @@
 mod agenda_ops;
+pub mod ai_state;
 mod babel_ops;
 mod changes;
 mod command;
 mod dap_ops;
+pub mod dap_state;
 mod debug_panel_ops;
 mod diagnostics;
-mod dispatch;
+pub mod dispatch;
 mod edit_ops;
 pub(crate) mod ex_parse;
 mod file_ops;
 mod git_ops;
 mod heading_ops;
-mod help_ops;
+pub(crate) mod help_ops;
 mod hook_ops;
 mod jumps;
 pub(crate) mod kb_ops;
+pub mod kb_state;
 mod keymaps;
 mod lsp_actions;
 mod lsp_completion;
@@ -36,12 +39,203 @@ mod surround;
 mod syntax_ops;
 mod table_ops;
 mod text_objects;
+pub mod vi_state;
 mod visual;
 
+pub use ai_state::AiState;
 pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
+pub use dap_state::DapContext;
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
+pub use help_ops::is_builtin_node;
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
 pub use kb_ops::KbWatcherStats;
+pub use kb_state::KbContext;
+pub use vi_state::ViState;
+
+/// Default TCP address for the collaborative state server.
+pub const DEFAULT_COLLAB_ADDRESS: &str = "127.0.0.1:9473";
+/// Default TCP port for the collaborative state server.
+pub const DEFAULT_COLLAB_PORT: u16 = 9473;
+
+/// Collaborative editing connection status.
+/// Surfaced in the status bar via `format_collab_status()`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CollabStatus {
+    /// No collaborative session configured or active.
+    #[default]
+    Off,
+    /// Establishing initial connection to the state server.
+    Connecting,
+    /// Connected to the state server with `peer_count` other editors.
+    Connected { peer_count: usize },
+    /// Lost connection, attempting to re-establish.
+    Reconnecting,
+    /// Disconnected from the state server (not retrying).
+    Disconnected,
+}
+
+impl CollabStatus {
+    /// Short string label for this status (used by AI tools, Scheme API, introspect).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CollabStatus::Off => "off",
+            CollabStatus::Connecting => "connecting",
+            CollabStatus::Connected { .. } => "connected",
+            CollabStatus::Reconnecting => "reconnecting",
+            CollabStatus::Disconnected => "disconnected",
+        }
+    }
+}
+
+/// Intent signals from the editor core to the binary event loop.
+///
+/// The binary drains `editor.pending_collab_intent` each tick, similar to
+/// `pending_lsp_requests` and `pending_dap_intents`.
+#[derive(Debug, Clone)]
+pub enum CollabIntent {
+    /// Start a local state server process.
+    StartServer,
+    /// Connect to a remote state server.
+    Connect { address: String },
+    /// Disconnect from the current server.
+    Disconnect,
+    /// Show the *Collab Status* diagnostic buffer.
+    ShowStatus,
+    /// Share the named buffer for collaborative editing.
+    ShareBuffer { buffer_name: String },
+    /// Force sync the named buffer.
+    ForceSync { buffer_name: String },
+    /// Run connectivity diagnostics.
+    Doctor,
+    /// List shared documents on the server (opens *Collab Docs* buffer).
+    ListDocs,
+    /// List docs, then open a palette picker for joining.
+    ListDocsForJoin,
+    /// Join a shared document by name (create buffer from server state).
+    JoinDoc { doc_id: String },
+    /// Save a synced buffer via the collab save protocol (docs/save_intent).
+    SaveCollab {
+        doc_id: String,
+        content_hash: String,
+    },
+}
+
+/// Shell/terminal intent queue and cached state, extracted from Editor.
+/// All fields were previously `pending_shell_*` / `shell_*` on Editor;
+/// now accessed via `editor.shell.*`.
+#[derive(Debug, Default)]
+pub struct ShellIntents {
+    /// Buffer indices of newly created shell buffers that need PTY spawning.
+    pub spawns: Vec<usize>,
+    /// Working directory overrides for shell spawns: buffer_idx → dir.
+    pub cwds: HashMap<usize, std::path::PathBuf>,
+    /// Agent shell spawns: (buf_idx, command).
+    pub agent_spawns: Vec<(usize, String)>,
+    /// Buffer indices of shell terminals that should be reset (clear screen).
+    pub resets: Vec<usize>,
+    /// Buffer indices of shell terminals that should be closed.
+    pub closes: Vec<usize>,
+    /// Queued text to send to shell terminals: (buffer_index, text).
+    pub inputs: Vec<(usize, String)>,
+    /// Pending scroll amount. Positive = up, negative = down, zero = bottom.
+    pub scroll: Option<i32>,
+    /// Pending mouse click: (row, col, button).
+    pub click: Option<(usize, usize, crate::input::MouseButton)>,
+    /// Pending mouse drag position: (row, col).
+    pub drag: Option<(usize, usize)>,
+    /// Pending mouse release position: (row, col).
+    pub release: Option<(usize, usize)>,
+    /// Cached viewport snapshots, keyed by buffer index.
+    pub viewports: HashMap<usize, Vec<String>>,
+    /// Cached current working directories, keyed by buffer index.
+    pub viewport_cwds: HashMap<usize, String>,
+}
+
+/// Collaborative editing state extracted from Editor.
+/// All fields were previously `collab_*` on Editor; now accessed via `editor.collab.*`.
+#[derive(Debug)]
+pub struct CollabState {
+    /// Current connection status (Off/Connecting/Connected/Reconnecting/Disconnected).
+    pub status: CollabStatus,
+    /// Number of documents currently synced via the collaborative state server.
+    pub synced_docs: usize,
+    /// Set of buffer names currently synced via the collaborative state server.
+    pub synced_buffers: HashSet<String>,
+    /// Pending collaborative editing intent for the binary event loop to drain.
+    pub pending_intent: Option<CollabIntent>,
+    /// TCP address of the collaborative state server.
+    pub server_address: String,
+    /// Automatically connect to the state server on startup.
+    pub auto_connect: bool,
+    /// Automatically share new buffers when connected.
+    pub auto_share: bool,
+    /// Seconds between automatic reconnection attempts.
+    pub reconnect_interval: u64,
+    /// Display name for collaborative edits.
+    pub user_name: String,
+    /// Write timeout for peer connections, in milliseconds.
+    pub write_timeout_ms: u64,
+    /// Maximum pending updates before warning (0 = unlimited).
+    pub max_pending_updates: u64,
+    /// Exponential backoff multiplier for reconnection attempts.
+    pub reconnect_backoff_factor: u64,
+    /// Maximum reconnection attempts before giving up (0 = infinite).
+    pub max_reconnect_attempts: u64,
+    /// Milliseconds to batch local updates before sending (0 = immediate).
+    pub batch_update_ms: u64,
+    /// When joining a doc, prompt to map to local project path.
+    pub auto_resolve_paths: bool,
+    /// Default directory for :saveas on joined buffers (empty = CWD).
+    pub default_save_dir: String,
+    /// Auto-save local file when CRDT update arrives.
+    pub save_on_remote_update: bool,
+    /// Seconds between heartbeat pings to the state server (0 = disabled).
+    pub heartbeat_interval: u64,
+    /// Pending save_committed to send on next drain tick.
+    /// Format: (doc_id, save_epoch, content_hash, saved_by).
+    pub pending_save_committed: Option<(String, u64, String, String)>,
+    /// Remote user awareness state (cursors, selections, presence).
+    pub remote_users: mae_sync::awareness::AwarenessMap,
+    /// Pending awareness update to send (throttled at 50ms).
+    pub pending_awareness: Option<(String, String)>, // (doc_id, state_json)
+    /// Timestamp of last awareness send (for throttling).
+    pub last_awareness_sent: std::time::Instant,
+}
+
+impl CollabState {
+    pub fn new() -> Self {
+        Self {
+            status: CollabStatus::Off,
+            synced_docs: 0,
+            synced_buffers: HashSet::new(),
+            pending_intent: None,
+            server_address: DEFAULT_COLLAB_ADDRESS.to_string(),
+            auto_connect: false,
+            auto_share: false,
+            reconnect_interval: 5,
+            user_name: String::new(),
+            write_timeout_ms: 5000,
+            max_pending_updates: 1000,
+            reconnect_backoff_factor: 2,
+            max_reconnect_attempts: 0,
+            batch_update_ms: 0,
+            auto_resolve_paths: false,
+            default_save_dir: String::new(),
+            save_on_remote_update: false,
+            heartbeat_interval: 30,
+            pending_save_committed: None,
+            remote_users: mae_sync::awareness::AwarenessMap::new(),
+            pending_awareness: None,
+            last_awareness_sent: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Default for CollabState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// State for an active note capture session (org-roam parity).
 /// Set when `kb_create_note_from_title` creates a note; cleared by
@@ -58,7 +252,8 @@ pub use marks::Mark;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use crate::buffer::Buffer;
 
@@ -83,8 +278,6 @@ pub fn rekey_after_remove<V>(map: &mut HashMap<usize, V>, removed_idx: usize) {
 }
 use crate::command_palette::CommandPalette;
 use crate::commands::CommandRegistry;
-use crate::dap_intent::DapIntent;
-use crate::debug::DebugState;
 use crate::file_picker::FilePicker;
 use crate::hooks::HookRegistry;
 use crate::kb_seed::seed_kb;
@@ -369,9 +562,9 @@ pub struct AiNetworkCheck {
     pub error: Option<String>,
 }
 
-// @ai-caution: [dispatch] ~100+ fields. Growing toward Emacs buffer.c pattern.
-// Before adding fields, check if the state belongs in a sub-struct (LspContext,
-// DapContext, ModuleContext, RenderContext). See ROADMAP.md architecture debt.
+// @ai-caution: [dispatch] ~40 fields after ViState (41) + AiState (34) + CollabState (18) + ShellIntents (12) extraction.
+// Before adding fields, check if the state belongs in a sub-struct
+// (LspContext, DapContext, KbContext). See ROADMAP.md architecture debt.
 /// Top-level editor state.
 ///
 /// Designed as a clean, composable state machine that both human keybindings
@@ -392,22 +585,21 @@ pub struct Editor {
     pub status_msg: String,
     /// Name of the command currently being dispatched (Emacs `this-command`).
     pub current_command: String,
-    pub command_line: String,
     pub commands: CommandRegistry,
     pub keymaps: HashMap<String, Keymap>,
     /// Current which-key prefix being accumulated. Empty = no popup.
     pub which_key_prefix: Vec<KeyPress>,
+    /// Scroll offset (in rows) for the which-key popup. Reset when prefix changes.
+    pub which_key_scroll: usize,
     /// In-editor message log (*Messages* buffer equivalent).
     /// Shared with the tracing layer via MessageLogHandle.
     pub message_log: MessageLog,
     /// Active color theme. All rendering reads from this.
     pub theme: Theme,
-    /// Active debug session state, if any. Both self-debug and DAP populate this.
-    pub debug_state: Option<DebugState>,
-    /// Named registers for yank/paste (vi `"` register is the default).
-    pub registers: HashMap<char, String>,
-    /// Pending char-argument command (e.g. after pressing `f`, waiting for target char).
-    pub pending_char_command: Option<String>,
+    /// DAP debug session state and pending intent queue.
+    pub dap: DapContext,
+    /// Vi-modal editing state (operators, registers, marks, macros, command-line, etc.).
+    pub vi: ViState,
     /// True while the user is resolving `SPC h k` (describe-key).
     /// The next key sequence they type is looked up in the normal
     /// keymap, and the resulting command's help page is opened instead
@@ -415,30 +607,10 @@ pub struct Editor {
     pub awaiting_key_description: bool,
     /// Transient flag for double-Esc detection in the *AI* output buffer.
     pub conv_esc_pending: bool,
-    /// Active named register selected by `"x` prefix. Consumed by the
-    /// next yank/delete/paste operation. Uppercase = append mode,
-    /// `_` = black-hole (discard), `+`/`*` = system clipboard.
-    pub active_register: Option<char>,
-    /// True after the user pressed `"` in normal/visual mode; the next
-    /// char will populate [`Self::active_register`].
-    pub pending_register_prompt: bool,
-    /// True after the user pressed `Ctrl-R` in insert mode; the next
-    /// char selects a register whose contents will be inserted at the
-    /// cursor. Cleared on resolution or Escape.
-    pub pending_insert_register: bool,
-    /// C-o in insert mode: execute one normal command then return to insert.
-    pub insert_mode_oneshot_normal: bool,
-    /// First delimiter captured during a `cs<from><to>` sequence. Set
-    /// after `cs` + the first char, consumed when the second char
-    /// arrives.
-    pub pending_surround_from: Option<char>,
     /// Search state (pattern, cached matches, direction).
     pub search_state: SearchState,
     /// Current search input being typed in Search mode.
     pub search_input: String,
-    /// Visual mode anchor (row, col) — start of selection.
-    pub visual_anchor_row: usize,
-    pub visual_anchor_col: usize,
     /// Viewport height in lines, updated each frame from the renderer.
     /// Used by scroll commands (Ctrl-U/D/F/B, H/M/L, zz/zt/zb).
     pub viewport_height: usize,
@@ -457,42 +629,6 @@ pub struct Editor {
     pub command_palette: Option<CommandPalette>,
     /// Mini-dialog state for interactive commands (edit-link, rename, etc.).
     pub mini_dialog: Option<crate::command_palette::MiniDialogState>,
-    /// Tab completion matches for command mode (:e path).
-    pub tab_completions: Vec<String>,
-    pub tab_completion_idx: usize,
-    /// Last repeatable edit for dot-repeat (`.`).
-    pub last_edit: Option<EditRecord>,
-    /// Char offset at the point insert mode was entered (for capturing inserted text).
-    pub insert_start_offset: Option<usize>,
-    /// The command that initiated the current insert mode session (for dot-repeat).
-    pub insert_initiated_by: Option<String>,
-    /// Cursor position (buffer_idx, row, col) at the point insert mode was
-    /// last exited. Used by `gi` to re-enter insert at that spot.
-    pub last_insert_pos: Option<(usize, usize, usize)>,
-    /// Jump list (vim `Ctrl-o` / `Ctrl-i`, Practical Vim ch. 9).
-    /// Oldest → newest. Capped at [`JUMP_LIST_CAP`].
-    pub jumps: Vec<JumpEntry>,
-    /// Cursor into `jumps`. `jump_idx == jumps.len()` means "past newest"
-    /// (fresh state); a successful Ctrl-o decrements it.
-    pub jump_idx: usize,
-    /// Change list (vim `g;` / `g,`, Practical Vim ch. 9). Oldest →
-    /// newest. Capped at [`CHANGE_LIST_CAP`].
-    pub changes: Vec<ChangeEntry>,
-    /// Cursor into `changes`. `change_idx == changes.len()` means
-    /// "past newest"; a successful `g;` decrements it.
-    pub change_idx: usize,
-    /// Vi-style count prefix (e.g. `5j` = move down 5). None = no count typed.
-    pub count_prefix: Option<usize>,
-    /// Count saved for pending char-argument commands (f/F/t/T/r + char).
-    pub pending_char_count: usize,
-    /// Index of the previously active buffer (for Ctrl-^ alternate file).
-    pub alternate_buffer_idx: Option<usize>,
-    /// Command-line history (for up/down recall in `:` mode).
-    pub command_history: Vec<String>,
-    /// Current index into command_history when recalling (None = not recalling).
-    pub command_history_idx: Option<usize>,
-    /// Cursor position (byte index) within `command_line` for readline-style editing.
-    pub command_cursor: usize,
     /// Queue of pending LSP requests for the binary to drain each event-loop tick.
     /// The core cannot call async LSP code directly; instead, commands push
     /// intents here and `main.rs` forwards them to `run_lsp_task`.
@@ -503,51 +639,11 @@ pub struct Editor {
     /// when a project root is first detected after LSP has already started
     /// (e.g. launched from app launcher with `cwd = $HOME`).
     pub pending_lsp_root_change: Option<String>,
-    /// Queue of pending DAP requests for the binary to drain each event-loop tick.
-    /// Same pattern as `pending_lsp_requests`: core cannot call async DAP code
-    /// directly; commands push intents here and `main.rs` forwards them to
-    /// `run_dap_task`.
-    pub pending_dap_intents: Vec<DapIntent>,
-    /// Buffer indices of newly created shell buffers that need PTY spawning.
-    /// The binary drains this and creates `ShellTerminal` instances.
-    pub pending_shell_spawns: Vec<usize>,
-    /// Working directory overrides for shell spawns: buffer_idx → dir.
-    /// Drained together with `pending_shell_spawns` by the binary.
-    pub pending_shell_cwds: HashMap<usize, std::path::PathBuf>,
-    /// Agent shell spawns: (buf_idx, command). The binary spawns these with
-    /// `spawn_command` so the PTY exits when the agent command exits.
-    pub pending_agent_spawns: Vec<(usize, String)>,
-    /// Buffer indices of shell terminals that should be reset (clear screen).
-    /// Drained by the binary which owns the `ShellTerminal` instances.
-    pub pending_shell_resets: Vec<usize>,
-    /// Buffer indices of shell terminals that should be closed.
-    /// Drained by the binary which shuts down the PTY and removes the terminal.
-    pub pending_shell_closes: Vec<usize>,
-    /// Queued text to send to shell terminals: (buffer_index, text).
-    /// Drained by the binary which owns the `ShellTerminal` instances.
-    pub pending_shell_inputs: Vec<(usize, String)>,
-    /// Pending shell scroll amount. Positive = scroll up, negative = scroll down,
-    /// zero = scroll to bottom. Consumed by the binary which owns `ShellTerminal`.
-    pub pending_shell_scroll: Option<i32>,
-    /// Pending shell mouse click: (row, col, button). Set by `handle_mouse_click`
-    /// for shell buffers, drained by the binary which owns `ShellTerminal`.
-    pub pending_shell_click: Option<(usize, usize, crate::input::MouseButton)>,
-    /// Pending shell mouse drag position: (row, col). Set during drag in shell
-    /// buffers, drained by the binary.
-    pub pending_shell_drag: Option<(usize, usize)>,
-    /// Pending shell mouse release position: (row, col). Set on button release
-    /// in shell buffers, drained by the binary to finalize selection.
-    pub pending_shell_release: Option<(usize, usize)>,
+    /// Shell/terminal intent queue and cached state.
+    pub shell: ShellIntents,
     /// Buffer indices removed this tick, for the binary to rekey its own
     /// shell-related HashMaps (shell_terminals, shell_last_dims, etc.).
     pub pending_buffer_removals: Vec<usize>,
-    /// Cached viewport snapshots for shell terminals, updated by the binary
-    /// each render tick. Keyed by buffer index. Used by AI tools to read
-    /// terminal output without direct access to `ShellTerminal`.
-    pub shell_viewports: HashMap<usize, Vec<String>>,
-    /// Cached current working directories for shell terminals, keyed by
-    /// buffer index. Updated by the binary via /proc/{pid}/cwd.
-    pub shell_cwds: HashMap<usize, String>,
     /// Hook registry: named extension points with ordered Scheme function lists.
     /// Populated by `(add-hook! ...)` from Scheme, fired by core operations.
     pub hooks: HookRegistry,
@@ -569,61 +665,12 @@ pub struct Editor {
     pub syntax_reparse_pending: std::collections::HashSet<usize>,
     /// Timestamp of the last buffer edit. Used for debouncing syntax reparses.
     pub last_edit_time: std::time::Instant,
-    /// Stack of prior char-offset visual selections created by
-    /// `syntax_expand_selection` — lets `syntax_contract_selection` walk
-    /// back down the node tree. Cleared on `syntax_select_node`.
-    pub syntax_selection_stack: Vec<(usize, usize)>,
-    /// Named cursor marks, keyed by mark letter (`m`+letter to set,
-    /// `'`+letter to jump). Paths make marks survive buffer switches.
-    pub marks: HashMap<char, Mark>,
     /// LSP completion popup state. Empty = no popup visible.
     pub completion_items: Vec<CompletionItem>,
     /// Index of the currently selected completion item.
     pub completion_selected: usize,
-    /// True while a macro is being recorded into `macro_register`.
-    pub macro_recording: bool,
-    /// Register letter being recorded into (a-z).
-    pub macro_register: Option<char>,
-    /// Raw keystroke log for the active recording session.
-    pub macro_log: Vec<crate::keymap::KeyPress>,
-    /// Register letter of the last-replayed macro (for `@@`).
-    pub last_macro_register: Option<char>,
-    /// Recursion depth guard during macro replay (max 10).
-    pub macro_replay_depth: usize,
-    /// Knowledge base: backing store for the help system and the
-    /// AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
-    /// hand-authored concept nodes on startup.
-    pub kb: mae_kb::KnowledgeBase,
-    /// KB federation: registry of external KB instances (org-roam dirs etc.).
-    pub kb_registry: mae_kb::federation::KbRegistry,
-    /// KB federation: loaded KB instances keyed by registry UUID.
-    pub kb_instances: HashMap<String, mae_kb::KnowledgeBase>,
-    /// KB federation: live file watchers for registered org directories.
-    pub kb_watchers: HashMap<String, mae_kb::watch::OrgDirWatcher>,
-    /// KB watcher: last drain timestamp per instance UUID (for debounce).
-    pub kb_last_drain: HashMap<String, std::time::Instant>,
-    /// KB watcher: cumulative statistics.
-    pub kb_watcher_stats: KbWatcherStats,
-    /// KB option: enable/disable file watchers.
-    pub kb_watcher_enabled: bool,
-    /// KB option: debounce interval in ms between watcher drains.
-    pub kb_watcher_debounce_ms: u64,
-    /// KB option: max events processed per idle tick.
-    pub kb_max_drain_events: usize,
-    /// KB option: max bytes for RAG excerpt truncation.
-    pub kb_search_excerpt_length: usize,
-    /// KB option: hard cap for kb_search_context results.
-    pub kb_search_max_results: usize,
-    /// KB option: auto-register org directories in project root.
-    pub kb_auto_register: bool,
-    /// KB option: default directory for user-created notes (org-roam-directory equivalent).
-    pub kb_notes_dir: Option<std::path::PathBuf>,
-    /// Active capture state (org-roam C-c C-c / C-c C-k flow).
-    pub capture_state: Option<CaptureState>,
-    /// KB node IDs visited via AI tools (kb_get/links_from/links_to) this session.
-    /// Append guidance on revisit to steer away from manual graph traversal loops.
-    /// Cleared when a new AI conversation starts.
-    pub kb_ai_visited_ids: std::collections::HashSet<String>,
+    /// Knowledge base state: backing store, federation, watchers, and config.
+    pub kb: KbContext,
 
     /// Override for config dir (test isolation — prevents clobbering ~/.config/mae).
     pub config_dir_override: Option<std::path::PathBuf>,
@@ -660,7 +707,7 @@ pub struct Editor {
     pub spell_enabled: bool,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
-    pub last_help_state: Option<crate::help_view::HelpView>,
+    pub last_kb_state: Option<crate::kb_view::KbView>,
     /// Which ASCII art to show on the splash screen. Default is "bat".
     pub splash_art: Option<String>,
     /// Custom splash arts registered via `(register-splash-art! ...)`.
@@ -671,62 +718,12 @@ pub struct Editor {
     pub splash_image_height: u32,
     /// Show ASCII MAE logo text below splash art/image. Default true.
     pub splash_show_logo: bool,
-    /// Pending operator for operator-pending mode (`d`, `c`, `y`).
-    /// When set, the next motion completes the operator.
-    pub pending_operator: Option<String>,
-    /// Cursor position (row, col) when operator-pending started.
-    pub operator_start: Option<(usize, usize)>,
-    /// Count prefix saved from the operator key (e.g. `2d` saves 2).
-    /// Multiplied with the motion's own count when the motion fires.
-    pub operator_count: Option<usize>,
-    /// True if the last dispatched motion was linewise (gg, G, {, }, etc.).
-    pub last_motion_linewise: bool,
-    /// Char offset range saved by `ys{motion}` for the subsequent char-await
-    /// that wraps the range with a delimiter pair.
-    pub pending_surround_range: Option<(usize, usize)>,
-    /// Last f/F/t/T search: (char, command-name). `;` repeats same direction,
-    /// `,` repeats opposite.
-    pub last_find_char: Option<(char, String)>,
-    /// Saved visual selection from last exit: (anchor_row, anchor_col, cursor_row, cursor_col, visual_type).
-    pub last_visual: Option<(usize, usize, usize, usize, crate::VisualType)>,
     /// Scheme code queued for evaluation by the binary. Commands like
     /// `eval-line` / `eval-buffer` push the captured text here; the
     /// event loop drains it after dispatch (same pattern as LSP intents).
     pub pending_scheme_eval: Vec<String>,
-    /// Running AI session spend in USD (zero for unpriced/local models).
-    /// Surfaced in the status line so users see the meter tick before
-    /// they blow past a budget.
-    pub ai_session_cost_usd: f64,
-    /// Cumulative prompt tokens this session (all providers).
-    pub ai_session_tokens_in: u64,
-    /// Cumulative completion tokens this session (all providers).
-    pub ai_session_tokens_out: u64,
-    /// Cumulative cache read tokens (prompt cache hits).
-    pub ai_cache_read_tokens: u64,
-    /// Cumulative cache creation tokens.
-    pub ai_cache_creation_tokens: u64,
-    /// Model's context window size in tokens.
-    pub ai_context_window: u64,
-    /// Estimated tokens currently used in context.
-    pub ai_context_used_tokens: u64,
-    /// Timestamp of the last successful AI API call.
-    pub ai_last_api_success: Option<std::time::Instant>,
-    /// Last AI API error message (if any).
-    pub ai_last_api_error: Option<String>,
-    /// Latency of the last AI API call in milliseconds.
-    pub ai_last_api_latency_ms: Option<u64>,
-    /// Total number of AI API calls this session.
-    pub ai_api_call_count: u64,
-    /// Last network connectivity check result (from :ai-ping).
-    /// Fields: (endpoint, reachable, http_status, latency_ms, error).
-    pub ai_last_network_check: Option<AiNetworkCheck>,
-    /// Throttle for AI output scroll during streaming. Only `StreamChunk`
-    /// events are throttled (50ms); discrete events always scroll immediately.
-    pub ai_last_output_scroll: Option<std::time::Instant>,
-    /// Dedicated window for AI file operations. Reused across all open_file/switch_buffer
-    /// calls during a session. Prevents the AI from creating multiple splits.
-    /// Cleared on session end.
-    pub ai_work_window_id: Option<crate::window::WindowId>,
+    /// AI session state (provider config, tokens, streaming, conversation pair, etc.).
+    pub ai: AiState,
     /// Visual bell: when set, the renderer inverts the status bar background
     /// until this instant passes. Emacs `visible-bell` equivalent.
     pub bell_until: Option<std::time::Instant>,
@@ -734,8 +731,6 @@ pub struct Editor {
     pub project: Option<crate::project::Project>,
     /// Cached git branch name for the active project. Updated on project detect and file save.
     pub git_branch: Option<String>,
-    /// Current AI permission tier label for status display.
-    pub ai_permission_tier: String,
     /// Recently opened files (bounded, deduplicated).
     pub recent_files: crate::project::RecentFiles,
     /// Recently used project roots (bounded, deduplicated).
@@ -752,45 +747,14 @@ pub struct Editor {
     pub break_indent: bool,
     /// String prefix for continuation lines (neovim showbreak). Default "↪ ".
     pub show_break: String,
+    /// Column at which fill-paragraph wraps text (Emacs fill-column).
+    pub fill_column: usize,
     /// Toggle: hide *bold* and /italic/ markers in Org-mode.
     pub org_hide_emphasis_markers: bool,
-    /// Pending agent setup request from `:agent-setup <name>` or `:agent-list`.
-    /// The binary drains this and calls `agents::setup_agent()`.
-    /// `Some("__list__")` is the sentinel for `:agent-list`.
-    pub pending_agent_setup: Option<String>,
-    /// Controls what keyboard input is allowed during AI/MCP operations.
-    /// When not `None`, editor commands are blocked but shell input and
-    /// navigation may still be allowed. Esc / Ctrl-C always cancel and
-    /// release the lock.
-    pub input_lock: InputLock,
-    /// True while the AI session is actively streaming (text chunks or tool
-    /// calls). Used to distinguish "AI thinking" from "idle but locked".
-    pub ai_streaming: bool,
-    /// Set to true when the user requests AI cancellation (e.g. via `ai-cancel` command).
-    /// The event loop will read and reset this flag, sending the actual cancel command to the AI thread.
-    pub ai_cancel_requested: bool,
-    /// Last time the Escape key was pressed (for double-esc detection).
-    pub last_esc_time: Option<std::time::Instant>,
-    /// AI operating mode (manual, auto-accept, plan).
-    pub ai_mode: String,
-    /// Active prompt profile name.
-    pub ai_profile: String,
-    /// Current round in the AI tool loop.
-    pub ai_current_round: usize,
-    /// Current transaction start index in history.
-    pub ai_transaction_start_idx: Option<usize>,
-    /// AI's target buffer context. When set, buffer/LSP tools operate here
-    /// instead of the human-focused active buffer. This allows the AI to
-    /// edit files while the human watches the *AI* conversation.
-    pub ai_target_buffer_idx: Option<usize>,
-    /// AI's target window context. When set, cursor/scroll tools operate on
-    /// this window instead of the focused window. Set via `set_ai_target` tool.
-    pub ai_target_window_id: Option<crate::window::WindowId>,
-    /// Linked output+input buffer pair for the split-view conversation UI.
-    /// `None` until the user opens the conversation buffer.
-    pub conversation_pair: Option<ConversationPair>,
     /// Window ID of the file tree sidebar, if open. Used to track and close it.
     pub file_tree_window_id: Option<crate::window::WindowId>,
+    /// Whether to auto-focus the file tree window when it opens.
+    pub file_tree_focus_on_open: bool,
     /// Pending file tree action (rename/create). The command-line submit
     /// path checks this after the user types a new name.
     /// NOTE: Mostly replaced by MiniDialog — retained only for backward compat
@@ -827,20 +791,6 @@ pub struct Editor {
     /// Clipboard integration mode: "unnamedplus" (system clipboard for paste),
     /// "unnamed" (yank syncs out, paste reads internal), "internal" (no sync).
     pub clipboard: String,
-    /// AI editor/agent command to launch in a shell (e.g. "claude", "aider").
-    /// Used by `open-ai-agent` to spawn an agent shell.
-    pub ai_editor: String,
-    /// AI provider name: "claude", "openai", "gemini", "ollama", "deepseek".
-    /// Set via `(set-option! "ai-provider" "deepseek")` or config.toml.
-    pub ai_provider: String,
-    /// AI model identifier. Empty = use provider default.
-    pub ai_model: String,
-    /// Scheme-registered AI tools (via `register-ai-tool!`).
-    pub scheme_ai_tools: Vec<crate::SchemeToolDef>,
-    /// Shell command whose stdout is the API key (e.g. "pass show deepseek/api-key").
-    pub ai_api_key_command: String,
-    /// Base URL override for the AI API.
-    pub ai_base_url: String,
     /// Whether to restore sessions on startup. Default false.
     pub restore_session: bool,
     /// Insert-mode C-d behavior: "dedent" (vim) or "delete-forward" (Emacs).
@@ -885,7 +835,7 @@ pub struct Editor {
     pub heading_scale_h3: f32,
     /// Show link labels instead of raw markup (Emacs org-link-descriptive). Default true.
     pub link_descriptive: bool,
-    /// Apply inline bold/italic/code styling in conversation/help buffers. Default true.
+    /// Apply inline bold/italic/code styling in conversation and KB buffers. Default true.
     pub render_markup: bool,
     /// Show hover info in a floating popup (true) or status bar (false). Default true.
     pub lsp_hover_popup: bool,
@@ -935,10 +885,6 @@ pub struct Editor {
     /// Last cursor position when a documentHighlight request was sent.
     /// Used to avoid duplicate requests when the cursor hasn't moved.
     pub highlight_last_pos: Option<(usize, usize)>,
-    /// Pending block-visual insert: (min_row, max_row, min_col) saved when `I`
-    /// is pressed in block visual mode. On insert-mode exit, the typed text is
-    /// replicated to all rows in the range.
-    pub pending_block_insert: Option<(usize, usize, usize)>,
     /// Shared heartbeat counter — incremented each event loop tick by the
     /// binary. The watchdog thread monitors this to detect main-thread stalls.
     pub heartbeat: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -1013,11 +959,6 @@ pub struct Editor {
     /// Persistent list of org directories/files to scan for agenda items.
     /// Stored in config.toml as `[org] agenda_files = [...]`.
     pub org_agenda_files: Vec<String>,
-    /// Whether an AI provider was successfully configured at startup.
-    /// Set by `setup_ai()` in bootstrap.rs. Used by the UI layer to
-    /// show guidance when the user tries to open an AI conversation
-    /// without credentials.
-    pub ai_configured: bool,
     /// Active modules. Populated by the module loader in bootstrap.rs.
     /// Used by `:describe-module`, `list_modules` MCP tool, and `audit_configuration`.
     pub active_modules: Vec<ModuleInfo>,
@@ -1034,6 +975,11 @@ pub struct Editor {
     /// Pending package management commands (sync, upgrade, doctor).
     /// Drained by the binary crate in the event loop.
     pub pending_pkg_commands: Vec<String>,
+    /// Paths for which this editor instance holds advisory file locks.
+    /// Locks are acquired on file open and released on buffer close or exit.
+    pub locked_files: HashSet<PathBuf>,
+    /// Collaborative editing state (connection, sync, options).
+    pub collab: CollabState,
 }
 
 impl Default for Editor {
@@ -1056,26 +1002,18 @@ impl Editor {
             running: true,
             status_msg: String::new(),
             current_command: String::new(),
-            command_line: String::new(),
             commands,
             keymaps,
             which_key_prefix: Vec::new(),
+            which_key_scroll: 0,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             theme: default_theme(),
-            debug_state: None,
-            registers: HashMap::new(),
-            pending_char_command: None,
+            dap: DapContext::new(),
+            vi: ViState::new(),
             awaiting_key_description: false,
             conv_esc_pending: false,
-            active_register: None,
-            pending_register_prompt: false,
-            pending_insert_register: false,
-            insert_mode_oneshot_normal: false,
-            pending_surround_from: None,
             search_state: SearchState::default(),
             search_input: String::new(),
-            visual_anchor_row: 0,
-            visual_anchor_col: 0,
             viewport_height: 24,
             last_layout_area: Rect {
                 x: 0,
@@ -1088,39 +1026,11 @@ impl Editor {
             file_browser: None,
             command_palette: None,
             mini_dialog: None,
-            tab_completions: Vec::new(),
-            tab_completion_idx: 0,
-            last_edit: None,
-            insert_start_offset: None,
-            insert_initiated_by: None,
-            last_insert_pos: None,
-            jumps: Vec::new(),
-            jump_idx: 0,
-            changes: Vec::new(),
-            change_idx: 0,
-            count_prefix: None,
-            pending_char_count: 1,
-            alternate_buffer_idx: None,
-            command_history: Vec::new(),
-            command_history_idx: None,
-            command_cursor: 0,
             pending_lsp_requests: Vec::new(),
             lsp_trigger_characters: std::collections::HashMap::new(),
             pending_lsp_root_change: None,
-            pending_dap_intents: Vec::new(),
-            pending_shell_spawns: Vec::new(),
-            pending_shell_cwds: HashMap::new(),
-            pending_agent_spawns: Vec::new(),
-            pending_shell_resets: Vec::new(),
-            pending_shell_closes: Vec::new(),
-            pending_shell_inputs: Vec::new(),
-            pending_shell_scroll: None,
-            pending_shell_click: None,
-            pending_shell_drag: None,
-            pending_shell_release: None,
+            shell: ShellIntents::default(),
             pending_buffer_removals: Vec::new(),
-            shell_viewports: HashMap::new(),
-            shell_cwds: HashMap::new(),
             hooks,
             pending_hook_evals: Vec::new(),
             diagnostics: DiagnosticStore::default(),
@@ -1128,44 +1038,16 @@ impl Editor {
             syntax: crate::syntax::SyntaxMap::new(),
             syntax_reparse_pending: std::collections::HashSet::new(),
             last_edit_time: std::time::Instant::now(),
-            syntax_selection_stack: Vec::new(),
-            marks: HashMap::new(),
             completion_items: Vec::new(),
             completion_selected: 0,
-            macro_recording: false,
-            macro_register: None,
-            macro_log: Vec::new(),
-            last_macro_register: None,
-            macro_replay_depth: 0,
-            last_help_state: None,
+            last_kb_state: None,
             splash_art: Some("bat".to_string()),
             custom_splash_arts: Vec::new(),
             splash_image_width: 25,
             splash_image_height: 20,
             splash_show_logo: true,
-            pending_operator: None,
-            operator_start: None,
-            operator_count: None,
-            last_motion_linewise: false,
-            pending_surround_range: None,
-            last_find_char: None,
-            last_visual: None,
             pending_scheme_eval: Vec::new(),
-            kb,
-            kb_registry: mae_kb::federation::KbRegistry::default(),
-            kb_instances: HashMap::new(),
-            kb_watchers: HashMap::new(),
-            kb_last_drain: HashMap::new(),
-            kb_watcher_stats: KbWatcherStats::default(),
-            kb_watcher_enabled: true,
-            kb_watcher_debounce_ms: 500,
-            kb_max_drain_events: 100,
-            kb_search_excerpt_length: 500,
-            kb_search_max_results: 20,
-            kb_auto_register: false,
-            kb_notes_dir: None,
-            capture_state: None,
-            kb_ai_visited_ids: std::collections::HashSet::new(),
+            kb: KbContext::new(kb),
             config_dir_override: None,
             data_dir_override: None,
             babel_confirm: true,
@@ -1180,24 +1062,10 @@ impl Editor {
             spell_results: HashMap::new(),
             format_on_save: false,
             spell_enabled: false,
-            ai_session_cost_usd: 0.0,
-            ai_session_tokens_in: 0,
-            ai_session_tokens_out: 0,
-            ai_cache_read_tokens: 0,
-            ai_cache_creation_tokens: 0,
-            ai_context_window: 0,
-            ai_context_used_tokens: 0,
-            ai_last_api_success: None,
-            ai_last_api_error: None,
-            ai_last_api_latency_ms: None,
-            ai_api_call_count: 0,
-            ai_last_output_scroll: None,
-            ai_work_window_id: None,
-            ai_last_network_check: None,
+            ai: AiState::new(),
             bell_until: None,
             project: None,
             git_branch: None,
-            ai_permission_tier: "ReadOnly".to_string(),
             recent_files: crate::project::RecentFiles::default(),
             recent_projects: crate::project::RecentProjects::default(),
             project_list: crate::project::ProjectList::default(),
@@ -1206,20 +1074,10 @@ impl Editor {
             word_wrap: false,
             break_indent: true,
             show_break: "↪ ".to_string(),
+            fill_column: 80,
             org_hide_emphasis_markers: false,
-            pending_agent_setup: None,
-            input_lock: InputLock::None,
-            ai_streaming: false,
-            ai_cancel_requested: false,
-            last_esc_time: None,
-            ai_mode: "standard".to_string(),
-            ai_profile: "pair-programmer".to_string(),
-            ai_current_round: 0,
-            ai_transaction_start_idx: None,
-            ai_target_buffer_idx: None,
-            ai_target_window_id: None,
-            conversation_pair: None,
             file_tree_window_id: None,
+            file_tree_focus_on_open: true,
             file_tree_action: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
@@ -1227,12 +1085,6 @@ impl Editor {
             gui_font_size_default: 14.0,
             gui_font_family: String::new(),
             gui_icon_font_family: String::new(),
-            ai_editor: "claude".to_string(),
-            ai_provider: String::new(),
-            ai_model: String::new(),
-            scheme_ai_tools: Vec::new(),
-            ai_api_key_command: String::new(),
-            ai_base_url: String::new(),
             option_registry: OptionRegistry::new(),
             splash_selection: 0,
             debug_mode: false,
@@ -1287,7 +1139,6 @@ impl Editor {
             highlight_ranges: Vec::new(),
             highlight_generation: 0,
             highlight_last_pos: None,
-            pending_block_insert: None,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1316,12 +1167,13 @@ impl Editor {
             markup_cache: HashMap::new(),
             code_block_cache: HashMap::new(),
             org_agenda_files: Vec::new(),
-            ai_configured: false,
             active_modules: Vec::new(),
             module_binding_warnings: Vec::new(),
             pending_module_reloads: Vec::new(),
             pending_pkg_commands: Vec::new(),
             pending_git_diff: None,
+            locked_files: HashSet::new(),
+            collab: CollabState::new(),
         }
     }
 
@@ -1390,6 +1242,58 @@ impl Editor {
         self.keymaps.get(name)
     }
 
+    /// Look up a key binding by key string (e.g. "SPC n d t").
+    /// Returns (command_name, keymap_name) if found.
+    pub fn lookup_key_binding(&self, key_str: &str) -> Option<(String, String)> {
+        let seq = crate::keymap::parse_key_seq_spaced(key_str);
+        if seq.is_empty() {
+            return None;
+        }
+        for (name, km) in &self.keymaps {
+            for (bound_seq, cmd) in km.bindings() {
+                if *bound_seq == seq {
+                    return Some((cmd.clone(), name.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Query keybindings across all keymaps with optional filters.
+    /// Returns vec of (key_display, command, keymap_name).
+    pub fn query_keybindings(
+        &self,
+        keymap_filter: Option<&str>,
+        command_filter: Option<&str>,
+        prefix_filter: Option<&str>,
+    ) -> Vec<(String, String, String)> {
+        let prefix_seq = prefix_filter.map(crate::keymap::parse_key_seq_spaced);
+        let mut results = Vec::new();
+        for (name, km) in &self.keymaps {
+            if let Some(filter) = keymap_filter {
+                if name != filter {
+                    continue;
+                }
+            }
+            for (seq, cmd) in km.bindings() {
+                if let Some(ref cmd_filter) = command_filter {
+                    if !cmd.contains(cmd_filter) {
+                        continue;
+                    }
+                }
+                if let Some(ref prefix) = prefix_seq {
+                    if seq.len() < prefix.len() || &seq[..prefix.len()] != prefix.as_slice() {
+                        continue;
+                    }
+                }
+                let key_display = crate::keymap::format_key_seq(seq);
+                results.push((key_display, cmd.clone(), name.clone()));
+            }
+        }
+        results.sort_by(|a, b| a.2.cmp(&b.2).then(a.0.cmp(&b.0)));
+        results
+    }
+
     /// Merge which-key entries from the overlay keymap and its parent.
     fn merged_which_key_entries(&self, prefix: &[KeyPress]) -> Vec<WhichKeyEntry> {
         let Some((primary, fallback)) = self.current_keymap_names() else {
@@ -1416,14 +1320,61 @@ impl Editor {
     }
 
     /// Get which-key entries for the current keymap, merging overlay + parent.
+    /// Applies the `which-key-sort-order` option: groups first, then sorted.
     pub fn which_key_entries_for_current_keymap(&self) -> Vec<WhichKeyEntry> {
-        self.merged_which_key_entries(&self.which_key_prefix)
+        let mut entries = self.merged_which_key_entries(&self.which_key_prefix);
+        self.sort_which_key_entries(&mut entries);
+        entries
     }
 
     /// Get all top-level bindings for the current buffer's keymap + parent.
     /// Used by `show-buffer-keys` (`?`) to show a full keybind reference.
     pub fn buffer_keys_entries(&self) -> Vec<WhichKeyEntry> {
-        self.merged_which_key_entries(&[])
+        let mut entries = self.merged_which_key_entries(&[]);
+        self.sort_which_key_entries(&mut entries);
+        entries
+    }
+
+    /// Sort which-key entries: groups first (sorted by key), then leaves
+    /// sorted by the chosen field (`key`, `desc`, or `none`).
+    fn sort_which_key_entries(&self, entries: &mut [WhichKeyEntry]) {
+        let order = self
+            .get_option("which-key-sort-order")
+            .map(|(v, _)| v)
+            .unwrap_or_else(|| "key".to_string());
+        match order.as_str() {
+            "desc" => {
+                entries.sort_by(|a, b| {
+                    b.is_group
+                        .cmp(&a.is_group)
+                        .then_with(|| a.label.to_lowercase().cmp(&b.label.to_lowercase()))
+                });
+            }
+            "none" => {} // insertion order
+            _ => {
+                // "key" (default): groups first, then alphabetical by key
+                entries.sort_by(|a, b| {
+                    b.is_group.cmp(&a.is_group).then_with(|| {
+                        let ak = crate::text_utils::format_keypress(&a.key);
+                        let bk = crate::text_utils::format_keypress(&b.key);
+                        ak.cmp(&bk)
+                    })
+                });
+            }
+        }
+    }
+
+    /// Set the which-key prefix and reset scroll to top.
+    /// Use this instead of assigning `which_key_prefix` directly.
+    pub fn set_which_key_prefix(&mut self, prefix: Vec<KeyPress>) {
+        self.which_key_prefix = prefix;
+        self.which_key_scroll = 0;
+    }
+
+    /// Clear the which-key prefix and reset scroll.
+    pub fn clear_which_key_prefix(&mut self) {
+        self.which_key_prefix.clear();
+        self.which_key_scroll = 0;
     }
 
     // -- Redraw level methods (Emacs tiered redisplay pattern) ----------------
@@ -1673,21 +1624,21 @@ impl Editor {
         let idx = self.active_buffer_idx();
         let line_count = self.buffers[idx].display_line_count();
         if line_count == 0 {
-            self.visual_anchor_row = 0;
-            self.visual_anchor_col = 0;
+            self.vi.visual_anchor_row = 0;
+            self.vi.visual_anchor_col = 0;
         } else {
             let max_row = line_count.saturating_sub(1);
-            if self.visual_anchor_row > max_row {
-                self.visual_anchor_row = max_row;
+            if self.vi.visual_anchor_row > max_row {
+                self.vi.visual_anchor_row = max_row;
             }
-            let max_col = self.buffers[idx].line_len(self.visual_anchor_row);
-            if self.visual_anchor_col > max_col {
-                self.visual_anchor_col = max_col;
+            let max_col = self.buffers[idx].line_len(self.vi.visual_anchor_row);
+            if self.vi.visual_anchor_col > max_col {
+                self.vi.visual_anchor_col = max_col;
             }
         }
 
         // Clamp last_visual so `gv` reselect never panics.
-        if let Some((ref mut ar, ref mut ac, ref mut cr, ref mut cc, _)) = self.last_visual {
+        if let Some((ref mut ar, ref mut ac, ref mut cr, ref mut cc, _)) = self.vi.last_visual {
             if line_count == 0 {
                 *ar = 0;
                 *ac = 0;
@@ -1716,7 +1667,7 @@ impl Editor {
         for win in self.window_mgr.iter_windows_mut() {
             win.buffer_idx += 1;
         }
-        if let Some(alt) = self.alternate_buffer_idx.as_mut() {
+        if let Some(alt) = self.vi.alternate_buffer_idx.as_mut() {
             *alt += 1;
         }
         // Focus the dashboard.
@@ -1731,14 +1682,15 @@ impl Editor {
     /// AI-aware buffer index: returns `ai_target_buffer_idx` if set,
     /// otherwise falls back to `active_buffer_idx()`.
     pub fn ai_active_buffer_idx(&self) -> usize {
-        self.ai_target_buffer_idx
+        self.ai
+            .target_buffer_idx
             .unwrap_or_else(|| self.active_buffer_idx())
     }
 
     /// AI-aware cursor row: reads cursor from the AI target window if set,
     /// otherwise from the focused window.
     pub fn ai_cursor_row(&self) -> usize {
-        if let Some(win_id) = self.ai_target_window_id {
+        if let Some(win_id) = self.ai.target_window_id {
             if let Some(win) = self.window_mgr.iter_windows().find(|w| w.id == win_id) {
                 return win.cursor_row;
             }
@@ -1800,7 +1752,7 @@ impl Editor {
             focused_id,
             next_window_id: next_id,
             mode: self.mode,
-            conversation_pair: self.conversation_pair.clone(),
+            conversation_pair: self.ai.conversation_pair.clone(),
         });
         self.state_stack.len()
     }
@@ -1873,12 +1825,12 @@ impl Editor {
             if let (Some(out_idx), Some(in_idx)) = (out_ok, in_ok) {
                 pair.output_buffer_idx = out_idx;
                 pair.input_buffer_idx = in_idx;
-                self.conversation_pair = Some(pair);
+                self.ai.conversation_pair = Some(pair);
             } else {
-                self.conversation_pair = None;
+                self.ai.conversation_pair = None;
             }
         } else {
-            self.conversation_pair = None;
+            self.ai.conversation_pair = None;
         }
 
         // 6. Focus the originally focused buffer
@@ -1905,6 +1857,15 @@ impl Editor {
     /// Find a buffer index by name. Returns None if not found.
     pub fn find_buffer_by_name(&self, name: &str) -> Option<usize> {
         self.buffers.iter().position(|b| b.name == name)
+    }
+
+    /// Find a buffer by its collaborative document ID.
+    /// Falls back to `find_buffer_by_name` if no buffer has a matching `collab_doc_id`.
+    pub fn find_buffer_by_collab_doc_id(&self, doc_id: &str) -> Option<usize> {
+        self.buffers
+            .iter()
+            .position(|b| b.collab_doc_id.as_deref() == Some(doc_id))
+            .or_else(|| self.find_buffer_by_name(doc_id))
     }
 
     /// Find a buffer by name, or create it with the provided closure.
@@ -1986,38 +1947,51 @@ impl Editor {
         self.buffers.len() - 1
     }
 
-    /// Find or create the `*Help*` buffer and navigate it to `node_id`.
+    /// Find or create the appropriate KB buffer (`*Help*` for builtins,
+    /// `*KB*` for user/federated nodes) and navigate it to `node_id`.
     /// Returns the buffer index. Does NOT switch focus — callers decide.
-    pub fn ensure_help_buffer_idx(&mut self, node_id: &str) -> usize {
+    pub fn ensure_kb_buffer_idx(&mut self, node_id: &str) -> usize {
+        use crate::buffer::buffer_names;
+        use crate::editor::help_ops::is_builtin_node;
+
+        let target_name = if is_builtin_node(node_id) {
+            buffer_names::HELP
+        } else {
+            buffer_names::KB
+        };
+
+        // Look for an existing buffer with the right name
         if let Some(idx) = self
             .buffers
             .iter()
-            .position(|b| b.kind == crate::buffer::BufferKind::Help)
+            .position(|b| b.kind == crate::buffer::BufferKind::Kb && b.name == target_name)
         {
-            if let Some(view) = self.buffers[idx].help_view_mut() {
-                let v: &mut crate::help_view::HelpView = view;
+            if let Some(view) = self.buffers[idx].kb_view_mut() {
+                let v: &mut crate::kb_view::KbView = view;
                 v.navigate_to(node_id.to_string());
             }
             return idx;
         }
-        self.buffers.push(Buffer::new_help(node_id));
+        let mut buf = Buffer::new_kb(node_id);
+        buf.name = target_name.to_string();
+        self.buffers.push(buf);
         self.buffers.len() - 1
     }
 
-    /// Mutable view onto the help buffer's HelpView, if any help buffer exists.
-    pub fn help_view_mut(&mut self) -> Option<&mut crate::help_view::HelpView> {
+    /// Mutable view onto the KB buffer's KbView, if any KB buffer exists.
+    pub fn kb_view_mut(&mut self) -> Option<&mut crate::kb_view::KbView> {
         self.buffers
             .iter_mut()
-            .find(|b| b.kind == crate::buffer::BufferKind::Help)
-            .and_then(|b| b.help_view_mut())
+            .find(|b| b.kind == crate::buffer::BufferKind::Kb)
+            .and_then(|b| b.kb_view_mut())
     }
 
-    /// Immutable view onto the help buffer's HelpView, if any help buffer exists.
-    pub fn help_view(&self) -> Option<&crate::help_view::HelpView> {
+    /// Immutable view onto the KB buffer's KbView, if any KB buffer exists.
+    pub fn kb_view(&self) -> Option<&crate::kb_view::KbView> {
         self.buffers
             .iter()
-            .find(|b| b.kind == crate::buffer::BufferKind::Help)
-            .and_then(|b| b.help_view())
+            .find(|b| b.kind == crate::buffer::BufferKind::Kb)
+            .and_then(|b| b.kb_view())
     }
 
     /// Switch the focused window to the buffer at the given index.
@@ -2028,7 +2002,7 @@ impl Editor {
         }
         let prev_idx = self.active_buffer_idx();
         if prev_idx != idx {
-            self.alternate_buffer_idx = Some(prev_idx);
+            self.vi.alternate_buffer_idx = Some(prev_idx);
         }
         self.save_mode_to_buffer();
         // Check for external file changes before showing the buffer.
@@ -2062,7 +2036,7 @@ impl Editor {
             return true;
         }
         // The *ai-input* buffer is also part of the conversation pair.
-        if let Some(ref pair) = self.conversation_pair {
+        if let Some(ref pair) = self.ai.conversation_pair {
             if idx == pair.input_buffer_idx {
                 return true;
             }
@@ -2079,6 +2053,7 @@ impl Editor {
     /// Prefers the focused window if it's replaceable. Excludes conversation pair windows.
     fn find_replaceable_window(&self) -> Option<crate::window::WindowId> {
         let conv_ids = self
+            .ai
             .conversation_pair
             .as_ref()
             .map(|p| [p.output_window_id, p.input_window_id]);
@@ -2109,7 +2084,7 @@ impl Editor {
         if self.file_tree_window_id == Some(win_id) {
             return true;
         }
-        if let Some(ref pair) = self.conversation_pair {
+        if let Some(ref pair) = self.ai.conversation_pair {
             if win_id == pair.output_window_id || win_id == pair.input_window_id {
                 return true;
             }
@@ -2150,10 +2125,10 @@ impl Editor {
     /// Adjust `ai_target_buffer_idx` after a buffer at `removed_idx` was removed.
     /// Must be called after every `buffers.remove()` to prevent stale indices.
     pub fn adjust_ai_target_after_remove(&mut self, removed_idx: usize) {
-        if let Some(ref mut target) = self.ai_target_buffer_idx {
+        if let Some(ref mut target) = self.ai.target_buffer_idx {
             if *target == removed_idx {
                 // The target buffer was removed — clear it
-                self.ai_target_buffer_idx = None;
+                self.ai.target_buffer_idx = None;
             } else if *target > removed_idx {
                 *target -= 1;
             }
@@ -2176,12 +2151,12 @@ impl Editor {
         self.adjust_ai_target_after_remove(removed_idx);
 
         // 2. Editor-owned shell maps
-        rekey_after_remove(&mut self.shell_viewports, removed_idx);
-        rekey_after_remove(&mut self.shell_cwds, removed_idx);
-        rekey_after_remove(&mut self.pending_shell_cwds, removed_idx);
+        rekey_after_remove(&mut self.shell.viewports, removed_idx);
+        rekey_after_remove(&mut self.shell.viewport_cwds, removed_idx);
+        rekey_after_remove(&mut self.shell.cwds, removed_idx);
 
         // 3. Pending shell queues (Vec<usize> and Vec<(usize, _)>)
-        self.pending_shell_spawns.retain_mut(|idx| {
+        self.shell.spawns.retain_mut(|idx| {
             if *idx == removed_idx {
                 return false;
             }
@@ -2190,7 +2165,7 @@ impl Editor {
             }
             true
         });
-        self.pending_agent_spawns.retain_mut(|(idx, _)| {
+        self.shell.agent_spawns.retain_mut(|(idx, _)| {
             if *idx == removed_idx {
                 return false;
             }
@@ -2199,7 +2174,7 @@ impl Editor {
             }
             true
         });
-        self.pending_shell_resets.retain_mut(|idx| {
+        self.shell.resets.retain_mut(|idx| {
             if *idx == removed_idx {
                 return false;
             }
@@ -2208,7 +2183,7 @@ impl Editor {
             }
             true
         });
-        self.pending_shell_closes.retain_mut(|idx| {
+        self.shell.closes.retain_mut(|idx| {
             if *idx == removed_idx {
                 return false;
             }
@@ -2217,7 +2192,7 @@ impl Editor {
             }
             true
         });
-        self.pending_shell_inputs.retain_mut(|(idx, _)| {
+        self.shell.inputs.retain_mut(|(idx, _)| {
             if *idx == removed_idx {
                 return false;
             }
@@ -2228,9 +2203,9 @@ impl Editor {
         });
 
         // 4. Alternate buffer index
-        if let Some(ref mut alt) = self.alternate_buffer_idx {
+        if let Some(ref mut alt) = self.vi.alternate_buffer_idx {
             if *alt == removed_idx {
-                self.alternate_buffer_idx = None;
+                self.vi.alternate_buffer_idx = None;
             } else if *alt > removed_idx {
                 *alt -= 1;
             }
@@ -2242,9 +2217,9 @@ impl Editor {
         }
 
         // 6. Conversation pair buffer indices
-        if let Some(ref mut pair) = self.conversation_pair {
+        if let Some(ref mut pair) = self.ai.conversation_pair {
             if pair.output_buffer_idx == removed_idx || pair.input_buffer_idx == removed_idx {
-                self.conversation_pair = None; // invalidate
+                self.ai.conversation_pair = None; // invalidate
             } else {
                 if pair.output_buffer_idx > removed_idx {
                     pair.output_buffer_idx -= 1;
@@ -2265,27 +2240,27 @@ impl Editor {
             return false;
         }
 
-        self.ai_target_buffer_idx = Some(idx);
+        self.ai.target_buffer_idx = Some(idx);
 
         // 0. Reuse the dedicated AI work window if it exists and is still valid.
-        if let Some(work_id) = self.ai_work_window_id {
+        if let Some(work_id) = self.ai.work_window_id {
             if self.window_mgr.window(work_id).is_some() {
                 if let Some(win) = self.window_mgr.window_mut(work_id) {
                     win.buffer_idx = idx;
                     win.cursor_row = 0;
                     win.cursor_col = 0;
                 }
-                self.ai_target_window_id = Some(work_id);
+                self.ai.target_window_id = Some(work_id);
                 self.mark_full_redraw();
                 return true;
             } else {
-                self.ai_work_window_id = None; // stale reference
+                self.ai.work_window_id = None; // stale reference
             }
         }
 
         // 1. Is this buffer already visible?
         if let Some(w) = self.window_mgr.iter_windows().find(|w| w.buffer_idx == idx) {
-            self.ai_target_window_id = Some(w.id);
+            self.ai.target_window_id = Some(w.id);
             return true;
         }
 
@@ -2302,8 +2277,8 @@ impl Editor {
                 win.cursor_row = 0;
                 win.cursor_col = 0;
             }
-            self.ai_work_window_id = Some(other_id);
-            self.ai_target_window_id = Some(other_id);
+            self.ai.work_window_id = Some(other_id);
+            self.ai.target_window_id = Some(other_id);
             self.mark_full_redraw();
             return true;
         }
@@ -2315,8 +2290,8 @@ impl Editor {
                 win.cursor_row = 0;
                 win.cursor_col = 0;
             }
-            self.ai_work_window_id = Some(repl_id);
-            self.ai_target_window_id = Some(repl_id);
+            self.ai.work_window_id = Some(repl_id);
+            self.ai.target_window_id = Some(repl_id);
             self.mark_full_redraw();
             return true;
         }
@@ -2333,7 +2308,7 @@ impl Editor {
                 .map(|w| w.id);
             if let Some(id) = non_conv_win {
                 self.window_mgr.set_focused(id);
-            } else if let Some(ref pair) = self.conversation_pair {
+            } else if let Some(ref pair) = self.ai.conversation_pair {
                 // All windows are conversation. Agent shells are persistent
                 // interactive sessions — stealing the output window would
                 // permanently replace the conversation display. Skip the steal
@@ -2347,8 +2322,8 @@ impl Editor {
                         win.cursor_row = 0;
                         win.cursor_col = 0;
                     }
-                    self.ai_work_window_id = Some(out_id);
-                    self.ai_target_window_id = Some(out_id);
+                    self.ai.work_window_id = Some(out_id);
+                    self.ai.target_window_id = Some(out_id);
                     self.mark_full_redraw();
                     return true;
                 }
@@ -2371,8 +2346,8 @@ impl Editor {
 
         match split_result {
             Ok(new_id) => {
-                self.ai_work_window_id = Some(new_id);
-                self.ai_target_window_id = Some(new_id);
+                self.ai.work_window_id = Some(new_id);
+                self.ai.target_window_id = Some(new_id);
                 self.mark_full_redraw();
                 true
             }
@@ -2462,6 +2437,8 @@ impl Editor {
         }
         let prev_idx = self.active_buffer_idx();
         self.save_mode_to_buffer();
+        // Save the current window's view state before switching.
+        self.window_mgr.focused_window_mut().save_view_state();
         self.display_buffer(buf_idx);
         // Find the window now showing buf_idx and focus it.
         let win_id = self
@@ -2472,13 +2449,17 @@ impl Editor {
         if let Some(id) = win_id {
             self.window_mgr.set_focused(id);
         }
+        // Restore view state for the new buffer (scroll position, cursor).
+        self.window_mgr
+            .focused_window_mut()
+            .restore_view_state(buf_idx);
         // No forced fallback: if display_buffer() routed the buffer via
         // switch_to_buffer_non_conversation (e.g. split_root for agent
         // shells), the buffer is already placed in a new window that may
         // not match the iter_windows search above. Forcing it into the
         // focused window would steal conversation windows.
         if prev_idx != buf_idx {
-            self.alternate_buffer_idx = Some(prev_idx);
+            self.vi.alternate_buffer_idx = Some(prev_idx);
         }
         self.sync_mode_to_buffer();
     }
@@ -2487,6 +2468,7 @@ impl Editor {
     /// Excludes windows that are part of the conversation pair (output/input).
     fn find_window_with_kind(&self, kind: crate::BufferKind) -> Option<crate::window::WindowId> {
         let conv_ids = self
+            .ai
             .conversation_pair
             .as_ref()
             .map(|p| [p.output_window_id, p.input_window_id]);
@@ -2606,15 +2588,15 @@ impl Editor {
 
     /// Reset the AI session: request cancellation, clear state, and end streaming.
     pub fn reset_ai_session(&mut self) {
-        self.ai_cancel_requested = true;
-        self.ai_streaming = false;
-        self.ai_current_round = 0;
-        self.ai_transaction_start_idx = None;
+        self.ai.cancel_requested = true;
+        self.ai.streaming = false;
+        self.ai.current_round = 0;
+        self.ai.transaction_start_idx = None;
         if let Some(conv) = self.conversation_mut() {
             conv.end_streaming();
             conv.push_system("[AI Session Reset]");
         }
-        self.input_lock = crate::InputLock::None;
+        self.ai.input_lock = crate::InputLock::None;
     }
 
     /// Shutdown hook — called before `running = false`. Persists message log.
@@ -2662,7 +2644,7 @@ impl Editor {
 
     /// Consume the count prefix, returning the count (default 1).
     pub fn take_count(&mut self) -> usize {
-        self.count_prefix.take().unwrap_or(1)
+        self.vi.count_prefix.take().unwrap_or(1)
     }
 
     /// Single source of truth for how many visual cell-rows a buffer line occupies.

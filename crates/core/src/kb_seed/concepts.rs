@@ -274,7 +274,7 @@ See also: [[concept:buffer]], [[concept:mode]], [[concept:keymap-inheritance]]\n
 pub(super) const CONCEPT_BUFFER_VIEW: &str = "\
 The **BufferView** enum (`buffer_view.rs`) stores mode-specific state on `Buffer`. \
 Variants: `Conversation`, `Help`, `Debug`, `GitStatus`, `Visual`, `FileTree`, `None`.\n\n\
-Accessor methods: `buf.conversation()`, `buf.help_view()`, `buf.git_status_view()`, etc. \
+Accessor methods: `buf.conversation()`, `buf.kb_view()`, `buf.git_status_view()`, etc. \
 Each returns `Option<&T>` (or `Option<&mut T>` for the `_mut` variant).\n\n\
 This replaced 6 `Option<T>` fields that were always mutually exclusive.\n\n\
 See also: [[concept:buffer]], [[concept:buffer-mode]]\n";
@@ -326,7 +326,7 @@ for Emacs's 29 `display-buffer-*` functions and regex alist.\n\n\
 ### The Problem\n\
 Five direct `focused_window_mut().buffer_idx` calls (help, messages, debug, git-status, \
 file-tree) had zero conversation awareness. If the AI agent called `help_open` while \
-focused on the tiny AI input pane, the help buffer got crammed in and the conversation \
+focused on the tiny AI input pane, the KB buffer got crammed in and the conversation \
 layout was destroyed.\n\n\
 ### The 4 Actions (vs Emacs's 29)\n\
 - **ReplaceFocused** — replace the focused window, but fall through to AvoidConversation \
@@ -421,7 +421,11 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:scheme-api|Scheme API]] — ~50 functions for buffer/window/command/keymap access\n\
 - [[concept:ai-modes|AI Agent vs Chat]] — when to use each AI interface\n\
 - [[concept:prompt-tiers|Prompt Tiers]] — model-aware prompt selection (full vs compact)\n\
-- [[concept:display-policy|Display Policy]] — how buffers are placed in windows (4 actions, O(1) dispatch)
+- [[concept:display-policy|Display Policy]] — how buffers are placed in windows (4 actions, O(1) dispatch)\n\
+- [[concept:sync-engine|Sync Engine]] — yrs (Yjs Rust) CRDT for collaborative state\n\
+- [[concept:collaborative-state|Collaborative State]] — vision: text + visual + KB sync\n\
+- [[concept:adr-text-sync|ADR-002: Text Sync]] — decision: yrs/YATA (accepted)\n\
+- [[concept:adr-kb-crdt|ADR-005: KB CRDT]] — KB nodes as yrs documents
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -437,7 +441,7 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 ## Getting around
 - **Enter** on a link follows it.
 - **C-o** goes back, **C-i** goes forward (history, like vim jumps).
-- **q** closes the help buffer.
+- **q** closes the KB viewer.
 ";
 
 pub(super) const CONCEPT_BUFFER: &str = "A **buffer** is the unit of editable content in MAE.\n\
@@ -518,7 +522,7 @@ See also: [[concept:knowledge-base]], [[concept:command]], [[concept:agent-boots
 
 pub(super) const CONCEPT_KB: &str = "\
 MAE's **knowledge base** is a typed graph of nodes with bidirectional \
-link markers. It serves as both the built-in help system and a personal \
+link markers. It serves as both the built-in manual and a personal \
 knowledge graph (org-roam-equivalent).\n\n\
 ## Graph model\n\
 - Typed nodes with bidirectional links (`id|display` syntax).\n\
@@ -671,6 +675,36 @@ service, no API key required to read your own notes.\n\
 search cache. FTS5 with porter stemmer. Sub-millisecond search across \
 thousands of nodes. No Electron, no browser runtime.\n\n\
 See also: [[concept:knowledge-base]], [[concept:kb-federation]], [[concept:kb-workflows]]\n";
+
+pub(super) const CONCEPT_DAILIES: &str = "\
+**Org-dailies** provides daily journal notes with backward chain-linking, \
+inspired by `org-roam-dailies` in Emacs.\n\n\
+## How It Works\n\
+Each daily note lives at `<dailies-dir>/YYYY-MM-DD.org` with a unique ID \
+(`daily:YYYY-MM-DD`). When you open today's daily, MAE creates the file if \
+needed and **chain-fills** backward — creating stub files for any gaps and \
+inserting Previous links (e.g. `Previous: YYYY-MM-DD`) to form a \
+continuous backward chain.\n\n\
+## Keybindings (SPC n d)\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `SPC n d t` | [[cmd:daily-goto-today]] | Open today's daily (chain-fill) |\n\
+| `SPC n d y` | [[cmd:daily-goto-yesterday]] | Open yesterday's daily |\n\
+| `SPC n d d` | [[cmd:daily-goto-date]] | Open daily for a specific date |\n\
+| `SPC n d p` | [[cmd:daily-prev]] | Navigate to previous daily |\n\
+| `SPC n d n` | [[cmd:daily-next]] | Navigate to next daily |\n\n\
+## Configuration\n\
+- `kb_dailies_dir` — explicit path (default: `<kb_notes_dir>/daily`)\n\
+- `kb_daily_chain_gap_max` — max days to chain-fill backward (default: 90)\n\n\
+## Chain-Fill Algorithm\n\
+1. Ensure target date file exists (create stub if needed)\n\
+2. Walk backward day-by-day from target\n\
+3. For each missing day, create a stub `.org` file\n\
+4. Insert `Previous:` link in each stub pointing to the prior day\n\
+5. Stop when hitting a pre-existing daily or exhausting `kb_daily_chain_gap_max`\n\n\
+All file writes use a write-guard to prevent the filesystem watcher from \
+triggering duplicate reimports.\n\n\
+See also: [[concept:knowledge-base]], [[concept:kb-workflows]], [[concept:modules]]\n";
 
 pub(super) const CONCEPT_PROJECT: &str =
     "A **project** in MAE is a directory with optional `.project` TOML configuration.\n\n\
@@ -1295,3 +1329,250 @@ for the canonical three-file pattern.\n\n\
 For a more complex example with module-owned keymaps, see `modules/file-tree/`.\n\n\
 See also: [[concept:modules]], [[concept:flags]], [[concept:design-philosophy]], \
 [[concept:package-system]], [[concept:scheme-api]], [[index]]\n";
+
+pub(super) const CONCEPT_SYNC_ENGINE: &str = "\
+The **Sync Engine** is MAE's collaborative state layer, built on \
+yrs (the Rust port of Yjs, using the YATA algorithm). Crate: `yrs` on crates.io.\n\n\
+## Why yrs\n\
+- Handles text (`YText`), structured documents (`YMap`, `YArray`), and \
+  knowledge base nodes in a single framework\n\
+- Built-in `UndoManager` with per-user stacks\n\
+- Awareness protocol for cursor/selection sharing\n\
+- Proven at scale: Notion (200M+ users), Excalidraw, TLDraw\n\
+- YATA algorithm: O(n) space, optimized for sequential typing\n\n\
+## Dual Structure\n\
+yrs `YText` is the source of truth for collaborative state. ropey remains \
+the rendering engine (efficient line indexing via `Rope::line()`). A bridge \
+rebuilds the rope from YText on remote changes (~1ms for 10K lines).\n\n\
+## Document Types\n\
+| Type | yrs Representation | Use Case |\n\
+|------|-------------------|----------|\n\
+| Text buffer | `YText` | Code editing |\n\
+| Visual element | `YMap { position, style, children }` | Design system |\n\
+| KB node | `YMap { title: YText, body: YText, tags: YArray }` | Knowledge base |\n\n\
+See also: [[concept:collaborative-state]], [[concept:adr-text-sync]], [[concept:adr-kb-crdt]]\n";
+
+pub(super) const CONCEPT_COLLABORATIVE_STATE: &str = "\
+MAE is a **collaborative state engine** where AI and humans interact via text \
+OR visual interfaces, backed by a federated knowledge base. The sync layer \
+(powered by [[concept:sync-engine|yrs]]) is the universal substrate for ALL state:\n\n\
+- **Editor buffers** — text and code (YText)\n\
+- **Visual documents** — design components, scene graphs (YMap/YArray)\n\
+- **Knowledge base nodes** — CRDT-synced across instances for offline editing\n\n\
+## Requirements\n\
+1. Real-time multi-user collaboration (text AND visual content)\n\
+2. AI agents as collaborative peers (sequential tool calls → yrs transactions)\n\
+3. Non-textual documents: scene graphs, component trees, design tokens\n\
+4. KB nodes as CRDT documents — offline editing, conflict-free merge, P2P federation\n\
+5. Sustainable maintenance for a small team (~1000 lines MAE-specific sync code)\n\
+6. Performance: 100+ concurrent clients, 100K+ element documents\n\n\
+## Transport\n\
+JSON-RPC 2.0 over Unix sockets (extend existing MCP protocol). Upgrade path: \
+msgpack wire format, then TCP for multi-machine. See [[concept:adr-text-sync]].\n\n\
+See also: [[concept:sync-engine]], [[concept:knowledge-base]], [[concept:ai-as-peer]]\n";
+
+pub(super) const CONCEPT_ADR_TEXT_SYNC: &str = "\
+**ADR-002: Text Synchronization Model** — Status: **Accepted (yrs/YATA)**\n\n\
+## Decision\n\
+Use yrs (Yjs Rust port) as the sync engine for all collaborative state. \
+Dual structure: yrs YText + ropey mirror for rendering.\n\n\
+## Key Rationale\n\
+- MAE needs to sync structured documents (visual elements, KB nodes), not just text\n\
+- yrs provides YText, YMap, YArray — handles all content types\n\
+- Built-in UndoManager eliminates custom undo work\n\
+- Yjs ecosystem is the de-facto standard (Notion, Excalidraw, TLDraw)\n\n\
+## Alternatives Rejected\n\
+| Library | Why Not |\n\
+|---------|--------|\n\
+| automerge-rs | Performance cliff >100K ops, no built-in undo |\n\
+| diamond-types | Text-only, bus factor = 1 |\n\
+| Custom OT | Combinatorial explosion for visual operations |\n\n\
+Full ADR: `docs/adr/002-text-sync-model.md`\n\n\
+See also: [[concept:sync-engine]], [[concept:collaborative-state]], [[concept:adr-kb-crdt]]\n";
+
+pub(super) const CONCEPT_ADR_KB_CRDT: &str = "\
+**ADR-005: KB Nodes as CRDT Documents** — Status: **Accepted**\n\n\
+## Decision\n\
+Each KB node becomes a yrs document with schema:\n\
+```\n\
+YMap { id, title: YText, body: YText, tags: YArray, links: YArray, meta: YMap }\n\
+```\n\n\
+SQLite remains the persistence backend — yrs document bytes stored as BLOBs. \
+FTS5 indexes materialized text from `YText::to_string()`.\n\n\
+## Benefits\n\
+- **Offline editing**: Edit KB nodes without connectivity, merge on reconnect\n\
+- **P2P federation**: Exchange yrs state vectors between MAE instances\n\
+- **AI attribution**: Each transaction carries a client ID\n\
+- **Per-user undo**: yrs UndoManager provides this automatically\n\n\
+## Migration Path\n\
+1. Phase A: SQLite only (current)\n\
+2. Phase B: Optional `crdt_doc BLOB` column, new nodes get yrs docs\n\
+3. Phase C: All nodes have yrs docs, SQLite is read cache + FTS index\n\n\
+Full ADR: `docs/adr/005-kb-crdt.md`\n\n\
+See also: [[concept:sync-engine]], [[concept:knowledge-base]], [[concept:collaborative-state]]\n";
+
+pub(super) const CONCEPT_COLLAB_ARCHITECTURE: &str = "\
+**Collaborative Editing Architecture** describes how MAE synchronises editor \
+state across multiple clients — from solo AI agents on a single machine to \
+multi-user sessions over a LAN or the internet.\n\n\
+## Document Addressing\n\
+Every collaborative document is identified by a URI with one of three namespaces:\n\
+| Namespace | Example | Meaning |\n\
+|-----------|---------|--------|\n\
+| `file:` | `file:///home/user/project/main.rs` | Local or remote file buffer |\n\
+| `kb:` | `kb://default/concept:collab-architecture` | Knowledge-base node |\n\
+| `shared:` | `shared://session-id/scratchpad` | Anonymous shared document |\n\n\
+## Data Flow\n\
+```\n\
+Local editor\n\
+  └─ user/AI edit → yrs transaction (YText insert/delete)\n\
+       └─ mae-sync encodes update bytes\n\
+            └─ TCP framed write → state server (sync/update)\n\
+                 └─ server applies to doc store, WAL flush\n\
+                      └─ broadcast diff → connected peers\n\
+                           └─ peer decodes → ropey mirror rebuild → redraw\n\
+```\n\n\
+## Save Protocol\n\
+File saves use content-hash verification (SHA-256) to guard against silent \
+mtime failures. Before writing, MAE reads the current on-disk bytes, computes \
+their SHA-256, and compares it with the last-known hash. If they differ an \
+external modification warning is raised. After writing, the new hash is \
+stored as the baseline. Advisory lock files (`.{name}.mae.lock`) prevent \
+simultaneous writes from two editor instances.\n\n\
+## State Server Role\n\
+The `mae-state-server` binary is a **document hub**, not a source of truth. \
+Documents are authoritative at the client; the server:\n\
+- Holds the latest merged CRDT state (yrs doc bytes)\n\
+- Appends every `sync/update` to a SQLite WAL before applying to memory\n\
+- Broadcasts diffs to all connected peers (bounded queues, write timeout 5 s)\n\
+- Compacts WAL into a snapshot once the WAL exceeds the configured threshold (default 500 entries)\n\
+- Recovers by loading the latest snapshot then replaying the WAL tail on restart\n\n\
+## Three Workflow Tiers\n\
+| Tier | Server | Use case |\n\
+|------|--------|----------|\n\
+| **Solo** | none | Single user, no collaboration needed |\n\
+| **Loopback** | `127.0.0.1:9473` | Multiple MAE instances or AI agents on one machine |\n\
+| **Collaborative** | remote host | Multi-user editing across machines |\n\n\
+In solo mode the sync layer is still active locally — edits are yrs \
+transactions — but no TCP connection is opened. This means switching from \
+solo to loopback requires only `(set-option! \"collab-server-address\" \"127.0.0.1:9473\")` \
+and a reconnect; no data migration is needed.\n\n\
+See also: [[concept:sync-engine]], [[concept:collab-workflows]], \
+[[concept:collaborative-state]], [[concept:adr-text-sync]], [[index]]\n";
+
+pub(super) const CONCEPT_COLLAB_WORKFLOWS: &str = "\
+**Collaborative Editing Workflows** — practical recipes for the three tiers \
+of MAE collaboration.\n\n\
+## Solo Mode\n\
+No state server is required. MAE operates entirely locally. All edits are \
+still yrs transactions, which means:\n\
+- Full undo/redo with per-user attribution\n\
+- Zero configuration changes needed\n\
+- Instant upgrade path to loopback or collaborative mode\n\n\
+## Loopback Mode (Local Multi-Agent)\n\
+Run `mae-state-server` on the same machine to coordinate multiple MAE \
+instances or AI agents on the same project.\n\n\
+```bash\n\
+mae-state-server                      # listens on 127.0.0.1:9473\n\
+```\n\n\
+Then in each MAE instance:\n\
+```scheme\n\
+(set-option! \"collab-server-address\" \"127.0.0.1:9473\")\n\
+(set-option! \"collab-auto-connect\" \"true\")\n\
+```\n\n\
+Or interactively: `SPC C s` to start a local server, `SPC C c` to connect.\n\n\
+## Collaborative Mode (Multi-User)\n\
+Point all clients at a shared server:\n\
+```scheme\n\
+(set-option! \"collab-server-address\" \"192.168.1.10:9473\")\n\
+```\n\n\
+The server can be started with:\n\
+```bash\n\
+mae-state-server --bind 0.0.0.0:9473\n\
+```\n\n\
+> **Security (v1):** No authentication. Restrict access to a trusted LAN \n\
+> or VPN. Do not expose the state server port to the public internet.\n\n\
+## Commands\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `SPC C s` | `:collab-start-server` | Start a local state server |\n\
+| `SPC C c` | `:collab-connect` | Connect to configured server |\n\
+| `SPC C d` | `:collab-disconnect` | Disconnect from server |\n\
+| `SPC C S` | `:collab-share-buffer` | Share current buffer with peers |\n\
+| `SPC C i` | `:collab-status` | Show connection + peer status |\n\n\
+## Configuration Options\n\
+| Option | Default | Description |\n\
+|--------|---------|-------------|\n\
+| `collab-server-address` | `\"\"` | Server host:port (empty = solo mode) |\n\
+| `collab-auto-connect` | `\"false\"` | Connect on startup if address is set |\n\n\
+## Diagnostics\n\
+- `:collab-doctor` — comprehensive diagnostic: server reachability, WAL health, peer list\n\
+- `:collab-status` — live connection state, document list, peer cursors\n\
+- `mae doctor` (CLI) — checks state-server process, port binding, WAL integrity\n\n\
+See also: [[concept:collab-architecture]], [[lesson:collab-setup]], \
+[[concept:sync-engine]], [[index]]\n";
+
+pub(super) const CONCEPT_SCHEME_TESTING: &str = "\
+MAE has a headless **Scheme test framework** inspired by Emacs ERT/Buttercup \
+and Neovim Plenary. Tests boot a real editor (no mocks) and exercise the same \
+Scheme API available to users.\n\n\
+## BDD Structure\n\
+Tests use `describe-group` / `it-test` blocks (like Buttercup's `describe`/`it`):\n\n\
+```scheme\n\
+(describe-group \"Feature name\"\n\
+  (lambda ()\n\
+    (it-test \"setup\"\n\
+      (lambda () (create-buffer \"*test*\")))\n\
+    (it-test \"insert text\"\n\
+      (lambda () (buffer-insert \"hello\")))\n\
+    (it-test \"verify\"\n\
+      (lambda () (should-equal (buffer-string) \"hello\")))))\n\
+```\n\n\
+## Assertions\n\
+| Function | Purpose |\n\
+|----------|----------|\n\
+| [[scheme:should]] | Assert truthy |\n\
+| [[scheme:should-not]] | Assert falsy |\n\
+| [[scheme:should-equal]] | Assert equality |\n\
+| [[scheme:should-contain]] | Assert substring |\n\
+| `(should-mode MODE)` | Assert editor mode |\n\n\
+## Running Tests\n\
+```\n\
+mae --test tests/crdt/               # CRDT sync tests\n\
+mae --test tests/editor/             # Editor feature tests\n\
+mae --test tests/collab-e2e/test_smoke.scm  # Single file\n\
+```\n\n\
+## Key Principle: One Op Per Step\n\
+Each `it-test` is one eval→apply cycle. Pending mutations (`buffer-insert`, \
+`goto-char`, etc.) execute during `apply_to_editor` after eval completes. \
+Multiple mutations in one step may execute in unexpected order — split them.\n\n\
+See also: [[concept:test-runner]], [[scheme:describe-group]], \
+[[scheme:it-test]], [[index]]\n";
+
+pub(super) const CONCEPT_TEST_RUNNER: &str = "\
+The **headless test runner** (`mae --test PATH`) orchestrates Scheme test \
+execution from the Rust side. It is the canonical path for all tests.\n\n\
+## Architecture (3 layers)\n\
+1. **`scheme/lib/mae-test.scm`** — BDD library (describe/it/should/TAP output)\n\
+2. **`crates/mae/src/test_runner.rs`** — Rust orchestrator\n\
+3. **`crates/scheme/src/runtime.rs`** — Scheme primitives\n\n\
+## Execution Flow\n\
+1. Boot editor headless (no terminal/GUI)\n\
+2. Load `mae-test.scm` library\n\
+3. Load test file(s) → registers tests via `describe-group`/`it-test`\n\
+4. Iterate tests from Rust: `eval(\"(run-nth-test N)\")` for each test\n\
+5. Between each test: `apply_to_editor()` + `sync_scheme_state()`\n\
+6. Print TAP v14 output, exit 0 (pass) or 1 (fail)\n\n\
+## SharedState Pattern\n\
+Steel's `register_value` creates new binding cells on each call, breaking \
+closures captured in earlier evals. The solution: store mutable state in \
+`Arc<Mutex<SharedState>>` and register Rust functions that read from it. \
+Scheme forwarding functions (`buffer-string`, `buffer-sync-enabled?`, \
+`current-mode`, `get-buffer-by-name`) call these Rust functions.\n\n\
+## Adding New Test Primitives\n\
+- **Read-only**: Add to SharedState → register `test-*` Rust fn → add \
+  Scheme forwarding in `install_mutable_buffer_accessors` → update in \
+  `sync_scheme_state`\n\
+- **Mutations**: Add pending field to SharedState → register Scheme fn → \
+  process in `apply_to_editor`\n\n\
+See also: [[concept:scheme-testing]], [[concept:scheme-api]], [[index]]\n";

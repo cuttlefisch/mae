@@ -294,190 +294,190 @@ mod tests {
     use crate::syntax::Language;
 
     fn org_editor(text: &str) -> Editor {
-        let mut ed = Editor::new();
-        ed.buffers[0].insert_text_at(0, text);
-        ed.syntax.set_language(0, Language::Org);
-        ed
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, text);
+        editor.syntax.set_language(0, Language::Org);
+        editor
     }
 
     #[test]
     fn org_demote_adds_star() {
-        let mut ed = org_editor("* Heading\nBody\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_demote();
-        assert_eq!(ed.buffers[0].text(), "** Heading\nBody\n");
-        assert!(ed.status_msg.contains("level 2"));
+        let mut editor = org_editor("* Heading\nBody\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_demote();
+        assert_eq!(editor.buffers[0].text(), "** Heading\nBody\n");
+        assert!(editor.status_msg.contains("level 2"));
     }
 
     #[test]
     fn org_promote_removes_star() {
-        let mut ed = org_editor("** Heading\nBody\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_promote();
-        assert_eq!(ed.buffers[0].text(), "* Heading\nBody\n");
-        assert!(ed.status_msg.contains("level 1"));
+        let mut editor = org_editor("** Heading\nBody\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_promote();
+        assert_eq!(editor.buffers[0].text(), "* Heading\nBody\n");
+        assert!(editor.status_msg.contains("level 1"));
     }
 
     #[test]
     fn org_promote_single_star_noop() {
-        let mut ed = org_editor("* Heading\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_promote();
-        assert_eq!(ed.buffers[0].text(), "* Heading\n");
+        let mut editor = org_editor("* Heading\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_promote();
+        assert_eq!(editor.buffers[0].text(), "* Heading\n");
     }
 
     #[test]
     fn dedent_line_dispatches_org_promote() {
-        let mut ed = org_editor("** Heading\nBody\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.dispatch_builtin("dedent-line");
-        assert_eq!(ed.buffers[0].text(), "* Heading\nBody\n");
+        let mut editor = org_editor("** Heading\nBody\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.dispatch_builtin("dedent-line");
+        assert_eq!(editor.buffers[0].text(), "* Heading\nBody\n");
     }
 
     #[test]
     fn indent_line_dispatches_org_demote() {
-        let mut ed = org_editor("* Heading\nBody\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.dispatch_builtin("indent-line");
-        assert_eq!(ed.buffers[0].text(), "** Heading\nBody\n");
+        let mut editor = org_editor("* Heading\nBody\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.dispatch_builtin("indent-line");
+        assert_eq!(editor.buffers[0].text(), "** Heading\nBody\n");
     }
 
     #[test]
     fn org_demote_non_heading_noop() {
-        let mut ed = org_editor("Just text\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_demote();
-        assert_eq!(ed.buffers[0].text(), "Just text\n");
+        let mut editor = org_editor("Just text\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_demote();
+        assert_eq!(editor.buffers[0].text(), "Just text\n");
     }
 
     #[test]
     fn org_subtree_range_single() {
-        let ed = org_editor("* H1\nBody\n* H2\n");
-        let range = ed.org_subtree_range(0);
+        let editor = org_editor("* H1\nBody\n* H2\n");
+        let range = editor.org_subtree_range(0);
         assert_eq!(range, Some((0, 2)));
     }
 
     #[test]
     fn org_subtree_range_nested() {
-        let ed = org_editor("* H1\n** Sub\nBody\n* H2\n");
-        let range = ed.org_subtree_range(0);
+        let editor = org_editor("* H1\n** Sub\nBody\n* H2\n");
+        let range = editor.org_subtree_range(0);
         assert_eq!(range, Some((0, 3)));
-        let range = ed.org_subtree_range(1);
+        let range = editor.org_subtree_range(1);
         assert_eq!(range, Some((1, 3)));
     }
 
     #[test]
     fn org_move_subtree_down() {
-        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_move_subtree_down();
-        assert_eq!(ed.buffers[0].text(), "* H2\nBody2\n* H1\nBody1\n");
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 2);
+        let mut editor = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_move_subtree_down();
+        assert_eq!(editor.buffers[0].text(), "* H2\nBody2\n* H1\nBody1\n");
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 2);
     }
 
     #[test]
     fn org_move_subtree_up() {
-        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 2;
-        ed.org_move_subtree_up();
-        assert_eq!(ed.buffers[0].text(), "* H2\nBody2\n* H1\nBody1\n");
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 0);
+        let mut editor = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 2;
+        editor.org_move_subtree_up();
+        assert_eq!(editor.buffers[0].text(), "* H2\nBody2\n* H1\nBody1\n");
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 0);
     }
 
     #[test]
     fn org_move_at_boundary_noop() {
-        let mut ed = org_editor("* H1\nBody\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_move_subtree_down();
-        assert_eq!(ed.buffers[0].text(), "* H1\nBody\n");
-        ed.org_move_subtree_up();
-        assert_eq!(ed.buffers[0].text(), "* H1\nBody\n");
+        let mut editor = org_editor("* H1\nBody\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_move_subtree_down();
+        assert_eq!(editor.buffers[0].text(), "* H1\nBody\n");
+        editor.org_move_subtree_up();
+        assert_eq!(editor.buffers[0].text(), "* H1\nBody\n");
     }
 
     // --- Three-state org heading cycle tests ---
 
     #[test]
     fn org_cycle_subtree_to_folded() {
-        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_cycle();
+        let mut editor = org_editor("* H1\nBody\n** Sub\nSub body\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_cycle();
         assert!(
-            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0),
+            editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0),
             "Expected fold at row 0"
         );
-        assert!(ed.status_msg.contains("Folded"));
+        assert!(editor.status_msg.contains("Folded"));
     }
 
     #[test]
     fn org_cycle_folded_to_children() {
-        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        let mut editor = org_editor("* H1\nBody\n** Sub\nSub body\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
         // First TAB: SUBTREE → FOLDED
-        ed.org_cycle();
-        assert!(ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0));
+        editor.org_cycle();
+        assert!(editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0));
         // Second TAB: FOLDED → CHILDREN
-        ed.org_cycle();
+        editor.org_cycle();
         assert!(
-            !ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0),
+            !editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0),
             "Heading 0 should not be folded in CHILDREN state"
         );
         // Child heading at row 2 should be folded
         assert!(
-            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 2),
+            editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 2),
             "Child heading at row 2 should be folded"
         );
-        assert!(ed.status_msg.contains("Children"));
+        assert!(editor.status_msg.contains("Children"));
     }
 
     #[test]
     fn org_cycle_children_to_subtree() {
-        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_cycle(); // SUBTREE → FOLDED
-        ed.org_cycle(); // FOLDED → CHILDREN
-        ed.org_cycle(); // CHILDREN → SUBTREE
+        let mut editor = org_editor("* H1\nBody\n** Sub\nSub body\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_cycle(); // SUBTREE → FOLDED
+        editor.org_cycle(); // FOLDED → CHILDREN
+        editor.org_cycle(); // CHILDREN → SUBTREE
         assert!(
-            ed.buffers[0].folded_ranges.is_empty(),
+            editor.buffers[0].folded_ranges.is_empty(),
             "All folds should be cleared in SUBTREE state"
         );
-        assert!(ed.status_msg.contains("Subtree"));
+        assert!(editor.status_msg.contains("Subtree"));
     }
 
     #[test]
     fn org_cycle_full_round_trip() {
-        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n* H2\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        assert!(ed.buffers[0].folded_ranges.is_empty());
-        ed.org_cycle(); // → FOLDED
-        ed.org_cycle(); // → CHILDREN
-        ed.org_cycle(); // → SUBTREE
-        assert!(ed.buffers[0].folded_ranges.is_empty());
+        let mut editor = org_editor("* H1\nBody\n** Sub\nSub body\n* H2\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        assert!(editor.buffers[0].folded_ranges.is_empty());
+        editor.org_cycle(); // → FOLDED
+        editor.org_cycle(); // → CHILDREN
+        editor.org_cycle(); // → SUBTREE
+        assert!(editor.buffers[0].folded_ranges.is_empty());
     }
 
     #[test]
     fn org_cycle_leaf_heading_two_state() {
-        let mut ed = org_editor("* H1\nBody line 1\nBody line 2\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_cycle(); // → FOLDED
-        assert!(!ed.buffers[0].folded_ranges.is_empty());
-        ed.org_cycle(); // → UNFOLDED
-        assert!(ed.buffers[0].folded_ranges.is_empty());
+        let mut editor = org_editor("* H1\nBody line 1\nBody line 2\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_cycle(); // → FOLDED
+        assert!(!editor.buffers[0].folded_ranges.is_empty());
+        editor.org_cycle(); // → UNFOLDED
+        assert!(editor.buffers[0].folded_ranges.is_empty());
     }
 
     #[test]
     fn org_cycle_nested_children() {
-        let mut ed = org_editor("* H1\n** Sub1\n*** Deep\nDeep body\n** Sub2\nSub2 body\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_cycle(); // → FOLDED
-        ed.org_cycle(); // → CHILDREN
-                        // ** Sub1 (row 1) should be folded (has content below)
+        let mut editor = org_editor("* H1\n** Sub1\n*** Deep\nDeep body\n** Sub2\nSub2 body\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_cycle(); // → FOLDED
+        editor.org_cycle(); // → CHILDREN
+                            // ** Sub1 (row 1) should be folded (has content below)
         assert!(
-            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 1),
+            editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 1),
             "Sub1 should be folded in CHILDREN state"
         );
         // ** Sub2 (row 4) should be folded
         assert!(
-            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 4),
+            editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 4),
             "Sub2 should be folded in CHILDREN state"
         );
     }
@@ -486,37 +486,37 @@ mod tests {
 
     #[test]
     fn org_move_subtree_down_clears_folds() {
-        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.buffers[0].folded_ranges.push((0, 2));
-        ed.org_move_subtree_down();
+        let mut editor = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.buffers[0].folded_ranges.push((0, 2));
+        editor.org_move_subtree_down();
         assert!(
-            ed.buffers[0].folded_ranges.is_empty(),
+            editor.buffers[0].folded_ranges.is_empty(),
             "Folds should be cleared after move: {:?}",
-            ed.buffers[0].folded_ranges
+            editor.buffers[0].folded_ranges
         );
     }
 
     #[test]
     fn org_move_subtree_up_clears_folds() {
-        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 2;
-        ed.buffers[0].folded_ranges.push((2, 4));
-        ed.org_move_subtree_up();
+        let mut editor = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 2;
+        editor.buffers[0].folded_ranges.push((2, 4));
+        editor.org_move_subtree_up();
         assert!(
-            ed.buffers[0].folded_ranges.is_empty(),
+            editor.buffers[0].folded_ranges.is_empty(),
             "Folds should be cleared after move up"
         );
     }
 
     #[test]
     fn org_promote_preserves_folds() {
-        let mut ed = org_editor("** Heading\nBody\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.buffers[0].folded_ranges.push((0, 2));
-        ed.org_promote();
+        let mut editor = org_editor("** Heading\nBody\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.buffers[0].folded_ranges.push((0, 2));
+        editor.org_promote();
         assert_eq!(
-            ed.buffers[0].folded_ranges.len(),
+            editor.buffers[0].folded_ranges.len(),
             1,
             "Promote should preserve folds"
         );
@@ -524,12 +524,12 @@ mod tests {
 
     #[test]
     fn org_demote_preserves_folds() {
-        let mut ed = org_editor("* Heading\nBody\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.buffers[0].folded_ranges.push((0, 2));
-        ed.org_demote();
+        let mut editor = org_editor("* Heading\nBody\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.buffers[0].folded_ranges.push((0, 2));
+        editor.org_demote();
         assert_eq!(
-            ed.buffers[0].folded_ranges.len(),
+            editor.buffers[0].folded_ranges.len(),
             1,
             "Demote should preserve folds"
         );
@@ -548,56 +548,56 @@ mod tests {
 
     #[test]
     fn heading_scale_option_toggle() {
-        let mut ed = Editor::new();
-        assert!(ed.heading_scale); // default on
-        assert!(ed.set_option("heading_scale", "false").is_ok());
-        assert!(!ed.heading_scale);
-        assert!(ed.set_option("heading-scale", "true").is_ok());
-        assert!(ed.heading_scale);
+        let mut editor = Editor::new();
+        assert!(editor.heading_scale); // default on
+        assert!(editor.set_option("heading_scale", "false").is_ok());
+        assert!(!editor.heading_scale);
+        assert!(editor.set_option("heading-scale", "true").is_ok());
+        assert!(editor.heading_scale);
     }
 
     // --- zM/zR for org headings ---
 
     #[test]
     fn org_close_all_folds() {
-        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
-        ed.close_all_folds();
-        assert!(!ed.buffers[0].folded_ranges.is_empty());
+        let mut editor = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        editor.close_all_folds();
+        assert!(!editor.buffers[0].folded_ranges.is_empty());
     }
 
     #[test]
     fn org_open_all_folds_clears() {
-        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
-        ed.close_all_folds();
-        ed.open_all_folds();
-        assert!(ed.buffers[0].folded_ranges.is_empty());
+        let mut editor = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        editor.close_all_folds();
+        editor.open_all_folds();
+        assert!(editor.buffers[0].folded_ranges.is_empty());
     }
 
     // --- TODO cycle tests ---
 
     #[test]
     fn todo_cycle_adds_todo() {
-        let mut ed = org_editor("* Heading\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_todo_cycle();
-        assert!(ed.buffers[0].text().contains("TODO"));
+        let mut editor = org_editor("* Heading\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_todo_cycle();
+        assert!(editor.buffers[0].text().contains("TODO"));
     }
 
     #[test]
     fn todo_cycle_todo_to_done() {
-        let mut ed = org_editor("* TODO Heading\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_todo_cycle();
-        assert!(ed.buffers[0].text().contains("DONE"));
-        assert!(!ed.buffers[0].text().contains("TODO"));
+        let mut editor = org_editor("* TODO Heading\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_todo_cycle();
+        assert!(editor.buffers[0].text().contains("DONE"));
+        assert!(!editor.buffers[0].text().contains("TODO"));
     }
 
     #[test]
     fn todo_cycle_done_to_todo() {
-        let mut ed = org_editor("* DONE Heading\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.org_todo_cycle();
-        assert!(ed.buffers[0].text().contains("TODO"));
-        assert!(!ed.buffers[0].text().contains("DONE"));
+        let mut editor = org_editor("* DONE Heading\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.org_todo_cycle();
+        assert!(editor.buffers[0].text().contains("TODO"));
+        assert!(!editor.buffers[0].text().contains("DONE"));
     }
 }

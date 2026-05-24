@@ -29,18 +29,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build static binary
-        run: cargo build --release --target x86_64-unknown-linux-musl --package mae
+        run: |
+          cargo build --release --target x86_64-unknown-linux-musl --package mae
+          cargo build --release --target x86_64-unknown-linux-musl --package mae-state-server
 
       - name: Prepare artifact
         run: |
           mkdir -p dist
           cp target/x86_64-unknown-linux-musl/release/mae dist/mae-linux-x86_64
-          chmod +x dist/mae-linux-x86_64
+          cp target/x86_64-unknown-linux-musl/release/mae-state-server dist/mae-state-server-linux-x86_64
+          chmod +x dist/mae-linux-x86_64 dist/mae-state-server-linux-x86_64
 
       - uses: actions/upload-artifact@v7
         with:
           name: mae-linux-x86_64
-          path: dist/mae-linux-x86_64
+          path: |
+            dist/mae-linux-x86_64
+            dist/mae-state-server-linux-x86_64
 
   build-linux-gui:
     name: Build linux-x86_64-gui
@@ -121,6 +126,7 @@ jobs:
           body_path: CHANGELOG-release.md
           files: |
             dist/mae-linux-x86_64
+            dist/mae-state-server-linux-x86_64
             dist/mae-linux-x86_64-gui
             dist/mae-macos-aarch64
           fail_on_unmatched_files: true

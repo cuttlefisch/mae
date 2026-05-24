@@ -32,7 +32,7 @@ use crate::config;
 
 /// Drain pending agent setup requests (:agent-setup / :agent-list).
 pub fn drain_agent_setup(editor: &mut Editor) {
-    let Some(agent_name) = editor.pending_agent_setup.take() else {
+    let Some(agent_name) = editor.ai.pending_agent_setup.take() else {
         return;
     };
     if agent_name == "__list__" {
@@ -63,9 +63,9 @@ pub fn spawn_pending_shells(
     mcp_socket_path: &str,
     app_config: &config::Config,
 ) {
-    let shell_spawns = std::mem::take(&mut editor.pending_shell_spawns);
-    let agent_spawns = std::mem::take(&mut editor.pending_agent_spawns);
-    let shell_cwds = std::mem::take(&mut editor.pending_shell_cwds);
+    let shell_spawns = std::mem::take(&mut editor.shell.spawns);
+    let agent_spawns = std::mem::take(&mut editor.shell.agent_spawns);
+    let shell_cwds = std::mem::take(&mut editor.shell.cwds);
     let had_shell_spawns = !shell_spawns.is_empty() || !agent_spawns.is_empty();
 
     // Build theme-aware env vars and color entries once for all spawns.
@@ -184,14 +184,14 @@ pub fn manage_shell_lifecycle(
     shell_terminals: &mut HashMap<usize, mae_shell::ShellTerminal>,
 ) {
     // Reset pending shells.
-    for buf_idx in std::mem::take(&mut editor.pending_shell_resets) {
+    for buf_idx in std::mem::take(&mut editor.shell.resets) {
         if let Some(shell) = shell_terminals.get(&buf_idx) {
             shell.reset();
         }
     }
 
     // Close pending shells.
-    for buf_idx in std::mem::take(&mut editor.pending_shell_closes) {
+    for buf_idx in std::mem::take(&mut editor.shell.closes) {
         if let Some(shell) = shell_terminals.remove(&buf_idx) {
             shell.shutdown();
         }
@@ -249,7 +249,7 @@ pub fn manage_shell_lifecycle(
             for win_id in orphan_ids {
                 if win_id == focused_id {
                     // Retarget focused window to alternate buffer
-                    let alt = editor.alternate_buffer_idx.unwrap_or(0);
+                    let alt = editor.vi.alternate_buffer_idx.unwrap_or(0);
                     let target = if alt < editor.buffers.len() && alt != buf_idx {
                         alt
                     } else {
@@ -289,7 +289,7 @@ pub fn manage_shell_lifecycle(
     }
 
     // Drain pending shell inputs.
-    for (buf_idx, text) in std::mem::take(&mut editor.pending_shell_inputs) {
+    for (buf_idx, text) in std::mem::take(&mut editor.shell.inputs) {
         if let Some(shell) = shell_terminals.get(&buf_idx) {
             shell.write_paste(&text);
             shell.scroll_to_bottom();
@@ -297,7 +297,7 @@ pub fn manage_shell_lifecycle(
     }
 
     // Drain pending shell scroll.
-    if let Some(scroll_amount) = editor.pending_shell_scroll.take() {
+    if let Some(scroll_amount) = editor.shell.scroll.take() {
         let buf_idx = editor.active_buffer_idx();
         if let Some(shell) = shell_terminals.get(&buf_idx) {
             if scroll_amount == 0 {
@@ -309,7 +309,7 @@ pub fn manage_shell_lifecycle(
     }
 
     // Drain pending shell mouse click.
-    if let Some((row, col, button)) = editor.pending_shell_click.take() {
+    if let Some((row, col, button)) = editor.shell.click.take() {
         let buf_idx = editor.active_buffer_idx();
         if let Some(shell) = shell_terminals.get_mut(&buf_idx) {
             match button {
@@ -319,7 +319,7 @@ pub fn manage_shell_lifecycle(
                 }
                 mae_core::input::MouseButton::Middle => {
                     // Paste from default register into shell.
-                    if let Some(text) = editor.registers.get(&'"').cloned() {
+                    if let Some(text) = editor.vi.registers.get(&'"').cloned() {
                         shell.write_paste(&text);
                     }
                 }
@@ -329,7 +329,7 @@ pub fn manage_shell_lifecycle(
     }
 
     // Drain pending shell mouse drag.
-    if let Some((row, col)) = editor.pending_shell_drag.take() {
+    if let Some((row, col)) = editor.shell.drag.take() {
         let buf_idx = editor.active_buffer_idx();
         if let Some(shell) = shell_terminals.get_mut(&buf_idx) {
             shell.update_selection(row, col);
@@ -337,14 +337,14 @@ pub fn manage_shell_lifecycle(
     }
 
     // Drain pending shell mouse release — finalize selection and copy to registers.
-    if let Some((row, col)) = editor.pending_shell_release.take() {
+    if let Some((row, col)) = editor.shell.release.take() {
         let buf_idx = editor.active_buffer_idx();
         if let Some(shell) = shell_terminals.get_mut(&buf_idx) {
             shell.update_selection(row, col);
             if let Some(text) = shell.finish_selection() {
                 if !text.is_empty() {
-                    editor.registers.insert('"', text.clone());
-                    editor.registers.insert('+', text);
+                    editor.vi.registers.insert('"', text.clone());
+                    editor.vi.registers.insert('+', text);
                 }
             }
         }
@@ -353,16 +353,18 @@ pub fn manage_shell_lifecycle(
     // Cache shell viewport snapshots and CWDs for AI tool access.
     for (buf_idx, shell) in shell_terminals.iter() {
         let viewport = shell.read_viewport(100);
-        editor.shell_viewports.insert(*buf_idx, viewport);
+        editor.shell.viewports.insert(*buf_idx, viewport);
         if let Some(cwd) = shell.cwd() {
-            editor.shell_cwds.insert(*buf_idx, cwd);
+            editor.shell.viewport_cwds.insert(*buf_idx, cwd);
         }
     }
     editor
-        .shell_viewports
+        .shell
+        .viewports
         .retain(|idx, _| shell_terminals.contains_key(idx));
     editor
-        .shell_cwds
+        .shell
+        .viewport_cwds
         .retain(|idx, _| shell_terminals.contains_key(idx));
 }
 
@@ -418,7 +420,7 @@ pub fn health_check(
 
             for win_id in orphan_ids {
                 if win_id == focused_id {
-                    let alt = editor.alternate_buffer_idx.unwrap_or(0);
+                    let alt = editor.vi.alternate_buffer_idx.unwrap_or(0);
                     let target = if alt < editor.buffers.len() && alt != buf_idx {
                         alt
                     } else {
@@ -450,16 +452,16 @@ pub fn health_check(
     }
 
     // Clear stale input locks when the process that set them is no longer active.
-    match editor.input_lock {
+    match editor.ai.input_lock {
         InputLock::AiBusy if !ai_event_active => {
             warn!("health check: stale AiBusy lock — clearing");
-            editor.input_lock = InputLock::None;
-            editor.ai_streaming = false;
+            editor.ai.input_lock = InputLock::None;
+            editor.ai.streaming = false;
             editor.set_status("AI lock cleared (session inactive)");
         }
         InputLock::McpBusy if !mcp_activity_active => {
             warn!("health check: stale McpBusy lock — clearing");
-            editor.input_lock = InputLock::None;
+            editor.ai.input_lock = InputLock::None;
             editor.set_status("MCP lock cleared (no pending requests)");
         }
         _ => {}

@@ -57,6 +57,10 @@ impl Editor {
                     ) {
                         Ok(tree_win_id) => {
                             self.file_tree_window_id = Some(tree_win_id);
+                            // Auto-focus the tree window if configured.
+                            if self.file_tree_focus_on_open {
+                                self.window_mgr.set_focused(tree_win_id);
+                            }
                             // Auto-reveal the current file in the tree.
                             if let Some(current_path) = self
                                 .buffers
@@ -109,7 +113,7 @@ impl Editor {
                         // Focus a non-tree, non-conversation window to open the file in.
                         let tree_win_id = self.file_tree_window_id;
                         let buffers = &self.buffers;
-                        let conv_pair = &self.conversation_pair;
+                        let conv_pair = &self.ai.conversation_pair;
                         let target_win = self
                             .window_mgr
                             .iter_windows()

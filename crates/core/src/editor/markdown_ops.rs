@@ -45,10 +45,10 @@ mod tests {
     use crate::syntax::Language;
 
     fn md_editor(text: &str) -> Editor {
-        let mut ed = Editor::new();
-        ed.buffers[0].insert_text_at(0, text);
-        ed.syntax.set_language(0, Language::Markdown);
-        ed
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, text);
+        editor.syntax.set_language(0, Language::Markdown);
+        editor
     }
 
     #[test]
@@ -65,65 +65,65 @@ mod tests {
 
     #[test]
     fn md_promote_removes_hash() {
-        let mut ed = md_editor("## Heading\nBody\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.md_promote();
-        assert_eq!(ed.buffers[0].text(), "# Heading\nBody\n");
+        let mut editor = md_editor("## Heading\nBody\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.md_promote();
+        assert_eq!(editor.buffers[0].text(), "# Heading\nBody\n");
     }
 
     #[test]
     fn md_demote_adds_hash() {
-        let mut ed = md_editor("# Heading\nBody\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.md_demote();
-        assert_eq!(ed.buffers[0].text(), "## Heading\nBody\n");
+        let mut editor = md_editor("# Heading\nBody\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.md_demote();
+        assert_eq!(editor.buffers[0].text(), "## Heading\nBody\n");
     }
 
     #[test]
     fn md_subtree_range() {
-        let ed = md_editor("# H1\nBody\n## Sub\nSub body\n# H2\n");
-        let range = ed.heading_subtree_range(0, Language::Markdown);
+        let editor = md_editor("# H1\nBody\n## Sub\nSub body\n# H2\n");
+        let range = editor.heading_subtree_range(0, Language::Markdown);
         assert_eq!(range, Some((0, 4)));
-        let range = ed.heading_subtree_range(2, Language::Markdown);
+        let range = editor.heading_subtree_range(2, Language::Markdown);
         assert_eq!(range, Some((2, 4)));
     }
 
     #[test]
     fn md_cycle_three_state() {
-        let mut ed = md_editor("# H1\nBody\n## Sub\nSub body\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        let mut editor = md_editor("# H1\nBody\n## Sub\nSub body\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
         // SUBTREE → FOLDED
-        ed.md_cycle();
-        assert!(ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0));
+        editor.md_cycle();
+        assert!(editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0));
         // FOLDED → CHILDREN
-        ed.md_cycle();
-        assert!(!ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0));
-        assert!(ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 2));
+        editor.md_cycle();
+        assert!(!editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0));
+        assert!(editor.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 2));
         // CHILDREN → SUBTREE
-        ed.md_cycle();
-        assert!(ed.buffers[0].folded_ranges.is_empty());
+        editor.md_cycle();
+        assert!(editor.buffers[0].folded_ranges.is_empty());
     }
 
     #[test]
     fn md_move_subtree_down() {
-        let mut ed = md_editor("# H1\nBody1\n# H2\nBody2\n");
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.md_move_subtree_down();
-        assert_eq!(ed.buffers[0].text(), "# H2\nBody2\n# H1\nBody1\n");
+        let mut editor = md_editor("# H1\nBody1\n# H2\nBody2\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.md_move_subtree_down();
+        assert_eq!(editor.buffers[0].text(), "# H2\nBody2\n# H1\nBody1\n");
     }
 
     #[test]
     fn md_close_all_folds() {
-        let mut ed = md_editor("# H1\nBody1\n## H2\nBody2\n");
-        ed.close_all_folds();
-        assert!(!ed.buffers[0].folded_ranges.is_empty());
+        let mut editor = md_editor("# H1\nBody1\n## H2\nBody2\n");
+        editor.close_all_folds();
+        assert!(!editor.buffers[0].folded_ranges.is_empty());
     }
 
     #[test]
     fn md_open_all_folds() {
-        let mut ed = md_editor("# H1\nBody1\n## H2\nBody2\n");
-        ed.close_all_folds();
-        ed.open_all_folds();
-        assert!(ed.buffers[0].folded_ranges.is_empty());
+        let mut editor = md_editor("# H1\nBody1\n## H2\nBody2\n");
+        editor.close_all_folds();
+        editor.open_all_folds();
+        assert!(editor.buffers[0].folded_ranges.is_empty());
     }
 }

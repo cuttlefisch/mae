@@ -1,19 +1,17 @@
-// @ai-caution: [dispatch] At 1,100+ lines this file is a semantic dumping
-// ground — config, themes, terminal, help, registers, options, toggles,
-// projects, modules, AI, and file management. Planned split into
-// dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs. See ROADMAP.md.
+// @ai-caution: [dispatch] Remaining UI commands after split into
+// dispatch/{help,terminal,project,kb,config}.rs. Dashboard, AI, palette,
+// describe, link editing, demos, and misc UI commands live here.
 
-//! UI commands: palette, help, messages, config, themes, registers.
+//! UI commands: palette, AI, describe, link editing, demos, misc.
 
 use crate::buffer::Buffer;
 use crate::command_palette::CommandPalette;
-use crate::theme::bundled_theme_names;
 use crate::Mode;
 
 use super::super::Editor;
 
 impl Editor {
-    /// Dispatch UI, config, diagnostics, terminal, help, AI, project, and toggle commands.
+    /// Dispatch UI, AI, describe, link editing, demo, and misc commands.
     /// Returns `Some(true)` if handled.
     pub(super) fn dispatch_ui(&mut self, name: &str) -> Option<bool> {
         match name {
@@ -32,7 +30,7 @@ impl Editor {
                     self.buffers.len() - 1
                 };
                 let prev = self.active_buffer_idx();
-                self.alternate_buffer_idx = Some(prev);
+                self.vi.alternate_buffer_idx = Some(prev);
                 self.display_buffer(idx);
                 self.set_mode(Mode::Normal);
             }
@@ -41,9 +39,9 @@ impl Editor {
                 let is_scratch = self.buffers[current].kind == crate::BufferKind::Text
                     && self.buffers[current].name == "[scratch]";
                 if is_scratch {
-                    let alt = self.alternate_buffer_idx.unwrap_or(0);
+                    let alt = self.vi.alternate_buffer_idx.unwrap_or(0);
                     if alt < self.buffers.len() && alt != current {
-                        self.alternate_buffer_idx = Some(current);
+                        self.vi.alternate_buffer_idx = Some(current);
                         self.display_buffer(alt);
                         self.sync_mode_to_buffer();
                     }
@@ -57,7 +55,7 @@ impl Editor {
                             self.buffers.push(Buffer::new());
                             self.buffers.len() - 1
                         };
-                    self.alternate_buffer_idx = Some(current);
+                    self.vi.alternate_buffer_idx = Some(current);
                     self.display_buffer(idx);
                     self.set_mode(Mode::Normal);
                 }
@@ -162,167 +160,6 @@ impl Editor {
                 self.set_status("No link under cursor");
             }
 
-            // Help / KB
-            "help" => self.open_help_at("index"),
-            "help-follow-link" => self.help_follow_link(),
-            "help-back" => self.help_back(),
-            "help-forward" => self.help_forward(),
-            "help-next-link" => self.help_next_link(),
-            "help-prev-link" => self.help_prev_link(),
-            "help-close" => self.help_close(),
-            "help-search" => {
-                let nodes: Vec<(String, String)> = self
-                    .kb
-                    .list_ids(None)
-                    .iter()
-                    .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
-                    .collect();
-                self.command_palette = Some(
-                    crate::command_palette::CommandPalette::for_help_search(&nodes),
-                );
-                self.set_mode(Mode::CommandPalette);
-            }
-            "help-reopen" => {
-                self.help_reopen();
-            }
-            "kb-view" => {
-                self.help_return_to_view();
-            }
-            "tutor" => {
-                self.open_help_at("tutorial:getting-started");
-            }
-
-            // Shell / terminal
-            "terminal" => {
-                let shell_name = format!("*Terminal {}*", self.buffers.len());
-                let buf = Buffer::new_shell(shell_name);
-                self.buffers.push(buf);
-                let idx = self.buffers.len() - 1;
-                self.pending_shell_spawns.push(idx);
-                self.display_buffer_and_focus(idx);
-                self.set_mode(Mode::ShellInsert);
-            }
-            "terminal-reset" => {
-                let idx = self.active_buffer_idx();
-                if self.buffers[idx].kind == crate::BufferKind::Shell {
-                    self.pending_shell_resets.push(idx);
-                    self.set_status("Terminal reset");
-                } else {
-                    self.set_status("Not a terminal buffer");
-                }
-            }
-            "shell-normal-mode" => {
-                self.set_mode(Mode::Normal);
-                self.set_status("Terminal: normal mode");
-            }
-            "terminal-close" => {
-                let idx = self.active_buffer_idx();
-                if self.buffers[idx].kind == crate::BufferKind::Shell {
-                    self.pending_shell_closes.push(idx);
-                    self.set_mode(Mode::Normal);
-                } else {
-                    self.set_status("Not a terminal buffer");
-                }
-            }
-            "shell-scroll-page-up" => {
-                self.pending_shell_scroll = Some(self.focused_viewport_height() as i32);
-            }
-            "shell-scroll-page-down" => {
-                self.pending_shell_scroll = Some(-(self.focused_viewport_height() as i32));
-            }
-            "shell-scroll-to-bottom" => {
-                self.pending_shell_scroll = Some(0);
-            }
-            "shell-select-mode" => {
-                let buf_idx = self.active_buffer_idx();
-                if self.buffers[buf_idx].kind != crate::BufferKind::Shell {
-                    self.set_status("Not a shell buffer");
-                } else {
-                    // Read scrollback from cached shell viewport data.
-                    let content = if let Some(viewport) = self.shell_viewports.get(&buf_idx) {
-                        viewport.join("\n")
-                    } else {
-                        String::new()
-                    };
-
-                    if content.is_empty() {
-                        self.set_status("No shell output to select");
-                    } else {
-                        // Reuse an existing *shell-select* buffer or create one.
-                        let existing = self.buffers.iter().position(|b| b.name == "*shell-select*");
-                        let new_idx = if let Some(i) = existing {
-                            self.buffers[i].replace_contents(&content);
-                            self.buffers[i].read_only = true;
-                            self.buffers[i].kind = crate::BufferKind::ShellSelect;
-                            i
-                        } else {
-                            let mut buf = crate::buffer::Buffer::new();
-                            buf.replace_contents(&content);
-                            buf.name = "*shell-select*".into();
-                            buf.kind = crate::BufferKind::ShellSelect;
-                            buf.modified = false;
-                            buf.read_only = true;
-                            self.buffers.push(buf);
-                            self.buffers.len() - 1
-                        };
-
-                        // Record the shell buffer as alternate so close returns to it.
-                        self.alternate_buffer_idx = Some(buf_idx);
-                        self.display_buffer(new_idx);
-                        // Move cursor to end of buffer so user sees most recent output.
-                        let line_count = self.buffers[new_idx].display_line_count();
-                        if line_count > 0 {
-                            let win = self.window_mgr.focused_window_mut();
-                            win.cursor_row = line_count.saturating_sub(1);
-                        }
-                        self.mark_full_redraw();
-                        self.set_status(
-                            "Shell select mode — use v to select, y to yank, q/Esc to exit",
-                        );
-                    }
-                }
-            }
-            "close-shell-select" => {
-                let select_idx = self
-                    .buffers
-                    .iter()
-                    .position(|b| b.kind == crate::BufferKind::ShellSelect);
-                if let Some(idx) = select_idx {
-                    // Switch to alternate buffer (the shell), or first non-select buffer.
-                    let dest = self
-                        .alternate_buffer_idx
-                        .filter(|&i| i != idx && i < self.buffers.len())
-                        .or_else(|| {
-                            self.buffers
-                                .iter()
-                                .position(|b| b.kind != crate::BufferKind::ShellSelect)
-                        })
-                        .unwrap_or(0);
-                    for win in self.window_mgr.iter_windows_mut() {
-                        if win.buffer_idx == idx {
-                            win.buffer_idx = dest;
-                            win.cursor_row = 0;
-                            win.cursor_col = 0;
-                        }
-                    }
-                    self.buffers.remove(idx);
-                    self.notify_buffer_removed(idx);
-                    for win in self.window_mgr.iter_windows_mut() {
-                        if win.buffer_idx > idx {
-                            win.buffer_idx -= 1;
-                        }
-                    }
-                    self.sync_mode_to_buffer();
-                    self.mark_full_redraw();
-                }
-            }
-            "send-to-shell" => {
-                self.send_line_to_shell();
-            }
-            "send-region-to-shell" => {
-                self.send_region_to_shell();
-            }
-
             "command-palette" => {
                 self.command_palette = Some(CommandPalette::from_registry(&self.commands));
                 self.set_mode(Mode::CommandPalette);
@@ -333,8 +170,8 @@ impl Editor {
                 self.open_conversation_buffer();
                 // If AI is not configured, show setup guidance in the output buffer
                 // and stay in Normal mode so the user can read/copy the URLs.
-                if !self.ai_configured {
-                    if let Some(ref pair) = self.conversation_pair {
+                if !self.ai.configured {
+                    if let Some(ref pair) = self.ai.conversation_pair {
                         let out_idx = pair.output_buffer_idx;
                         if out_idx < self.buffers.len() {
                             let guidance = "\
@@ -383,7 +220,7 @@ For full setup guide: :help ai-setup";
                     None => "No AI conversation active",
                 };
                 self.set_status(status);
-                self.ai_cancel_requested = true;
+                self.ai.cancel_requested = true;
             }
 
             // Describe
@@ -401,14 +238,11 @@ For full setup guide: :help ai-setup";
             "describe-configuration" => {
                 self.show_configuration_report();
             }
-            "kb-health" => {
-                self.show_kb_health_report();
-            }
             "describe-bindings" => {
                 self.show_bindings_report();
             }
             "describe-module" => {
-                let arg = self.command_line.trim().to_string();
+                let arg = self.vi.command_line.trim().to_string();
                 let module_name = if arg.is_empty() { None } else { Some(arg) };
                 self.show_module_report(module_name.as_deref());
             }
@@ -442,465 +276,19 @@ For full setup guide: :help ai-setup";
             "describe-mode" => {
                 self.show_mode_report();
             }
-            "module-reload" => {
-                // Module name comes from the command line argument.
-                let arg = self.command_line.trim().to_string();
-                if arg.is_empty() {
-                    self.set_status("Usage: :module-reload <name>".to_string());
-                } else {
-                    self.pending_module_reloads.push(arg.clone());
-                    self.set_status(format!("Reloading module '{}'...", arg));
-                }
-            }
-            "describe-display-policy" => {
-                let report = self.display_policy.format_report();
-                let mut buf = crate::buffer::Buffer::new();
-                buf.name = "*Display Policy*".to_string();
-                buf.replace_contents(&report);
-                buf.modified = false;
-                buf.read_only = true;
-                let buf_idx = self.buffers.len();
-                self.buffers.push(buf);
-                self.display_buffer(buf_idx);
-            }
-            "reload-config" => {
-                // Reload config.toml — parse as TOML table and apply known editor options.
-                // This lives in mae-core so we can't import the mae crate's Config struct.
-                // Instead we read the raw TOML and extract [editor] keys.
-                let config_path = std::env::var("XDG_CONFIG_HOME")
-                    .ok()
-                    .map(std::path::PathBuf::from)
-                    .or_else(|| {
-                        std::env::var("HOME")
-                            .ok()
-                            .map(|h| std::path::PathBuf::from(h).join(".config"))
-                    })
-                    .unwrap_or_else(|| std::path::PathBuf::from(".config"))
-                    .join("mae")
-                    .join("config.toml");
-                if !config_path.exists() {
-                    self.set_status("No config.toml found");
-                } else {
-                    match std::fs::read_to_string(&config_path) {
-                        Ok(contents) => {
-                            match contents.parse::<toml::Table>() {
-                                Ok(table) => {
-                                    let mut applied = 0;
-                                    // Apply [editor] section options
-                                    if let Some(editor_table) =
-                                        table.get("editor").and_then(|v| v.as_table())
-                                    {
-                                        for (key, val) in editor_table {
-                                            let val_str = match val {
-                                                toml::Value::String(s) => s.clone(),
-                                                toml::Value::Boolean(b) => b.to_string(),
-                                                toml::Value::Integer(i) => i.to_string(),
-                                                toml::Value::Float(f) => f.to_string(),
-                                                _ => continue,
-                                            };
-                                            let _ = self.set_option(key, &val_str);
-                                            applied += 1;
-                                        }
-                                    }
-                                    // Also re-evaluate init.scm
-                                    let init_path = config_path
-                                        .parent()
-                                        .unwrap_or(std::path::Path::new("."))
-                                        .join("init.scm");
-                                    if init_path.exists() {
-                                        self.pending_scheme_eval
-                                            .push(format!("(load \"{}\")", init_path.display()));
-                                    }
-                                    self.set_status(format!(
-                                        "Configuration reloaded ({} options + init.scm)",
-                                        applied
-                                    ));
-                                }
-                                Err(e) => {
-                                    self.set_status(format!("Config parse error: {}", e));
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            self.set_status(format!("Failed to read config: {}", e));
-                        }
-                    }
-                }
-            }
-
-            // Theme
-            "set-theme" => {
-                let names = bundled_theme_names();
-                let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-                self.command_palette = Some(crate::command_palette::CommandPalette::for_themes(
-                    &name_refs,
-                ));
-                self.set_mode(Mode::CommandPalette);
-            }
-            "cycle-theme" => {
-                self.cycle_theme();
-            }
-            "set-splash-art" => {
-                let palette = CommandPalette::for_splash_art(self);
-                self.command_palette = Some(palette);
-                self.set_mode(Mode::CommandPalette);
-            }
-
-            // +project
-            "open-scheme-repl" => self.open_scheme_repl(),
-            "project-find-file" => self.project_find_file(),
-            "project-search" => self.project_search(),
-            "project-browse" => self.project_browse(),
-            "project-recent-files" => self.project_recent_files(),
-            "project-switch" => self.project_switch_palette(),
-            "project-forget" => self.project_forget_palette(),
-            "project-clean" => self.project_clean(),
-
-            // +notes (KB)
-            "kb-find" | "kb-create" => {
-                let nodes = self.kb_all_node_pairs();
-                self.command_palette =
-                    Some(crate::command_palette::CommandPalette::for_kb_find_or_create(&nodes));
-                self.set_mode(Mode::CommandPalette);
-            }
-            "kb-edit-source" => {
-                self.help_edit_source();
-            }
-            "kb-insert-link" => {
-                let nodes = self.kb_all_node_pairs();
-                self.command_palette = Some(
-                    crate::command_palette::CommandPalette::for_kb_insert_link(&nodes),
-                );
-                self.set_mode(Mode::CommandPalette);
-            }
-            "kb-delete" => {
-                self.set_mode(Mode::Command);
-                self.command_line = "kb-delete ".to_string();
-                self.command_cursor = self.command_line.len();
-            }
-            "kb-register" => {
-                self.set_mode(Mode::Command);
-                self.command_line = "kb-register ".to_string();
-                self.command_cursor = self.command_line.len();
-            }
-            "kb-reimport" => {
-                self.set_mode(Mode::Command);
-                self.command_line = "kb-reimport ".to_string();
-                self.command_cursor = self.command_line.len();
-            }
-            "kb-instances" => {
-                self.show_kb_instances();
-            }
-            "kb-save" => {
-                self.set_status("Usage: :kb-save <path>");
-            }
-            "kb-load" => {
-                self.set_status("Usage: :kb-load <path>");
-            }
-            "kb-ingest" => {
-                self.set_status("Usage: :kb-ingest <directory>");
-            }
-            "kb-rebuild" => {
-                self.kb = crate::kb_seed::seed_kb(&self.commands, &self.keymaps, &self.hooks);
-                let count = self.kb.list_ids(None).len();
-                self.set_status(format!("KB rebuilt: {} nodes", count));
-            }
-            "capture-finalize" => {
-                if let Some(cap) = self.capture_state.take() {
-                    self.dispatch_builtin("save");
-                    let ret = cap
-                        .return_buffer_idx
-                        .min(self.buffers.len().saturating_sub(1));
-                    self.display_buffer(ret);
-                    self.set_status("Capture finalized");
-                } else {
-                    self.set_status("No active capture");
-                }
-            }
-            "capture-abort" => {
-                if let Some(cap) = self.capture_state.take() {
-                    // Force-kill the capture buffer (no save prompt)
-                    self.dispatch_builtin("force-kill-buffer");
-                    // Delete the file from disk
-                    if let Some(ref path) = cap.file_path {
-                        let _ = std::fs::remove_file(path);
-                    }
-                    // Remove node from KB
-                    self.kb.remove(&cap.node_id);
-                    for kb in self.kb_instances.values_mut() {
-                        kb.remove(&cap.node_id);
-                    }
-                    let ret = cap
-                        .return_buffer_idx
-                        .min(self.buffers.len().saturating_sub(1));
-                    self.display_buffer(ret);
-                    self.set_status("Capture aborted");
-                } else {
-                    self.set_status("No active capture");
-                }
-            }
-            "ai-save" => {
-                self.set_status("Usage: :ai-save <path>");
-            }
-            "ai-load" => {
-                self.set_status("Usage: :ai-load <path>");
-            }
-
-            // Config
-            "edit-config" => {
-                let config_dir = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-                    std::path::PathBuf::from(xdg)
-                } else if let Ok(home) = std::env::var("HOME") {
-                    std::path::PathBuf::from(home).join(".config")
-                } else {
-                    std::path::PathBuf::from(".config")
-                }
-                .join("mae");
-                let init_path = config_dir.join("init.scm");
-                if !init_path.exists() {
-                    let _ = std::fs::create_dir_all(&config_dir);
-                    let template = "\
-;; MAE init.scm — Scheme configuration (loaded after config.toml)
-;; This file is the primary config surface. TOML is bootstrap-only.
-;;
-;; Examples:
-;;   (set-option! \"theme\" \"catppuccin-mocha\")
-;;   (set-option! \"font_size\" \"16\")
-;;   (set-option! \"word_wrap\" \"true\")
-;;   (set-option! \"relative_line_numbers\" \"true\")
-;;
-;; Keybindings:
-;;   (define-key \"normal\" \"g c\" \"toggle-comment\")
-;;
-;; Hooks:
-;;   (add-hook! \"buffer-open\" (lambda () (display \"opened!\")))
-;;
-";
-                    let _ = std::fs::write(&init_path, template);
-                }
-                self.open_file(init_path.display().to_string());
-            }
-            "setup-wizard" => {
-                self.set_status(
-                    "Run `mae --init-config --force` from a terminal to re-run the setup wizard. Or use :edit-settings to edit config.toml directly."
-                );
-            }
-            "edit-settings" => {
-                let config_path = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-                    std::path::PathBuf::from(xdg)
-                } else if let Ok(home) = std::env::var("HOME") {
-                    std::path::PathBuf::from(home).join(".config")
-                } else {
-                    std::path::PathBuf::from(".config")
-                }
-                .join("mae")
-                .join("config.toml");
-                self.open_file(config_path.display().to_string());
-            }
-
-            // Toggles
-            "toggle-line-numbers" => {
-                self.show_line_numbers = !self.show_line_numbers;
-                self.set_status(format!(
-                    "Line numbers: {}",
-                    if self.show_line_numbers { "on" } else { "off" }
-                ));
-            }
-            "toggle-relative-line-numbers" => {
-                self.relative_line_numbers = !self.relative_line_numbers;
-                self.set_status(format!(
-                    "Relative line numbers: {}",
-                    if self.relative_line_numbers {
-                        "on"
-                    } else {
-                        "off"
-                    }
-                ));
-            }
-            "toggle-word-wrap" => {
-                // Toggle per-buffer (setlocal). Flips the effective value.
-                let new_val = !self.effective_word_wrap();
-                let idx = self.active_buffer_idx();
-                self.buffers[idx].local_options.word_wrap = Some(new_val);
-                self.buffers[idx].visual_rows_cache = None;
-                self.set_status(format!(
-                    "Word wrap: {} (buffer-local)",
-                    if new_val { "on" } else { "off" }
-                ));
-            }
-            "toggle-inline-images" => {
-                let idx = self.active_buffer_idx();
-                let cur = self.buffers[idx]
-                    .local_options
-                    .inline_images
-                    .unwrap_or(false);
-                let new_val = !cur;
-                self.buffers[idx].local_options.inline_images = Some(new_val);
-                self.buffers[idx].collapsed_images.clear();
-                // Force display region recompute (bypass debounce).
-                self.buffers[idx].display_regions_gen = u64::MAX;
-                self.buffers[idx].display_regions_dirty_since = None;
-                self.set_status(format!(
-                    "Inline images: {}",
-                    if new_val { "on" } else { "off" }
-                ));
-            }
-            "toggle-image-at-point" => {
-                let idx = self.active_buffer_idx();
-                let row = self.window_mgr.focused_window().cursor_row;
-                // Check if this line has an image region.
-                let has_image = self.buffers[idx].display_regions.iter().any(|r| {
-                    r.image.is_some() && {
-                        let line_num = self.buffers[idx].rope().byte_to_line(r.byte_start);
-                        line_num == row
-                    }
-                });
-                if has_image {
-                    if self.buffers[idx].collapsed_images.contains(&row) {
-                        self.buffers[idx].collapsed_images.remove(&row);
-                        self.set_status("Image expanded");
-                    } else {
-                        self.buffers[idx].collapsed_images.insert(row);
-                        self.set_status("Image collapsed");
-                    }
-                    self.buffers[idx].display_regions_gen = u64::MAX;
-                    self.buffers[idx].display_regions_dirty_since = None;
-                } else {
-                    self.set_status("No image at cursor line");
-                }
-            }
-            "image-info-at-point" => {
-                let idx = self.active_buffer_idx();
-                let row = self.window_mgr.focused_window().cursor_row;
-                let image_path = self.buffers[idx]
-                    .display_regions
-                    .iter()
-                    .find_map(|r| {
-                        r.image.as_ref().map(|img| {
-                            let text: String = self.buffers[idx].rope().chars().collect();
-                            let line_num =
-                                text[..r.byte_start].chars().filter(|&c| c == '\n').count();
-                            (line_num, img.path.clone())
-                        })
-                    })
-                    .and_then(|(line_num, path)| if line_num == row { Some(path) } else { None });
-                match image_path {
-                    Some(path) => {
-                        let meta = std::fs::metadata(&path);
-                        match meta {
-                            Ok(m) => {
-                                let size_kb = m.len() / 1024;
-                                self.set_status(format!(
-                                    "Image: {} ({}KB)",
-                                    path.display(),
-                                    size_kb
-                                ));
-                            }
-                            Err(e) => {
-                                self.set_status(format!("Image error: {}", e));
-                            }
-                        }
-                    }
-                    None => {
-                        self.set_status("No image at cursor line");
-                    }
-                }
-            }
-            "terminal-here" => {
-                // Open terminal in current buffer's file directory.
-                let idx = self.active_buffer_idx();
-                let cwd = self.buffers[idx]
-                    .file_path()
-                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                    .or_else(|| self.active_project_root().map(|p| p.to_path_buf()));
-                if let Some(dir) = cwd {
-                    let shell_name = format!("*Terminal {}*", self.buffers.len());
-                    let buf = Buffer::new_shell(shell_name);
-                    self.buffers.push(buf);
-                    let shell_idx = self.buffers.len() - 1;
-                    self.pending_shell_spawns.push(shell_idx);
-                    self.pending_shell_cwds.insert(shell_idx, dir.clone());
-                    self.display_buffer_and_focus(shell_idx);
-                    self.set_mode(Mode::ShellInsert);
-                    self.set_status(format!("Terminal: {}", dir.display()));
-                } else {
-                    // Fall back to regular terminal.
-                    self.dispatch_builtin("terminal");
-                }
-            }
-            "toggle-scrollbar" => {
-                self.scrollbar = !self.scrollbar;
-                self.set_status(format!(
-                    "Scrollbar: {}",
-                    if self.scrollbar { "on" } else { "off" }
-                ));
-            }
-            "toggle-fps" => {
-                self.show_fps = !self.show_fps;
-                self.set_status(format!(
-                    "FPS overlay: {}",
-                    if self.show_fps { "on" } else { "off" }
-                ));
-            }
-            "debug-mode" => {
-                self.debug_mode = !self.debug_mode;
-                if self.debug_mode {
-                    self.show_fps = true;
-                }
-                self.set_status(format!(
-                    "Debug mode: {}",
-                    if self.debug_mode { "on" } else { "off" }
-                ));
-            }
-
-            // Event recording
-            "record-start" => {
-                self.event_recorder.start_recording();
-                self.set_status("Recording started");
-            }
-            "record-stop" => {
-                self.event_recorder.stop_recording();
-                self.set_status(format!(
-                    "Recording stopped ({} events)",
-                    self.event_recorder.event_count()
-                ));
-            }
-
-            // Font zoom
-            "increase-font-size" => {
-                let new_size = (self.gui_font_size + 1.0).min(72.0);
-                self.gui_font_size = new_size;
-                self.set_status(format!("Font size: {}", new_size));
-            }
-            "decrease-font-size" => {
-                let new_size = (self.gui_font_size - 1.0).max(6.0);
-                self.gui_font_size = new_size;
-                self.set_status(format!("Font size: {}", new_size));
-            }
-            "reset-font-size" => {
-                self.gui_font_size = self.gui_font_size_default;
-                self.set_status(format!(
-                    "Font size: {} (default)",
-                    self.gui_font_size_default
-                ));
-            }
-            "debug-path" => {
-                let path = std::env::var("PATH").unwrap_or_else(|_| "not set".to_string());
-                self.set_status(format!("PATH={}", path));
-            }
 
             // AI agent launcher
             "open-ai-agent" => {
                 // Prefer git root so agents operate at the repository level,
                 // not a subcrate Cargo.toml directory.
                 let agent_cwd = self.git_or_project_root();
-                let shell_name = format!("*AI:{}*", self.ai_editor);
+                let shell_name = format!("*AI:{}*", self.ai.editor_name);
                 let mut buf = Buffer::new_shell(shell_name);
                 buf.agent_shell = true;
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;
                 if let Some(cwd) = agent_cwd {
-                    self.pending_shell_cwds.insert(new_idx, cwd);
+                    self.shell.cwds.insert(new_idx, cwd);
                 }
                 // @ai-caution: [window-split] Agent shells MUST use
                 // switch_to_buffer_non_conversation() + split_root(), NOT
@@ -916,41 +304,9 @@ For full setup guide: :help ai-setup";
                 if let Some(wid) = agent_win_id {
                     self.window_mgr.set_focused(wid);
                 }
-                let cmd = self.ai_editor.clone();
-                self.pending_agent_spawns.push((new_idx, cmd));
+                let cmd = self.ai.editor_name.clone();
+                self.shell.agent_spawns.push((new_idx, cmd));
                 self.set_mode(Mode::ShellInsert);
-            }
-
-            // Agenda
-            "open-agenda" => {
-                self.open_agenda(crate::agenda_view::AgendaFilter::default());
-            }
-            "agenda-goto" => {
-                self.agenda_goto();
-            }
-            "agenda-refresh" => {
-                self.agenda_refresh();
-            }
-            "agenda-filter-todo" => {
-                self.agenda_filter_todo();
-            }
-            "agenda-filter-priority" => {
-                self.agenda_filter_priority();
-            }
-            "agenda-add" => {
-                // When dispatched as a builtin (not ex-command), prompt not available.
-                // Users should use :agenda-add <path> instead.
-                self.set_status("Use :agenda-add <path> to add agenda files");
-            }
-            "agenda-remove" => {
-                self.set_status("Use :agenda-remove <path> to remove agenda files");
-            }
-            "agenda-list" => {
-                self.agenda_list_paths();
-            }
-            "agenda-ingest" => {
-                self.ingest_agenda_files();
-                self.set_status("Agenda files re-ingested");
             }
 
             // Demo buffers

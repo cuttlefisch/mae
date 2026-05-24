@@ -90,6 +90,7 @@ yellow = "#f1fa8c"
 "markup.done" = { fg = "green" }
 "markup.checkbox" = { fg = "yellow", bold = true }
 "markup.checkbox.checked" = { fg = "green" }
+"markup.drawer" = { fg = "comment" }
 
 "diff.added" = { fg = "green" }
 "diff.removed" = { fg = "red" }

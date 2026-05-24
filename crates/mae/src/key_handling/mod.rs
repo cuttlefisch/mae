@@ -143,19 +143,19 @@ pub fn handle_key(
     pending_interactive_event: &mut Option<PendingInteractiveEvent>,
 ) {
     // Double Esc to cancel AI
-    if key.code == KeyCode::Esc && editor.ai_streaming {
+    if key.code == KeyCode::Esc && editor.ai.streaming {
         let now = std::time::Instant::now();
-        if let Some(last) = editor.last_esc_time {
+        if let Some(last) = editor.ai.last_esc_time {
             if now.duration_since(last).as_millis() < 500 {
-                editor.ai_cancel_requested = true;
+                editor.ai.cancel_requested = true;
                 editor.set_status("AI interrupted (double-esc)");
-                editor.last_esc_time = None;
+                editor.ai.last_esc_time = None;
                 return;
             }
         }
-        editor.last_esc_time = Some(now);
+        editor.ai.last_esc_time = Some(now);
     } else if key.code != KeyCode::Esc {
-        editor.last_esc_time = None;
+        editor.ai.last_esc_time = None;
     }
 
     // Toggle collapse in conversation buffers (Normal mode)
@@ -191,7 +191,7 @@ pub fn handle_key(
     // --- Splash screen navigation intercept ---
     // When the splash is visible, j/k/Up/Down navigate, Enter selects,
     // and any other key dismisses the splash (by inserting into scratch).
-    if editor.mode == Mode::Normal && is_splash_visible(editor) {
+    if editor.mode == Mode::Normal && is_splash_visible(editor) && pending_keys.is_empty() {
         debug!(key_code = ?key.code, splash_selection = editor.splash_selection, "splash intercept");
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
@@ -223,32 +223,57 @@ pub fn handle_key(
         }
     }
 
+    // --- Which-key scroll intercept ---
+    // When the which-key popup is visible, C-j/C-k/C-n/C-p scroll it.
+    if editor.mode == Mode::Normal && !editor.which_key_prefix.is_empty() {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match (key.code, ctrl) {
+            (KeyCode::Char('j'), true) | (KeyCode::Char('n'), true) | (KeyCode::Down, _) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_add(1);
+                return;
+            }
+            (KeyCode::Char('k'), true) | (KeyCode::Char('p'), true) | (KeyCode::Up, _) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_sub(1);
+                return;
+            }
+            (KeyCode::Char('d'), true) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_add(5);
+                return;
+            }
+            (KeyCode::Char('u'), true) => {
+                editor.which_key_scroll = editor.which_key_scroll.saturating_sub(5);
+                return;
+            }
+            _ => {} // fall through to normal dispatch
+        }
+    }
+
     let mode_before = editor.mode;
 
     // --- Macro recording intercept ---
     // While recording, capture every keystroke into macro_log before dispatch.
     // Exception: a bare `q` in Normal mode with no pending prefix stops recording.
-    if editor.macro_recording {
+    if editor.vi.macro_recording {
         let is_stop_key = matches!(key.code, KeyCode::Char('q'))
             && !key.modifiers.contains(KeyModifiers::CONTROL)
             && !key.modifiers.contains(KeyModifiers::ALT)
             && editor.mode == Mode::Normal
             && pending_keys.is_empty()
-            && editor.pending_char_command.is_none()
-            && editor.pending_operator.is_none();
+            && editor.vi.pending_char_command.is_none()
+            && editor.vi.pending_operator.is_none();
         if is_stop_key {
             editor.stop_recording();
             return;
         }
         if let Some(kp) = crossterm_to_keypress(&key) {
-            editor.macro_log.push(kp);
+            editor.vi.macro_log.push(kp);
         }
     }
 
     // --- Normal-mode Enter-to-submit on conversation input buffer ---
     // handle_normal_mode doesn't have ai_tx, so we intercept here.
     if editor.mode == Mode::Normal && key.code == KeyCode::Enter {
-        if let Some(ref pair) = editor.conversation_pair.clone() {
+        if let Some(ref pair) = editor.ai.conversation_pair.clone() {
             if editor.active_buffer_idx() == pair.input_buffer_idx {
                 editor.set_mode(Mode::ConversationInput);
                 conversation::submit_conversation_prompt(editor, ai_tx, pending_interactive_event);
@@ -320,7 +345,7 @@ pub fn handle_key(
     // --- Suppress gutter change indicators on *ai-input* buffer ---
     // The input buffer is ephemeral — gutter markers and [+] modified flag are meaningless.
     // This runs after ALL modes (Normal, ConversationInput, Visual, etc.) to catch every path.
-    if let Some(ref pair) = editor.conversation_pair {
+    if let Some(ref pair) = editor.ai.conversation_pair {
         if pair.input_buffer_idx < editor.buffers.len() {
             let buf = &mut editor.buffers[pair.input_buffer_idx];
             buf.changed_lines.clear();

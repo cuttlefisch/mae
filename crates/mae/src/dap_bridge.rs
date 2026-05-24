@@ -11,10 +11,10 @@ pub(crate) fn drain_dap_intents(
     editor: &mut Editor,
     dap_tx: &tokio::sync::mpsc::Sender<DapCommand>,
 ) {
-    if editor.pending_dap_intents.is_empty() {
+    if editor.dap.pending_intents.is_empty() {
         return;
     }
-    let intents = std::mem::take(&mut editor.pending_dap_intents);
+    let intents = std::mem::take(&mut editor.dap.pending_intents);
     for intent in intents {
         let cmd = intent_to_dap_command(intent);
         let kind = dap_command_name(&cmd);
@@ -209,7 +209,8 @@ pub(crate) fn handle_dap_event(editor: &mut Editor, event: DapTaskEvent) {
         } => {
             // Check if this is a watch expression result.
             let is_watch = editor
-                .debug_state
+                .dap
+                .state
                 .as_ref()
                 .map(|s| {
                     s.watch_expressions
@@ -221,7 +222,7 @@ pub(crate) fn handle_dap_event(editor: &mut Editor, event: DapTaskEvent) {
                 editor.apply_watch_result(&expression, &result, true);
                 editor.debug_panel_refresh_if_open();
             } else {
-                if let Some(ref mut ds) = editor.debug_state {
+                if let Some(ref mut ds) = editor.dap.state {
                     ds.log(format!(
                         "eval: {} = {} ({})",
                         expression,

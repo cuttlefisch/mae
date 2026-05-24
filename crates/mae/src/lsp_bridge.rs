@@ -564,13 +564,13 @@ pub(crate) fn handle_lsp_event(
             // Pre-fill the rename prompt with the placeholder text.
             if let Some(name) = placeholder {
                 editor.set_mode(mae_core::Mode::Command);
-                editor.command_line = format!("lsp-rename {}", name);
-                editor.command_cursor = editor.command_line.len();
+                editor.vi.command_line = format!("lsp-rename {}", name);
+                editor.vi.command_cursor = editor.vi.command_line.len();
                 editor.set_status("Edit name and press Enter to rename");
             } else {
                 editor.set_mode(mae_core::Mode::Command);
-                editor.command_line = "lsp-rename ".to_string();
-                editor.command_cursor = editor.command_line.len();
+                editor.vi.command_line = "lsp-rename ".to_string();
+                editor.vi.command_cursor = editor.vi.command_line.len();
                 editor.set_status("Enter new name for symbol");
             }
             true

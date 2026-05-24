@@ -54,7 +54,7 @@ pub(crate) fn render_debug_window(
     let visible_height = inner.height as usize;
     let scroll_offset = debug_scroll_offset(cursor_idx, visible_height);
 
-    let active_thread_id = editor.debug_state.as_ref().map(|s| s.active_thread_id);
+    let active_thread_id = editor.dap.state.as_ref().map(|s| s.active_thread_id);
     let selected_frame_id = view.selected_frame_id;
     let cursor_style = ts(editor, "ui.selection");
 

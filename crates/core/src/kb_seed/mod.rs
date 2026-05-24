@@ -1,4 +1,4 @@
-//! Seed the knowledge base with built-in help content.
+//! Seed the knowledge base with built-in manual content.
 //!
 //! The KB is MAE's answer to Emacs's built-in `*Help*` and its Info
 //! manuals. Two sources feed it:
@@ -12,7 +12,7 @@
 //!
 //! The hand-authored nodes live in `themes/…`-style static strings here
 //! rather than on disk. Phase 5 will add a persistent store; until then,
-//! regenerating the KB on every startup keeps help docs and commands in
+//! regenerating the KB on every startup keeps manual entries and commands in
 //! lockstep with the code that ships.
 
 mod concepts;
@@ -314,6 +314,13 @@ fn tutor_nodes() -> Vec<Node> {
             LESSON_KB_IMPORT,
         )
         .with_tags(["tutorial", "kb", "federation", "org-roam"]),
+        Node::new(
+            "lesson:collab-setup",
+            "Setting Up Collaborative Editing",
+            NodeKind::Concept,
+            LESSON_COLLAB_SETUP,
+        )
+        .with_tags(["tutorial", "collaboration", "state-server", "sync"]),
     ]
 }
 
@@ -558,6 +565,14 @@ fn static_nodes() -> Vec<Node> {
         )
         .with_tags(["kb", "comparison", "obsidian", "roam"])
         .with_aliases(["obsidian", "roam research", "notion", "logseq"]),
+        Node::new(
+            "concept:dailies",
+            "Concept: Org-Dailies",
+            NodeKind::Concept,
+            CONCEPT_DAILIES,
+        )
+        .with_tags(["kb", "dailies", "journal", "org-roam"])
+        .with_aliases(["daily notes", "journal", "org-roam-dailies"]),
         Node::new(
             "key:normal-mode",
             "Keys: Normal Mode",
@@ -836,6 +851,68 @@ fn static_nodes() -> Vec<Node> {
             GUIDE_EXTENSION_AUTHORING,
         )
         .with_tags(["modules", "guide", "extensibility"]),
+        Node::new(
+            "concept:sync-engine",
+            "Concept: Sync Engine (yrs)",
+            NodeKind::Concept,
+            CONCEPT_SYNC_ENGINE,
+        )
+        .with_tags(["architecture", "sync", "crdt"])
+        .with_aliases(["yrs", "yjs", "crdt", "collaboration"]),
+        Node::new(
+            "concept:collaborative-state",
+            "Concept: Collaborative State Engine",
+            NodeKind::Concept,
+            CONCEPT_COLLABORATIVE_STATE,
+        )
+        .with_tags(["architecture", "sync", "vision"])
+        .with_aliases(["collab", "multiplayer", "real-time"]),
+        Node::new(
+            "concept:adr-text-sync",
+            "ADR-002: Text Sync (Accepted)",
+            NodeKind::Concept,
+            CONCEPT_ADR_TEXT_SYNC,
+        )
+        .with_tags(["adr", "sync", "architecture"]),
+        Node::new(
+            "concept:adr-kb-crdt",
+            "ADR-005: KB as CRDT",
+            NodeKind::Concept,
+            CONCEPT_ADR_KB_CRDT,
+        )
+        .with_tags(["adr", "kb", "sync", "architecture"]),
+        Node::new(
+            "concept:collab-architecture",
+            "Collaborative Editing Architecture",
+            NodeKind::Concept,
+            CONCEPT_COLLAB_ARCHITECTURE,
+        )
+        .with_tags(["architecture", "sync", "collaboration"])
+        .with_aliases(["collab", "real-time", "state-server", "multiplayer"]),
+        Node::new(
+            "concept:collab-workflows",
+            "Collaborative Editing Workflows",
+            NodeKind::Concept,
+            CONCEPT_COLLAB_WORKFLOWS,
+        )
+        .with_tags(["workflow", "sync", "collaboration"])
+        .with_aliases(["collab workflows", "loopback", "multi-user"]),
+        Node::new(
+            "concept:scheme-testing",
+            "Concept: Scheme Testing Framework",
+            NodeKind::Concept,
+            CONCEPT_SCHEME_TESTING,
+        )
+        .with_tags(["testing", "scheme", "development"])
+        .with_aliases(["test", "ert", "buttercup", "plenary", "tap"]),
+        Node::new(
+            "concept:test-runner",
+            "Concept: Headless Test Runner",
+            NodeKind::Concept,
+            CONCEPT_TEST_RUNNER,
+        )
+        .with_tags(["testing", "development", "architecture"])
+        .with_aliases(["mae --test", "headless", "tap"]),
     ]
 }
 
@@ -884,8 +961,16 @@ mod tests {
             "concept:kb-federation",
             "concept:kb-workflows",
             "concept:kb-vs-alternatives",
+            "concept:dailies",
+            "concept:sync-engine",
+            "concept:collaborative-state",
+            "concept:adr-text-sync",
+            "concept:adr-kb-crdt",
+            "concept:collab-architecture",
+            "concept:collab-workflows",
             "guide:extension-authoring",
             "lesson:kb-import-roam",
+            "lesson:collab-setup",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);

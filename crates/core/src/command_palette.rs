@@ -15,6 +15,8 @@ use crate::file_picker::score_match;
 pub struct PaletteEntry {
     pub name: String,
     pub doc: String,
+    /// Extra searchable text (e.g. KB node body). Not displayed, only matched.
+    pub searchable_extra: Option<String>,
 }
 
 /// What to do with the selected entry when the user presses Enter.
@@ -28,7 +30,7 @@ pub enum PalettePurpose {
     Execute,
     Describe,
     SetTheme,
-    HelpSearch,
+    KbSearch,
     SwitchBuffer,
     SetSplashArt,
     RecentFile,
@@ -40,6 +42,7 @@ pub enum PalettePurpose {
     KbFindOrCreate,
     KbInsertLink,
     MiniDialog,
+    CollabJoin,
 }
 
 impl PalettePurpose {
@@ -49,7 +52,7 @@ impl PalettePurpose {
             Self::Execute => "Commands",
             Self::Describe => "Describe Command",
             Self::SetTheme => "Themes",
-            Self::HelpSearch => "Help Topics",
+            Self::KbSearch => "MAE Help",
             Self::SwitchBuffer => "Buffers",
             Self::SetSplashArt => "Splash Art",
             Self::RecentFile => "Recent Files",
@@ -61,6 +64,7 @@ impl PalettePurpose {
             Self::KbFindOrCreate => "Find or Create",
             Self::KbInsertLink => "Insert Link",
             Self::MiniDialog => "Dialog",
+            Self::CollabJoin => "Join Document",
         }
     }
 }
@@ -122,6 +126,11 @@ pub enum MiniDialogContext {
     AgendaFilterTag,
     RevertBuffer {
         buf_idx: usize,
+    },
+    DailyGotoDate,
+    CollabResolvePath {
+        buf_idx: usize,
+        resolved_path: std::path::PathBuf,
     },
 }
 
@@ -230,13 +239,14 @@ impl CommandPalette {
     }
 
     /// Help search palette: entries are KB node ids + titles, Enter opens
-    /// the selected node in the help buffer. Used by `SPC h s`.
+    /// the selected node in the KB buffer. Used by `SPC h s`.
     pub fn for_help_search(nodes: &[(String, String)]) -> Self {
         let mut entries: Vec<PaletteEntry> = nodes
             .iter()
             .map(|(id, title)| PaletteEntry {
                 name: id.clone(),
                 doc: title.clone(),
+                searchable_extra: None,
             })
             .collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -246,7 +256,7 @@ impl CommandPalette {
             entries,
             filtered,
             selected: 0,
-            purpose: PalettePurpose::HelpSearch,
+            purpose: PalettePurpose::KbSearch,
             query_selected: false,
         }
     }
@@ -294,15 +304,24 @@ impl CommandPalette {
     /// KB find-or-create palette: pre-populated with all KB nodes.
     /// Typing filters; Enter on a match opens it, Enter with no match creates.
     /// Used by `SPC n c` / `SPC n f`.
-    pub fn for_kb_find_or_create(nodes: &[(String, String)]) -> Self {
-        let mut entries: Vec<PaletteEntry> = nodes
+    /// Accepts `(id, title, body)` triples — body is stored in `searchable_extra`
+    /// (truncated to 500 chars) so fuzzy search matches body content.
+    /// The caller is responsible for sorting (alphabetical, activity, etc.).
+    pub fn for_kb_find_or_create(nodes: &[(String, String, String)]) -> Self {
+        let entries: Vec<PaletteEntry> = nodes
             .iter()
-            .map(|(id, title)| PaletteEntry {
+            .map(|(id, title, body)| PaletteEntry {
                 name: id.clone(),
                 doc: title.clone(),
+                searchable_extra: if body.is_empty() {
+                    None
+                } else {
+                    // Truncate to 500 chars to avoid 73KB outlier dominating memory
+                    let truncated: String = body.chars().take(500).collect();
+                    Some(truncated)
+                },
             })
             .collect();
-        entries.sort_by(|a, b| a.name.cmp(&b.name));
         let filtered: Vec<usize> = (0..entries.len()).collect();
         CommandPalette {
             query: String::new(),
@@ -322,6 +341,7 @@ impl CommandPalette {
             .map(|(id, title)| PaletteEntry {
                 name: id.clone(),
                 doc: title.clone(),
+                searchable_extra: None,
             })
             .collect();
         let filtered: Vec<usize> = (0..entries.len()).collect();
@@ -340,7 +360,11 @@ impl CommandPalette {
         let names = crate::render_common::splash::available_splash_names(editor);
         let entries: Vec<PaletteEntry> = names
             .into_iter()
-            .map(|(name, kind)| PaletteEntry { name, doc: kind })
+            .map(|(name, kind)| PaletteEntry {
+                name,
+                doc: kind,
+                searchable_extra: None,
+            })
             .collect();
         let filtered: Vec<usize> = (0..entries.len()).collect();
         CommandPalette {
@@ -353,12 +377,18 @@ impl CommandPalette {
         }
     }
 
+    /// Collab join palette: server documents to join. Used by `SPC C j`.
+    pub fn for_collab_join(names: &[&str]) -> Self {
+        Self::with_name_list(names, PalettePurpose::CollabJoin)
+    }
+
     fn with_name_list(names: &[&str], purpose: PalettePurpose) -> Self {
         let entries: Vec<PaletteEntry> = names
             .iter()
             .map(|n| PaletteEntry {
                 name: n.to_string(),
                 doc: String::new(),
+                searchable_extra: None,
             })
             .collect();
         let filtered: Vec<usize> = (0..entries.len()).collect();
@@ -379,6 +409,7 @@ impl CommandPalette {
             .map(|c| PaletteEntry {
                 name: c.name.clone(),
                 doc: c.doc.clone(),
+                searchable_extra: None,
             })
             .collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -411,7 +442,8 @@ impl CommandPalette {
                     } else {
                         score_match(&e.doc, &q)
                     };
-                    name_score.max(doc_score).map(|s| (idx, s))
+                    let extra_score = e.searchable_extra.as_ref().and_then(|s| score_match(s, &q));
+                    name_score.max(doc_score).max(extra_score).map(|s| (idx, s))
                 })
                 .collect();
             scored.sort_by_key(|b| std::cmp::Reverse(b.1));
@@ -493,7 +525,7 @@ mod tests {
             PalettePurpose::Execute,
             PalettePurpose::Describe,
             PalettePurpose::SetTheme,
-            PalettePurpose::HelpSearch,
+            PalettePurpose::KbSearch,
             PalettePurpose::SwitchBuffer,
             PalettePurpose::SetSplashArt,
             PalettePurpose::RecentFile,
@@ -505,6 +537,7 @@ mod tests {
             PalettePurpose::KbFindOrCreate,
             PalettePurpose::KbInsertLink,
             PalettePurpose::MiniDialog,
+            PalettePurpose::CollabJoin,
         ];
         for p in &purposes {
             assert!(!p.label().is_empty(), "{:?} has empty label", p);
@@ -652,5 +685,47 @@ mod tests {
         palette.query = "a".into();
         palette.update_filter();
         assert_eq!(palette.selected, 0, "selection must reset on filter");
+    }
+
+    #[test]
+    fn palette_searchable_extra_matches() {
+        let nodes = vec![(
+            "zed-arch".to_string(),
+            "Zed Architecture".to_string(),
+            "The collaboration layer uses DeltaDB for state sync.".to_string(),
+        )];
+        let mut palette = CommandPalette::for_kb_find_or_create(&nodes);
+        palette.query = "DeltaDB".into();
+        palette.update_filter();
+        assert_eq!(
+            palette.filtered.len(),
+            1,
+            "body content in searchable_extra should match"
+        );
+    }
+
+    #[test]
+    fn palette_title_match_ranks_above_body_match() {
+        let nodes = vec![
+            (
+                "a".to_string(),
+                "DeltaDB Overview".to_string(),
+                "empty body".to_string(),
+            ),
+            (
+                "b".to_string(),
+                "Zed Architecture".to_string(),
+                "Uses DeltaDB for collaboration".to_string(),
+            ),
+        ];
+        let mut palette = CommandPalette::for_kb_find_or_create(&nodes);
+        palette.query = "DeltaDB".into();
+        palette.update_filter();
+        assert_eq!(palette.filtered.len(), 2);
+        // Title match (node a) should rank first
+        assert_eq!(
+            palette.entries[palette.filtered[0]].name, "a",
+            "title match should rank above body match"
+        );
     }
 }

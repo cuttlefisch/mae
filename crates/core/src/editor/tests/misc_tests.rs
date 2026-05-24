@@ -63,96 +63,100 @@ fn option_registry_has_debug_mode() {
 fn test_switch_non_conv_normal_window() {
     // When focused window is NOT conversation, it still avoids stealing focus
     // by splitting or using another window.
-    let mut ed = Editor::new();
-    ed.buffers.push(Buffer::new());
-    assert!(!ed.is_conversation_buffer(ed.active_buffer_idx()));
-    let ok = ed.switch_to_buffer_non_conversation(1);
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    assert!(!editor.is_conversation_buffer(editor.active_buffer_idx()));
+    let ok = editor.switch_to_buffer_non_conversation(1);
     assert!(ok);
     // Focus remains on buffer 0
-    assert_eq!(ed.active_buffer_idx(), 0);
+    assert_eq!(editor.active_buffer_idx(), 0);
     // Buffer 1 is now visible in another window (the split)
-    assert!(ed.window_mgr.iter_windows().any(|w| w.buffer_idx == 1));
+    assert!(editor.window_mgr.iter_windows().any(|w| w.buffer_idx == 1));
 }
 
 #[test]
 fn test_switch_non_conv_routes_to_other_window() {
     // With a split, if conversation is focused, the new buffer goes to the other pane.
-    let mut ed = Editor::new();
+    let mut editor = Editor::new();
     // Create a conversation buffer.
-    let conv_idx = ed.ensure_conversation_buffer_idx();
-    ed.switch_to_buffer(conv_idx);
+    let conv_idx = editor.ensure_conversation_buffer_idx();
+    editor.switch_to_buffer(conv_idx);
     // Split vertically so there are two windows.
-    let area = ed.default_area();
-    let new_id = ed
+    let area = editor.default_area();
+    let new_id = editor
         .window_mgr
         .split(crate::window::SplitDirection::Vertical, 0, area)
         .expect("split should succeed");
     // Focus the conversation window (not the new split).
     // The focused window should still be on conv_idx after split — split
     // doesn't change focus.
-    assert_eq!(ed.active_buffer_idx(), conv_idx);
+    assert_eq!(editor.active_buffer_idx(), conv_idx);
     // Add a third buffer and route it.
-    ed.buffers.push(Buffer::new());
-    let target_idx = ed.buffers.len() - 1;
-    let ok = ed.switch_to_buffer_non_conversation(target_idx);
+    editor.buffers.push(Buffer::new());
+    let target_idx = editor.buffers.len() - 1;
+    let ok = editor.switch_to_buffer_non_conversation(target_idx);
     assert!(ok);
     // Focused window should STILL show conversation.
-    assert_eq!(ed.active_buffer_idx(), conv_idx);
+    assert_eq!(editor.active_buffer_idx(), conv_idx);
     // The other window should show the target buffer.
-    let other_win = ed.window_mgr.window(new_id).expect("split window exists");
+    let other_win = editor
+        .window_mgr
+        .window(new_id)
+        .expect("split window exists");
     assert_eq!(other_win.buffer_idx, target_idx);
 }
 
 #[test]
 fn test_switch_non_conv_auto_splits() {
     // Single *AI* window: auto-splits to keep conversation visible.
-    let mut ed = Editor::new();
-    let conv_idx = ed.ensure_conversation_buffer_idx();
-    ed.switch_to_buffer(conv_idx);
-    assert_eq!(ed.window_mgr.window_count(), 1);
+    let mut editor = Editor::new();
+    let conv_idx = editor.ensure_conversation_buffer_idx();
+    editor.switch_to_buffer(conv_idx);
+    assert_eq!(editor.window_mgr.window_count(), 1);
     // Add a target buffer.
-    ed.buffers.push(Buffer::new());
-    let target_idx = ed.buffers.len() - 1;
-    let ok = ed.switch_to_buffer_non_conversation(target_idx);
+    editor.buffers.push(Buffer::new());
+    let target_idx = editor.buffers.len() - 1;
+    let ok = editor.switch_to_buffer_non_conversation(target_idx);
     assert!(ok);
     // Should have split into 2 windows.
-    assert_eq!(ed.window_mgr.window_count(), 2);
+    assert_eq!(editor.window_mgr.window_count(), 2);
 }
 
 #[test]
 fn test_open_file_non_conv_preserves_ai() {
     // open_file_non_conversation with *AI* focused keeps conversation visible.
-    let mut ed = Editor::new();
-    let conv_idx = ed.ensure_conversation_buffer_idx();
-    ed.switch_to_buffer(conv_idx);
+    let mut editor = Editor::new();
+    let conv_idx = editor.ensure_conversation_buffer_idx();
+    editor.switch_to_buffer(conv_idx);
     // Create a temp file.
     let dir = std::env::temp_dir().join("mae_test_open_non_conv");
     let _ = fs::create_dir_all(&dir);
     let file_path = dir.join("test.txt");
     fs::write(&file_path, "hello").unwrap();
-    ed.open_file_non_conversation(file_path.to_str().unwrap());
+    editor.open_file_non_conversation(file_path.to_str().unwrap());
     // Focused window should still show conversation.
-    assert_eq!(ed.active_buffer_idx(), conv_idx);
+    assert_eq!(editor.active_buffer_idx(), conv_idx);
     // Cleanup.
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_focus_hooks_fired() {
-    let mut ed = Editor::new();
+    let mut editor = Editor::new();
     // Register dummy functions so fire_hook actually queues something
-    ed.hooks.add("focus-out", "dummy-fn");
-    ed.hooks.add("focus-in", "dummy-fn");
+    editor.hooks.add("focus-out", "dummy-fn");
+    editor.hooks.add("focus-in", "dummy-fn");
 
     // Create a split so we can switch focus
-    ed.buffers.push(Buffer::new());
-    let area = ed.default_area();
-    ed.window_mgr
+    editor.buffers.push(Buffer::new());
+    let area = editor.default_area();
+    editor
+        .window_mgr
         .split(crate::window::SplitDirection::Vertical, 1, area)
         .unwrap();
 
-    ed.execute_command("focus-right");
-    let hooks: Vec<_> = ed
+    editor.execute_command("focus-right");
+    let hooks: Vec<_> = editor
         .pending_hook_evals
         .iter()
         .map(|(h, _)| h.as_str())
@@ -304,7 +308,7 @@ fn save_and_restore_preserves_conversation_pair() {
     editor.buffers.push(input_buf);
 
     // Simulate a conversation pair
-    editor.conversation_pair = Some(ConversationPair {
+    editor.ai.conversation_pair = Some(ConversationPair {
         output_buffer_idx: 0,
         input_buffer_idx: 1,
         output_window_id: 100,
@@ -314,7 +318,7 @@ fn save_and_restore_preserves_conversation_pair() {
     editor.save_state();
 
     // Mutate: clear the pair and add a test buffer
-    editor.conversation_pair = None;
+    editor.ai.conversation_pair = None;
     let mut test_buf = Buffer::new();
     test_buf.name = "test.txt".into();
     editor.buffers.push(test_buf);
@@ -323,6 +327,7 @@ fn save_and_restore_preserves_conversation_pair() {
 
     // Conversation pair should be restored with correct (possibly remapped) indices
     let pair = editor
+        .ai
         .conversation_pair
         .as_ref()
         .expect("pair should be restored");
@@ -337,40 +342,44 @@ fn save_and_restore_preserves_conversation_pair() {
 
 #[test]
 fn conversation_creates_group() {
-    let mut ed = Editor::new();
-    ed.open_conversation_buffer();
-    let pair = ed.conversation_pair.as_ref().expect("pair should exist");
+    let mut editor = Editor::new();
+    editor.open_conversation_buffer();
+    let pair = editor
+        .ai
+        .conversation_pair
+        .as_ref()
+        .expect("pair should exist");
     assert!(
-        ed.window_mgr.is_in_group(pair.output_window_id),
+        editor.window_mgr.is_in_group(pair.output_window_id),
         "output window should be in a group"
     );
     assert!(
-        ed.window_mgr.is_in_group(pair.input_window_id),
+        editor.window_mgr.is_in_group(pair.input_window_id),
         "input window should be in a group"
     );
     assert_eq!(
-        ed.window_mgr.group_label(pair.output_window_id),
+        editor.window_mgr.group_label(pair.output_window_id),
         Some("conversation")
     );
 }
 
 #[test]
 fn split_from_conversation_wraps_group() {
-    let mut ed = Editor::new();
-    ed.open_conversation_buffer();
-    let pair = ed.conversation_pair.as_ref().unwrap().clone();
+    let mut editor = Editor::new();
+    editor.open_conversation_buffer();
+    let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
     // Focus the input window and split to open a new buffer.
-    ed.window_mgr.set_focused(pair.input_window_id);
-    let area = ed.default_area();
-    let new_id = ed
+    editor.window_mgr.set_focused(pair.input_window_id);
+    let area = editor.default_area();
+    let new_id = editor
         .window_mgr
         .split(crate::window::SplitDirection::Vertical, 0, area)
         .expect("split should succeed");
     // The new window should be outside the conversation group.
-    assert!(!ed.window_mgr.is_in_group(new_id));
+    assert!(!editor.window_mgr.is_in_group(new_id));
     // The conversation windows should still be in the group.
-    assert!(ed.window_mgr.is_in_group(pair.output_window_id));
-    assert!(ed.window_mgr.is_in_group(pair.input_window_id));
+    assert!(editor.window_mgr.is_in_group(pair.output_window_id));
+    assert!(editor.window_mgr.is_in_group(pair.input_window_id));
 }
 
 // --- Bug regression: AI-opened buffer triggers full redraw (syntax highlighting)
@@ -410,7 +419,7 @@ fn ai_active_buffer_idx_uses_target_when_set() {
     let mut editor = Editor::new();
     // Add a second buffer
     editor.buffers.push(Buffer::new());
-    editor.ai_target_buffer_idx = Some(1);
+    editor.ai.target_buffer_idx = Some(1);
     assert_eq!(editor.ai_active_buffer_idx(), 1);
     assert_eq!(editor.active_buffer_idx(), 0); // focused is still 0
 }
@@ -453,7 +462,7 @@ fn ai_cursor_row_uses_target_window() {
         .unwrap()
         .id;
     editor.window_mgr.set_focused(original_id);
-    editor.ai_target_window_id = Some(new_win_id);
+    editor.ai.target_window_id = Some(new_win_id);
 
     assert_eq!(editor.ai_cursor_row(), 42);
     assert_eq!(editor.window_mgr.focused_window().cursor_row, 0); // focused is still 0
@@ -461,7 +470,7 @@ fn ai_cursor_row_uses_target_window() {
 
 #[test]
 fn dispatch_builtin_in_target_restores_focus() {
-    let mut editor = ed_with_text("line one\nline two\nline three");
+    let mut editor = editor_with_bulk_text("line one\nline two\nline three");
     editor.buffers.push(Buffer::new());
     let area = crate::window::Rect {
         x: 0,
@@ -480,7 +489,7 @@ fn dispatch_builtin_in_target_restores_focus() {
         .unwrap()
         .id;
     editor.window_mgr.set_focused(original_id);
-    editor.ai_target_window_id = Some(new_win_id);
+    editor.ai.target_window_id = Some(new_win_id);
 
     // Dispatch move-down in the target window
     editor.dispatch_builtin_in_target("move-down");
@@ -491,7 +500,7 @@ fn dispatch_builtin_in_target_restores_focus() {
 
 #[test]
 fn execute_command_respects_ai_target() {
-    let mut editor = ed_with_text("line one\nline two\nline three");
+    let mut editor = editor_with_bulk_text("line one\nline two\nline three");
     editor.buffers.push(Buffer::new());
     let area = crate::window::Rect {
         x: 0,
@@ -510,7 +519,7 @@ fn execute_command_respects_ai_target() {
         .unwrap()
         .id;
     editor.window_mgr.set_focused(original_id);
-    editor.ai_target_window_id = Some(new_win_id);
+    editor.ai.target_window_id = Some(new_win_id);
 
     // Cursor in target window should be at 0 initially
     let target_row_before = editor
@@ -601,29 +610,29 @@ fn poll_pending_git_diff_applies_result() {
 
 #[test]
 fn ai_work_window_reused_across_open_file() {
-    let mut ed = Editor::new();
+    let mut editor = Editor::new();
     // Set up a conversation so switch_to_buffer_non_conversation splits.
-    let conv_idx = ed.ensure_conversation_buffer_idx();
-    ed.switch_to_buffer(conv_idx);
+    let conv_idx = editor.ensure_conversation_buffer_idx();
+    editor.switch_to_buffer(conv_idx);
 
     // Open first file — creates a split (work window).
-    ed.buffers.push(Buffer::new());
-    let idx1 = ed.buffers.len() - 1;
-    ed.switch_to_buffer_non_conversation(idx1);
-    let window_count_after_first = ed.window_mgr.window_count();
-    let work_id = ed.ai_work_window_id.expect("should record work window");
+    editor.buffers.push(Buffer::new());
+    let idx1 = editor.buffers.len() - 1;
+    editor.switch_to_buffer_non_conversation(idx1);
+    let window_count_after_first = editor.window_mgr.window_count();
+    let work_id = editor.ai.work_window_id.expect("should record work window");
 
     // Open second file — reuses the work window, no new split.
-    ed.buffers.push(Buffer::new());
-    let idx2 = ed.buffers.len() - 1;
-    ed.switch_to_buffer_non_conversation(idx2);
+    editor.buffers.push(Buffer::new());
+    let idx2 = editor.buffers.len() - 1;
+    editor.switch_to_buffer_non_conversation(idx2);
     assert_eq!(
-        ed.window_mgr.window_count(),
+        editor.window_mgr.window_count(),
         window_count_after_first,
         "should not create additional windows"
     );
-    assert_eq!(ed.ai_work_window_id, Some(work_id));
-    let win = ed.window_mgr.window(work_id).unwrap();
+    assert_eq!(editor.ai.work_window_id, Some(work_id));
+    let win = editor.window_mgr.window(work_id).unwrap();
     assert_eq!(
         win.buffer_idx, idx2,
         "work window should show the latest buffer"
@@ -632,15 +641,15 @@ fn ai_work_window_reused_across_open_file() {
 
 #[test]
 fn ai_work_window_cleared_on_stale() {
-    let mut ed = Editor::new();
+    let mut editor = Editor::new();
     // Set a fake work window ID that doesn't exist.
-    ed.ai_work_window_id = Some(999u32);
+    editor.ai.work_window_id = Some(999u32);
 
-    ed.buffers.push(Buffer::new());
-    let idx = ed.buffers.len() - 1;
+    editor.buffers.push(Buffer::new());
+    let idx = editor.buffers.len() - 1;
     // Should detect stale reference and fall through to normal logic.
-    let ok = ed.switch_to_buffer_non_conversation(idx);
+    let ok = editor.switch_to_buffer_non_conversation(idx);
     assert!(ok);
     // Stale ID should be cleared.
-    assert_ne!(ed.ai_work_window_id, Some(999u32));
+    assert_ne!(editor.ai.work_window_id, Some(999u32));
 }

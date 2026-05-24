@@ -1,7 +1,10 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use tracing::{debug, warn};
 
 use crate::buffer::Buffer;
 use crate::debug::{DebugState, DebugTarget, Scope, StackFrame, Variable};
+use crate::file_lock;
 use crate::theme::{bundled_theme_names, BundledResolver, Theme};
 
 use super::Editor;
@@ -40,6 +43,84 @@ impl Editor {
             }
         }
         (saved, errors)
+    }
+
+    /// Save a single buffer with content-hash verification.
+    ///
+    /// If the file on disk has been externally modified (hash mismatch) AND
+    /// the buffer has unsaved changes, returns an error telling the user to
+    /// use `:w!` to force. Otherwise proceeds with `buffer.save()`.
+    pub fn save_buffer_with_hash_check(&mut self, idx: usize) -> Result<(), String> {
+        if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+            if self.buffers[idx].check_disk_changed_by_hash() && self.buffers[idx].modified {
+                warn!(
+                    path = %path.display(),
+                    "content-hash mismatch: file changed on disk while buffer was modified"
+                );
+                return Err("File changed on disk. Use :w! to force save.".to_string());
+            }
+        }
+        self.buffers[idx].save().map_err(|e| e.to_string())?;
+        if let Some(path) = self.buffers[idx].file_path() {
+            debug!(path = %path.display(), "buffer saved (hash verified)");
+        }
+        Ok(())
+    }
+
+    /// Force-save a buffer, skipping the content-hash check.
+    /// Used by `:w!` when the user explicitly wants to overwrite.
+    pub fn save_buffer_force(&mut self, idx: usize) -> Result<(), String> {
+        self.buffers[idx].save().map_err(|e| e.to_string())?;
+        if let Some(path) = self.buffers[idx].file_path() {
+            debug!(path = %path.display(), "buffer force-saved (hash check skipped)");
+        }
+        Ok(())
+    }
+
+    /// Acquire an advisory file lock for the given path.
+    ///
+    /// If the lock is successfully acquired, the path is tracked in
+    /// `locked_files`. If another MAE instance holds the lock, a warning
+    /// is logged and the status message is set — but the open is NOT blocked.
+    pub fn acquire_file_lock(&mut self, path: &Path) {
+        let canonical = path.to_path_buf();
+        match file_lock::acquire_lock(path) {
+            Ok(()) => {
+                debug!(path = %path.display(), "advisory file lock acquired");
+                self.locked_files.insert(canonical);
+            }
+            Err(info) => {
+                warn!(
+                    path = %path.display(),
+                    holder_pid = info.pid,
+                    holder_host = %info.hostname,
+                    "file locked by another MAE instance"
+                );
+                self.status_msg = format!(
+                    "Warning: {} is locked by MAE pid {} on {}",
+                    path.display(),
+                    info.pid,
+                    info.hostname,
+                );
+            }
+        }
+    }
+
+    /// Release the advisory file lock for the given path.
+    pub fn release_file_lock(&mut self, path: &Path) {
+        file_lock::release_lock(path);
+        self.locked_files.remove(path);
+        debug!(path = %path.display(), "advisory file lock released");
+    }
+
+    /// Release all advisory file locks held by this editor instance.
+    /// Called on editor exit to clean up lock files.
+    pub fn release_all_file_locks(&mut self) {
+        let paths: Vec<PathBuf> = self.locked_files.drain().collect();
+        for path in &paths {
+            file_lock::release_lock(path);
+            debug!(path = %path.display(), "advisory file lock released (exit cleanup)");
+        }
     }
 
     /// Check whether any buffer has unsaved modifications.
@@ -179,15 +260,44 @@ impl Editor {
                 // so the in-memory graph stays in sync (watcher may be disabled).
                 if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
                     if self.kb_path_in_instance(&path) {
+                        // Guard the path so the watcher doesn't re-ingest
+                        // what we just saved (deduplicate sync+async reimport).
+                        self.kb.write_guard.insert(path.clone());
                         self.kb_reimport_file(&path);
-                        // Refresh help buffer if it's showing a node from this file
+                        self.kb.watcher_stats.reimports_total += 1;
+                        // Record modification for activity tracking.
+                        self.kb_record_modification(&path);
+                        // Refresh KB buffer if it's showing a node from this file
                         self.refresh_help_if_stale();
+                    }
+                }
+                // If buffer is synced via collab AND this client is the sharer,
+                // trigger the save protocol. Joiners save locally only — they are
+                // not the authoritative saver (Bug 2 fix).
+                if self.buffers[idx].collab_is_sharer {
+                    if let Some(ref doc_id) = self.buffers[idx].collab_doc_id {
+                        let content = self.buffers[idx].text();
+                        use sha2::{Digest, Sha256};
+                        let mut hasher = Sha256::new();
+                        hasher.update(content.as_bytes());
+                        let content_hash = format!("{:x}", hasher.finalize());
+                        self.collab.pending_intent = Some(super::CollabIntent::SaveCollab {
+                            doc_id: doc_id.clone(),
+                            content_hash,
+                        });
                     }
                 }
                 self.fire_hook("after-save");
             }
             Err(e) => {
-                self.set_status(format!("Error saving: {}", e));
+                // Collab buffers with no file_path: guide user to :saveas
+                if self.buffers[idx].collab_doc_id.is_some()
+                    && self.buffers[idx].file_path().is_none()
+                {
+                    self.set_status("No local path set — use :saveas <path> to save".to_string());
+                } else {
+                    self.set_status(format!("Error saving: {}", e));
+                }
             }
         }
     }
@@ -325,7 +435,7 @@ impl Editor {
     /// and both windows are valid, just focuses the input window.
     pub fn open_conversation_buffer(&mut self) {
         // If pair exists and both windows/buffers are still valid, just focus input.
-        if let Some(ref pair) = self.conversation_pair {
+        if let Some(ref pair) = self.ai.conversation_pair {
             let out_ok = pair.output_buffer_idx < self.buffers.len()
                 && self.window_mgr.window(pair.output_window_id).is_some();
             let in_ok = pair.input_buffer_idx < self.buffers.len()
@@ -395,7 +505,7 @@ impl Editor {
         );
 
         // 9. Record the pair.
-        self.conversation_pair = Some(super::ConversationPair {
+        self.ai.conversation_pair = Some(super::ConversationPair {
             output_buffer_idx: output_idx,
             input_buffer_idx: input_idx,
             output_window_id,
@@ -507,7 +617,7 @@ impl Editor {
                 },
                 Variable {
                     name: "command_line".into(),
-                    value: self.command_line.clone(),
+                    value: self.vi.command_line.clone(),
                     var_type: Some("String".into()),
                     variables_reference: 0,
                 },
@@ -716,13 +826,13 @@ impl Editor {
         // Mark as stopped (self-debug is always "stopped" — it's a snapshot)
         state.stopped_location = Some(("crates/mae/src/main.rs".into(), 0));
 
-        self.debug_state = Some(state);
+        self.dap.state = Some(state);
         self.set_status("Self-debug: Rust state captured. Use SPC d v to inspect.");
     }
 
     /// Refresh the Rust portion of the self-debug state (call on each debug render).
     pub fn refresh_self_debug(&mut self) {
-        if let Some(ref state) = self.debug_state {
+        if let Some(ref state) = self.dap.state {
             if state.target == DebugTarget::SelfDebug {
                 // Re-capture by starting fresh
                 self.start_self_debug();
@@ -735,47 +845,48 @@ impl Editor {
         if cmd.is_empty() {
             return;
         }
-        if self.command_history.last().map(|s| s.as_str()) == Some(cmd) {
+        if self.vi.command_history.last().map(|s| s.as_str()) == Some(cmd) {
             return; // skip consecutive duplicate
         }
-        self.command_history.push(cmd.to_string());
+        self.vi.command_history.push(cmd.to_string());
         // Bound history to 500 entries
-        if self.command_history.len() > 500 {
-            self.command_history
-                .drain(..self.command_history.len() - 500);
+        if self.vi.command_history.len() > 500 {
+            self.vi
+                .command_history
+                .drain(..self.vi.command_history.len() - 500);
         }
-        self.command_history_idx = None;
+        self.vi.command_history_idx = None;
     }
 
     /// Recall previous command from history (Up arrow / C-p in command mode).
     pub fn command_history_prev(&mut self) {
-        if self.command_history.is_empty() {
+        if self.vi.command_history.is_empty() {
             return;
         }
-        let idx = match self.command_history_idx {
+        let idx = match self.vi.command_history_idx {
             Some(0) => return, // already at oldest
             Some(i) => i - 1,
-            None => self.command_history.len() - 1,
+            None => self.vi.command_history.len() - 1,
         };
-        self.command_history_idx = Some(idx);
-        self.command_line = self.command_history[idx].clone();
-        self.command_cursor = self.command_line.len(); // end of recalled line
+        self.vi.command_history_idx = Some(idx);
+        self.vi.command_line = self.vi.command_history[idx].clone();
+        self.vi.command_cursor = self.vi.command_line.len(); // end of recalled line
     }
 
     /// Recall next command from history (Down arrow / C-n in command mode).
     pub fn command_history_next(&mut self) {
-        let idx = match self.command_history_idx {
+        let idx = match self.vi.command_history_idx {
             Some(i) => i + 1,
             None => return,
         };
-        if idx >= self.command_history.len() {
-            self.command_history_idx = None;
-            self.command_line.clear();
-            self.command_cursor = 0;
+        if idx >= self.vi.command_history.len() {
+            self.vi.command_history_idx = None;
+            self.vi.command_line.clear();
+            self.vi.command_cursor = 0;
         } else {
-            self.command_history_idx = Some(idx);
-            self.command_line = self.command_history[idx].clone();
-            self.command_cursor = self.command_line.len();
+            self.vi.command_history_idx = Some(idx);
+            self.vi.command_line = self.vi.command_history[idx].clone();
+            self.vi.command_cursor = self.vi.command_line.len();
         }
     }
 
@@ -786,112 +897,114 @@ impl Editor {
 
     /// Insert `ch` at the current cursor position and advance the cursor.
     pub fn cmdline_insert_char(&mut self, ch: char) {
-        let pos = self.command_cursor.min(self.command_line.len());
-        self.command_line.insert(pos, ch);
-        self.command_cursor = pos + ch.len_utf8();
-        self.command_history_idx = None;
-        self.tab_completions.clear();
+        let pos = self.vi.command_cursor.min(self.vi.command_line.len());
+        self.vi.command_line.insert(pos, ch);
+        self.vi.command_cursor = pos + ch.len_utf8();
+        self.vi.command_history_idx = None;
+        self.vi.tab_completions.clear();
     }
 
     /// Delete the char immediately before the cursor (Backspace / C-h).
     pub fn cmdline_backspace(&mut self) {
-        if self.command_cursor == 0 {
+        if self.vi.command_cursor == 0 {
             return;
         }
         // Walk back to the previous char boundary.
-        let mut pos = self.command_cursor;
+        let mut pos = self.vi.command_cursor;
         loop {
             pos -= 1;
-            if self.command_line.is_char_boundary(pos) {
+            if self.vi.command_line.is_char_boundary(pos) {
                 break;
             }
         }
-        self.command_line.remove(pos);
-        self.command_cursor = pos;
-        self.command_history_idx = None;
-        self.tab_completions.clear();
+        self.vi.command_line.remove(pos);
+        self.vi.command_cursor = pos;
+        self.vi.command_history_idx = None;
+        self.vi.tab_completions.clear();
     }
 
     /// Delete the char at the cursor (C-d / DEL).
     pub fn cmdline_delete_forward(&mut self) {
-        if self.command_cursor >= self.command_line.len() {
+        if self.vi.command_cursor >= self.vi.command_line.len() {
             return;
         }
-        self.command_line.remove(self.command_cursor);
-        self.tab_completions.clear();
+        self.vi.command_line.remove(self.vi.command_cursor);
+        self.vi.tab_completions.clear();
     }
 
     /// Move cursor to beginning of line (C-a / Home).
     pub fn cmdline_move_home(&mut self) {
-        self.command_cursor = 0;
+        self.vi.command_cursor = 0;
     }
 
     /// Move cursor to end of line (C-e / End).
     pub fn cmdline_move_end(&mut self) {
-        self.command_cursor = self.command_line.len();
+        self.vi.command_cursor = self.vi.command_line.len();
     }
 
     /// Move cursor one character backward (C-b / Left).
     pub fn cmdline_move_backward(&mut self) {
-        if self.command_cursor == 0 {
+        if self.vi.command_cursor == 0 {
             return;
         }
-        let mut pos = self.command_cursor;
+        let mut pos = self.vi.command_cursor;
         loop {
             pos -= 1;
-            if self.command_line.is_char_boundary(pos) {
+            if self.vi.command_line.is_char_boundary(pos) {
                 break;
             }
         }
-        self.command_cursor = pos;
+        self.vi.command_cursor = pos;
     }
 
     /// Move cursor one character forward (C-f / Right).
     pub fn cmdline_move_forward(&mut self) {
-        if self.command_cursor >= self.command_line.len() {
+        if self.vi.command_cursor >= self.vi.command_line.len() {
             return;
         }
-        let ch = self.command_line[self.command_cursor..]
+        let ch = self.vi.command_line[self.vi.command_cursor..]
             .chars()
             .next()
             .unwrap();
-        self.command_cursor += ch.len_utf8();
+        self.vi.command_cursor += ch.len_utf8();
     }
 
     /// Delete backward to the previous whitespace token boundary (C-w).
     pub fn cmdline_delete_word_backward(&mut self) {
-        if self.command_cursor == 0 {
+        if self.vi.command_cursor == 0 {
             return;
         }
-        let s = &self.command_line[..self.command_cursor];
+        let s = &self.vi.command_line[..self.vi.command_cursor];
         // Strip trailing whitespace, then strip the word.
         let trimmed = s.trim_end_matches(|c: char| c.is_whitespace());
         let word_start = trimmed
             .rfind(|c: char| c.is_whitespace())
             .map(|i| i + 1) // byte after the space
             .unwrap_or(0);
-        self.command_line.drain(word_start..self.command_cursor);
-        self.command_cursor = word_start;
-        self.tab_completions.clear();
+        self.vi
+            .command_line
+            .drain(word_start..self.vi.command_cursor);
+        self.vi.command_cursor = word_start;
+        self.vi.tab_completions.clear();
     }
 
     /// Delete from cursor to beginning of line (C-u).
     pub fn cmdline_kill_to_start(&mut self) {
-        self.command_line.drain(..self.command_cursor);
-        self.command_cursor = 0;
-        self.tab_completions.clear();
+        self.vi.command_line.drain(..self.vi.command_cursor);
+        self.vi.command_cursor = 0;
+        self.vi.tab_completions.clear();
     }
 
     /// Delete from cursor to end of line (C-k).
     pub fn cmdline_kill_to_end(&mut self) {
-        self.command_line.truncate(self.command_cursor);
-        self.tab_completions.clear();
+        self.vi.command_line.truncate(self.vi.command_cursor);
+        self.vi.tab_completions.clear();
     }
 
     /// Compute tab completions for the current command line content.
     /// Returns candidates for command names (no space yet) or arguments.
     pub fn cmdline_completions(&self) -> Vec<String> {
-        let line = &self.command_line;
+        let line = &self.vi.command_line;
         if let Some(space_pos) = line.find(' ') {
             // After a space: complete arguments for known commands.
             let cmd = &line[..space_pos];
@@ -963,13 +1076,14 @@ impl Editor {
                 // Complete from all KB node IDs + bare names (without namespace prefix)
                 let mut matches: Vec<String> = self
                     .kb
+                    .primary
                     .list_ids(None)
                     .into_iter()
                     .filter(|id| id.starts_with(prefix))
                     .collect();
                 // Also match bare names (e.g. "buffer-insert" matches "scheme:buffer-insert")
                 if !prefix.contains(':') {
-                    for id in self.kb.list_ids(None) {
+                    for id in self.kb.primary.list_ids(None) {
                         if let Some(name) = id.split(':').nth(1) {
                             if name.starts_with(prefix) && !matches.contains(&name.to_string()) {
                                 matches.push(name.to_string());
@@ -1043,7 +1157,7 @@ impl Editor {
 
     #[cfg(test)]
     pub fn cmdline_text(&self) -> &str {
-        &self.command_line
+        &self.vi.command_line
     }
 
     /// Check if a buffer's backing file changed on disk and prompt the user
@@ -1075,7 +1189,7 @@ impl Editor {
     pub fn open_file(&mut self, path: impl AsRef<Path>) {
         if let Some(new_idx) = self.open_file_hidden(path) {
             let prev_idx = self.active_buffer_idx();
-            self.alternate_buffer_idx = Some(prev_idx);
+            self.vi.alternate_buffer_idx = Some(prev_idx);
             self.display_buffer(new_idx);
         }
     }
@@ -1133,7 +1247,9 @@ impl Editor {
                                 )
                             })
                             .unwrap_or_default();
-                        self.kb.ingest_project(&proj.name, &root, &config_body);
+                        self.kb
+                            .primary
+                            .ingest_project(&proj.name, &root, &config_body);
                     }
                 }
 
@@ -1328,8 +1444,8 @@ mod tests {
     fn ed() -> Editor {
         let mut e = Editor::new();
         // prime command line
-        e.command_line = "hello world".to_string();
-        e.command_cursor = e.command_line.len();
+        e.vi.command_line = "hello world".to_string();
+        e.vi.command_cursor = e.vi.command_line.len();
         e
     }
 
@@ -1338,93 +1454,93 @@ mod tests {
         let mut e = Editor::new();
         e.cmdline_insert_char('a');
         e.cmdline_insert_char('b');
-        assert_eq!(e.command_line, "ab");
-        assert_eq!(e.command_cursor, 2);
+        assert_eq!(e.vi.command_line, "ab");
+        assert_eq!(e.vi.command_cursor, 2);
     }
 
     #[test]
     fn cmdline_insert_char_in_middle() {
         let mut e = ed();
-        e.command_cursor = 5; // after "hello"
+        e.vi.command_cursor = 5; // after "hello"
         e.cmdline_insert_char('!');
-        assert_eq!(e.command_line, "hello! world");
-        assert_eq!(e.command_cursor, 6);
+        assert_eq!(e.vi.command_line, "hello! world");
+        assert_eq!(e.vi.command_cursor, 6);
     }
 
     #[test]
     fn cmdline_backspace_removes_char() {
         let mut e = ed();
         e.cmdline_backspace(); // removes 'd'
-        assert_eq!(e.command_line, "hello worl");
-        assert_eq!(e.command_cursor, 10);
+        assert_eq!(e.vi.command_line, "hello worl");
+        assert_eq!(e.vi.command_cursor, 10);
     }
 
     #[test]
     fn cmdline_backspace_at_start_is_noop() {
         let mut e = ed();
-        e.command_cursor = 0;
+        e.vi.command_cursor = 0;
         e.cmdline_backspace();
-        assert_eq!(e.command_line, "hello world");
+        assert_eq!(e.vi.command_line, "hello world");
     }
 
     #[test]
     fn cmdline_delete_forward_removes_char_at_cursor() {
         let mut e = ed();
-        e.command_cursor = 0;
+        e.vi.command_cursor = 0;
         e.cmdline_delete_forward(); // removes 'h'
-        assert_eq!(e.command_line, "ello world");
+        assert_eq!(e.vi.command_line, "ello world");
     }
 
     #[test]
     fn cmdline_move_home_end() {
         let mut e = ed();
         e.cmdline_move_home();
-        assert_eq!(e.command_cursor, 0);
+        assert_eq!(e.vi.command_cursor, 0);
         e.cmdline_move_end();
-        assert_eq!(e.command_cursor, 11);
+        assert_eq!(e.vi.command_cursor, 11);
     }
 
     #[test]
     fn cmdline_move_backward_forward() {
         let mut e = ed();
-        e.command_cursor = 5;
+        e.vi.command_cursor = 5;
         e.cmdline_move_backward();
-        assert_eq!(e.command_cursor, 4);
+        assert_eq!(e.vi.command_cursor, 4);
         e.cmdline_move_forward();
-        assert_eq!(e.command_cursor, 5);
+        assert_eq!(e.vi.command_cursor, 5);
     }
 
     #[test]
     fn cmdline_delete_word_backward() {
         let mut e = ed();
         e.cmdline_delete_word_backward(); // deletes "world"
-        assert_eq!(e.command_line, "hello ");
-        assert_eq!(e.command_cursor, 6);
+        assert_eq!(e.vi.command_line, "hello ");
+        assert_eq!(e.vi.command_cursor, 6);
     }
 
     #[test]
     fn cmdline_kill_to_start() {
         let mut e = ed();
-        e.command_cursor = 5; // after "hello"
+        e.vi.command_cursor = 5; // after "hello"
         e.cmdline_kill_to_start();
-        assert_eq!(e.command_line, " world");
-        assert_eq!(e.command_cursor, 0);
+        assert_eq!(e.vi.command_line, " world");
+        assert_eq!(e.vi.command_cursor, 0);
     }
 
     #[test]
     fn cmdline_kill_to_end() {
         let mut e = ed();
-        e.command_cursor = 5; // after "hello"
+        e.vi.command_cursor = 5; // after "hello"
         e.cmdline_kill_to_end();
-        assert_eq!(e.command_line, "hello");
-        assert_eq!(e.command_cursor, 5);
+        assert_eq!(e.vi.command_line, "hello");
+        assert_eq!(e.vi.command_cursor, 5);
     }
 
     #[test]
     fn cmdline_kill_to_end_at_end_is_noop() {
         let mut e = ed();
         e.cmdline_kill_to_end();
-        assert_eq!(e.command_line, "hello world");
+        assert_eq!(e.vi.command_line, "hello world");
     }
 
     #[test]
@@ -1432,8 +1548,8 @@ mod tests {
         let mut e = Editor::new();
         e.push_command_history("first");
         e.command_history_prev();
-        assert_eq!(e.command_line, "first");
-        assert_eq!(e.command_cursor, 5);
+        assert_eq!(e.vi.command_line, "first");
+        assert_eq!(e.vi.command_cursor, 5);
     }
 
     #[test]
@@ -1442,8 +1558,8 @@ mod tests {
         e.push_command_history("first");
         e.command_history_prev();
         e.command_history_next();
-        assert_eq!(e.command_line, "");
-        assert_eq!(e.command_cursor, 0);
+        assert_eq!(e.vi.command_line, "");
+        assert_eq!(e.vi.command_cursor, 0);
     }
 
     #[test]
@@ -1483,5 +1599,156 @@ mod tests {
             filename_at_offset(&rope, offset).as_deref(),
             Some("foo/bar.h")
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // save_buffer_with_hash_check / save_buffer_force tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn save_buffer_hash_check_blocks_on_mismatch() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "original content").unwrap();
+
+        let mut editor = Editor::new();
+        let buf = crate::buffer::Buffer::from_file(&file).unwrap();
+        editor.buffers.push(buf);
+        let idx = editor.buffers.len() - 1;
+
+        // Modify buffer (mark dirty)
+        editor.buffers[idx].modified = true;
+
+        // Externally overwrite the file (hash will mismatch)
+        std::fs::write(&file, "externally modified content").unwrap();
+
+        let result = editor.save_buffer_with_hash_check(idx);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("File changed on disk"));
+    }
+
+    #[test]
+    fn save_buffer_hash_check_passes_when_clean() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "original content").unwrap();
+
+        let mut editor = Editor::new();
+        let buf = crate::buffer::Buffer::from_file(&file).unwrap();
+        editor.buffers.push(buf);
+        let idx = editor.buffers.len() - 1;
+
+        // Modify buffer but don't touch the file externally
+        editor.buffers[idx].modified = true;
+
+        let result = editor.save_buffer_with_hash_check(idx);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn save_buffer_force_overwrites_despite_mismatch() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("test.txt");
+        std::fs::write(&file, "original content").unwrap();
+
+        let mut editor = Editor::new();
+        let buf = crate::buffer::Buffer::from_file(&file).unwrap();
+        editor.buffers.push(buf);
+        let idx = editor.buffers.len() - 1;
+
+        // Modify buffer
+        editor.buffers[idx].modified = true;
+
+        // Externally overwrite the file
+        std::fs::write(&file, "externally modified content").unwrap();
+
+        // Force save should succeed despite mismatch
+        let result = editor.save_buffer_force(idx);
+        assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Editor-level file lock lifecycle tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn acquire_file_lock_tracks_in_set() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("locked.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let mut editor = Editor::new();
+        editor.acquire_file_lock(&file);
+
+        assert!(editor.locked_files.contains(&file));
+        // Clean up
+        editor.release_file_lock(&file);
+    }
+
+    #[test]
+    fn release_file_lock_removes_from_set() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("locked.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let mut editor = Editor::new();
+        editor.acquire_file_lock(&file);
+        assert!(editor.locked_files.contains(&file));
+
+        editor.release_file_lock(&file);
+        assert!(editor.locked_files.is_empty());
+        assert!(!crate::file_lock::lock_path(&file).exists());
+    }
+
+    #[test]
+    fn release_all_file_locks_cleans_up() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let files: Vec<_> = (0..3)
+            .map(|i| {
+                let f = tmp.path().join(format!("file{}.txt", i));
+                std::fs::write(&f, "content").unwrap();
+                f
+            })
+            .collect();
+
+        let mut editor = Editor::new();
+        for f in &files {
+            editor.acquire_file_lock(f);
+        }
+        assert_eq!(editor.locked_files.len(), 3);
+
+        editor.release_all_file_locks();
+        assert!(editor.locked_files.is_empty());
+        for f in &files {
+            assert!(!crate::file_lock::lock_path(f).exists());
+        }
+    }
+
+    #[test]
+    fn acquire_file_lock_contention_sets_status() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("contested.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        // Write a lock with parent PID (guaranteed alive, not our PID)
+        let parent_pid = unsafe { libc::getppid() } as u32;
+        let fake_lock = crate::file_lock::LockInfo {
+            pid: parent_pid,
+            hostname: "other-host".to_string(),
+            timestamp: 0,
+        };
+        let lpath = crate::file_lock::lock_path(&file);
+        std::fs::write(&lpath, serde_json::to_string(&fake_lock).unwrap()).unwrap();
+
+        let mut editor = Editor::new();
+        editor.acquire_file_lock(&file);
+
+        // Lock should NOT be in our set (we didn't acquire it)
+        assert!(!editor.locked_files.contains(&file));
+        // Status message should warn about contention
+        assert!(editor.status_msg.contains("locked by"));
+
+        // Clean up
+        let _ = std::fs::remove_file(&lpath);
     }
 }

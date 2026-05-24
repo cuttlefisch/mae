@@ -398,7 +398,7 @@ pub fn setup_ai(
         let tools = {
             let mut t = tools_from_registry(&editor.commands);
             t.extend(ai_specific_tools(&editor.option_registry));
-            t.extend(mae_ai::scheme_tools_to_definitions(&editor.scheme_ai_tools));
+            t.extend(mae_ai::scheme_tools_to_definitions(&editor.ai.scheme_tools));
             t
         };
 
@@ -992,7 +992,8 @@ pub fn load_modules(
 
     // Use declared modules from (mae! ...) if present; otherwise enable all.
     let declared = scheme.declared_modules();
-    let enabled: HashMap<String, Vec<String>> = if declared.is_empty() {
+    let has_mae_block = !declared.is_empty();
+    let mut enabled: HashMap<String, Vec<String>> = if declared.is_empty() {
         // No mae! block — enable all discovered modules (backward compat).
         all_modules
             .iter()
@@ -1001,6 +1002,32 @@ pub fn load_modules(
     } else {
         declared
     };
+
+    // keymap-doom is the default keymap and must always load unless the user
+    // explicitly declared a different keymap-* module.
+    let has_keymap_module = enabled.keys().any(|k| k.starts_with("keymap-"));
+    if !has_keymap_module {
+        let doom_available = all_modules.iter().any(|(_, m)| m.name() == "keymap-doom");
+        if doom_available {
+            info!("auto-enabling keymap-doom (default keymap — add to mae! block to suppress)");
+            enabled.insert("keymap-doom".to_string(), vec![]);
+        }
+    }
+
+    // Auto-enable language modules (category = "lang") unless explicitly disabled.
+    // Language modules provide keymaps and hooks for file types — without them,
+    // file-type features silently fail (Emacs auto-mode-alist equivalent).
+    if has_mae_block {
+        for (_, module) in &all_modules {
+            if module.module.category == "lang" && !enabled.contains_key(module.name()) {
+                info!(
+                    "auto-enabling {} (language module — add to mae! block to customize)",
+                    module.name()
+                );
+                enabled.insert(module.name().to_string(), vec![]);
+            }
+        }
+    }
 
     let resolved = match resolve_load_order(&all_modules, &enabled) {
         Ok(r) => r,
@@ -1125,14 +1152,14 @@ pub fn load_modules(
                 path: m.path.display().to_string(),
             })
             .collect();
-        install_module_nodes(&mut editor.kb, &module_data);
+        install_module_nodes(&mut editor.kb.primary, &module_data);
     }
 
     // Also drain any KB nodes registered from Scheme during module autoloads
     for (id, title, body) in scheme.drain_kb_nodes() {
         let node = mae_core::KbNode::new(id, title, mae_core::KbNodeKind::Note, body)
             .with_tags(["scheme"]);
-        editor.kb.insert(node);
+        editor.kb.primary.insert(node);
     }
 
     let loaded_count = resolved

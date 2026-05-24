@@ -18,7 +18,8 @@ pub fn execute_image_info(args: &serde_json::Value) -> Result<String, String> {
 /// List all image links in the current buffer with resolved paths.
 pub fn execute_image_list(editor: &Editor) -> Result<String, String> {
     let idx = editor
-        .ai_target_buffer_idx
+        .ai
+        .target_buffer_idx
         .unwrap_or_else(|| editor.active_buffer_idx());
     let buf = &editor.buffers[idx];
 

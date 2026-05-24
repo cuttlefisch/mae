@@ -11,19 +11,19 @@ impl Editor {
             }
             "debug-start" => {
                 self.set_mode(crate::Mode::Command);
-                self.command_line = "debug-start ".to_string();
-                self.command_cursor = self.command_line.len();
+                self.vi.command_line = "debug-start ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
             }
             "debug-stop" => {
-                if self.debug_state.is_some() {
+                if self.dap.state.is_some() {
                     let is_dap = matches!(
-                        self.debug_state.as_ref().map(|s| &s.target),
+                        self.dap.state.as_ref().map(|s| &s.target),
                         Some(crate::debug::DebugTarget::Dap { .. })
                     );
                     if is_dap {
                         self.dap_disconnect(true);
                     } else {
-                        self.debug_state = None;
+                        self.dap.state = None;
                         self.set_status("Debug session ended");
                     }
                 } else {
@@ -31,7 +31,7 @@ impl Editor {
                 }
             }
             "debug-continue" | "debug-step-over" | "debug-step-into" | "debug-step-out" => {
-                if self.debug_state.is_none() {
+                if self.dap.state.is_none() {
                     self.set_status("No active debug session");
                 } else {
                     match name {
@@ -47,7 +47,7 @@ impl Editor {
                 self.dap_toggle_breakpoint_at_cursor();
             }
             "debug-inspect" => {
-                if let Some(state) = &self.debug_state {
+                if let Some(state) = &self.dap.state {
                     let thread_info = if state.threads.is_empty() {
                         "no threads".to_string()
                     } else {

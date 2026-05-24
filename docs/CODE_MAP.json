@@ -12,7 +12,9 @@
         "mae-mcp",
         "mae-renderer",
         "mae-scheme",
-        "mae-shell"
+        "mae-shell",
+        "mae-sync",
+        "mae-state-server"
       ],
       "public_items": [
         {
@@ -24,7 +26,8 @@
     "mae-ai": {
       "path": "crates/ai/src/lib.rs",
       "dependencies": [
-        "mae-core"
+        "mae-core",
+        "mae-sync"
       ],
       "public_items": [
         {
@@ -193,7 +196,8 @@
         "mae-lookup",
         "mae-make",
         "mae-snippets",
-        "mae-spell"
+        "mae-spell",
+        "mae-sync"
       ],
       "public_items": [
         {
@@ -269,6 +273,10 @@
           "kind": "mod"
         },
         {
+          "name": "file_lock",
+          "kind": "mod"
+        },
+        {
           "name": "file_picker",
           "kind": "mod"
         },
@@ -289,10 +297,6 @@
           "kind": "mod"
         },
         {
-          "name": "help_view",
-          "kind": "mod"
-        },
-        {
           "name": "hooks",
           "kind": "mod"
         },
@@ -306,6 +310,10 @@
         },
         {
           "name": "kb_seed",
+          "kind": "mod"
+        },
+        {
+          "name": "kb_view",
           "kind": "mod"
         },
         {
@@ -358,6 +366,10 @@
         },
         {
           "name": "table",
+          "kind": "mod"
+        },
+        {
+          "name": "text_utils",
           "kind": "mod"
         },
         {
@@ -540,8 +552,14 @@
     },
     "mae-kb": {
       "path": "crates/kb/src/lib.rs",
-      "dependencies": [],
+      "dependencies": [
+        "mae-sync"
+      ],
       "public_items": [
+        {
+          "name": "activity",
+          "kind": "mod"
+        },
         {
           "name": "federation",
           "kind": "mod"
@@ -584,6 +602,10 @@
         },
         {
           "name": "BrokenLink",
+          "kind": "struct"
+        },
+        {
+          "name": "StaleNode",
           "kind": "struct"
         },
         {
@@ -663,6 +685,10 @@
       "dependencies": [],
       "public_items": [
         {
+          "name": "broadcast",
+          "kind": "mod"
+        },
+        {
           "name": "client",
           "kind": "mod"
         },
@@ -672,6 +698,10 @@
         },
         {
           "name": "protocol",
+          "kind": "mod"
+        },
+        {
+          "name": "session",
           "kind": "mod"
         },
         {
@@ -685,6 +715,18 @@
         {
           "name": "McpServer",
           "kind": "struct"
+        },
+        {
+          "name": "write_framed",
+          "kind": "fn"
+        },
+        {
+          "name": "read_message",
+          "kind": "fn"
+        },
+        {
+          "name": "handle_request",
+          "kind": "fn"
         }
       ]
     },
@@ -712,7 +754,8 @@
     "mae-scheme": {
       "path": "crates/scheme/src/lib.rs",
       "dependencies": [
-        "mae-core"
+        "mae-core",
+        "mae-sync"
       ],
       "public_items": [
         {
@@ -762,6 +805,81 @@
           "kind": "mod"
         }
       ]
+    },
+    "mae-state-server": {
+      "path": "crates/state-server/src/lib.rs",
+      "dependencies": [
+        "mae-mcp",
+        "mae-sync"
+      ],
+      "public_items": [
+        {
+          "name": "doc_store",
+          "kind": "mod"
+        },
+        {
+          "name": "handler",
+          "kind": "mod"
+        },
+        {
+          "name": "storage",
+          "kind": "mod"
+        }
+      ]
+    },
+    "mae-sync": {
+      "path": "crates/sync/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "awareness",
+          "kind": "mod"
+        },
+        {
+          "name": "encoding",
+          "kind": "mod"
+        },
+        {
+          "name": "kb",
+          "kind": "mod"
+        },
+        {
+          "name": "text",
+          "kind": "mod"
+        },
+        {
+          "name": "SyncError",
+          "kind": "enum"
+        },
+        {
+          "name": "DocAddress",
+          "kind": "enum"
+        },
+        {
+          "name": "SavePolicy",
+          "kind": "enum"
+        },
+        {
+          "name": "ClockStatus",
+          "kind": "enum"
+        },
+        {
+          "name": "SyncDiagnosis",
+          "kind": "struct"
+        },
+        {
+          "name": "SyncOverallStatus",
+          "kind": "enum"
+        },
+        {
+          "name": "compare_state_vectors",
+          "kind": "fn"
+        },
+        {
+          "name": "compute_project_identity",
+          "kind": "fn"
+        }
+      ]
     }
   },
   "scheme_primitives": [
@@ -799,6 +917,10 @@
     },
     {
       "name": "run-command",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "execute-ex",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -894,11 +1016,19 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "buffer-undo-boundary",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "switch-to-buffer",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
       "name": "undefine-key!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "set-group-name",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -1066,6 +1196,142 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "exit",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "write-file",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "sleep-ms",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "file-exists?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "wait-for-file",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "current-milliseconds",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "goto-char",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "current-mode",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-buffer-string",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-buffer-text",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "messages-buffer-text",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-sync-enabled?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-pending-updates",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-sync-content",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-encode-state",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-get-buffer-by-name",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-get-option",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-region-active?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-region-start",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-region-end",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-search-forward",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-cursor-row",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-cursor-col",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "test-status-message",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-enable-sync",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-disable-sync",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-apply-update",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-load-sync-state",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-encode-state-vector",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-get-state-vector",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-compute-diff",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-get-diff",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-reconcile-to",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-get-reconcile-result",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "buffer-line",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -1147,6 +1413,50 @@
     },
     {
       "name": "keymap-bindings",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-string",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-text",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "collab-status",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "collab-synced-buffers",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-sync-enabled?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-pending-updates",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-sync-content",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-drain-updates",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-encode-state",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "undo-available?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "redo-available?",
       "source": "crates/scheme/src/runtime.rs"
     }
   ],
@@ -1441,6 +1751,10 @@
       "doc": "Dedent current line by up to 4 spaces (<<)"
     },
     {
+      "name": "fill-paragraph",
+      "doc": "Hard-wrap current paragraph at fill-column (M-q)"
+    },
+    {
       "name": "toggle-case",
       "doc": "Toggle case of char under cursor (~)"
     },
@@ -1525,6 +1839,10 @@
       "doc": "Enter insert mode at end of line"
     },
     {
+      "name": "enter-insert-mode-bol",
+      "doc": "Enter insert mode at first non-blank (I)"
+    },
+    {
       "name": "enter-normal-mode",
       "doc": "Return to normal mode"
     },
@@ -1595,6 +1913,22 @@
     {
       "name": "window-shrink",
       "doc": "Decrease window size (SPC w -)"
+    },
+    {
+      "name": "window-grow-width",
+      "doc": "Increase window width (SPC w >)"
+    },
+    {
+      "name": "window-shrink-width",
+      "doc": "Decrease window width (SPC w <)"
+    },
+    {
+      "name": "window-grow-height",
+      "doc": "Increase window height (SPC w +)"
+    },
+    {
+      "name": "window-shrink-height",
+      "doc": "Decrease window height (SPC w -)"
     },
     {
       "name": "window-balance",
@@ -2645,6 +2979,10 @@
       "doc": "Show KB health report (orphans, broken links, namespace counts)"
     },
     {
+      "name": "kb-cleanup-orphans",
+      "doc": "Remove orphan user notes with no links (SPC n C)"
+    },
+    {
       "name": "describe-display-policy",
       "doc": "Show the active display policy rules (how buffers are placed in windows)"
     },
@@ -2838,7 +3176,31 @@
     },
     {
       "name": "kb-delete",
-      "doc": "Delete a KB node by ID (SPC n d)"
+      "doc": "Delete a KB node by ID (SPC n D)"
+    },
+    {
+      "name": "daily-goto-today",
+      "doc": "Open today's daily note with chain-fill (SPC n d t)"
+    },
+    {
+      "name": "daily-goto-yesterday",
+      "doc": "Open yesterday's daily note (SPC n d y)"
+    },
+    {
+      "name": "daily-goto-date",
+      "doc": "Open daily note for a date (SPC n d d)"
+    },
+    {
+      "name": "daily-prev",
+      "doc": "Navigate to previous daily note (SPC n d p)"
+    },
+    {
+      "name": "daily-next",
+      "doc": "Navigate to next daily note (SPC n d n)"
+    },
+    {
+      "name": "kb-audit",
+      "doc": "Run KB audit report (SPC n H a)"
     },
     {
       "name": "capture-finalize",
@@ -2882,7 +3244,7 @@
     },
     {
       "name": "help-close",
-      "doc": "Close help buffer"
+      "doc": "Close KB viewer"
     },
     {
       "name": "help-search",
@@ -2890,7 +3252,7 @@
     },
     {
       "name": "help-reopen",
-      "doc": "Reopen the last-closed help buffer"
+      "doc": "Reopen the last-closed KB viewer"
     },
     {
       "name": "kb-view",
@@ -2906,11 +3268,11 @@
     },
     {
       "name": "help-close-all-folds",
-      "doc": "Fold all headings in help buffer (zM)"
+      "doc": "Fold all headings in KB viewer (zM)"
     },
     {
       "name": "help-open-all-folds",
-      "doc": "Unfold all headings in help buffer (zR)"
+      "doc": "Unfold all headings in KB viewer (zR)"
     },
     {
       "name": "help-edit",
@@ -3059,6 +3421,42 @@
     {
       "name": "record-save",
       "doc": "Save recorded events to JSON file (:record-save <path>)"
+    },
+    {
+      "name": "collab-start",
+      "doc": "Start local state server"
+    },
+    {
+      "name": "collab-connect",
+      "doc": "Connect to collaborative state server"
+    },
+    {
+      "name": "collab-disconnect",
+      "doc": "Disconnect from state server"
+    },
+    {
+      "name": "collab-status",
+      "doc": "Show collaborative editing status"
+    },
+    {
+      "name": "collab-share",
+      "doc": "Share current buffer for collaboration"
+    },
+    {
+      "name": "collab-sync",
+      "doc": "Force sync current buffer"
+    },
+    {
+      "name": "collab-doctor",
+      "doc": "Run collaborative editing diagnostics"
+    },
+    {
+      "name": "collab-list",
+      "doc": "List shared documents on the state server (SPC C l)"
+    },
+    {
+      "name": "collab-join",
+      "doc": "Join a shared document (SPC C j)"
     },
     {
       "name": "move-down",

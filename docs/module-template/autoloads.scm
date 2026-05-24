@@ -27,6 +27,6 @@
 
 ;; Flag-gated features — only run when user enables +flag.
 ;; (when-flag "my-module" "extra"
-;;   (define-key "normal" "SPC m e" "my-extra-command"))
+;;   (lambda () (define-key "normal" "SPC m e" "my-extra-command")))
 
 (provide-feature "my-module-autoloads")

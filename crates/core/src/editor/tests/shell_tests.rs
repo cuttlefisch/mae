@@ -166,7 +166,7 @@ fn clamp_all_cursors_clamps_visual_anchor_past_eof() {
         win.cursor_col = 3;
     }
     editor.enter_visual_mode(crate::VisualType::Char);
-    assert_eq!(editor.visual_anchor_row, 2);
+    assert_eq!(editor.vi.visual_anchor_row, 2);
 
     // Truncate buffer to 1 line (simulating MCP edit)
     let buf = &mut editor.buffers[0];
@@ -175,11 +175,11 @@ fn clamp_all_cursors_clamps_visual_anchor_past_eof() {
     buf.delete_range(one_line, total);
 
     // Before clamp, anchor is stale
-    assert!(editor.visual_anchor_row > editor.buffers[0].display_line_count().saturating_sub(1));
+    assert!(editor.vi.visual_anchor_row > editor.buffers[0].display_line_count().saturating_sub(1));
 
     editor.clamp_all_cursors();
-    assert!(editor.visual_anchor_row < editor.buffers[0].display_line_count());
-    assert!(editor.visual_anchor_col <= editor.buffers[0].line_len(editor.visual_anchor_row));
+    assert!(editor.vi.visual_anchor_row < editor.buffers[0].display_line_count());
+    assert!(editor.vi.visual_anchor_col <= editor.buffers[0].line_len(editor.vi.visual_anchor_row));
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn clamp_all_cursors_clamps_last_visual_past_eof() {
     buf.insert_text_at(0, "aaa\nbbb\nccc\nddd\n");
     let mut editor = Editor::with_buffer(buf);
     // Set up a saved visual selection at rows 2-3
-    editor.last_visual = Some((2, 1, 3, 2, crate::VisualType::Char));
+    editor.vi.last_visual = Some((2, 1, 3, 2, crate::VisualType::Char));
 
     // Truncate to 1 line
     let buf = &mut editor.buffers[0];
@@ -198,7 +198,7 @@ fn clamp_all_cursors_clamps_last_visual_past_eof() {
 
     editor.clamp_all_cursors();
 
-    let (ar, ac, cr, cc, _) = editor.last_visual.unwrap();
+    let (ar, ac, cr, cc, _) = editor.vi.last_visual.unwrap();
     assert!(ar < editor.buffers[0].display_line_count());
     assert!(cr < editor.buffers[0].display_line_count());
     assert!(ac <= editor.buffers[0].line_len(ar));
@@ -217,7 +217,7 @@ fn shell_select_mode_creates_temp_buffer() {
     editor.buffers.push(shell_buf);
     editor.switch_to_buffer(1);
     let shell_idx = editor.active_buffer_idx();
-    editor.shell_viewports.insert(
+    editor.shell.viewports.insert(
         shell_idx,
         vec!["$ echo hello".into(), "hello".into(), "$ ".into()],
     );
@@ -277,7 +277,8 @@ fn shell_select_mode_reuses_existing_buffer() {
     editor.switch_to_buffer(1);
     let shell_idx = editor.active_buffer_idx();
     editor
-        .shell_viewports
+        .shell
+        .viewports
         .insert(shell_idx, vec!["first".into()]);
 
     editor.dispatch_builtin("shell-select-mode");
@@ -286,7 +287,8 @@ fn shell_select_mode_reuses_existing_buffer() {
     // Switch back to the shell buffer and run again with updated content.
     editor.switch_to_buffer(shell_idx);
     editor
-        .shell_viewports
+        .shell
+        .viewports
         .insert(shell_idx, vec!["second".into()]);
     editor.dispatch_builtin("shell-select-mode");
 
@@ -313,7 +315,8 @@ fn shell_select_q_closes_and_returns() {
     editor.switch_to_buffer(1);
     let shell_idx = editor.active_buffer_idx();
     editor
-        .shell_viewports
+        .shell
+        .viewports
         .insert(shell_idx, vec!["output".into()]);
 
     editor.dispatch_builtin("shell-select-mode");
@@ -422,18 +425,18 @@ fn test_notify_buffer_removed_viewports() {
     // Set up 3 buffers
     editor.buffers.push(Buffer::new());
     editor.buffers.push(Buffer::new());
-    editor.shell_viewports.insert(0, vec!["a".into()]);
-    editor.shell_viewports.insert(2, vec!["c".into()]);
+    editor.shell.viewports.insert(0, vec!["a".into()]);
+    editor.shell.viewports.insert(2, vec!["c".into()]);
     // Remove buffer 1
     editor.buffers.remove(1);
     editor.notify_buffer_removed(1);
     // Key 0 unchanged, key 2 shifted to 1
-    assert!(editor.shell_viewports.contains_key(&0));
+    assert!(editor.shell.viewports.contains_key(&0));
     assert_eq!(
-        editor.shell_viewports.get(&1).unwrap(),
+        editor.shell.viewports.get(&1).unwrap(),
         &vec!["c".to_string()]
     );
-    assert!(!editor.shell_viewports.contains_key(&2));
+    assert!(!editor.shell.viewports.contains_key(&2));
 }
 
 #[test]
@@ -442,17 +445,17 @@ fn test_notify_buffer_removed_alternate() {
     editor.buffers.push(Buffer::new());
     editor.buffers.push(Buffer::new());
     // alternate points to buffer 2
-    editor.alternate_buffer_idx = Some(2);
+    editor.vi.alternate_buffer_idx = Some(2);
     editor.buffers.remove(1);
     editor.notify_buffer_removed(1);
     // alternate should shift from 2 to 1
-    assert_eq!(editor.alternate_buffer_idx, Some(1));
+    assert_eq!(editor.vi.alternate_buffer_idx, Some(1));
 
     // Now test clearing when alternate matches removed
-    editor.alternate_buffer_idx = Some(1);
+    editor.vi.alternate_buffer_idx = Some(1);
     editor.buffers.remove(1);
     editor.notify_buffer_removed(1);
-    assert_eq!(editor.alternate_buffer_idx, None);
+    assert_eq!(editor.vi.alternate_buffer_idx, None);
 }
 
 #[test]
@@ -495,16 +498,16 @@ fn test_notify_buffer_removed_pending_queues() {
     let mut editor = Editor::new();
     editor.buffers.push(Buffer::new());
     editor.buffers.push(Buffer::new());
-    editor.pending_shell_spawns = vec![0, 1, 2];
-    editor.pending_shell_resets = vec![2];
-    editor.pending_agent_spawns = vec![(1, "cmd".into()), (2, "cmd2".into())];
+    editor.shell.spawns = vec![0, 1, 2];
+    editor.shell.resets = vec![2];
+    editor.shell.agent_spawns = vec![(1, "cmd".into()), (2, "cmd2".into())];
     // Remove buffer 1
     editor.buffers.remove(1);
     editor.notify_buffer_removed(1);
     // idx 1 dropped, idx 2 shifted to 1
-    assert_eq!(editor.pending_shell_spawns, vec![0, 1]);
-    assert_eq!(editor.pending_shell_resets, vec![1]);
-    assert_eq!(editor.pending_agent_spawns, vec![(1, "cmd2".into())]);
+    assert_eq!(editor.shell.spawns, vec![0, 1]);
+    assert_eq!(editor.shell.resets, vec![1]);
+    assert_eq!(editor.shell.agent_spawns, vec![(1, "cmd2".into())]);
     // pending_buffer_removals should have an entry
     assert_eq!(editor.pending_buffer_removals, vec![1]);
 }
@@ -575,7 +578,7 @@ fn find_window_with_kind_excludes_conversation_pair() {
         .find_window_with_kind(crate::BufferKind::Shell)
         .is_some());
     // Mark that window as part of conversation pair — should now be excluded.
-    editor.conversation_pair = Some(crate::editor::ConversationPair {
+    editor.ai.conversation_pair = Some(crate::editor::ConversationPair {
         output_buffer_idx: 0,
         input_buffer_idx: 0,
         output_window_id: new_win_id,
@@ -668,11 +671,11 @@ fn switch_to_buffer_non_conv_sets_target_window_id() {
     assert!(ok);
     // ai_target_window_id must be set.
     assert!(
-        editor.ai_target_window_id.is_some(),
+        editor.ai.target_window_id.is_some(),
         "ai_target_window_id must be set by switch_to_buffer_non_conversation"
     );
     // The target window should show buffer 1.
-    let tw_id = editor.ai_target_window_id.unwrap();
+    let tw_id = editor.ai.target_window_id.unwrap();
     let tw = editor.window_mgr.window(tw_id).unwrap();
     assert_eq!(tw.buffer_idx, 1);
 }
@@ -697,7 +700,7 @@ fn switch_to_buffer_non_conv_visible_sets_target_window() {
     // Step 1 path: buffer already visible.
     let ok = editor.switch_to_buffer_non_conversation(1);
     assert!(ok);
-    assert_eq!(editor.ai_target_window_id, Some(second_win_id));
+    assert_eq!(editor.ai.target_window_id, Some(second_win_id));
 }
 
 #[test]
@@ -710,7 +713,7 @@ fn agent_shell_does_not_steal_conversation_output() {
     // Split to create the conversation layout.
     editor.dispatch_builtin("split-vertical");
     let win_ids: Vec<_> = editor.window_mgr.iter_windows().map(|w| w.id).collect();
-    editor.conversation_pair = Some(crate::editor::ConversationPair {
+    editor.ai.conversation_pair = Some(crate::editor::ConversationPair {
         output_buffer_idx: 0,
         input_buffer_idx: 1,
         output_window_id: win_ids[0],
@@ -771,7 +774,7 @@ fn agent_shell_opens_beside_conversation_group() {
         .split(crate::window::SplitDirection::Horizontal, 1, area)
         .expect("split should succeed");
     // Window 0 = *AI*, input_win_id = *ai-input*.
-    editor.conversation_pair = Some(crate::editor::ConversationPair {
+    editor.ai.conversation_pair = Some(crate::editor::ConversationPair {
         output_buffer_idx: 0,
         input_buffer_idx: 1,
         output_window_id: 0,

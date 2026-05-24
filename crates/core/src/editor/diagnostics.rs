@@ -410,31 +410,31 @@ mod tests {
 
     #[test]
     fn active_buffer_diagnostics_finds_match() {
-        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        ed.diagnostics.set(
+        let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        editor.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![diag(0, 0, DiagnosticSeverity::Error, "bad")],
         );
-        assert_eq!(ed.active_buffer_diagnostics().unwrap().len(), 1);
+        assert_eq!(editor.active_buffer_diagnostics().unwrap().len(), 1);
     }
 
     #[test]
     fn active_buffer_diagnostics_returns_none_without_file() {
-        let ed = Editor::new();
-        assert!(ed.active_buffer_diagnostics().is_none());
+        let editor = Editor::new();
+        assert!(editor.active_buffer_diagnostics().is_none());
     }
 
     #[test]
     fn jump_next_no_diagnostics_sets_status() {
-        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        ed.jump_next_diagnostic();
-        assert!(ed.status_msg.contains("no diagnostics"));
+        let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        editor.jump_next_diagnostic();
+        assert!(editor.status_msg.contains("no diagnostics"));
     }
 
     #[test]
     fn jump_next_moves_forward() {
-        let mut ed = editor_with_file("/tmp/a.rs", "line0\nline1\nline2\nline3\n");
-        ed.diagnostics.set(
+        let mut editor = editor_with_file("/tmp/a.rs", "line0\nline1\nline2\nline3\n");
+        editor.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![
                 diag(1, 0, DiagnosticSeverity::Error, "d1"),
@@ -442,20 +442,20 @@ mod tests {
             ],
         );
         // Cursor starts at 0,0 — should jump to line 1.
-        ed.jump_next_diagnostic();
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 1);
+        editor.jump_next_diagnostic();
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
         // Jump again → line 3.
-        ed.jump_next_diagnostic();
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 3);
+        editor.jump_next_diagnostic();
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 3);
         // One more → wraps back to first diagnostic.
-        ed.jump_next_diagnostic();
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 1);
+        editor.jump_next_diagnostic();
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
     }
 
     #[test]
     fn jump_prev_moves_backward() {
-        let mut ed = editor_with_file("/tmp/a.rs", "line0\nline1\nline2\nline3\n");
-        ed.diagnostics.set(
+        let mut editor = editor_with_file("/tmp/a.rs", "line0\nline1\nline2\nline3\n");
+        editor.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![
                 diag(1, 0, DiagnosticSeverity::Error, "d1"),
@@ -464,25 +464,25 @@ mod tests {
         );
         // Move cursor to end.
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 3;
             win.cursor_col = 4;
         }
-        ed.jump_prev_diagnostic();
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 3);
-        assert_eq!(ed.window_mgr.focused_window().cursor_col, 2);
-        ed.jump_prev_diagnostic();
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 1);
+        editor.jump_prev_diagnostic();
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 3);
+        assert_eq!(editor.window_mgr.focused_window().cursor_col, 2);
+        editor.jump_prev_diagnostic();
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
         // Wraps to last.
-        ed.jump_prev_diagnostic();
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 3);
+        editor.jump_prev_diagnostic();
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 3);
     }
 
     #[test]
     fn show_diagnostics_buffer_empty() {
-        let mut ed = Editor::new();
-        ed.show_diagnostics_buffer();
-        let buf = ed.active_buffer();
+        let mut editor = Editor::new();
+        editor.show_diagnostics_buffer();
+        let buf = editor.active_buffer();
         assert_eq!(buf.name, "*Diagnostics*");
         let text = buf.text();
         assert!(text.contains("*Diagnostics*"));
@@ -491,20 +491,20 @@ mod tests {
 
     #[test]
     fn show_diagnostics_buffer_lists_entries() {
-        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        ed.diagnostics.set(
+        let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        editor.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![
                 diag(0, 0, DiagnosticSeverity::Error, "bad"),
                 diag(2, 3, DiagnosticSeverity::Warning, "meh"),
             ],
         );
-        ed.diagnostics.set(
+        editor.diagnostics.set(
             "file:///tmp/b.rs".into(),
             vec![diag(5, 0, DiagnosticSeverity::Hint, "consider")],
         );
-        ed.show_diagnostics_buffer();
-        let buf = ed.active_buffer();
+        editor.show_diagnostics_buffer();
+        let buf = editor.active_buffer();
         assert_eq!(buf.name, "*Diagnostics*");
         let text = buf.text();
         assert!(text.contains("/tmp/a.rs"));
@@ -519,16 +519,16 @@ mod tests {
 
     #[test]
     fn show_diagnostics_buffer_refreshes_existing() {
-        let mut ed = Editor::new();
-        ed.show_diagnostics_buffer();
-        let first_len = ed.buffers.len();
+        let mut editor = Editor::new();
+        editor.show_diagnostics_buffer();
+        let first_len = editor.buffers.len();
         // Populate and refresh — must reuse the same buffer.
-        ed.diagnostics.set(
+        editor.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![diag(0, 0, DiagnosticSeverity::Error, "bad")],
         );
-        ed.show_diagnostics_buffer();
-        assert_eq!(ed.buffers.len(), first_len);
-        assert!(ed.active_buffer().text().contains("bad"));
+        editor.show_diagnostics_buffer();
+        assert_eq!(editor.buffers.len(), first_len);
+        assert!(editor.active_buffer().text().contains("bad"));
     }
 }

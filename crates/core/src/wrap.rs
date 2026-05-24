@@ -74,6 +74,40 @@ pub fn leading_indent_len(chars: &[char]) -> usize {
         .sum()
 }
 
+/// Count display columns to the start of content after a list marker.
+/// For `  - item text`, returns 4 (past the `- `).
+/// For non-list lines, falls back to `leading_indent_len`.
+pub fn content_indent_len(chars: &[char]) -> usize {
+    let ws = leading_indent_len(chars);
+    let ws_chars: usize = chars
+        .iter()
+        .take_while(|c| **c == ' ' || **c == '\t')
+        .count();
+    let rest = &chars[ws_chars..];
+    // Detect org/markdown list markers: `- `, `+ `, `* `, `1. `, `1) `
+    if rest.len() >= 2 {
+        match rest[0] {
+            '-' | '+' | '*' if rest[1] == ' ' => return ws + 2,
+            '0'..='9' => {
+                // Numbered list: skip digits then `. ` or `) `
+                let mut i = 0;
+                while i < rest.len() && rest[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i < rest.len()
+                    && (rest[i] == '.' || rest[i] == ')')
+                    && i + 1 < rest.len()
+                    && rest[i + 1] == ' '
+                {
+                    return ws + i + 2;
+                }
+            }
+            _ => {}
+        }
+    }
+    ws
+}
+
 /// Display width of a char slice.
 pub fn slice_display_width(chars: &[char]) -> usize {
     chars.iter().map(|c| char_width(*c)).sum()
@@ -103,7 +137,7 @@ pub fn wrap_cursor_position(
         return (0, 0);
     }
     let indent_len = if break_indent {
-        leading_indent_len(&chars)
+        content_indent_len(&chars)
     } else {
         0
     };
@@ -153,7 +187,7 @@ pub fn wrap_line_display_rows(
         return 1;
     }
     let indent_len = if break_indent {
-        leading_indent_len(&chars)
+        content_indent_len(&chars)
     } else {
         0
     };
@@ -197,7 +231,7 @@ pub fn wrap_row_start_col(
         return 0;
     }
     let indent_len = if break_indent {
-        leading_indent_len(&chars)
+        content_indent_len(&chars)
     } else {
         0
     };
@@ -261,6 +295,37 @@ mod tests {
     fn leading_indent() {
         let chars: Vec<char> = "    hello".chars().collect();
         assert_eq!(leading_indent_len(&chars), 4);
+    }
+
+    #[test]
+    fn content_indent_list_marker() {
+        // "  - item text" → content starts at col 4 (past "  - ")
+        let chars: Vec<char> = "  - item text".chars().collect();
+        assert_eq!(content_indent_len(&chars), 4);
+    }
+
+    #[test]
+    fn content_indent_numbered_list() {
+        let chars: Vec<char> = "  1. item text".chars().collect();
+        assert_eq!(content_indent_len(&chars), 5); // "  1. "
+    }
+
+    #[test]
+    fn content_indent_no_marker() {
+        let chars: Vec<char> = "    hello".chars().collect();
+        assert_eq!(content_indent_len(&chars), 4); // falls back to leading whitespace
+    }
+
+    #[test]
+    fn content_indent_plus_marker() {
+        let chars: Vec<char> = "+ item".chars().collect();
+        assert_eq!(content_indent_len(&chars), 2); // "+ "
+    }
+
+    #[test]
+    fn content_indent_star_marker() {
+        let chars: Vec<char> = "* item".chars().collect();
+        assert_eq!(content_indent_len(&chars), 2); // "* "
     }
 
     #[test]

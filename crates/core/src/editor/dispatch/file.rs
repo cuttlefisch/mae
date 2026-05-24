@@ -34,7 +34,7 @@ impl Editor {
                 win.save_view_state();
                 let new_idx = (win.buffer_idx + 1) % self.buffers.len();
                 win.restore_view_state(new_idx);
-                self.alternate_buffer_idx = Some(prev_idx);
+                self.vi.alternate_buffer_idx = Some(prev_idx);
                 let name = self.buffers[new_idx].name.clone();
                 self.set_status(format!("Buffer: {}", name));
                 self.sync_mode_to_buffer();
@@ -50,7 +50,7 @@ impl Editor {
                 win.save_view_state();
                 let new_idx = (win.buffer_idx + count - 1) % count;
                 win.restore_view_state(new_idx);
-                self.alternate_buffer_idx = Some(prev_idx);
+                self.vi.alternate_buffer_idx = Some(prev_idx);
                 let name = self.buffers[new_idx].name.clone();
                 self.set_status(format!("Buffer: {}", name));
                 self.sync_mode_to_buffer();

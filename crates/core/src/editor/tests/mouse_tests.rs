@@ -92,8 +92,8 @@ fn mouse_click_shell_buffer_routes_to_pending() {
     editor.handle_mouse_click(5, 10, crate::input::MouseButton::Left);
 
     // Should have set pending_shell_click (with border offset subtracted).
-    assert!(editor.pending_shell_click.is_some());
-    let (row, col, _) = editor.pending_shell_click.unwrap();
+    assert!(editor.shell.click.is_some());
+    let (row, col, _) = editor.shell.click.unwrap();
     assert_eq!(row, 4); // 5 - 1 border
     assert_eq!(col, 9); // 10 - 1 border
 }
@@ -108,8 +108,8 @@ fn mouse_drag_shell_buffer_routes_to_pending() {
 
     editor.handle_mouse_drag(3, 7);
 
-    assert!(editor.pending_shell_drag.is_some());
-    let (row, col) = editor.pending_shell_drag.unwrap();
+    assert!(editor.shell.drag.is_some());
+    let (row, col) = editor.shell.drag.unwrap();
     assert_eq!(row, 2);
     assert_eq!(col, 6);
     // Should NOT enter Visual mode for shell buffers.
@@ -126,8 +126,8 @@ fn mouse_release_shell_buffer_routes_to_pending() {
 
     editor.handle_mouse_release(8, 15);
 
-    assert!(editor.pending_shell_release.is_some());
-    let (row, col) = editor.pending_shell_release.unwrap();
+    assert!(editor.shell.release.is_some());
+    let (row, col) = editor.shell.release.unwrap();
     assert_eq!(row, 7);
     assert_eq!(col, 14);
 }
@@ -137,7 +137,7 @@ fn mouse_release_text_buffer_is_noop() {
     let mut editor = Editor::new();
     editor.handle_mouse_release(5, 10);
     // Text buffer → no pending shell release.
-    assert!(editor.pending_shell_release.is_none());
+    assert!(editor.shell.release.is_none());
 }
 
 #[test]
@@ -654,8 +654,8 @@ fn shift_click_starts_selection() {
         matches!(editor.mode, crate::Mode::Visual(crate::VisualType::Char)),
         "shift-click should enter visual char mode"
     );
-    assert_eq!(editor.visual_anchor_row, 0);
-    assert_eq!(editor.visual_anchor_col, 0);
+    assert_eq!(editor.vi.visual_anchor_row, 0);
+    assert_eq!(editor.vi.visual_anchor_col, 0);
     let win = editor.window_mgr.focused_window();
     assert_eq!(win.cursor_col, 5);
 }
@@ -667,8 +667,8 @@ fn shift_click_extends_existing_selection() {
     editor.show_line_numbers = false;
 
     // Enter visual mode manually
-    editor.visual_anchor_row = 0;
-    editor.visual_anchor_col = 2;
+    editor.vi.visual_anchor_row = 0;
+    editor.vi.visual_anchor_col = 2;
     editor.set_mode(crate::Mode::Visual(crate::VisualType::Char));
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_col = 5;
@@ -677,7 +677,7 @@ fn shift_click_extends_existing_selection() {
     editor.handle_mouse_click_shift(1, 10, crate::input::MouseButton::Left, true);
 
     // Anchor unchanged, cursor moved
-    assert_eq!(editor.visual_anchor_col, 2);
+    assert_eq!(editor.vi.visual_anchor_col, 2);
     let win = editor.window_mgr.focused_window();
     assert_eq!(win.cursor_col, 10);
 }

@@ -135,7 +135,7 @@ pub fn collect_line_severities(buf: &Buffer, editor: &Editor) -> HashMap<u32, Di
 pub fn collect_breakpoints(buf: &Buffer, editor: &Editor) -> (HashSet<u32>, Option<u32>) {
     let mut bps = HashSet::new();
     let mut stopped = None;
-    if let (Some(path), Some(state)) = (buf.file_path(), editor.debug_state.as_ref()) {
+    if let (Some(path), Some(state)) = (buf.file_path(), editor.dap.state.as_ref()) {
         let path_str = path.to_string_lossy();
         if let Some(list) = state.breakpoints.get(path_str.as_ref()) {
             for bp in list {

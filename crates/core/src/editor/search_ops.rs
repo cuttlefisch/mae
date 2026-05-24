@@ -146,8 +146,8 @@ impl Editor {
         let cursor_row = rope.char_to_line(end_inclusive);
         let cursor_col = end_inclusive - rope.line_to_char(cursor_row);
 
-        self.visual_anchor_row = anchor_row;
-        self.visual_anchor_col = anchor_col;
+        self.vi.visual_anchor_row = anchor_row;
+        self.vi.visual_anchor_col = anchor_col;
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = cursor_row;
         win.cursor_col = cursor_col;

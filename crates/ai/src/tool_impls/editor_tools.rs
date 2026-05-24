@@ -11,10 +11,10 @@ pub fn execute_editor_state(editor: &Editor) -> Result<String, String> {
         "active_buffer": buf.name,
         "active_buffer_modified": buf.modified,
         "message_log_entries": editor.message_log.len(),
-        "debug_session_active": editor.debug_state.is_some(),
-        "debug_target": editor.debug_state.as_ref().map(|s| format!("{:?}", s.target)),
+        "debug_session_active": editor.dap.state.is_some(),
+        "debug_target": editor.dap.state.as_ref().map(|s| format!("{:?}", s.target)),
         "debug_panel_open": editor.buffers.iter().any(|b| b.kind == mae_core::buffer::BufferKind::Debug),
-        "breakpoint_count": editor.debug_state.as_ref().map(|s| s.breakpoint_count()).unwrap_or(0),
+        "breakpoint_count": editor.dap.state.as_ref().map(|s| s.breakpoint_count()).unwrap_or(0),
         "command_count": editor.commands.len(),
         "renderer": editor.renderer_name,
         "git_branch": editor.git_branch,
@@ -130,7 +130,7 @@ pub fn execute_set_option(editor: &mut Editor, args: &serde_json::Value) -> Resu
 }
 
 pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
-    match &editor.debug_state {
+    match &editor.dap.state {
         None => Ok("No active debug session".into()),
         Some(state) => {
             let threads: Vec<serde_json::Value> = state
@@ -303,7 +303,8 @@ pub fn execute_shell_scrollback(
     let lines = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
 
     let viewport = editor
-        .shell_viewports
+        .shell
+        .viewports
         .get(&buf_idx)
         .ok_or_else(|| format!("No shell viewport data for buffer index {}", buf_idx))?;
 
@@ -759,10 +760,10 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
     let mut issues = Vec::new();
 
     // AI Agent
-    let ai_cmd = if editor.ai_editor.is_empty() {
+    let ai_cmd = if editor.ai.editor_name.is_empty() {
         "claude".to_string()
     } else {
-        editor.ai_editor.clone()
+        editor.ai.editor_name.clone()
     };
     let ai_agent_found = on_path(&ai_cmd);
     if !ai_agent_found {
@@ -770,12 +771,12 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
     }
 
     // AI Chat
-    let provider = if editor.ai_provider.is_empty() {
+    let provider = if editor.ai.provider.is_empty() {
         String::new()
     } else {
-        editor.ai_provider.clone()
+        editor.ai.provider.clone()
     };
-    let model = editor.ai_model.clone();
+    let model = editor.ai.model.clone();
 
     let (api_key_set, api_key_source) = match provider.as_str() {
         "claude" if std::env::var("ANTHROPIC_API_KEY").is_ok() => {
@@ -790,8 +791,8 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         "deepseek" if std::env::var("DEEPSEEK_API_KEY").is_ok() => {
             (true, "env:DEEPSEEK_API_KEY".to_string())
         }
-        _ if !editor.ai_api_key_command.is_empty() => {
-            (true, format!("command:{}", editor.ai_api_key_command))
+        _ if !editor.ai.api_key_command.is_empty() => {
+            (true, format!("command:{}", editor.ai.api_key_command))
         }
         _ => (false, String::new()),
     };
@@ -887,7 +888,7 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
     let display_policy: std::collections::HashMap<String, String> = [
         mae_core::BufferKind::Text,
         mae_core::BufferKind::Diff,
-        mae_core::BufferKind::Help,
+        mae_core::BufferKind::Kb,
         mae_core::BufferKind::Messages,
         mae_core::BufferKind::Shell,
         mae_core::BufferKind::Debug,
@@ -924,6 +925,19 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         })
         .collect();
 
+    // Collaboration
+    let collab_addr = editor.collab.server_address.clone();
+    let collab_auto = editor.collab.auto_connect;
+    let collab_configured =
+        collab_auto || !matches!(editor.collab.status, mae_core::CollabStatus::Off);
+    let collab_status_str = editor.collab.status.as_str();
+    let state_server_found = on_path("mae-state-server");
+    if collab_auto && !state_server_found {
+        issues.push(
+            "collab_auto_connect is true but mae-state-server binary not found on PATH".to_string(),
+        );
+    }
+
     let report = serde_json::json!({
         "ai_agent": {
             "command": ai_cmd,
@@ -938,6 +952,14 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         },
         "lsp_servers": lsp_json,
         "dap_adapters": dap_json,
+        "collaboration": {
+            "configured": collab_configured,
+            "server_address": collab_addr,
+            "auto_connect": collab_auto,
+            "status": collab_status_str,
+            "synced_docs": editor.collab.synced_docs,
+            "state_server_binary_found": state_server_found,
+        },
         "init_files": init_files,
         "modules": modules_json,
         "options_modified": options_modified,
@@ -993,6 +1015,29 @@ pub fn execute_pkg_command(editor: &mut Editor, command: &str) -> Result<String,
     ))
 }
 
+pub fn execute_keymap_query(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let keymap = args.get("keymap").and_then(|v| v.as_str());
+    let command = args.get("command").and_then(|v| v.as_str());
+    let prefix = args.get("prefix").and_then(|v| v.as_str());
+
+    let results = editor.query_keybindings(keymap, command, prefix);
+    let bindings: Vec<serde_json::Value> = results
+        .into_iter()
+        .map(|(key, cmd, km)| {
+            serde_json::json!({
+                "key": key,
+                "command": cmd,
+                "keymap": km,
+            })
+        })
+        .collect();
+    let output = serde_json::json!({
+        "bindings": bindings,
+        "count": bindings.len(),
+    });
+    serde_json::to_string_pretty(&output).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1008,9 +1053,17 @@ mod tests {
         assert!(json.get("ai_chat").is_some());
         assert!(json.get("lsp_servers").is_some());
         assert!(json.get("dap_adapters").is_some());
+        assert!(json.get("collaboration").is_some());
         assert!(json.get("init_files").is_some());
         assert!(json.get("options_modified").is_some());
         assert!(json.get("issues").is_some());
+        // Verify collaboration section structure
+        let collab = &json["collaboration"];
+        assert!(collab.get("configured").is_some());
+        assert!(collab.get("server_address").is_some());
+        assert!(collab.get("auto_connect").is_some());
+        assert!(collab.get("status").is_some());
+        assert!(collab.get("synced_docs").is_some());
     }
 
     #[test]

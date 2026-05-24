@@ -573,9 +573,35 @@ impl Renderer for GuiRenderer {
                 (editor.which_key_entries_for_current_keymap(), None)
             };
 
-            let entry_cols = (cols / 25).max(1);
-            let entry_rows = entries.len().div_ceil(entry_cols);
-            let popup_height = (entry_rows + 2).min(rows / 2).max(3);
+            let separator = editor
+                .get_option("which-key-separator")
+                .map(|(v, _)| v)
+                .unwrap_or_else(|| " ".to_string());
+            let max_desc: usize = editor
+                .get_option("which-key-max-desc-length")
+                .and_then(|(v, _)| v.parse().ok())
+                .unwrap_or(40);
+            let sep_width = mae_core::text_utils::display_width(&separator);
+            let inner_width = cols.saturating_sub(2);
+            let (_col_w, num_cols) = mae_core::text_utils::which_key_column_layout(
+                &entries,
+                inner_width,
+                sep_width,
+                max_desc,
+            );
+            let entry_rows = entries.len().div_ceil(num_cols);
+            let max_pct: usize = editor
+                .get_option("which-key-max-height-pct")
+                .and_then(|(v, _)| v.parse().ok())
+                .unwrap_or(mae_core::text_utils::WK_MAX_HEIGHT_PCT_DEFAULT)
+                .clamp(
+                    mae_core::text_utils::WK_MAX_HEIGHT_PCT_MIN,
+                    mae_core::text_utils::WK_MAX_HEIGHT_PCT_MAX,
+                );
+            let max_h = rows * max_pct / 100;
+            let popup_height = (entry_rows + 2)
+                .min(max_h)
+                .max(mae_core::text_utils::WK_MIN_HEIGHT);
 
             let win_height = rows.saturating_sub(popup_height);
             render_window_area(
@@ -1289,8 +1315,8 @@ fn render_gui_cursor(
         let (cw, _) = canvas.cell_size();
         if editor.mode == mae_core::Mode::Command {
             // Command line cursor — always cell-based (no scaling).
-            let cursor_col = editor.command_line
-                [..editor.command_cursor.min(editor.command_line.len())]
+            let cursor_col = editor.vi.command_line
+                [..editor.vi.command_cursor.min(editor.vi.command_line.len())]
                 .chars()
                 .count();
             let pixel_y = cmd_row as f32 * ch;
@@ -1318,6 +1344,38 @@ fn render_gui_cursor(
             };
             cursor::render_cursor(canvas, editor, cursor_pixel_y, cursor_pixel_x, pos.scale);
         }
+
+        // Render remote collaborative selections (underneath local).
+        cursor::render_remote_selections(
+            canvas,
+            editor,
+            frame_layout,
+            inner_row,
+            inner_col,
+            inner_height,
+            gutter_w,
+        );
+
+        // Render remote collaborative cursors with labels.
+        cursor::render_remote_cursors(
+            canvas,
+            editor,
+            frame_layout,
+            inner_row,
+            inner_col,
+            inner_height,
+            gutter_w,
+        );
+
+        // Off-screen indicators for remote users above/below viewport.
+        cursor::render_remote_offscreen_indicators(
+            canvas,
+            editor,
+            frame_layout,
+            inner_row,
+            inner_col,
+            inner_height,
+        );
 
         // Render secondary cursors (multi-cursor mode).
         cursor::render_secondary_cursors(

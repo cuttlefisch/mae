@@ -56,7 +56,7 @@ impl Editor {
         let nodes: Vec<_> = if let Some(ref states) = filter.todo_states {
             let mut result = Vec::new();
             for state in states {
-                for node in self.kb.nodes_by_todo_state(state) {
+                for node in self.kb.primary.nodes_by_todo_state(state) {
                     if matches_filter(node, filter) {
                         result.push(node.clone());
                     }
@@ -66,6 +66,7 @@ impl Editor {
         } else {
             // All TODO nodes
             self.kb
+                .primary
                 .todo_nodes()
                 .into_iter()
                 .filter(|n| matches_filter(n, filter))
@@ -228,9 +229,9 @@ impl Editor {
     fn ingest_single_agenda_path(&mut self, path: &str) {
         let p = std::path::Path::new(path);
         if p.is_dir() {
-            self.kb.ingest_org_dir(p);
+            self.kb.primary.ingest_org_dir(p);
         } else if p.is_file() {
-            self.kb.ingest_org_file(p);
+            self.kb.primary.ingest_org_file(p);
         }
     }
 
@@ -291,13 +292,13 @@ mod tests {
 
     #[test]
     fn open_agenda_creates_buffer() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         // Insert some TODO nodes into KB.
-        ed.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:1", "Fix bug", mae_kb::NodeKind::Note, "Fix the bug")
                 .with_todo_state("TODO"),
         );
-        ed.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new(
                 "todo:2",
                 "Write docs",
@@ -306,110 +307,110 @@ mod tests {
             )
             .with_todo_state("DONE"),
         );
-        ed.open_agenda(AgendaFilter::default());
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        assert_eq!(ed.buffers[idx].kind, BufferKind::Agenda);
-        assert!(ed.buffers[idx].read_only);
-        let text = ed.buffers[idx].rope().to_string();
+        editor.open_agenda(AgendaFilter::default());
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        assert_eq!(editor.buffers[idx].kind, BufferKind::Agenda);
+        assert!(editor.buffers[idx].read_only);
+        let text = editor.buffers[idx].rope().to_string();
         assert!(text.contains("Fix bug"));
         assert!(text.contains("Write docs"));
     }
 
     #[test]
     fn agenda_filter_by_state() {
-        let mut ed = Editor::new();
-        ed.kb.insert(
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:1", "Active", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO"),
         );
-        ed.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:2", "Finished", mae_kb::NodeKind::Note, "")
                 .with_todo_state("DONE"),
         );
-        ed.open_agenda(AgendaFilter {
+        editor.open_agenda(AgendaFilter {
             todo_states: Some(vec!["TODO".to_string()]),
             ..Default::default()
         });
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        let text = ed.buffers[idx].rope().to_string();
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        let text = editor.buffers[idx].rope().to_string();
         assert!(text.contains("Active"));
         assert!(!text.contains("Finished"));
     }
 
     #[test]
     fn agenda_filter_by_priority() {
-        let mut ed = Editor::new();
-        ed.kb.insert(
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:1", "Urgent", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO")
                 .with_priority('A'),
         );
-        ed.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:2", "Low", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO")
                 .with_priority('C'),
         );
-        ed.open_agenda(AgendaFilter {
+        editor.open_agenda(AgendaFilter {
             priority: Some('A'),
             ..Default::default()
         });
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        let text = ed.buffers[idx].rope().to_string();
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        let text = editor.buffers[idx].rope().to_string();
         assert!(text.contains("Urgent"));
         assert!(!text.contains("Low"));
     }
 
     #[test]
     fn agenda_filter_by_tag() {
-        let mut ed = Editor::new();
-        ed.kb.insert(
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:1", "Work item", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO")
                 .with_tags(["work"]),
         );
-        ed.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:2", "Personal", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO")
                 .with_tags(["home"]),
         );
-        ed.open_agenda(AgendaFilter {
+        editor.open_agenda(AgendaFilter {
             tag: Some("work".to_string()),
             ..Default::default()
         });
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        let text = ed.buffers[idx].rope().to_string();
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        let text = editor.buffers[idx].rope().to_string();
         assert!(text.contains("Work item"));
         assert!(!text.contains("Personal"));
     }
 
     #[test]
     fn agenda_refresh_preserves_filter() {
-        let mut ed = Editor::new();
-        ed.kb.insert(
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:1", "Active", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO"),
         );
-        ed.open_agenda(AgendaFilter {
+        editor.open_agenda(AgendaFilter {
             todo_states: Some(vec!["TODO".to_string()]),
             ..Default::default()
         });
         // Add another TODO after opening
-        ed.kb.insert(
+        editor.kb.primary.insert(
             mae_kb::Node::new("todo:2", "New task", mae_kb::NodeKind::Note, "")
                 .with_todo_state("TODO"),
         );
-        ed.agenda_refresh();
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        let text = ed.buffers[idx].rope().to_string();
+        editor.agenda_refresh();
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        let text = editor.buffers[idx].rope().to_string();
         assert!(text.contains("New task"));
     }
 
     #[test]
     fn agenda_empty_kb() {
-        let mut ed = Editor::new();
-        ed.open_agenda(AgendaFilter::default());
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        let text = ed.buffers[idx].rope().to_string();
+        let mut editor = Editor::new();
+        editor.open_agenda(AgendaFilter::default());
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        let text = editor.buffers[idx].rope().to_string();
         assert!(text.contains("No matching TODO items"));
     }
 
@@ -447,19 +448,19 @@ Needs cleanup.
 Deploy the latest build.
 ";
 
-    fn ingest_org_fixture(ed: &mut Editor, content: &str) {
+    fn ingest_org_fixture(editor: &mut Editor, content: &str) {
         for node in mae_kb::org::parse_org_multi(content) {
-            ed.kb.insert(node);
+            editor.kb.primary.insert(node);
         }
     }
 
     #[test]
     fn agenda_from_org_file_shows_all_todos() {
-        let mut ed = Editor::new();
-        ingest_org_fixture(&mut ed, AGENDA_ORG);
-        ed.open_agenda(AgendaFilter::default());
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        let text = ed.buffers[idx].rope().to_string();
+        let mut editor = Editor::new();
+        ingest_org_fixture(&mut editor, AGENDA_ORG);
+        editor.open_agenda(AgendaFilter::default());
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        let text = editor.buffers[idx].rope().to_string();
         assert!(
             text.contains("Fix critical bug"),
             "missing Fix critical bug"
@@ -478,14 +479,14 @@ Deploy the latest build.
 
     #[test]
     fn agenda_from_org_file_filters_by_state() {
-        let mut ed = Editor::new();
-        ingest_org_fixture(&mut ed, AGENDA_ORG);
-        ed.open_agenda(AgendaFilter {
+        let mut editor = Editor::new();
+        ingest_org_fixture(&mut editor, AGENDA_ORG);
+        editor.open_agenda(AgendaFilter {
             todo_states: Some(vec!["TODO".to_string()]),
             ..Default::default()
         });
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        let text = ed.buffers[idx].rope().to_string();
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        let text = editor.buffers[idx].rope().to_string();
         assert!(text.contains("Fix critical bug"));
         assert!(text.contains("Refactor module"));
         assert!(!text.contains("Write documentation")); // DONE
@@ -494,14 +495,14 @@ Deploy the latest build.
 
     #[test]
     fn agenda_from_org_file_filters_by_priority() {
-        let mut ed = Editor::new();
-        ingest_org_fixture(&mut ed, AGENDA_ORG);
-        ed.open_agenda(AgendaFilter {
+        let mut editor = Editor::new();
+        ingest_org_fixture(&mut editor, AGENDA_ORG);
+        editor.open_agenda(AgendaFilter {
             priority: Some('A'),
             ..Default::default()
         });
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        let text = ed.buffers[idx].rope().to_string();
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        let text = editor.buffers[idx].rope().to_string();
         assert!(text.contains("Fix critical bug"));
         assert!(text.contains("Deploy to staging"));
         assert!(!text.contains("Write documentation"));
@@ -510,14 +511,14 @@ Deploy the latest build.
 
     #[test]
     fn agenda_from_org_file_filters_by_tag() {
-        let mut ed = Editor::new();
-        ingest_org_fixture(&mut ed, AGENDA_ORG);
-        ed.open_agenda(AgendaFilter {
+        let mut editor = Editor::new();
+        ingest_org_fixture(&mut editor, AGENDA_ORG);
+        editor.open_agenda(AgendaFilter {
             tag: Some("urgent".to_string()),
             ..Default::default()
         });
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        let text = ed.buffers[idx].rope().to_string();
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        let text = editor.buffers[idx].rope().to_string();
         assert!(text.contains("Fix critical bug"));
         assert!(text.contains("Deploy to staging"));
         assert!(!text.contains("Write documentation"));
@@ -526,11 +527,11 @@ Deploy the latest build.
 
     #[test]
     fn agenda_from_org_file_view_structure() {
-        let mut ed = Editor::new();
-        ingest_org_fixture(&mut ed, AGENDA_ORG);
-        ed.open_agenda(AgendaFilter::default());
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        let view = match &ed.buffers[idx].view {
+        let mut editor = Editor::new();
+        ingest_org_fixture(&mut editor, AGENDA_ORG);
+        editor.open_agenda(AgendaFilter::default());
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        let view = match &editor.buffers[idx].view {
             BufferView::Agenda(v) => v.as_ref(),
             _ => panic!("expected Agenda view"),
         };
@@ -561,14 +562,14 @@ Deploy the latest build.
 
     #[test]
     fn agenda_scales_to_1000_todos() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         for i in 0..1000 {
             let pri = match i % 3 {
                 0 => 'A',
                 1 => 'B',
                 _ => 'C',
             };
-            ed.kb.insert(
+            editor.kb.primary.insert(
                 mae_kb::Node::new(
                     format!("perf:{}", i),
                     format!("Task {}", i),
@@ -580,10 +581,10 @@ Deploy the latest build.
             );
         }
         let start = std::time::Instant::now();
-        ed.open_agenda(AgendaFilter::default());
+        editor.open_agenda(AgendaFilter::default());
         let elapsed = start.elapsed();
-        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
-        let text = ed.buffers[idx].rope().to_string();
+        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+        let text = editor.buffers[idx].rope().to_string();
         assert!(text.contains("1000 items"), "expected 1000 items");
         assert!(
             elapsed.as_millis() < 50,
@@ -603,18 +604,21 @@ Deploy the latest build.
             ":PROPERTIES:\n:ID: tmp-node-1\n:END:\n#+title: Tmp\n* TODO Task one\n:PROPERTIES:\n:ID: tmp-task-1\n:END:\n",
         )
         .unwrap();
-        let mut ed = Editor::new();
-        ed.agenda_add_path(&tmp.path().to_string_lossy());
-        assert!(ed.kb.contains("tmp-task-1"), "node should be ingested");
-        assert_eq!(ed.org_agenda_files.len(), 1);
+        let mut editor = Editor::new();
+        editor.agenda_add_path(&tmp.path().to_string_lossy());
+        assert!(
+            editor.kb.primary.contains("tmp-task-1"),
+            "node should be ingested"
+        );
+        assert_eq!(editor.org_agenda_files.len(), 1);
     }
 
     #[test]
     fn agenda_remove_path_removes_from_list() {
-        let mut ed = Editor::new();
-        ed.org_agenda_files.push("/tmp/test".to_string());
-        ed.agenda_remove_path("/tmp/test");
-        assert!(ed.org_agenda_files.is_empty());
+        let mut editor = Editor::new();
+        editor.org_agenda_files.push("/tmp/test".to_string());
+        editor.agenda_remove_path("/tmp/test");
+        assert!(editor.org_agenda_files.is_empty());
     }
 
     #[test]
@@ -626,10 +630,14 @@ Deploy the latest build.
             ":PROPERTIES:\n:ID: rescan-file\n:END:\n#+title: Rescan\n* TODO Rescan task\n:PROPERTIES:\n:ID: rescan-task-1\n:END:\n",
         )
         .unwrap();
-        let mut ed = Editor::new();
-        ed.org_agenda_files
+        let mut editor = Editor::new();
+        editor
+            .org_agenda_files
             .push(tmp.path().to_string_lossy().to_string());
-        ed.ingest_agenda_files();
-        assert!(ed.kb.contains("rescan-task-1"), "node should be ingested");
+        editor.ingest_agenda_files();
+        assert!(
+            editor.kb.primary.contains("rescan-task-1"),
+            "node should be ingested"
+        );
     }
 }

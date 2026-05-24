@@ -19,8 +19,17 @@ pub(super) fn handle_keymap_mode(
         }
     }
 
+    // C-c in normal mode: cancel pending operation (like Esc) rather than
+    // hard-killing the editor. Users can bind C-c to "quit" via Scheme if
+    // they want the old behavior.
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        editor.running = false;
+        if !pending_keys.is_empty() {
+            pending_keys.clear();
+            editor.clear_which_key_prefix();
+            editor.set_status("");
+        }
+        // Cancel any in-progress AI operation
+        editor.ai.cancel_requested = true;
         return;
     }
 
@@ -58,13 +67,13 @@ pub(super) fn handle_keymap_mode(
         LookupResult::Exact(cmd) => {
             let cmd = cmd.to_string();
             pending_keys.clear();
-            editor.which_key_prefix.clear();
-            let had_pending_op = editor.pending_operator.is_some();
+            editor.clear_which_key_prefix();
+            let had_pending_op = editor.vi.pending_operator.is_some();
             // Multiply operator count with motion count (e.g. 2d3j → 6j)
             if had_pending_op && Editor::is_motion_command(&cmd) {
-                if let Some(op_count) = editor.operator_count.take() {
-                    let motion_count = editor.count_prefix.unwrap_or(1);
-                    editor.count_prefix = Some(op_count * motion_count);
+                if let Some(op_count) = editor.vi.operator_count.take() {
+                    let motion_count = editor.vi.count_prefix.unwrap_or(1);
+                    editor.vi.count_prefix = Some(op_count * motion_count);
                 }
             }
             dispatch_command(editor, scheme, &cmd);
@@ -73,13 +82,13 @@ pub(super) fn handle_keymap_mode(
                 editor.apply_pending_operator_for_motion(&cmd);
             }
             // C-o oneshot: return to insert mode after one normal command
-            if editor.insert_mode_oneshot_normal && editor.mode == Mode::Normal {
-                editor.insert_mode_oneshot_normal = false;
+            if editor.vi.insert_mode_oneshot_normal && editor.mode == Mode::Normal {
+                editor.vi.insert_mode_oneshot_normal = false;
                 editor.set_mode(Mode::Insert);
             }
         }
         LookupResult::Prefix => {
-            editor.which_key_prefix = pending_keys.clone();
+            editor.set_which_key_prefix(pending_keys.clone());
         }
         LookupResult::None => {
             // Operator fallback: try splitting the sequence at each position
@@ -115,7 +124,7 @@ pub(super) fn handle_keymap_mode(
             if split_at > 0 {
                 let remaining: Vec<KeyPress> = pending_keys[split_at..].to_vec();
                 pending_keys.clear();
-                editor.which_key_prefix.clear();
+                editor.clear_which_key_prefix();
                 dispatch_command(editor, scheme, &split_cmd);
 
                 // Extract leading digits from remaining keys as count_prefix.
@@ -139,7 +148,7 @@ pub(super) fn handle_keymap_mode(
                             count = count * 10 + (ch as usize - '0' as usize);
                         }
                     }
-                    editor.count_prefix = Some(count.clamp(1, 99999));
+                    editor.vi.count_prefix = Some(count.clamp(1, 99999));
                 }
 
                 // Re-lookup the remaining keys (after digits) as a new sequence.
@@ -167,16 +176,16 @@ pub(super) fn handle_keymap_mode(
                 match result2 {
                     LookupResult::Exact(cmd) => {
                         let cmd = cmd.to_string();
-                        let had_pending = editor.pending_operator.is_some();
+                        let had_pending = editor.vi.pending_operator.is_some();
                         // Multiply operator count with motion count
                         if had_pending && Editor::is_motion_command(&cmd) {
-                            if let Some(op_count) = editor.operator_count.take() {
-                                let motion_count = editor.count_prefix.unwrap_or(1);
-                                editor.count_prefix = Some(op_count * motion_count);
+                            if let Some(op_count) = editor.vi.operator_count.take() {
+                                let motion_count = editor.vi.count_prefix.unwrap_or(1);
+                                editor.vi.count_prefix = Some(op_count * motion_count);
                             }
                         }
                         pending_keys.clear();
-                        editor.which_key_prefix.clear();
+                        editor.clear_which_key_prefix();
                         dispatch_command(editor, scheme, &cmd);
                         if had_pending && Editor::is_motion_command(&cmd) {
                             editor.apply_pending_operator_for_motion(&cmd);
@@ -185,15 +194,15 @@ pub(super) fn handle_keymap_mode(
                     LookupResult::Prefix => {
                         // Remaining keys are a prefix (e.g., `g` of `gg`).
                         // Keep them in pending_keys; next keystroke will complete.
-                        editor.which_key_prefix = pending_keys.clone();
+                        editor.set_which_key_prefix(pending_keys.clone());
                     }
                     LookupResult::None => {
                         // Remaining keys also don't match — give up.
                         pending_keys.clear();
-                        editor.which_key_prefix.clear();
-                        editor.pending_operator = None;
-                        editor.operator_start = None;
-                        editor.operator_count = None;
+                        editor.clear_which_key_prefix();
+                        editor.vi.pending_operator = None;
+                        editor.vi.operator_start = None;
+                        editor.vi.operator_count = None;
                         editor.set_status("Key not bound");
                     }
                 }
@@ -202,7 +211,7 @@ pub(super) fn handle_keymap_mode(
                 if !editor.which_key_prefix.is_empty() {
                     editor.set_status("Key not bound");
                 }
-                editor.which_key_prefix.clear();
+                editor.clear_which_key_prefix();
             }
         }
     }
@@ -219,18 +228,18 @@ pub(super) fn handle_describe_key_await(
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
 ) {
-    // Ctrl-C is always a hard exit.
+    // Ctrl-C cancels describe-key (same as Esc).
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         editor.awaiting_key_description = false;
         pending_keys.clear();
-        editor.which_key_prefix.clear();
-        editor.running = false;
+        editor.clear_which_key_prefix();
+        editor.set_status("describe-key cancelled");
         return;
     }
     if key.code == KeyCode::Esc {
         editor.awaiting_key_description = false;
         pending_keys.clear();
-        editor.which_key_prefix.clear();
+        editor.clear_which_key_prefix();
         editor.set_status("describe-key cancelled");
         return;
     }
@@ -251,9 +260,9 @@ pub(super) fn handle_describe_key_await(
             let cmd = cmd.to_string();
             editor.awaiting_key_description = false;
             pending_keys.clear();
-            editor.which_key_prefix.clear();
+            editor.clear_which_key_prefix();
             let id = format!("cmd:{}", cmd);
-            if editor.kb.contains(&id) {
+            if editor.kb.primary.contains(&id) {
                 editor.open_help_at(&id);
             } else {
                 // Command is bound but has no KB node (rare — all
@@ -263,12 +272,12 @@ pub(super) fn handle_describe_key_await(
             }
         }
         LookupResult::Prefix => {
-            editor.which_key_prefix = pending_keys.clone();
+            editor.set_which_key_prefix(pending_keys.clone());
         }
         LookupResult::None => {
             editor.awaiting_key_description = false;
             pending_keys.clear();
-            editor.which_key_prefix.clear();
+            editor.clear_which_key_prefix();
             editor.set_status("Key not bound");
         }
     }
@@ -292,10 +301,10 @@ pub(super) fn handle_normal_mode(
     // `"<char>` — register prompt. Capture the next char into
     // active_register; Escape cancels. See register_ops.rs for the
     // semantics of each register letter.
-    if editor.pending_register_prompt {
-        editor.pending_register_prompt = false;
+    if editor.vi.pending_register_prompt {
+        editor.vi.pending_register_prompt = false;
         if let KeyCode::Char(ch) = key.code {
-            editor.active_register = Some(ch);
+            editor.vi.active_register = Some(ch);
             editor.set_status(format!("\"{}", ch));
         } else {
             editor.set_status("");
@@ -304,28 +313,28 @@ pub(super) fn handle_normal_mode(
     }
 
     // If a char-argument command is pending (f/F/t/T or text objects), capture the next char
-    if let Some(cmd) = editor.pending_char_command.take() {
+    if let Some(cmd) = editor.vi.pending_char_command.take() {
         if let KeyCode::Char(ch) = key.code {
-            let had_pending_op = editor.pending_operator.is_some();
+            let had_pending_op = editor.vi.pending_operator.is_some();
             // Try text object dispatch first, then fall back to char motion
             if editor.dispatch_text_object(&cmd, ch) || editor.dispatch_surround(&cmd, ch) {
                 // Text object/surround handled it directly — clear dangling state
-                editor.pending_operator = None;
-                editor.operator_start = None;
-                editor.operator_count = None;
+                editor.vi.pending_operator = None;
+                editor.vi.operator_start = None;
+                editor.vi.operator_count = None;
             } else {
                 editor.dispatch_char_motion(&cmd, ch);
                 // f/t motions with a pending operator
                 if had_pending_op {
-                    editor.last_motion_linewise = false;
+                    editor.vi.last_motion_linewise = false;
                     editor.apply_pending_operator();
                 }
             }
         } else {
             // Escape or non-char clears pending operator too
-            editor.pending_operator = None;
-            editor.operator_start = None;
-            editor.operator_count = None;
+            editor.vi.pending_operator = None;
+            editor.vi.operator_start = None;
+            editor.vi.operator_count = None;
         }
         // Any key (including Escape) clears the pending state
         return;
@@ -339,8 +348,8 @@ pub(super) fn handle_normal_mode(
             && pending_keys.is_empty()
         {
             let digit = (ch as usize) - ('0' as usize);
-            let current = editor.count_prefix.unwrap_or(0);
-            editor.count_prefix = Some((current * 10 + digit).min(99999));
+            let current = editor.vi.count_prefix.unwrap_or(0);
+            editor.vi.count_prefix = Some((current * 10 + digit).min(99999));
             return;
         }
     }
@@ -348,24 +357,24 @@ pub(super) fn handle_normal_mode(
         if !key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            && editor.count_prefix.is_some()
+            && editor.vi.count_prefix.is_some()
             && pending_keys.is_empty()
         {
-            let current = editor.count_prefix.unwrap_or(0);
-            editor.count_prefix = Some((current * 10).min(99999));
+            let current = editor.vi.count_prefix.unwrap_or(0);
+            editor.vi.count_prefix = Some((current * 10).min(99999));
             return;
         }
     }
 
     // Escape dismisses which-key popup if active, clears count prefix and pending operator
     if key.code == KeyCode::Esc {
-        editor.count_prefix = None;
-        editor.pending_operator = None;
-        editor.operator_start = None;
-        editor.operator_count = None;
+        editor.vi.count_prefix = None;
+        editor.vi.pending_operator = None;
+        editor.vi.operator_start = None;
+        editor.vi.operator_count = None;
         if !editor.which_key_prefix.is_empty() {
             pending_keys.clear();
-            editor.which_key_prefix.clear();
+            editor.clear_which_key_prefix();
             return;
         }
     }
@@ -381,7 +390,7 @@ pub(super) fn handle_normal_mode(
     // --- Conversation pair intercepts ---
     // Output buffer (*AI*): i/a redirect to input window. Double-Esc returns to input.
     // Input buffer (*ai-input*): Enter submits, i/a enter ConversationInput mode.
-    if let Some(ref pair) = editor.conversation_pair.clone() {
+    if let Some(ref pair) = editor.ai.conversation_pair.clone() {
         let idx = editor.active_buffer_idx();
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -398,7 +407,7 @@ pub(super) fn handle_normal_mode(
                 {
                     editor.window_mgr.set_focused(pair.input_window_id);
                     editor.set_mode(Mode::ConversationInput);
-                    editor.count_prefix = None;
+                    editor.vi.count_prefix = None;
                     return;
                 }
                 // Double-Esc: return to input prompt (single Esc stays in output for nav).
@@ -409,7 +418,7 @@ pub(super) fn handle_normal_mode(
                         editor.conv_esc_pending = false;
                         editor.window_mgr.set_focused(pair.input_window_id);
                         editor.set_mode(Mode::ConversationInput);
-                        editor.count_prefix = None;
+                        editor.vi.count_prefix = None;
                         return;
                     }
                     editor.conv_esc_pending = true;
@@ -428,7 +437,7 @@ pub(super) fn handle_normal_mode(
             match key.code {
                 KeyCode::Char('i') if !ctrl => {
                     editor.set_mode(Mode::ConversationInput);
-                    editor.count_prefix = None;
+                    editor.vi.count_prefix = None;
                     return;
                 }
                 KeyCode::Char('a') if !ctrl => {
@@ -440,14 +449,14 @@ pub(super) fn handle_normal_mode(
                         win.cursor_col += 1;
                     }
                     editor.set_mode(Mode::ConversationInput);
-                    editor.count_prefix = None;
+                    editor.vi.count_prefix = None;
                     return;
                 }
                 KeyCode::Char('I') if !ctrl => {
                     // Insert at first non-blank.
                     editor.window_mgr.focused_window_mut().cursor_col = 0;
                     editor.set_mode(Mode::ConversationInput);
-                    editor.count_prefix = None;
+                    editor.vi.count_prefix = None;
                     return;
                 }
                 KeyCode::Char('A') if !ctrl => {
@@ -456,7 +465,7 @@ pub(super) fn handle_normal_mode(
                     let line_len = editor.buffers[idx].line_len(row);
                     editor.window_mgr.focused_window_mut().cursor_col = line_len;
                     editor.set_mode(Mode::ConversationInput);
-                    editor.count_prefix = None;
+                    editor.vi.count_prefix = None;
                     return;
                 }
                 KeyCode::Char('o') if !ctrl => {
@@ -467,7 +476,7 @@ pub(super) fn handle_normal_mode(
                     win.cursor_col = line_len;
                     editor.buffers[idx].insert_char(editor.window_mgr.focused_window_mut(), '\n');
                     editor.set_mode(Mode::ConversationInput);
-                    editor.count_prefix = None;
+                    editor.vi.count_prefix = None;
                     return;
                 }
                 KeyCode::Char('O') if !ctrl => {
@@ -481,7 +490,7 @@ pub(super) fn handle_normal_mode(
                     }
                     win.cursor_col = 0;
                     editor.set_mode(Mode::ConversationInput);
-                    editor.count_prefix = None;
+                    editor.vi.count_prefix = None;
                     return;
                 }
                 _ => {}

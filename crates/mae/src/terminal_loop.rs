@@ -34,11 +34,14 @@ pub(crate) async fn run_terminal_loop(
     dap_event_rx: &mut tokio::sync::mpsc::Receiver<mae_dap::DapTaskEvent>,
     dap_command_tx: &tokio::sync::mpsc::Sender<DapCommand>,
     mcp_tool_rx: &mut tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
+    collab_event_rx: &mut tokio::sync::mpsc::Receiver<crate::collab_bridge::CollabEvent>,
+    collab_command_tx: &tokio::sync::mpsc::Sender<crate::collab_bridge::CollabCommand>,
     mcp_socket_path: &str,
     all_tools: &[mae_ai::ToolDefinition],
     permission_policy: &mae_ai::PermissionPolicy,
     app_config: &config::Config,
     mcp_client_mgr: &ai_event_handler::McpClientMgrRef,
+    sync_broadcaster: &mae_mcp::broadcast::SharedBroadcaster,
 ) -> io::Result<()> {
     let mut renderer = TerminalRenderer::new()?;
     let mut event_stream = EventStream::new();
@@ -326,6 +329,9 @@ pub(crate) async fn run_terminal_loop(
         trace!("drain_intents_and_lifecycle enter");
         drain_lsp_intents(editor, lsp_command_tx);
         drain_dap_intents(editor, dap_command_tx);
+        crate::collab_bridge::drain_collab_intents(editor, collab_command_tx);
+        crate::collab_bridge::queue_awareness_update(editor);
+        crate::collab_bridge::cleanup_stale_awareness(editor);
 
         shell_lifecycle::drain_agent_setup(editor);
         shell_lifecycle::spawn_pending_shells(
@@ -419,6 +425,8 @@ pub(crate) async fn run_terminal_loop(
                 // Frame slot arrived — mark dirty so the render section fires.
                 tui_dirty = true;
                 render_pending = false;
+                // Drain sync updates on frame tick (~16ms max latency).
+                crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster, Some(collab_command_tx));
             }
             _ = syntax_reparse_timer => {
                 // Debounce expired — drain pending reparses.
@@ -431,14 +439,14 @@ pub(crate) async fn run_terminal_loop(
                         tui_dirty = true;
                         editor.last_edit_time = std::time::Instant::now();
                         editor.clear_highlights();
-                        if editor.input_lock != mae_core::InputLock::None {
+                        if editor.ai.input_lock != mae_core::InputLock::None {
                             use crossterm::event::{KeyCode, KeyModifiers};
                             if key.code == KeyCode::Esc
                                 || (key.code == KeyCode::Char('c')
                                     && key.modifiers.contains(KeyModifiers::CONTROL))
                             {
-                                editor.input_lock = mae_core::InputLock::None;
-                                editor.ai_streaming = false;
+                                editor.ai.input_lock = mae_core::InputLock::None;
+                                editor.ai.streaming = false;
                                 last_mcp_activity = None;
                                 if let Some(ref tx) = ai_command_tx {
                                     let _ = tx.try_send(AiCommand::Cancel);
@@ -459,13 +467,13 @@ pub(crate) async fn run_terminal_loop(
                             handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx, &mut pending_interactive_event);
 
                             // Handle cancellation requested via command (e.g. SPC a c)
-                            if editor.ai_cancel_requested {
-                                editor.ai_cancel_requested = false;
+                            if editor.ai.cancel_requested {
+                                editor.ai.cancel_requested = false;
                                 if let Some(ref tx) = ai_command_tx {
                                     let _ = tx.try_send(AiCommand::Cancel);
                                 }
-                                editor.ai_streaming = false;
-                                editor.input_lock = mae_core::InputLock::None;
+                                editor.ai.streaming = false;
+                                editor.ai.input_lock = mae_core::InputLock::None;
                                 pending_interactive_event = None;
                                 if editor.cleanup_self_test() {
                                     editor.set_status("[AI] Cancelled — self-test state restored");
@@ -602,10 +610,10 @@ pub(crate) async fn run_terminal_loop(
                     if ts.elapsed() > std::time::Duration::from_millis(500)
                         && deferred_mcp_reply.is_empty()
                     {
-                        if editor.input_lock == mae_core::InputLock::McpBusy {
+                        if editor.ai.input_lock == mae_core::InputLock::McpBusy {
                             editor.set_status("MCP: input unlocked");
                         }
-                        editor.input_lock = mae_core::InputLock::None;
+                        editor.ai.input_lock = mae_core::InputLock::None;
                         last_mcp_activity = None;
                         tui_dirty = true;
                     }
@@ -613,16 +621,22 @@ pub(crate) async fn run_terminal_loop(
             }
             Some(mcp_req) = mcp_tool_rx.recv() => {
                 tui_dirty = true;
-                editor.input_lock = mae_core::InputLock::McpBusy;
+                editor.ai.input_lock = mae_core::InputLock::McpBusy;
                 last_mcp_activity = Some(tokio::time::Instant::now());
                 let immediate = ai_event_handler::handle_mcp_request(
                     editor, mcp_req, all_tools, permission_policy,
                     lsp_command_tx, &mut deferred_mcp_reply,
                 );
                 if immediate && deferred_mcp_reply.is_empty() {
-                    editor.input_lock = mae_core::InputLock::None;
+                    editor.ai.input_lock = mae_core::InputLock::None;
                     last_mcp_activity = None;
                 }
+                // Drain sync updates immediately after MCP-driven edits.
+                crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster, Some(collab_command_tx));
+            }
+            Some(collab_event) = collab_event_rx.recv() => {
+                tui_dirty = true;
+                crate::collab_bridge::handle_collab_event(editor, collab_event);
             }
         }
     }

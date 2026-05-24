@@ -43,8 +43,8 @@ impl Editor {
             .as_ref()
             .map(|p| p.root.display().to_string())
             .unwrap_or_else(|| ".".to_string());
-        self.command_line = format!("grep {} ", root);
-        self.command_cursor = self.command_line.len();
+        self.vi.command_line = format!("grep {} ", root);
+        self.vi.command_cursor = self.vi.command_line.len();
         self.set_status("Project search: enter pattern");
     }
 

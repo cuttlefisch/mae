@@ -14,6 +14,41 @@ pub fn execute_introspect(editor: &Editor, args: &serde_json::Value) -> Result<S
 
     let mut result = serde_json::Map::new();
 
+    // Always include version for diagnostic context
+    if section == "all" || section == "version" {
+        result.insert(
+            "version".into(),
+            json!({
+                "mae": env!("CARGO_PKG_VERSION"),
+                "build_profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+            }),
+        );
+    }
+    if section == "all" || section == "modules" {
+        let loaded: Vec<&str> = editor
+            .active_modules
+            .iter()
+            .filter(|m| m.status == "loaded")
+            .map(|m| m.name.as_str())
+            .collect();
+        let failed: Vec<&str> = editor
+            .active_modules
+            .iter()
+            .filter(|m| m.status != "loaded")
+            .map(|m| m.name.as_str())
+            .collect();
+        result.insert(
+            "modules".into(),
+            json!({
+                "total": editor.active_modules.len(),
+                "loaded_count": loaded.len(),
+                "loaded": loaded,
+                "failed_count": failed.len(),
+                "failed": failed,
+            }),
+        );
+    }
+
     if section == "all" || section == "threads" {
         result.insert("threads".into(), build_threads_section());
     }
@@ -37,6 +72,9 @@ pub fn execute_introspect(editor: &Editor, args: &serde_json::Value) -> Result<S
     }
     if section == "all" || section == "lsp" {
         result.insert("lsp".into(), build_lsp_section(editor));
+    }
+    if section == "all" || section == "collaboration" {
+        result.insert("collaboration".into(), build_collaboration_section(editor));
     }
     if section == "frame" {
         result.insert("frame".into(), build_frame_section(editor));
@@ -165,8 +203,8 @@ fn build_buffers_section(editor: &Editor) -> serde_json::Value {
 
 fn build_shell_section(editor: &Editor) -> serde_json::Value {
     json!({
-        "viewport_count": editor.shell_viewports.len(),
-        "cwd_count": editor.shell_cwds.len(),
+        "viewport_count": editor.shell.viewports.len(),
+        "cwd_count": editor.shell.viewport_cwds.len(),
     })
 }
 
@@ -207,39 +245,39 @@ fn build_frame_section(editor: &Editor) -> serde_json::Value {
 }
 
 fn build_kb_section(editor: &Editor) -> serde_json::Value {
-    let local_nodes = editor.kb.len();
-    let federated_instances = editor.kb_instances.len();
-    let total_federated_nodes: usize = editor.kb_instances.values().map(|kb| kb.len()).sum();
-    let watcher_count = editor.kb_watchers.len();
-    let ws = &editor.kb_watcher_stats;
+    let local_nodes = editor.kb.primary.len();
+    let federated_instances = editor.kb.instances.len();
+    let total_federated_nodes: usize = editor.kb.instances.values().map(|kb| kb.len()).sum();
+    let watcher_count = editor.kb.watchers.len();
+    let ws = &editor.kb.watcher_stats;
 
     // Check for non-default KB options
     let mut option_overrides = serde_json::Map::new();
-    if !editor.kb_watcher_enabled {
+    if !editor.kb.watcher_enabled {
         option_overrides.insert("kb_watcher_enabled".into(), json!(false));
     }
-    if editor.kb_watcher_debounce_ms != 500 {
+    if editor.kb.watcher_debounce_ms != 500 {
         option_overrides.insert(
             "kb_watcher_debounce_ms".into(),
-            json!(editor.kb_watcher_debounce_ms),
+            json!(editor.kb.watcher_debounce_ms),
         );
     }
-    if editor.kb_max_drain_events != 100 {
+    if editor.kb.max_drain_events != 100 {
         option_overrides.insert(
             "kb_max_drain_events".into(),
-            json!(editor.kb_max_drain_events),
+            json!(editor.kb.max_drain_events),
         );
     }
-    if editor.kb_search_excerpt_length != 500 {
+    if editor.kb.search_excerpt_length != 500 {
         option_overrides.insert(
             "kb_search_excerpt_length".into(),
-            json!(editor.kb_search_excerpt_length),
+            json!(editor.kb.search_excerpt_length),
         );
     }
-    if editor.kb_search_max_results != 20 {
+    if editor.kb.search_max_results != 20 {
         option_overrides.insert(
             "kb_search_max_results".into(),
-            json!(editor.kb_search_max_results),
+            json!(editor.kb.search_max_results),
         );
     }
 
@@ -251,10 +289,15 @@ fn build_kb_section(editor: &Editor) -> serde_json::Value {
         "watcher_stats": {
             "events_upserted": ws.events_upserted,
             "events_removed": ws.events_removed,
-            "events_skipped": ws.events_skipped,
+            "suppressed_debounce": ws.suppressed_debounce,
+            "suppressed_timebox": ws.suppressed_timebox,
+            "events_suppressed": ws.events_suppressed,
+            "reimports_total": ws.reimports_total,
             "errors": ws.errors,
             "last_drain_us": ws.last_drain_us,
             "last_drain_event_count": ws.last_drain_event_count,
+            "drain_us_sum": ws.drain_us_sum,
+            "drain_count": ws.drain_count,
         },
         "search_latency_us": editor.perf_stats.kb_search_latency_us,
         "option_overrides": option_overrides,
@@ -292,36 +335,47 @@ fn build_lsp_section(editor: &Editor) -> serde_json::Value {
 
 fn build_ai_section(editor: &Editor) -> serde_json::Value {
     let conv_entries = editor.conversation().map(|c| c.entries.len()).unwrap_or(0);
-    let context_usage_pct = if editor.ai_context_window > 0 {
-        (editor.ai_context_used_tokens as f64 / editor.ai_context_window as f64 * 100.0) as u64
+    let context_usage_pct = if editor.ai.context_window > 0 {
+        (editor.ai.context_used_tokens as f64 / editor.ai.context_window as f64 * 100.0) as u64
     } else {
         0
     };
     let cache_hit_pct = {
-        let total = editor.ai_cache_read_tokens + editor.ai_cache_creation_tokens;
+        let total = editor.ai.cache_read_tokens + editor.ai.cache_creation_tokens;
         if total > 0 {
-            (editor.ai_cache_read_tokens as f64 / total as f64 * 100.0) as u64
+            (editor.ai.cache_read_tokens as f64 / total as f64 * 100.0) as u64
         } else {
             0
         }
     };
     json!({
-        "mode": editor.ai_mode,
-        "profile": editor.ai_profile,
-        "streaming": editor.ai_streaming,
-        "input_lock": format!("{:?}", editor.input_lock),
+        "mode": editor.ai.mode,
+        "profile": editor.ai.profile,
+        "streaming": editor.ai.streaming,
+        "input_lock": format!("{:?}", editor.ai.input_lock),
         "conversation_entries": conv_entries,
-        "current_round": editor.ai_current_round,
-        "transaction_start_idx": editor.ai_transaction_start_idx,
-        "session_cost_usd": editor.ai_session_cost_usd,
-        "session_tokens_in": editor.ai_session_tokens_in,
-        "session_tokens_out": editor.ai_session_tokens_out,
-        "cache_read_tokens": editor.ai_cache_read_tokens,
-        "cache_creation_tokens": editor.ai_cache_creation_tokens,
+        "current_round": editor.ai.current_round,
+        "transaction_start_idx": editor.ai.transaction_start_idx,
+        "session_cost_usd": editor.ai.session_cost_usd,
+        "session_tokens_in": editor.ai.session_tokens_in,
+        "session_tokens_out": editor.ai.session_tokens_out,
+        "cache_read_tokens": editor.ai.cache_read_tokens,
+        "cache_creation_tokens": editor.ai.cache_creation_tokens,
         "cache_hit_pct": cache_hit_pct,
-        "context_window": editor.ai_context_window,
-        "context_used_tokens": editor.ai_context_used_tokens,
+        "context_window": editor.ai.context_window,
+        "context_used_tokens": editor.ai.context_used_tokens,
         "context_usage_pct": context_usage_pct,
+    })
+}
+
+fn build_collaboration_section(editor: &Editor) -> serde_json::Value {
+    let collab_status = editor.collab.status.as_str();
+    let collab_server = editor.collab.server_address.clone();
+    json!({
+        "collab_status": collab_status,
+        "collab_server": collab_server,
+        "synced_buffers": editor.collab.synced_docs,
+        "pending_collab_intent": editor.collab.pending_intent.is_some(),
     })
 }
 
@@ -370,5 +424,29 @@ mod tests {
         assert_eq!(lsp["any_starting"], true);
         let servers = lsp["servers"].as_array().unwrap();
         assert_eq!(servers.len(), 2);
+    }
+
+    #[test]
+    fn introspect_collaboration_section() {
+        let editor = Editor::new();
+        let result = execute_introspect(&editor, &json!({"section": "collaboration"})).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let collab = &val["collaboration"];
+        assert_eq!(collab["collab_status"], "off");
+        assert!(collab["collab_server"].as_str().is_some());
+        assert_eq!(collab["synced_buffers"], 0);
+        assert_eq!(collab["pending_collab_intent"], false);
+    }
+
+    #[test]
+    fn introspect_all_includes_collaboration() {
+        let editor = Editor::new();
+        let result = execute_introspect(&editor, &json!({})).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(
+            val.get("collaboration").is_some(),
+            "all sections should include collaboration"
+        );
+        assert_eq!(val["collaboration"]["collab_status"], "off");
     }
 }

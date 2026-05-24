@@ -1,0 +1,156 @@
+# Docker Compose for collab CRDT E2E tests.
+#
+# Topology: state-server + client-a + client-b + undo-sharer + undo-joiner + verifier
+# Scenarios: separate filesystems + shared filesystem convergence + two-client CRDT undo
+#
+# Usage:
+#   make docker-collab-test
+#   (runs foreground, inspects verifier exit code from stopped container)
+
+services:
+  state-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    entrypoint: ["mae-state-server", "--bind", "0.0.0.0:9473"]
+    stop_grace_period: 10s
+    environment:
+      RUST_LOG: "mae_mcp=warn,mae_state_server=debug,mae_sync=debug,info"
+    healthcheck:
+      # Use a non-intrusive TCP check: connect + immediate close.
+      # Previous check (echo '{}' | nc) created full sessions every 2s,
+      # flooding all clients with PeerJoined/PeerLeft noise events.
+      test: ["CMD-SHELL", "nc -z localhost 9473"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 2s
+    networks:
+      - collab-test
+
+  client-a:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    entrypoint: ["mae", "--test", "/tests/test_share.scm"]
+    stop_grace_period: 120s
+    volumes:
+      - workspace-a:/workspace
+      - ./tests/collab-e2e:/tests:ro
+      - ./scheme/lib:/usr/share/mae/lib:ro
+      - sync:/sync
+      - shared-workspace:/shared
+    environment:
+      MAE_COLLAB_SERVER: "state-server:9473"
+      MAE_COLLAB_AUTO_CONNECT: "1"
+      MAE_SKIP_WIZARD: "1"
+      MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,info"
+    depends_on:
+      state-server:
+        condition: service_healthy
+    networks:
+      - collab-test
+
+  client-b:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    entrypoint: ["mae", "--test", "/tests/test_join.scm"]
+    stop_grace_period: 120s
+    volumes:
+      - workspace-b:/workspace
+      - ./tests/collab-e2e:/tests:ro
+      - ./scheme/lib:/usr/share/mae/lib:ro
+      - sync:/sync
+      - shared-workspace:/shared
+    environment:
+      MAE_COLLAB_SERVER: "state-server:9473"
+      MAE_COLLAB_AUTO_CONNECT: "1"
+      MAE_SKIP_WIZARD: "1"
+      MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,info"
+    depends_on:
+      state-server:
+        condition: service_healthy
+    networks:
+      - collab-test
+
+  undo-sharer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    entrypoint: ["mae", "--test", "/tests/test_undo_sharer.scm"]
+    stop_grace_period: 120s
+    volumes:
+      - workspace-undo-a:/workspace
+      - ./tests/collab-e2e:/tests:ro
+      - ./scheme/lib:/usr/share/mae/lib:ro
+      - sync:/sync
+    environment:
+      MAE_COLLAB_SERVER: "state-server:9473"
+      MAE_COLLAB_AUTO_CONNECT: "1"
+      MAE_SKIP_WIZARD: "1"
+      MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,info"
+    depends_on:
+      state-server:
+        condition: service_healthy
+    networks:
+      - collab-test
+
+  undo-joiner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    entrypoint: ["mae", "--test", "/tests/test_undo_joiner.scm"]
+    stop_grace_period: 120s
+    volumes:
+      - workspace-undo-b:/workspace
+      - ./tests/collab-e2e:/tests:ro
+      - ./scheme/lib:/usr/share/mae/lib:ro
+      - sync:/sync
+    environment:
+      MAE_COLLAB_SERVER: "state-server:9473"
+      MAE_COLLAB_AUTO_CONNECT: "1"
+      MAE_SKIP_WIZARD: "1"
+      MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,info"
+    depends_on:
+      state-server:
+        condition: service_healthy
+    networks:
+      - collab-test
+
+  verifier:
+    image: alpine:3.19
+    entrypoint: ["/bin/sh", "/tests/verify.sh"]
+    volumes:
+      - workspace-a:/workspace-a:ro
+      - workspace-b:/workspace-b:ro
+      - workspace-undo-a:/workspace-undo-a:ro
+      - workspace-undo-b:/workspace-undo-b:ro
+      - shared-workspace:/shared-workspace:ro
+      - ./tests/collab-e2e:/tests:ro
+    depends_on:
+      client-a:
+        condition: service_completed_successfully
+      client-b:
+        condition: service_completed_successfully
+      undo-sharer:
+        condition: service_completed_successfully
+      undo-joiner:
+        condition: service_completed_successfully
+
+volumes:
+  workspace-a:
+  workspace-b:
+  workspace-undo-a:
+  workspace-undo-b:
+  shared-workspace:
+  sync:
+
+networks:
+  collab-test:
+    driver: bridge

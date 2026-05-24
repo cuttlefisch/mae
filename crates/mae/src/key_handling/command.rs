@@ -8,17 +8,17 @@ use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, warn};
 
 fn apply_tab_completion(editor: &mut Editor) {
-    if editor.tab_completions.is_empty() {
+    if editor.vi.tab_completions.is_empty() {
         return;
     }
-    let completion = editor.tab_completions[editor.tab_completion_idx].clone();
-    if let Some(space_pos) = editor.command_line.find(' ') {
-        let prefix = editor.command_line[..=space_pos].to_string();
-        editor.command_line = format!("{}{}", prefix, completion);
+    let completion = editor.vi.tab_completions[editor.vi.tab_completion_idx].clone();
+    if let Some(space_pos) = editor.vi.command_line.find(' ') {
+        let prefix = editor.vi.command_line[..=space_pos].to_string();
+        editor.vi.command_line = format!("{}{}", prefix, completion);
     } else {
-        editor.command_line = completion;
+        editor.vi.command_line = completion;
     }
-    editor.command_cursor = editor.command_line.len();
+    editor.vi.command_cursor = editor.vi.command_line.len();
 }
 
 pub fn handle_command_mode(
@@ -34,14 +34,14 @@ pub fn handle_command_mode(
         KeyCode::Esc => {
             editor.file_tree_action = None;
             editor.set_mode(Mode::Normal);
-            editor.command_line.clear();
-            editor.command_cursor = 0;
+            editor.vi.command_line.clear();
+            editor.vi.command_cursor = 0;
         }
         KeyCode::Enter => {
-            let cmd = editor.command_line.clone();
+            let cmd = editor.vi.command_line.clone();
             editor.set_mode(Mode::Normal);
-            editor.command_line.clear();
-            editor.command_cursor = 0;
+            editor.vi.command_line.clear();
+            editor.vi.command_cursor = 0;
 
             // File tree action (rename/create) — intercept before normal dispatch.
             if let Some(action) = editor.file_tree_action.take() {
@@ -159,26 +159,26 @@ pub fn handle_command_mode(
                         cfg.provider_type, cfg.model, connected
                     )];
                     if connected {
-                        if editor.ai_session_cost_usd > 0.0 {
-                            parts.push(format!("${:.4}", editor.ai_session_cost_usd));
+                        if editor.ai.session_cost_usd > 0.0 {
+                            parts.push(format!("${:.4}", editor.ai.session_cost_usd));
                         }
-                        if editor.ai_session_tokens_in > 0 || editor.ai_session_tokens_out > 0 {
+                        if editor.ai.session_tokens_in > 0 || editor.ai.session_tokens_out > 0 {
                             parts.push(format!(
                                 "tokens: {}in/{}out",
-                                editor.ai_session_tokens_in, editor.ai_session_tokens_out
+                                editor.ai.session_tokens_in, editor.ai.session_tokens_out
                             ));
                         }
-                        if editor.ai_context_window > 0 && editor.ai_context_used_tokens > 0 {
-                            let pct = (editor.ai_context_used_tokens as f64
-                                / editor.ai_context_window as f64
+                        if editor.ai.context_window > 0 && editor.ai.context_used_tokens > 0 {
+                            let pct = (editor.ai.context_used_tokens as f64
+                                / editor.ai.context_window as f64
                                 * 100.0) as u64;
                             parts.push(format!("ctx: {}%", pct));
                         }
-                        if editor.ai_cache_read_tokens > 0 {
+                        if editor.ai.cache_read_tokens > 0 {
                             let total_cache =
-                                editor.ai_cache_read_tokens + editor.ai_cache_creation_tokens;
+                                editor.ai.cache_read_tokens + editor.ai.cache_creation_tokens;
                             let hit_pct = if total_cache > 0 {
-                                (editor.ai_cache_read_tokens as f64 / total_cache as f64 * 100.0)
+                                (editor.ai.cache_read_tokens as f64 / total_cache as f64 * 100.0)
                                     as u64
                             } else {
                                 0
@@ -277,14 +277,14 @@ pub fn handle_command_mode(
                 let categories = cmd.strip_prefix("self-test").unwrap().trim();
                 if let Some(tx) = ai_tx {
                     // Lock input so user keystrokes don't interfere with test state.
-                    editor.input_lock = mae_core::InputLock::AiBusy;
+                    editor.ai.input_lock = mae_core::InputLock::AiBusy;
                     // Ensure *AI* buffer exists and is visible so the user
                     // can watch self-test progress (tool calls, results, report).
                     editor.open_conversation_buffer();
                     let prompt = build_self_test_prompt(categories);
                     if tx.try_send(AiCommand::Prompt(prompt)).is_err() {
                         warn!("AI self-test prompt dropped");
-                        editor.input_lock = mae_core::InputLock::None;
+                        editor.ai.input_lock = mae_core::InputLock::None;
                     }
                     info!(
                         "self-test started, categories={:?}",
@@ -361,24 +361,24 @@ pub fn handle_command_mode(
             }
         }
         KeyCode::Tab => {
-            if editor.tab_completions.is_empty() {
-                editor.tab_completions = editor.cmdline_completions();
-                editor.tab_completion_idx = 0;
+            if editor.vi.tab_completions.is_empty() {
+                editor.vi.tab_completions = editor.cmdline_completions();
+                editor.vi.tab_completion_idx = 0;
             } else {
-                editor.tab_completion_idx =
-                    (editor.tab_completion_idx + 1) % editor.tab_completions.len();
+                editor.vi.tab_completion_idx =
+                    (editor.vi.tab_completion_idx + 1) % editor.vi.tab_completions.len();
             }
             apply_tab_completion(editor);
         }
         KeyCode::BackTab => {
-            if editor.tab_completions.is_empty() {
-                editor.tab_completions = editor.cmdline_completions();
-                if !editor.tab_completions.is_empty() {
-                    editor.tab_completion_idx = editor.tab_completions.len() - 1;
+            if editor.vi.tab_completions.is_empty() {
+                editor.vi.tab_completions = editor.cmdline_completions();
+                if !editor.vi.tab_completions.is_empty() {
+                    editor.vi.tab_completion_idx = editor.vi.tab_completions.len() - 1;
                 }
             } else {
-                let len = editor.tab_completions.len();
-                editor.tab_completion_idx = (editor.tab_completion_idx + len - 1) % len;
+                let len = editor.vi.tab_completions.len();
+                editor.vi.tab_completion_idx = (editor.vi.tab_completion_idx + len - 1) % len;
             }
             apply_tab_completion(editor);
         }
@@ -428,7 +428,7 @@ pub fn handle_command_mode(
             editor.cmdline_kill_to_end();
         }
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if editor.command_line.is_empty() {
+            if editor.vi.command_line.is_empty() {
                 // C-d on empty line = abort (like in shells)
                 editor.set_mode(Mode::Normal);
             } else {
@@ -436,14 +436,14 @@ pub fn handle_command_mode(
             }
         }
         KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if editor.command_line.is_empty() {
+            if editor.vi.command_line.is_empty() {
                 editor.set_mode(Mode::Normal);
             } else {
                 editor.cmdline_backspace();
             }
         }
         KeyCode::Backspace => {
-            if editor.command_line.is_empty() {
+            if editor.vi.command_line.is_empty() {
                 editor.set_mode(Mode::Normal);
             } else {
                 editor.cmdline_backspace();
@@ -511,9 +511,9 @@ fn build_ai_status_report(
     // Permission
     lines.push("Permission".to_string());
     lines.push("----------".to_string());
-    lines.push(format!("  Tier:       {}", editor.ai_permission_tier));
-    lines.push(format!("  Mode:       {}", editor.ai_mode));
-    lines.push(format!("  Profile:    {}", editor.ai_profile));
+    lines.push(format!("  Tier:       {}", editor.ai.permission_tier));
+    lines.push(format!("  Mode:       {}", editor.ai.mode));
+    lines.push(format!("  Profile:    {}", editor.ai.profile));
     lines.push(String::new());
 
     // Session
@@ -521,34 +521,34 @@ fn build_ai_status_report(
     lines.push("-------".to_string());
     lines.push(format!(
         "  Cost:           ${:.4}",
-        editor.ai_session_cost_usd
+        editor.ai.session_cost_usd
     ));
-    lines.push(format!("  Tokens In:      {}", editor.ai_session_tokens_in));
+    lines.push(format!("  Tokens In:      {}", editor.ai.session_tokens_in));
     lines.push(format!(
         "  Tokens Out:     {}",
-        editor.ai_session_tokens_out
+        editor.ai.session_tokens_out
     ));
-    if editor.ai_context_window > 0 {
-        let pct = (editor.ai_context_used_tokens as f64 / editor.ai_context_window as f64) * 100.0;
+    if editor.ai.context_window > 0 {
+        let pct = (editor.ai.context_used_tokens as f64 / editor.ai.context_window as f64) * 100.0;
         lines.push(format!(
             "  Context:        {}/{} ({:.1}%)",
-            editor.ai_context_used_tokens, editor.ai_context_window, pct
+            editor.ai.context_used_tokens, editor.ai.context_window, pct
         ));
     }
-    if editor.ai_cache_read_tokens > 0 || editor.ai_cache_creation_tokens > 0 {
-        let total = editor.ai_cache_read_tokens + editor.ai_cache_creation_tokens;
+    if editor.ai.cache_read_tokens > 0 || editor.ai.cache_creation_tokens > 0 {
+        let total = editor.ai.cache_read_tokens + editor.ai.cache_creation_tokens;
         let hit = if total > 0 {
-            (editor.ai_cache_read_tokens as f64 / total as f64) * 100.0
+            (editor.ai.cache_read_tokens as f64 / total as f64) * 100.0
         } else {
             0.0
         };
         lines.push(format!(
             "  Cache Read:     {} ({:.1}% hit rate)",
-            editor.ai_cache_read_tokens, hit
+            editor.ai.cache_read_tokens, hit
         ));
         lines.push(format!(
             "  Cache Created:  {}",
-            editor.ai_cache_creation_tokens
+            editor.ai.cache_creation_tokens
         ));
     }
     if let Some(ref cfg) = config {
@@ -566,8 +566,8 @@ fn build_ai_status_report(
     // Network
     lines.push("Network".to_string());
     lines.push("-------".to_string());
-    lines.push(format!("  API Calls:  {}", editor.ai_api_call_count));
-    if let Some(ref instant) = editor.ai_last_api_success {
+    lines.push(format!("  API Calls:  {}", editor.ai.api_call_count));
+    if let Some(ref instant) = editor.ai.last_api_success {
         let elapsed = instant.elapsed();
         let secs = elapsed.as_secs();
         let ago = if secs < 60 {
@@ -581,13 +581,13 @@ fn build_ai_status_report(
     } else {
         lines.push("  Last OK:    (none)".to_string());
     }
-    if let Some(ms) = editor.ai_last_api_latency_ms {
+    if let Some(ms) = editor.ai.last_api_latency_ms {
         lines.push(format!("  Latency:    {}ms", ms));
     }
-    if let Some(ref err) = editor.ai_last_api_error {
+    if let Some(ref err) = editor.ai.last_api_error {
         lines.push(format!("  Last Error: {}", err));
     }
-    if let Some(ref check) = editor.ai_last_network_check {
+    if let Some(ref check) = editor.ai.last_network_check {
         lines.push(String::new());
         lines.push("Connectivity".to_string());
         lines.push("------------".to_string());
@@ -609,10 +609,10 @@ fn build_ai_status_report(
     // Scheme Tools
     lines.push("Scheme Tools".to_string());
     lines.push("------------".to_string());
-    if editor.scheme_ai_tools.is_empty() {
+    if editor.ai.scheme_tools.is_empty() {
         lines.push("  (none registered)".to_string());
     } else {
-        for st in &editor.scheme_ai_tools {
+        for st in &editor.ai.scheme_tools {
             lines.push(format!(
                 "  {} — {} [{}]",
                 st.name, st.description, st.permission
@@ -700,7 +700,7 @@ mod tests {
     #[test]
     fn ai_status_report_with_network_check() {
         let mut editor = mae_core::Editor::new();
-        editor.ai_last_network_check = Some(mae_core::editor::AiNetworkCheck {
+        editor.ai.last_network_check = Some(mae_core::editor::AiNetworkCheck {
             endpoint: "https://api.anthropic.com".into(),
             reachable: true,
             http_status: Some(200),
@@ -718,10 +718,10 @@ mod tests {
     #[test]
     fn ai_status_report_network_with_data() {
         let mut editor = mae_core::Editor::new();
-        editor.ai_api_call_count = 5;
-        editor.ai_last_api_latency_ms = Some(123);
-        editor.ai_last_api_success = Some(std::time::Instant::now());
-        editor.ai_last_api_error = Some("timeout".to_string());
+        editor.ai.api_call_count = 5;
+        editor.ai.last_api_latency_ms = Some(123);
+        editor.ai.last_api_success = Some(std::time::Instant::now());
+        editor.ai.last_api_error = Some("timeout".to_string());
         let report = build_ai_status_report(&editor, &None);
         assert!(report.contains("API Calls:  5"));
         assert!(report.contains("Latency:    123ms"));

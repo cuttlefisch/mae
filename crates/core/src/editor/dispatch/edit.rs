@@ -168,7 +168,7 @@ impl Editor {
                 if let Some(text) = self.paste_text() {
                     let idx = self.active_buffer_idx();
                     if self.buffers[idx].kind == crate::BufferKind::Shell {
-                        self.pending_shell_inputs.push((idx, text));
+                        self.shell.inputs.push((idx, text));
                         return None;
                     }
                     if self.buffers[idx].read_only {
@@ -211,7 +211,7 @@ impl Editor {
                 if let Some(text) = self.paste_text() {
                     let idx = self.active_buffer_idx();
                     if self.buffers[idx].kind == crate::BufferKind::Shell {
-                        self.pending_shell_inputs.push((idx, text));
+                        self.shell.inputs.push((idx, text));
                         return None;
                     }
                     if self.buffers[idx].read_only {
@@ -304,17 +304,29 @@ impl Editor {
                 }
                 self.set_mode(mode);
             }
+            "enter-insert-mode-bol" => {
+                let idx = self.active_buffer_idx();
+                use crate::buffer_mode::BufferMode;
+                let mode = self.buffers[idx].kind.insert_mode();
+                if mode == Mode::Insert {
+                    self.window_mgr
+                        .focused_window_mut()
+                        .move_to_first_non_blank(&self.buffers[idx]);
+                    self.buffers[idx].begin_undo_group();
+                }
+                self.set_mode(mode);
+            }
             "enter-normal-mode" => {
-                self.insert_mode_oneshot_normal = false;
+                self.vi.insert_mode_oneshot_normal = false;
                 if matches!(self.mode, Mode::Visual(_)) {
                     self.save_visual_state();
                 }
                 if self.mode == Mode::Insert {
                     self.finalize_insert_for_repeat();
 
-                    if let Some((min_row, max_row, col)) = self.pending_block_insert.take() {
+                    if let Some((min_row, max_row, col)) = self.vi.pending_block_insert.take() {
                         let idx = self.active_buffer_idx();
-                        if let Some(ref edit) = self.last_edit {
+                        if let Some(ref edit) = self.vi.last_edit {
                             if let Some(ref text) = edit.inserted_text {
                                 if !text.is_empty() {
                                     for row in (min_row + 1..=max_row).rev() {
@@ -346,14 +358,14 @@ impl Editor {
                     }
                     let idx = self.active_buffer_idx();
                     let w = self.window_mgr.focused_window();
-                    self.last_insert_pos = Some((idx, w.cursor_row, w.cursor_col));
+                    self.vi.last_insert_pos = Some((idx, w.cursor_row, w.cursor_col));
                 }
                 self.set_mode(Mode::Normal);
             }
             "enter-command-mode" => {
                 self.set_mode(Mode::Command);
-                self.command_line.clear();
-                self.command_cursor = 0;
+                self.vi.command_line.clear();
+                self.vi.command_cursor = 0;
             }
 
             // Text object operators
@@ -365,7 +377,7 @@ impl Editor {
             | "yank-around-object"
             | "visual-inner-object"
             | "visual-around-object" => {
-                self.pending_char_command = Some(name.to_string());
+                self.vi.pending_char_command = Some(name.to_string());
             }
 
             // Operator variants on matches: d{gn,gN}, c{gn,gN}, y{gn,gN}
@@ -477,7 +489,7 @@ impl Editor {
 
             // Replace char
             "replace-char-await" => {
-                self.pending_char_command = Some("replace-char".to_string());
+                self.vi.pending_char_command = Some("replace-char".to_string());
             }
 
             // Substitute
@@ -503,7 +515,7 @@ impl Editor {
 
             // gi — re-enter insert at last position
             "reinsert-at-last-position" => {
-                if let Some((target_idx, row, col)) = self.last_insert_pos {
+                if let Some((target_idx, row, col)) = self.vi.last_insert_pos {
                     if target_idx == self.active_buffer_idx() {
                         let idx = self.active_buffer_idx();
                         let win = self.window_mgr.focused_window_mut();
@@ -576,6 +588,12 @@ impl Editor {
                 self.record_edit_with_count("dedent-line", count);
             }
 
+            // Fill paragraph
+            "fill-paragraph" => {
+                self.fill_paragraph();
+                self.record_edit("fill-paragraph");
+            }
+
             // Case change
             "toggle-case" => {
                 for _ in 0..n {
@@ -596,10 +614,10 @@ impl Editor {
             "show-changes-buffer" => self.show_changes_buffer(),
             "show-registers" => self.show_registers_buffer(),
             "paste-from-yank" => {
-                if let Some(text) = self.registers.get(&'0').cloned() {
+                if let Some(text) = self.vi.registers.get(&'0').cloned() {
                     let idx = self.active_buffer_idx();
                     if self.buffers[idx].kind == crate::BufferKind::Shell {
-                        self.pending_shell_inputs.push((idx, text));
+                        self.shell.inputs.push((idx, text));
                         return None;
                     }
                     if self.buffers[idx].read_only {
@@ -637,31 +655,31 @@ impl Editor {
                 }
             }
             "prompt-register" => {
-                self.pending_register_prompt = true;
+                self.vi.pending_register_prompt = true;
                 self.set_status("\"");
             }
 
             // Surround
             "delete-surround-await" => {
-                self.pending_char_command = Some("delete-surround".to_string());
+                self.vi.pending_char_command = Some("delete-surround".to_string());
             }
             "change-surround-await" => {
-                self.pending_char_command = Some("change-surround-1".to_string());
+                self.vi.pending_char_command = Some("change-surround-1".to_string());
             }
             "surround-line-await" => {
-                self.pending_char_command = Some("surround-line".to_string());
+                self.vi.pending_char_command = Some("surround-line".to_string());
             }
             "surround-visual-await" => {
-                self.pending_char_command = Some("surround-visual".to_string());
+                self.vi.pending_char_command = Some("surround-visual".to_string());
             }
 
             // Alternate file
             "alternate-file" => {
-                if let Some(alt_idx) = self.alternate_buffer_idx {
+                if let Some(alt_idx) = self.vi.alternate_buffer_idx {
                     if alt_idx < self.buffers.len() {
                         self.save_mode_to_buffer();
                         let current = self.active_buffer_idx();
-                        self.alternate_buffer_idx = Some(current);
+                        self.vi.alternate_buffer_idx = Some(current);
                         self.display_buffer_and_focus(alt_idx);
                         let name = self.buffers[alt_idx].name.clone();
                         self.set_status(format!("Buffer: {}", name));
@@ -672,14 +690,14 @@ impl Editor {
 
             // Macros
             "start-recording-await" => {
-                self.pending_char_command = Some("start-recording".to_string());
+                self.vi.pending_char_command = Some("start-recording".to_string());
             }
             "replay-macro-await" => {
-                self.pending_char_count = n;
-                self.pending_char_command = Some("replay-macro".to_string());
+                self.vi.pending_char_count = n;
+                self.vi.pending_char_command = Some("replay-macro".to_string());
             }
             "replay-last-macro" => {
-                if let Some(ch) = self.last_macro_register {
+                if let Some(ch) = self.vi.last_macro_register {
                     if let Err(e) = self.replay_macro(ch, n) {
                         self.set_status(e);
                     }
@@ -696,27 +714,27 @@ impl Editor {
             // Operator-pending mode
             "operator-delete" => {
                 let win = self.window_mgr.focused_window();
-                self.pending_operator = Some("d".to_string());
-                self.operator_start = Some((win.cursor_row, win.cursor_col));
-                self.operator_count = count;
+                self.vi.pending_operator = Some("d".to_string());
+                self.vi.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.vi.operator_count = count;
             }
             "operator-change" => {
                 let win = self.window_mgr.focused_window();
-                self.pending_operator = Some("c".to_string());
-                self.operator_start = Some((win.cursor_row, win.cursor_col));
-                self.operator_count = count;
+                self.vi.pending_operator = Some("c".to_string());
+                self.vi.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.vi.operator_count = count;
             }
             "operator-yank" => {
                 let win = self.window_mgr.focused_window();
-                self.pending_operator = Some("y".to_string());
-                self.operator_start = Some((win.cursor_row, win.cursor_col));
-                self.operator_count = count;
+                self.vi.pending_operator = Some("y".to_string());
+                self.vi.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.vi.operator_count = count;
             }
             "operator-surround" => {
                 let win = self.window_mgr.focused_window();
-                self.pending_operator = Some("s".to_string());
-                self.operator_start = Some((win.cursor_row, win.cursor_col));
-                self.operator_count = count;
+                self.vi.pending_operator = Some("s".to_string());
+                self.vi.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.vi.operator_count = count;
             }
 
             _ => return None,

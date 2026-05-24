@@ -107,7 +107,7 @@ Choose your track:\n\n\
 Each track is a linked sequence of short lessons. Follow the **Next:** links at the bottom.\n\n\
 See also: [[tutor:index|Lesson-style Tutorial]], [[index|Help Index]]\n\n\
 * Getting Help\n\
-- `SPC h` opens the help system\n\
+- `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
 - `:help TOPIC` looks up any command, option, or concept\n\
 - `SPC h k` describes what a key does\n\
@@ -132,7 +132,7 @@ Normal, Insert (`i`/`a`/`o`/`O`), Visual (`v`/`V`), Command (`:`)\n\n\
 `q{reg}` to record, `q` to stop, `@{reg}` to replay\n\n\
 **Next:** [[tutorial:vim-differences|What's Different from Vim]]\n\n\
 * Getting Help\n\
-- `SPC h` opens the help system\n\
+- `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
 - `:help TOPIC` looks up any command, option, or concept\n\
 - `SPC h k` describes what a key does\n\
@@ -147,7 +147,7 @@ to 14+ command groups:\n\
 - `SPC b` — buffer operations\n\
 - `SPC w` — window operations\n\
 - `SPC a` — AI commands\n\
-- `SPC h` — help system\n\
+- `SPC h` — MAE manual\n\
 - `SPC p` — project commands\n\
 ...and more. A **which-key** popup appears after pressing SPC.\n\n\
 ## Scheme instead of VimL/Lua\n\
@@ -167,7 +167,7 @@ MAE uses a Scheme-based package system with `require-feature`/`provide-feature` 
 instead of Vim plugins. See [[concept:package-system|Package System]].\n\n\
 **Next:** [[tutorial:mae-navigation|MAE Navigation]]\n\n\
 * Getting Help\n\
-- `SPC h` opens the help system\n\
+- `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
 - `:help TOPIC` looks up any command, option, or concept\n\
 - `SPC h k` describes what a key does\n\
@@ -194,7 +194,7 @@ Type commands after `:`. Press `:` from Normal mode.\n\n\
 **The golden rule:** If you get lost, press **Escape** to return to Normal mode.\n\n\
 **Next:** [[tutorial:basic-movement|Basic Movement]]\n\n\
 * Getting Help\n\
-- `SPC h` opens the help system\n\
+- `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
 - `:help TOPIC` looks up any command, option, or concept\n\
 - `SPC h k` describes what a key does\n\
@@ -230,7 +230,7 @@ All movement happens in **Normal mode** (press Escape if you're elsewhere).\n\n\
 **Try it:** Open a file with `:e filename` and practice moving around!\n\n\
 **Next:** [[tutorial:basic-editing|Basic Editing]]\n\n\
 * Getting Help\n\
-- `SPC h` opens the help system\n\
+- `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
 - `:help TOPIC` looks up any command, option, or concept\n\
 - `SPC h k` describes what a key does\n\
@@ -266,7 +266,7 @@ const TUTORIAL_BASIC_EDITING: &str = "\
 `.` repeats your last edit. Delete a word with `dw`, then press `.` to delete another.\n\n\
 **Next:** [[tutorial:mae-navigation|MAE Navigation]]\n\n\
 * Getting Help\n\
-- `SPC h` opens the help system\n\
+- `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
 - `:help TOPIC` looks up any command, option, or concept\n\
 - `SPC h k` describes what a key does\n\
@@ -305,7 +305,7 @@ MAE's **SPC leader** gives fast access to every subsystem.\n\n\
 - `:help topic` — look up a topic\n\n\
 **Next:** [[tutorial:mae-extending|Extending MAE]]\n\n\
 * Getting Help\n\
-- `SPC h` opens the help system\n\
+- `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
 - `:help TOPIC` looks up any command, option, or concept\n\
 - `SPC h k` describes what a key does\n\
@@ -341,7 +341,7 @@ See [[concept:scheme-api|Scheme API]] for the full reference, or use \
 `:help scheme:function-name` for individual docs.\n\n\
 See also: [[tutorial:ai-setup|Set up AI]]\n\n\
 * Getting Help\n\
-- `SPC h` opens the help system\n\
+- `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
 - `:help TOPIC` looks up any command, option, or concept\n\
 - `SPC h k` describes what a key does\n\
@@ -382,7 +382,7 @@ Press `SPC a p` and type a message. If you see a response, AI Chat is working.\n
 Press `SPC a a` to launch the agent terminal.\n\n\
 **Next:** [[tutorial:ai-agent|AI Agent (Terminal)]]\n\n\
 * Getting Help\n\
-- `SPC h` opens the help system\n\
+- `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
 - `:help TOPIC` looks up any command, option, or concept\n\
 - `SPC h k` describes what a key does\n\
@@ -411,7 +411,7 @@ editor = \"claude\"          # or \"gemini\", or a custom command\n\
 - The agent's terminal is a full VT100 emulator (colors, scrollback)\n\n\
 **Next:** [[tutorial:ai-chat|AI Chat (Built-in)]]\n\n\
 * Getting Help\n\
-- `SPC h` opens the help system\n\
+- `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
 - `:help TOPIC` looks up any command, option, or concept\n\
 - `SPC h k` describes what a key does\n\
@@ -452,7 +452,7 @@ Conversations are saved per project in `.mae/conversation.json`.\n\
 - The token budget dashboard shows usage in the status bar\n\n\
 See also: [[concept:ai-as-peer|AI as Peer]], [[concept:ai-modes|Agent vs Chat]]\n\n\
 * Getting Help\n\
-- `SPC h` opens the help system\n\
+- `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
 - `:help TOPIC` looks up any command, option, or concept\n\
 - `SPC h k` describes what a key does\n\

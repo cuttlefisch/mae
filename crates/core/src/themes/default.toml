@@ -105,7 +105,27 @@ gray = "#a89984"
 "markup.priority.a" = { fg = "red", bold = true }
 "markup.priority.b" = { fg = "yellow", bold = true }
 "markup.priority.c" = { fg = "green" }
+"markup.drawer" = { fg = "dark_gray" }
 "markup.code_block" = { bg = "#32302f" }
+
+# Collaborative cursor palette (8 colors, WCAG AA, colorblind-safe).
+"ui.collab.cursor.0" = { fg = "#FF6B6B" }
+"ui.collab.cursor.1" = { fg = "#60A5FA" }
+"ui.collab.cursor.2" = { fg = "#34D399" }
+"ui.collab.cursor.3" = { fg = "#FBBF24" }
+"ui.collab.cursor.4" = { fg = "#A78BFA" }
+"ui.collab.cursor.5" = { fg = "#22D3EE" }
+"ui.collab.cursor.6" = { fg = "#F472B6" }
+"ui.collab.cursor.7" = { fg = "#94A3B8" }
+"ui.collab.selection.0" = { bg = "#FF6B6B" }
+"ui.collab.selection.1" = { bg = "#60A5FA" }
+"ui.collab.selection.2" = { bg = "#34D399" }
+"ui.collab.selection.3" = { bg = "#FBBF24" }
+"ui.collab.selection.4" = { bg = "#A78BFA" }
+"ui.collab.selection.5" = { bg = "#22D3EE" }
+"ui.collab.selection.6" = { bg = "#F472B6" }
+"ui.collab.selection.7" = { bg = "#94A3B8" }
+"ui.collab.label" = { fg = "white", bold = true }
 
 "diff.added" = { fg = "green" }
 "diff.removed" = { fg = "red" }

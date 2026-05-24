@@ -1,4 +1,5 @@
 mod ai_exec;
+mod collab_exec;
 mod core_exec;
 mod dap_exec;
 pub(crate) mod grading;
@@ -10,6 +11,7 @@ mod permission;
 pub mod sandbox;
 pub(crate) mod self_test;
 mod shell_exec;
+mod sync_exec;
 mod tool_dispatch;
 
 #[cfg(test)]
@@ -435,7 +437,7 @@ mod tests {
         ));
         assert!(result.success, "open_file failed: {}", result.output);
         assert_eq!(editor.buffers.len(), 2);
-        let target_idx = editor.ai_target_buffer_idx.expect("should have AI target");
+        let target_idx = editor.ai.target_buffer_idx.expect("should have AI target");
         assert!(editor.buffers[target_idx].text().contains("line1"));
 
         std::fs::remove_file(&path).ok();
@@ -487,7 +489,7 @@ mod tests {
             &PermissionPolicy::default(),
         ));
         assert!(result.success);
-        let target_idx = editor.ai_target_buffer_idx.expect("should have AI target");
+        let target_idx = editor.ai.target_buffer_idx.expect("should have AI target");
         assert_eq!(editor.buffers[target_idx].name, "second");
     }
 
@@ -676,7 +678,7 @@ mod tests {
         ));
         assert!(result.success, "create_file failed: {}", result.output);
         assert_eq!(editor.buffers.len(), 2);
-        let target_idx = editor.ai_target_buffer_idx.expect("should have AI target");
+        let target_idx = editor.ai.target_buffer_idx.expect("should have AI target");
         assert!(editor.buffers[target_idx].text().contains("new file"));
         // File should exist on disk
         assert!(path.exists());
@@ -837,7 +839,7 @@ mod tests {
 
         editor.switch_to_buffer(1);
         assert_eq!(editor.active_buffer_idx(), 1);
-        assert_eq!(editor.alternate_buffer_idx, Some(0));
+        assert_eq!(editor.vi.alternate_buffer_idx, Some(0));
     }
 
     // --- Phase 4c M4: AI DAP tools ---
@@ -864,8 +866,8 @@ mod tests {
             &privileged_policy(),
         ));
         assert!(result.success, "dap_start failed: {}", result.output);
-        assert_eq!(editor.pending_dap_intents.len(), 1);
-        assert!(editor.debug_state.is_some());
+        assert_eq!(editor.dap.pending_intents.len(), 1);
+        assert!(editor.dap.state.is_some());
     }
 
     #[test]
@@ -925,7 +927,7 @@ mod tests {
     #[test]
     fn dap_step_tool_rejects_unknown_direction() {
         let mut editor = Editor::new();
-        editor.debug_state = Some(mae_core::DebugState::new(mae_core::DebugTarget::Dap {
+        editor.dap.state = Some(mae_core::DebugState::new(mae_core::DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "/bin/ls".into(),
         }));

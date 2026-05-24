@@ -45,7 +45,7 @@ fn find_char_dispatch() {
 fn yank_line_and_paste_after() {
     let mut editor = editor_with_text("aaa\nbbb\n");
     editor.dispatch_builtin("yank-line");
-    assert_eq!(editor.registers.get(&'"'), Some(&"aaa\n".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"aaa\n".to_string()));
     editor.dispatch_builtin("paste-after");
     assert_eq!(editor.buffers[0].text(), "aaa\naaa\nbbb\n");
     assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
@@ -57,7 +57,7 @@ fn yank_line_and_paste_before() {
     editor.window_mgr.focused_window_mut().cursor_row = 1;
     editor.window_mgr.focused_window_mut().cursor_col = 0;
     editor.dispatch_builtin("yank-line");
-    assert_eq!(editor.registers.get(&'"'), Some(&"bbb\n".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"bbb\n".to_string()));
     editor.dispatch_builtin("paste-before");
     assert_eq!(editor.buffers[0].text(), "aaa\nbbb\nbbb\n");
 }
@@ -69,7 +69,7 @@ fn delete_line_copies_to_register_then_paste_restores() {
     editor.window_mgr.focused_window_mut().cursor_col = 0;
     editor.dispatch_builtin("delete-line");
     assert_eq!(editor.buffers[0].text(), "aaa\nccc\n");
-    assert_eq!(editor.registers.get(&'"'), Some(&"bbb\n".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"bbb\n".to_string()));
     // Paste it back
     editor.window_mgr.focused_window_mut().cursor_row = 0;
     editor.dispatch_builtin("paste-after");
@@ -81,7 +81,7 @@ fn delete_word_forward() {
     let mut editor = editor_with_text("hello world");
     editor.dispatch_builtin("delete-word-forward");
     assert_eq!(editor.buffers[0].text(), "world");
-    assert_eq!(editor.registers.get(&'"'), Some(&"hello ".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"hello ".to_string()));
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn delete_to_line_end() {
     editor.window_mgr.focused_window_mut().cursor_col = 5;
     editor.dispatch_builtin("delete-to-line-end");
     assert_eq!(editor.buffers[0].text(), "hello");
-    assert_eq!(editor.registers.get(&'"'), Some(&" world".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&" world".to_string()));
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn delete_to_line_start() {
     editor.window_mgr.focused_window_mut().cursor_col = 5;
     editor.dispatch_builtin("delete-to-line-start");
     assert_eq!(editor.buffers[0].text(), " world");
-    assert_eq!(editor.registers.get(&'"'), Some(&"hello".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"hello".to_string()));
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn yank_word_does_not_modify_buffer() {
     let mut editor = editor_with_text("hello world");
     editor.dispatch_builtin("yank-word-forward");
     assert_eq!(editor.buffers[0].text(), "hello world");
-    assert_eq!(editor.registers.get(&'"'), Some(&"hello ".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"hello ".to_string()));
 }
 
 #[test]
@@ -115,23 +115,23 @@ fn yank_to_line_end() {
     let mut editor = editor_with_text("hello world");
     editor.window_mgr.focused_window_mut().cursor_col = 6;
     editor.dispatch_builtin("yank-to-line-end");
-    assert_eq!(editor.registers.get(&'"'), Some(&"world".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"world".to_string()));
 }
 
 #[test]
 fn multiple_yanks_overwrite_register() {
     let mut editor = editor_with_text("aaa\nbbb\n");
     editor.dispatch_builtin("yank-line");
-    assert_eq!(editor.registers.get(&'"'), Some(&"aaa\n".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"aaa\n".to_string()));
     editor.window_mgr.focused_window_mut().cursor_row = 1;
     editor.dispatch_builtin("yank-line");
-    assert_eq!(editor.registers.get(&'"'), Some(&"bbb\n".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"bbb\n".to_string()));
 }
 
 #[test]
 fn paste_in_empty_buffer() {
     let mut editor = Editor::new();
-    editor.registers.insert('"', "hello".to_string());
+    editor.vi.registers.insert('"', "hello".to_string());
     editor.dispatch_builtin("paste-after");
     assert_eq!(editor.buffers[0].text(), "hello");
 }
@@ -156,44 +156,44 @@ fn change_list_records_on_edit() {
     // paste from the default register.
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "abc\ndef\n");
-    let mut ed = Editor::with_buffer(buf);
-    ed.registers.insert('"', "X".into());
+    let mut editor = Editor::with_buffer(buf);
+    editor.vi.registers.insert('"', "X".into());
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 1;
         w.cursor_col = 1;
     }
-    ed.dispatch_builtin("paste-after");
-    assert_eq!(ed.changes.len(), 1);
-    assert_eq!(ed.changes[0].row, 1);
+    editor.dispatch_builtin("paste-after");
+    assert_eq!(editor.vi.changes.len(), 1);
+    assert_eq!(editor.vi.changes[0].row, 1);
 }
 
 #[test]
 fn g_semi_dispatches_to_change_backward() {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "one\ntwo\nthree\n");
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     // Seed two change entries manually.
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         w.cursor_col = 1;
     }
-    ed.record_change();
+    editor.record_change();
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 2;
         w.cursor_col = 2;
     }
-    ed.record_change();
+    editor.record_change();
     // Move cursor somewhere else, then dispatch g;.
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 1;
         w.cursor_col = 0;
     }
-    ed.dispatch_builtin("change-backward");
-    let w = ed.window_mgr.focused_window();
+    editor.dispatch_builtin("change-backward");
+    let w = editor.window_mgr.focused_window();
     assert_eq!((w.cursor_row, w.cursor_col), (2, 2));
 }
 
@@ -201,35 +201,35 @@ fn g_semi_dispatches_to_change_backward() {
 fn ex_changes_opens_scratch_buffer() {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "a\nb\n");
-    let mut ed = Editor::with_buffer(buf);
-    ed.execute_command("changes");
-    assert!(ed.buffers.iter().any(|b| b.name == "*Changes*"));
+    let mut editor = Editor::with_buffer(buf);
+    editor.execute_command("changes");
+    assert!(editor.buffers.iter().any(|b| b.name == "*Changes*"));
 }
 
 #[test]
 fn at_colon_repeats_last_ex_command() {
     // `@:` should re-run the most recent ex command. Use :noh which has
     // an observable side-effect (search_state.highlight_active = false).
-    let mut ed = Editor::new();
-    ed.search_state.highlight_active = true;
-    ed.push_command_history("noh");
+    let mut editor = Editor::new();
+    editor.search_state.highlight_active = true;
+    editor.push_command_history("noh");
     // Run :noh once to populate last command
-    ed.execute_command("noh");
-    assert!(!ed.search_state.highlight_active);
-    ed.search_state.highlight_active = true;
+    editor.execute_command("noh");
+    assert!(!editor.search_state.highlight_active);
+    editor.search_state.highlight_active = true;
     // Now simulate @:
-    ed.dispatch_char_motion("replay-macro", ':');
-    assert!(!ed.search_state.highlight_active);
+    editor.dispatch_char_motion("replay-macro", ':');
+    assert!(!editor.search_state.highlight_active);
 }
 
 #[test]
 fn at_colon_without_history_sets_status() {
-    let mut ed = Editor::new();
-    ed.dispatch_char_motion("replay-macro", ':');
+    let mut editor = Editor::new();
+    editor.dispatch_char_motion("replay-macro", ':');
     assert!(
-        ed.status_msg.contains("No previous command"),
+        editor.status_msg.contains("No previous command"),
         "expected empty-history message, got: {:?}",
-        ed.status_msg
+        editor.status_msg
     );
 }
 
@@ -263,35 +263,35 @@ fn gf_opens_file_under_cursor() {
 
     let mut buf = Buffer::new();
     buf.insert_text_at(0, &format!("see {} for more\n", target_str));
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     // Put cursor inside the path.
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         // Column in "see <path>..." — position on the first char of the path.
         w.cursor_col = 4;
     }
-    ed.dispatch_builtin("goto-file-under-cursor");
+    editor.dispatch_builtin("goto-file-under-cursor");
     // The target buffer should now be active.
-    let active_name = ed.active_buffer().name.clone();
-    assert_eq!(active_name, "target.txt", "status: {:?}", ed.status_msg);
+    let active_name = editor.active_buffer().name.clone();
+    assert_eq!(active_name, "target.txt", "status: {:?}", editor.status_msg);
 }
 
 #[test]
 fn gf_status_when_no_filename() {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "   \n");
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         w.cursor_col = 0;
     }
-    ed.dispatch_builtin("goto-file-under-cursor");
+    editor.dispatch_builtin("goto-file-under-cursor");
     assert!(
-        ed.status_msg.contains("no filename"),
+        editor.status_msg.contains("no filename"),
         "status: {:?}",
-        ed.status_msg
+        editor.status_msg
     );
 }
 
@@ -299,17 +299,17 @@ fn gf_status_when_no_filename() {
 fn gf_status_when_file_missing() {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "/nonexistent/path/xyzzy.txt\n");
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         w.cursor_col = 5;
     }
-    ed.dispatch_builtin("goto-file-under-cursor");
+    editor.dispatch_builtin("goto-file-under-cursor");
     assert!(
-        ed.status_msg.contains("not found"),
+        editor.status_msg.contains("not found"),
         "status: {:?}",
-        ed.status_msg
+        editor.status_msg
     );
 }
 
@@ -320,54 +320,54 @@ fn repeat_find_semicolon_after_f() {
     // "hello world" — f'o' should land on first 'o' (col 4), then ';' on second 'o' (col 7)
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "hello world\n");
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         w.cursor_col = 0;
     }
     // f then 'o'
-    ed.dispatch_builtin("find-char-forward-await");
-    ed.dispatch_char_motion("find-char-forward", 'o');
-    assert_eq!(ed.window_mgr.focused_window().cursor_col, 4);
+    editor.dispatch_builtin("find-char-forward-await");
+    editor.dispatch_char_motion("find-char-forward", 'o');
+    assert_eq!(editor.window_mgr.focused_window().cursor_col, 4);
     // ; should repeat
-    ed.dispatch_builtin("repeat-find");
-    assert_eq!(ed.window_mgr.focused_window().cursor_col, 7);
+    editor.dispatch_builtin("repeat-find");
+    assert_eq!(editor.window_mgr.focused_window().cursor_col, 7);
 }
 
 #[test]
 fn repeat_find_reverse_comma_after_f() {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, "hello world\n");
-    let mut ed = Editor::with_buffer(buf);
+    let mut editor = Editor::with_buffer(buf);
     {
-        let w = ed.window_mgr.focused_window_mut();
+        let w = editor.window_mgr.focused_window_mut();
         w.cursor_row = 0;
         w.cursor_col = 0;
     }
     // f 'o' lands on col 4
-    ed.dispatch_builtin("find-char-forward-await");
-    ed.dispatch_char_motion("find-char-forward", 'o');
-    assert_eq!(ed.window_mgr.focused_window().cursor_col, 4);
+    editor.dispatch_builtin("find-char-forward-await");
+    editor.dispatch_char_motion("find-char-forward", 'o');
+    assert_eq!(editor.window_mgr.focused_window().cursor_col, 4);
     // ; lands on col 7
-    ed.dispatch_builtin("repeat-find");
-    assert_eq!(ed.window_mgr.focused_window().cursor_col, 7);
+    editor.dispatch_builtin("repeat-find");
+    assert_eq!(editor.window_mgr.focused_window().cursor_col, 7);
     // , (reverse) goes back to col 4
-    ed.dispatch_builtin("repeat-find-reverse");
-    assert_eq!(ed.window_mgr.focused_window().cursor_col, 4);
+    editor.dispatch_builtin("repeat-find-reverse");
+    assert_eq!(editor.window_mgr.focused_window().cursor_col, 4);
 }
 
 // --- from motion_tests ---
 #[test]
 fn caret_moves_to_first_non_blank() {
-    let mut editor = ed_with_text("    hello\n");
+    let mut editor = editor_with_bulk_text("    hello\n");
     editor.dispatch_builtin("move-to-first-non-blank");
     assert_eq!(editor.window_mgr.focused_window().cursor_col, 4);
 }
 
 #[test]
 fn caret_on_unindented_line_lands_at_zero() {
-    let mut editor = ed_with_text("hello\n");
+    let mut editor = editor_with_bulk_text("hello\n");
     {
         let win = editor.window_mgr.focused_window_mut();
         win.cursor_col = 3;
@@ -378,7 +378,7 @@ fn caret_on_unindented_line_lands_at_zero() {
 
 #[test]
 fn plus_moves_down_to_first_non_blank() {
-    let mut editor = ed_with_text("first\n    second\nthird\n");
+    let mut editor = editor_with_bulk_text("first\n    second\nthird\n");
     editor.dispatch_builtin("move-line-next-non-blank");
     let w = editor.window_mgr.focused_window();
     assert_eq!((w.cursor_row, w.cursor_col), (1, 4));
@@ -386,7 +386,7 @@ fn plus_moves_down_to_first_non_blank() {
 
 #[test]
 fn minus_moves_up_to_first_non_blank() {
-    let mut editor = ed_with_text("    first\nsecond\nthird\n");
+    let mut editor = editor_with_bulk_text("    first\nsecond\nthird\n");
     {
         let win = editor.window_mgr.focused_window_mut();
         win.cursor_row = 2;
@@ -402,8 +402,8 @@ fn minus_moves_up_to_first_non_blank() {
 
 #[test]
 fn plus_with_count_moves_n_lines() {
-    let mut editor = ed_with_text("a\nb\nc\n    d\ne\n");
-    editor.count_prefix = Some(3);
+    let mut editor = editor_with_bulk_text("a\nb\nc\n    d\ne\n");
+    editor.vi.count_prefix = Some(3);
     editor.dispatch_builtin("move-line-next-non-blank");
     let w = editor.window_mgr.focused_window();
     assert_eq!((w.cursor_row, w.cursor_col), (3, 4));
@@ -411,7 +411,7 @@ fn plus_with_count_moves_n_lines() {
 
 #[test]
 fn ge_moves_to_end_of_prev_word() {
-    let mut editor = ed_with_text("foo bar baz\n");
+    let mut editor = editor_with_bulk_text("foo bar baz\n");
     {
         let win = editor.window_mgr.focused_window_mut();
         win.cursor_col = 8; // 'b' of 'baz'
@@ -424,7 +424,7 @@ fn ge_moves_to_end_of_prev_word() {
 
 #[test]
 fn big_ge_treats_punctuation_as_word() {
-    let mut editor = ed_with_text("foo.bar baz\n");
+    let mut editor = editor_with_bulk_text("foo.bar baz\n");
     {
         let win = editor.window_mgr.focused_window_mut();
         win.cursor_col = 8; // 'b' of 'baz'
@@ -435,18 +435,18 @@ fn big_ge_treats_punctuation_as_word() {
 
 #[test]
 fn substitute_char_deletes_and_enters_insert() {
-    let mut editor = ed_with_text("abc\n");
+    let mut editor = editor_with_bulk_text("abc\n");
     editor.dispatch_builtin("substitute-char");
     assert_eq!(editor.mode, Mode::Insert);
     assert_eq!(editor.active_buffer().text(), "bc\n");
     // Yanked char preserved in default register
-    assert_eq!(editor.registers.get(&'"').map(String::as_str), Some("a"));
+    assert_eq!(editor.vi.registers.get(&'"').map(String::as_str), Some("a"));
 }
 
 #[test]
 fn substitute_char_with_count_deletes_n_chars() {
-    let mut editor = ed_with_text("abcdef\n");
-    editor.count_prefix = Some(3);
+    let mut editor = editor_with_bulk_text("abcdef\n");
+    editor.vi.count_prefix = Some(3);
     editor.dispatch_builtin("substitute-char");
     assert_eq!(editor.mode, Mode::Insert);
     assert_eq!(editor.active_buffer().text(), "def\n");
@@ -454,8 +454,8 @@ fn substitute_char_with_count_deletes_n_chars() {
 
 #[test]
 fn substitute_char_stops_at_line_end() {
-    let mut editor = ed_with_text("ab\ncd\n");
-    editor.count_prefix = Some(10);
+    let mut editor = editor_with_bulk_text("ab\ncd\n");
+    editor.vi.count_prefix = Some(10);
     editor.dispatch_builtin("substitute-char");
     // Should only delete "ab" — bounded to current line, not newline
     assert_eq!(editor.active_buffer().text(), "\ncd\n");
@@ -463,7 +463,7 @@ fn substitute_char_stops_at_line_end() {
 
 #[test]
 fn substitute_line_replaces_line_and_enters_insert() {
-    let mut editor = ed_with_text("first line\nsecond\n");
+    let mut editor = editor_with_bulk_text("first line\nsecond\n");
     editor.dispatch_builtin("substitute-line");
     assert_eq!(editor.mode, Mode::Insert);
     assert_eq!(editor.active_buffer().text(), "\nsecond\n");
@@ -471,7 +471,7 @@ fn substitute_line_replaces_line_and_enters_insert() {
 
 #[test]
 fn gi_returns_to_last_insert_exit_position() {
-    let mut editor = ed_with_text("abc def\n");
+    let mut editor = editor_with_bulk_text("abc def\n");
     // Enter insert at col 4 ('d'), type nothing, exit normal.
     {
         let win = editor.window_mgr.focused_window_mut();
@@ -480,7 +480,7 @@ fn gi_returns_to_last_insert_exit_position() {
     editor.dispatch_builtin("enter-insert-mode");
     editor.dispatch_builtin("enter-normal-mode");
     // Cursor backed up by 1 on exit; last_insert_pos should reflect that.
-    let expected = editor.last_insert_pos;
+    let expected = editor.vi.last_insert_pos;
     assert!(expected.is_some());
 
     // Move cursor elsewhere
@@ -499,8 +499,8 @@ fn gi_returns_to_last_insert_exit_position() {
 
 #[test]
 fn gi_without_prior_insert_just_enters_insert() {
-    let mut editor = ed_with_text("abc\n");
-    assert!(editor.last_insert_pos.is_none());
+    let mut editor = editor_with_bulk_text("abc\n");
+    assert!(editor.vi.last_insert_pos.is_none());
     editor.dispatch_builtin("reinsert-at-last-position");
     assert_eq!(editor.mode, Mode::Insert);
 }
@@ -509,7 +509,7 @@ fn gi_without_prior_insert_just_enters_insert() {
 
 #[test]
 fn gg_then_ctrl_o_restores_cursor() {
-    let mut editor = ed_with_text("a\nb\nc\nd\ne\n");
+    let mut editor = editor_with_bulk_text("a\nb\nc\nd\ne\n");
     {
         let win = editor.window_mgr.focused_window_mut();
         win.cursor_row = 3;
@@ -526,7 +526,7 @@ fn gg_then_ctrl_o_restores_cursor() {
 
 #[test]
 fn capital_g_then_ctrl_o_ctrl_i_round_trip() {
-    let mut editor = ed_with_text("l0\nl1\nl2\nl3\nl4\n");
+    let mut editor = editor_with_bulk_text("l0\nl1\nl2\nl3\nl4\n");
     {
         let win = editor.window_mgr.focused_window_mut();
         win.cursor_row = 1;
@@ -544,7 +544,7 @@ fn capital_g_then_ctrl_o_ctrl_i_round_trip() {
 
 #[test]
 fn jump_backward_at_empty_list_is_noop() {
-    let mut editor = ed_with_text("hello\n");
+    let mut editor = editor_with_bulk_text("hello\n");
     editor.dispatch_builtin("jump-backward");
     // Cursor unchanged, no panic.
     let w = editor.window_mgr.focused_window();
@@ -555,7 +555,7 @@ fn jump_backward_at_empty_list_is_noop() {
 
 #[test]
 fn gn_selects_next_match() {
-    let mut editor = ed_with_text("foo bar foo bar foo\n");
+    let mut editor = editor_with_bulk_text("foo bar foo bar foo\n");
     editor.search_input = "foo".to_string();
     editor.execute_search();
     // After execute_search cursor moves to first match past col 0 — which wraps to col 0
@@ -565,34 +565,34 @@ fn gn_selects_next_match() {
     // Should now be in visual char mode
     assert!(matches!(editor.mode, Mode::Visual(VisualType::Char)));
     // Anchor at match start (col 8), cursor at match end inclusive (col 10)
-    assert_eq!(editor.visual_anchor_col, 8);
+    assert_eq!(editor.vi.visual_anchor_col, 8);
     assert_eq!(editor.window_mgr.focused_window().cursor_col, 10);
 }
 
 #[test]
 fn gn_inside_match_selects_containing() {
-    let mut editor = ed_with_text("hello world hello\n");
+    let mut editor = editor_with_bulk_text("hello world hello\n");
     editor.search_input = "hello".to_string();
     editor.execute_search();
     // Put cursor inside first match (offset 2)
     editor.window_mgr.focused_window_mut().cursor_col = 2;
     editor.dispatch_builtin("visual-select-next-match");
     assert!(matches!(editor.mode, Mode::Visual(VisualType::Char)));
-    assert_eq!(editor.visual_anchor_col, 0);
+    assert_eq!(editor.vi.visual_anchor_col, 0);
     assert_eq!(editor.window_mgr.focused_window().cursor_col, 4);
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn gN_selects_previous_match() {
-    let mut editor = ed_with_text("foo bar foo bar foo\n");
+    let mut editor = editor_with_bulk_text("foo bar foo bar foo\n");
     editor.search_input = "foo".to_string();
     editor.execute_search();
     editor.window_mgr.focused_window_mut().cursor_col = 14; // between 2nd and 3rd foo
     editor.dispatch_builtin("visual-select-prev-match");
     assert!(matches!(editor.mode, Mode::Visual(VisualType::Char)));
     // Should select the 2nd "foo" at col 8..11
-    assert_eq!(editor.visual_anchor_col, 8);
+    assert_eq!(editor.vi.visual_anchor_col, 8);
     assert_eq!(editor.window_mgr.focused_window().cursor_col, 10);
 }
 
@@ -600,7 +600,7 @@ fn gN_selects_previous_match() {
 fn cgn_replaces_match_and_dot_repeats() {
     // Practical Vim tip 86 flow: search → cgn → type → Esc → .
     // Place cursor before any match so execute_search lands on the 1st foo.
-    let mut editor = ed_with_text(".. foo bar foo bar foo\n");
+    let mut editor = editor_with_bulk_text(".. foo bar foo bar foo\n");
     editor.search_input = "foo".to_string();
     editor.execute_search();
     // execute_search advances to first match with start > cursor (col 0),
@@ -628,7 +628,7 @@ fn cgn_replaces_match_and_dot_repeats() {
 
 #[test]
 fn dgn_deletes_next_match() {
-    let mut editor = ed_with_text("foo bar foo\n");
+    let mut editor = editor_with_bulk_text("foo bar foo\n");
     editor.search_input = "foo".to_string();
     editor.execute_search();
     editor.window_mgr.focused_window_mut().cursor_col = 0;
@@ -642,7 +642,7 @@ fn dgn_deletes_next_match() {
 
 #[test]
 fn ygn_yanks_next_match() {
-    let mut editor = ed_with_text("foo bar baz\n");
+    let mut editor = editor_with_bulk_text("foo bar baz\n");
     editor.search_input = "bar".to_string();
     editor.execute_search();
     editor.window_mgr.focused_window_mut().cursor_col = 0;
@@ -651,12 +651,12 @@ fn ygn_yanks_next_match() {
     // Buffer unchanged
     assert_eq!(editor.buffers[0].text(), "foo bar baz\n");
     // Default register holds "bar"
-    assert_eq!(editor.registers.get(&'"'), Some(&"bar".to_string()));
+    assert_eq!(editor.vi.registers.get(&'"'), Some(&"bar".to_string()));
 }
 
 #[test]
 fn gn_without_search_is_noop() {
-    let mut editor = ed_with_text("hello world\n");
+    let mut editor = editor_with_bulk_text("hello world\n");
     // No search was executed
     editor.dispatch_builtin("visual-select-next-match");
     // Should stay in normal mode

@@ -29,8 +29,8 @@ impl Editor {
                     }
                 } else if kind == crate::BufferKind::Shell {
                     // In normal mode over a shell buffer, scroll scrollback up.
-                    let prev = self.pending_shell_scroll.unwrap_or(0);
-                    self.pending_shell_scroll = Some(prev + n as i32);
+                    let prev = self.shell.scroll.unwrap_or(0);
+                    self.shell.scroll = Some(prev + n as i32);
                 } else {
                     let buf = &self.buffers[idx];
                     for _ in 0..n {
@@ -53,8 +53,8 @@ impl Editor {
                     }
                 } else if kind == crate::BufferKind::Shell {
                     // In normal mode over a shell buffer, scroll scrollback down.
-                    let prev = self.pending_shell_scroll.unwrap_or(0);
-                    self.pending_shell_scroll = Some(prev - n as i32);
+                    let prev = self.shell.scroll.unwrap_or(0);
+                    self.shell.scroll = Some(prev - n as i32);
                 } else {
                     let buf = &self.buffers[idx];
                     for _ in 0..n {
@@ -344,20 +344,20 @@ impl Editor {
                 }
             }
             "find-char-forward-await" => {
-                self.pending_char_command = Some("find-char-forward".to_string());
-                self.pending_char_count = n;
+                self.vi.pending_char_command = Some("find-char-forward".to_string());
+                self.vi.pending_char_count = n;
             }
             "find-char-backward-await" => {
-                self.pending_char_command = Some("find-char-backward".to_string());
-                self.pending_char_count = n;
+                self.vi.pending_char_command = Some("find-char-backward".to_string());
+                self.vi.pending_char_count = n;
             }
             "till-char-forward-await" => {
-                self.pending_char_command = Some("till-char-forward".to_string());
-                self.pending_char_count = n;
+                self.vi.pending_char_command = Some("till-char-forward".to_string());
+                self.vi.pending_char_count = n;
             }
             "till-char-backward-await" => {
-                self.pending_char_command = Some("till-char-backward".to_string());
-                self.pending_char_count = n;
+                self.vi.pending_char_command = Some("till-char-backward".to_string());
+                self.vi.pending_char_count = n;
             }
 
             // Scroll commands
@@ -377,8 +377,8 @@ impl Editor {
                     }
                     crate::BufferKind::Shell => {
                         for _ in 0..n {
-                            let prev = self.pending_shell_scroll.unwrap_or(0);
-                            self.pending_shell_scroll = Some(prev + amount as i32);
+                            let prev = self.shell.scroll.unwrap_or(0);
+                            self.shell.scroll = Some(prev + amount as i32);
                         }
                     }
                     _ => {
@@ -414,8 +414,8 @@ impl Editor {
                     }
                     crate::BufferKind::Shell => {
                         for _ in 0..n {
-                            let prev = self.pending_shell_scroll.unwrap_or(0);
-                            self.pending_shell_scroll = Some(prev - amount as i32);
+                            let prev = self.shell.scroll.unwrap_or(0);
+                            self.shell.scroll = Some(prev - amount as i32);
                         }
                     }
                     _ => {
@@ -453,8 +453,8 @@ impl Editor {
                     crate::BufferKind::Shell => {
                         let scroll_speed = self.scroll_speed as i32;
                         for _ in 0..n {
-                            let prev = self.pending_shell_scroll.unwrap_or(0);
-                            self.pending_shell_scroll = Some(prev - scroll_speed);
+                            let prev = self.shell.scroll.unwrap_or(0);
+                            self.shell.scroll = Some(prev - scroll_speed);
                         }
                     }
                     _ => {
@@ -538,8 +538,8 @@ impl Editor {
                     crate::BufferKind::Shell => {
                         let scroll_speed = self.scroll_speed as i32;
                         for _ in 0..n {
-                            let prev = self.pending_shell_scroll.unwrap_or(0);
-                            self.pending_shell_scroll = Some(prev + scroll_speed);
+                            let prev = self.shell.scroll.unwrap_or(0);
+                            self.shell.scroll = Some(prev + scroll_speed);
                         }
                     }
                     _ => {
@@ -636,13 +636,13 @@ impl Editor {
 
             // Repeat f/F/t/T
             "repeat-find" => {
-                if let Some((ch, ref cmd)) = self.last_find_char.clone() {
-                    self.pending_char_count = n;
+                if let Some((ch, ref cmd)) = self.vi.last_find_char.clone() {
+                    self.vi.pending_char_count = n;
                     self.dispatch_char_motion(cmd, ch);
                 }
             }
             "repeat-find-reverse" => {
-                if let Some((ch, ref cmd)) = self.last_find_char.clone() {
+                if let Some((ch, ref cmd)) = self.vi.last_find_char.clone() {
                     let reversed = match cmd.as_str() {
                         "find-char-forward" => "find-char-backward",
                         "find-char-backward" => "find-char-forward",
@@ -650,16 +650,16 @@ impl Editor {
                         "till-char-backward" => "till-char-forward",
                         _ => return Some(true),
                     };
-                    self.pending_char_count = n;
+                    self.vi.pending_char_count = n;
                     self.dispatch_char_motion(reversed, ch);
                 }
             }
 
             // Reselect last visual selection (gv)
             "reselect-visual" => {
-                if let Some((ar, ac, cr, cc, vtype)) = self.last_visual {
-                    self.visual_anchor_row = ar;
-                    self.visual_anchor_col = ac;
+                if let Some((ar, ac, cr, cc, vtype)) = self.vi.last_visual {
+                    self.vi.visual_anchor_row = ar;
+                    self.vi.visual_anchor_col = ac;
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_row = cr;
                     win.cursor_col = cc;
@@ -721,10 +721,10 @@ impl Editor {
 
             // Marks
             "set-mark-await" => {
-                self.pending_char_command = Some("set-mark".to_string());
+                self.vi.pending_char_command = Some("set-mark".to_string());
             }
             "jump-mark-await" => {
-                self.pending_char_command = Some("jump-mark".to_string());
+                self.vi.pending_char_command = Some("jump-mark".to_string());
             }
 
             // Jump list

@@ -135,7 +135,7 @@ pub fn execute_dap_set_breakpoint(editor: &mut Editor, args: &Value) -> Result<S
 ///
 /// Errors if no session is active (helps the AI catch stale state).
 pub fn execute_dap_continue(editor: &mut Editor) -> Result<String, String> {
-    if editor.debug_state.is_none() {
+    if editor.dap.state.is_none() {
         return Err("No active debug session. Call dap_start first.".into());
     }
     editor.dap_continue();
@@ -149,7 +149,7 @@ pub fn execute_dap_continue(editor: &mut Editor) -> Result<String, String> {
 /// Args:
 /// - `direction` (string, required): `"over"`, `"in"`, or `"out"`.
 pub fn execute_dap_step(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    if editor.debug_state.is_none() {
+    if editor.dap.state.is_none() {
         return Err("No active debug session. Call dap_start first.".into());
     }
     let direction = args
@@ -180,7 +180,8 @@ pub fn execute_dap_step(editor: &mut Editor, args: &Value) -> Result<String, Str
 /// Errors if no match is found.
 pub fn execute_dap_inspect_variable(editor: &Editor, args: &Value) -> Result<String, String> {
     let state = editor
-        .debug_state
+        .dap
+        .state
         .as_ref()
         .ok_or("No active debug session. Call dap_start first.")?;
     let name = args
@@ -241,7 +242,8 @@ pub fn execute_dap_remove_breakpoint(editor: &mut Editor, args: &Value) -> Resul
 /// can see results of prior `dap_expand_variable` calls.
 pub fn execute_dap_list_variables(editor: &Editor) -> Result<String, String> {
     let state = editor
-        .debug_state
+        .dap
+        .state
         .as_ref()
         .ok_or("No active debug session. Call dap_start first.")?;
 
@@ -303,7 +305,7 @@ fn render_variable_json(
 /// Queues a DAP request and returns immediately. The AI should call
 /// `debug_state` or `dap_list_variables` after a moment to see results.
 pub fn execute_dap_expand_variable(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    if editor.debug_state.is_none() {
+    if editor.dap.state.is_none() {
         return Err("No active debug session. Call dap_start first.".into());
     }
     let var_ref = args
@@ -329,7 +331,7 @@ pub fn execute_dap_expand_variable(editor: &mut Editor, args: &Value) -> Result<
 ///
 /// Queues a scopes request for the new frame.
 pub fn execute_dap_select_frame(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    if editor.debug_state.is_none() {
+    if editor.dap.state.is_none() {
         return Err("No active debug session. Call dap_start first.".into());
     }
     let frame_id = args
@@ -339,7 +341,8 @@ pub fn execute_dap_select_frame(editor: &mut Editor, args: &Value) -> Result<Str
 
     // Verify the frame exists.
     let frame_exists = editor
-        .debug_state
+        .dap
+        .state
         .as_ref()
         .map(|s| s.stack_frames.iter().any(|f| f.id == frame_id))
         .unwrap_or(false);
@@ -368,7 +371,8 @@ pub fn execute_dap_select_frame(editor: &mut Editor, args: &Value) -> Result<Str
 /// - `thread_id` (integer, required): the thread id to select.
 pub fn execute_dap_select_thread(editor: &mut Editor, args: &Value) -> Result<String, String> {
     let state = editor
-        .debug_state
+        .dap
+        .state
         .as_mut()
         .ok_or("No active debug session. Call dap_start first.")?;
     let thread_id = args
@@ -391,7 +395,8 @@ pub fn execute_dap_select_thread(editor: &mut Editor, args: &Value) -> Result<St
 /// - `lines` (integer, optional): number of recent lines to return (default 50).
 pub fn execute_dap_output(editor: &Editor, args: &Value) -> Result<String, String> {
     let state = editor
-        .debug_state
+        .dap
+        .state
         .as_ref()
         .ok_or("No active debug session. Call dap_start first.")?;
 
@@ -423,7 +428,7 @@ pub fn execute_dap_output(editor: &Editor, args: &Value) -> Result<String, Strin
 /// `DapTaskEvent::EvaluateResult`. The AI should call `debug_state`
 /// or `dap_output` after a moment to see the result.
 pub fn execute_dap_evaluate(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    if editor.debug_state.is_none() {
+    if editor.dap.state.is_none() {
         return Err("No active debug session. Call dap_start first.".into());
     }
     let expression = args
@@ -446,7 +451,7 @@ pub fn execute_dap_evaluate(editor: &mut Editor, args: &Value) -> Result<String,
 /// - `terminate_debuggee` (boolean, optional): if true, also terminate
 ///   the debugged process. Default: false (detach only).
 pub fn execute_dap_disconnect(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    if editor.debug_state.is_none() {
+    if editor.dap.state.is_none() {
         return Err("No active debug session. Call dap_start first.".into());
     }
     let terminate = args
@@ -464,11 +469,11 @@ mod tests {
 
     fn ed_with_dap_session() -> Editor {
         let mut ed = Editor::new();
-        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+        ed.dap.state = Some(DebugState::new(DebugTarget::Dap {
             adapter_name: "lldb".into(),
             program: "/bin/ls".into(),
         }));
-        ed.debug_state.as_mut().unwrap().active_thread_id = 1;
+        ed.dap.state.as_mut().unwrap().active_thread_id = 1;
         ed
     }
 
@@ -487,8 +492,8 @@ mod tests {
         // dap_start now returns empty string (deferred — result comes from event loop)
         let _out =
             execute_dap_start(&mut ed, &json!({"adapter": "lldb", "program": "/bin/ls"})).unwrap();
-        assert_eq!(ed.pending_dap_intents.len(), 1);
-        assert!(ed.debug_state.is_some());
+        assert_eq!(ed.dap.pending_intents.len(), 1);
+        assert!(ed.dap.state.is_some());
     }
 
     #[test]
@@ -503,7 +508,7 @@ mod tests {
             }),
         )
         .unwrap();
-        assert_eq!(ed.pending_dap_intents.len(), 1);
+        assert_eq!(ed.dap.pending_intents.len(), 1);
     }
 
     #[test]
@@ -574,7 +579,7 @@ mod tests {
     fn dap_continue_queues_intent() {
         let mut ed = ed_with_dap_session();
         execute_dap_continue(&mut ed).unwrap();
-        assert_eq!(ed.pending_dap_intents.len(), 1);
+        assert_eq!(ed.dap.pending_intents.len(), 1);
     }
 
     #[test]
@@ -596,7 +601,7 @@ mod tests {
         for dir in ["over", "in", "out"] {
             let mut ed = ed_with_dap_session();
             execute_dap_step(&mut ed, &json!({"direction": dir})).unwrap();
-            assert_eq!(ed.pending_dap_intents.len(), 1, "direction {}", dir);
+            assert_eq!(ed.dap.pending_intents.len(), 1, "direction {}", dir);
         }
     }
 
@@ -610,7 +615,7 @@ mod tests {
     #[test]
     fn dap_inspect_variable_finds_match() {
         let mut ed = ed_with_dap_session();
-        let state = ed.debug_state.as_mut().unwrap();
+        let state = ed.dap.state.as_mut().unwrap();
         state.scopes.push(Scope {
             name: "Locals".into(),
             variables_reference: 1,
@@ -636,7 +641,7 @@ mod tests {
     #[test]
     fn dap_inspect_variable_scope_filter() {
         let mut ed = ed_with_dap_session();
-        let state = ed.debug_state.as_mut().unwrap();
+        let state = ed.dap.state.as_mut().unwrap();
         state.scopes.push(Scope {
             name: "Locals".into(),
             variables_reference: 1,
@@ -726,7 +731,7 @@ mod tests {
         )
         .unwrap();
         assert!(out.contains("Evaluating"));
-        assert_eq!(ed.pending_dap_intents.len(), 1);
+        assert_eq!(ed.dap.pending_intents.len(), 1);
     }
 
     #[test]
@@ -741,7 +746,7 @@ mod tests {
         let mut ed = ed_with_dap_session();
         let out = execute_dap_disconnect(&mut ed, &json!({"terminate_debuggee": true})).unwrap();
         assert!(out.contains("Disconnecting"));
-        assert!(ed.debug_state.is_none());
+        assert!(ed.dap.state.is_none());
     }
 
     #[test]
@@ -761,9 +766,9 @@ mod tests {
         .unwrap();
         assert!(out.contains("Attaching"));
         assert!(out.contains("12345"));
-        assert_eq!(ed.pending_dap_intents.len(), 1);
+        assert_eq!(ed.dap.pending_intents.len(), 1);
         assert!(matches!(
-            ed.pending_dap_intents[0],
+            ed.dap.pending_intents[0],
             mae_core::DapIntent::StartSession { attach: true, .. }
         ));
     }
@@ -787,7 +792,7 @@ mod tests {
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["condition"], "x > 5");
         // Verify it's stored in state.
-        let state = ed.debug_state.as_ref().unwrap();
+        let state = ed.dap.state.as_ref().unwrap();
         let bp = &state.breakpoints["/a.rs"][0];
         assert_eq!(bp.condition.as_deref(), Some("x > 5"));
     }

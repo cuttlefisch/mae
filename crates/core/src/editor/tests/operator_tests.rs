@@ -12,7 +12,7 @@ fn operator_pending_d_with_move_to_last_line() {
     win.cursor_col = 0;
     // Simulate d + G
     editor.dispatch_builtin("operator-delete");
-    assert!(editor.pending_operator.is_some());
+    assert!(editor.vi.pending_operator.is_some());
     editor.dispatch_builtin("move-to-last-line");
     editor.apply_pending_operator_for_motion("move-to-last-line");
     // Lines 1-3 deleted, only line0 remains
@@ -85,7 +85,7 @@ fn operator_pending_y_to_first_line() {
         "line1\nline2\nline3\n"
     );
     // Register should have yanked lines 0-2
-    let yanked = editor.registers.get(&'"').unwrap();
+    let yanked = editor.vi.registers.get(&'"').unwrap();
     assert_eq!(yanked, "line1\nline2\nline3\n");
     // Cursor at start position (row 0 after yank restores to min)
     assert_eq!(editor.window_mgr.focused_window().cursor_row, 0);
@@ -141,7 +141,7 @@ fn operator_pending_yy_still_works() {
     // yy is a linewise special, not operator-pending
     let mut editor = editor_with_text("line1\nline2\n");
     editor.dispatch_builtin("yank-line");
-    let yanked = editor.registers.get(&'"').unwrap();
+    let yanked = editor.vi.registers.get(&'"').unwrap();
     assert_eq!(yanked, "line1\n");
 }
 
@@ -175,7 +175,7 @@ fn operator_pending_y_word() {
     editor.dispatch_builtin("operator-yank");
     editor.dispatch_builtin("move-word-forward");
     editor.apply_pending_operator_for_motion("move-word-forward");
-    let yanked = editor.registers.get(&'"').unwrap();
+    let yanked = editor.vi.registers.get(&'"').unwrap();
     assert_eq!(yanked, "hello ");
     // Buffer unchanged
     assert_eq!(editor.active_buffer().rope().to_string(), "hello world");
@@ -228,9 +228,11 @@ fn spc_c_group_has_code_bindings() {
         normal.lookup(&parse_key_seq_spaced("SPC c R")),
         LookupResult::Exact("lsp-rename")
     );
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC c f")),
-        LookupResult::Exact("lsp-format")
+    // SPC c f is owned by the format module (format-buffer), not the kernel.
+    // Verify it's not bound in the kernel keymap.
+    assert!(
+        normal.lookup(&parse_key_seq_spaced("SPC c f")) != LookupResult::Exact("lsp-format"),
+        "SPC c f should not be bound to lsp-format in kernel (owned by format module)"
     );
 }
 
@@ -253,7 +255,7 @@ fn lsp_rename_enters_command_mode() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("lsp-rename");
     assert_eq!(editor.mode, Mode::Command);
-    assert!(editor.command_line.starts_with("lsp-rename "));
+    assert!(editor.vi.command_line.starts_with("lsp-rename "));
 }
 
 // ---- WU1: Count prefix with operators ----
@@ -264,14 +266,14 @@ fn operator_count_3dj_deletes_4_lines() {
     // In the real key handler, operator_count is multiplied with motion count
     // and set as count_prefix before dispatch. Here we simulate that.
     let mut editor = editor_with_text("line1\nline2\nline3\nline4\nline5\n");
-    editor.count_prefix = Some(3);
+    editor.vi.count_prefix = Some(3);
     editor.dispatch_builtin("operator-delete");
-    assert_eq!(editor.operator_count, Some(3));
-    assert!(editor.pending_operator.is_some());
+    assert_eq!(editor.vi.operator_count, Some(3));
+    assert!(editor.vi.pending_operator.is_some());
     // Simulate what key_handling does: multiply op_count * motion_count
-    let op_count = editor.operator_count.take().unwrap();
-    let motion_count = editor.count_prefix.unwrap_or(1);
-    editor.count_prefix = Some(op_count * motion_count); // 3*1=3
+    let op_count = editor.vi.operator_count.take().unwrap();
+    let motion_count = editor.vi.count_prefix.unwrap_or(1);
+    editor.vi.count_prefix = Some(op_count * motion_count); // 3*1=3
     editor.dispatch_builtin("move-down"); // moves 3 lines
     editor.apply_pending_operator_for_motion("move-down");
     assert_eq!(editor.active_buffer().rope().to_string(), "line5\n");
@@ -284,9 +286,9 @@ fn operator_count_d3j_deletes_4_lines() {
     // consumes it and repeats move-down 3 times.
     let mut editor = editor_with_text("line1\nline2\nline3\nline4\nline5\n");
     editor.dispatch_builtin("operator-delete");
-    assert!(editor.operator_count.is_none());
+    assert!(editor.vi.operator_count.is_none());
     // Motion j with count=3: set count_prefix, then dispatch (which consumes it)
-    editor.count_prefix = Some(3);
+    editor.vi.count_prefix = Some(3);
     editor.dispatch_builtin("move-down"); // dispatch_builtin repeats 3 times
     editor.apply_pending_operator_for_motion("move-down");
     assert_eq!(editor.active_buffer().rope().to_string(), "line5\n");
@@ -295,50 +297,50 @@ fn operator_count_d3j_deletes_4_lines() {
 #[test]
 fn operator_count_saved_on_delete() {
     let mut editor = editor_with_text("hello\nworld\n");
-    editor.count_prefix = Some(5);
+    editor.vi.count_prefix = Some(5);
     editor.dispatch_builtin("operator-delete");
-    assert_eq!(editor.operator_count, Some(5));
+    assert_eq!(editor.vi.operator_count, Some(5));
 }
 
 #[test]
 fn operator_count_saved_on_change() {
     let mut editor = editor_with_text("hello\nworld\n");
-    editor.count_prefix = Some(2);
+    editor.vi.count_prefix = Some(2);
     editor.dispatch_builtin("operator-change");
-    assert_eq!(editor.operator_count, Some(2));
+    assert_eq!(editor.vi.operator_count, Some(2));
 }
 
 #[test]
 fn operator_count_saved_on_yank() {
     let mut editor = editor_with_text("hello\nworld\n");
-    editor.count_prefix = Some(3);
+    editor.vi.count_prefix = Some(3);
     editor.dispatch_builtin("operator-yank");
-    assert_eq!(editor.operator_count, Some(3));
+    assert_eq!(editor.vi.operator_count, Some(3));
 }
 
 #[test]
 fn operator_count_saved_on_surround() {
     let mut editor = editor_with_text("hello\nworld\n");
-    editor.count_prefix = Some(4);
+    editor.vi.count_prefix = Some(4);
     editor.dispatch_builtin("operator-surround");
-    assert_eq!(editor.operator_count, Some(4));
+    assert_eq!(editor.vi.operator_count, Some(4));
 }
 
 #[test]
 fn operator_count_none_without_count() {
     let mut editor = editor_with_text("hello\nworld\n");
     editor.dispatch_builtin("operator-delete");
-    assert!(editor.operator_count.is_none());
+    assert!(editor.vi.operator_count.is_none());
 }
 
 #[test]
 fn operator_count_cleared_on_apply() {
     let mut editor = editor_with_text("hello world");
-    editor.count_prefix = Some(2);
+    editor.vi.count_prefix = Some(2);
     editor.dispatch_builtin("operator-delete");
     editor.dispatch_builtin("move-word-forward");
     editor.apply_pending_operator_for_motion("move-word-forward");
-    assert!(editor.operator_count.is_none());
+    assert!(editor.vi.operator_count.is_none());
 }
 
 // ---- WU2: Motion classification fixes ----
@@ -377,9 +379,9 @@ fn text_object_clears_pending_operator() {
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_col = 3; // inside parens
     editor.dispatch_text_object("delete-inner-object", '(');
-    assert!(editor.pending_operator.is_none());
-    assert!(editor.operator_start.is_none());
-    assert!(editor.operator_count.is_none());
+    assert!(editor.vi.pending_operator.is_none());
+    assert!(editor.vi.operator_start.is_none());
+    assert!(editor.vi.operator_count.is_none());
 }
 
 // ---- WU5: Project switching ----

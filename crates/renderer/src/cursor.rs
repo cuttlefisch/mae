@@ -33,8 +33,8 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
         };
 
         if editor.mode == Mode::Command {
-            let cursor_col = editor.command_line
-                [..editor.command_cursor.min(editor.command_line.len())]
+            let cursor_col = editor.vi.command_line
+                [..editor.vi.command_cursor.min(editor.vi.command_line.len())]
                 .chars()
                 .count() as u16;
             frame.set_cursor_position(Position::new(cmd_area.x + 1 + cursor_col, cmd_area.y));

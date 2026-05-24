@@ -91,6 +91,7 @@ gutter = "#4b5263"
 "markup.done" = { fg = "green" }
 "markup.checkbox" = { fg = "yellow", bold = true }
 "markup.checkbox.checked" = { fg = "green" }
+"markup.drawer" = { fg = "fg_dark" }
 
 "diff.added" = { fg = "green" }
 "diff.removed" = { fg = "red" }

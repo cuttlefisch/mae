@@ -27,15 +27,15 @@ impl Editor {
         if !Self::is_valid_macro_register(ch) {
             return Err(format!("Invalid macro register: '{}' (use a-z)", ch));
         }
-        if self.macro_recording {
+        if self.vi.macro_recording {
             return Err(format!(
                 "Already recording to register '{}'",
-                self.macro_register.unwrap_or('?')
+                self.vi.macro_register.unwrap_or('?')
             ));
         }
-        self.macro_recording = true;
-        self.macro_register = Some(ch);
-        self.macro_log.clear();
+        self.vi.macro_recording = true;
+        self.vi.macro_register = Some(ch);
+        self.vi.macro_log.clear();
         self.set_status(format!("recording @{}", ch));
         Ok(())
     }
@@ -43,15 +43,15 @@ impl Editor {
     /// Stop the current recording and save the log to the register.
     /// Returns the register letter, or None if not recording.
     pub fn stop_recording(&mut self) -> Option<char> {
-        if !self.macro_recording {
+        if !self.vi.macro_recording {
             return None;
         }
-        let ch = self.macro_register.unwrap_or('a');
-        let serialized = serialize_macro(&self.macro_log);
-        self.registers.insert(ch, serialized);
-        self.macro_recording = false;
-        self.macro_register = None;
-        self.macro_log.clear();
+        let ch = self.vi.macro_register.unwrap_or('a');
+        let serialized = serialize_macro(&self.vi.macro_log);
+        self.vi.registers.insert(ch, serialized);
+        self.vi.macro_recording = false;
+        self.vi.macro_register = None;
+        self.vi.macro_log.clear();
         self.set_status(format!("stopped recording @{}", ch));
         Some(ch)
     }
@@ -61,10 +61,11 @@ impl Editor {
         if !Self::is_valid_macro_register(ch) {
             return Err(format!("Invalid macro register: '{}' (use a-z)", ch));
         }
-        if self.macro_replay_depth >= 10 {
+        if self.vi.macro_replay_depth >= 10 {
             return Err("Macro recursion limit reached (depth 10)".to_string());
         }
         let serialized = self
+            .vi
             .registers
             .get(&ch)
             .cloned()
@@ -73,8 +74,8 @@ impl Editor {
             return Ok(());
         }
         let keys = deserialize_macro(&serialized);
-        self.last_macro_register = Some(ch);
-        self.macro_replay_depth += 1;
+        self.vi.last_macro_register = Some(ch);
+        self.vi.macro_replay_depth += 1;
         for _ in 0..count {
             if !self.running {
                 break;
@@ -87,7 +88,7 @@ impl Editor {
                 self.replay_keypress(kp, &mut pending);
             }
         }
-        self.macro_replay_depth -= 1;
+        self.vi.macro_replay_depth -= 1;
         Ok(())
     }
 
@@ -97,7 +98,7 @@ impl Editor {
     pub fn replay_keypress(&mut self, kp: KeyPress, pending: &mut Vec<KeyPress>) {
         // If a pending char-argument command is waiting (e.g. after `f`, `r`),
         // consume this keypress as its argument.
-        if let Some(cmd) = self.pending_char_command.take() {
+        if let Some(cmd) = self.vi.pending_char_command.take() {
             if let Key::Char(ch) = kp.key {
                 self.dispatch_char_motion(&cmd, ch);
             }
@@ -185,123 +186,127 @@ mod tests {
 
     #[test]
     fn start_recording_valid_register() {
-        let mut ed = Editor::new();
-        ed.start_recording('a').unwrap();
-        assert!(ed.macro_recording);
-        assert_eq!(ed.macro_register, Some('a'));
-        assert!(ed.macro_log.is_empty());
+        let mut editor = Editor::new();
+        editor.start_recording('a').unwrap();
+        assert!(editor.vi.macro_recording);
+        assert_eq!(editor.vi.macro_register, Some('a'));
+        assert!(editor.vi.macro_log.is_empty());
     }
 
     #[test]
     fn start_recording_invalid_register_rejected() {
-        let mut ed = Editor::new();
-        assert!(ed.start_recording('1').is_err());
-        assert!(ed.start_recording('A').is_err()); // uppercase rejected
-        assert!(ed.start_recording('!').is_err());
-        assert!(!ed.macro_recording);
+        let mut editor = Editor::new();
+        assert!(editor.start_recording('1').is_err());
+        assert!(editor.start_recording('A').is_err()); // uppercase rejected
+        assert!(editor.start_recording('!').is_err());
+        assert!(!editor.vi.macro_recording);
     }
 
     #[test]
     fn start_recording_while_already_recording_errors() {
-        let mut ed = Editor::new();
-        ed.start_recording('a').unwrap();
-        assert!(ed.start_recording('b').is_err());
+        let mut editor = Editor::new();
+        editor.start_recording('a').unwrap();
+        assert!(editor.start_recording('b').is_err());
     }
 
     #[test]
     fn stop_recording_saves_to_register() {
-        let mut ed = Editor::new();
-        ed.start_recording('a').unwrap();
-        ed.macro_log.push(KeyPress::char('j'));
-        ed.macro_log.push(KeyPress::char('j'));
-        let ch = ed.stop_recording();
+        let mut editor = Editor::new();
+        editor.start_recording('a').unwrap();
+        editor.vi.macro_log.push(KeyPress::char('j'));
+        editor.vi.macro_log.push(KeyPress::char('j'));
+        let ch = editor.stop_recording();
         assert_eq!(ch, Some('a'));
-        assert!(!ed.macro_recording);
-        assert!(ed.macro_log.is_empty());
-        assert_eq!(ed.registers.get(&'a').map(|s| s.as_str()), Some("jj"));
+        assert!(!editor.vi.macro_recording);
+        assert!(editor.vi.macro_log.is_empty());
+        assert_eq!(
+            editor.vi.registers.get(&'a').map(|s| s.as_str()),
+            Some("jj")
+        );
     }
 
     #[test]
     fn stop_recording_when_not_recording_returns_none() {
-        let mut ed = Editor::new();
-        assert_eq!(ed.stop_recording(), None);
+        let mut editor = Editor::new();
+        assert_eq!(editor.stop_recording(), None);
     }
 
     // --- Replay ---
 
     #[test]
     fn replay_macro_moves_cursor() {
-        let mut ed = editor_with_text("line1\nline2\nline3\n");
-        ed.registers.insert('a', "j".to_string());
-        ed.replay_macro('a', 1).unwrap();
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 1);
+        let mut editor = editor_with_text("line1\nline2\nline3\n");
+        editor.vi.registers.insert('a', "j".to_string());
+        editor.replay_macro('a', 1).unwrap();
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
     }
 
     #[test]
     fn replay_macro_count_repeats() {
-        let mut ed = editor_with_text("line1\nline2\nline3\n");
-        ed.registers.insert('a', "j".to_string());
-        ed.replay_macro('a', 2).unwrap();
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 2);
+        let mut editor = editor_with_text("line1\nline2\nline3\n");
+        editor.vi.registers.insert('a', "j".to_string());
+        editor.replay_macro('a', 2).unwrap();
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 2);
     }
 
     #[test]
     fn replay_macro_sets_last_register() {
-        let mut ed = Editor::new();
-        ed.registers.insert('a', "j".to_string());
-        ed.replay_macro('a', 1).unwrap();
-        assert_eq!(ed.last_macro_register, Some('a'));
+        let mut editor = Editor::new();
+        editor.vi.registers.insert('a', "j".to_string());
+        editor.replay_macro('a', 1).unwrap();
+        assert_eq!(editor.vi.last_macro_register, Some('a'));
     }
 
     #[test]
     fn replay_macro_nonexistent_register_errors() {
-        let mut ed = Editor::new();
-        let err = ed.replay_macro('z', 1).unwrap_err();
+        let mut editor = Editor::new();
+        let err = editor.replay_macro('z', 1).unwrap_err();
         assert!(err.contains("empty"));
     }
 
     #[test]
     fn replay_macro_empty_register_is_noop() {
-        let mut ed = editor_with_text("hello\n");
-        ed.registers.insert('a', "".to_string());
-        ed.replay_macro('a', 1).unwrap(); // must not panic
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 0);
+        let mut editor = editor_with_text("hello\n");
+        editor.vi.registers.insert('a', "".to_string());
+        editor.replay_macro('a', 1).unwrap(); // must not panic
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 0);
     }
 
     #[test]
     fn replay_macro_invalid_register_errors() {
-        let mut ed = Editor::new();
-        assert!(ed.replay_macro('Z', 1).is_err()); // uppercase rejected
+        let mut editor = Editor::new();
+        assert!(editor.replay_macro('Z', 1).is_err()); // uppercase rejected
     }
 
     #[test]
     fn replay_macro_insert_mode_text() {
-        let mut ed = editor_with_text("abc\n");
+        let mut editor = editor_with_text("abc\n");
         // Macro: enter insert mode, type "XY", escape back to normal
-        ed.registers.insert('b', "iXY<Esc>".to_string());
-        ed.replay_macro('b', 1).unwrap();
-        assert_eq!(ed.active_buffer().line_text(0), "XYabc\n");
-        assert_eq!(ed.mode, Mode::Normal);
+        editor.vi.registers.insert('b', "iXY<Esc>".to_string());
+        editor.replay_macro('b', 1).unwrap();
+        assert_eq!(editor.active_buffer().line_text(0), "XYabc\n");
+        assert_eq!(editor.mode, Mode::Normal);
     }
 
     #[test]
     fn replay_macro_multi_key_sequence() {
         // `dd` is a two-key sequence (prefix + confirm)
-        let mut ed = editor_with_text("line1\nline2\nline3\n");
-        ed.registers.insert('a', "dd".to_string());
-        ed.replay_macro('a', 1).unwrap();
+        let mut editor = editor_with_text("line1\nline2\nline3\n");
+        editor.vi.registers.insert('a', "dd".to_string());
+        editor.replay_macro('a', 1).unwrap();
         // line1 should be deleted
-        assert_eq!(ed.active_buffer().line_count(), 3); // "line2\nline3\n" + trailing
-        assert_eq!(ed.active_buffer().line_text(0), "line2\n");
+        assert_eq!(editor.active_buffer().line_count(), 3); // "line2\nline3\n" + trailing
+        assert_eq!(editor.active_buffer().line_text(0), "line2\n");
     }
 
     #[test]
     fn recursive_macro_guard() {
         use crate::keymap::parse_key_seq;
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         // Bind @ → replay-macro-await (normally from modules/macros/autoloads.scm)
         // so the keymap lookup during replay works.
-        ed.keymaps
+        editor
+            .keymaps
             .get_mut("normal")
             .unwrap()
             .bind(parse_key_seq("@"), "replay-macro-await");
@@ -310,17 +315,17 @@ mod tests {
         // depth error through set_status (dispatch_char_motion catches it),
         // so the outer call still returns Ok. Verify no stack overflow and
         // that the status message reports the guard fired.
-        ed.registers.insert('a', "@a".to_string());
-        let result = ed.replay_macro('a', 1);
+        editor.vi.registers.insert('a', "@a".to_string());
+        let result = editor.replay_macro('a', 1);
         assert!(
             result.is_ok(),
             "outer call should return Ok, got {:?}",
             result
         );
         assert!(
-            ed.status_msg.contains("recursion") || ed.status_msg.contains("depth"),
+            editor.status_msg.contains("recursion") || editor.status_msg.contains("depth"),
             "expected depth-guard message in status, got: {:?}",
-            ed.status_msg
+            editor.status_msg
         );
     }
 
@@ -330,22 +335,22 @@ mod tests {
     // Verify commands remain registered as kernel builtins.
     #[test]
     fn macro_commands_registered() {
-        let ed = Editor::new();
-        assert!(ed.commands.contains("start-recording-await"));
-        assert!(ed.commands.contains("replay-macro-await"));
+        let editor = Editor::new();
+        assert!(editor.commands.contains("start-recording-await"));
+        assert!(editor.commands.contains("replay-macro-await"));
     }
 
     #[test]
     fn replay_macro_at_sign_uses_last_register() {
         // @@ replays the last-used macro. Implemented by passing '@' as the
         // register char to dispatch_char_motion("replay-macro", '@').
-        let mut ed = editor_with_text("line1\nline2\nline3\n");
-        ed.registers.insert('a', "j".to_string());
-        ed.replay_macro('a', 1).unwrap(); // sets last_macro_register = Some('a')
-        assert_eq!(ed.last_macro_register, Some('a'));
+        let mut editor = editor_with_text("line1\nline2\nline3\n");
+        editor.vi.registers.insert('a', "j".to_string());
+        editor.replay_macro('a', 1).unwrap(); // sets last_macro_register = Some('a')
+        assert_eq!(editor.vi.last_macro_register, Some('a'));
         // Now call replay_macro with '@' — it should replay 'a' again.
         // This is what dispatch_char_motion does when ch == '@'.
-        ed.replay_macro('a', 1).unwrap(); // simulate @@
-        assert_eq!(ed.window_mgr.focused_window().cursor_row, 2);
+        editor.replay_macro('a', 1).unwrap(); // simulate @@
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 2);
     }
 }

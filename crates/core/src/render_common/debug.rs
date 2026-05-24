@@ -8,7 +8,7 @@ use crate::Editor;
 
 /// Build the debug window title string from the current debug state.
 pub fn debug_title(editor: &Editor) -> String {
-    match &editor.debug_state {
+    match &editor.dap.state {
         Some(state) => match &state.target {
             DebugTarget::Dap {
                 adapter_name,
@@ -38,7 +38,7 @@ pub enum DebugLineStyle {
 
 /// Determine the semantic style for a debug line item.
 ///
-/// `active_thread_id` comes from `editor.debug_state`.
+/// `active_thread_id` comes from `editor.dap.state`.
 /// `selected_frame_id` comes from the buffer's `DebugView`.
 pub fn debug_line_style(
     item: Option<&DebugLineItem>,

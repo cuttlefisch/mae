@@ -30,13 +30,13 @@ impl Editor {
     /// unnamed `"` always mirrors the most recent yank/delete so `p`
     /// keeps working without an explicit register.
     pub(crate) fn save_yank(&mut self, text: String) {
-        let target = self.active_register.take();
+        let target = self.vi.active_register.take();
         if target == Some('_') {
             // Black-hole: don't even touch "" or "0.
             return;
         }
         // "0 always holds the last yank.
-        self.registers.insert('0', text.clone());
+        self.vi.registers.insert('0', text.clone());
         if let Some(ch) = target {
             self.write_named_register(ch, &text);
         }
@@ -45,7 +45,7 @@ impl Editor {
             let _ = crate::clipboard::copy(&text);
         }
         // Unnamed register mirrors the yank.
-        self.registers.insert('"', text);
+        self.vi.registers.insert('"', text);
     }
 
     /// Route a deleted string to the appropriate registers.
@@ -54,7 +54,7 @@ impl Editor {
     /// is reserved for the most recent *yank*, so you can still paste
     /// the last yank after a delete clobbered `""`.
     pub(crate) fn save_delete(&mut self, text: String) {
-        let target = self.active_register.take();
+        let target = self.vi.active_register.take();
         if target == Some('_') {
             return;
         }
@@ -65,7 +65,7 @@ impl Editor {
         if self.clipboard != "internal" {
             let _ = crate::clipboard::copy(&text);
         }
-        self.registers.insert('"', text);
+        self.vi.registers.insert('"', text);
     }
 
     /// Shared plumbing for named-register writes: uppercase = append,
@@ -75,22 +75,22 @@ impl Editor {
             if let Err(e) = crate::clipboard::copy(text) {
                 self.set_status(format!("Clipboard copy failed: {}", e));
             }
-            self.registers.insert(ch, text.to_string());
+            self.vi.registers.insert(ch, text.to_string());
             return;
         }
         if ch.is_ascii_uppercase() {
             let lower = ch.to_ascii_lowercase();
-            let entry = self.registers.entry(lower).or_default();
+            let entry = self.vi.registers.entry(lower).or_default();
             entry.push_str(text);
             return;
         }
-        self.registers.insert(ch, text.to_string());
+        self.vi.registers.insert(ch, text.to_string());
     }
 
     /// Read text for paste. Consumes [`Editor::active_register`] if
     /// set. Falls back to `"`. `"+`/`"*` query the system clipboard.
     pub(crate) fn paste_text(&mut self) -> Option<String> {
-        let target = self.active_register.take();
+        let target = self.vi.active_register.take();
         match target {
             Some('_') => None,
             Some(ch @ ('+' | '*')) => {
@@ -99,11 +99,11 @@ impl Editor {
                 // no xclip installed).
                 crate::clipboard::paste()
                     .ok()
-                    .or_else(|| self.registers.get(&ch).cloned())
+                    .or_else(|| self.vi.registers.get(&ch).cloned())
             }
             Some(ch) => {
                 let lower = ch.to_ascii_lowercase();
-                self.registers.get(&lower).cloned()
+                self.vi.registers.get(&lower).cloned()
             }
             None => {
                 // clipboard=unnamedplus: try system clipboard first, fall
@@ -115,7 +115,7 @@ impl Editor {
                         }
                     }
                 }
-                self.registers.get(&'"').cloned()
+                self.vi.registers.get(&'"').cloned()
             }
         }
     }
@@ -128,10 +128,10 @@ impl Editor {
         let text = match ch {
             '+' | '*' => crate::clipboard::paste()
                 .ok()
-                .or_else(|| self.registers.get(&ch).cloned()),
+                .or_else(|| self.vi.registers.get(&ch).cloned()),
             other => {
                 let key = other.to_ascii_lowercase();
-                self.registers.get(&key).cloned()
+                self.vi.registers.get(&key).cloned()
             }
         };
         let Some(text) = text else {
@@ -169,7 +169,7 @@ impl Editor {
             }
             v.extend(['+', '*', '_']);
             // Append any registers we might not have predicted.
-            for &k in self.registers.keys() {
+            for &k in self.vi.registers.keys() {
                 if !v.contains(&k) {
                     v.push(k);
                 }
@@ -178,7 +178,7 @@ impl Editor {
         };
         let mut any = false;
         for ch in order {
-            if let Some(text) = self.registers.get(&ch) {
+            if let Some(text) = self.vi.registers.get(&ch) {
                 if text.is_empty() {
                     continue;
                 }
@@ -219,86 +219,114 @@ mod tests {
 
     #[test]
     fn save_yank_populates_unnamed_and_zero() {
-        let mut ed = Editor::new();
-        ed.save_yank("hello".to_string());
-        assert_eq!(ed.registers.get(&'"').map(String::as_str), Some("hello"));
-        assert_eq!(ed.registers.get(&'0').map(String::as_str), Some("hello"));
+        let mut editor = Editor::new();
+        editor.save_yank("hello".to_string());
+        assert_eq!(
+            editor.vi.registers.get(&'"').map(String::as_str),
+            Some("hello")
+        );
+        assert_eq!(
+            editor.vi.registers.get(&'0').map(String::as_str),
+            Some("hello")
+        );
     }
 
     #[test]
     fn save_delete_populates_unnamed_but_not_zero() {
-        let mut ed = Editor::new();
-        ed.save_yank("original".to_string());
-        ed.save_delete("trashed".to_string());
-        assert_eq!(ed.registers.get(&'"').map(String::as_str), Some("trashed"));
+        let mut editor = Editor::new();
+        editor.save_yank("original".to_string());
+        editor.save_delete("trashed".to_string());
+        assert_eq!(
+            editor.vi.registers.get(&'"').map(String::as_str),
+            Some("trashed")
+        );
         // "0 retains the prior yank — deletes don't clobber it.
-        assert_eq!(ed.registers.get(&'0').map(String::as_str), Some("original"));
+        assert_eq!(
+            editor.vi.registers.get(&'0').map(String::as_str),
+            Some("original")
+        );
     }
 
     #[test]
     fn active_register_routes_yank() {
-        let mut ed = Editor::new();
-        ed.active_register = Some('a');
-        ed.save_yank("to-a".to_string());
-        assert_eq!(ed.registers.get(&'a').map(String::as_str), Some("to-a"));
-        assert_eq!(ed.registers.get(&'"').map(String::as_str), Some("to-a"));
+        let mut editor = Editor::new();
+        editor.vi.active_register = Some('a');
+        editor.save_yank("to-a".to_string());
+        assert_eq!(
+            editor.vi.registers.get(&'a').map(String::as_str),
+            Some("to-a")
+        );
+        assert_eq!(
+            editor.vi.registers.get(&'"').map(String::as_str),
+            Some("to-a")
+        );
         // Active register consumed.
-        assert_eq!(ed.active_register, None);
+        assert_eq!(editor.vi.active_register, None);
     }
 
     #[test]
     fn uppercase_register_appends() {
-        let mut ed = Editor::new();
-        ed.active_register = Some('a');
-        ed.save_yank("first".to_string());
-        ed.active_register = Some('A');
-        ed.save_yank("-second".to_string());
+        let mut editor = Editor::new();
+        editor.vi.active_register = Some('a');
+        editor.save_yank("first".to_string());
+        editor.vi.active_register = Some('A');
+        editor.save_yank("-second".to_string());
         assert_eq!(
-            ed.registers.get(&'a').map(String::as_str),
+            editor.vi.registers.get(&'a').map(String::as_str),
             Some("first-second")
         );
     }
 
     #[test]
     fn black_hole_discards_everything() {
-        let mut ed = Editor::new();
-        ed.save_yank("keep-me".to_string());
-        ed.active_register = Some('_');
-        ed.save_delete("bye".to_string());
+        let mut editor = Editor::new();
+        editor.save_yank("keep-me".to_string());
+        editor.vi.active_register = Some('_');
+        editor.save_delete("bye".to_string());
         // Neither "" nor "0 were touched by the black-hole delete.
-        assert_eq!(ed.registers.get(&'"').map(String::as_str), Some("keep-me"));
-        assert_eq!(ed.registers.get(&'0').map(String::as_str), Some("keep-me"));
+        assert_eq!(
+            editor.vi.registers.get(&'"').map(String::as_str),
+            Some("keep-me")
+        );
+        assert_eq!(
+            editor.vi.registers.get(&'0').map(String::as_str),
+            Some("keep-me")
+        );
     }
 
     #[test]
     fn paste_text_reads_active_register() {
-        let mut ed = Editor::new();
-        ed.registers.insert('a', "from-a".to_string());
-        ed.registers.insert('"', "from-unnamed".to_string());
-        ed.active_register = Some('a');
-        assert_eq!(ed.paste_text().as_deref(), Some("from-a"));
-        assert_eq!(ed.active_register, None);
+        let mut editor = Editor::new();
+        editor.vi.registers.insert('a', "from-a".to_string());
+        editor.vi.registers.insert('"', "from-unnamed".to_string());
+        editor.vi.active_register = Some('a');
+        assert_eq!(editor.paste_text().as_deref(), Some("from-a"));
+        assert_eq!(editor.vi.active_register, None);
         // After consuming the active register, paste falls back to "".
-        assert_eq!(ed.paste_text().as_deref(), Some("from-unnamed"));
+        assert_eq!(editor.paste_text().as_deref(), Some("from-unnamed"));
     }
 
     #[test]
     fn paste_text_black_hole_returns_none() {
-        let mut ed = Editor::new();
-        ed.registers.insert('"', "x".into());
-        ed.active_register = Some('_');
-        assert_eq!(ed.paste_text(), None);
+        let mut editor = Editor::new();
+        editor.vi.registers.insert('"', "x".into());
+        editor.vi.active_register = Some('_');
+        assert_eq!(editor.paste_text(), None);
     }
 
     #[test]
     fn show_registers_buffer_lists_non_empty() {
-        let mut ed = Editor::new();
-        ed.registers.insert('"', "unnamed-text".into());
-        ed.registers.insert('a', "alpha".into());
+        let mut editor = Editor::new();
+        editor.vi.registers.insert('"', "unnamed-text".into());
+        editor.vi.registers.insert('a', "alpha".into());
         // Empty register should not appear.
-        ed.registers.insert('z', "".into());
-        ed.show_registers_buffer();
-        let buf = ed.buffers.iter().find(|b| b.name == "*Registers*").unwrap();
+        editor.vi.registers.insert('z', "".into());
+        editor.show_registers_buffer();
+        let buf = editor
+            .buffers
+            .iter()
+            .find(|b| b.name == "*Registers*")
+            .unwrap();
         let text = buf.text();
         assert!(text.contains("unnamed-text"));
         assert!(text.contains("alpha"));
@@ -307,53 +335,57 @@ mod tests {
 
     #[test]
     fn show_registers_buffer_empty_case() {
-        let mut ed = Editor::new();
-        ed.show_registers_buffer();
-        let buf = ed.buffers.iter().find(|b| b.name == "*Registers*").unwrap();
+        let mut editor = Editor::new();
+        editor.show_registers_buffer();
+        let buf = editor
+            .buffers
+            .iter()
+            .find(|b| b.name == "*Registers*")
+            .unwrap();
         assert!(buf.text().contains("all registers empty"));
     }
 
     #[test]
     fn clipboard_internal_skips_system_clipboard() {
-        let mut ed = Editor::new();
-        ed.clipboard = "internal".to_string();
+        let mut editor = Editor::new();
+        editor.clipboard = "internal".to_string();
         // Should not panic or error — clipboard::copy is never called.
-        ed.save_yank("internal-only".to_string());
+        editor.save_yank("internal-only".to_string());
         assert_eq!(
-            ed.registers.get(&'"').map(String::as_str),
+            editor.vi.registers.get(&'"').map(String::as_str),
             Some("internal-only")
         );
         assert_eq!(
-            ed.registers.get(&'0').map(String::as_str),
+            editor.vi.registers.get(&'0').map(String::as_str),
             Some("internal-only")
         );
     }
 
     #[test]
     fn clipboard_option_default_is_unnamed() {
-        let ed = Editor::new();
-        assert_eq!(ed.clipboard, "unnamed");
+        let editor = Editor::new();
+        assert_eq!(editor.clipboard, "unnamed");
     }
 
     #[test]
     fn set_clipboard_option_validates() {
-        let mut ed = Editor::new();
-        assert!(ed.set_option("clipboard", "unnamedplus").is_ok());
-        assert_eq!(ed.clipboard, "unnamedplus");
-        assert!(ed.set_option("clipboard", "unnamed").is_ok());
-        assert_eq!(ed.clipboard, "unnamed");
-        assert!(ed.set_option("clipboard", "internal").is_ok());
-        assert_eq!(ed.clipboard, "internal");
-        assert!(ed.set_option("clipboard", "bogus").is_err());
+        let mut editor = Editor::new();
+        assert!(editor.set_option("clipboard", "unnamedplus").is_ok());
+        assert_eq!(editor.clipboard, "unnamedplus");
+        assert!(editor.set_option("clipboard", "unnamed").is_ok());
+        assert_eq!(editor.clipboard, "unnamed");
+        assert!(editor.set_option("clipboard", "internal").is_ok());
+        assert_eq!(editor.clipboard, "internal");
+        assert!(editor.set_option("clipboard", "bogus").is_err());
     }
 
     #[test]
     fn paste_from_yank_register() {
-        let mut ed = Editor::new();
-        ed.registers.insert('0', "yanked".into());
-        ed.registers.insert('"', "deleted".into());
-        ed.dispatch_builtin("paste-from-yank");
-        let text = ed.buffers[ed.active_buffer_idx()].text();
+        let mut editor = Editor::new();
+        editor.vi.registers.insert('0', "yanked".into());
+        editor.vi.registers.insert('"', "deleted".into());
+        editor.dispatch_builtin("paste-from-yank");
+        let text = editor.buffers[editor.active_buffer_idx()].text();
         assert!(
             text.contains("yanked"),
             "paste-from-yank should use register 0, got: {}",
@@ -365,9 +397,9 @@ mod tests {
     // Verify commands remain registered as kernel builtins.
     #[test]
     fn register_commands_registered() {
-        let ed = Editor::new();
-        assert!(ed.commands.contains("show-registers"));
-        assert!(ed.commands.contains("paste-from-yank"));
-        assert!(ed.commands.contains("prompt-register"));
+        let editor = Editor::new();
+        assert!(editor.commands.contains("show-registers"));
+        assert!(editor.commands.contains("paste-from-yank"));
+        assert!(editor.commands.contains("prompt-register"));
     }
 }

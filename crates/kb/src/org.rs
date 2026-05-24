@@ -16,7 +16,7 @@
 //! swap in tree-sitter-org without breaking the API.
 
 use crate::{KnowledgeBase, Node, NodeKind};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Result of ingesting a directory: how many files were parsed as nodes
@@ -36,7 +36,11 @@ pub fn parse_org(content: &str) -> Option<Node> {
     let id = header.file_id?;
     let title = header.file_title.unwrap_or_else(|| id.clone());
     let body = rewrite_links(content);
-    Some(Node::new(id, title, NodeKind::Note, body).with_tags(header.file_tags))
+    let mut node = Node::new(id, title, NodeKind::Note, body).with_tags(header.file_tags);
+    if !header.file_properties.is_empty() {
+        node = node.with_properties(header.file_properties);
+    }
+    Some(node)
 }
 
 /// Parse an org file into zero or more nodes: the file itself (if it
@@ -59,7 +63,12 @@ pub fn parse_org_multi(content: &str) -> Vec<Node> {
     if let Some(id) = header.file_id.clone() {
         let title = header.file_title.clone().unwrap_or_else(|| id.clone());
         let body = rewrite_links(content);
-        out.push(Node::new(id, title, NodeKind::Note, body).with_tags(header.file_tags.clone()));
+        let mut node =
+            Node::new(id, title, NodeKind::Note, body).with_tags(header.file_tags.clone());
+        if !header.file_properties.is_empty() {
+            node = node.with_properties(header.file_properties.clone());
+        }
+        out.push(node);
     }
 
     // Heading nodes. Find heading boundaries; for each heading with an
@@ -81,7 +90,8 @@ pub fn parse_org_multi(content: &str) -> Vec<Node> {
             .find(|(_, l, _)| *l <= level)
             .map(|(idx, _, _)| *idx)
             .unwrap_or(lines.len());
-        let Some(id) = scan_heading_id(&lines[start + 1..end]) else {
+        let (heading_id, heading_props) = scan_heading_properties(&lines[start + 1..end]);
+        let Some(id) = heading_id else {
             continue;
         };
         let body_raw = lines[start..end].join("\n");
@@ -92,6 +102,9 @@ pub fn parse_org_multi(content: &str) -> Vec<Node> {
             Node::new(id, headings[hi].2.title.clone(), NodeKind::Note, body).with_tags(tags);
         node.todo_state = headings[hi].2.todo_state.clone();
         node.priority = headings[hi].2.priority;
+        if !heading_props.is_empty() {
+            node.properties = heading_props;
+        }
         out.push(node);
     }
 
@@ -103,6 +116,8 @@ struct FileHeader {
     file_title: Option<String>,
     file_tags: Vec<String>,
     file_header_end: usize,
+    /// All property drawer key-value pairs (lowercased keys, excluding ID).
+    file_properties: HashMap<String, String>,
 }
 
 fn parse_file_header(content: &str) -> FileHeader {
@@ -110,6 +125,7 @@ fn parse_file_header(content: &str) -> FileHeader {
     let mut file_id = None;
     let mut file_title = None;
     let mut file_tags = Vec::new();
+    let mut file_properties = HashMap::new();
     let mut in_properties = false;
     let mut file_header_end = 0;
 
@@ -121,6 +137,7 @@ fn parse_file_header(content: &str) -> FileHeader {
                 file_title,
                 file_tags,
                 file_header_end,
+                file_properties,
             };
         }
         file_header_end = i + 1;
@@ -137,10 +154,13 @@ fn parse_file_header(content: &str) -> FileHeader {
         if in_properties {
             if let Some(rest) = trimmed.strip_prefix(':') {
                 if let Some((key, value)) = rest.split_once(':') {
-                    if key.eq_ignore_ascii_case("ID") {
-                        let v = value.trim();
-                        if !v.is_empty() {
+                    let v = value.trim();
+                    if !v.is_empty() {
+                        if key.eq_ignore_ascii_case("ID") {
                             file_id = Some(v.to_string());
+                        } else {
+                            // Store all non-ID properties with lowercased key.
+                            file_properties.insert(key.to_ascii_lowercase(), v.to_string());
                         }
                     }
                 }
@@ -170,6 +190,7 @@ fn parse_file_header(content: &str) -> FileHeader {
         file_title,
         file_tags,
         file_header_end,
+        file_properties,
     }
 }
 
@@ -281,39 +302,43 @@ fn is_org_tag_run(s: &str) -> bool {
 }
 
 /// Scan the lines immediately after a heading for a `:PROPERTIES: :ID: …
-/// :END:` drawer. Returns the ID if present. Only looks at contiguous
-/// lines starting right after the heading — if a blank line precedes
-/// the drawer it's still considered valid (org tolerates that).
-fn scan_heading_id(lines: &[&str]) -> Option<String> {
+/// :END:` drawer. Returns the ID and all other properties if present.
+/// Only looks at contiguous lines starting right after the heading —
+/// if a blank line precedes the drawer it's still considered valid
+/// (org tolerates that).
+fn scan_heading_properties(lines: &[&str]) -> (Option<String>, HashMap<String, String>) {
     let mut in_props = false;
+    let mut id = None;
+    let mut props = HashMap::new();
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start();
         let upper = trimmed.to_ascii_uppercase();
         if i == 0 && !in_props && !upper.starts_with(":PROPERTIES:") && !trimmed.is_empty() {
-            // Drawer must be the very first content after the heading.
-            return None;
+            return (None, props);
         }
         if upper.starts_with(":PROPERTIES:") {
             in_props = true;
             continue;
         }
         if in_props && upper.starts_with(":END:") {
-            return None;
+            return (id, props);
         }
         if in_props {
             if let Some(rest) = trimmed.strip_prefix(':') {
                 if let Some((key, value)) = rest.split_once(':') {
-                    if key.eq_ignore_ascii_case("ID") {
-                        let v = value.trim();
-                        if !v.is_empty() {
-                            return Some(v.to_string());
+                    let v = value.trim();
+                    if !v.is_empty() {
+                        if key.eq_ignore_ascii_case("ID") {
+                            id = Some(v.to_string());
+                        } else {
+                            props.insert(key.to_ascii_lowercase(), v.to_string());
                         }
                     }
                 }
             }
         }
     }
-    None
+    (id, props)
 }
 
 /// Rewrite `[[id:UUID][display]]` / `[[id:UUID]]` → `[[UUID|display]]` /
@@ -389,6 +414,64 @@ pub fn rewrite_links(body: &str) -> String {
         i += ch.len_utf8();
     }
     out
+}
+
+/// Rewrite a single property in an org file's PROPERTIES drawer.
+/// If the key exists, update its value. If not, insert before :END:.
+/// Returns the modified content string, or None if no PROPERTIES drawer found.
+pub fn update_property(content: &str, key: &str, value: &str) -> Option<String> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut in_props = false;
+    let key_lower = key.to_ascii_lowercase();
+    let mut found_key_line = None;
+    let mut end_line = None;
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        let upper = trimmed.to_ascii_uppercase();
+        if upper.starts_with(":PROPERTIES:") {
+            in_props = true;
+            continue;
+        }
+        if in_props && upper.starts_with(":END:") {
+            end_line = Some(i);
+            break;
+        }
+        if in_props {
+            if let Some(rest) = trimmed.strip_prefix(':') {
+                if let Some((k, _)) = rest.split_once(':') {
+                    if k.eq_ignore_ascii_case(&key_lower) {
+                        found_key_line = Some(i);
+                    }
+                }
+            }
+        }
+    }
+
+    let end_line = end_line?; // No valid PROPERTIES drawer → bail
+
+    let mut result = Vec::with_capacity(lines.len() + 1);
+    for (i, line) in lines.iter().enumerate() {
+        if Some(i) == found_key_line {
+            // Replace the existing key line, preserving indentation
+            let indent = &line[..line.len() - line.trim_start().len()];
+            result.push(format!("{}:{}: {}", indent, key, value));
+        } else if found_key_line.is_none() && i == end_line {
+            // Key not found — insert before :END:
+            let indent = &line[..line.len() - line.trim_start().len()];
+            result.push(format!("{}:{}: {}", indent, key, value));
+            result.push(line.to_string());
+        } else {
+            result.push(line.to_string());
+        }
+    }
+
+    // Preserve trailing newline if original had one
+    let mut out = result.join("\n");
+    if content.ends_with('\n') {
+        out.push('\n');
+    }
+    Some(out)
 }
 
 impl KnowledgeBase {
@@ -724,5 +807,88 @@ x = \"[[id:fake][link]]\"
             out.contains("[[id:fake][link]]"),
             "case-insensitive code block not detected: {out}"
         );
+    }
+
+    #[test]
+    fn parse_captures_all_properties() {
+        let content = "\
+:PROPERTIES:
+:ID:       abc-123
+:hash:     deadbeef
+:last-modified: 2026-01-15
+:last-accessed: 2026-01-14
+:END:
+#+title: My Note
+
+Body text.
+";
+        let node = parse_org(content).unwrap();
+        assert_eq!(node.id, "abc-123");
+        assert_eq!(node.properties.get("hash").unwrap(), "deadbeef");
+        assert_eq!(node.properties.get("last-modified").unwrap(), "2026-01-15");
+        assert_eq!(node.properties.get("last-accessed").unwrap(), "2026-01-14");
+        // ID should NOT be in properties (it's the node id).
+        assert!(!node.properties.contains_key("id"));
+    }
+
+    #[test]
+    fn multi_heading_captures_properties() {
+        let content = "\
+:PROPERTIES:
+:ID: file-id
+:hash: filehash
+:END:
+#+title: Daily
+
+* Entry
+:PROPERTIES:
+:ID: heading-id
+:custom-prop: hello
+:END:
+
+Body.
+";
+        let nodes = parse_org_multi(content);
+        let file_node = nodes.iter().find(|n| n.id == "file-id").unwrap();
+        assert_eq!(file_node.properties.get("hash").unwrap(), "filehash");
+        let heading_node = nodes.iter().find(|n| n.id == "heading-id").unwrap();
+        assert_eq!(heading_node.properties.get("custom-prop").unwrap(), "hello");
+    }
+
+    #[test]
+    fn update_property_inserts_new() {
+        let content = "\
+:PROPERTIES:
+:ID: abc
+:END:
+#+title: Test
+";
+        let result = update_property(content, "hash", "deadbeef").unwrap();
+        assert!(result.contains(":hash: deadbeef"));
+        assert!(result.contains(":END:"));
+        // hash should appear before :END:
+        let hash_pos = result.find(":hash:").unwrap();
+        let end_pos = result.find(":END:").unwrap();
+        assert!(hash_pos < end_pos);
+    }
+
+    #[test]
+    fn update_property_replaces_existing() {
+        let content = "\
+:PROPERTIES:
+:ID: abc
+:hash: oldhash
+:END:
+#+title: Test
+";
+        let result = update_property(content, "hash", "newhash").unwrap();
+        assert!(result.contains(":hash: newhash"));
+        assert!(!result.contains("oldhash"));
+    }
+
+    #[test]
+    fn update_property_returns_none_for_malformed() {
+        let content = "#+title: No drawer\nBody text.\n";
+        assert!(update_property(content, "hash", "value").is_none());
     }
 }

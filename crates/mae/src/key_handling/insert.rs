@@ -19,8 +19,8 @@ pub(super) fn handle_insert_mode(
     // Ctrl-R <reg> — insert the named register's contents at the cursor.
     // The next char is captured here (after Ctrl-R has already fired).
     // Escape cancels.
-    if editor.pending_insert_register {
-        editor.pending_insert_register = false;
+    if editor.vi.pending_insert_register {
+        editor.vi.pending_insert_register = false;
         if let KeyCode::Char(ch) = key.code {
             editor.insert_from_register(ch);
         }
@@ -37,7 +37,7 @@ pub(super) fn handle_insert_mode(
     // the generic `Char('r')` insertion path.
     if let KeyCode::Char('r') = key.code {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
-            editor.pending_insert_register = true;
+            editor.vi.pending_insert_register = true;
             return;
         }
     }
@@ -188,7 +188,7 @@ pub(super) fn handle_insert_mode(
         }
         // C-o: execute one normal-mode command, then return to insert
         KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            editor.insert_mode_oneshot_normal = true;
+            editor.vi.insert_mode_oneshot_normal = true;
             editor.set_mode(mae_core::Mode::Normal);
             editor.set_status("-- (insert) -- C-o: one normal command, then back to insert");
             return;

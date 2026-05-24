@@ -40,6 +40,8 @@ pub struct Config {
     pub performance: PerformanceSection,
     #[serde(default)]
     pub org: OrgSection,
+    #[serde(default)]
+    pub collaboration: CollaborationSection,
 }
 
 /// Current config schema version. Bump when config.toml format changes.
@@ -155,6 +157,22 @@ pub struct PerformanceSection {
     pub degrade_threshold_line_length: Option<usize>,
     pub display_region_debounce_ms: Option<u64>,
     pub syntax_reparse_debounce_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CollaborationSection {
+    /// State server address (e.g. "127.0.0.1:9473").
+    pub server_address: Option<String>,
+    /// Automatically connect to the state server on startup.
+    pub auto_connect: Option<bool>,
+    /// Automatically share new file buffers when connected.
+    pub auto_share: Option<bool>,
+    /// Seconds between reconnection attempts (default: 5).
+    pub reconnect_interval_secs: Option<u64>,
+    /// Display name for collaborative edits (shown to peers).
+    pub user_name: Option<String>,
+    /// Seconds between heartbeat pings to the state server (0 = disabled, default: 30).
+    pub heartbeat_interval_secs: Option<u64>,
 }
 
 fn default_true() -> bool {
@@ -335,7 +353,11 @@ fn default_init_template() -> &'static str {
     "file-tree"         ; project sidebar
 
   :lang
+    "org"               ; org-mode keymap + hooks
     "tables"            ; table manipulation in org/markdown
+
+  :app
+    "dailies"           ; daily notes (SPC n d)
 )
 
 ;; ── Third-party packages ─────────────────────────────────
@@ -410,10 +432,10 @@ impl SchemeAiOverrides {
     /// Build from editor state. Empty strings mean "not set".
     pub fn from_editor(editor: &mae_core::Editor) -> Self {
         Self {
-            provider: editor.ai_provider.clone(),
-            model: editor.ai_model.clone(),
-            api_key_command: editor.ai_api_key_command.clone(),
-            base_url: editor.ai_base_url.clone(),
+            provider: editor.ai.provider.clone(),
+            model: editor.ai.model.clone(),
+            api_key_command: editor.ai.api_key_command.clone(),
+            base_url: editor.ai.base_url.clone(),
         }
     }
 

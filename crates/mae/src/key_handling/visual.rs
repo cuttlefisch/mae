@@ -9,10 +9,10 @@ pub(super) fn handle_visual_mode(
     pending_keys: &mut Vec<KeyPress>,
 ) {
     // Register prompt (`"<char>` in visual mode — same semantics as Normal).
-    if editor.pending_register_prompt {
-        editor.pending_register_prompt = false;
+    if editor.vi.pending_register_prompt {
+        editor.vi.pending_register_prompt = false;
         if let KeyCode::Char(ch) = key.code {
-            editor.active_register = Some(ch);
+            editor.vi.active_register = Some(ch);
             editor.set_status(format!("\"{}", ch));
         } else {
             editor.set_status("");
@@ -21,25 +21,25 @@ pub(super) fn handle_visual_mode(
     }
 
     // Handle pending char-argument commands (f/F/t/T or text objects)
-    if let Some(cmd) = editor.pending_char_command.take() {
+    if let Some(cmd) = editor.vi.pending_char_command.take() {
         if let KeyCode::Char(ch) = key.code {
-            let had_pending_op = editor.pending_operator.is_some();
+            let had_pending_op = editor.vi.pending_operator.is_some();
             if editor.dispatch_text_object(&cmd, ch) || editor.dispatch_surround(&cmd, ch) {
                 // Text object/surround handled it directly — clear dangling state
-                editor.pending_operator = None;
-                editor.operator_start = None;
-                editor.operator_count = None;
+                editor.vi.pending_operator = None;
+                editor.vi.operator_start = None;
+                editor.vi.operator_count = None;
             } else {
                 editor.dispatch_char_motion(&cmd, ch);
                 if had_pending_op {
-                    editor.last_motion_linewise = false;
+                    editor.vi.last_motion_linewise = false;
                     editor.apply_pending_operator();
                 }
             }
         } else {
-            editor.pending_operator = None;
-            editor.operator_start = None;
-            editor.operator_count = None;
+            editor.vi.pending_operator = None;
+            editor.vi.operator_start = None;
+            editor.vi.operator_count = None;
         }
         return;
     }
@@ -52,8 +52,8 @@ pub(super) fn handle_visual_mode(
             && pending_keys.is_empty()
         {
             let digit = (ch as usize) - ('0' as usize);
-            let current = editor.count_prefix.unwrap_or(0);
-            editor.count_prefix = Some((current * 10 + digit).min(99999));
+            let current = editor.vi.count_prefix.unwrap_or(0);
+            editor.vi.count_prefix = Some((current * 10 + digit).min(99999));
             return;
         }
     }
@@ -61,17 +61,17 @@ pub(super) fn handle_visual_mode(
         if !key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            && editor.count_prefix.is_some()
+            && editor.vi.count_prefix.is_some()
             && pending_keys.is_empty()
         {
-            let current = editor.count_prefix.unwrap_or(0);
-            editor.count_prefix = Some((current * 10).min(99999));
+            let current = editor.vi.count_prefix.unwrap_or(0);
+            editor.vi.count_prefix = Some((current * 10).min(99999));
             return;
         }
     }
 
     if key.code == KeyCode::Esc {
-        editor.count_prefix = None;
+        editor.vi.count_prefix = None;
     }
 
     super::normal::handle_keymap_mode(editor, scheme, key, pending_keys);

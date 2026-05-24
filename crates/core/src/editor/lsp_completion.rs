@@ -134,95 +134,95 @@ mod tests {
 
     #[test]
     fn apply_completion_result_stores_items() {
-        let mut ed = Editor::new();
-        ed.apply_completion_result(vec![make_item("foo", "foo"), make_item("bar", "bar")]);
-        assert_eq!(ed.completion_items.len(), 2);
-        assert_eq!(ed.completion_selected, 0);
+        let mut editor = Editor::new();
+        editor.apply_completion_result(vec![make_item("foo", "foo"), make_item("bar", "bar")]);
+        assert_eq!(editor.completion_items.len(), 2);
+        assert_eq!(editor.completion_selected, 0);
     }
 
     #[test]
     fn apply_completion_result_empty_clears_popup() {
-        let mut ed = Editor::new();
-        ed.apply_completion_result(vec![make_item("foo", "foo")]);
-        ed.apply_completion_result(vec![]);
-        assert!(ed.completion_items.is_empty());
+        let mut editor = Editor::new();
+        editor.apply_completion_result(vec![make_item("foo", "foo")]);
+        editor.apply_completion_result(vec![]);
+        assert!(editor.completion_items.is_empty());
     }
 
     #[test]
     fn lsp_dismiss_completion_clears_state() {
-        let mut ed = Editor::new();
-        ed.apply_completion_result(vec![make_item("foo", "foo")]);
-        ed.completion_selected = 0;
-        ed.lsp_dismiss_completion();
-        assert!(ed.completion_items.is_empty());
-        assert_eq!(ed.completion_selected, 0);
+        let mut editor = Editor::new();
+        editor.apply_completion_result(vec![make_item("foo", "foo")]);
+        editor.completion_selected = 0;
+        editor.lsp_dismiss_completion();
+        assert!(editor.completion_items.is_empty());
+        assert_eq!(editor.completion_selected, 0);
     }
 
     #[test]
     fn lsp_complete_next_wraps() {
-        let mut ed = Editor::new();
-        ed.apply_completion_result(vec![
+        let mut editor = Editor::new();
+        editor.apply_completion_result(vec![
             make_item("a", "a"),
             make_item("b", "b"),
             make_item("c", "c"),
         ]);
-        ed.lsp_complete_next();
-        assert_eq!(ed.completion_selected, 1);
-        ed.lsp_complete_next();
-        assert_eq!(ed.completion_selected, 2);
-        ed.lsp_complete_next(); // wraps to 0
-        assert_eq!(ed.completion_selected, 0);
+        editor.lsp_complete_next();
+        assert_eq!(editor.completion_selected, 1);
+        editor.lsp_complete_next();
+        assert_eq!(editor.completion_selected, 2);
+        editor.lsp_complete_next(); // wraps to 0
+        assert_eq!(editor.completion_selected, 0);
     }
 
     #[test]
     fn lsp_complete_prev_wraps() {
-        let mut ed = Editor::new();
-        ed.apply_completion_result(vec![
+        let mut editor = Editor::new();
+        editor.apply_completion_result(vec![
             make_item("a", "a"),
             make_item("b", "b"),
             make_item("c", "c"),
         ]);
-        ed.lsp_complete_prev(); // wraps to 2
-        assert_eq!(ed.completion_selected, 2);
+        editor.lsp_complete_prev(); // wraps to 2
+        assert_eq!(editor.completion_selected, 2);
     }
 
     #[test]
     fn lsp_request_completion_queues_intent() {
-        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        ed.lsp_request_completion();
-        assert_eq!(ed.pending_lsp_requests.len(), 1);
+        let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        editor.lsp_request_completion();
+        assert_eq!(editor.pending_lsp_requests.len(), 1);
         assert!(matches!(
-            ed.pending_lsp_requests[0],
+            editor.pending_lsp_requests[0],
             LspIntent::Completion { .. }
         ));
     }
 
     #[test]
     fn lsp_request_completion_skipped_for_buffer_without_file() {
-        let mut ed = Editor::new();
-        ed.lsp_request_completion();
-        assert!(ed.pending_lsp_requests.is_empty());
+        let mut editor = Editor::new();
+        editor.lsp_request_completion();
+        assert!(editor.pending_lsp_requests.is_empty());
     }
 
     #[test]
     fn lsp_accept_completion_inserts_text() {
-        let mut ed = editor_with_file("/tmp/a.rs", "fn mai\n");
+        let mut editor = editor_with_file("/tmp/a.rs", "fn mai\n");
         // Position cursor at end of "mai" (col 6)
         {
-            let win = ed.window_mgr.focused_window_mut();
+            let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = 0;
             win.cursor_col = 6;
         }
-        ed.apply_completion_result(vec![make_item("main", "main")]);
-        ed.lsp_accept_completion();
-        assert_eq!(ed.active_buffer().line_text(0), "fn main\n");
-        assert!(ed.completion_items.is_empty());
+        editor.apply_completion_result(vec![make_item("main", "main")]);
+        editor.lsp_accept_completion();
+        assert_eq!(editor.active_buffer().line_text(0), "fn main\n");
+        assert!(editor.completion_items.is_empty());
     }
 
     #[test]
     fn lsp_accept_completion_noop_when_empty() {
-        let mut ed = editor_with_file("/tmp/a.rs", "hello\n");
-        ed.lsp_accept_completion(); // must not panic
-        assert_eq!(ed.active_buffer().line_text(0), "hello\n");
+        let mut editor = editor_with_file("/tmp/a.rs", "hello\n");
+        editor.lsp_accept_completion(); // must not panic
+        assert_eq!(editor.active_buffer().line_text(0), "hello\n");
     }
 }

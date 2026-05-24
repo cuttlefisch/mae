@@ -82,6 +82,7 @@ pub const QUICK_ACTIONS: &[(&str, &str, &str)] = &[
     ("SPC h t", "Tutorial", "tutor"),
     ("SPC t s", "Set theme", "theme-picker"),
     ("SPC x", "Scratch buffer", "toggle-scratch-buffer"),
+    ("SPC C c", "Connect to server", "collab-connect"),
     ("SPC q q", "Quit", "quit"),
 ];
 

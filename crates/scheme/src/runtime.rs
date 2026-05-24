@@ -65,10 +65,14 @@ struct SharedState {
     pending_undo: bool,
     /// Pending redo
     pending_redo: bool,
+    /// Pending undo boundary (sync_undo_boundary)
+    pending_undo_boundary: bool,
     /// Pending switch-to-buffer index
     pending_switch_buffer: Option<usize>,
     /// Key removals: (keymap_name, key_string)
     pending_key_removals: Vec<(String, String)>,
+    /// Group name assignments: (keymap_name, prefix_key_string, label)
+    pending_group_names: Vec<(String, String, String)>,
 
     // --- Package infrastructure ---
     /// Features that have been `provide`d.
@@ -127,6 +131,80 @@ struct SharedState {
     /// Current module directory (set before loading each module's autoloads).
     /// Used by `register-splash-art-image!` to resolve relative paths.
     current_module_dir: Option<PathBuf>,
+
+    // --- Test framework primitives ---
+    /// Pending exit code from `(exit CODE)`.
+    pending_exit_code: Option<i32>,
+    /// Pending file writes from `(write-file PATH CONTENT)`.
+    pending_write_files: Vec<(String, String)>,
+    /// Pending sleep from `(sleep-ms N)`.
+    pending_sleep_ms: Option<u64>,
+    /// Ex-commands to dispatch via `(execute-ex CMD-STRING)`.
+    /// Routes through `execute_command()` which handles argument parsing.
+    pending_ex_commands: Vec<String>,
+
+    // --- CRDT/sync test primitives ---
+    /// Pending enable-sync: client_id for active buffer.
+    pending_enable_sync: Option<u64>,
+    /// Pending disable-sync on active buffer.
+    pending_disable_sync: bool,
+    /// Pending sync updates to apply: (buffer_name, base64-encoded update).
+    pending_sync_applies: Vec<(String, Vec<u8>)>,
+    /// Pending load-sync-state: (base64-decoded state bytes, client_id).
+    pending_load_sync_state: Option<(Vec<u8>, u64)>,
+    /// Accumulated sync updates from pending_sync_updates (base64-encoded).
+    /// Always captured after each apply cycle; drained by `(buffer-drain-updates)`.
+    accumulated_sync_updates: Vec<String>,
+    /// Current mode string for test inspection (updated by test runner).
+    current_mode: String,
+    /// Active buffer text for test inspection (updated by test runner).
+    current_buffer_text: String,
+    /// All buffer texts for (buffer-text NAME) (updated by test runner).
+    all_buffer_texts: Vec<(String, String)>,
+    /// Whether sync is enabled on active buffer (updated by test runner).
+    sync_enabled: bool,
+    /// Number of pending sync updates (updated by test runner).
+    pending_update_count: usize,
+    /// Sync doc content (None if sync not enabled) (updated by test runner).
+    sync_content: Option<String>,
+    /// Encoded sync state (None if sync not enabled) (updated by test runner).
+    encoded_state: Option<String>,
+    /// Buffer name→index mapping (updated by test runner for cross-test visibility).
+    buffer_names: Vec<(usize, String)>,
+
+    // --- Option state (updated by test runner) ---
+    /// Snapshot of option values: (name, value_string).
+    option_values: Vec<(String, String)>,
+
+    // --- Visual/region state (updated by test runner) ---
+    /// Whether a visual selection is active.
+    region_active: bool,
+    /// Start offset of the visual selection.
+    region_start: usize,
+    /// End offset of the visual selection.
+    region_end: usize,
+
+    // --- Cursor state (updated by test runner) ---
+    /// Cursor row (0-indexed), updated by sync_scheme_state.
+    cursor_row: usize,
+    /// Cursor column (0-indexed), updated by sync_scheme_state.
+    cursor_col: usize,
+    /// Last status message set by the editor (for test inspection).
+    last_status_message: String,
+
+    // --- State vector / reconcile (new CRDT test primitives) ---
+    /// Pending state vector encode request.
+    pending_encode_state_vector: bool,
+    /// Encoded state vector result (base64).
+    encoded_state_vector: Option<String>,
+    /// Pending compute-diff: (remote_state_vector_base64).
+    pending_compute_diff: Option<String>,
+    /// Computed diff result (base64).
+    computed_diff: Option<String>,
+    /// Pending reconcile-to: target text.
+    pending_reconcile_to: Option<String>,
+    /// Reconcile result (base64 update).
+    reconcile_result: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -297,6 +375,15 @@ impl SchemeRuntime {
         let s = shared.clone();
         engine.register_fn("run-command", move |name: String| {
             s.lock().unwrap().pending_commands.push(name);
+            SteelVal::Void
+        });
+
+        // (execute-ex CMD-STRING) — route through ex-command parser.
+        // Handles argument splitting: (execute-ex "collab-join test.txt"),
+        // (execute-ex "saveas /path/to/file"), (execute-ex "w /path"), etc.
+        let s = shared.clone();
+        engine.register_fn("execute-ex", move |cmd: String| {
+            s.lock().unwrap().pending_ex_commands.push(cmd);
             SteelVal::Void
         });
 
@@ -533,6 +620,14 @@ impl SchemeRuntime {
             SteelVal::Void
         });
 
+        // (buffer-undo-boundary) — mark an explicit CRDT undo boundary.
+        // Subsequent edits start a new undo item.
+        let s = shared.clone();
+        engine.register_fn("buffer-undo-boundary", move || {
+            s.lock().unwrap().pending_undo_boundary = true;
+            SteelVal::Void
+        });
+
         // (switch-to-buffer IDX)
         let s = shared.clone();
         engine.register_fn("switch-to-buffer", move |idx: isize| {
@@ -546,6 +641,19 @@ impl SchemeRuntime {
             s.lock().unwrap().pending_key_removals.push((map, key));
             SteelVal::Void
         });
+
+        // (set-group-name MAP PREFIX LABEL) — set which-key group label
+        let s = shared.clone();
+        engine.register_fn(
+            "set-group-name",
+            move |map: String, prefix: String, label: String| {
+                s.lock()
+                    .unwrap()
+                    .pending_group_names
+                    .push((map, prefix, label));
+                SteelVal::Void
+            },
+        );
 
         // --- File I/O (no editor state needed) ---
 
@@ -655,7 +763,7 @@ impl SchemeRuntime {
         engine
             .run(
                 r#"
-(define (when-flag flag-name thunk)
+(define (when-flag module-name flag-name thunk)
   ;; Flag variables are set as __mae-flag-MODULE-FLAG = #t by the loader.
   ;; We can't easily check from Scheme since we don't know the module name here,
   ;; so for now just evaluate the thunk. The loader only sets flags that are enabled.
@@ -1101,6 +1209,334 @@ impl SchemeRuntime {
             }
         });
 
+        // --- Test framework primitives ---
+
+        // (exit CODE) — request process exit with given code.
+        // Accumulated in SharedState; the test runner checks after each eval.
+        let s = shared.clone();
+        engine.register_fn("exit", move |code: isize| {
+            s.lock().unwrap().pending_exit_code = Some(code as i32);
+            SteelVal::Void
+        });
+
+        // (write-file PATH CONTENT) — write a string to disk.
+        // Useful for inter-container signaling in docker-based tests.
+        let s = shared.clone();
+        engine.register_fn("write-file", move |path: String, content: String| {
+            s.lock().unwrap().pending_write_files.push((path, content));
+            SteelVal::Void
+        });
+
+        // (sleep-ms N) — request a sleep of N milliseconds.
+        // Accumulated in SharedState; the test runner handles the actual sleep
+        // and drains collab/shell events during the wait.
+        let s = shared.clone();
+        engine.register_fn("sleep-ms", move |ms: isize| {
+            s.lock().unwrap().pending_sleep_ms = Some(ms.max(0) as u64);
+            SteelVal::Void
+        });
+
+        // (file-exists? PATH) — check if a file exists on disk.
+        engine.register_fn("file-exists?", move |path: String| -> bool {
+            std::path::Path::new(&path).exists()
+        });
+
+        // (wait-for-file PATH TIMEOUT-MS) — block until file exists.
+        // Uses real thread::sleep (100ms poll). Returns #t on success, #f on timeout.
+        // Note: blocks the main thread — collab events won't drain during wait.
+        // Fine for file-based signal coordination; use sleep-ms for CRDT waits.
+        engine.register_fn(
+            "wait-for-file",
+            move |path: String, timeout_ms: isize| -> bool {
+                let timeout = std::time::Duration::from_millis(timeout_ms.max(0) as u64);
+                let poll = std::time::Duration::from_millis(100);
+                let start = std::time::Instant::now();
+                loop {
+                    if std::path::Path::new(&path).exists() {
+                        return true;
+                    }
+                    if start.elapsed() >= timeout {
+                        return false;
+                    }
+                    std::thread::sleep(poll);
+                }
+            },
+        );
+
+        // (current-milliseconds) — monotonic time in milliseconds.
+        engine.register_fn("current-milliseconds", move || -> isize {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as isize
+        });
+
+        // (goto-char OFFSET) — move cursor to character offset (0-indexed).
+        // Accumulated as a pending cursor operation.
+        let s = shared.clone();
+        engine.register_fn("goto-char", move |offset: isize| {
+            // Store as a special sentinel: row=usize::MAX signals char-offset mode.
+            // The apply_to_editor handler converts offset → (row, col).
+            s.lock().unwrap().pending_cursor = Some((usize::MAX, offset.max(0) as usize));
+            SteelVal::Void
+        });
+
+        // --- Test introspection via SharedState ---
+
+        // --- Test introspection functions via SharedState ---
+        // These read from SharedState (updated by test runner's sync_scheme_state),
+        // so they always return the latest value regardless of Steel binding scopes.
+
+        // (current-mode) — read the current mode.
+        let s = shared.clone();
+        engine.register_fn("current-mode", move || -> String {
+            s.lock().unwrap().current_mode.clone()
+        });
+
+        // (test-buffer-string) — read active buffer text (test runner updates this).
+        let s = shared.clone();
+        engine.register_fn("test-buffer-string", move || -> String {
+            s.lock().unwrap().current_buffer_text.clone()
+        });
+
+        // (test-buffer-text NAME) — read named buffer text.
+        let s = shared.clone();
+        engine.register_fn("test-buffer-text", move |name: String| -> SteelVal {
+            let state = s.lock().unwrap();
+            state
+                .all_buffer_texts
+                .iter()
+                .find(|(n, _)| n == &name || n.ends_with(&name))
+                .map(|(_, t)| SteelVal::StringV(t.clone().into()))
+                .unwrap_or(SteelVal::BoolV(false))
+        });
+
+        // (messages-buffer-text) — read *messages* buffer content (for diagnostics assertions).
+        let s = shared.clone();
+        engine.register_fn("messages-buffer-text", move || -> String {
+            let state = s.lock().unwrap();
+            state
+                .all_buffer_texts
+                .iter()
+                .find(|(n, _)| n == "*messages*")
+                .map(|(_, t)| t.clone())
+                .unwrap_or_default()
+        });
+
+        // (test-sync-enabled?) — whether sync is enabled on active buffer.
+        let s = shared.clone();
+        engine.register_fn("test-sync-enabled?", move || -> bool {
+            s.lock().unwrap().sync_enabled
+        });
+
+        // (test-pending-updates) — number of pending sync updates.
+        let s = shared.clone();
+        engine.register_fn("test-pending-updates", move || -> isize {
+            s.lock().unwrap().pending_update_count as isize
+        });
+
+        // (test-sync-content) — sync doc content or #f.
+        let s = shared.clone();
+        engine.register_fn("test-sync-content", move || -> SteelVal {
+            let state = s.lock().unwrap();
+            match &state.sync_content {
+                Some(c) => SteelVal::StringV(c.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
+
+        // (test-encode-state) — encoded sync state or #f.
+        let s = shared.clone();
+        engine.register_fn("test-encode-state", move || -> SteelVal {
+            let state = s.lock().unwrap();
+            match &state.encoded_state {
+                Some(s) => SteelVal::StringV(s.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
+
+        // (test-get-buffer-by-name NAME) — lookup buffer index by name from SharedState.
+        let s = shared.clone();
+        engine.register_fn("test-get-buffer-by-name", move |name: String| -> SteelVal {
+            let state = s.lock().unwrap();
+            state
+                .buffer_names
+                .iter()
+                .find(|(_, n)| n == &name)
+                .map(|(i, _)| SteelVal::IntV(*i as isize))
+                .unwrap_or(SteelVal::BoolV(false))
+        });
+
+        // (test-get-option NAME) — read option value from SharedState (fresh each step).
+        let s = shared.clone();
+        engine.register_fn("test-get-option", move |name: String| -> SteelVal {
+            let state = s.lock().unwrap();
+            state
+                .option_values
+                .iter()
+                .find(|(n, _)| n == &name)
+                .map(|(_, v)| SteelVal::StringV(v.clone().into()))
+                .unwrap_or(SteelVal::BoolV(false))
+        });
+
+        // (test-region-active?) — whether a visual selection is active.
+        let s = shared.clone();
+        engine.register_fn("test-region-active?", move || -> bool {
+            s.lock().unwrap().region_active
+        });
+
+        // (test-region-start) — start offset of the visual selection.
+        let s = shared.clone();
+        engine.register_fn("test-region-start", move || -> isize {
+            s.lock().unwrap().region_start as isize
+        });
+
+        // (test-region-end) — end offset of the visual selection.
+        let s = shared.clone();
+        engine.register_fn("test-region-end", move || -> isize {
+            s.lock().unwrap().region_end as isize
+        });
+
+        // (test-search-forward PATTERN) — search for PATTERN in active buffer text.
+        // Returns the character offset of the first match, or #f if not found.
+        let s = shared.clone();
+        engine.register_fn("test-search-forward", move |pattern: String| -> SteelVal {
+            let state = s.lock().unwrap();
+            match state.current_buffer_text.find(&pattern) {
+                Some(byte_offset) => {
+                    // Convert byte offset to char offset.
+                    let char_offset = state.current_buffer_text[..byte_offset].chars().count();
+                    SteelVal::IntV(char_offset as isize)
+                }
+                None => SteelVal::BoolV(false),
+            }
+        });
+
+        // (test-cursor-row) — cursor row (0-indexed) from SharedState.
+        let s = shared.clone();
+        engine.register_fn("test-cursor-row", move || -> isize {
+            s.lock().unwrap().cursor_row as isize
+        });
+
+        // (test-cursor-col) — cursor column (0-indexed) from SharedState.
+        let s = shared.clone();
+        engine.register_fn("test-cursor-col", move || -> isize {
+            s.lock().unwrap().cursor_col as isize
+        });
+
+        // (test-status-message) — last status bar message from SharedState.
+        let s = shared.clone();
+        engine.register_fn("test-status-message", move || -> String {
+            s.lock().unwrap().last_status_message.clone()
+        });
+
+        // --- CRDT/sync test primitives ---
+
+        // (buffer-enable-sync CLIENT-ID) — enable sync on active buffer.
+        let s = shared.clone();
+        engine.register_fn("buffer-enable-sync", move |client_id: isize| {
+            s.lock().unwrap().pending_enable_sync = Some(client_id.max(1) as u64);
+            SteelVal::Void
+        });
+
+        // (buffer-disable-sync) — disable sync on active buffer.
+        let s = shared.clone();
+        engine.register_fn("buffer-disable-sync", move || {
+            s.lock().unwrap().pending_disable_sync = true;
+            SteelVal::Void
+        });
+
+        // (buffer-apply-update BUFFER-NAME UPDATE-BASE64) — apply encoded sync update.
+        let s = shared.clone();
+        engine.register_fn(
+            "buffer-apply-update",
+            move |buf_name: String, update_b64: String| {
+                use base64::Engine as _;
+                match base64::engine::general_purpose::STANDARD.decode(&update_b64) {
+                    Ok(bytes) => {
+                        s.lock()
+                            .unwrap()
+                            .pending_sync_applies
+                            .push((buf_name, bytes));
+                        SteelVal::BoolV(true)
+                    }
+                    Err(e) => SteelVal::StringV(format!("base64 decode error: {}", e).into()),
+                }
+            },
+        );
+
+        // (buffer-load-sync-state STATE-BASE64 CLIENT-ID) — load full state into active buffer.
+        let s = shared.clone();
+        engine.register_fn(
+            "buffer-load-sync-state",
+            move |state_b64: String, client_id: isize| {
+                use base64::Engine as _;
+                match base64::engine::general_purpose::STANDARD.decode(&state_b64) {
+                    Ok(bytes) => {
+                        s.lock().unwrap().pending_load_sync_state =
+                            Some((bytes, client_id.max(1) as u64));
+                        SteelVal::BoolV(true)
+                    }
+                    Err(e) => SteelVal::StringV(format!("base64 decode error: {}", e).into()),
+                }
+            },
+        );
+
+        // (buffer-encode-state-vector) — request encoding of the active buffer's state vector.
+        // The result is available via (buffer-get-state-vector) after the next apply cycle.
+        let s = shared.clone();
+        engine.register_fn("buffer-encode-state-vector", move || {
+            s.lock().unwrap().pending_encode_state_vector = true;
+            SteelVal::Void
+        });
+
+        // (buffer-get-state-vector) — retrieve the encoded state vector (base64) or #f.
+        let s = shared.clone();
+        engine.register_fn("buffer-get-state-vector", move || -> SteelVal {
+            let state = s.lock().unwrap();
+            match &state.encoded_state_vector {
+                Some(sv) => SteelVal::StringV(sv.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
+
+        // (buffer-compute-diff SV-BASE64) — compute diff from remote state vector.
+        // The result is available via (buffer-get-diff) after the next apply cycle.
+        let s = shared.clone();
+        engine.register_fn("buffer-compute-diff", move |sv_b64: String| {
+            s.lock().unwrap().pending_compute_diff = Some(sv_b64);
+            SteelVal::Void
+        });
+
+        // (buffer-get-diff) — retrieve the computed diff (base64) or #f.
+        let s = shared.clone();
+        engine.register_fn("buffer-get-diff", move || -> SteelVal {
+            let state = s.lock().unwrap();
+            match &state.computed_diff {
+                Some(d) => SteelVal::StringV(d.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
+
+        // (buffer-reconcile-to TEXT) — reconcile sync doc to target text.
+        // The result (base64 update) is available via (buffer-get-reconcile-result).
+        let s = shared.clone();
+        engine.register_fn("buffer-reconcile-to", move |text: String| {
+            s.lock().unwrap().pending_reconcile_to = Some(text);
+            SteelVal::Void
+        });
+
+        // (buffer-get-reconcile-result) — retrieve reconcile result (base64 update) or #f.
+        let s = shared.clone();
+        engine.register_fn("buffer-get-reconcile-result", move || -> SteelVal {
+            let state = s.lock().unwrap();
+            match &state.reconcile_result {
+                Some(r) => SteelVal::StringV(r.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
+
         // Register default values for state-injected variables.
         // This prevents FreeIdentifier errors in init.scm during startup.
         engine.register_value("*buffer-name*", SteelVal::StringV("scratch".into()));
@@ -1166,6 +1602,98 @@ impl SchemeRuntime {
     pub fn drain_kb_nodes(&mut self) -> Vec<(String, String, String)> {
         let mut state = self.shared.lock().unwrap();
         std::mem::take(&mut state.pending_kb_nodes)
+    }
+
+    // --- Test framework accessors ---
+
+    /// Take the pending exit code set by `(exit CODE)`, if any.
+    pub fn take_exit_code(&mut self) -> Option<i32> {
+        self.shared.lock().unwrap().pending_exit_code.take()
+    }
+
+    /// Update the current mode string in SharedState (for test runner).
+    pub fn set_current_mode(&self, mode: &str) {
+        self.shared.lock().unwrap().current_mode = mode.to_string();
+    }
+
+    /// Update the active buffer text in SharedState (for test runner).
+    pub fn set_current_buffer_text(&self, text: &str) {
+        self.shared.lock().unwrap().current_buffer_text = text.to_string();
+    }
+
+    /// Update all buffer texts in SharedState (for test runner).
+    pub fn set_all_buffer_texts(&self, texts: Vec<(String, String)>) {
+        self.shared.lock().unwrap().all_buffer_texts = texts;
+    }
+
+    /// Update sync state in SharedState (for test runner).
+    pub fn set_sync_state(
+        &self,
+        enabled: bool,
+        pending_count: usize,
+        content: Option<String>,
+        encoded: Option<String>,
+    ) {
+        let mut state = self.shared.lock().unwrap();
+        state.sync_enabled = enabled;
+        state.pending_update_count = pending_count;
+        state.sync_content = content;
+        state.encoded_state = encoded;
+    }
+
+    /// Update buffer names in SharedState for `(get-buffer-by-name)` across tests.
+    pub fn set_buffer_names(&self, names: Vec<(usize, String)>) {
+        self.shared.lock().unwrap().buffer_names = names;
+    }
+
+    /// Update option values in SharedState for test runner.
+    pub fn set_option_values(&self, values: Vec<(String, String)>) {
+        self.shared.lock().unwrap().option_values = values;
+    }
+
+    /// Update region (visual selection) state in SharedState for test runner.
+    pub fn set_region_state(&self, active: bool, start: usize, end: usize) {
+        let mut state = self.shared.lock().unwrap();
+        state.region_active = active;
+        state.region_start = start;
+        state.region_end = end;
+    }
+
+    /// Update cursor position in SharedState (called by test runner).
+    pub fn set_cursor_position(&self, row: usize, col: usize) {
+        let mut state = self.shared.lock().unwrap();
+        state.cursor_row = row;
+        state.cursor_col = col;
+    }
+
+    /// Update last status message in SharedState (called by test runner).
+    pub fn set_last_status_message(&self, msg: &str) {
+        self.shared.lock().unwrap().last_status_message = msg.to_string();
+    }
+
+    /// Drain pending file writes from `(write-file PATH CONTENT)`.
+    pub fn drain_write_files(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.shared.lock().unwrap().pending_write_files)
+    }
+
+    /// Take the pending sleep request from `(sleep-ms N)`, if any.
+    pub fn take_sleep_ms(&mut self) -> Option<u64> {
+        self.shared.lock().unwrap().pending_sleep_ms.take()
+    }
+
+    /// Always accumulate pending sync updates from the active buffer into
+    /// SharedState. Called before `drain_and_broadcast` so Scheme tests can
+    /// retrieve updates via `(buffer-drain-updates)` without a two-step flag
+    /// dance. Clones (not drains) so `drain_and_broadcast` still forwards them.
+    pub fn capture_pending_sync_updates(&mut self, editor: &mae_core::Editor) {
+        let mut state = self.shared.lock().unwrap();
+        let idx = editor.active_buffer_idx();
+        for u in &editor.buffers[idx].pending_sync_updates {
+            use base64::Engine as _;
+            state
+                .accumulated_sync_updates
+                .push(base64::engine::general_purpose::STANDARD.encode(u));
+        }
     }
 
     /// Evaluate a Scheme expression and return the result as a string.
@@ -1304,7 +1832,7 @@ impl SchemeRuntime {
             .register_value("*shell-buffers*", SteelVal::ListV(shell_indices.into()));
 
         // (shell-cwd BUF-IDX) — return cached CWD for a shell buffer.
-        let cwds = editor.shell_cwds.clone();
+        let cwds = editor.shell.viewport_cwds.clone();
         self.engine.register_fn("shell-cwd", move |idx: isize| {
             cwds.get(&(idx.max(0) as usize))
                 .cloned()
@@ -1312,7 +1840,7 @@ impl SchemeRuntime {
         });
 
         // (shell-read-output BUF-IDX MAX-LINES) — read viewport snapshot.
-        let viewports = editor.shell_viewports.clone();
+        let viewports = editor.shell.viewports.clone();
         self.engine
             .register_fn("shell-read-output", move |idx: isize, max: isize| {
                 let idx = idx.max(0) as usize;
@@ -1382,7 +1910,7 @@ impl SchemeRuntime {
         // Compute region bounds (valid only in visual mode, but safe to call anytime)
         let (region_beg, region_end, selection_text) = if is_visual {
             let anchor_offset =
-                buf.char_offset_at(editor.visual_anchor_row, editor.visual_anchor_col);
+                buf.char_offset_at(editor.vi.visual_anchor_row, editor.vi.visual_anchor_col);
             let cursor_off = buf.char_offset_at(win.cursor_row, win.cursor_col);
             let beg = anchor_offset.min(cursor_off);
             let end = anchor_offset.max(cursor_off) + 1; // inclusive end
@@ -1501,20 +2029,29 @@ impl SchemeRuntime {
         self.engine
             .register_value("*option-list*", SteelVal::ListV(opt_info.into()));
 
+        // Populate SharedState option_values so get-option has initial data.
+        {
+            let values: Vec<(String, String)> = editor
+                .option_registry
+                .list()
+                .iter()
+                .filter_map(|o| {
+                    editor
+                        .get_option(&o.name)
+                        .map(|(v, _)| (o.name.to_string(), v))
+                })
+                .collect();
+            self.shared.lock().unwrap().option_values = values;
+        }
+
         // (get-option NAME) — returns current value as string, or #f
-        let options_snapshot: Vec<(String, String)> = editor
-            .option_registry
-            .list()
-            .iter()
-            .filter_map(|o| {
-                editor
-                    .get_option(&o.name)
-                    .map(|(v, _)| (o.name.to_string(), v))
-            })
-            .collect();
+        // Reads from SharedState so values are fresh after sync_scheme_state.
+        let s = self.shared.clone();
         self.engine
             .register_fn("get-option", move |name: String| -> SteelVal {
-                options_snapshot
+                let state = s.lock().unwrap();
+                state
+                    .option_values
                     .iter()
                     .find(|(n, _)| n == &name)
                     .map(|(_, v)| SteelVal::StringV(v.clone().into()))
@@ -1596,6 +2133,135 @@ impl SchemeRuntime {
                     })
                     .unwrap_or(SteelVal::ListV(vec![].into()))
             });
+
+        // (buffer-string) — return full text of the active buffer (ERT naming).
+        let active_text = buf.text();
+        self.engine
+            .register_fn("buffer-string", move || -> String { active_text.clone() });
+
+        // (buffer-text NAME) — return full text of a named buffer.
+        // Reads from SharedState so values are fresh after sync_scheme_state.
+        {
+            let all_buf_texts: Vec<(String, String)> = editor
+                .buffers
+                .iter()
+                .map(|b| (b.name.clone(), b.text()))
+                .collect();
+            self.shared.lock().unwrap().all_buffer_texts = all_buf_texts;
+        }
+        let s = self.shared.clone();
+        self.engine
+            .register_fn("buffer-text", move |name: String| -> SteelVal {
+                let state = s.lock().unwrap();
+                state
+                    .all_buffer_texts
+                    .iter()
+                    .find(|(n, _)| n == &name || n.ends_with(&name))
+                    .map(|(_, t)| SteelVal::StringV(t.clone().into()))
+                    .unwrap_or(SteelVal::BoolV(false))
+            });
+
+        // (collab-status) — returns an alist with current collaboration state.
+        // Returns: ((status . "off") (server . "127.0.0.1:9473") (synced-docs . 0) (peer-count . 0))
+        let collab_status_str = editor.collab.status.as_str().to_string();
+        let collab_server_addr = editor.collab.server_address.clone();
+        let collab_synced_docs = editor.collab.synced_docs;
+        self.engine
+            .register_fn("collab-status", move || -> SteelVal {
+                let make_pair = |k: &str, v: SteelVal| -> SteelVal {
+                    SteelVal::ListV(vec![SteelVal::StringV(k.into()), v].into())
+                };
+                SteelVal::ListV(
+                    vec![
+                        make_pair(
+                            "status",
+                            SteelVal::StringV(collab_status_str.clone().into()),
+                        ),
+                        make_pair(
+                            "server",
+                            SteelVal::StringV(collab_server_addr.clone().into()),
+                        ),
+                        make_pair("synced-docs", SteelVal::IntV(collab_synced_docs as isize)),
+                        make_pair("peer-count", SteelVal::IntV(0)),
+                    ]
+                    .into(),
+                )
+            });
+
+        // (collab-synced-buffers) — returns a list of synced buffer names.
+        let synced_names: Vec<String> = editor.collab.synced_buffers.iter().cloned().collect();
+        self.engine
+            .register_fn("collab-synced-buffers", move || -> SteelVal {
+                SteelVal::ListV(
+                    synced_names
+                        .iter()
+                        .map(|n| SteelVal::StringV(n.clone().into()))
+                        .collect::<Vec<_>>()
+                        .into(),
+                )
+            });
+
+        // --- Sync/CRDT state inspection ---
+
+        // (buffer-sync-enabled?) — #t if sync_doc is active on the current buffer.
+        let sync_enabled = buf.sync_doc.is_some();
+        self.engine
+            .register_value("*buffer-sync-enabled?*", SteelVal::BoolV(sync_enabled));
+        self.engine
+            .register_fn("buffer-sync-enabled?", move || sync_enabled);
+
+        // (buffer-pending-updates) — number of pending sync updates on active buffer.
+        let pending_count = buf.pending_sync_updates.len() as isize;
+        self.engine
+            .register_fn("buffer-pending-updates", move || pending_count);
+
+        // (buffer-sync-content) — read content from the yrs doc (not the rope).
+        let sync_content = buf.sync_doc.as_ref().map(|s| s.content());
+        self.engine
+            .register_fn("buffer-sync-content", move || -> SteelVal {
+                match &sync_content {
+                    Some(c) => SteelVal::StringV(c.clone().into()),
+                    None => SteelVal::BoolV(false),
+                }
+            });
+
+        // (buffer-drain-updates) — take and return all accumulated sync updates.
+        // Updates are accumulated by capture_pending_sync_updates() after each
+        // apply cycle, so this is a simple take-and-return (no flag dance needed).
+        let s = self.shared.clone();
+        self.engine
+            .register_fn("buffer-drain-updates", move || -> SteelVal {
+                let mut state = s.lock().unwrap();
+                let updates = std::mem::take(&mut state.accumulated_sync_updates);
+                SteelVal::ListV(
+                    updates
+                        .into_iter()
+                        .map(|s| SteelVal::StringV(s.into()))
+                        .collect::<Vec<_>>()
+                        .into(),
+                )
+            });
+
+        // (buffer-encode-state) — return full yrs document state as base64.
+        let encoded_state = buf.sync_doc.as_ref().map(|s| {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(s.encode_state())
+        });
+        self.engine
+            .register_fn("buffer-encode-state", move || -> SteelVal {
+                match &encoded_state {
+                    Some(s) => SteelVal::StringV(s.clone().into()),
+                    None => SteelVal::BoolV(false),
+                }
+            });
+
+        // (undo-available?) — #t if undo stack is non-empty.
+        let has_undo = buf.has_undo();
+        self.engine.register_fn("undo-available?", move || has_undo);
+
+        // (redo-available?) — #t if redo stack is non-empty.
+        let has_redo = buf.has_redo();
+        self.engine.register_fn("redo-available?", move || has_redo);
     }
 
     /// Apply accumulated config changes to the editor.
@@ -1754,7 +2420,7 @@ impl SchemeRuntime {
         for (id, title, body) in state.pending_kb_nodes.drain(..) {
             let node = mae_core::KbNode::new(id.clone(), title, mae_core::KbNodeKind::Note, body)
                 .with_tags(["scheme"]);
-            editor.kb.insert(node);
+            editor.kb.primary.insert(node);
             debug!(id = %id, "kb node registered from scheme");
         }
 
@@ -1798,12 +2464,22 @@ impl SchemeRuntime {
             win.cursor_col = end.saturating_sub(line_start);
         }
 
-        // (cursor-goto ROW COL)
+        // (cursor-goto ROW COL) or (goto-char OFFSET)
         if let Some((row, col)) = state.pending_cursor.take() {
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
-            win.cursor_row = row;
-            win.cursor_col = col;
+            if row == usize::MAX {
+                // goto-char mode: col holds the char offset
+                let offset = col.min(editor.buffers[idx].rope().len_chars());
+                let rope = editor.buffers[idx].rope();
+                let new_row = rope.char_to_line(offset);
+                let line_start = rope.line_to_char(new_row);
+                win.cursor_row = new_row;
+                win.cursor_col = offset.saturating_sub(line_start);
+            } else {
+                win.cursor_row = row;
+                win.cursor_col = col;
+            }
             win.clamp_cursor(&editor.buffers[idx]);
         }
 
@@ -1901,11 +2577,130 @@ impl SchemeRuntime {
             editor.buffers[idx].redo(win);
         }
 
+        // (buffer-undo-boundary)
+        if state.pending_undo_boundary {
+            state.pending_undo_boundary = false;
+            let idx = editor.active_buffer_idx();
+            editor.buffers[idx].sync_undo_boundary();
+        }
+
+        // --- CRDT/sync operations ---
+
+        // (buffer-enable-sync CLIENT-ID)
+        if let Some(client_id) = state.pending_enable_sync.take() {
+            let idx = editor.active_buffer_idx();
+            editor.buffers[idx].enable_sync(client_id);
+            debug!(client_id = client_id, "sync enabled on active buffer");
+        }
+
+        // (buffer-disable-sync)
+        if state.pending_disable_sync {
+            state.pending_disable_sync = false;
+            let idx = editor.active_buffer_idx();
+            editor.buffers[idx].disable_sync();
+            debug!("sync disabled on active buffer");
+        }
+
+        // (buffer-load-sync-state STATE-BYTES CLIENT-ID)
+        if let Some((state_bytes, client_id)) = state.pending_load_sync_state.take() {
+            let idx = editor.active_buffer_idx();
+            match editor.buffers[idx].load_sync_state(&state_bytes, client_id) {
+                Ok(()) => debug!(client_id = client_id, "sync state loaded on active buffer"),
+                Err(e) => warn!(error = %e, "failed to load sync state"),
+            }
+        }
+
+        // (buffer-drain-updates) — now handled by capture_pending_sync_updates(),
+        // which must run before drain_and_broadcast in the test runner.
+
+        // (buffer-apply-update BUFFER-NAME UPDATE-BYTES)
+        let sync_applies: Vec<(String, Vec<u8>)> = state.pending_sync_applies.drain(..).collect();
+        for (buf_name, update_bytes) in sync_applies {
+            if let Some(idx) = editor.buffers.iter().position(|b| b.name == buf_name) {
+                match editor.buffers[idx].apply_sync_update(&update_bytes) {
+                    Ok(()) => debug!(buffer = %buf_name, "sync update applied"),
+                    Err(e) => warn!(buffer = %buf_name, error = %e, "failed to apply sync update"),
+                }
+            } else {
+                warn!(buffer = %buf_name, "buffer not found for sync update");
+            }
+        }
+
+        // (buffer-encode-state-vector) — encode active buffer's state vector.
+        if state.pending_encode_state_vector {
+            state.pending_encode_state_vector = false;
+            let idx = editor.active_buffer_idx();
+            if let Some(ref sync) = editor.buffers[idx].sync_doc {
+                use base64::Engine as _;
+                let sv = sync.state_vector();
+                state.encoded_state_vector =
+                    Some(base64::engine::general_purpose::STANDARD.encode(&sv));
+            } else {
+                state.encoded_state_vector = None;
+            }
+        }
+
+        // (buffer-compute-diff SV-BASE64) — compute diff from remote state vector.
+        if let Some(sv_b64) = state.pending_compute_diff.take() {
+            use base64::Engine as _;
+            use mae_sync::yrs::updates::decoder::Decode;
+            use mae_sync::yrs::{ReadTxn, Transact};
+            let idx = editor.active_buffer_idx();
+            if let Some(ref sync) = editor.buffers[idx].sync_doc {
+                match base64::engine::general_purpose::STANDARD.decode(&sv_b64) {
+                    Ok(sv_bytes) => {
+                        let txn = sync.doc().transact();
+                        match mae_sync::yrs::StateVector::decode_v1(&sv_bytes) {
+                            Ok(sv) => {
+                                let diff = txn.encode_state_as_update_v1(&sv);
+                                state.computed_diff =
+                                    Some(base64::engine::general_purpose::STANDARD.encode(&diff));
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "failed to decode state vector");
+                                state.computed_diff = None;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to base64-decode state vector");
+                        state.computed_diff = None;
+                    }
+                }
+            } else {
+                state.computed_diff = None;
+            }
+        }
+
+        // (buffer-reconcile-to TEXT) — reconcile sync doc to target text.
+        if let Some(target) = state.pending_reconcile_to.take() {
+            use base64::Engine as _;
+            let idx = editor.active_buffer_idx();
+            let has_sync = editor.buffers[idx].sync_doc.is_some();
+            if has_sync {
+                let update = editor.buffers[idx]
+                    .sync_doc
+                    .as_mut()
+                    .unwrap()
+                    .reconcile_to(&target);
+                if update.is_empty() {
+                    state.reconcile_result = Some(String::new());
+                } else {
+                    state.reconcile_result =
+                        Some(base64::engine::general_purpose::STANDARD.encode(&update));
+                }
+                // Rebuild the buffer rope from the sync doc.
+                editor.buffers[idx].rebuild_rope_from_sync();
+            } else {
+                state.reconcile_result = None;
+            }
+        }
+
         // (switch-to-buffer IDX)
         if let Some(idx) = state.pending_switch_buffer.take() {
             if idx < editor.buffers.len() {
                 let prev = editor.active_buffer_idx();
-                editor.alternate_buffer_idx = Some(prev);
+                editor.vi.alternate_buffer_idx = Some(prev);
                 editor.display_buffer(idx);
             }
         }
@@ -1920,10 +2715,26 @@ impl SchemeRuntime {
             }
         }
 
+        // (set-group-name MAP PREFIX LABEL)
+        // @ai-caution: [scheme-api] set-group-name must drain in apply_to_editor alongside keymap_bindings.
+        for (map_name, prefix_str, label) in state.pending_group_names.drain(..) {
+            if let Some(keymap) = editor.keymaps.get_mut(&map_name) {
+                let seq = parse_key_seq_spaced(&prefix_str);
+                if !seq.is_empty() {
+                    keymap.set_group_name(seq, &label);
+                    debug!(keymap = %map_name, prefix = %prefix_str, label = %label,
+                           "applying scheme group name");
+                }
+            }
+        }
+
         // (run-command NAME) — dispatch each queued command.
         // We drain them outside the lock since dispatch_builtin
         // may re-enter shared state.
         let commands: Vec<String> = state.pending_commands.drain(..).collect();
+
+        // (execute-ex CMD) — dispatch through ex-command parser (supports args).
+        let ex_commands: Vec<String> = state.pending_ex_commands.drain(..).collect();
 
         // (message TEXT) — append to message log
         for msg in state.pending_messages.drain(..) {
@@ -1932,7 +2743,7 @@ impl SchemeRuntime {
 
         // (shell-send-input BUF-IDX TEXT) — queue shell terminal input.
         for (buf_idx, text) in state.pending_shell_inputs.drain(..) {
-            editor.pending_shell_inputs.push((buf_idx, text));
+            editor.shell.inputs.push((buf_idx, text));
         }
 
         // Recent files and projects
@@ -2060,13 +2871,14 @@ impl SchemeRuntime {
             debug!(name = %tool.name, handler = %tool.handler_fn, "registering Scheme AI tool");
             // Upsert: replace if already registered by name
             if let Some(existing) = editor
-                .scheme_ai_tools
+                .ai
+                .scheme_tools
                 .iter_mut()
                 .find(|t| t.name == tool.name)
             {
                 *existing = tool;
             } else {
-                editor.scheme_ai_tools.push(tool);
+                editor.ai.scheme_tools.push(tool);
             }
         }
 
@@ -2099,6 +2911,10 @@ impl SchemeRuntime {
             editor.dispatch_builtin(&name);
         }
 
+        for cmd in ex_commands {
+            editor.execute_command(&cmd);
+        }
+
         if binding_count > 0 || cmd_count > 0 {
             info!(
                 keybindings = binding_count,
@@ -2106,6 +2922,11 @@ impl SchemeRuntime {
                 "scheme config applied to editor"
             );
         }
+
+        // Note: We do NOT call inject_editor_state here because Steel's
+        // register_value creates new binding cells. Closures captured in
+        // previous evals would still reference old cells. The test runner
+        // uses sync_scheme_state (with set!) to mutate existing cells.
     }
 
     /// Call a named Scheme function (for executing Scheme-backed commands).
@@ -2733,7 +3554,10 @@ mod tests {
     fn test_shell_cwd_returns_cached_value() {
         let mut rt = new_runtime();
         let mut editor = Editor::new();
-        editor.shell_cwds.insert(1, "/home/user".to_string());
+        editor
+            .shell
+            .viewport_cwds
+            .insert(1, "/home/user".to_string());
         rt.inject_editor_state(&editor);
         let result = rt.eval("(shell-cwd 1)").unwrap();
         assert_eq!(result, "/home/user");
@@ -2744,7 +3568,8 @@ mod tests {
         let mut rt = new_runtime();
         let mut editor = Editor::new();
         editor
-            .shell_viewports
+            .shell
+            .viewports
             .insert(2, vec!["$ ls".to_string(), "file.txt".to_string()]);
         rt.inject_editor_state(&editor);
         let result = rt.eval("(shell-read-output 2 10)").unwrap();
@@ -3058,6 +3883,42 @@ mod tests {
                 .unwrap()
                 .lookup(&parse_key_seq("Q")),
             mae_core::LookupResult::None
+        );
+    }
+
+    #[test]
+    fn set_group_name_works() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        // Add some bindings under SPC z prefix
+        rt.eval(r#"(define-key "normal" "SPC z a" "quit")"#)
+            .unwrap();
+        rt.eval(r#"(define-key "normal" "SPC z b" "save")"#)
+            .unwrap();
+        rt.eval(r#"(set-group-name "normal" "SPC z" "+test-group")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        let normal = editor.keymaps.get("normal").unwrap();
+        let spc = mae_core::parse_key_seq_spaced("SPC");
+        let entries = normal.which_key_entries(&spc, &editor.commands);
+        let z_entry = entries
+            .iter()
+            .find(|e| matches!(e.key.key, mae_core::Key::Char('z')));
+        assert!(z_entry.is_some(), "SPC should have a 'z' group");
+        assert_eq!(z_entry.unwrap().label, "+test-group");
+    }
+
+    #[test]
+    fn runtime_define_key_updates_keymap() {
+        let mut rt = new_runtime();
+        let mut ed = Editor::new();
+        rt.eval(r#"(define-key "normal" "SPC z z" "quit")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut ed);
+        let normal = ed.keymaps.get("normal").unwrap();
+        assert_eq!(
+            normal.lookup(&mae_core::parse_key_seq_spaced("SPC z z")),
+            mae_core::LookupResult::Exact("quit")
         );
     }
 
@@ -3439,7 +4300,7 @@ mod tests {
             .unwrap();
         rt.apply_to_editor(&mut editor);
 
-        let node = editor.kb.get("module:test:guide");
+        let node = editor.kb.primary.get("module:test:guide");
         assert!(node.is_some(), "expected kb node to be registered");
         assert_eq!(node.unwrap().title, "Test Guide");
     }

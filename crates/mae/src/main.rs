@@ -1,6 +1,7 @@
 mod agents;
 mod ai_event_handler;
 mod bootstrap;
+mod collab_bridge;
 mod config;
 mod dap_bridge;
 mod doctor;
@@ -11,7 +12,9 @@ mod lsp_bridge;
 pub mod pkg;
 mod shell_keys;
 mod shell_lifecycle;
+mod sync_broadcast;
 mod terminal_loop;
+mod test_runner;
 mod watchdog;
 
 use std::io;
@@ -82,7 +85,9 @@ fn main() -> io::Result<()> {
         println!("  --init-config [--force] Write a commented template and run wizard");
         println!("  --print-config-path     Print the config file path and exit");
         println!("  --print-config-template Print the default commented template to stdout");
-        println!("  --gui                   Launch with GUI backend (winit + skia)");
+        println!("  --gui                   Launch with GUI backend (default when available)");
+        println!("  --no-gui, --tui, -nw    Force terminal mode (like emacs -nw)");
+        println!("  --connect [ADDR]        Connect to state server (like emacsclient -c)");
         println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
         println!("  --setup-agents [DIR]    Write .mcp.json & agent settings for discovery");
         println!("  --check-config          Validate init.scm + config.toml and exit (for CI)");
@@ -90,6 +95,9 @@ fn main() -> io::Result<()> {
         println!("  --debug-init            Verbose init file loading (show errors in *Messages*)");
         println!("  -q, --clean             Skip config, init.scm, and history (like emacs -q)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
+        println!("  --test PATH             Run Scheme tests headless (file or directory)");
+        println!("  --test-filter PATTERN   Filter tests by name pattern");
+        println!("  --test-output FORMAT    Output format: tap (default) | human");
         println!("  sync                    Materialize declared state (clone/update packages)");
         println!("  upgrade                 Fetch latest for all packages");
         println!("  purge                   Remove packages not declared in init.scm");
@@ -222,6 +230,90 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    // --test PATH: headless Scheme test runner.
+    if let Some(test_pos) = args.iter().position(|a| a == "--test") {
+        let test_path = args
+            .get(test_pos + 1)
+            .filter(|a| !a.starts_with('-'))
+            .cloned()
+            .unwrap_or_else(|| {
+                eprintln!("mae: --test requires a PATH argument (file or directory)");
+                std::process::exit(2);
+            });
+
+        let test_filter = args
+            .iter()
+            .position(|a| a == "--test-filter")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str());
+
+        let test_output = args
+            .iter()
+            .position(|a| a == "--test-output")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str())
+            .unwrap_or("tap");
+
+        // Boot editor headless with Scheme runtime.
+        let mut editor = Editor::new();
+        let (app_config, _) = config::load_config();
+        if let Some(ref theme) = app_config.editor.theme {
+            editor.set_theme_by_name(theme);
+        }
+        let mut scheme = match SchemeRuntime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("mae: scheme runtime init failed: {}", e.message);
+                std::process::exit(2);
+            }
+        };
+
+        // Apply env-var overrides for collab.
+        if let Ok(addr) = std::env::var("MAE_COLLAB_SERVER") {
+            editor.collab.server_address = addr;
+        }
+        if std::env::var("MAE_COLLAB_AUTO_CONNECT").is_ok() {
+            editor.collab.auto_connect = true;
+        }
+
+        let _module_registry = load_init_file(&mut scheme, &mut editor);
+
+        // Build a minimal tokio runtime for the collab bridge.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| io::Error::other(e.to_string()))?;
+
+        let (mut collab_event_rx, collab_command_tx, collab_spawn) =
+            collab_bridge::setup_collab_channels(&editor);
+
+        let exit_code = rt.block_on(async {
+            collab_bridge::spawn_collab_task(collab_spawn);
+
+            // Give the collab bridge a moment to connect if auto-connect is set.
+            if editor.collab.auto_connect {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                // Drain initial connection events.
+                while let Ok(event) = collab_event_rx.try_recv() {
+                    collab_bridge::handle_collab_event(&mut editor, event);
+                }
+            }
+
+            test_runner::run_scheme_tests(
+                &mut editor,
+                &mut scheme,
+                &mut collab_event_rx,
+                &collab_command_tx,
+                &test_path,
+                test_filter,
+                test_output,
+            )
+            .await
+        });
+
+        std::process::exit(exit_code);
+    }
+
     // First-run wizard: runs only when stdin is a TTY, no config file exists,
     // no AI env vars are set, and MAE_SKIP_WIZARD is not set. Must run before
     // the renderer takes over the terminal.
@@ -232,11 +324,32 @@ fn main() -> io::Result<()> {
     // --clean / -q: skip user config, init.scm, history, and project detection (like emacs -q)
     let clean_mode = args.iter().any(|a| a == "--clean" || a == "-q");
 
-    // Find the first positional argument (not a flag).
-    let file_arg = args.iter().skip(1).find(|a| !a.starts_with('-'));
+    // --connect [ADDR]: connect to collab server on startup (emacsclient -c equivalent)
+    let connect_addr: Option<String> = {
+        let pos = args.iter().position(|a| a == "--connect");
+        if let Some(i) = pos {
+            let addr = args
+                .get(i + 1)
+                .filter(|a| !a.starts_with('-'))
+                .cloned()
+                .unwrap_or_else(|| mae_core::DEFAULT_COLLAB_ADDRESS.to_string());
+            Some(addr)
+        } else {
+            None
+        }
+    };
+
+    // Find the first positional argument (not a flag), skipping --connect's address arg.
+    let connect_pos = args.iter().position(|a| a == "--connect");
+    let file_arg = args
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(i, a)| !a.starts_with('-') && connect_pos.is_none_or(|ci| *i != ci + 1))
+        .map(|(_, a)| a.as_str());
 
     let mut editor = if let Some(path) = file_arg {
-        match Buffer::from_file(std::path::Path::new(path)) {
+        match Buffer::from_file(std::path::Path::new(&path)) {
             Ok(buf) => {
                 info!(path, "opened file from CLI argument");
                 let mut ed = Editor::with_buffer(buf);
@@ -308,7 +421,7 @@ fn main() -> io::Result<()> {
         editor.splash_art = Some(art.clone());
     }
     if let Some(ref cmd) = app_config.ai.editor {
-        editor.ai_editor = cmd.clone();
+        editor.ai.editor_name = cmd.clone();
     }
     if let Some(restore) = app_config.editor.restore_session {
         editor.restore_session = restore;
@@ -333,6 +446,40 @@ fn main() -> io::Result<()> {
     }
     if let Some(ref icon_family) = app_config.editor.icon_font_family {
         editor.gui_icon_font_family = icon_family.clone();
+    }
+
+    // Apply collaboration settings from config → OptionRegistry.
+    if let Some(ref addr) = app_config.collaboration.server_address {
+        let _ = editor.set_option("collab_server_address", addr);
+    }
+    if let Some(auto) = app_config.collaboration.auto_connect {
+        let _ = editor.set_option("collab_auto_connect", &auto.to_string());
+    }
+    if let Some(auto) = app_config.collaboration.auto_share {
+        let _ = editor.set_option("collab_auto_share", &auto.to_string());
+    }
+    if let Some(secs) = app_config.collaboration.reconnect_interval_secs {
+        let _ = editor.set_option("collab_reconnect_interval", &secs.to_string());
+    }
+    if let Some(ref name) = app_config.collaboration.user_name {
+        let _ = editor.set_option("collab_user_name", name);
+    }
+    if let Some(secs) = app_config.collaboration.heartbeat_interval_secs {
+        let _ = editor.set_option("collab_heartbeat_interval", &secs.to_string());
+    }
+
+    // Auto-derive collab user name if not set via config.
+    if editor.collab.user_name.is_empty() {
+        let (resolved, source) = resolve_collab_user_name();
+        info!(name = %resolved, source = %source, "collab identity resolved");
+        let _ = editor.set_option("collab_user_name", &resolved);
+    }
+
+    // --connect overrides collab options: auto-connect to the given address.
+    if let Some(ref addr) = connect_addr {
+        let _ = editor.set_option("collab_server_address", addr);
+        let _ = editor.set_option("collab_auto_connect", "true");
+        info!(address = %addr, "CLI --connect: auto-connect enabled");
     }
 
     // Apply performance thresholds from config.
@@ -402,12 +549,12 @@ fn main() -> io::Result<()> {
                     errors = report.errors.len(),
                     "KB instance loaded"
                 );
-                editor.kb_instances.insert(inst.uuid.clone(), kb);
+                editor.kb.instances.insert(inst.uuid.clone(), kb);
             } else {
                 info!(name = %inst.name, dir = %inst.org_dir.display(), "KB instance dir missing, skipping");
             }
         }
-        editor.kb_registry = registry;
+        editor.kb.registry = registry;
     }
 
     // Fire app-start hook after initialization is complete.
@@ -429,7 +576,12 @@ fn main() -> io::Result<()> {
         info!("debug-init mode enabled");
     }
 
-    let use_gui = args.iter().any(|a| a == "--gui");
+    // GUI is the default when compiled with the gui feature (like emacs).
+    // --no-gui / --tui / -nw forces terminal mode (like emacs -nw).
+    let force_tui = args
+        .iter()
+        .any(|a| a == "--no-gui" || a == "--tui" || a == "-nw");
+    let use_gui = cfg!(feature = "gui") && !force_tui;
 
     // Build the tokio runtime manually. The GUI path needs the event loop
     // on the main thread (winit requirement) with tokio on a background
@@ -454,6 +606,7 @@ fn main() -> io::Result<()> {
         all_tools,
         permission_policy,
         mcp_client_mgr,
+        sync_broadcaster,
     ) = rt.block_on(async {
         let (ai_event_rx, ai_event_tx, ai_command_tx) = setup_ai(&editor);
         info!(
@@ -489,7 +642,7 @@ fn main() -> io::Result<()> {
         let mut all_tools = {
             let mut tools = tools_from_registry(&editor.commands);
             tools.extend(ai_specific_tools(&editor.option_registry));
-            tools.extend(mae_ai::scheme_tools_to_definitions(&editor.scheme_ai_tools));
+            tools.extend(mae_ai::scheme_tools_to_definitions(&editor.ai.scheme_tools));
             tools
         };
         let permission_policy = config::resolve_permission_policy(&app_config);
@@ -534,6 +687,8 @@ fn main() -> io::Result<()> {
         cleanup_stale_mcp_sockets();
         let mcp_socket_path = format!("/tmp/mae-{}.sock", std::process::id());
         let (mcp_tool_tx, mcp_tool_rx) = tokio::sync::mpsc::channel::<mae_mcp::McpToolRequest>(16);
+        let sync_broadcaster: mae_mcp::broadcast::SharedBroadcaster =
+            std::sync::Arc::new(std::sync::Mutex::new(mae_mcp::broadcast::EventBroadcaster::new()));
         {
             let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = all_tools
                 .iter()
@@ -543,7 +698,7 @@ fn main() -> io::Result<()> {
                     input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
                 })
                 .collect();
-            let server = mae_mcp::McpServer::new(&mcp_socket_path, mcp_tool_tx);
+            let server = mae_mcp::McpServer::new(&mcp_socket_path, mcp_tool_tx, sync_broadcaster.clone());
             tokio::spawn(server.run(mcp_tools));
             info!(socket = %mcp_socket_path, "MCP server started");
         }
@@ -561,10 +716,11 @@ fn main() -> io::Result<()> {
             all_tools,
             permission_policy,
             mcp_client_mgr,
+            sync_broadcaster,
         )
     });
 
-    editor.ai_configured = ai_command_tx.is_some();
+    editor.ai.configured = ai_command_tx.is_some();
 
     // --self-test [categories] — headless AI self-test.
     if args.iter().any(|a| a == "--self-test") {
@@ -620,28 +776,41 @@ fn main() -> io::Result<()> {
                 permission_policy,
                 app_config,
                 mcp_client_mgr,
+                sync_broadcaster,
             );
         }
     }
 
+    // Set up collab bridge channels (no runtime needed yet).
+    let (mut collab_event_rx, collab_command_tx, collab_spawn) =
+        collab_bridge::setup_collab_channels(&editor);
+
     // Terminal path: run the async event loop on the main thread.
-    rt.block_on(run_terminal_loop(
-        &mut editor,
-        &mut scheme,
-        &mut ai_event_rx,
-        &ai_event_tx,
-        &ai_command_tx,
-        &mut lsp_event_rx,
-        &lsp_command_tx,
-        &mut dap_event_rx,
-        &dap_command_tx,
-        &mut mcp_tool_rx,
-        &mcp_socket_path,
-        &all_tools,
-        &permission_policy,
-        &app_config,
-        &mcp_client_mgr,
-    ))?;
+    // Spawn collab task inside block_on where tokio runtime is active.
+    rt.block_on(async {
+        collab_bridge::spawn_collab_task(collab_spawn);
+        run_terminal_loop(
+            &mut editor,
+            &mut scheme,
+            &mut ai_event_rx,
+            &ai_event_tx,
+            &ai_command_tx,
+            &mut lsp_event_rx,
+            &lsp_command_tx,
+            &mut dap_event_rx,
+            &dap_command_tx,
+            &mut mcp_tool_rx,
+            &mut collab_event_rx,
+            &collab_command_tx,
+            &mcp_socket_path,
+            &all_tools,
+            &permission_policy,
+            &app_config,
+            &mcp_client_mgr,
+            &sync_broadcaster,
+        )
+        .await
+    })?;
 
     let _ = std::fs::remove_file(&mcp_socket_path);
     info!("mae exited cleanly");
@@ -652,6 +821,53 @@ fn main() -> io::Result<()> {
 // GUI event loop (Phase 8 M4: run_app + EventLoopProxy)
 // ---------------------------------------------------------------------------
 //
+/// Resolve collaborative user name from available sources.
+///
+/// Resolution order:
+/// 1. `git config user.name`
+/// 2. `$USER` environment variable
+/// 3. hostname
+/// 4. "anonymous"
+///
+/// Returns `(name, source)` for logging.
+fn resolve_collab_user_name() -> (String, &'static str) {
+    // 1. git config user.name
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["config", "user.name"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    {
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return (name, "git config");
+            }
+        }
+    }
+    // 2. $USER env var
+    if let Ok(user) = std::env::var("USER") {
+        if !user.is_empty() {
+            return (user, "$USER");
+        }
+    }
+    // 3. hostname
+    if let Ok(output) = std::process::Command::new("hostname")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    {
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return (name, "hostname");
+            }
+        }
+    }
+    // 4. fallback
+    ("anonymous".to_string(), "fallback")
+}
+
 // Architecture: main thread runs EventLoop::run_app(&mut GuiApp) (blocking).
 // Background thread runs a tokio current_thread runtime with the bridge_task
 // that reads AI/LSP/DAP/MCP channels and forwards events via EventLoopProxy.
@@ -678,6 +894,7 @@ fn run_gui(
     permission_policy: mae_ai::PermissionPolicy,
     app_config: config::Config,
     mcp_client_mgr: ai_event_handler::McpClientMgrRef,
+    sync_broadcaster: mae_mcp::broadcast::SharedBroadcaster,
 ) -> io::Result<()> {
     use gui_event::MaeEvent;
     use std::sync::atomic::AtomicBool;
@@ -710,6 +927,10 @@ fn run_gui(
         .map_err(|e| io::Error::other(e.to_string()))?;
     let proxy = event_loop.create_proxy();
 
+    // Set up collab bridge channels (no runtime needed yet — task spawned in bridge_task).
+    let (collab_event_rx, collab_command_tx, collab_spawn) =
+        collab_bridge::setup_collab_channels(&editor);
+
     // Shared atomics so the bridge task only sends ticks when relevant.
     let shell_active = Arc::new(AtomicBool::new(false));
     let mcp_active = Arc::new(AtomicBool::new(false));
@@ -718,15 +939,21 @@ fn run_gui(
     let shell_active_bg = shell_active.clone();
     let mcp_active_bg = mcp_active.clone();
     std::thread::spawn(move || {
-        rt.block_on(bridge_task(
-            proxy,
-            ai_event_rx,
-            lsp_event_rx,
-            dap_event_rx,
-            mcp_tool_rx,
-            shell_active_bg,
-            mcp_active_bg,
-        ));
+        rt.block_on(async {
+            // Spawn collab task inside the tokio runtime.
+            collab_bridge::spawn_collab_task(collab_spawn);
+            bridge_task(
+                proxy,
+                ai_event_rx,
+                lsp_event_rx,
+                dap_event_rx,
+                mcp_tool_rx,
+                collab_event_rx,
+                shell_active_bg,
+                mcp_active_bg,
+            )
+            .await;
+        });
     });
 
     info!("entering GUI event loop (run_app + EventLoopProxy)");
@@ -751,9 +978,11 @@ fn run_gui(
         permission_policy,
         lsp_command_tx,
         dap_command_tx,
+        collab_command_tx,
         mcp_socket_path,
         app_config,
         mcp_client_mgr,
+        sync_broadcaster,
         ctrl_held: false,
         alt_held: false,
         shift_held: false,
@@ -797,6 +1026,7 @@ async fn bridge_task(
     mut lsp_rx: tokio::sync::mpsc::Receiver<mae_lsp::LspTaskEvent>,
     mut dap_rx: tokio::sync::mpsc::Receiver<mae_dap::DapTaskEvent>,
     mut mcp_rx: tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
+    mut collab_rx: tokio::sync::mpsc::Receiver<collab_bridge::CollabEvent>,
     shell_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     mcp_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
@@ -830,6 +1060,9 @@ async fn bridge_task(
             }
             Some(ev) = mcp_rx.recv() => {
                 if proxy.send_event(MaeEvent::McpToolRequest(ev)).is_err() { break; }
+            }
+            Some(ev) = collab_rx.recv() => {
+                if proxy.send_event(MaeEvent::CollabEvent(ev)).is_err() { break; }
             }
             _ = shell_interval.tick() => {
                 if shell_active.load(Relaxed) {
@@ -887,11 +1120,13 @@ struct GuiApp {
     // Command senders (main thread → background tokio thread)
     lsp_command_tx: tokio::sync::mpsc::Sender<LspCommand>,
     dap_command_tx: tokio::sync::mpsc::Sender<DapCommand>,
+    collab_command_tx: tokio::sync::mpsc::Sender<collab_bridge::CollabCommand>,
 
     // Config
     mcp_socket_path: String,
     app_config: config::Config,
     mcp_client_mgr: ai_event_handler::McpClientMgrRef,
+    sync_broadcaster: mae_mcp::broadcast::SharedBroadcaster,
 
     // Input state
     ctrl_held: bool,
@@ -935,6 +1170,9 @@ impl GuiApp {
     fn drain_intents_and_lifecycle(&mut self) {
         lsp_bridge::drain_lsp_intents(&mut self.editor, &self.lsp_command_tx);
         dap_bridge::drain_dap_intents(&mut self.editor, &self.dap_command_tx);
+        collab_bridge::drain_collab_intents(&mut self.editor, &self.collab_command_tx);
+        collab_bridge::queue_awareness_update(&mut self.editor);
+        collab_bridge::cleanup_stale_awareness(&mut self.editor);
 
         shell_lifecycle::drain_agent_setup(&mut self.editor);
         shell_lifecycle::spawn_pending_shells(
@@ -1094,7 +1332,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.dirty = true;
             }
             MaeEvent::McpToolRequest(mcp_req) => {
-                self.editor.input_lock = mae_core::InputLock::McpBusy;
+                self.editor.ai.input_lock = mae_core::InputLock::McpBusy;
                 self.last_mcp_activity = Some(tokio::time::Instant::now());
                 let immediate = ai_event_handler::handle_mcp_request(
                     &mut self.editor,
@@ -1105,9 +1343,15 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     &mut self.deferred_mcp_reply,
                 );
                 if immediate && self.deferred_mcp_reply.is_empty() {
-                    self.editor.input_lock = mae_core::InputLock::None;
+                    self.editor.ai.input_lock = mae_core::InputLock::None;
                     self.last_mcp_activity = None;
                 }
+                // Drain sync updates immediately after MCP-driven edits.
+                sync_broadcast::drain_and_broadcast(
+                    &mut self.editor,
+                    &self.sync_broadcaster,
+                    Some(&self.collab_command_tx),
+                );
                 self.dirty = true;
             }
             MaeEvent::ShellTick => {
@@ -1130,10 +1374,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     if ts.elapsed() > std::time::Duration::from_millis(500)
                         && self.deferred_mcp_reply.is_empty()
                     {
-                        if self.editor.input_lock == mae_core::InputLock::McpBusy {
+                        if self.editor.ai.input_lock == mae_core::InputLock::McpBusy {
                             self.editor.set_status("MCP: input unlocked");
                         }
-                        self.editor.input_lock = mae_core::InputLock::None;
+                        self.editor.ai.input_lock = mae_core::InputLock::None;
                         self.last_mcp_activity = None;
                         self.dirty = true;
                     }
@@ -1155,11 +1399,21 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 // Autosave check (piggybacks on 30s health tick).
                 self.editor.try_autosave();
             }
+            MaeEvent::CollabEvent(collab_event) => {
+                collab_bridge::handle_collab_event(&mut self.editor, collab_event);
+                self.dirty = true;
+            }
             MaeEvent::IdleTick => {
                 if self.last_input_time.elapsed() > std::time::Duration::from_millis(100) {
                     self.editor.idle_work();
                     // Don't set dirty — idle work shouldn't trigger redraws.
                 }
+                // Drain sync updates on idle tick (~100ms max latency for keyboard edits).
+                sync_broadcast::drain_and_broadcast(
+                    &mut self.editor,
+                    &self.sync_broadcaster,
+                    Some(&self.collab_command_tx),
+                );
             }
         }
     }
@@ -1261,12 +1515,12 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.alt_held,
                     self.shift_held,
                 ) {
-                    if self.editor.input_lock != mae_core::InputLock::None {
+                    if self.editor.ai.input_lock != mae_core::InputLock::None {
                         if kp.key == mae_core::Key::Escape
                             || (kp.key == mae_core::Key::Char('c') && kp.ctrl)
                         {
-                            self.editor.input_lock = mae_core::InputLock::None;
-                            self.editor.ai_streaming = false;
+                            self.editor.ai.input_lock = mae_core::InputLock::None;
+                            self.editor.ai.streaming = false;
                             self.last_mcp_activity = None;
                             if let Some(ref tx) = self.ai_command_tx {
                                 let _ = tx.try_send(AiCommand::Cancel);
@@ -1304,13 +1558,13 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                             &mut self.pending_interactive_event,
                         );
 
-                        if self.editor.ai_cancel_requested {
-                            self.editor.ai_cancel_requested = false;
+                        if self.editor.ai.cancel_requested {
+                            self.editor.ai.cancel_requested = false;
                             if let Some(ref tx) = self.ai_command_tx {
                                 let _ = tx.try_send(AiCommand::Cancel);
                             }
-                            self.editor.ai_streaming = false;
-                            self.editor.input_lock = mae_core::InputLock::None;
+                            self.editor.ai.streaming = false;
+                            self.editor.ai.input_lock = mae_core::InputLock::None;
                             self.pending_interactive_event = None;
                             if self.editor.cleanup_self_test() {
                                 self.editor

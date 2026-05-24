@@ -12,7 +12,7 @@ pub fn execute_shell_list(editor: &Editor) -> Result<String, String> {
     let mut entries = Vec::new();
     for (idx, buf) in editor.buffers.iter().enumerate() {
         if buf.kind == BufferKind::Shell {
-            let has_viewport = editor.shell_viewports.contains_key(&idx);
+            let has_viewport = editor.shell.viewports.contains_key(&idx);
             entries.push(serde_json::json!({
                 "buffer_index": idx,
                 "name": buf.name,
@@ -42,7 +42,7 @@ pub fn execute_shell_read_output(editor: &Editor, args: &Value) -> Result<String
         return Err(format!("Buffer {} is not a shell terminal", buf_idx));
     }
 
-    let viewport = editor.shell_viewports.get(&buf_idx).ok_or_else(|| {
+    let viewport = editor.shell.viewports.get(&buf_idx).ok_or_else(|| {
         format!(
             "Shell terminal {} has no cached output (may have exited)",
             buf_idx
@@ -80,7 +80,7 @@ pub fn execute_shell_send_input(editor: &mut Editor, args: &Value) -> Result<Str
         .replace("\\t", "\t") // \t → tab
         .replace("\\e", "\x1b"); // \e → ESC
 
-    editor.pending_shell_inputs.push((buf_idx, processed));
+    editor.shell.inputs.push((buf_idx, processed));
     Ok(format!("Input queued for shell terminal {}", buf_idx))
 }
 
@@ -107,18 +107,18 @@ pub fn execute_terminal_spawn(editor: &mut Editor, args: &Value) -> Result<Strin
     // Store CWD override if provided.
     if let Some(dir) = cwd {
         if dir.is_dir() {
-            editor.pending_shell_cwds.insert(idx, dir);
+            editor.shell.cwds.insert(idx, dir);
         }
     }
 
     if let Some(cmd) = command {
-        editor.pending_agent_spawns.push((idx, cmd));
+        editor.shell.agent_spawns.push((idx, cmd));
         Ok(format!(
             "Agent terminal spawning with command in buffer {}",
             idx
         ))
     } else {
-        editor.pending_shell_spawns.push(idx);
+        editor.shell.spawns.push(idx);
         Ok(format!("Interactive terminal spawning in buffer {}", idx))
     }
 }
@@ -138,7 +138,8 @@ pub fn execute_terminal_at_file(editor: &mut Editor, args: &Value) -> Result<Str
     } else {
         // Use current buffer's file path.
         let idx = editor
-            .ai_target_buffer_idx
+            .ai
+            .target_buffer_idx
             .unwrap_or_else(|| editor.active_buffer_idx());
         editor.buffers[idx]
             .file_path()
@@ -202,7 +203,7 @@ mod tests {
         let buf = mae_core::Buffer::new_shell("*Terminal 1*");
         editor.buffers.push(buf);
         let idx = editor.buffers.len() - 1;
-        editor.shell_viewports.insert(
+        editor.shell.viewports.insert(
             idx,
             vec!["$ ls".into(), "file1.rs".into(), "file2.rs".into()],
         );
@@ -220,13 +221,13 @@ mod tests {
         editor.buffers.push(buf);
         let idx = editor.buffers.len() - 1;
         // Need viewport to indicate it's running.
-        editor.shell_viewports.insert(idx, vec![]);
+        editor.shell.viewports.insert(idx, vec![]);
         let args = serde_json::json!({"buffer_index": idx, "input": "ls\\n"});
         let result = execute_shell_send_input(&mut editor, &args).unwrap();
         assert!(result.contains("queued"));
-        assert_eq!(editor.pending_shell_inputs.len(), 1);
-        assert_eq!(editor.pending_shell_inputs[0].0, idx);
+        assert_eq!(editor.shell.inputs.len(), 1);
+        assert_eq!(editor.shell.inputs[0].0, idx);
         // \n should be converted to \r
-        assert_eq!(editor.pending_shell_inputs[0].1, "ls\r");
+        assert_eq!(editor.shell.inputs[0].1, "ls\r");
     }
 }

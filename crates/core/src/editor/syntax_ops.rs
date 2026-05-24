@@ -52,7 +52,7 @@ impl Editor {
         let end_byte = node.end_byte();
         let kind = node.kind().to_string();
 
-        self.syntax_selection_stack.clear();
+        self.vi.syntax_selection_stack.clear();
         self.set_visual_from_byte_range(start_byte, end_byte);
         self.set_status(format!("Selected: {}", kind));
         true
@@ -105,7 +105,7 @@ impl Editor {
         let new_end = node.end_byte();
         let kind = node.kind().to_string();
 
-        self.syntax_selection_stack.push(current_range);
+        self.vi.syntax_selection_stack.push(current_range);
         self.set_visual_from_byte_range(new_start, new_end);
         self.set_status(format!("Expanded: {}", kind));
         true
@@ -113,7 +113,7 @@ impl Editor {
 
     /// Pop the syntax-selection stack and restore the previous Visual range.
     pub fn syntax_contract_selection(&mut self) -> bool {
-        let Some((start, end)) = self.syntax_selection_stack.pop() else {
+        let Some((start, end)) = self.vi.syntax_selection_stack.pop() else {
             self.set_status("No prior selection");
             return false;
         };
@@ -142,8 +142,8 @@ impl Editor {
         let cursor_row = rope.char_to_line(char_cursor);
         let cursor_col = char_cursor - rope.line_to_char(cursor_row);
 
-        self.visual_anchor_row = anchor_row;
-        self.visual_anchor_col = anchor_col;
+        self.vi.visual_anchor_row = anchor_row;
+        self.vi.visual_anchor_col = anchor_col;
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = cursor_row;
         win.cursor_col = cursor_col;
@@ -184,27 +184,27 @@ mod tests {
     use crate::syntax::Language;
 
     fn rust_editor(text: &str) -> Editor {
-        let mut ed = Editor::new();
-        ed.buffers[0].insert_text_at(0, text);
-        ed.syntax.set_language(0, Language::Rust);
-        ed
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, text);
+        editor.syntax.set_language(0, Language::Rust);
+        editor
     }
 
     #[test]
     fn toggle_fold_on_rust_function() {
         let code = "fn main() {\n    println!(\"hello\");\n    let x = 1;\n}\n";
-        let mut ed = rust_editor(code);
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.toggle_fold();
+        let mut editor = rust_editor(code);
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.toggle_fold();
         // After toggling, there should be a fold range starting at line 0
         assert!(
-            !ed.buffers[0].folded_ranges.is_empty(),
+            !editor.buffers[0].folded_ranges.is_empty(),
             "Expected fold range"
         );
         // Toggle again to unfold
-        ed.toggle_fold();
+        editor.toggle_fold();
         assert!(
-            ed.buffers[0].folded_ranges.is_empty(),
+            editor.buffers[0].folded_ranges.is_empty(),
             "Expected no folds after second toggle"
         );
     }
@@ -212,10 +212,10 @@ mod tests {
     #[test]
     fn close_all_folds_rust() {
         let code = "fn foo() {\n    1\n}\nfn bar() {\n    2\n}\n";
-        let mut ed = rust_editor(code);
-        ed.close_all_folds();
+        let mut editor = rust_editor(code);
+        editor.close_all_folds();
         assert!(
-            !ed.buffers[0].folded_ranges.is_empty(),
+            !editor.buffers[0].folded_ranges.is_empty(),
             "Expected at least one fold"
         );
     }
@@ -223,31 +223,31 @@ mod tests {
     #[test]
     fn open_all_folds() {
         let code = "fn foo() {\n    1\n}\n";
-        let mut ed = rust_editor(code);
-        ed.close_all_folds();
-        assert!(!ed.buffers[0].folded_ranges.is_empty());
-        ed.open_all_folds();
-        assert!(ed.buffers[0].folded_ranges.is_empty());
+        let mut editor = rust_editor(code);
+        editor.close_all_folds();
+        assert!(!editor.buffers[0].folded_ranges.is_empty());
+        editor.open_all_folds();
+        assert!(editor.buffers[0].folded_ranges.is_empty());
     }
 
     #[test]
     fn toggle_fold_dispatch() {
         let code = "fn main() {\n    println!(\"hello\");\n}\n";
-        let mut ed = rust_editor(code);
-        ed.window_mgr.focused_window_mut().cursor_row = 0;
-        ed.dispatch_builtin("toggle-fold");
-        assert!(!ed.buffers[0].folded_ranges.is_empty());
-        ed.dispatch_builtin("toggle-fold");
-        assert!(ed.buffers[0].folded_ranges.is_empty());
+        let mut editor = rust_editor(code);
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.dispatch_builtin("toggle-fold");
+        assert!(!editor.buffers[0].folded_ranges.is_empty());
+        editor.dispatch_builtin("toggle-fold");
+        assert!(editor.buffers[0].folded_ranges.is_empty());
     }
 
     #[test]
     fn close_open_all_folds_dispatch() {
         let code = "fn foo() {\n    1\n}\nfn bar() {\n    2\n}\n";
-        let mut ed = rust_editor(code);
-        ed.dispatch_builtin("close-all-folds");
-        assert!(!ed.buffers[0].folded_ranges.is_empty());
-        ed.dispatch_builtin("open-all-folds");
-        assert!(ed.buffers[0].folded_ranges.is_empty());
+        let mut editor = rust_editor(code);
+        editor.dispatch_builtin("close-all-folds");
+        assert!(!editor.buffers[0].folded_ranges.is_empty());
+        editor.dispatch_builtin("open-all-folds");
+        assert!(editor.buffers[0].folded_ranges.is_empty());
     }
 }

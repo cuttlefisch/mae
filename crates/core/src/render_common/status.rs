@@ -5,7 +5,9 @@
 //! left/right text.  The backend only needs to draw the resulting strings.
 
 use crate::buffer_mode::BufferMode;
-use crate::{Buffer, BufferKind, Editor, InputLock, LspServerStatus, Mode, VisualType, Window};
+use crate::{
+    Buffer, BufferKind, CollabStatus, Editor, InputLock, LspServerStatus, Mode, VisualType, Window,
+};
 
 #[cfg(test)]
 use crate::LspServerInfo;
@@ -78,10 +80,10 @@ pub fn truncate_branch(branch: &str, max_w: usize) -> String {
 
 /// Build the mode label string.
 pub fn mode_label(editor: &Editor) -> String {
-    if editor.input_lock != InputLock::None {
-        match editor.input_lock {
+    if editor.ai.input_lock != InputLock::None {
+        match editor.ai.input_lock {
             InputLock::AiBusy => {
-                if editor.ai_streaming {
+                if editor.ai.streaming {
                     " AI... ".to_string()
                 } else {
                     " AI BUSY ".to_string()
@@ -90,8 +92,8 @@ pub fn mode_label(editor: &Editor) -> String {
             InputLock::McpBusy => " MCP... ".to_string(),
             InputLock::None => unreachable!(),
         }
-    } else if editor.macro_recording {
-        format!(" REC @{} ", editor.macro_register.unwrap_or('?'))
+    } else if editor.vi.macro_recording {
+        format!(" REC @{} ", editor.vi.macro_register.unwrap_or('?'))
     } else {
         // Buffer-kind-aware labels: derive from BufferMode trait.
         let buf_kind = editor.active_buffer().kind;
@@ -124,8 +126,8 @@ pub fn mode_label(editor: &Editor) -> String {
 
 /// Return the theme key for the current mode's status bar style.
 pub fn mode_theme_key(editor: &Editor) -> &'static str {
-    if editor.input_lock != InputLock::None {
-        match editor.input_lock {
+    if editor.ai.input_lock != InputLock::None {
+        match editor.ai.input_lock {
             InputLock::AiBusy => "ui.statusline.mode.locked",
             InputLock::McpBusy => "ui.statusline.mode.mcp",
             InputLock::None => "ui.statusline.mode.normal",
@@ -191,6 +193,12 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         segments.push(Segment::new(lsp_status, 4));
     }
 
+    // Priority 4: collab status.
+    let collab_str = format_collab_status(editor);
+    if !collab_str.is_empty() {
+        segments.push(Segment::new(collab_str, 4));
+    }
+
     // Priority 5: visual selection count (only in visual mode).
     if matches!(editor.mode, Mode::Visual(_)) {
         let (lines, chars) = editor.visual_selection_size();
@@ -216,9 +224,9 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
     }
 
     // Priority 3.5: capture mode indicator.
-    if editor.capture_state.is_some() {
+    if editor.kb.capture_state.is_some() {
         segments.push(Segment::new(
-            " [Capture: C-c C-c finish | C-c C-k abort]".to_string(),
+            " [Capture: SPC n s finish | SPC n k abort | C-c C-c/C-k]".to_string(),
             3,
         ));
     }
@@ -230,18 +238,18 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
     }
 
     // Priority 7a: colored AI mode badge (only when AI session is active).
-    if editor.conversation_pair.is_some()
-        || editor.ai_session_tokens_in > 0
-        || editor.ai_session_tokens_out > 0
+    if editor.ai.conversation_pair.is_some()
+        || editor.ai.session_tokens_in > 0
+        || editor.ai.session_tokens_out > 0
     {
-        let ai_mode_style = match editor.ai_mode.as_str() {
+        let ai_mode_style = match editor.ai.mode.as_str() {
             "standard" => "ui.statusline.ai.standard",
             "auto-accept" => "ui.statusline.ai.auto",
             "plan" => "ui.statusline.ai.plan",
             _ => "ui.statusline.ai.standard",
         };
         segments.push(Segment::with_style(
-            format!(" {} ", editor.ai_mode.to_uppercase()),
+            format!(" {} ", editor.ai.mode.to_uppercase()),
             7,
             ai_mode_style,
         ));
@@ -260,7 +268,7 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         format!(" {}", file_type)
     };
     let pct = compute_scroll_pct(buf, win);
-    let tier_str = format!(" [{}]", editor.ai_permission_tier);
+    let tier_str = format!(" [{}]", editor.ai.permission_tier);
     let combined_7 = format!("{} {}{}", file_type_str, pct, tier_str);
     if !combined_7.trim().is_empty() {
         segments.push(Segment::new(combined_7, 7));
@@ -374,7 +382,7 @@ pub fn layout_status_segments(
 /// Build the command/message line text.
 pub fn command_line_text(editor: &Editor) -> String {
     if editor.mode == Mode::Command {
-        format!(":{}", editor.command_line)
+        format!(":{}", editor.vi.command_line)
     } else if editor.mode == Mode::Search {
         let prompt = if editor.search_state.direction == crate::SearchDirection::Forward {
             "/"
@@ -382,7 +390,7 @@ pub fn command_line_text(editor: &Editor) -> String {
             "?"
         };
         format!("{}{}", prompt, editor.search_input)
-    } else if let Some(count) = editor.count_prefix {
+    } else if let Some(count) = editor.vi.count_prefix {
         format!("{}", count)
     } else {
         editor.status_msg.clone()
@@ -454,20 +462,20 @@ fn compute_scroll_pct(buf: &Buffer, win: &Window) -> String {
 }
 
 pub fn format_ai_info(editor: &Editor) -> String {
-    if editor.ai_session_tokens_in == 0 && editor.ai_session_tokens_out == 0 {
+    if editor.ai.session_tokens_in == 0 && editor.ai.session_tokens_out == 0 {
         return String::new();
     }
     let tokens = format!(
         "{}/{}",
-        format_tokens(editor.ai_session_tokens_in),
-        format_tokens(editor.ai_session_tokens_out),
+        format_tokens(editor.ai.session_tokens_in),
+        format_tokens(editor.ai.session_tokens_out),
     );
-    let cache_str = format_cache_hit_rate(editor.ai_cache_read_tokens, editor.ai_session_tokens_in);
-    let ctx_str = format_context_usage(editor.ai_context_used_tokens, editor.ai_context_window);
-    if editor.ai_session_cost_usd > 0.0 {
+    let cache_str = format_cache_hit_rate(editor.ai.cache_read_tokens, editor.ai.session_tokens_in);
+    let ctx_str = format_context_usage(editor.ai.context_used_tokens, editor.ai.context_window);
+    if editor.ai.session_cost_usd > 0.0 {
         format!(
             " ${:.2} {}{}{}",
-            editor.ai_session_cost_usd, tokens, cache_str, ctx_str
+            editor.ai.session_cost_usd, tokens, cache_str, ctx_str
         )
     } else {
         format!(" {}{}{}", tokens, cache_str, ctx_str)
@@ -505,6 +513,52 @@ pub fn format_lsp_status(editor: &Editor) -> String {
         " LSP:✓".to_string()
     } else {
         String::new()
+    }
+}
+
+pub fn format_collab_status(editor: &Editor) -> String {
+    let buf = &editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+    let pending = buf.pending_sync_updates.len();
+    // Show offline indicator regardless of connection status — buffer may have
+    // CRDT state from a previous session even after disconnect.
+    if buf.collab_offline {
+        if pending > 0 {
+            return format!(" [C:OFFLINE|pending:{}]", pending);
+        }
+        return " [C:OFFLINE]".to_string();
+    }
+    match &editor.collab.status {
+        CollabStatus::Off => String::new(),
+        CollabStatus::Connecting => " [C:\u{2026}]".to_string(),
+        CollabStatus::Connected { peer_count } => {
+            let is_synced = buf
+                .collab_doc_id
+                .as_ref()
+                .is_some_and(|id| editor.collab.synced_buffers.contains(id))
+                || editor.collab.synced_buffers.contains(&buf.name);
+            if !is_synced {
+                return format!(" [C:{}]", peer_count);
+            }
+
+            // Show remote user names if awareness data is available.
+            let doc_id = buf.collab_doc_id.as_deref().unwrap_or(&buf.name);
+            let remote_users = editor.collab.remote_users.users_for_doc(doc_id);
+            if !remote_users.is_empty() {
+                let names: Vec<&str> = remote_users.iter().map(|u| u.user_name.as_str()).collect();
+                return format!(" [C:{}|{}]", peer_count, names.join(" "),);
+            }
+
+            let role = if buf.collab_is_sharer {
+                "sharer"
+            } else if pending > 0 {
+                return format!(" [C:{}|pending:{}]", peer_count, pending);
+            } else {
+                "synced"
+            };
+            format!(" [C:{}|{}]", peer_count, role)
+        }
+        CollabStatus::Reconnecting => " [C:\u{27f3}]".to_string(),
+        CollabStatus::Disconnected => " [C:\u{2717}]".to_string(),
     }
 }
 
@@ -743,7 +797,7 @@ mod tests {
     fn ai_mode_badge_has_style_hint() {
         let mut editor = Editor::new();
         // Badge only appears when AI session is active.
-        editor.ai_session_tokens_in = 100;
+        editor.ai.session_tokens_in = 100;
         let segments = build_status_segments(&editor, None);
         let ai_seg = segments.iter().find(|s| s.text.contains("STANDARD"));
         assert!(ai_seg.is_some());
@@ -778,5 +832,52 @@ mod tests {
             &layout.right_text[span.byte_offset..span.byte_offset + span.byte_len],
             " MODE "
         );
+    }
+
+    #[test]
+    fn format_collab_status_sharer() {
+        let mut editor = crate::Editor::new();
+        editor.collab.status = crate::editor::CollabStatus::Connected { peer_count: 3 };
+        let buf = &mut editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+        buf.collab_doc_id = Some("test".to_string());
+        buf.collab_is_sharer = true;
+        editor.collab.synced_buffers.insert("test".to_string());
+        let s = format_collab_status(&editor);
+        assert_eq!(s, " [C:3|sharer]");
+    }
+
+    #[test]
+    fn format_collab_status_synced_joiner() {
+        let mut editor = crate::Editor::new();
+        editor.collab.status = crate::editor::CollabStatus::Connected { peer_count: 2 };
+        let buf = &mut editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+        buf.collab_doc_id = Some("test".to_string());
+        buf.collab_is_sharer = false;
+        editor.collab.synced_buffers.insert("test".to_string());
+        let s = format_collab_status(&editor);
+        assert_eq!(s, " [C:2|synced]");
+    }
+
+    #[test]
+    fn format_collab_status_pending() {
+        let mut editor = crate::Editor::new();
+        editor.collab.status = crate::editor::CollabStatus::Connected { peer_count: 1 };
+        let buf = &mut editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+        buf.collab_doc_id = Some("test".to_string());
+        buf.collab_is_sharer = false;
+        buf.pending_sync_updates = vec![vec![1], vec![2]];
+        editor.collab.synced_buffers.insert("test".to_string());
+        let s = format_collab_status(&editor);
+        assert_eq!(s, " [C:1|pending:2]");
+    }
+
+    #[test]
+    fn format_collab_status_offline_pending() {
+        let mut editor = crate::Editor::new();
+        let buf = &mut editor.buffers[editor.window_mgr.focused_window().buffer_idx];
+        buf.collab_offline = true;
+        buf.pending_sync_updates = vec![vec![1]; 5];
+        let s = format_collab_status(&editor);
+        assert_eq!(s, " [C:OFFLINE|pending:5]");
     }
 }

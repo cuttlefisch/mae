@@ -1,11 +1,17 @@
+mod collab;
+mod config;
 mod dap;
 mod edit;
 mod file;
 mod file_tree;
 mod fold_org;
 mod git;
+mod help;
+mod kb;
 mod lsp;
 mod nav;
+mod project;
+mod terminal;
 mod ui;
 mod visual;
 mod window;
@@ -23,6 +29,19 @@ impl Editor {
     pub fn dispatch_builtin(&mut self, name: &str) -> bool {
         let _cmd_start = std::time::Instant::now();
         let _cmd_name = name;
+
+        // Mark a CRDT undo boundary before each dispatch so consecutive
+        // normal-mode operations become separate undo items.  Inside an
+        // explicit undo group (insert mode, compound ops) we skip this so
+        // all edits merge into one item.
+        {
+            let idx = self.active_buffer_idx();
+            let buf = &mut self.buffers[idx];
+            if !buf.in_undo_group() {
+                buf.sync_undo_boundary();
+            }
+        }
+
         let result = self.dispatch_builtin_inner(name);
         let elapsed_us = _cmd_start.elapsed().as_micros() as u64;
         self.perf_stats.record_command(_cmd_name, elapsed_us);
@@ -66,11 +85,11 @@ impl Editor {
         // Consume the count prefix at the top of every dispatch.
         // `count` is Some(n) if user typed a digit prefix, None if not.
         // `n` is the effective repeat count (default 1).
-        let count = self.count_prefix.take();
+        let count = self.vi.count_prefix.take();
         let n = count.unwrap_or(1);
 
         // Track linewise vs characterwise for operator-pending mode
-        self.last_motion_linewise = Self::is_linewise_motion(name);
+        self.vi.last_motion_linewise = Self::is_linewise_motion(name);
 
         // Try each category in turn. Order doesn't matter for correctness
         // (arm names are unique across categories), but we put high-frequency
@@ -88,6 +107,21 @@ impl Editor {
             return v;
         }
         if let Some(v) = self.dispatch_window(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_help(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_terminal(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_project(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_kb(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_config(name) {
             return v;
         }
         if let Some(v) = self.dispatch_ui(name) {
@@ -146,6 +180,9 @@ impl Editor {
         }
         if let Some(v) = self.dispatch_file_tree(name) {
             self.mark_full_redraw();
+            return v;
+        }
+        if let Some(v) = self.dispatch_collab(name) {
             return v;
         }
 
@@ -380,7 +417,7 @@ impl Editor {
     ///
     /// Returns true if the command was recognized.
     pub fn dispatch_builtin_in_target(&mut self, name: &str) -> bool {
-        let target_win = self.ai_target_window_id;
+        let target_win = self.ai.target_window_id;
         let saved_focus = self.window_mgr.focused_id();
 
         // Switch focus to the AI target window if set
@@ -410,7 +447,7 @@ impl Editor {
     /// Kill buffer at `idx`, handling LSP notification, window fixup, and fallback.
     pub fn kill_buffer_at(&mut self, idx: usize) {
         // If this buffer is part of a conversation pair, close both halves.
-        if let Some(ref pair) = self.conversation_pair {
+        if let Some(ref pair) = self.ai.conversation_pair {
             let sibling_idx = if idx == pair.output_buffer_idx {
                 Some(pair.input_buffer_idx)
             } else if idx == pair.input_buffer_idx {
@@ -419,7 +456,7 @@ impl Editor {
                 None
             };
             if let Some(sib) = sibling_idx {
-                let pair = self.conversation_pair.take().unwrap();
+                let pair = self.ai.conversation_pair.take().unwrap();
                 // Close the sibling's window.
                 let sib_win = if sib == pair.input_buffer_idx {
                     pair.input_window_id
@@ -501,6 +538,15 @@ impl Editor {
         if idx >= self.buffers.len() {
             return;
         }
+        // Warn if sync updates are being dropped — the broadcaster drains
+        // every ~16-100ms, so this should be rare in practice.
+        if !self.buffers[idx].pending_sync_updates.is_empty() {
+            tracing::warn!(
+                buffer = %self.buffers[idx].name,
+                pending = self.buffers[idx].pending_sync_updates.len(),
+                "dropping pending sync updates on buffer close"
+            );
+        }
         self.lsp_notify_did_close_for_buffer(idx);
         self.buffers.remove(idx);
         self.notify_buffer_removed(idx);
@@ -534,10 +580,10 @@ impl Editor {
         let area = self.default_area();
         self.window_mgr.focus_direction(dir, area);
         self.sync_mode_to_buffer();
-        // Refresh help buffer on focus (picks up node edits from other windows).
+        // Refresh KB buffer on focus (picks up node edits from other windows).
         let idx = self.active_buffer_idx();
-        if self.buffers[idx].kind == crate::buffer::BufferKind::Help {
-            self.help_populate_buffer(idx);
+        if self.buffers[idx].kind == crate::buffer::BufferKind::Kb {
+            self.kb_populate_buffer(idx);
         }
         // When focusing a conversation output buffer, jump cursor to the last line
         // so the user sees the most recent content (not stranded at row 0).

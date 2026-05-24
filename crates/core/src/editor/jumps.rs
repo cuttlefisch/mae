@@ -56,18 +56,18 @@ impl Editor {
     pub fn record_jump(&mut self) {
         let entry = self.current_jump_entry();
         // Drop any forward history — new jump redefines the "future".
-        self.jumps.truncate(self.jump_idx);
+        self.vi.jumps.truncate(self.vi.jump_idx);
         // Dedupe against the most recent entry.
-        if self.jumps.last() == Some(&entry) {
+        if self.vi.jumps.last() == Some(&entry) {
             return;
         }
-        self.jumps.push(entry);
+        self.vi.jumps.push(entry);
         // Enforce bound: drop from the front.
-        if self.jumps.len() > JUMP_LIST_CAP {
-            let overflow = self.jumps.len() - JUMP_LIST_CAP;
-            self.jumps.drain(..overflow);
+        if self.vi.jumps.len() > JUMP_LIST_CAP {
+            let overflow = self.vi.jumps.len() - JUMP_LIST_CAP;
+            self.vi.jumps.drain(..overflow);
         }
-        self.jump_idx = self.jumps.len();
+        self.vi.jump_idx = self.vi.jumps.len();
     }
 
     /// `Ctrl-o` — navigate backward through the jump list. No-op at the
@@ -75,20 +75,20 @@ impl Editor {
     /// motions, pushes the current position so `Ctrl-i` can return.
     pub fn jump_backward(&mut self, n: usize) {
         for _ in 0..n {
-            if self.jump_idx == 0 {
+            if self.vi.jump_idx == 0 {
                 return;
             }
             // First backward from the "present" — save where we are so
             // forward navigation can restore this spot.
-            if self.jump_idx == self.jumps.len() {
+            if self.vi.jump_idx == self.vi.jumps.len() {
                 let current = self.current_jump_entry();
-                if self.jumps.last() != Some(&current) {
-                    self.jumps.push(current);
+                if self.vi.jumps.last() != Some(&current) {
+                    self.vi.jumps.push(current);
                     // jump_idx stays pointing at the original "past-end"
                     // slot, which is now the entry we just pushed.
                 }
             }
-            self.jump_idx -= 1;
+            self.vi.jump_idx -= 1;
             self.restore_jump_at_idx();
         }
     }
@@ -97,15 +97,15 @@ impl Editor {
     /// newest entry.
     pub fn jump_forward(&mut self, n: usize) {
         for _ in 0..n {
-            if self.jump_idx + 1 >= self.jumps.len() {
+            if self.vi.jump_idx + 1 >= self.vi.jumps.len() {
                 return;
             }
-            self.jump_idx += 1;
+            self.vi.jump_idx += 1;
             self.restore_jump_at_idx();
         }
     }
 
-    /// Move the focused window to `self.jumps[self.jump_idx]`.
+    /// Move the focused window to `self.vi.jumps[self.vi.jump_idx]`.
     ///
     /// Resolves the entry's buffer via path first (so re-opened files
     /// still work), falling back to the stored index for scratch
@@ -114,7 +114,7 @@ impl Editor {
     /// where it is — the alternative (emitting an error) would be noisy
     /// for an operation users expect to be cheap.
     fn restore_jump_at_idx(&mut self) {
-        let entry = self.jumps[self.jump_idx].clone();
+        let entry = self.vi.jumps[self.vi.jump_idx].clone();
         let target_idx = if let Some(ref path) = entry.path {
             self.buffers
                 .iter()
@@ -159,155 +159,155 @@ mod tests {
     use super::*;
     use crate::buffer::Buffer;
 
-    fn ed_with_text(s: &str) -> Editor {
+    fn editor_with_bulk_text(s: &str) -> Editor {
         let mut buf = Buffer::new();
         buf.insert_text_at(0, s);
         Editor::with_buffer(buf)
     }
 
-    fn set_cursor(ed: &mut Editor, row: usize, col: usize) {
-        let win = ed.window_mgr.focused_window_mut();
+    fn set_cursor(editor: &mut Editor, row: usize, col: usize) {
+        let win = editor.window_mgr.focused_window_mut();
         win.cursor_row = row;
         win.cursor_col = col;
     }
 
     #[test]
     fn record_jump_appends_entry() {
-        let mut ed = ed_with_text("a\nb\nc\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.record_jump();
-        assert_eq!(ed.jumps.len(), 1);
-        assert_eq!(ed.jump_idx, 1);
+        let mut editor = editor_with_bulk_text("a\nb\nc\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.record_jump();
+        assert_eq!(editor.vi.jumps.len(), 1);
+        assert_eq!(editor.vi.jump_idx, 1);
     }
 
     #[test]
     fn record_jump_dedupes_consecutive() {
-        let mut ed = ed_with_text("a\nb\nc\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.record_jump();
-        ed.record_jump();
-        assert_eq!(ed.jumps.len(), 1);
+        let mut editor = editor_with_bulk_text("a\nb\nc\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.record_jump();
+        editor.record_jump();
+        assert_eq!(editor.vi.jumps.len(), 1);
     }
 
     #[test]
     fn ctrl_o_restores_previous_position() {
-        let mut ed = ed_with_text("line0\nline1\nline2\nline3\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.record_jump();
-        set_cursor(&mut ed, 3, 2);
+        let mut editor = editor_with_bulk_text("line0\nline1\nline2\nline3\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.record_jump();
+        set_cursor(&mut editor, 3, 2);
 
-        ed.jump_backward(1);
-        let win = ed.window_mgr.focused_window();
+        editor.jump_backward(1);
+        let win = editor.window_mgr.focused_window();
         assert_eq!((win.cursor_row, win.cursor_col), (0, 0));
     }
 
     #[test]
     fn ctrl_i_returns_to_starting_position() {
-        let mut ed = ed_with_text("line0\nline1\nline2\nline3\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.record_jump();
-        set_cursor(&mut ed, 3, 2);
+        let mut editor = editor_with_bulk_text("line0\nline1\nline2\nline3\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.record_jump();
+        set_cursor(&mut editor, 3, 2);
 
-        ed.jump_backward(1);
-        ed.jump_forward(1);
-        let win = ed.window_mgr.focused_window();
+        editor.jump_backward(1);
+        editor.jump_forward(1);
+        let win = editor.window_mgr.focused_window();
         assert_eq!((win.cursor_row, win.cursor_col), (3, 2));
     }
 
     #[test]
     fn ctrl_o_at_oldest_is_noop() {
-        let mut ed = ed_with_text("a\nb\n");
-        ed.jump_backward(1);
-        let win = ed.window_mgr.focused_window();
+        let mut editor = editor_with_bulk_text("a\nb\n");
+        editor.jump_backward(1);
+        let win = editor.window_mgr.focused_window();
         assert_eq!((win.cursor_row, win.cursor_col), (0, 0));
     }
 
     #[test]
     fn ctrl_i_at_newest_is_noop() {
-        let mut ed = ed_with_text("line0\nline1\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.record_jump();
-        set_cursor(&mut ed, 1, 0);
+        let mut editor = editor_with_bulk_text("line0\nline1\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.record_jump();
+        set_cursor(&mut editor, 1, 0);
         // With no Ctrl-o, jump_idx is already past-end — Ctrl-i does nothing.
-        ed.jump_forward(1);
-        let win = ed.window_mgr.focused_window();
+        editor.jump_forward(1);
+        let win = editor.window_mgr.focused_window();
         assert_eq!((win.cursor_row, win.cursor_col), (1, 0));
     }
 
     #[test]
     fn new_jump_truncates_forward_history() {
-        let mut ed = ed_with_text("l0\nl1\nl2\nl3\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.record_jump();
-        set_cursor(&mut ed, 1, 0);
-        ed.record_jump();
-        set_cursor(&mut ed, 2, 0);
-        ed.record_jump();
-        set_cursor(&mut ed, 3, 0);
+        let mut editor = editor_with_bulk_text("l0\nl1\nl2\nl3\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.record_jump();
+        set_cursor(&mut editor, 1, 0);
+        editor.record_jump();
+        set_cursor(&mut editor, 2, 0);
+        editor.record_jump();
+        set_cursor(&mut editor, 3, 0);
 
         // Walk back twice.
-        ed.jump_backward(2);
+        editor.jump_backward(2);
         // Record a NEW jump — forward history (l2, l3) should drop.
-        set_cursor(&mut ed, 0, 2);
-        ed.record_jump();
+        set_cursor(&mut editor, 0, 2);
+        editor.record_jump();
 
         // Forward should be a no-op now.
-        set_cursor(&mut ed, 3, 3);
-        ed.jump_forward(1);
-        let win = ed.window_mgr.focused_window();
+        set_cursor(&mut editor, 3, 3);
+        editor.jump_forward(1);
+        let win = editor.window_mgr.focused_window();
         assert_eq!((win.cursor_row, win.cursor_col), (3, 3));
     }
 
     #[test]
     fn ctrl_o_twice_walks_back_through_history() {
-        let mut ed = ed_with_text("l0\nl1\nl2\nl3\n");
-        set_cursor(&mut ed, 0, 0);
-        ed.record_jump();
-        set_cursor(&mut ed, 1, 1);
-        ed.record_jump();
-        set_cursor(&mut ed, 2, 2);
-        ed.record_jump();
-        set_cursor(&mut ed, 3, 3);
+        let mut editor = editor_with_bulk_text("l0\nl1\nl2\nl3\n");
+        set_cursor(&mut editor, 0, 0);
+        editor.record_jump();
+        set_cursor(&mut editor, 1, 1);
+        editor.record_jump();
+        set_cursor(&mut editor, 2, 2);
+        editor.record_jump();
+        set_cursor(&mut editor, 3, 3);
 
-        ed.jump_backward(1);
-        let w = ed.window_mgr.focused_window();
+        editor.jump_backward(1);
+        let w = editor.window_mgr.focused_window();
         assert_eq!((w.cursor_row, w.cursor_col), (2, 2));
 
-        ed.jump_backward(1);
-        let w = ed.window_mgr.focused_window();
+        editor.jump_backward(1);
+        let w = editor.window_mgr.focused_window();
         assert_eq!((w.cursor_row, w.cursor_col), (1, 1));
 
-        ed.jump_backward(1);
-        let w = ed.window_mgr.focused_window();
+        editor.jump_backward(1);
+        let w = editor.window_mgr.focused_window();
         assert_eq!((w.cursor_row, w.cursor_col), (0, 0));
     }
 
     #[test]
     fn jump_list_bounded() {
-        let mut ed = ed_with_text("x\n");
+        let mut editor = editor_with_bulk_text("x\n");
         for i in 0..(JUMP_LIST_CAP + 10) {
-            set_cursor(&mut ed, 0, i % 2);
+            set_cursor(&mut editor, 0, i % 2);
             // Alternate col so dedupe doesn't collapse everything.
-            ed.record_jump();
+            editor.record_jump();
         }
-        assert!(ed.jumps.len() <= JUMP_LIST_CAP);
+        assert!(editor.vi.jumps.len() <= JUMP_LIST_CAP);
     }
 
     #[test]
     fn jump_restore_clamps_past_eof() {
-        let mut ed = ed_with_text("one\ntwo\nthree\nfour\n");
-        set_cursor(&mut ed, 3, 2);
-        ed.record_jump();
-        set_cursor(&mut ed, 0, 0);
+        let mut editor = editor_with_bulk_text("one\ntwo\nthree\nfour\n");
+        set_cursor(&mut editor, 3, 2);
+        editor.record_jump();
+        set_cursor(&mut editor, 0, 0);
 
         // Delete the last two lines.
-        let buf = &mut ed.buffers[0];
+        let buf = &mut editor.buffers[0];
         let total = buf.rope().len_chars();
         let two_lines_end = buf.rope().line_to_char(2);
         buf.delete_range(two_lines_end, total);
 
-        ed.jump_backward(1);
-        let win = ed.window_mgr.focused_window();
-        assert!(win.cursor_row < ed.buffers[0].display_line_count());
+        editor.jump_backward(1);
+        let win = editor.window_mgr.focused_window();
+        assert!(win.cursor_row < editor.buffers[0].display_line_count());
     }
 }

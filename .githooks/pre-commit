@@ -17,5 +17,12 @@ if ! cargo clippy --workspace --all-targets --exclude mae-gui --exclude mae-test
     exit 1
 fi
 
+# 3. Code-map freshness check
+echo "Checking code-map freshness..."
+if ! make code-map-check 2>/dev/null; then
+    echo "❌ Code-map is stale. Run 'make code-map' to regenerate."
+    exit 1
+fi
+
 echo "✅ Pre-commit checks passed."
 exit 0

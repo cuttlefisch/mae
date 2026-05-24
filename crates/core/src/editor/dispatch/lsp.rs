@@ -19,7 +19,7 @@ impl Editor {
                 }
                 self.lsp_request_hover();
                 // Also show debug variable value if stopped.
-                if let Some(state) = &self.debug_state {
+                if let Some(state) = &self.dap.state {
                     if state.is_stopped() {
                         let buf = &self.buffers[self.active_buffer_idx()];
                         let win = self.window_mgr.focused_window();
@@ -84,8 +84,8 @@ impl Editor {
             }
             "lsp-rename" => {
                 self.set_mode(crate::Mode::Command);
-                self.command_line = "lsp-rename ".to_string();
-                self.command_cursor = self.command_line.len();
+                self.vi.command_line = "lsp-rename ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
                 self.set_status("Enter new name for symbol");
             }
             "lsp-format" => {

@@ -36,11 +36,13 @@ pub fn execute_open_file(editor: &mut Editor, args: &serde_json::Value) -> Resul
         Err(editor.status_msg.clone())
     } else {
         let target_name = editor
-            .ai_target_buffer_idx
+            .ai
+            .target_buffer_idx
             .map(|idx| editor.buffers[idx].name.clone())
             .unwrap_or_else(|| "unknown".to_string());
         let line_count = editor
-            .ai_target_buffer_idx
+            .ai
+            .target_buffer_idx
             .map(|idx| editor.buffers[idx].line_count())
             .unwrap_or(0);
 

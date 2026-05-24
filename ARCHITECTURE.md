@@ -64,14 +64,14 @@ It replaces scattered `match buf.kind` blocks with polymorphic dispatch:
 `BufferView` (`buffer_view.rs`) stores mode-specific state on `Buffer`:
 
 - `Conversation(Box<Conversation>)`
-- `Help(Box<HelpView>)`
+- `Kb(Box<KbView>)`
 - `Debug(Box<DebugView>)`
 - `GitStatus(Box<GitStatusView>)`
 - `Visual(Box<VisualBuffer>)`
 - `FileTree(Box<FileTree>)`
 - `None`
 
-Accessor methods: `buf.conversation()`, `buf.help_view()`, `buf.git_status_view()`, etc.
+Accessor methods: `buf.conversation()`, `buf.kb_view()`, `buf.git_status_view()`, etc.
 Replaces 6 `Option<T>` fields that were always mutually exclusive.
 
 ## Keymap Inheritance

@@ -5,7 +5,7 @@
 //!
 //! The knowledge base is the shared data model for:
 //!
-//! 1. The built-in help system (command, concept, and keybinding docs).
+//! 1. The built-in manual (command, concept, and keybinding docs).
 //! 2. User-authored notes (org-roam-style bidirectional links).
 //! 3. An AI-facing query surface — the agent is a *peer actor* that can
 //!    read the same nodes the human reads via `:help`.
@@ -24,6 +24,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+pub mod activity;
 pub mod federation;
 pub mod fuzzy;
 pub mod org;
@@ -73,7 +74,7 @@ pub struct Node {
     /// Stable identifier — e.g. `"cmd:delete-line"`, `"concept:buffer"`,
     /// `"index"`. Slugs use `:` as namespace separator by convention.
     pub id: String,
-    /// Human-readable title shown at the top of the help buffer.
+    /// Human-readable title shown at the top of the KB buffer.
     pub title: String,
     pub kind: NodeKind,
     /// Markdown body. May contain `[[link]]` markers that the renderer
@@ -96,10 +97,19 @@ pub struct Node {
     /// Alternative names for discoverability (e.g. "plugins" for concept:modules).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// Arbitrary property drawer key-value pairs (e.g. last-accessed, hash).
+    /// Populated from org `:PROPERTIES:` drawer during ingest.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub properties: HashMap<String, String>,
     /// Path to the source `.org` file this node was parsed from (if any).
     /// Not serialized — ephemeral, populated during ingest.
     #[serde(skip)]
     pub source_file: Option<std::path::PathBuf>,
+    /// Encoded yrs CRDT document bytes (for collaborative KB editing).
+    /// When present, this is the authoritative representation; `title`/`body`/`tags`
+    /// are materialized from the CRDT content for FTS5 and display.
+    #[serde(skip)]
+    pub crdt_doc: Option<Vec<u8>>,
 }
 
 impl Node {
@@ -120,7 +130,9 @@ impl Node {
             source: None,
             source_version: None,
             aliases: Vec::new(),
+            properties: HashMap::new(),
             source_file: None,
+            crdt_doc: None,
         }
     }
 
@@ -150,9 +162,40 @@ impl Node {
         self
     }
 
+    pub fn with_properties(mut self, props: HashMap<String, String>) -> Self {
+        self.properties = props;
+        self
+    }
+
     pub fn with_source_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.source_file = Some(path.into());
         self
+    }
+
+    /// Create a `KbNodeDoc` from this node's content.
+    ///
+    /// If the node already has CRDT bytes (`crdt_doc`), restores from those.
+    /// Otherwise creates a fresh yrs document from the text fields.
+    pub fn to_crdt_doc(&self) -> Result<mae_sync::kb::KbNodeDoc, mae_sync::SyncError> {
+        if let Some(ref bytes) = self.crdt_doc {
+            mae_sync::kb::KbNodeDoc::from_bytes(bytes)
+        } else {
+            Ok(mae_sync::kb::KbNodeDoc::new(
+                &self.id,
+                &self.title,
+                &self.body,
+                &self.tags,
+            ))
+        }
+    }
+
+    /// Update this node's text fields from a `KbNodeDoc`, and store the
+    /// encoded CRDT bytes for persistence.
+    pub fn apply_crdt_doc(&mut self, doc: &mae_sync::kb::KbNodeDoc) {
+        self.title = doc.title();
+        self.body = doc.body();
+        self.tags = doc.tags();
+        self.crdt_doc = Some(doc.encode());
     }
 
     /// Extract all `[[link]]` and `[[link|display]]` targets from the body.
@@ -275,6 +318,14 @@ fn is_uuid_like(s: &str) -> bool {
             .all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
+/// A node whose `source_file` points to a path that no longer exists on disk.
+#[derive(Debug, Clone)]
+pub struct StaleNode {
+    pub id: String,
+    pub title: String,
+    pub source_file: std::path::PathBuf,
+}
+
 /// Health report for the knowledge base — orphans, broken links, namespace stats.
 #[derive(Debug, Clone)]
 pub struct KbHealthReport {
@@ -283,6 +334,7 @@ pub struct KbHealthReport {
     pub orphan_ids: Vec<String>,
     pub broken_links: Vec<BrokenLink>,
     pub namespace_counts: HashMap<String, usize>,
+    pub stale_nodes: Vec<StaleNode>,
 }
 
 /// Pre-lowercased search cache for a single node. Populated at insert
@@ -353,6 +405,11 @@ impl KnowledgeBase {
 
     pub fn get(&self, id: &str) -> Option<&Node> {
         self.nodes.get(id)
+    }
+
+    /// Get a mutable reference to a node by ID.
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut Node> {
+        self.nodes.get_mut(id)
     }
 
     /// Insert (or overwrite) a node. Returns the previous node, if any.
@@ -489,7 +546,10 @@ impl KnowledgeBase {
         if !title_hits.is_empty() {
             return title_hits;
         }
-        // Fuzzy fallback: score against id + title + aliases.
+        // Fuzzy fallback: score against id + title + aliases only.
+        // Body is excluded from fuzzy — long body text matches almost any
+        // query as a subsequence, producing too many false positives.
+        // Body is already covered by substring matching above.
         let query_chars: Vec<char> = q.chars().collect();
         let mut scored: Vec<(String, i64)> = self
             .lower
@@ -504,6 +564,30 @@ impl KnowledgeBase {
             })
             .collect();
         scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        scored.into_iter().map(|(id, _)| id).collect()
+    }
+
+    /// Search nodes then re-sort results by activity score (highest first).
+    /// Falls back to normal search order for nodes without activity properties.
+    pub fn search_sorted_by_activity(
+        &self,
+        query: &str,
+        weights: &activity::ActivityWeights,
+        today: (i32, u32, u32),
+    ) -> Vec<String> {
+        let ids = self.search(query);
+        let mut scored: Vec<(String, f64)> = ids
+            .into_iter()
+            .map(|id| {
+                let score = self
+                    .get(&id)
+                    .map(|n| activity::activity_score(&n.properties, weights, today))
+                    .unwrap_or(0.0);
+                (id, score)
+            })
+            .collect();
+        // Stable sort: equal-score nodes keep their original search rank.
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.into_iter().map(|(id, _)| id).collect()
     }
 
@@ -696,6 +780,7 @@ impl KnowledgeBase {
             orphan_ids,
             broken_links: result.broken_links,
             namespace_counts: result.namespace_counts,
+            stale_nodes: Vec::new(), // populated lazily by caller via detect_stale_nodes()
         }
     }
 
@@ -704,6 +789,55 @@ impl KnowledgeBase {
         let mut v = self.links_in.get(target).cloned().unwrap_or_default();
         v.sort();
         v
+    }
+
+    /// Detect nodes whose `source_file` points to a path that no longer exists.
+    /// This is intentionally lazy — call on-demand (health report, reimport),
+    /// not on every drain tick (filesystem stat per node is expensive).
+    pub fn detect_stale_nodes(&self) -> Vec<StaleNode> {
+        self.nodes
+            .values()
+            .filter_map(|n| {
+                n.source_file.as_ref().and_then(|path| {
+                    if !path.exists() {
+                        Some(StaleNode {
+                            id: n.id.clone(),
+                            title: n.title.clone(),
+                            source_file: path.clone(),
+                        })
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Remove stale nodes (source file deleted) and return the count removed.
+    pub fn remove_stale_nodes(&mut self) -> usize {
+        let stale_ids: Vec<String> = self
+            .detect_stale_nodes()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        let count = stale_ids.len();
+        for id in stale_ids {
+            self.remove(&id);
+        }
+        count
+    }
+
+    /// Validate links in a node's body, returning IDs of missing targets.
+    pub fn validate_links(&self, node_id: &str) -> Vec<String> {
+        let body = match self.nodes.get(node_id) {
+            Some(n) => &n.body,
+            None => return Vec::new(),
+        };
+        parse_links(body)
+            .into_iter()
+            .filter(|(target, _)| !self.nodes.contains_key(target))
+            .map(|(target, _)| target)
+            .collect()
     }
 
     /// Return all (id, title) pairs for all nodes, sorted by id.
@@ -715,6 +849,18 @@ impl KnowledgeBase {
             .collect();
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
         pairs
+    }
+
+    /// Return all (id, title, body) triples for all nodes, sorted by id.
+    /// Body is included for search matching in the palette.
+    pub fn all_id_title_body_triples(&self) -> Vec<(String, String, String)> {
+        let mut triples: Vec<(String, String, String)> = self
+            .nodes
+            .values()
+            .map(|n| (n.id.clone(), n.title.clone(), n.body.clone()))
+            .collect();
+        triples.sort_by(|a, b| a.0.cmp(&b.0));
+        triples
     }
 }
 
@@ -1246,6 +1392,170 @@ mod tests {
                 ("a".to_string(), "Alpha".to_string()),
                 ("b".to_string(), "Beta".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn search_finds_body_substring() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new(
+            "zed-arch",
+            "Zed Architecture",
+            NodeKind::Note,
+            "The collaboration layer uses DeltaDB for state sync.",
+        ));
+        let hits = kb.search("DeltaDB");
+        assert!(
+            hits.contains(&"zed-arch".to_string()),
+            "body substring should match, got {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn search_body_substring_but_not_fuzzy() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new(
+            "zed-arch",
+            "Zed Architecture",
+            NodeKind::Note,
+            "The collaboration layer uses DeltaDB for state sync.",
+        ));
+        // "DeltaDB" is a substring in body — should match
+        assert!(!kb.search("DeltaDB").is_empty());
+        // "DltDB" is NOT a substring — fuzzy fallback excludes body,
+        // so this should NOT match (only title/id/aliases get fuzzy).
+        let hits = kb.search("DltDB");
+        assert!(
+            hits.is_empty(),
+            "fuzzy body matching should not produce false positives"
+        );
+    }
+
+    #[test]
+    fn search_title_ranks_above_body() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new(
+            "a",
+            "DeltaDB Overview",
+            NodeKind::Note,
+            "empty body",
+        ));
+        kb.insert(Node::new(
+            "b",
+            "Zed Architecture",
+            NodeKind::Note,
+            "Uses DeltaDB for collaboration",
+        ));
+        let hits = kb.search("DeltaDB");
+        assert_eq!(hits[0], "a", "title match should rank before body match");
+    }
+
+    #[test]
+    fn search_sorted_by_activity_recent_first() {
+        let mut kb = KnowledgeBase::new();
+        let mut old_node = Node::new("old", "Old Note", NodeKind::Note, "");
+        old_node
+            .properties
+            .insert("last-accessed".to_string(), "2026-01-01".to_string());
+        let mut new_node = Node::new("new", "New Note", NodeKind::Note, "");
+        new_node
+            .properties
+            .insert("last-accessed".to_string(), "2026-05-20".to_string());
+        kb.insert(old_node);
+        kb.insert(new_node);
+        let weights = activity::ActivityWeights::default();
+        let hits = kb.search_sorted_by_activity("Note", &weights, (2026, 5, 20));
+        assert_eq!(hits[0], "new", "recently accessed node should rank first");
+    }
+
+    #[test]
+    fn all_id_title_body_triples_sorted() {
+        let kb = kb_with(vec![
+            Node::new("b", "Beta", NodeKind::Note, "beta body"),
+            Node::new("a", "Alpha", NodeKind::Note, "alpha body"),
+        ]);
+        let triples = kb.all_id_title_body_triples();
+        assert_eq!(triples[0].0, "a");
+        assert_eq!(triples[0].2, "alpha body");
+        assert_eq!(triples[1].0, "b");
+    }
+
+    #[test]
+    fn stale_node_detected_after_file_delete() {
+        let mut kb = KnowledgeBase::new();
+        let fake_path = std::path::PathBuf::from("/tmp/mae-test-nonexistent-12345.org");
+        // Ensure path doesn't exist
+        assert!(!fake_path.exists());
+        kb.insert(
+            Node::new("stale-test", "Stale", NodeKind::Note, "body").with_source_file(&fake_path),
+        );
+        let stale = kb.detect_stale_nodes();
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].id, "stale-test");
+        assert_eq!(stale[0].source_file, fake_path);
+    }
+
+    #[test]
+    fn link_validation_warns_on_broken_link() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new("a", "A", NodeKind::Note, "[[missing-id]]"));
+        kb.insert(Node::new("b", "B", NodeKind::Note, "[[a]]")); // valid
+        let missing = kb.validate_links("a");
+        assert_eq!(missing, vec!["missing-id"]);
+        let missing = kb.validate_links("b");
+        assert!(missing.is_empty(), "link to existing node should be valid");
+    }
+
+    #[test]
+    fn cleanup_orphans_removes_user_notes() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new(
+            "orphan-note",
+            "Orphan",
+            NodeKind::Note,
+            "no links",
+        ));
+        kb.insert(Node::new("a", "A", NodeKind::Note, "[[b]]"));
+        kb.insert(Node::new("b", "B", NodeKind::Note, ""));
+        // orphan-note has no links in or out — should be removable
+        let report = kb.health_report();
+        assert!(report.orphan_ids.contains(&"orphan-note".to_string()));
+        // Simulate cleanup (same logic as Editor::kb_cleanup_orphans)
+        let seed_prefixes = ["cmd:", "concept:", "lesson:", "scheme:", "option:"];
+        let to_remove: Vec<String> = report
+            .orphan_ids
+            .into_iter()
+            .filter(|id| !seed_prefixes.iter().any(|p| id.starts_with(p)))
+            .collect();
+        for id in &to_remove {
+            kb.remove(id);
+        }
+        assert!(!kb.contains("orphan-note"));
+        assert!(kb.contains("a"));
+        assert!(kb.contains("b"));
+    }
+
+    #[test]
+    fn cleanup_orphans_preserves_seed_nodes() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new("cmd:save", "Save", NodeKind::Command, ""));
+        kb.insert(Node::new("concept:buffer", "Buffer", NodeKind::Concept, ""));
+        kb.insert(Node::new("lesson:intro", "Intro", NodeKind::Note, ""));
+        kb.insert(Node::new("scheme:define", "Define", NodeKind::Note, ""));
+        kb.insert(Node::new("option:theme", "Theme", NodeKind::Note, ""));
+        // All are orphans (no links), but should be preserved by seed prefix filter
+        let report = kb.health_report();
+        let seed_prefixes = ["cmd:", "concept:", "lesson:", "scheme:", "option:"];
+        let to_remove: Vec<String> = report
+            .orphan_ids
+            .into_iter()
+            .filter(|id| !seed_prefixes.iter().any(|p| id.starts_with(p)))
+            .collect();
+        assert!(
+            to_remove.is_empty(),
+            "seed nodes should be preserved: {:?}",
+            to_remove
         );
     }
 }

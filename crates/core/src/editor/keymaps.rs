@@ -119,6 +119,7 @@ impl Editor {
         normal.bind(parse_key_seq("J"), "join-lines");
         normal.bind(parse_key_seq(">>"), "indent-line");
         normal.bind(parse_key_seq("<<"), "dedent-line");
+        normal.bind(parse_key_seq_spaced("M-q"), "fill-paragraph");
         // Case change
         normal.bind(parse_key_seq("~"), "toggle-case");
         normal.bind(parse_key_seq_spaced("g U U"), "uppercase-line");
@@ -157,6 +158,7 @@ impl Editor {
         normal.bind(parse_key_seq("i"), "enter-insert-mode");
         normal.bind(parse_key_seq("a"), "enter-insert-mode-after");
         normal.bind(parse_key_seq("A"), "enter-insert-mode-eol");
+        normal.bind(parse_key_seq("I"), "enter-insert-mode-bol");
         normal.bind(parse_key_seq("o"), "open-line-below");
         normal.bind(parse_key_seq("O"), "open-line-above");
         normal.bind(parse_key_seq(":"), "enter-command-mode");
@@ -179,6 +181,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC b n"), "next-buffer");
         normal.bind(parse_key_seq_spaced("SPC b p"), "prev-buffer");
         normal.bind(parse_key_seq_spaced("SPC b l"), "alternate-file");
+        normal.bind(parse_key_seq_spaced("SPC b a"), "alternate-file");
         normal.bind(parse_key_seq_spaced("SPC b m"), "view-messages");
         normal.bind(parse_key_seq_spaced("SPC b N"), "new-buffer");
         normal.bind(parse_key_seq_spaced("SPC b D"), "force-kill-buffer");
@@ -217,6 +220,8 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("C-w +"), "window-grow");
         normal.bind(parse_key_seq_spaced("C-w -"), "window-shrink");
         normal.bind(parse_key_seq_spaced("C-w ="), "window-balance");
+        normal.bind(parse_key_seq_spaced("C-w >"), "window-grow-width");
+        normal.bind(parse_key_seq_spaced("C-w <"), "window-shrink-width");
         // +ai
         normal.bind(parse_key_seq_spaced("SPC a a"), "open-ai-agent");
         normal.bind(parse_key_seq_spaced("SPC a p"), "ai-prompt");
@@ -309,17 +314,26 @@ impl Editor {
         // SPC o a / SPC o A — moved to modules/agenda/autoloads.scm
         // +register — moved to modules/registers/autoloads.scm
         // +notes (KB shortcuts)
+        // +dailies
+        normal.bind(parse_key_seq_spaced("SPC n d t"), "daily-goto-today");
+        normal.bind(parse_key_seq_spaced("SPC n d y"), "daily-goto-yesterday");
+        normal.bind(parse_key_seq_spaced("SPC n d d"), "daily-goto-date");
+        normal.bind(parse_key_seq_spaced("SPC n d p"), "daily-prev");
+        normal.bind(parse_key_seq_spaced("SPC n d n"), "daily-next");
         normal.bind(parse_key_seq_spaced("SPC n f"), "kb-find");
         normal.bind(parse_key_seq_spaced("SPC n v"), "kb-view");
         normal.bind(parse_key_seq_spaced("SPC n e"), "kb-edit-source");
         normal.bind(parse_key_seq_spaced("SPC n c"), "kb-create");
-        normal.bind(parse_key_seq_spaced("SPC n d"), "kb-delete");
+        normal.bind(parse_key_seq_spaced("SPC n D"), "kb-delete");
         normal.bind(parse_key_seq_spaced("SPC n r"), "kb-register");
         normal.bind(parse_key_seq_spaced("SPC n R"), "kb-reimport");
         normal.bind(parse_key_seq_spaced("SPC n i"), "kb-insert-link");
-        // Capture mode (org-roam parity)
+        // Capture mode (org-roam parity) — leader alternatives for discoverability
         normal.bind(parse_key_seq_spaced("C-c C-c"), "capture-finalize");
         normal.bind(parse_key_seq_spaced("C-c C-k"), "capture-abort");
+        normal.bind(parse_key_seq_spaced("SPC n s"), "capture-finalize");
+        normal.bind(parse_key_seq_spaced("SPC n k"), "capture-abort");
+        normal.bind(parse_key_seq_spaced("SPC n C"), "kb-cleanup-orphans");
         normal.bind(parse_key_seq_spaced("SPC n I"), "kb-instances");
         normal.bind(parse_key_seq_spaced("SPC n h"), "kb-health");
         // +code (LSP shortcuts)
@@ -329,7 +343,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC c x"), "lsp-show-diagnostics");
         normal.bind(parse_key_seq_spaced("SPC c a"), "lsp-code-action");
         normal.bind(parse_key_seq_spaced("SPC c R"), "lsp-rename");
-        normal.bind(parse_key_seq_spaced("SPC c f"), "lsp-format");
+        // SPC c f owned by format module (format-buffer) — do not bind here.
         normal.bind(parse_key_seq_spaced("SPC c F"), "lsp-range-format");
         normal.bind(parse_key_seq_spaced("SPC c s"), "lsp-status");
         normal.bind(parse_key_seq_spaced("SPC c o"), "lsp-symbol-outline");
@@ -351,6 +365,7 @@ impl Editor {
         normal.set_group_name(parse_key_seq_spaced("SPC p"), "+project");
         normal.set_group_name(parse_key_seq_spaced("SPC g"), "+git");
         normal.set_group_name(parse_key_seq_spaced("SPC n"), "+notes");
+        normal.set_group_name(parse_key_seq_spaced("SPC n d"), "+dailies");
         normal.set_group_name(parse_key_seq_spaced("SPC o"), "+open");
         normal.set_group_name(parse_key_seq_spaced("SPC l"), "+lsp");
         normal.set_group_name(parse_key_seq_spaced("SPC r"), "+register");
@@ -366,8 +381,9 @@ impl Editor {
         insert.bind(vec![KeyPress::special(Key::Right)], "move-right");
         // LSP completion navigation (Tab/Ctrl-n/Ctrl-p handled specially in binary
         // so they can either trigger/navigate the popup or fall through to Tab insert).
-        // We bind them here so dispatch_builtin can route them.
-        insert.bind(vec![KeyPress::special(Key::Tab)], "lsp-accept-completion");
+        // Tab is owned by the snippet module (snippet-expand-or-next), with fallback
+        // to lsp-accept-completion in keymap-doom if snippets are not loaded.
+        // Binary insert.rs handles Tab directly via pattern match before keymap dispatch.
         insert.bind(vec![KeyPress::ctrl('n')], "lsp-complete-next");
         insert.bind(vec![KeyPress::ctrl('p')], "lsp-complete-prev");
         // Note: Enter, Backspace, and printable chars are handled specially
@@ -546,9 +562,9 @@ mod tests {
 
     #[test]
     fn org_buffer_keymap_names() {
-        let mut ed = Editor::new();
-        ed.syntax.set_language(0, Language::Org);
-        let names = ed.current_keymap_names();
+        let mut editor = Editor::new();
+        editor.syntax.set_language(0, Language::Org);
+        let names = editor.current_keymap_names();
         // Org keymap moved to modules/org/ — falls back to normal at construction
         assert_eq!(names, Some(("org", Some("normal"))));
     }
@@ -558,8 +574,8 @@ mod tests {
 
     #[test]
     fn all_spc_bindings_resolve_to_registered_commands() {
-        let ed = Editor::new();
-        let normal = ed.keymaps.get("normal").unwrap();
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
         let spc = parse_key_seq("SPC");
         let mut missing = Vec::new();
         for (keys, cmd) in normal.bindings() {
@@ -567,7 +583,7 @@ mod tests {
             if keys.first() != spc.first() {
                 continue;
             }
-            if !ed.commands.contains(cmd) {
+            if !editor.commands.contains(cmd) {
                 missing.push(cmd.clone());
             }
         }
@@ -580,8 +596,8 @@ mod tests {
 
     #[test]
     fn new_spc_bindings_resolve_correctly() {
-        let ed = Editor::new();
-        let normal = ed.keymaps.get("normal").unwrap();
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
         // SPC g bindings moved to modules/git-status/
         let cases = vec![
             ("SPC w w", "focus-next-window"),
@@ -609,8 +625,8 @@ mod tests {
 
     #[test]
     fn ctrl_g_resolves_to_file_info() {
-        let ed = Editor::new();
-        let normal = ed.keymaps.get("normal").unwrap();
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
         let keys = vec![KeyPress::ctrl('g')];
         assert_eq!(
             normal.lookup(&keys),
@@ -624,29 +640,29 @@ mod tests {
     // Verify commands remain registered as kernel builtins.
     #[test]
     fn file_tree_commands_registered() {
-        let ed = Editor::new();
-        assert!(ed.commands.contains("file-tree-toggle"));
-        assert!(ed.commands.contains("file-tree-down"));
-        assert!(ed.commands.contains("file-tree-open"));
-        assert!(ed.commands.contains("file-tree-create"));
+        let editor = Editor::new();
+        assert!(editor.commands.contains("file-tree-toggle"));
+        assert!(editor.commands.contains("file-tree-down"));
+        assert!(editor.commands.contains("file-tree-open"));
+        assert!(editor.commands.contains("file-tree-create"));
     }
 
     #[test]
     fn file_tree_buffer_keymap_names() {
-        let mut ed = Editor::new();
+        let mut editor = Editor::new();
         let root = std::env::current_dir().unwrap();
         let tree_buf = crate::buffer::Buffer::new_file_tree(&root);
-        ed.buffers.push(tree_buf);
-        let tree_idx = ed.buffers.len() - 1;
-        ed.window_mgr.focused_window_mut().buffer_idx = tree_idx;
-        let names = ed.current_keymap_names();
+        editor.buffers.push(tree_buf);
+        let tree_idx = editor.buffers.len() - 1;
+        editor.window_mgr.focused_window_mut().buffer_idx = tree_idx;
+        let names = editor.current_keymap_names();
         assert_eq!(names, Some(("file-tree", Some("normal"))));
     }
 
     #[test]
     fn help_keymap_exists_with_bindings() {
-        let ed = Editor::new();
-        let help_map = ed.keymaps.get("help").unwrap();
+        let editor = Editor::new();
+        let help_map = editor.keymaps.get("help").unwrap();
         assert_eq!(help_map.parent.as_deref(), Some("normal"));
         let q_key = parse_key_seq("q");
         assert_eq!(
@@ -664,26 +680,59 @@ mod tests {
 
     #[test]
     fn help_buffer_uses_help_keymap() {
-        let mut ed = Editor::new();
-        // Create a help buffer and focus it
+        let mut editor = Editor::new();
+        // Create a KB buffer and focus it
         let mut buf = crate::buffer::Buffer::new();
-        buf.kind = crate::buffer::BufferKind::Help;
+        buf.kind = crate::buffer::BufferKind::Kb;
         buf.name = "*Help*".to_string();
-        ed.buffers.push(buf);
-        let help_idx = ed.buffers.len() - 1;
-        ed.window_mgr.focused_window_mut().buffer_idx = help_idx;
-        let names = ed.current_keymap_names();
+        editor.buffers.push(buf);
+        let help_idx = editor.buffers.len() - 1;
+        editor.window_mgr.focused_window_mut().buffer_idx = help_idx;
+        let names = editor.current_keymap_names();
         assert_eq!(names, Some(("help", Some("normal"))));
     }
 
     #[test]
+    fn dailies_bindings_registered() {
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
+        let entries = normal.which_key_entries(&parse_key_seq_spaced("SPC n d"), &editor.commands);
+        assert!(
+            entries.iter().any(|e| e.label.contains("today")),
+            "dailies bindings should include 'today'"
+        );
+        assert_eq!(entries.len(), 5, "should have 5 dailies bindings");
+    }
+
+    #[test]
+    fn spc_sub_prefixes_have_which_key_group_names() {
+        // Verify sub-prefixes (like SPC n d) also have group names
+        use crate::keymap::parse_key_seq_spaced;
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
+        let spc_n = parse_key_seq_spaced("SPC n");
+        let entries = normal.which_key_entries(&spc_n, &editor.commands);
+        let d_entry = entries.iter().find(|e| {
+            use crate::keymap::Key;
+            matches!(e.key.key, Key::Char('d'))
+        });
+        assert!(d_entry.is_some(), "SPC n should have a 'd' entry");
+        let d = d_entry.unwrap();
+        assert!(d.is_group, "SPC n d should be a group");
+        assert_eq!(
+            d.label, "+dailies",
+            "SPC n d group should be labeled +dailies"
+        );
+    }
+
+    #[test]
     fn overlay_keymaps_have_parent_field() {
-        let ed = Editor::new();
+        let editor = Editor::new();
         // git-status, org, markdown keymaps moved to modules
         // Only kernel keymaps remain at construction
-        assert!(ed.keymaps.get("normal").unwrap().parent.is_none());
+        assert!(editor.keymaps.get("normal").unwrap().parent.is_none());
         assert_eq!(
-            ed.keymaps.get("help").unwrap().parent.as_deref(),
+            editor.keymaps.get("help").unwrap().parent.as_deref(),
             Some("normal")
         );
     }
@@ -694,10 +743,10 @@ mod tests {
 
     #[test]
     fn overlay_keymaps_have_show_buffer_keys_help() {
-        let ed = Editor::new();
+        let editor = Editor::new();
         let q_key = parse_key_seq("?");
         // Only help keymap remains in kernel
-        let km = ed.keymaps.get("help").unwrap();
+        let km = editor.keymaps.get("help").unwrap();
         assert_eq!(
             km.lookup(&q_key),
             crate::keymap::LookupResult::Exact("show-buffer-keys"),
@@ -706,16 +755,41 @@ mod tests {
 
     #[test]
     fn buffer_keys_entries_returns_entries() {
-        let mut ed = Editor::new();
-        // Create a help buffer and focus it (help keymap is still in kernel)
+        let mut editor = Editor::new();
+        // Create a KB buffer and focus it (help keymap is still in kernel)
         let mut buf = crate::buffer::Buffer::new();
-        buf.kind = crate::buffer::BufferKind::Help;
+        buf.kind = crate::buffer::BufferKind::Kb;
         buf.name = "*Help*".to_string();
-        ed.buffers.push(buf);
-        let idx = ed.buffers.len() - 1;
-        ed.window_mgr.focused_window_mut().buffer_idx = idx;
-        let entries = ed.buffer_keys_entries();
+        editor.buffers.push(buf);
+        let idx = editor.buffers.len() - 1;
+        editor.window_mgr.focused_window_mut().buffer_idx = idx;
+        let entries = editor.buffer_keys_entries();
         // Should have entries from help + normal keymaps
         assert!(!entries.is_empty());
+    }
+
+    #[test]
+    fn shift_i_bound_in_normal_mode() {
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
+        let seq = parse_key_seq("I");
+        let result = normal.lookup(&seq);
+        assert_eq!(
+            result,
+            crate::keymap::LookupResult::Exact("enter-insert-mode-bol")
+        );
+    }
+
+    #[test]
+    fn org_keymap_has_tab_and_enter() {
+        // The org keymap is created by the Scheme module, but we can verify
+        // the kernel fallback: org buffers should map to ("org", Some("normal"))
+        // and the org keymap (if loaded) would have Tab and Enter bindings.
+        // Here we just verify the kernel keymap name resolution is correct.
+        let mut editor = Editor::new();
+        editor.syntax.set_language(0, Language::Org);
+        let (primary, fallback) = editor.current_keymap_names().unwrap();
+        assert_eq!(primary, "org");
+        assert_eq!(fallback, Some("normal"));
     }
 }

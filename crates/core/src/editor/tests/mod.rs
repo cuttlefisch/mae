@@ -15,6 +15,7 @@ mod navigation_tests;
 mod operator_tests;
 mod option_tests;
 mod org_checkbox_tests;
+mod org_rendering_tests;
 mod performance_tests;
 mod project_tests;
 mod search_tests;
@@ -25,6 +26,9 @@ mod visual_tests;
 
 // Shared test helpers used across multiple test modules
 
+/// Create an editor with text inserted char-by-char (simulates input mode).
+/// Use when testing input processing, mode transitions, or cursor behavior
+/// that depends on how characters were entered.
 pub(crate) fn editor_with_text(text: &str) -> Editor {
     let mut editor = Editor::new();
     for ch in text.chars() {
@@ -36,7 +40,9 @@ pub(crate) fn editor_with_text(text: &str) -> Editor {
     editor
 }
 
-pub(crate) fn ed_with_rust(src: &str) -> Editor {
+/// Create an editor with a `.rs` file path and text inserted char-by-char.
+/// Use when testing syntax highlighting, LSP features, or language-specific behavior.
+pub(crate) fn editor_with_rust(src: &str) -> Editor {
     let mut buf = Buffer::new();
     buf.set_file_path(std::path::PathBuf::from("/tmp/x.rs"));
     let mut editor = Editor::with_buffer(buf);
@@ -51,7 +57,10 @@ pub(crate) fn ed_with_rust(src: &str) -> Editor {
     editor
 }
 
-pub(crate) fn ed_with_text(text: &str) -> Editor {
+/// Create an editor with text inserted in bulk via `insert_text_at()`.
+/// Bypasses input mode — use when you need multi-line content without
+/// input-mode side effects (no mode transitions, no per-char hooks).
+pub(crate) fn editor_with_bulk_text(text: &str) -> Editor {
     let mut buf = Buffer::new();
     buf.insert_text_at(0, text);
     let mut editor = Editor::with_buffer(buf);

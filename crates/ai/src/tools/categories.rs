@@ -93,7 +93,8 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "spell_check"
         | "lookup_online"
         | "next_error"
-        | "search_tools" => ToolTier::Core,
+        | "search_tools"
+        | "keymap_query" => ToolTier::Core,
         // Everything else is extended
         _ => ToolTier::Extended,
     }
@@ -101,7 +102,7 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
 
 /// Classify a tool into its category for request_tools.
 pub fn classify_tool_category(name: &str) -> Option<ToolCategory> {
-    if name.starts_with("mcp_") {
+    if name.starts_with("mcp_") || name.starts_with("collab_") {
         return Some(ToolCategory::Mcp);
     }
     if name.starts_with("lsp_") || name == "syntax_tree" {

@@ -142,7 +142,7 @@ fn ctrl_o_in_insert_mode_executes_one_normal_command_then_returns() {
     // C-o: switch to normal for one command
     dispatch(&mut editor, &mut scheme, make_ctrl('o'));
     assert_eq!(editor.mode, Mode::Normal);
-    assert!(editor.insert_mode_oneshot_normal);
+    assert!(editor.vi.insert_mode_oneshot_normal);
 
     // Execute one normal command (e.g. '0' = move to line start)
     // Note: '0' with no count_prefix is move-to-line-start, not a digit
@@ -150,7 +150,7 @@ fn ctrl_o_in_insert_mode_executes_one_normal_command_then_returns() {
 
     // Should be back in insert mode
     assert_eq!(editor.mode, Mode::Insert);
-    assert!(!editor.insert_mode_oneshot_normal);
+    assert!(!editor.vi.insert_mode_oneshot_normal);
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn conversation_multiline_submit_reads_all_lines() {
     // Open conversation (creates pair: *AI* output + *ai-input* input).
     editor.dispatch_builtin("ai-prompt");
     assert_eq!(editor.mode, Mode::ConversationInput);
-    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
 
     // Type "hello" into the input buffer.
     for ch in "hello".chars() {
@@ -363,4 +363,68 @@ fn global_command_via_ex_mode() {
     let text = editor.buffers[0].text();
     assert!(!text.contains("TODO"));
     assert!(text.contains("Done"));
+}
+
+// -----------------------------------------------------------------------
+// Splash intercept must not swallow keys during multi-key sequences
+// -----------------------------------------------------------------------
+
+#[test]
+fn splash_intercept_skipped_when_pending_keys_nonempty() {
+    let mut scheme = require_scheme!();
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    assert!(is_splash_visible(&editor));
+
+    let sel_before = editor.splash_selection;
+
+    // Simulate a multi-key sequence in progress (e.g. SPC C already pressed).
+    let mut pending_keys = vec![
+        mae_core::KeyPress {
+            key: mae_core::Key::Char(' '),
+            ctrl: false,
+            alt: false,
+            shift: false,
+        },
+        mae_core::KeyPress {
+            key: mae_core::Key::Char('C'),
+            ctrl: false,
+            alt: false,
+            shift: true,
+        },
+    ];
+    let ai_tx: Option<tokio::sync::mpsc::Sender<mae_ai::AiCommand>> = None;
+    let mut pending_interactive: Option<PendingInteractiveEvent> = None;
+
+    // Press 'j' — should NOT be intercepted by splash navigation.
+    handle_key(
+        &mut editor,
+        &mut scheme,
+        make_key(KeyCode::Char('j')),
+        &mut pending_keys,
+        &ai_tx,
+        &mut pending_interactive,
+    );
+
+    // Splash selection must NOT have changed.
+    assert_eq!(
+        editor.splash_selection, sel_before,
+        "splash intercept swallowed 'j' during a pending key sequence"
+    );
+}
+
+#[test]
+fn splash_intercept_works_when_no_pending_keys() {
+    // Confirm the normal splash j/k still works when no sequence is in progress.
+    let mut scheme = require_scheme!();
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    assert!(is_splash_visible(&editor));
+    assert_eq!(editor.splash_selection, 0);
+
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('j')));
+    assert_eq!(
+        editor.splash_selection, 1,
+        "splash j should still work normally"
+    );
 }

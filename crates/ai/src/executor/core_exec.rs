@@ -5,10 +5,10 @@ use crate::tool_impls::{
     execute_command_list, execute_create_file, execute_cursor_info, execute_debug_state,
     execute_editor_restore_state, execute_editor_save_state, execute_editor_state,
     execute_file_read, execute_get_option, execute_image_info, execute_image_list,
-    execute_list_buffers, execute_list_modules, execute_open_file, execute_pkg_command,
-    execute_project_files, execute_project_info, execute_project_search, execute_read_messages,
-    execute_rename_file, execute_set_option, execute_switch_buffer, execute_switch_project,
-    execute_syntax_tree, execute_window_layout,
+    execute_keymap_query, execute_list_buffers, execute_list_modules, execute_open_file,
+    execute_pkg_command, execute_project_files, execute_project_info, execute_project_search,
+    execute_read_messages, execute_rename_file, execute_set_option, execute_switch_buffer,
+    execute_switch_project, execute_syntax_tree, execute_window_layout,
 };
 use crate::types::ToolCall;
 
@@ -63,8 +63,8 @@ fn execute_dispatch_command(editor: &mut Editor, cmd: &str) -> Result<String, St
 fn execute_set_ai_target(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
     // Clear targeting if requested.
     if args.get("clear").and_then(|v| v.as_bool()).unwrap_or(false) {
-        editor.ai_target_buffer_idx = None;
-        editor.ai_target_window_id = None;
+        editor.ai.target_buffer_idx = None;
+        editor.ai.target_window_id = None;
         return Ok("AI target cleared (using focused window)".into());
     }
 
@@ -73,14 +73,14 @@ fn execute_set_ai_target(editor: &mut Editor, args: &serde_json::Value) -> Resul
         let idx = editor
             .find_buffer_by_name(name)
             .ok_or_else(|| format!("No buffer named '{}'", name))?;
-        editor.ai_target_buffer_idx = Some(idx);
+        editor.ai.target_buffer_idx = Some(idx);
         // Also set window target if a window shows this buffer.
         if let Some(win) = editor
             .window_mgr
             .iter_windows()
             .find(|w| w.buffer_idx == idx)
         {
-            editor.ai_target_window_id = Some(win.id);
+            editor.ai.target_window_id = Some(win.id);
         }
         return Ok(format!("AI target set to buffer '{}'", name));
     }
@@ -94,8 +94,8 @@ fn execute_set_ai_target(editor: &mut Editor, args: &serde_json::Value) -> Resul
             .find(|w| w.id == wid)
             .ok_or_else(|| format!("No window with id {}", wid))?;
         let buf_idx = win.buffer_idx;
-        editor.ai_target_window_id = Some(wid);
-        editor.ai_target_buffer_idx = Some(buf_idx);
+        editor.ai.target_window_id = Some(wid);
+        editor.ai.target_buffer_idx = Some(buf_idx);
         return Ok(format!(
             "AI target set to window {} (buffer '{}')",
             wid, editor.buffers[buf_idx].name
@@ -163,6 +163,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
                 _ => Err("target_format must be 'org' or 'markdown'".into()),
             }
         }
+        "keymap_query" => execute_keymap_query(editor, &call.arguments),
         _ => return None,
     };
     Some(result)

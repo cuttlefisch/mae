@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.9.0-dev · **Tests:** 3,186 passing · **Status:** Alpha — all 11 phases + Phase G complete, feature crate extraction done.
+**Current version:** v0.10.4-dev · **Tests:** 3,895+ passing · **Status:** Alpha — Phases 1-11 complete, Phase 12 (collab) protocol-complete, Phase 13 (Scheme runtime) planned.
 
 ---
 
@@ -24,8 +24,51 @@
 
 ## Known Bugs
 
+### Pre-existing
+
 - [ ] **AI output buffer cursor invisible in GUI**: After AI responds, the cursor in the `*ai*` conversation output buffer is not visible. Root cause: buffer type / layout metadata mismatch — the conversation buffer doesn't provide the same state that the cursor renderer expects. Low priority (output buffer is read-only, navigation still works).
 - [ ] **Theme load failure is silent in headless mode**: If config.toml requests a nonexistent theme, `set_theme_by_name()` shows a status bar message but keeps the current theme. In CI/headless mode the user gets zero feedback. Should log to stderr or return non-zero exit from `--check-config`.
+
+### Collaborative Editing (v0.11.0)
+
+- [x] **One-directional sync**: cli1→cli2 works but cli2→cli1 does not. Root cause: `biased` tokio::select starved TCP reads. Fix: remove `biased;` from connected select loop.
+- [x] **First `SPC C j` unresponsive from Dashboard**: Join only works after a `SPC C D`/`SPC C i` round-trip. Root cause: splash screen intercept swallows `j` during multi-key sequences. Fix: add `pending_keys.is_empty()` guard.
+- [x] **Syntax highlighting differs on join**: Joiner sees wrong colors (purple bullets, green title). Root cause: `set_language` without `invalidate()` leaves no tree-sitter parse tree. Fix: call `syntax.invalidate(idx)` after join.
+- [x] **Per-user CRDT undo**: yrs `UndoManager` with per-origin undo stacks. Local edits use origin-tagged transactions; `undo()`/`redo()` generate CRDT-native inverse operations (no more `reconcile_to()` round-trip). Remote edits excluded from local undo stack. `enable_undo()` called in `enable_sync()`/`load_sync_state()`. `capture_timeout_millis: u64::MAX` with explicit `undo_reset()` at dispatch boundaries — vim insert-mode groups all chars into one undo item. *(12f8ce4)*
+- [x] **`:w` fails on non-sharer clients**: Save works only for the client that originally opened and shared the file. Other clients (including those that outlive the sharer) get errors. Root cause: `file_path` not properly resolved on join, or save protocol assumes original sharer identity. *(8de53b8)*
+- [x] **Sharer quit doesn't notify peers or stop sharing**: When the client that triggered the share disconnects, peers are not notified and the shared document lingers. Need graceful disconnect protocol: server detects client drop → notifies remaining peers → optionally promotes new owner or marks doc read-only. *(8de53b8)*
+- [x] **Client disconnect lifecycle undefined**: No documented or tested behavior for: client crash, network drop, graceful quit, last-client-leaves. Must define and implement industry-standard behavior (cf. VS Code Live Share, Google Docs). Document in `docs/COLLABORATION.md`. *(8de53b8)*
+- [x] **Collab e2e test harness missing**: 15 E2E tests (in-memory Client harness + 9 TCP network tests) covering share/join/edit/sync/disconnect/eviction/convergence.
+- [x] **Edits lost during share round-trip (BUG A)**: Optimistically track doc in `collab_synced_buffers` immediately, with `ShareFailed` rollback on server error.
+- [x] **Eviction doesn't delete from SQLite (BUG B)**: `evict_idle()` now deletes from storage after removing from HashMap.
+- [x] **Inconsistent snapshots in sync/resync and sync/diff (BUG C)**: Atomic `encode_state_and_sv()` and `encode_diff_and_sv()` methods under single lock.
+- [x] **sync/share loses connected_clients (BUG D)**: Atomic `share_doc()` method sets `connected_clients=1` on creation.
+- [x] **Missing subscription types (BUG E)**: `send_subscribe()` now includes `peer_joined`, `peer_left`, `save_committed`.
+
+### Deferred to v0.12+ (Collab)
+
+- [x] **Offline edit recovery**: Preserve `sync_doc` during disconnect, reconcile on rejoin instead of full-state overwrite. *(b8d4b6a)*
+- [x] **Client-side gap detection**: Track `wal_seq` from notifications, trigger auto-resync on gaps. *(b8d4b6a)*
+- [x] **Save protocol wiring**: Call `docs/save_intent` + `docs/save_committed` from editor's `:w` for synced buffers.
+- [ ] **Cursor positioning after CRDT undo**: Track cursor pos in `StackItem.meta` via `observe_item_added` — currently uses `clamp_cursor()` (safe but imprecise after multi-line undo).
+- [x] **Undo capture timeout tuning**: Fixed in 12f8ce4 — `capture_timeout_millis: u64::MAX` with explicit `undo_reset()` at dispatch boundaries. Vim insert-mode groups all chars into one undo item.
+- [ ] **Cursor drift on remote edits**: `apply_sync_update` rebuilds rope but doesn't adjust cursor. If remote peer inserts before cursor, local cursor points to wrong logical position. Fix requires architecture change (Buffer doesn't own Window) — adjust at call site in `collab_bridge.rs` or add cursor-offset return from `apply_sync_update`.
+- [ ] **Modified flag incorrect with CRDT undo**: CRDT undo path sets `modified = true` unconditionally. No `saved_undo_depth` tracking for CRDT path, so buffer can never report "unmodified" after undo returns to saved state.
+- [ ] **Docker E2E test disabled**: Removed from CI. Steel Scheme's `sleep-ms` is a pending operation (set-and-return), not a blocking call. `wait-until`/`wait-for-file` loops can't actually wait inside a single eval — they spin without real time passing. Cross-container coordination requires either: (a) a Scheme runtime with blocking/async wait primitives, or (b) rewriting all coordination as separate test steps with sleep-ms between them (works but fragile). Protocol correctness is fully covered by collab_e2e.rs (23 tests), tests/crdt/ (142 tests), and tests/collab-local/ (85 tests). Re-enable after Scheme runtime replacement.
+- [ ] **Undo stack size limit for CRDT**: yrs UndoManager has no built-in limit. Add `observe_item_added` callback to evict old items beyond threshold (cf. Emacs `undo-limit`).
+- [x] **Awareness protocol**: Cursor/selection sharing via `sync/awareness` JSON-RPC relay. 8-color WCAG AA palette, 50ms throttle, 30s timeout, echo filtering. GUI (2px bar + labels + off-screen ▲/▼) and TUI (underline + initial + ▲/▼) rendering. Status bar presence. Auto-derived user identity (git → $USER → hostname). 12 tests.
+- [x] **Heartbeat/keepalive**: Detect silent client death, clean up stale `connected_clients`. *(b8d4b6a)*
+
+### Org-Mode Rendering
+
+- [ ] **Org rendering broken in editing buffers**: Checklists, `#+TITLE`, properties drawer dimming, and other structural org elements don't render correctly in dailies editing buffers. May be a tree-sitter parse issue or a span computation bug in `compute_org_spans()` vs `compute_org_style_spans()` fallback.
+- [ ] **KB node edit mode lacks rich formatting**: When editing a KB node, headers are not scaled/colored — rendering falls back to plain text instead of applying org-mode visual treatment.
+- [x] **Word-wrap indentation for list items**: `content_indent_len()` now detects list markers (`- `, `+ `, `* `, `1. `) and indents wrap continuations past the marker. Both GUI and TUI.
+- [x] **`fill-paragraph` / `M-q`**: Hard-wrap at `fill_column` (default 80), respects list-item hanging indent. `fill-region` for visual selection is TODO.
+
+### Line Numbers & Wrapping
+
+- [x] **Relative line numbers with word-wrap**: GUI now uses buffer-row distance for relative numbers in wrapped mode, not display-row distance (which inflated counts by including continuation rows).
 
 ---
 
@@ -43,11 +86,192 @@
 - [x] Babel edit-special: `SPC m '` opens src block in dedicated buffer with language mode
 - [x] Babel edit-commit: `SPC m '` in edit buffer writes body back to source
 
-### Near-term
+### Near-term: Server-Client Architecture
+
+- [ ] **Multi-AI file contention protocol**: When multiple AI-assisted editors (MAE, VS Code + Copilot, Cursor, aider) operate on the same project simultaneously, file writes race, LSP state goes stale, and undo histories diverge. Short-term: git worktree isolation (each agent in its own worktree, merge at commit time). Medium-term: advisory file locks (`.mae.lock`), inotify coordination to detect external changes and pause AI operations. Long-term: canonical state server (see below).
+- [x] **State server v1** (`mae-state-server` binary): Standalone CRDT sync server over TCP (port 9473). Per-document locking, WAL-first SQLite persistence, periodic compaction, transport-generic I/O (reuses `mae_mcp` primitives). Sync protocol: `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`. No auth (trusted LAN only).
+- [x] **State server v1.5** (scalability + UX): Sharded SQLite pool (4 shards), save protocol (SHA-256 content-hash), event sequence tracking (wal_seq), background compaction + idle eviction. Editor: 7 commands (SPC C prefix), 4 AI tools, status bar segment, 5 options, doctor integration, audit_configuration collab section. New methods: `sync/resync`, `docs/stats`, `docs/save_intent`, `docs/save_committed`, `$/debug`.
+- [x] **Client ID echo filtering**: Server `broadcast_except()` skips the originating session on `sync/update`. Eliminates wasted bandwidth/CPU from self-echo and prevents share duplication race.
+- [x] **Collab stub audit** (v0.11.0 correctness): Systematic review completed. Resolved items:
+  - ~~`docs/save_committed` handler is a no-op stub~~ — NOT a no-op: broadcasts `SaveCommitted` to peers (handler.rs:463-492)
+  - ~~`track_client_connect()` / `track_client_disconnect()` dead code~~ — called from handler.rs on `sync/update`, `sync/full_state`, `sync/resync`, `sync/share`, and session teardown
+  - ~~`DocAddress` enum never used~~ — used in `compute_doc_address()` (collab_bridge.rs) + `BufferJoined` handler
+  - ~~Per-doc `connected_clients` never incremented~~ — tracked by `share_doc()` (=1) + `track_client_connect/disconnect` in handler
+  - ~~No `peer_joined`/`peer_left` events~~ — exist in `EditorEvent`, broadcast by server on connect/disconnect
+  - `SaveIntentResult` returned by server, now consumed by editor save path ✅
+  - `save_intent` now called from editor `:w` for synced buffers ✅
+  - `docs/metadata` endpoint added to state server ✅
+  - `WalEntry::client_id` stored but never read for audit/attribution (deferred — needs Phase F auth)
+  - `StorageError::Io` variant reserved but unused (pluggable backends — by design)
+- [ ] **State server v2** (Phase F): Auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Completed: awareness protocol ✅, per-user undo ✅ (yrs `UndoManager`), git-based identity ✅, heartbeat/keepalive ✅, buffer status indicators ✅, Bugs 2-4 ✅ *(8de53b8)*. Priority next-round item: auth tiers.
+- [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
+  - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
+  - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
+  - *Tier 3* (100+ users, 500K+ nodes): PostgreSQL + pgvector, write sharding by namespace, event sourcing for real-time sync. ~3 months.
+  - Key bottlenecks: SQLite single-writer ceiling (~50 writes/sec), FTS5 index size at scale (~400MB at 100K nodes), network latency for RAG workflows (5-10 KB queries per AI turn × 30 concurrent agents = ~600 node fetches/sec peak).
+- [x] **CRDT collaborative editing (yrs/YATA)**: Sync engine: yrs (Yjs Rust port). Per-user cursors via Awareness protocol, per-user undo via yrs UndoManager, conflict-free merge for concurrent AI and human edits. Dual structure: yrs YText + ropey mirror. See ADR-002, ADR-005, ADR-006.
+  - Phase A: `mae-sync` crate (yrs dependency, document schemas, ropey bridge) ✅
+  - Phase B: Buffer integration (sync_doc field, local edits → yrs transactions) ✅
+  - Phase C: MCP sync methods (state_vector, apply_update) ✅
+  - Phase D: Push-based sync event broadcasting ✅
+  - Phase E (state-server): TCP transport, WAL persistence, per-doc locking ✅
+  - Phase F: Awareness protocol ✅, per-user undo ✅, multi-machine sync
+- [ ] **Networked feature E2E coverage gate**: Every networked feature (sync, save, awareness, auth) requires E2E test coverage before release. Coverage targets:
+  - Save protocol: save_intent → hash check → save_committed → peer notification (~80% — concurrent save, epoch validation, metadata round-trip)
+  - WAL gap recovery: trigger gap via server restart, verify ForceSync completes (~50% — compaction verified, WAL stats tracked)
+  - Disconnect/reconnect: pending sends, timeout, partition, duplicate updates (~80% — sharer disconnect, client stats, peer notification)
+  - Multi-document: doc ID collisions, focus switching, cross-doc isolation (40% today)
+  - Error paths: oversized updates, malformed CRDT, server errors (~70% — invalid CRDT bytes, concurrent share, nonexistent doc)
+  - Notifications: sharer_left, peer_count_changed, peer_saved (60% today)
+  - SQLite persistence: WAL durability, crash recovery (~40% — compaction reduces WAL, epoch persistence)
+  Methodology: verify protocol soundness → validate test methodology → ensure containers work without tests → wire tests one by one. Same approach as the collab E2E suite (afae68a).
+
+### KB Enterprise Readiness & Hardening
+
+- [x] **Change management**: `node_changelog` table with full audit trail (create/update/delete, old/new values, timestamps, author, reason). Schema v6 migration.
+- [x] **Incremental sync**: `sync_to_sqlite()` — only writes changed nodes, records all mutations in changelog.
+- [x] **Structured timestamps**: `created_at` / `updated_at` INTEGER columns on `nodes`. Enables `ORDER BY updated_at` without JSON parsing.
+- [x] **Changelog query API**: `node_history()`, `changes_since()` for auditing and time-travel.
+- [ ] **Point-in-time restore**: `kb_restore` command + MCP tool to revert a node to any prior state from changelog.
+- [ ] **Node blame**: Per-change author tracking. Requires session identity propagation from MCP client → KB write path.
+- [ ] **Changelog pruning**: Configurable retention policy (default: 90 days). `kb-changelog-prune` command.
+- [ ] **KB backup/export**: `kb-export` dumps full KB + changelog to portable format (SQLite file or JSON). `kb-import` restores.
+- [ ] **Conflict detection**: When multi-client writes land on same node, detect via version counter and surface conflict to user (not silent last-write-wins).
+- [ ] **KB replication**: Read replicas for high-read-throughput scenarios (AI agents doing 600+ node fetches/sec). WAL mode enables this natively for same-host.
+
+### Phase 13: MAE Scheme Runtime (v0.12.0)
+
+**Motivation**: Steel Scheme has served MAE well from prototype through alpha, but
+we've hit fundamental limitations that block feature development:
+
+1. **No blocking primitives**: `sleep-ms` is a pending operation (set-and-return),
+   not a blocking call. `wait-until`/`wait-for-file` loops inside a single eval
+   spin without real time passing. This blocks Docker E2E tests and any future
+   async coordination (e.g. LSP response polling, DAP breakpoint waits).
+
+2. **No proper error signaling from Rust**: `register_fn` can only return values,
+   not raise Scheme errors. Test assertions must use Scheme-level `(error ...)`,
+   and Rust-backed functions that fail can only return sentinel values that callers
+   must manually check. This prevents clean test infrastructure and robust error
+   handling in `mae:` namespace functions.
+
+3. **`register_value` shadowing**: Each call creates a new binding cell instead of
+   updating the existing one. Forces workaround in test runner (`set!` instead of
+   re-registration). See `steel_quirks.md`.
+
+4. **Void tail-call crash**: Certain tail-call patterns with void returns cause
+   panics. Limits test structure. Filed upstream but unresolved.
+
+5. **Unmaintained dependency chain**: `bincode` (RUSTSEC-2025-0141) is transitive
+   via `steel-core`. We can't fix this without forking Steel or replacing it.
+
+6. **No namespace system**: All user functions, MAE primitives, and test helpers
+   share a flat global namespace. As the API surface grows (currently 144 Scheme
+   primitives, 504 commands), collisions become likely.
+
+**Design**: MAE-native R7RS-small implementation with `mae:` extension namespace.
+
+#### Core: R7RS-small Compliance
+
+- **Standard library**: R7RS-small base (`(scheme base)`, `(scheme write)`,
+  `(scheme time)`, `(scheme file)`, `(scheme process-context)`, etc.)
+- **Proper tail calls**: Required by spec, enables iterative control flow
+- **First-class continuations**: `call/cc` for advanced control flow (error
+  handling, coroutines, generators)
+- **Hygienic macros**: `syntax-rules` (R7RS) + `syntax-case` (R6RS extension)
+- **Multiple values**: `values` / `call-with-values` / `receive`
+- **Libraries**: `(define-library ...)` / `(import ...)` / `(export ...)`
+- **Exact/inexact numeric tower**: Bignums, rationals, complex (at minimum
+  fixnums + flonums for initial release)
+
+#### Extensions: `mae:` Namespace
+
+Inspired by Emacs Lisp's `emacs-` prefix, Guile's module system, and Racket's
+`#lang` facility. All MAE-specific functionality lives in `(mae ...)` libraries:
+
+```scheme
+(import (scheme base)
+        (mae buffer)      ; buffer-insert, buffer-string, buffer-undo, etc.
+        (mae editor)      ; dispatch, modes, keymaps, options
+        (mae async)       ; sleep, wait-for, yield, spawn-fiber
+        (mae test)        ; describe, it, should, should-equal
+        (mae collab)      ; collab-status, collab-share, sync primitives
+        (mae lsp)         ; definition, references, hover, diagnostics
+        (mae dap)         ; breakpoints, step, inspect
+        (mae kb)          ; search, get, create, link
+        (mae shell))      ; send, read-output, cwd
+```
+
+#### Key Design Decisions
+
+| Decision | Rationale | Precedent |
+|----------|-----------|-----------|
+| R7RS-small core, not R7RS-large | Small spec = complete implementation. Large spec is optional modules | Chibi-Scheme, Chicken, Guile |
+| `mae:` namespace, not flat global | Prevent collisions as API grows. Clear provenance | Emacs `emacs-`, Guile modules, Racket collections |
+| Async/yield via delimited continuations | `sleep`, `wait-for-file`, `wait-until` actually block/yield | Guile fibers, Racket threads, Chez `engine` |
+| Rust FFI raises Scheme errors | `register_fn` returns `Result<SteelVal, SchemeError>` | Guile's `scm_throw`, Racket's `raise` |
+| GC: tracing (Immix or similar) | No `Rc<RefCell<>>` cycles. Concurrent collection designed in from day one | Architecture Principle #1 |
+| Bytecode VM, not tree-walking | Performance for hot paths (rendering hooks, input processing) | Guile 3.0, Chez, Racket BC |
+| Compatible `init.scm` migration | Existing user configs must work with deprecation warnings | Emacs 28→29 migration pattern |
+
+#### Prior Art Study
+
+| System | What MAE takes | What MAE avoids |
+|--------|---------------|-----------------|
+| **Emacs Lisp** | Dynamic scope option for hooks, `defadvice`, `defcustom` pattern, buffer-local variables | Dynamic scope as default, no modules, no TCO, no hygiene |
+| **Guile Scheme** | Module system (`define-module`), delimited continuations, Rust/C FFI patterns | Slow startup (~200ms), heavy runtime, complex build |
+| **Racket** | `#lang` extensibility, contract system, exceptional docs | 200MB runtime, poor embedding story, non-standard |
+| **Chibi-Scheme** | Minimal R7RS-small, <1MB, designed for embedding | Limited ecosystem, no JIT, slow numerics |
+| **Steel** | Rust integration patterns (what worked), `register_fn` API shape | Shadowing bugs, void crashes, no error signaling, unmaintained deps |
+| **Chez Scheme** | Compilation strategy, `engine` for preemption | Complex bootstrap, not designed for embedding |
+
+#### Implementation Phases
+
+- [ ] **Phase 13a**: Reader/parser (S-expressions, datum labels, `#;` comments)
+- [ ] **Phase 13b**: Bytecode compiler + VM (stack-based, tail-call elimination)
+- [ ] **Phase 13c**: R7RS-small base library (lists, strings, vectors, I/O, control)
+- [ ] **Phase 13d**: `(mae buffer)` + `(mae editor)` — port existing 144 primitives
+- [ ] **Phase 13e**: `(mae async)` — delimited continuations, fibers, blocking `sleep`/`wait`
+- [ ] **Phase 13f**: `(mae test)` — proper error signaling, structured test results
+- [ ] **Phase 13g**: Migration tooling — `init.scm` compatibility layer, deprecation warnings
+- [ ] **Phase 13h**: GC implementation (Immix or stop-the-world mark-sweep for v1)
+- [ ] **Phase 13i**: Remove `steel-core` dependency
+
+#### Success Criteria
+
+- All existing `init.scm` configs load with at most deprecation warnings
+- All 487 Scheme tests pass (142 CRDT + 85 collab-local + 260 editor)
+- `wait-for-file` and `wait-until` actually block/yield (Docker E2E re-enabled)
+- `register_fn` can return `Result` (errors propagate as Scheme exceptions)
+- No `bincode` or other unmaintained transitive dependencies
+- Startup time ≤ Steel's current performance (~50ms for init.scm)
+- Module system prevents namespace collisions
+
+### Near-term: Other
+- [ ] **Version compatibility policy**: Semver enforcement on upgrade — protocol version negotiation in state-server (`initialize` params), config schema migration on major bumps, `make install-upgrade` blocking on incompatible major versions (currently warns only). Prerequisite for v1.0.
 - [ ] PDF preview (GUI inline rendering via `hayro` pure-Rust rasterizer + midnight mode)
 - [ ] Semantic code search (vector embeddings)
 - [x] Org ↔ Markdown bidirectional conversion (`:markdown-to-org`, `:org-to-markdown`)
-- [ ] Investigate `bincode` unmaintained dependency (RUSTSEC-2025-0141) — transitive via `steel-core`; evaluate alternatives (`bitcode`, `postcard`) or upstream Steel fix
+
+### Phase 12: RAG Pipeline (planned)
+
+- [ ] **Embedding storage**: `sqlite-vec` extension for f32 vectors in KB SQLite. Schema: `node_embeddings(node_id, model, vector BLOB, updated_at)`.
+- [ ] **Embedding generation**: Support local models (GGUF/llama.cpp) and API-based (OpenAI, Voyage). `mae-embed` crate or integration in `mae-kb`.
+- [ ] **Vector search**: `kb_semantic_search(query, top_k)` MCP tool + `(kb-semantic-search QUERY K)` Scheme fn. Cosine similarity, FTS5 fallback.
+- [ ] **Retrieval pipeline**: Before each AI turn, auto-retrieve relevant KB nodes by: buffer context, semantic similarity, explicit references. Budget: `rag_max_context_tokens` option (default 2048).
+- [ ] **Context injection**: Retrieved nodes as structured `<context>` blocks in system prompt. Dedup, TTL cache (5 min).
+- [ ] **Incremental re-embedding**: `kb-reindex` command, background task, status bar progress.
+- [ ] **Multi-source indexing**: Code files (tree-sitter chunked), docs (section chunked), git history (recent commits).
+
+### AI Harness & Per-Model Tuning (planned)
+
+- [ ] **Model profiles**: `ModelProfile` type — max tokens, cache control, tool reliability, prompt style. Stored in `~/.config/mae/models.toml`. Built-in defaults for Claude family, GPT-4o/4.1, Gemini 2.5, DeepSeek V3/R1.
+- [ ] **Prompt template engine**: Template files in `~/.config/mae/prompts/` with variables (`{buffer_name}`, `{language}`, `{tools}`, `{context_budget}`). Per-model overrides.
+- [ ] **Tool tier selection**: Core (15 tools) / Extended (50) / Full (450+). Auto-selected by model reliability score. User-overridable via `ai_tool_tier` option.
+- [ ] **Capability detection**: Auto-run `model_exam` on first use. Cache in `~/.local/share/mae/model-capabilities.json`. Drive tool tier + prompt style.
+- [ ] **Prompt A/B harness**: `mae --prompt-eval` mode — standardized coding tasks x models x configs. Outputs comparison table (accuracy, tokens, latency).
+- [ ] **Per-model tokenizer**: tiktoken (OpenAI), anthropic tokenizer (Claude) for accurate budget math. Character fallback for unknown models.
+- [ ] **Graceful degradation**: Circuit breaker -> reduce tool tier -> simplify prompt -> add examples -> surface warning.
 
 ### Doom Parity Roadmap: Future Feature Crates
 
@@ -100,11 +324,73 @@
 - [ ] Free AI-assisted setup (Gemini free tier for first-run guidance)
 - [ ] Step-through command execution (inspect AI tool call stdin/stdout)
 
+### Keymap Architecture Migration
+
+> **Goal**: Kernel provides only vi-modal primitives. All leader-key (SPC) bindings move to keymap flavor modules.
+>
+> 1. Trim `keymaps.rs` to minimal vi: Escape, hjkl, operators, text objects, `:`, search
+> 2. Make `keymap-doom` the sole source of the SPC tree
+> 3. Ship `keymap-emacs` and `keymap-minimal` flavor modules
+> 4. Auto-load the selected `keymap_flavor` module regardless of `(mae!)` declarations
+> 5. Expose `(clear-keymap-prefix)` for users who want to override, not just extend
+> 6. Group names (`set-group-name`) should come from the keymap flavor module, not the kernel
+
 ### Architecture Debt (v0.9.1+)
 
-- [ ] **Editor struct field extraction**: ~100+ fields accumulating (Emacs buffer.c trajectory). Extract into named sub-structs: `LspContext` (7 fields), `DapContext` (3+ fields), `ModuleContext` (4 fields), `RenderContext` (5+ fields). Keeps LOC flat, improves cohesion.
-- [ ] **dispatch/ui.rs split**: At 1,141 lines, "UI" dispatch is a semantic dumping ground (config, themes, terminal, help, registers, options, toggles, projects, AI). Split into dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs, dispatch/help.rs.
+- [x] **Editor struct field extraction**: ~69 fields after 6 extractions — `CollabState` (18), `ShellIntents` (12), `ViState` (41), `AiState` (34), `KbContext` (21), `DapContext` (2). Remaining candidate: `LspContext` (7 fields).
+- [x] **dispatch/ui.rs split**: Split into dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs, dispatch/help.rs, dispatch/kb.rs. *(0829dd5)*
 - [ ] **Custom theme filesystem loading**: Only bundled themes work. No user theme search path (~/.config/mae/themes/). Emacs, Vim, Helix all support this.
+- [ ] **Binding ownership audit**: Every kernel-dispatched command should have a kernel default binding. Module bindings are for module-specific commands or user-facing overrides only.
+- [ ] **Ad-hoc solution review**: Thorough code review for hardcoded values, duplicated logic between TUI/GUI, and workarounds that should be proper abstractions — in prep for server-client architecture.
+- [ ] **Which-key idle delay**: Wire `which-key-idle-delay` option to event loop timer (default 0ms = immediate).
+- [ ] **Which-key floating popup mode**: Option to render which-key as a centered floating popup (like find-file/command-palette) instead of docked to bottom. Controlled by a `which-key-display` option (`docked` | `floating`).
+- [ ] **Scheme configurability audit**: Audit ALL OptionRegistry entries for missing `config_key` (prevents `:set-save` persistence). Verify every option round-trips through config.toml. Document full option surface in `:help concept:options` KB node.
+- [x] **Performance regression testing**: Criterion benchmark suite for buffer_ops + crdt_ops. `make bench/bench-save/bench-compare`. *(0829dd5)*
+- [ ] **KB search scoping**: Allow per-project KB search that excludes MAE internal nodes (scheme:*, cmd:*, option:*). Add `kb_search_scope` option: `"all"` (default), `"user"` (exclude internal), `"project"` (only project-registered KBs). AI tools respect scope; `:help` always searches all.
+- [ ] **KB node visibility**: Add `visibility` property to nodes: `public` (default), `internal` (MAE system nodes), `private` (user personal notes). Internal nodes hidden from user-facing search unless explicitly queried with `:help` or `kb_get` by ID.
+- [ ] **Per-workspace KB isolation**: When multiple projects are open, `kb_search` defaults to the active project's registered KB instances. Cross-project search available via `kb_search --all` or `(kb-search-all query)` Scheme API.
+- [ ] **KB tangle pipeline**: `make docs-tangle` extracts ADR markdown from KB concept nodes. CI job validates freshness (same as code-map pattern). Enables KB as single source of truth for architecture docs.
+- [ ] **Checkbox toggle in KB view mode**: Allow toggling checkboxes in read-only help/KB buffers without entering edit mode. Requires refactoring view-mode to allow targeted mutations.
+- [ ] **Replace mode (R)**: Standard vim replace mode where keystrokes overwrite characters.
+- [ ] **Doc store eviction TOCTOU**: Between identifying eviction candidates (read lock) and evicting (write lock), a client could reconnect. Low probability; fix requires holding write lock during entire eviction.
+- [ ] **Unified buffer-switching strategy**: Three patterns exist (`switch_to_buffer`, `display_buffer_and_focus`, palette). Should converge on one with consistent view state management.
+- [ ] **KB fuzzy body search**: `kb_search` currently matches node titles and tags via FTS5 but not node body content in a fuzzy/substring way. Searching for a term like "DeltaDB" that only appears in the body of some nodes returns no results. Add full-text indexing of node bodies (FTS5 `content` column) so `kb_search` and `:help` fuzzy completion can find concepts mentioned anywhere in the knowledge graph, not just in titles.
+
+---
+
+## Collab Data Lifecycle (Future)
+
+Items E1–E8 track open design questions and planned improvements for the collaborative editing data model. All are `Future` / `Planned` — none are committed to a specific release yet.
+
+- [x] **E1. Git-based project identity for collab** *(Complete — b8d4b6a)*
+  4-tier identity: git remote → `.project` name → directory basename → FNV-1a hash. `compute_doc_address()` uses `git remote get-url origin` → normalize → FNV-1a. Persistent across sessions (unique in the industry).
+
+- [ ] **E2. KB sync model** *(Future)*
+  KB notes (`DocAddress::KbNode`) shared between peers via yrs docs on state server. Conflict resolution for bidirectional link graph.
+
+- [ ] **E3. Directory creation policy for collab saves** *(Future)*
+  `collab_create_parent_dirs` option (default: false) — auto-create missing parent dirs on `:saveas`. Safety: prompt before creating directories.
+
+- [ ] **E4. Collab save conflict detection** *(Planned)*
+  Two clients both `:w` to shared filesystem path simultaneously. Advisory lock system + content-hash verification.
+
+- [ ] **E5. File-change notification for collab** *(Future)*
+  When Bob saves locally, notify Alice via `file-changed-on-disk` hook + inotify.
+
+- [ ] **E6. Peer-to-Peer collaborative editing** *(Future)*
+  - P2P-LAN: mDNS discovery + symmetric TCP. Transport layer already generic (`AsyncWrite`/`AsyncBufRead`)
+  - P2P-KB: KB node replication, link graph merge
+  - P2P-Internet: WebRTC/QUIC NAT traversal
+  - P2P-E2E: End-to-end encryption (Noise protocol)
+  - Blockers: collab_bridge is client-only, no mDNS, no peer auth
+
+- [ ] **E7. Operation-based version control** *(Future)*
+  Inspired by Zed DeltaDB ($32M Series B) — every keystroke tracked, character-level permalinks. yrs already stores operations; annotate with timestamp/user_id/commit message. Timeline scrubber UI showing who changed what.
+
+- [x] **E8. Collab buffer status indicators** *(8de53b8)*
+  - Visual distinction for pathless vs mapped collab buffers in status bar
+  - Show sync state (in-sync, pending, disconnected) per buffer
+  - Show peer count
 
 ---
 
@@ -194,6 +480,9 @@
 - KB documentation: `concept:kb-federation`, `concept:kb-workflows`, `concept:kb-vs-alternatives`
 - Tutorial: `lesson:kb-import-roam` (Lesson 13)
 - Self-test categories: `modules`, `federation`
+- Session detach/resume (tmux-style): persist editor state, reconnect from another terminal
+- Shared P2P sessions with focus handoff: collaborative cursor, presence indicators
+- Granular KB connection/search configuration: users can select/deselect which KB instances are active by default, run scoped queries across a subset of KBs, AI tool parity (e.g. `kb_search` accepts optional `instances` filter param)
 
 </details>
 
