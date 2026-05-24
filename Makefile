@@ -385,10 +385,15 @@ test-scheme-crdt: build-tui
 test-scheme-editor: build-tui
 	$(RELEASE_BIN) --test tests/editor/
 
-## test-scheme-all: run all local Scheme tests (crdt + editor)
+## test-scheme-collab-local: run collab state transition tests (no server needed)
+test-scheme-collab-local: build-tui
+	$(RELEASE_BIN) --test tests/collab-local/
+
+## test-scheme-all: run all local Scheme tests (crdt + editor + collab-local)
 test-scheme-all: build-tui
 	$(RELEASE_BIN) --test tests/crdt/
 	$(RELEASE_BIN) --test tests/editor/
+	$(RELEASE_BIN) --test tests/collab-local/
 
 ## test-scheme-ci: same as test-scheme-all (CI entry point)
 test-scheme-ci: test-scheme-all

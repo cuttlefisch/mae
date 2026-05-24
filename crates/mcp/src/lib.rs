@@ -356,12 +356,12 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
     let cl_prefix = b"Content-Length:";
     let peek_len = buf.len().min(cl_prefix.len());
     let looks_like_cl = peek_len > 0 && buf[..peek_len] == cl_prefix[..peek_len];
-    tracing::trace!(
+    tracing::debug!(
         peek_first_byte = buf[0],
         peek_len = buf.len(),
         looks_like_cl,
         peek_hex = %hex_preview(&buf[..buf.len().min(30)]),
-        "read_message: peek"
+        "read_message: framing decision"
     );
     if looks_like_cl {
         // Read header lines until we hit the empty \r\n separator.
@@ -417,10 +417,12 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
         tokio::io::AsyncReadExt::read_exact(reader, &mut body).await?;
         let msg = String::from_utf8(body)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        tracing::trace!(
+        tracing::debug!(
             content_length = len,
             msg_len = msg.len(),
-            "read_message: CL framing"
+            has_id = msg.contains("\"id\""),
+            has_method = msg.contains("\"method\""),
+            "read_message: complete (CL)"
         );
         Ok(Some(msg))
     } else {
@@ -441,7 +443,9 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
             if !trimmed.is_empty() {
                 tracing::warn!(
                     line_len = trimmed.len(),
-                    "read_message: line-based message read"
+                    has_id = trimmed.contains("\"id\""),
+                    has_method = trimmed.contains("\"method\""),
+                    "read_message: complete (line-based)"
                 );
                 return Ok(Some(trimmed));
             }

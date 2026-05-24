@@ -1228,6 +1228,10 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "messages-buffer-text",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "test-sync-enabled?",
       "source": "crates/scheme/src/runtime.rs"
     },

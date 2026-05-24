@@ -464,6 +464,7 @@ Source: `crates/sync/src/lib.rs`
 | `current-mode` | `crates/scheme/src/runtime.rs` |
 | `test-buffer-string` | `crates/scheme/src/runtime.rs` |
 | `test-buffer-text` | `crates/scheme/src/runtime.rs` |
+| `messages-buffer-text` | `crates/scheme/src/runtime.rs` |
 | `test-sync-enabled?` | `crates/scheme/src/runtime.rs` |
 | `test-pending-updates` | `crates/scheme/src/runtime.rs` |
 | `test-sync-content` | `crates/scheme/src/runtime.rs` |

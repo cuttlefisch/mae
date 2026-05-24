@@ -1280,6 +1280,18 @@ impl SchemeRuntime {
                 .unwrap_or(SteelVal::BoolV(false))
         });
 
+        // (messages-buffer-text) — read *messages* buffer content (for diagnostics assertions).
+        let s = shared.clone();
+        engine.register_fn("messages-buffer-text", move || -> String {
+            let state = s.lock().unwrap();
+            state
+                .all_buffer_texts
+                .iter()
+                .find(|(n, _)| n == "*messages*")
+                .map(|(_, t)| t.clone())
+                .unwrap_or_default()
+        });
+
         // (test-sync-enabled?) — whether sync is enabled on active buffer.
         let s = shared.clone();
         engine.register_fn("test-sync-enabled?", move || -> bool {

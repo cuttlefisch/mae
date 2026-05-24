@@ -132,13 +132,24 @@ pub async fn handle_client<R, W>(
 
                 session.touch();
                 session.messages_received += 1;
-                // Log every incoming message at debug level for diagnostics.
+                // WU6: Log message classification for dispatch diagnostics.
+                let is_doc = is_doc_method(&msg);
+                let is_notif = is_notification(&msg);
                 debug!(session = session_id, msg_len = msg.len(),
+                    is_doc, is_notif,
                     preview = &msg[..msg.len().min(120)],
-                    "incoming message");
+                    "dispatch: message classified");
 
                 // Check if this is a sync/* method we handle differently.
-                let mut response = if is_doc_method(&msg) {
+                // WU1: Detect notifications (no `id`) before dispatching.
+                // Notifications must not generate a response — handle and continue.
+                if is_doc && is_notif {
+                    debug!(session = session_id, "notification detected, handling without response");
+                    handle_doc_notification(&msg, &doc_store, &broadcaster, session_id, &mut session_docs).await;
+                    continue;
+                }
+
+                let mut response = if is_doc {
                     handle_doc_request(&msg, &doc_store, &broadcaster, start_time, session_id, &mut session_docs).await
                 } else {
                     mae_mcp::handle_request(
@@ -274,6 +285,92 @@ fn is_doc_method(msg: &str) -> bool {
         || msg.contains("\"docs/metadata\"")
         || msg.contains("\"sync/share\"")
         || msg.contains("\"$/debug\"")
+}
+
+/// Check if a raw JSON message is a JSON-RPC notification (has `method`, no `id`).
+///
+/// Notifications must not generate a response. Sending awareness as a notification
+/// is correct per JSON-RPC 2.0 — the server should relay without responding.
+fn is_notification(msg: &str) -> bool {
+    msg.contains("\"method\"") && !msg.contains("\"id\"")
+}
+
+/// Handle a JSON-RPC notification (no `id` field) for doc-level methods.
+///
+/// Unlike `handle_doc_request`, this does NOT return a response — per JSON-RPC 2.0,
+/// notifications must not be replied to. Currently handles `sync/awareness` relay.
+async fn handle_doc_notification(
+    msg: &str,
+    _doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    session_id: u64,
+    session_docs: &mut HashSet<String>,
+) {
+    // Parse method and params manually — no JsonRpcRequest (requires `id`).
+    let val: serde_json::Value = match serde_json::from_str(msg) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(session = session_id, error = %e, "notification: invalid JSON");
+            return;
+        }
+    };
+    let method = match val.get("method").and_then(|m| m.as_str()) {
+        Some(m) => m,
+        None => return,
+    };
+    let params = val
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    match method {
+        "sync/awareness" => {
+            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            let state = &params["state"];
+            debug!(session = session_id, doc = %doc_name, "sync/awareness notification: relaying");
+            // Track doc for cleanup (same as request path).
+            session_docs.insert(doc_name.clone());
+            {
+                let mut bc = broadcaster.lock().unwrap();
+                bc.broadcast_except(
+                    &EditorEvent::AwarenessUpdate {
+                        doc_id: doc_name,
+                        client_id: session_id,
+                        user_name: state
+                            .get("user_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        cursor_row: state
+                            .get("cursor_row")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as usize,
+                        cursor_col: state
+                            .get("cursor_col")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as usize,
+                        selection: state.get("selection").and_then(|v| {
+                            let arr = v.as_array()?;
+                            if arr.len() == 4 {
+                                Some((
+                                    arr[0].as_u64()? as usize,
+                                    arr[1].as_u64()? as usize,
+                                    arr[2].as_u64()? as usize,
+                                    arr[3].as_u64()? as usize,
+                                ))
+                            } else {
+                                None
+                            }
+                        }),
+                    },
+                    session_id,
+                );
+            }
+        }
+        _ => {
+            debug!(session = session_id, method, "unhandled doc notification");
+        }
+    }
 }
 
 /// Handle document-level methods directly (without editor tool dispatch).
@@ -1329,5 +1426,132 @@ mod tests {
         .await;
         assert!(resp.error.is_some());
         assert!(resp.error.unwrap().message.contains("Unknown method"));
+    }
+
+    // WU1: Notification handling tests
+
+    #[test]
+    fn is_notification_detects_no_id() {
+        let notif = r#"{"jsonrpc":"2.0","method":"sync/awareness","params":{}}"#;
+        assert!(is_notification(notif));
+
+        let request = r#"{"jsonrpc":"2.0","id":1,"method":"sync/awareness","params":{}}"#;
+        assert!(!is_notification(request));
+
+        let response = r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700}}"#;
+        assert!(!is_notification(response));
+    }
+
+    #[tokio::test]
+    async fn awareness_notification_no_response() {
+        // Sending sync/awareness as a notification (no id) should relay the
+        // broadcast but NOT generate any response.
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        // Subscribe a second client to receive the broadcast.
+        let session_id_sender = 1u64;
+        let session_id_receiver = 2u64;
+        let mut rx = {
+            let mut b = bc.lock().unwrap();
+            b.subscribe(session_id_receiver, vec!["sync_update".to_string()])
+        };
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "sync/awareness",
+            "params": {
+                "doc": "test.rs",
+                "state": {
+                    "user_name": "alice",
+                    "cursor_row": 10,
+                    "cursor_col": 5
+                }
+            }
+        });
+
+        let mut session_docs = HashSet::new();
+        handle_doc_notification(
+            &msg.to_string(),
+            &store,
+            &bc,
+            session_id_sender,
+            &mut session_docs,
+        )
+        .await;
+
+        // Verify: session_docs tracks the doc for cleanup.
+        assert!(session_docs.contains("test.rs"));
+
+        // Verify: broadcast was relayed (receiver should get AwarenessUpdate).
+        if let Ok(event) = rx.try_recv() {
+            match event {
+                EditorEvent::AwarenessUpdate {
+                    doc_id,
+                    user_name,
+                    cursor_row,
+                    cursor_col,
+                    ..
+                } => {
+                    assert_eq!(doc_id, "test.rs");
+                    assert_eq!(user_name, "alice");
+                    assert_eq!(cursor_row, 10);
+                    assert_eq!(cursor_col, 5);
+                }
+                other => panic!("expected AwarenessUpdate, got {:?}", other),
+            }
+        }
+        // No response was generated — that's the whole point of handling notifications.
+    }
+
+    #[tokio::test]
+    async fn awareness_with_id_returns_ack() {
+        // Backward compat: sync/awareness WITH an id should return a success response.
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "sync/awareness",
+            "params": {
+                "doc": "test.rs",
+                "state": {
+                    "user_name": "bob",
+                    "cursor_row": 0,
+                    "cursor_col": 0
+                }
+            }
+        });
+
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            1,
+            &mut HashSet::new(),
+        )
+        .await;
+
+        // Should succeed (not error) and echo back the doc name.
+        assert!(
+            resp.error.is_none(),
+            "awareness with id should succeed: {:?}",
+            resp.error
+        );
+        assert_eq!(resp.result.unwrap()["doc"], "test.rs");
+    }
+
+    #[tokio::test]
+    async fn notification_for_unknown_method_is_silently_dropped() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        let msg = r#"{"jsonrpc":"2.0","method":"sync/unknown_notification","params":{}}"#;
+        let mut session_docs = HashSet::new();
+
+        // Should not panic or error — just log and return.
+        handle_doc_notification(msg, &store, &bc, 1, &mut session_docs).await;
     }
 }

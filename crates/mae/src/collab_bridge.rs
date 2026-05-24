@@ -977,6 +977,8 @@ async fn run_collab_task(
     let mut pending_responses: HashMap<u64, PendingResponseKind> = HashMap::new();
     // WU1: Track wal_seq per doc for gap detection.
     let mut seq_tracker: HashMap<String, u64> = HashMap::new();
+    // WU6: Transport health counter for periodic diagnostics.
+    let mut messages_received: u64 = 0;
     // WU2: Heartbeat interval (from collab_heartbeat_interval option, disabled if 0).
     let mut heartbeat_interval =
         tokio::time::interval(std::time::Duration::from_secs(if heartbeat_secs > 0 {
@@ -1280,6 +1282,7 @@ async fn run_collab_task(
                 msg = read_message(buf_reader) => {
                     match msg {
                         Ok(Some(text)) => {
+                            messages_received += 1;
                             debug!(msg_len = text.len(),
                                 preview = &text[..text.len().min(120)],
                                 "bridge: incoming server message");
@@ -1328,6 +1331,13 @@ async fn run_collab_task(
                             continue;
                         }
                     } else if let Some(ref mut w) = writer {
+                        // WU6: Transport health summary on each heartbeat tick.
+                        debug!(
+                            messages_received,
+                            shared_doc_count = shared_docs.len(),
+                            pending_response_count = pending_responses.len(),
+                            "transport: health summary"
+                        );
                         let req_id = next_request_id;
                         next_request_id += 1;
                         let req = serde_json::json!({
@@ -1484,12 +1494,27 @@ pub(crate) async fn handle_incoming_message(
                 let has_error = val.get("error").is_some();
                 debug!(id, has_error, kind = ?std::mem::discriminant(&kind),
                     "bridge: matched response to pending request");
-                handle_response(&val, kind, evt_tx, shared_docs).await;
+                handle_response(&val, kind, evt_tx, shared_docs, seq_tracker).await;
             } else {
                 debug!(id, "bridge: response for unknown/expired request id");
             }
             return;
         }
+    }
+
+    // WU3: Log responses with null/non-integer id (likely server notification parse error).
+    if val.get("method").is_none() && (val.get("error").is_some() || val.get("result").is_some()) {
+        let error_msg = val
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown");
+        warn!(
+            error = %error_msg,
+            "bridge: received response with non-integer id \
+             (likely server notification parse error)"
+        );
+        return;
     }
 
     // Case 2: Server notification (has `method`, no `id` or id is null)
@@ -1673,6 +1698,7 @@ async fn handle_response(
     kind: PendingResponseKind,
     evt_tx: &mpsc::Sender<CollabEvent>,
     shared_docs: &mut Vec<String>,
+    seq_tracker: &mut std::collections::HashMap<String, u64>,
 ) {
     let result = val.get("result");
 
@@ -1694,6 +1720,15 @@ async fn handle_response(
                     .await;
             } else {
                 info!(doc = %doc_id, "share: server accepted sync/share");
+                // WU2: Seed seq_tracker from share response wal_seq.
+                let wal_seq = result
+                    .and_then(|r| r.get("wal_seq"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                if wal_seq > 0 {
+                    debug!(doc = %doc_id, wal_seq, "share: seeding seq_tracker");
+                    seq_tracker.insert(doc_id.clone(), wal_seq);
+                }
                 if !shared_docs.contains(&doc_id) {
                     shared_docs.push(doc_id.clone());
                 }
@@ -1732,6 +1767,15 @@ async fn handle_response(
                 .and_then(|s| s.as_str())
                 .unwrap_or("");
             info!(doc = %resolved_doc_id, b64_len = state_b64.len(), "join: received sync/resync response");
+            // WU2: Seed seq_tracker from join response wal_seq.
+            let wal_seq = result
+                .and_then(|r| r.get("wal_seq"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            if wal_seq > 0 {
+                debug!(doc = %resolved_doc_id, wal_seq, "join: seeding seq_tracker");
+                seq_tracker.insert(resolved_doc_id.clone(), wal_seq);
+            }
             // Update shared_docs to use the resolved name (replace unresolved if present).
             if resolved_doc_id != doc_id {
                 if let Some(pos) = shared_docs.iter().position(|d| d == &doc_id) {
@@ -2694,6 +2738,7 @@ mod tests {
             PendingResponseKind::ListDocs { for_join: true },
             &tx,
             &mut shared,
+            &mut std::collections::HashMap::new(),
         )
         .await;
         let event = rx.try_recv().unwrap();
@@ -2719,6 +2764,7 @@ mod tests {
             "id": 1,
             "result": { "doc": "test.rs", "wal_seq": 1 }
         });
+        let mut seq = std::collections::HashMap::new();
         handle_response(
             &val,
             PendingResponseKind::ShareBuffer {
@@ -2726,11 +2772,61 @@ mod tests {
             },
             &tx,
             &mut shared,
+            &mut seq,
         )
         .await;
         assert!(shared.contains(&"test.rs".to_string()));
+        // WU2: seq_tracker should be seeded from share response wal_seq.
+        assert_eq!(seq.get("test.rs"), Some(&1));
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, CollabEvent::BufferShared { doc_id } if doc_id == "test.rs"));
+    }
+
+    #[tokio::test]
+    async fn handle_response_join_seeds_seq_tracker() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut shared = Vec::new();
+        let mut seq = std::collections::HashMap::new();
+
+        // Create a real yrs state to encode.
+        let ts = mae_sync::text::TextSync::with_client_id("joined content", 1);
+        let state_b64 = mae_sync::encoding::update_to_base64(&ts.encode_state());
+
+        let val = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "doc": "joined.rs", "state": state_b64, "wal_seq": 7 }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::JoinDoc {
+                doc_id: "joined.rs".to_string(),
+            },
+            &tx,
+            &mut shared,
+            &mut seq,
+        )
+        .await;
+
+        // WU2: seq_tracker should be seeded from join response wal_seq.
+        assert_eq!(seq.get("joined.rs"), Some(&7));
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, CollabEvent::BufferJoined { doc_id, .. } if doc_id == "joined.rs"));
+    }
+
+    #[tokio::test]
+    async fn handle_incoming_logs_null_id_response() {
+        // WU3: Responses with null id should be logged but not panic or emit events.
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut pending = std::collections::HashMap::new();
+        let mut shared = Vec::new();
+        let mut seq = std::collections::HashMap::new();
+
+        let msg = r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#;
+        handle_incoming_message(msg, &tx, &mut pending, &mut shared, &mut seq).await;
+
+        // Should not emit any event (the warning is logged by tracing).
+        assert!(rx.try_recv().is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -2897,6 +2993,7 @@ mod tests {
             },
             &tx,
             &mut shared,
+            &mut std::collections::HashMap::new(),
         )
         .await;
 
@@ -3284,6 +3381,7 @@ mod tests {
             },
             &tx,
             &mut shared,
+            &mut std::collections::HashMap::new(),
         )
         .await;
         let event = rx.try_recv().unwrap();
@@ -3322,6 +3420,7 @@ mod tests {
             },
             &tx,
             &mut shared,
+            &mut std::collections::HashMap::new(),
         )
         .await;
         let event = rx.try_recv().unwrap();

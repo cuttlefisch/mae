@@ -246,7 +246,19 @@ async fn run_tests_iteratively(
     println!();
     println!("# {} passed, {} failed", pass_count, fail_count);
 
+    // WU5: Dump *messages* buffer on failure for diagnostics.
     if fail_count > 0 {
+        if let Some(msg_buf) = editor.buffers.iter().find(|b| b.name == "*messages*") {
+            let messages = msg_buf.text();
+            if !messages.is_empty() {
+                eprintln!();
+                eprintln!("--- *messages* buffer ({} chars) ---", messages.len());
+                for line in messages.lines().rev().take(50) {
+                    eprintln!("  {}", line);
+                }
+                eprintln!("--- end *messages* ---");
+            }
+        }
         1
     } else {
         0
