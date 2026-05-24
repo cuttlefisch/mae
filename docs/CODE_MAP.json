@@ -779,6 +779,10 @@
           "kind": "mod"
         },
         {
+          "name": "stdlib",
+          "kind": "mod"
+        },
+        {
           "name": "value",
           "kind": "mod"
         },

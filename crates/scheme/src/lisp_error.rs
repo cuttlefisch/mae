@@ -188,6 +188,14 @@ impl LispError {
         }
     }
 
+    pub fn immutable(what: impl Into<String>) -> Self {
+        LispError {
+            kind: ErrorKind::Immutable { what: what.into() },
+            location: None,
+            stack_trace: Vec::new(),
+        }
+    }
+
     pub fn division_by_zero() -> Self {
         LispError {
             kind: ErrorKind::DivisionByZero,

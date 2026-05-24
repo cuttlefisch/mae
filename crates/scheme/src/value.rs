@@ -459,6 +459,70 @@ impl Value {
             Value::Null => "null",
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Equivalence (R7RS §6.1)
+    // -----------------------------------------------------------------------
+
+    /// R7RS `eq?` — identity comparison.
+    pub fn is_eq(&self, other: &Value) -> bool {
+        match (self, other) {
+            (Value::Void, Value::Void) => true,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Char(a), Value::Char(b)) => a == b,
+            (Value::Symbol(a), Value::Symbol(b)) => a == b,
+            (Value::Null, Value::Null) => true,
+            (Value::Eof, Value::Eof) => true,
+            (Value::Undefined, Value::Undefined) => true,
+            (Value::Pair(a), Value::Pair(b)) => Rc::ptr_eq(a, b),
+            (Value::Vector(a), Value::Vector(b)) => Rc::ptr_eq(a, b),
+            (Value::String(a), Value::String(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
+            (Value::Closure(a), Value::Closure(b)) => Rc::ptr_eq(a, b),
+            (Value::Foreign(a), Value::Foreign(b)) => Rc::ptr_eq(a, b),
+            (Value::Continuation(a), Value::Continuation(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
+    /// R7RS `eqv?` — like eq? but compares floats by value.
+    pub fn is_eqv(&self, other: &Value) -> bool {
+        match (self, other) {
+            (Value::Float(a), Value::Float(b)) => a == b,
+            _ => self.is_eq(other),
+        }
+    }
+
+    /// R7RS `equal?` — recursive structural equality.
+    pub fn is_equal(&self, other: &Value) -> bool {
+        match (self, other) {
+            (Value::Pair(a), Value::Pair(b)) => a.0.is_equal(&b.0) && a.1.is_equal(&b.1),
+            (Value::Vector(a), Value::Vector(b)) => {
+                let a = a.borrow();
+                let b = b.borrow();
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.is_equal(y))
+            }
+            (Value::String(a), Value::String(b)) => a == b,
+            (Value::Bytevector(a), Value::Bytevector(b)) => {
+                a.borrow().as_slice() == b.borrow().as_slice()
+            }
+            _ => self.is_eqv(other),
+        }
+    }
+
+    /// Returns true only for `#f`.
+    pub fn is_false(&self) -> bool {
+        matches!(self, Value::Bool(false))
+    }
+
+    /// Try to get a float value (returns Option for convenience in stdlib).
+    pub fn to_f64(&self) -> Option<f64> {
+        match self {
+            Value::Float(f) => Some(*f),
+            Value::Int(n) => Some(*n as f64),
+            _ => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

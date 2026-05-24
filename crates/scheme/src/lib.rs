@@ -14,6 +14,7 @@ pub mod compiler;
 pub mod env;
 pub mod lisp_error;
 pub mod reader;
+pub mod stdlib;
 pub mod value;
 pub mod vm;
 

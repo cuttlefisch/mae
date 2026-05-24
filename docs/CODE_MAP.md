@@ -319,6 +319,7 @@ Source: `crates/scheme/src/lib.rs`
 | `env` | mod |
 | `lisp_error` | mod |
 | `reader` | mod |
+| `stdlib` | mod |
 | `value` | mod |
 | `vm` | mod |
 
