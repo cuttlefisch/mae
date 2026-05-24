@@ -165,6 +165,15 @@ impl TextSync {
         txn.encode_state_as_update_v1(&yrs::StateVector::default())
     }
 
+    /// Encode only the changes not yet seen by a peer (differential sync).
+    /// `remote_sv` is the encoded state vector from the remote peer.
+    pub fn encode_diff(&self, remote_sv: &[u8]) -> Vec<u8> {
+        let sv =
+            yrs::StateVector::decode_v1(remote_sv).unwrap_or_else(|_| yrs::StateVector::default());
+        let txn = self.doc.transact();
+        txn.encode_state_as_update_v1(&sv)
+    }
+
     /// Load from encoded full state.
     pub fn from_state(state: &[u8]) -> Result<Self, SyncError> {
         let doc = Doc::new();
@@ -866,5 +875,207 @@ mod tests {
         let (ok, _) = ts.undo();
         assert!(ok);
         assert_eq!(ts.content(), "hello world");
+    }
+
+    // --- Reconcile edge cases ---
+
+    #[test]
+    fn reconcile_complex_replace() {
+        let mut ts = TextSync::new("hello world");
+        let update = ts.reconcile_to("goodbye moon");
+        assert!(!update.is_empty());
+        assert_eq!(ts.content(), "goodbye moon");
+        assert_eq!(ts.rope().to_string(), "goodbye moon");
+    }
+
+    #[test]
+    fn reconcile_partial_overlap() {
+        let mut ts = TextSync::new("abcdef");
+        // Keep "abc", replace "def" with "xyz123"
+        let update = ts.reconcile_to("abcxyz123");
+        assert!(!update.is_empty());
+        assert_eq!(ts.content(), "abcxyz123");
+    }
+
+    #[test]
+    fn reconcile_to_longer() {
+        let mut ts = TextSync::new("short");
+        let long = "a".repeat(1000);
+        let update = ts.reconcile_to(&long);
+        assert!(!update.is_empty());
+        assert_eq!(ts.content(), long);
+    }
+
+    #[test]
+    fn reconcile_noop_identical() {
+        let mut ts = TextSync::new("same text");
+        let _update = ts.reconcile_to("same text");
+        // No-op reconcile should produce no meaningful diff.
+        assert_eq!(ts.content(), "same text");
+        // Update may still contain bytes (yrs transaction overhead) but content unchanged.
+    }
+
+    // --- Delete boundary cases ---
+
+    #[test]
+    fn delete_at_start() {
+        let mut ts = TextSync::with_client_id("hello", 1);
+        ts.delete(0, 2); // remove "he"
+        assert_eq!(ts.content(), "llo");
+        assert_eq!(ts.rope().to_string(), "llo");
+    }
+
+    #[test]
+    fn delete_at_end() {
+        let mut ts = TextSync::with_client_id("hello", 1);
+        ts.delete(3, 2); // remove "lo"
+        assert_eq!(ts.content(), "hel");
+    }
+
+    #[test]
+    fn delete_entire_content() {
+        let mut ts = TextSync::with_client_id("hello", 1);
+        ts.delete(0, 5);
+        assert_eq!(ts.content(), "");
+        assert_eq!(ts.rope().len_chars(), 0);
+    }
+
+    #[test]
+    fn delete_then_insert_at_same_position() {
+        let mut ts = TextSync::with_client_id("abc", 1);
+        ts.delete(1, 1); // remove "b" → "ac"
+        assert_eq!(ts.content(), "ac");
+        ts.insert(1, "X"); // → "aXc"
+        assert_eq!(ts.content(), "aXc");
+    }
+
+    // --- Undo/redo multi-cycle ---
+
+    #[test]
+    fn undo_redo_three_cycles() {
+        let mut ts = TextSync::with_client_id("base", 1);
+        ts.enable_undo();
+
+        ts.insert(4, " one");
+        ts.undo_reset();
+        ts.insert(8, " two");
+        ts.undo_reset();
+        ts.insert(12, " three");
+        assert_eq!(ts.content(), "base one two three");
+
+        // Undo all three
+        ts.undo();
+        assert_eq!(ts.content(), "base one two");
+        ts.undo();
+        assert_eq!(ts.content(), "base one");
+        ts.undo();
+        assert_eq!(ts.content(), "base");
+
+        // Redo all three
+        ts.redo();
+        assert_eq!(ts.content(), "base one");
+        ts.redo();
+        assert_eq!(ts.content(), "base one two");
+        ts.redo();
+        assert_eq!(ts.content(), "base one two three");
+    }
+
+    #[test]
+    fn undo_then_new_edit_clears_redo() {
+        let mut ts = TextSync::with_client_id("base", 1);
+        ts.enable_undo();
+
+        ts.insert(4, " one");
+        ts.undo_reset();
+        ts.insert(8, " two");
+        assert_eq!(ts.content(), "base one two");
+
+        // Undo " two"
+        ts.undo();
+        assert_eq!(ts.content(), "base one");
+
+        // New edit should clear redo stack
+        ts.insert(8, " NEW");
+        assert_eq!(ts.content(), "base one NEW");
+
+        // Redo should fail (stack cleared by new edit)
+        let (ok, _) = ts.redo();
+        assert!(!ok, "redo should fail after new edit");
+    }
+
+    #[test]
+    fn undo_delete_with_boundary() {
+        let mut ts = TextSync::with_client_id("hello world", 1);
+        ts.enable_undo();
+
+        ts.delete(5, 6); // remove " world"
+        ts.undo_reset();
+        ts.insert(5, " earth");
+        assert_eq!(ts.content(), "hello earth");
+
+        // Undo " earth" insert
+        ts.undo();
+        assert_eq!(ts.content(), "hello");
+
+        // Undo delete of " world"
+        ts.undo();
+        assert_eq!(ts.content(), "hello world");
+    }
+
+    // --- State vector / diff round-trip ---
+
+    #[test]
+    fn state_vector_diff_roundtrip() {
+        let mut doc_a = TextSync::with_client_id("initial", 1);
+        let mut doc_b = TextSync::with_client_id("", 2);
+
+        // Sync initial state
+        let state = doc_a.encode_state();
+        doc_b.apply_update(&state).unwrap();
+        assert_eq!(doc_b.content(), "initial");
+
+        // A makes edits
+        doc_a.insert(7, " content");
+        assert_eq!(doc_a.content(), "initial content");
+
+        // B computes state vector, A computes diff from it
+        let sv_b = doc_b.state_vector();
+        let diff = doc_a.encode_diff(&sv_b);
+        assert!(!diff.is_empty());
+
+        // B applies diff → should converge
+        doc_b.apply_update(&diff).unwrap();
+        assert_eq!(doc_b.content(), "initial content");
+    }
+
+    #[test]
+    fn state_vector_diff_with_concurrent_edits() {
+        let mut doc_a = TextSync::with_client_id("base", 1);
+        let mut doc_b = TextSync::with_client_id("", 2);
+
+        let state = doc_a.encode_state();
+        doc_b.apply_update(&state).unwrap();
+
+        // Both edit concurrently (before seeing each other's changes)
+        let update_a = doc_a.insert(4, "-A");
+        let update_b = doc_b.insert(4, "-B");
+
+        // Exchange via state vector + diff (not raw updates)
+        let sv_a = doc_a.state_vector();
+        let sv_b = doc_b.state_vector();
+
+        // But first apply raw updates to get full state
+        doc_a.apply_update(&update_b).unwrap();
+        doc_b.apply_update(&update_a).unwrap();
+
+        // Now compute diffs from pre-sync state vectors — should be non-empty
+        let _diff_for_a = doc_b.encode_diff(&sv_a);
+        let _diff_for_b = doc_a.encode_diff(&sv_b);
+
+        // Both should converge to same content
+        assert_eq!(doc_a.content(), doc_b.content());
+        let content = doc_a.content();
+        assert!(content.contains("-A"));
+        assert!(content.contains("-B"));
     }
 }

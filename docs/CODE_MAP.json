@@ -1212,6 +1212,10 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "wait-for-file",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "current-milliseconds",
       "source": "crates/scheme/src/runtime.rs"
     },

@@ -19,9 +19,10 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
 - **AI as peer actor** — 450+ editor commands exposed as AI tools. The AI calls
   the same `dispatch_builtin()` as your keybindings. No shadow API, no simulated
   keystrokes.
-- **Collaborative editing** — Real-time multi-user editing via CRDT state server
-  (yrs/YATA). Share buffers across editors on the same LAN. AI agents and humans
-  sync the same document. WAL-backed persistence, automatic reconnection.
+- **Collaborative editing** *(protocol-complete, not yet user-ready)* — CRDT sync
+  engine (yrs/YATA) with state server, WAL persistence, per-user undo, and
+  awareness protocol. Protocol and server are tested (250+ tests); end-to-end
+  user workflow requires Scheme runtime improvements before reliable release.
 - **Org-mode babel** — Execute code blocks in 12 languages, noweb expansion,
   `:tangle` directive, `:var` cross-references, safety policies. Export to
   HTML and Markdown with TOC, syntax highlighting, tag filtering.
@@ -349,8 +350,9 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, KB federation |
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
 | 11. Module System | ✅ Complete | 19 modules (Doom model), `mae pkg` CLI, flags, live reload |
-| 12. Collaborative Editing | 🔧 In progress | CRDT state server, multi-peer sync, WAL persistence |
-| **Next** | 🔧 In progress | Awareness protocol, PDF preview, semantic search. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) |
+| 12. Collaborative Editing | 🔧 Protocol complete | CRDT state server, multi-peer sync, WAL persistence, awareness, per-user undo. User-facing release blocked on Scheme runtime (Phase 13) |
+| 13. Scheme Runtime | 🔧 Planned | MAE-native R7RS-small with `mae:` namespace, async/yield, proper error signaling |
+| **Next** | 🔧 In progress | Scheme runtime replacement, PDF preview, semantic search. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) |
 
 ## Design Lineage
 

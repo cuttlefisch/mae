@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.9.0-dev · **Tests:** 3,186 passing · **Status:** Alpha — all 11 phases + Phase G complete, feature crate extraction done.
+**Current version:** v0.10.4-dev · **Tests:** 3,895+ passing · **Status:** Alpha — Phases 1-11 complete, Phase 12 (collab) protocol-complete, Phase 13 (Scheme runtime) planned.
 
 ---
 
@@ -54,7 +54,7 @@
 - [x] **Undo capture timeout tuning**: Fixed in 12f8ce4 — `capture_timeout_millis: u64::MAX` with explicit `undo_reset()` at dispatch boundaries. Vim insert-mode groups all chars into one undo item.
 - [ ] **Cursor drift on remote edits**: `apply_sync_update` rebuilds rope but doesn't adjust cursor. If remote peer inserts before cursor, local cursor points to wrong logical position. Fix requires architecture change (Buffer doesn't own Window) — adjust at call site in `collab_bridge.rs` or add cursor-offset return from `apply_sync_update`.
 - [ ] **Modified flag incorrect with CRDT undo**: CRDT undo path sets `modified = true` unconditionally. No `saved_undo_depth` tracking for CRDT path, so buffer can never report "unmodified" after undo returns to saved state.
-- [ ] **Docker E2E test timeout**: Current Docker collab E2E test times out after 15 minutes. Uses transactional session pattern (connect → one op → disconnect) that doesn't mirror real user behavior. Needs rewrite to use long-lived sessions with interleaved edits.
+- [ ] **Docker E2E test disabled**: Removed from CI. Steel Scheme's `sleep-ms` is a pending operation (set-and-return), not a blocking call. `wait-until`/`wait-for-file` loops can't actually wait inside a single eval — they spin without real time passing. Cross-container coordination requires either: (a) a Scheme runtime with blocking/async wait primitives, or (b) rewriting all coordination as separate test steps with sleep-ms between them (works but fragile). Protocol correctness is fully covered by collab_e2e.rs (23 tests), tests/crdt/ (142 tests), and tests/collab-local/ (85 tests). Re-enable after Scheme runtime replacement.
 - [ ] **Undo stack size limit for CRDT**: yrs UndoManager has no built-in limit. Add `observe_item_added` callback to evict old items beyond threshold (cf. Emacs `undo-limit`).
 - [x] **Awareness protocol**: Cursor/selection sharing via `sync/awareness` JSON-RPC relay. 8-color WCAG AA palette, 50ms throttle, 30s timeout, echo filtering. GUI (2px bar + labels + off-screen ▲/▼) and TUI (underline + initial + ▲/▼) rendering. Status bar presence. Auto-derived user identity (git → $USER → hostname). 12 tests.
 - [x] **Heartbeat/keepalive**: Detect silent client death, clean up stale `connected_clients`. *(b8d4b6a)*
@@ -139,12 +139,119 @@
 - [ ] **Conflict detection**: When multi-client writes land on same node, detect via version counter and surface conflict to user (not silent last-write-wins).
 - [ ] **KB replication**: Read replicas for high-read-throughput scenarios (AI agents doing 600+ node fetches/sec). WAL mode enables this natively for same-host.
 
+### Phase 13: MAE Scheme Runtime (v0.12.0)
+
+**Motivation**: Steel Scheme has served MAE well from prototype through alpha, but
+we've hit fundamental limitations that block feature development:
+
+1. **No blocking primitives**: `sleep-ms` is a pending operation (set-and-return),
+   not a blocking call. `wait-until`/`wait-for-file` loops inside a single eval
+   spin without real time passing. This blocks Docker E2E tests and any future
+   async coordination (e.g. LSP response polling, DAP breakpoint waits).
+
+2. **No proper error signaling from Rust**: `register_fn` can only return values,
+   not raise Scheme errors. Test assertions must use Scheme-level `(error ...)`,
+   and Rust-backed functions that fail can only return sentinel values that callers
+   must manually check. This prevents clean test infrastructure and robust error
+   handling in `mae:` namespace functions.
+
+3. **`register_value` shadowing**: Each call creates a new binding cell instead of
+   updating the existing one. Forces workaround in test runner (`set!` instead of
+   re-registration). See `steel_quirks.md`.
+
+4. **Void tail-call crash**: Certain tail-call patterns with void returns cause
+   panics. Limits test structure. Filed upstream but unresolved.
+
+5. **Unmaintained dependency chain**: `bincode` (RUSTSEC-2025-0141) is transitive
+   via `steel-core`. We can't fix this without forking Steel or replacing it.
+
+6. **No namespace system**: All user functions, MAE primitives, and test helpers
+   share a flat global namespace. As the API surface grows (currently 144 Scheme
+   primitives, 504 commands), collisions become likely.
+
+**Design**: MAE-native R7RS-small implementation with `mae:` extension namespace.
+
+#### Core: R7RS-small Compliance
+
+- **Standard library**: R7RS-small base (`(scheme base)`, `(scheme write)`,
+  `(scheme time)`, `(scheme file)`, `(scheme process-context)`, etc.)
+- **Proper tail calls**: Required by spec, enables iterative control flow
+- **First-class continuations**: `call/cc` for advanced control flow (error
+  handling, coroutines, generators)
+- **Hygienic macros**: `syntax-rules` (R7RS) + `syntax-case` (R6RS extension)
+- **Multiple values**: `values` / `call-with-values` / `receive`
+- **Libraries**: `(define-library ...)` / `(import ...)` / `(export ...)`
+- **Exact/inexact numeric tower**: Bignums, rationals, complex (at minimum
+  fixnums + flonums for initial release)
+
+#### Extensions: `mae:` Namespace
+
+Inspired by Emacs Lisp's `emacs-` prefix, Guile's module system, and Racket's
+`#lang` facility. All MAE-specific functionality lives in `(mae ...)` libraries:
+
+```scheme
+(import (scheme base)
+        (mae buffer)      ; buffer-insert, buffer-string, buffer-undo, etc.
+        (mae editor)      ; dispatch, modes, keymaps, options
+        (mae async)       ; sleep, wait-for, yield, spawn-fiber
+        (mae test)        ; describe, it, should, should-equal
+        (mae collab)      ; collab-status, collab-share, sync primitives
+        (mae lsp)         ; definition, references, hover, diagnostics
+        (mae dap)         ; breakpoints, step, inspect
+        (mae kb)          ; search, get, create, link
+        (mae shell))      ; send, read-output, cwd
+```
+
+#### Key Design Decisions
+
+| Decision | Rationale | Precedent |
+|----------|-----------|-----------|
+| R7RS-small core, not R7RS-large | Small spec = complete implementation. Large spec is optional modules | Chibi-Scheme, Chicken, Guile |
+| `mae:` namespace, not flat global | Prevent collisions as API grows. Clear provenance | Emacs `emacs-`, Guile modules, Racket collections |
+| Async/yield via delimited continuations | `sleep`, `wait-for-file`, `wait-until` actually block/yield | Guile fibers, Racket threads, Chez `engine` |
+| Rust FFI raises Scheme errors | `register_fn` returns `Result<SteelVal, SchemeError>` | Guile's `scm_throw`, Racket's `raise` |
+| GC: tracing (Immix or similar) | No `Rc<RefCell<>>` cycles. Concurrent collection designed in from day one | Architecture Principle #1 |
+| Bytecode VM, not tree-walking | Performance for hot paths (rendering hooks, input processing) | Guile 3.0, Chez, Racket BC |
+| Compatible `init.scm` migration | Existing user configs must work with deprecation warnings | Emacs 28→29 migration pattern |
+
+#### Prior Art Study
+
+| System | What MAE takes | What MAE avoids |
+|--------|---------------|-----------------|
+| **Emacs Lisp** | Dynamic scope option for hooks, `defadvice`, `defcustom` pattern, buffer-local variables | Dynamic scope as default, no modules, no TCO, no hygiene |
+| **Guile Scheme** | Module system (`define-module`), delimited continuations, Rust/C FFI patterns | Slow startup (~200ms), heavy runtime, complex build |
+| **Racket** | `#lang` extensibility, contract system, exceptional docs | 200MB runtime, poor embedding story, non-standard |
+| **Chibi-Scheme** | Minimal R7RS-small, <1MB, designed for embedding | Limited ecosystem, no JIT, slow numerics |
+| **Steel** | Rust integration patterns (what worked), `register_fn` API shape | Shadowing bugs, void crashes, no error signaling, unmaintained deps |
+| **Chez Scheme** | Compilation strategy, `engine` for preemption | Complex bootstrap, not designed for embedding |
+
+#### Implementation Phases
+
+- [ ] **Phase 13a**: Reader/parser (S-expressions, datum labels, `#;` comments)
+- [ ] **Phase 13b**: Bytecode compiler + VM (stack-based, tail-call elimination)
+- [ ] **Phase 13c**: R7RS-small base library (lists, strings, vectors, I/O, control)
+- [ ] **Phase 13d**: `(mae buffer)` + `(mae editor)` — port existing 144 primitives
+- [ ] **Phase 13e**: `(mae async)` — delimited continuations, fibers, blocking `sleep`/`wait`
+- [ ] **Phase 13f**: `(mae test)` — proper error signaling, structured test results
+- [ ] **Phase 13g**: Migration tooling — `init.scm` compatibility layer, deprecation warnings
+- [ ] **Phase 13h**: GC implementation (Immix or stop-the-world mark-sweep for v1)
+- [ ] **Phase 13i**: Remove `steel-core` dependency
+
+#### Success Criteria
+
+- All existing `init.scm` configs load with at most deprecation warnings
+- All 487 Scheme tests pass (142 CRDT + 85 collab-local + 260 editor)
+- `wait-for-file` and `wait-until` actually block/yield (Docker E2E re-enabled)
+- `register_fn` can return `Result` (errors propagate as Scheme exceptions)
+- No `bincode` or other unmaintained transitive dependencies
+- Startup time ≤ Steel's current performance (~50ms for init.scm)
+- Module system prevents namespace collisions
+
 ### Near-term: Other
 - [ ] **Version compatibility policy**: Semver enforcement on upgrade — protocol version negotiation in state-server (`initialize` params), config schema migration on major bumps, `make install-upgrade` blocking on incompatible major versions (currently warns only). Prerequisite for v1.0.
 - [ ] PDF preview (GUI inline rendering via `hayro` pure-Rust rasterizer + midnight mode)
 - [ ] Semantic code search (vector embeddings)
 - [x] Org ↔ Markdown bidirectional conversion (`:markdown-to-org`, `:org-to-markdown`)
-- [ ] Investigate `bincode` unmaintained dependency (RUSTSEC-2025-0141) — transitive via `steel-core`; evaluate alternatives (`bitcode`, `postcard`) or upstream Steel fix
 
 ### Phase 12: RAG Pipeline (planned)
 

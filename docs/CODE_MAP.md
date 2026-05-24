@@ -460,6 +460,7 @@ Source: `crates/sync/src/lib.rs`
 | `write-file` | `crates/scheme/src/runtime.rs` |
 | `sleep-ms` | `crates/scheme/src/runtime.rs` |
 | `file-exists?` | `crates/scheme/src/runtime.rs` |
+| `wait-for-file` | `crates/scheme/src/runtime.rs` |
 | `current-milliseconds` | `crates/scheme/src/runtime.rs` |
 | `goto-char` | `crates/scheme/src/runtime.rs` |
 | `current-mode` | `crates/scheme/src/runtime.rs` |

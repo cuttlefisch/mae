@@ -1241,6 +1241,28 @@ impl SchemeRuntime {
             std::path::Path::new(&path).exists()
         });
 
+        // (wait-for-file PATH TIMEOUT-MS) — block until file exists.
+        // Uses real thread::sleep (100ms poll). Returns #t on success, #f on timeout.
+        // Note: blocks the main thread — collab events won't drain during wait.
+        // Fine for file-based signal coordination; use sleep-ms for CRDT waits.
+        engine.register_fn(
+            "wait-for-file",
+            move |path: String, timeout_ms: isize| -> bool {
+                let timeout = std::time::Duration::from_millis(timeout_ms.max(0) as u64);
+                let poll = std::time::Duration::from_millis(100);
+                let start = std::time::Instant::now();
+                loop {
+                    if std::path::Path::new(&path).exists() {
+                        return true;
+                    }
+                    if start.elapsed() >= timeout {
+                        return false;
+                    }
+                    std::thread::sleep(poll);
+                }
+            },
+        );
+
         // (current-milliseconds) — monotonic time in milliseconds.
         engine.register_fn("current-milliseconds", move || -> isize {
             use std::time::{SystemTime, UNIX_EPOCH};

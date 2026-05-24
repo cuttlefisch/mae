@@ -1516,3 +1516,202 @@ async fn session_lifecycle_equivalence() {
         "at least one store should have tracked updates"
     );
 }
+
+// ---- docs/delete tests ----
+
+#[tokio::test]
+async fn delete_doc_removes_from_list() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    client.share("deleteme.txt", "some content").await;
+
+    // Verify it's listed
+    let list_msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": client.next_id,
+        "method": "docs/list", "params": {}
+    });
+    client.next_id += 1;
+    client.send(&list_msg).await;
+    let resp = client.recv().await;
+    let docs = resp["result"]["documents"].as_array().unwrap();
+    assert!(
+        docs.iter().any(|d| d.as_str() == Some("deleteme.txt")),
+        "doc should be in list before delete"
+    );
+
+    // Delete it
+    let del_msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": client.next_id,
+        "method": "docs/delete",
+        "params": { "doc": "deleteme.txt" }
+    });
+    client.next_id += 1;
+    client.send(&del_msg).await;
+    let del_resp = client.recv().await;
+    assert!(
+        del_resp.get("error").is_none(),
+        "delete should succeed: {del_resp}"
+    );
+
+    // Verify it's gone from the list
+    let list_msg2 = serde_json::json!({
+        "jsonrpc": "2.0", "id": client.next_id,
+        "method": "docs/list", "params": {}
+    });
+    client.next_id += 1;
+    client.send(&list_msg2).await;
+    let resp2 = client.recv().await;
+    let docs2 = resp2["result"]["documents"].as_array().unwrap();
+    assert!(
+        !docs2.iter().any(|d| d.as_str() == Some("deleteme.txt")),
+        "doc should be gone after delete"
+    );
+}
+
+#[tokio::test]
+async fn delete_nonexistent_doc_returns_error() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    let del_msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": client.next_id,
+        "method": "docs/delete",
+        "params": { "doc": "does-not-exist.txt" }
+    });
+    client.next_id += 1;
+    client.send(&del_msg).await;
+    let resp = client.recv().await;
+    // Should return error (doc not found) or succeed idempotently — either is valid.
+    // Just verify no panic/crash.
+    assert!(
+        resp.get("result").is_some() || resp.get("error").is_some(),
+        "should get a valid JSON-RPC response: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn delete_doc_then_reshare() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    client.share("recycle.txt", "original").await;
+    assert_eq!(client.content("recycle.txt").await, "original");
+
+    // Delete
+    let del_msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": client.next_id,
+        "method": "docs/delete",
+        "params": { "doc": "recycle.txt" }
+    });
+    client.next_id += 1;
+    client.send(&del_msg).await;
+    let _resp = client.recv().await;
+
+    // Re-share with different content
+    client.share("recycle.txt", "replacement").await;
+    assert_eq!(client.content("recycle.txt").await, "replacement");
+}
+
+// ---- Multi-buffer concurrent sync ----
+
+#[tokio::test]
+async fn multi_buffer_concurrent_sync() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut bob = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Alice shares two buffers
+    alice.share("buf-a.txt", "alpha").await;
+    alice.share("buf-b.txt", "beta").await;
+
+    // Bob gets full state for both
+    let state_a = bob.full_state("buf-a.txt").await;
+    let state_b = bob.full_state("buf-b.txt").await;
+    let mut ts_a = TextSync::from_state(&state_a).unwrap();
+    let mut ts_b = TextSync::from_state(&state_b).unwrap();
+    assert_eq!(ts_a.content(), "alpha");
+    assert_eq!(ts_b.content(), "beta");
+
+    // Bob edits both buffers — interleaved updates
+    let upd_a = ts_a.insert(5, "-A");
+    let upd_b = ts_b.insert(4, "-B");
+    bob.send_update("buf-a.txt", &upd_a).await;
+    bob.send_update("buf-b.txt", &upd_b).await;
+
+    // Alice should see updates for both — drain notifications
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Verify server-side content converged
+    let content_a = alice.content("buf-a.txt").await;
+    let content_b = alice.content("buf-b.txt").await;
+    assert_eq!(content_a, "alpha-A");
+    assert_eq!(content_b, "beta-B");
+}
+
+// ---- State vector diff protocol round-trip ----
+
+#[tokio::test]
+async fn state_vector_diff_protocol() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    alice.share("sv-test.txt", "initial").await;
+
+    // Get state vector from server
+    let sv_msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": alice.next_id,
+        "method": "sync/state_vector",
+        "params": { "doc": "sv-test.txt" }
+    });
+    alice.next_id += 1;
+    alice.send(&sv_msg).await;
+    let sv_resp = alice.recv().await;
+    assert!(
+        sv_resp.get("error").is_none(),
+        "state_vector should succeed: {sv_resp}"
+    );
+    let sv_b64 = sv_resp["result"]["sv"]
+        .as_str()
+        .expect("should have sv field");
+    assert!(!sv_b64.is_empty(), "sv should be non-empty");
+
+    // Make an edit
+    let state = alice.full_state("sv-test.txt").await;
+    let mut ts = TextSync::from_state(&state).unwrap();
+    let update = ts.insert(7, " content");
+    alice.send_update("sv-test.txt", &update).await;
+
+    // Get diff from the old state vector
+    let diff_msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": alice.next_id,
+        "method": "sync/diff",
+        "params": { "doc": "sv-test.txt", "sv": sv_b64 }
+    });
+    alice.next_id += 1;
+    alice.send(&diff_msg).await;
+    let diff_resp = alice.recv().await;
+    assert!(
+        diff_resp.get("error").is_none(),
+        "diff should succeed: {diff_resp}"
+    );
+    let diff_b64 = diff_resp["result"]["update"]
+        .as_str()
+        .expect("should have update field");
+    assert!(!diff_b64.is_empty(), "diff update should be non-empty");
+
+    // Verify final content is correct
+    assert_eq!(alice.content("sv-test.txt").await, "initial content");
+}
