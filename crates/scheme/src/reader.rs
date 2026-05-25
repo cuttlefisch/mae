@@ -189,6 +189,32 @@ impl<'a> Reader<'a> {
                 self.skip_block_comment()?;
                 self.read_datum()
             }
+            // Radix prefixes: #b (binary), #o (octal), #d (decimal), #x (hex)
+            'b' | 'B' => {
+                self.advance();
+                self.read_radix_number(2)
+            }
+            'o' | 'O' => {
+                self.advance();
+                self.read_radix_number(8)
+            }
+            'd' | 'D' => {
+                self.advance();
+                self.read_radix_number(10)
+            }
+            'x' | 'X' => {
+                self.advance();
+                self.read_radix_number(16)
+            }
+            // Exactness prefixes: #e (exact), #i (inexact)
+            'e' | 'E' => {
+                self.advance();
+                self.read_exactness_prefix(true)
+            }
+            'i' | 'I' => {
+                self.advance();
+                self.read_exactness_prefix(false)
+            }
             c if c.is_ascii_digit() => self.read_datum_label(),
             _ => Err(self.error(format!("unexpected character after '#': '{c}'"))),
         }
@@ -429,6 +455,113 @@ impl<'a> Reader<'a> {
                 self.read_special_number()
             } else {
                 self.read_symbol()
+            }
+        }
+    }
+
+    /// Read a number with explicit radix prefix (#b, #o, #d, #x).
+    fn read_radix_number(&mut self, radix: u32) -> Result<Value, LispError> {
+        let start = self.pos;
+
+        // Optional sign
+        let negative = if self.peek_char() == Some('-') {
+            self.advance();
+            true
+        } else if self.peek_char() == Some('+') {
+            self.advance();
+            false
+        } else {
+            false
+        };
+
+        // Collect digits valid for this radix
+        let digit_start = self.pos;
+        while !self.at_end() && !self.is_delimiter_here() {
+            let c = self.peek_char().unwrap();
+            let valid = match radix {
+                2 => matches!(c, '0' | '1'),
+                8 => matches!(c, '0'..='7'),
+                10 => c.is_ascii_digit(),
+                16 => c.is_ascii_hexdigit(),
+                _ => false,
+            };
+            if valid {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        let digits = &self.input[digit_start..self.pos];
+        if digits.is_empty() {
+            return Err(self.error(format!(
+                "expected digits after radix prefix in '{}'",
+                &self.input[start.saturating_sub(2)..self.pos]
+            )));
+        }
+
+        let n = i64::from_str_radix(digits, radix)
+            .map_err(|_| self.error(format!("invalid number with radix {radix}: {digits}")))?;
+
+        Ok(Value::Int(if negative { -n } else { n }))
+    }
+
+    /// Read after an exactness prefix (#e or #i).
+    /// May be followed by a radix prefix or a number.
+    fn read_exactness_prefix(&mut self, exact: bool) -> Result<Value, LispError> {
+        // Check for chained radix prefix: #e#x, #i#b, etc.
+        if self.peek_char() == Some('#') {
+            self.advance(); // consume '#'
+            let radix_char = self
+                .peek_char()
+                .ok_or_else(|| self.error("expected radix prefix after exactness prefix"))?;
+            let radix = match radix_char {
+                'b' | 'B' => {
+                    self.advance();
+                    2
+                }
+                'o' | 'O' => {
+                    self.advance();
+                    8
+                }
+                'd' | 'D' => {
+                    self.advance();
+                    10
+                }
+                'x' | 'X' => {
+                    self.advance();
+                    16
+                }
+                _ => {
+                    return Err(self.error(format!(
+                        "expected radix prefix after #e/#i, got '{radix_char}'"
+                    )))
+                }
+            };
+            let val = self.read_radix_number(radix)?;
+            return self.apply_exactness(val, exact);
+        }
+
+        // Just a number following
+        let val = self.read_number()?;
+        self.apply_exactness(val, exact)
+    }
+
+    /// Apply exactness conversion to a value.
+    fn apply_exactness(&self, val: Value, exact: bool) -> Result<Value, LispError> {
+        if exact {
+            // #e — convert to exact
+            match val {
+                Value::Float(f) => Ok(Value::Int(f as i64)),
+                Value::Int(_) => Ok(val),
+                _ => Err(self.error("exactness prefix on non-number")),
+            }
+        } else {
+            // #i — convert to inexact
+            match val {
+                Value::Int(n) => Ok(Value::Float(n as f64)),
+                Value::Float(_) => Ok(val),
+                _ => Err(self.error("inexactness prefix on non-number")),
             }
         }
     }

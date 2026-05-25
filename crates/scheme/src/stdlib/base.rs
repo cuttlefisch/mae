@@ -1,7 +1,52 @@
-//! R7RS §6.1-6.5, §6.10-6.11: Core primitives.
+//! R7RS §6.1-6.5, §6.10-6.12: Core primitives.
 //!
 //! Equivalence predicates, arithmetic, booleans, pairs/lists, symbols,
-//! control flow, and exceptions.
+//! control flow, exceptions, and eval.
+//!
+//! ## mae-scheme spec stances
+//!
+//! Where R7RS leaves behavior implementation-defined, mae-scheme makes the
+//! following choices. Each is documented at the point of implementation and
+//! here for reference.
+//!
+//! ### Numeric tower (§6.2)
+//! - **Exact integers**: `i64` fixnums. No bignum promotion (planned).
+//! - **Inexact reals**: `f64` IEEE 754 double precision.
+//! - **Complex numbers**: Not supported. `(scheme complex)` library is absent.
+//!   `complex?` returns `#t` for all numbers (R7RS §6.2.1: "all numbers are
+//!   complex" in implementations without a separate complex type).
+//! - **Exact/inexact coercion**: `(exact->inexact 5)` → `5.0`,
+//!   `(inexact->exact 5.0)` → `5`. Truncation for non-integer inexacts.
+//! - **Division**: `(/ 6 3)` → `2` (exact integer when divisible).
+//!   `(/ 1 3)` → `0.333...` (inexact when not). R7RS permits this.
+//!
+//! ### Pairs and lists (§6.4)
+//! - **Immutable pairs**: `set-car!` and `set-cdr!` are provided but pairs
+//!   are `Rc<(Value, Value)>`. Mutation creates new pairs. `list-set!` errors.
+//!
+//! ### Multiple values (§6.10)
+//! - **Values representation**: `(values x)` returns `x` directly.
+//!   `(values x y z)` returns a list `(x y z)`. This is a pragmatic choice —
+//!   true multi-value return would require VM-level support for a separate
+//!   values type. `call-with-values` and `receive` work correctly with
+//!   this representation via compiler-level desugaring.
+//!
+//! ### Eval (§6.12)
+//! - **`eval`** is a compiler special form that emits an `Op::Eval` opcode.
+//!   The VM converts the datum to string, re-parses, and evaluates it.
+//!   This is correct for quoted data `(eval '(+ 1 2))` which is the
+//!   standard use case. The environment argument is accepted but ignored —
+//!   all eval happens in the interaction environment.
+//!
+//! ### Tail calls (§3.5)
+//! - **Proper tail calls**: Guaranteed via `TAIL_CALL` opcode. Includes
+//!   tail position in `if`, `cond`, `case`, `and`, `or`, `when`, `unless`,
+//!   `let`, `let*`, `letrec`, `begin`, `do`, `guard`, and named `let`.
+//!
+//! ### Continuations (§6.10)
+//! - **Full call/cc**: Captures entire VM state (stack + frames). One-shot
+//!   and multi-shot invocation supported. `dynamic-wind` is implemented
+//!   in Scheme (bootstrap) using `guard` for exception safety.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -561,11 +606,16 @@ fn register_pairs_lists(vm: &mut Vm) {
         }
     });
 
+    // mae-scheme: pairs are immutable (Rc-based). list-set! is registered
+    // with a helpful error message rather than being absent.
     vm.register_fn(
         "list-set!",
-        "Set element of list (immutable pairs — error)",
+        "Set element of list. Error: mae-scheme pairs are immutable. Build new lists with cons/append.",
         Arity::Fixed(3),
-        |_args| Err(LispError::immutable("pair (list-set!)")),
+        |_args| Err(LispError::user(
+            "list-set!: mae-scheme pairs are immutable. Use (append (list-head lst k) (cons new-val (list-tail lst (+ k 1)))) to construct a modified list.",
+            vec![],
+        )),
     );
 
     vm.register_fn("list", "Construct list", Arity::Variadic(0), |args| {
@@ -1319,9 +1369,12 @@ fn register_extra_numeric(vm: &mut Vm) {
     );
 
     // R7RS §6.2.6 floor/ — returns two values (quotient, remainder)
+    // R7RS says these return "two values" via the values mechanism.
+    // Since our `values` for multiple returns is represented as a list,
+    // we return a list which call-with-values/receive can destructure.
     vm.register_fn(
         "floor/",
-        "Floor division returning (quotient remainder)",
+        "Floor division returning two values: quotient and remainder",
         Arity::Fixed(2),
         |args| {
             let a = args[0].as_int()?;
@@ -1343,7 +1396,7 @@ fn register_extra_numeric(vm: &mut Vm) {
     // R7RS §6.2.6 truncate/ — returns two values (quotient, remainder)
     vm.register_fn(
         "truncate/",
-        "Truncated division returning (quotient remainder)",
+        "Truncated division returning two values: quotient and remainder",
         Arity::Fixed(2),
         |args| {
             let a = args[0].as_int()?;

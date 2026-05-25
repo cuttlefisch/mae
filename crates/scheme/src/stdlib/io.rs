@@ -1,4 +1,26 @@
 //! R7RS §6.13: I/O and display primitives.
+//!
+//! ## mae-scheme I/O stance
+//!
+//! ### Port model
+//! Ports are enum variants: `StringInput`, `StringOutput`, `FileInput`,
+//! `FileOutput`, `Stdin`, `Stdout`, `Stderr`, `Closed`. Operations on
+//! closed ports signal errors (R7RS §6.13.1).
+//!
+//! ### Current ports
+//! `current-input-port`, `current-output-port`, `current-error-port` return
+//! the process-level stdin/stdout/stderr. They are NOT dynamically
+//! parameterizable via `parameterize` (planned). `with-input-from-file`
+//! and `with-output-to-file` are simplified (see SPEC_STANCES.md §8).
+//!
+//! ### Binary I/O
+//! `read-u8`, `peek-u8`, `write-u8`, `read-bytevector`, `write-bytevector`
+//! operate on bytevectors. `binary-port?` returns `#f` for text ports (all
+//! file ports are opened in text mode by default).
+//!
+//! ### String ports
+//! `open-input-string` and `open-output-string` / `get-output-string` provide
+//! in-memory I/O. These are the most commonly used port types in extension code.
 
 use std::rc::Rc;
 
@@ -540,6 +562,7 @@ pub fn register(vm: &mut Vm) {
             Ok(Value::list(vec![
                 Value::symbol("r7rs"),
                 Value::symbol("mae"),
+                Value::symbol("mae-scheme"),
                 Value::symbol("ratios"),
                 Value::symbol("exact-complex"),
             ]))
@@ -641,6 +664,16 @@ pub fn register(vm: &mut Vm) {
                                 Ok(Value::Int(byte as i64))
                             }
                         }
+                        Port::FileInput { reader, .. } => {
+                            use std::io::Read;
+                            let mut buf = [0u8; 1];
+                            match reader.read(&mut buf) {
+                                Ok(0) => Ok(Value::Eof),
+                                Ok(_) => Ok(Value::Int(buf[0] as i64)),
+                                Err(e) => Err(LispError::user(format!("read-u8: {e}"), vec![])),
+                            }
+                        }
+                        Port::Closed => Err(LispError::user("read-u8: port is closed", vec![])),
                         _ => Err(LispError::type_error("input-port", "other port type")),
                     }
                 }

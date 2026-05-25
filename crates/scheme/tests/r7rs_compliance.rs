@@ -4080,3 +4080,950 @@ fn s6_file_operations() {
     // After delete, should not exist
     is_false("(file-exists? \"/tmp/mae-scheme-test-file-ops.txt\")");
 }
+
+// ============================================================================
+// §7.1 Lexical structure — Reader features
+// ============================================================================
+
+#[test]
+fn s7_1_radix_prefixes() {
+    // Binary
+    is_int("#b101", 5);
+    is_int("#b0", 0);
+    is_int("#b1111", 15);
+    is_int("#b-101", -5);
+    is_int("#B110", 6);
+
+    // Octal
+    is_int("#o77", 63);
+    is_int("#o0", 0);
+    is_int("#o17", 15);
+    is_int("#o-10", -8);
+    is_int("#O77", 63);
+
+    // Decimal (explicit)
+    is_int("#d42", 42);
+    is_int("#d-7", -7);
+    is_int("#D100", 100);
+
+    // Hexadecimal
+    is_int("#xff", 255);
+    is_int("#x0", 0);
+    is_int("#xDEAD", 0xDEAD);
+    is_int("#x-ff", -255);
+    is_int("#XFF", 255);
+}
+
+#[test]
+fn s7_1_exactness_prefixes() {
+    // #i makes exact -> inexact
+    assert_eq!(eval("#i5"), Value::Float(5.0));
+    assert_eq!(eval("#i42"), Value::Float(42.0));
+
+    // #e makes inexact -> exact
+    is_int("#e1.0", 1);
+    is_int("#e5.0", 5);
+
+    // #e on already-exact is identity
+    is_int("#e5", 5);
+
+    // #i on already-inexact is identity
+    assert_eq!(eval("#i3.15"), Value::Float(3.15));
+}
+
+#[test]
+fn s7_1_combined_radix_exactness() {
+    // Exactness + radix combinations (R7RS §7.1.1)
+    is_int("#e#xff", 255);
+    is_int("#e#b101", 5);
+    is_int("#e#o77", 63);
+
+    // Inexact + radix
+    assert_eq!(eval("#i#xff"), Value::Float(255.0));
+    assert_eq!(eval("#i#b101"), Value::Float(5.0));
+    assert_eq!(eval("#i#o77"), Value::Float(63.0));
+}
+
+#[test]
+fn s7_1_radix_in_expressions() {
+    // Radix numbers should work in expressions
+    is_int("(+ #xff 1)", 256);
+    is_int("(* #b10 #o10)", 16); // 2 * 8
+    is_int("(- #x10 #d10)", 6); // 16 - 10
+}
+
+// ============================================================================
+// §6.12 Eval
+// ============================================================================
+
+#[test]
+fn s6_12_eval_basic() {
+    // Basic eval of quoted expression
+    is_int("(eval '(+ 1 2))", 3);
+    is_int("(eval '(* 3 4))", 12);
+    // Eval of self-evaluating datum
+    is_int("(eval 42)", 42);
+    is_true("(eval #t)");
+    is_str("(eval \"hello\")", "hello");
+}
+
+#[test]
+fn s6_12_eval_with_environment() {
+    // eval with interaction-environment
+    is_int("(eval '(+ 1 2) (interaction-environment))", 3);
+    // eval with scheme-report-environment
+    is_int("(eval '(+ 1 2) (scheme-report-environment 7))", 3);
+}
+
+#[test]
+fn s6_12_eval_complex() {
+    // Eval of nested expressions
+    is_int("(eval '(let ((x 10)) (+ x 5)))", 15);
+    // Eval of define + use
+    is_int("(eval '(begin (define y 42) y))", 42);
+    // Eval with lambda
+    is_int("(eval '((lambda (x) (* x x)) 5))", 25);
+}
+
+// ============================================================================
+// §6.10 call-with-values (R7RS spec compliance)
+// ============================================================================
+
+#[test]
+fn s6_10_call_with_values_spec() {
+    // R7RS examples from spec
+    // (call-with-values (lambda () (values 4 5)) (lambda (a b) b)) → 5
+    is_int(
+        "(call-with-values (lambda () (values 4 5)) (lambda (a b) b))",
+        5,
+    );
+    // Single value case
+    is_int("(call-with-values (lambda () 5) (lambda (x) x))", 5);
+    // Multiple values to list
+    assert_eq!(
+        format!(
+            "{}",
+            eval("(call-with-values (lambda () (values 1 2 3)) list)")
+        ),
+        "(1 2 3)"
+    );
+}
+
+#[test]
+fn s6_10_floor_truncate_with_values() {
+    // floor/ returns two values, usable with call-with-values
+    assert_eq!(
+        format!(
+            "{}",
+            eval("(call-with-values (lambda () (floor/ 17 5)) list)")
+        ),
+        "(3 2)"
+    );
+    // truncate/ returns two values
+    assert_eq!(
+        format!(
+            "{}",
+            eval("(call-with-values (lambda () (truncate/ 17 5)) list)")
+        ),
+        "(3 2)"
+    );
+    // Negative floor/
+    assert_eq!(
+        format!(
+            "{}",
+            eval("(call-with-values (lambda () (floor/ -7 2)) list)")
+        ),
+        "(-4 1)"
+    );
+}
+
+#[test]
+fn s6_10_receive_values() {
+    // receive (SRFI-8) is sugar for call-with-values
+    is_int("(receive (a b) (values 10 20) (+ a b))", 30);
+    is_int("(receive (a b c) (values 1 2 3) (* a b c))", 6);
+}
+
+// ============================================================================
+// Comprehensive coverage sweep — ensuring every R7RS function is tested
+// ============================================================================
+
+// §6.1 Equivalence predicates — additional coverage
+#[test]
+fn s6_1_eqv_comprehensive() {
+    // eqv? on characters
+    is_true("(eqv? #\\a #\\a)");
+    is_false("(eqv? #\\a #\\b)");
+    // eqv? on empty list
+    is_true("(eqv? '() '())");
+    // eqv? on booleans
+    is_true("(eqv? #t #t)");
+    is_true("(eqv? #f #f)");
+    is_false("(eqv? #t #f)");
+    // eqv? on numbers
+    is_true("(eqv? 42 42)");
+    is_false("(eqv? 42 42.0)"); // exact vs inexact
+}
+
+// §6.2 Numbers — comprehensive coverage
+#[test]
+fn s6_2_numeric_predicates() {
+    is_true("(zero? 0)");
+    is_false("(zero? 1)");
+    is_true("(positive? 5)");
+    is_false("(positive? -5)");
+    is_false("(positive? 0)");
+    is_true("(negative? -5)");
+    is_false("(negative? 5)");
+    is_true("(odd? 3)");
+    is_false("(odd? 4)");
+    is_true("(even? 4)");
+    is_false("(even? 3)");
+    is_true("(finite? 42.0)");
+    is_false("(finite? +inf.0)");
+    is_true("(infinite? +inf.0)");
+    is_true("(infinite? -inf.0)");
+    is_false("(infinite? 42.0)");
+    is_true("(nan? +nan.0)");
+    is_false("(nan? 42.0)");
+}
+
+#[test]
+fn s6_2_type_predicates() {
+    is_true("(number? 42)");
+    is_true("(number? 3.14)");
+    is_false("(number? \"hello\")");
+    is_true("(integer? 42)");
+    is_false("(integer? 3.14)");
+    is_true("(real? 42)");
+    is_true("(real? 3.14)");
+    is_true("(rational? 42)");
+    is_true("(complex? 42)"); // all numbers are complex
+    is_true("(exact? 42)");
+    is_false("(exact? 3.14)");
+    is_true("(inexact? 3.14)");
+    is_false("(inexact? 42)");
+    is_true("(exact-integer? 42)");
+    is_false("(exact-integer? 3.14)");
+    is_false("(exact-integer? 42.0)");
+}
+
+#[test]
+fn s6_2_arithmetic_edge_cases() {
+    // Unary minus
+    is_int("(- 5)", -5);
+    // Unary plus
+    is_int("(+ 5)", 5);
+    // Zero args
+    is_int("(+)", 0);
+    is_int("(*)", 1);
+    // abs
+    is_int("(abs -7)", 7);
+    is_int("(abs 7)", 7);
+    // min/max
+    is_int("(min 1 2 3)", 1);
+    is_int("(max 1 2 3)", 3);
+    is_int("(min 5)", 5);
+    is_int("(max 5)", 5);
+}
+
+#[test]
+fn s6_2_exact_inexact_conversion() {
+    // exact->inexact
+    assert_eq!(eval("(exact->inexact 5)"), Value::Float(5.0));
+    assert_eq!(eval("(inexact->exact 5.0)"), Value::Int(5));
+    // exact / inexact procedures (R7RS names)
+    assert_eq!(eval("(inexact 5)"), Value::Float(5.0));
+    assert_eq!(eval("(exact 5.0)"), Value::Int(5));
+}
+
+#[test]
+fn s6_2_gcd_lcm_extended() {
+    is_int("(gcd 32 -36)", 4);
+    is_int("(gcd)", 0);
+    is_int("(gcd 12)", 12);
+    is_int("(lcm 32 -36)", 288);
+    is_int("(lcm)", 1);
+    is_int("(lcm 12)", 12);
+}
+
+#[test]
+fn s6_2_exact_integer_sqrt_values() {
+    // Returns two values: root and remainder
+    // (exact-integer-sqrt 14) => 3 5 (since 3*3=9, 14-9=5)
+    assert_eq!(format!("{}", eval("(exact-integer-sqrt 14)")), "(3 5)");
+    assert_eq!(format!("{}", eval("(exact-integer-sqrt 4)")), "(2 0)");
+    assert_eq!(format!("{}", eval("(exact-integer-sqrt 0)")), "(0 0)");
+}
+
+#[test]
+fn s6_2_number_string_conversion() {
+    is_str("(number->string 42)", "42");
+    is_str("(number->string 42 16)", "2a");
+    is_str("(number->string 42 8)", "52");
+    is_str("(number->string 42 2)", "101010");
+    is_int("(string->number \"42\")", 42);
+    is_int("(string->number \"ff\" 16)", 255);
+    is_int("(string->number \"77\" 8)", 63);
+    is_false("(string->number \"not-a-number\")");
+}
+
+#[test]
+fn s6_2_rationalize_basic() {
+    // rationalize finds simplest rational within tolerance
+    // (rationalize 3 1) — integers in [2, 4], simplest is 2 or 3
+    // Our implementation returns the ceiling of lo, which for [2,4] is 2
+    is_true("(let ((r (rationalize 3 1))) (and (>= r 2) (<= r 4)))");
+    // Exact case with zero tolerance
+    is_int("(rationalize 5 0)", 5);
+}
+
+#[test]
+fn s6_2_quotient_remainder_modulo_extended() {
+    // R5RS compatibility names
+    is_int("(quotient 13 4)", 3);
+    is_int("(remainder 13 4)", 1);
+    is_int("(modulo 13 4)", 1);
+    is_int("(quotient -13 4)", -3);
+    is_int("(remainder -13 4)", -1);
+    is_int("(modulo -13 4)", 3);
+}
+
+// §6.3 Booleans
+#[test]
+fn s6_3_boolean_comprehensive() {
+    is_true("(boolean? #t)");
+    is_true("(boolean? #f)");
+    is_false("(boolean? 42)");
+    is_false("(boolean? '())");
+    is_true("(not #f)");
+    is_false("(not #t)");
+    is_false("(not 42)"); // only #f is falsy
+    is_true("(boolean=? #t #t)");
+    is_true("(boolean=? #f #f)");
+    is_false("(boolean=? #t #f)");
+}
+
+// §6.4 Pairs/Lists — additional coverage
+#[test]
+fn s6_4_set_car_cdr() {
+    // mae-scheme pairs are immutable — set-car!/set-cdr! signal errors
+    let err = eval_err("(let ((x (cons 1 2))) (set-car! x 10))");
+    assert!(
+        err.contains("immutable") || err.contains("set-car"),
+        "set-car! should signal immutable error: {err}"
+    );
+    let err = eval_err("(let ((x (cons 1 2))) (set-cdr! x 20))");
+    assert!(
+        err.contains("immutable") || err.contains("set-cdr"),
+        "set-cdr! should signal immutable error: {err}"
+    );
+}
+
+#[test]
+fn s6_4_association_lists() {
+    assert_eq!(
+        format!("{}", eval("(assq 'b '((a 1) (b 2) (c 3)))")),
+        "(b 2)"
+    );
+    is_false("(assq 'z '((a 1) (b 2)))");
+    assert_eq!(
+        format!("{}", eval("(assv 2 '((1 a) (2 b) (3 c)))")),
+        "(2 b)"
+    );
+    // assoc uses equal? — strings display with quotes in our Display impl
+    assert_eq!(
+        format!("{}", eval("(assoc \"b\" '((\"a\" 1) (\"b\" 2)))")),
+        "(\"b\" 2)"
+    );
+}
+
+#[test]
+fn s6_4_member_functions() {
+    assert_eq!(format!("{}", eval("(memq 'b '(a b c d))")), "(b c d)");
+    is_false("(memq 'z '(a b c))");
+    assert_eq!(format!("{}", eval("(memv 2 '(1 2 3 4))")), "(2 3 4)");
+    // member uses equal? — strings display with quotes
+    assert_eq!(
+        format!("{}", eval("(member \"b\" '(\"a\" \"b\" \"c\"))")),
+        "(\"b\" \"c\")"
+    );
+}
+
+// §6.5 Symbols — additional coverage
+#[test]
+fn s6_5_symbol_string_roundtrip() {
+    is_true("(symbol? 'hello)");
+    is_str("(symbol->string 'hello)", "hello");
+    is_true("(eq? (string->symbol \"hello\") 'hello)");
+    is_false("(symbol? 42)");
+    is_false("(symbol? \"hello\")");
+}
+
+// §6.9 Bytevectors — comprehensive
+#[test]
+fn s6_9_bytevector_ops() {
+    is_true("(bytevector? #u8(1 2 3))");
+    is_false("(bytevector? '(1 2 3))");
+    is_int("(bytevector-length #u8(1 2 3))", 3);
+    is_int("(bytevector-u8-ref #u8(10 20 30) 1)", 20);
+    assert_eq!(
+        format!(
+            "{}",
+            eval("(let ((bv (bytevector 1 2 3))) (bytevector-u8-set! bv 1 99) bv)")
+        ),
+        "#u8(1 99 3)"
+    );
+}
+
+#[test]
+fn s6_9_bytevector_constructors() {
+    assert_eq!(format!("{}", eval("(make-bytevector 3 0)")), "#u8(0 0 0)");
+    assert_eq!(format!("{}", eval("(bytevector 1 2 3)")), "#u8(1 2 3)");
+    assert_eq!(
+        format!("{}", eval("(bytevector-copy #u8(1 2 3))")),
+        "#u8(1 2 3)"
+    );
+    assert_eq!(
+        format!("{}", eval("(bytevector-append #u8(1 2) #u8(3 4))")),
+        "#u8(1 2 3 4)"
+    );
+}
+
+#[test]
+fn s6_9_utf8_conversion() {
+    is_str("(utf8->string #u8(104 101 108 108 111))", "hello");
+    assert_eq!(
+        format!("{}", eval("(string->utf8 \"hello\")")),
+        "#u8(104 101 108 108 111)"
+    );
+}
+
+// §6.10 Control — additional coverage
+#[test]
+fn s6_10_procedure_predicate_extended() {
+    is_true("(procedure? car)");
+    is_true("(procedure? (lambda (x) x))");
+    is_false("(procedure? 42)");
+    is_false("(procedure? '(1 2 3))");
+}
+
+#[test]
+fn s6_10_apply_comprehensive() {
+    is_int("(apply + '(1 2 3))", 6);
+    is_int("(apply + 1 2 '(3))", 6);
+    is_int("(apply * '(2 3 4))", 24);
+}
+
+// §6.11 Exceptions — additional coverage
+#[test]
+fn s6_11_error_object_fields() {
+    let result = eval(
+        "(guard (exn (#t (list (error-object-message exn) (error-object-type exn))))
+           (error \"test error\" 'my-type 1 2 3))",
+    );
+    let s = format!("{result}");
+    assert!(s.contains("test error"), "Expected error message in: {s}");
+}
+
+#[test]
+fn s6_11_raise_continuable() {
+    // raise-continuable with handler that returns a value
+    is_int(
+        "(with-exception-handler
+           (lambda (exn) 42)
+           (lambda () (raise-continuable \"continue me\")))",
+        42,
+    );
+}
+
+#[test]
+fn s6_11_error_predicates_comprehensive() {
+    // file-error? and read-error? on regular errors
+    is_false(
+        "(guard (exn (#t (file-error? exn)))
+           (error \"not a file error\"))",
+    );
+    is_false(
+        "(guard (exn (#t (read-error? exn)))
+           (error \"not a read error\"))",
+    );
+}
+
+// §6.14 System interface
+#[test]
+fn s6_14_system_interface() {
+    // features returns a list
+    is_true("(list? (features))");
+    // memq returns sublist (truthy), not #t — use pair? to check
+    is_true("(pair? (memq 'r7rs (features)))");
+    is_true("(pair? (memq 'mae-scheme (features)))");
+    is_true("(pair? (memq 'mae (features)))");
+    // command-line returns a list
+    is_true("(list? (command-line))");
+    // time functions
+    is_true("(number? (current-second))");
+    is_true("(number? (current-jiffy))");
+    is_true("(integer? (jiffies-per-second))");
+    is_true("(> (jiffies-per-second) 0)");
+}
+
+#[test]
+fn s6_14_environment_variables() {
+    // get-environment-variable
+    is_true("(or (string? (get-environment-variable \"HOME\")) (not (get-environment-variable \"HOME\")))");
+    // get-environment-variables returns alist
+    is_true("(list? (get-environment-variables))");
+}
+
+// §4.2.5 Delayed evaluation
+#[test]
+fn s4_2_5_promises() {
+    is_int("(force (delay 42))", 42);
+    is_int("(force (make-promise 42))", 42);
+    is_true("(promise? (delay 1))");
+    is_true("(promise? (make-promise 1))");
+    is_false("(promise? 42)");
+    // delay caches result
+    is_int(
+        "(let ((p (delay (+ 1 2))))
+           (+ (force p) (force p)))",
+        6,
+    );
+}
+
+// §4.2.6 Dynamic bindings
+#[test]
+fn s4_2_6_parameters() {
+    is_int(
+        "(let ((p (make-parameter 10)))
+           (p))",
+        10,
+    );
+    is_int(
+        "(let ((p (make-parameter 10)))
+           (parameterize ((p 20))
+             (p)))",
+        20,
+    );
+    // Original value restored after parameterize
+    is_int(
+        "(let ((p (make-parameter 10)))
+           (parameterize ((p 20))
+             (p))
+           (p))",
+        10,
+    );
+}
+
+// §4.3 Macros — additional coverage
+#[test]
+fn s4_3_define_syntax_basic() {
+    is_int(
+        "(begin
+           (define-syntax my-if
+             (syntax-rules ()
+               ((my-if test then else)
+                (cond (test then) (#t else)))))
+           (my-if #t 1 2))",
+        1,
+    );
+    is_int(
+        "(begin
+           (define-syntax my-if
+             (syntax-rules ()
+               ((my-if test then else)
+                (cond (test then) (#t else)))))
+           (my-if #f 1 2))",
+        2,
+    );
+}
+
+#[test]
+fn s4_3_let_syntax() {
+    is_int(
+        "(let-syntax ((double (syntax-rules ()
+                               ((double x) (+ x x)))))
+           (double 5))",
+        10,
+    );
+}
+
+// §5.5 Record types
+#[test]
+fn s5_5_define_record_type_basic() {
+    is_int(
+        "(begin
+           (define-record-type <point>
+             (make-point x y)
+             point?
+             (x point-x)
+             (y point-y))
+           (let ((p (make-point 3 4)))
+             (+ (point-x p) (point-y p))))",
+        7,
+    );
+    is_true(
+        "(begin
+           (define-record-type <point>
+             (make-point x y)
+             point?
+             (x point-x)
+             (y point-y))
+           (point? (make-point 1 2)))",
+    );
+    is_false(
+        "(begin
+           (define-record-type <point>
+             (make-point x y)
+             point?
+             (x point-x)
+             (y point-y))
+           (point? 42))",
+    );
+}
+
+// §4.2.1 case-lambda
+#[test]
+fn s4_2_1_case_lambda() {
+    is_int(
+        "(let ((f (case-lambda
+                    ((x) x)
+                    ((x y) (+ x y))
+                    ((x y z) (+ x y z)))))
+           (f 1))",
+        1,
+    );
+    is_int(
+        "(let ((f (case-lambda
+                    ((x) x)
+                    ((x y) (+ x y))
+                    ((x y z) (+ x y z)))))
+           (f 1 2))",
+        3,
+    );
+    is_int(
+        "(let ((f (case-lambda
+                    ((x) x)
+                    ((x y) (+ x y))
+                    ((x y z) (+ x y z)))))
+           (f 1 2 3))",
+        6,
+    );
+}
+
+// §4.2.4 do
+#[test]
+fn s4_2_4_do_comprehensive() {
+    // Sum 1..10
+    is_int(
+        "(do ((i 1 (+ i 1))
+              (sum 0 (+ sum i)))
+             ((> i 10) sum))",
+        55,
+    );
+    // Reverse a list
+    assert_eq!(
+        format!(
+            "{}",
+            eval(
+                "(do ((lst '(1 2 3 4 5) (cdr lst))
+                       (acc '() (cons (car lst) acc)))
+                      ((null? lst) acc))"
+            )
+        ),
+        "(5 4 3 2 1)"
+    );
+}
+
+// §5.6 Libraries — define-library
+#[test]
+fn s5_6_define_library_basic() {
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    // Define and import a library
+    vm.eval(
+        "(define-library (test math)
+           (export square cube)
+           (begin
+             (define (square x) (* x x))
+             (define (cube x) (* x x x))))",
+    )
+    .unwrap();
+    vm.eval("(import (test math))").unwrap();
+    assert_eq!(vm.eval("(square 5)").unwrap(), Value::Int(25));
+    assert_eq!(vm.eval("(cube 3)").unwrap(), Value::Int(27));
+}
+
+#[test]
+fn s5_6_import_modifiers() {
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    vm.eval(
+        "(define-library (test utils)
+           (export add1 sub1)
+           (begin
+             (define (add1 x) (+ x 1))
+             (define (sub1 x) (- x 1))))",
+    )
+    .unwrap();
+    // import with only
+    vm.eval("(import (only (test utils) add1))").unwrap();
+    assert_eq!(vm.eval("(add1 5)").unwrap(), Value::Int(6));
+    // import with rename
+    vm.eval("(import (rename (test utils) (sub1 decrement)))")
+        .unwrap();
+    assert_eq!(vm.eval("(decrement 5)").unwrap(), Value::Int(4));
+}
+
+// §4.1.7 include
+#[test]
+fn s4_1_7_cond_expand() {
+    // Basic cond-expand with r7rs feature
+    is_int("(cond-expand (r7rs 1) (else 0))", 1);
+    // mae and mae-scheme are both features
+    is_int("(cond-expand (mae 1) (else 0))", 1);
+    is_int("(cond-expand (mae-scheme 1) (else 0))", 1);
+    // and clause
+    is_int("(cond-expand ((and r7rs mae) 1) (else 0))", 1);
+    // or clause
+    is_int("(cond-expand ((or nonexistent r7rs) 1) (else 0))", 1);
+    // not clause
+    is_int("(cond-expand ((not nonexistent) 1) (else 0))", 1);
+    is_int("(cond-expand ((not r7rs) 1) (else 0))", 0);
+    // else clause
+    is_int("(cond-expand (nonexistent 1) (else 42))", 42);
+}
+
+// §6.6 Character case-insensitive operations
+#[test]
+fn s6_6_char_ci_comparisons() {
+    is_true("(char-ci=? #\\a #\\A)");
+    is_true("(char-ci=? #\\z #\\Z)");
+    is_false("(char-ci=? #\\a #\\b)");
+    is_true("(char-ci<? #\\a #\\B)");
+    is_false("(char-ci<? #\\b #\\A)");
+    is_true("(char-ci>? #\\b #\\A)");
+    is_false("(char-ci>? #\\a #\\B)");
+    is_true("(char-ci<=? #\\a #\\A)");
+    is_true("(char-ci<=? #\\a #\\B)");
+    is_true("(char-ci>=? #\\b #\\A)");
+    is_true("(char-ci>=? #\\a #\\A)");
+}
+
+#[test]
+fn s6_6_digit_value() {
+    is_int("(digit-value #\\0)", 0);
+    is_int("(digit-value #\\5)", 5);
+    is_int("(digit-value #\\9)", 9);
+    is_false("(digit-value #\\a)");
+    is_false("(digit-value #\\space)");
+}
+
+#[test]
+fn s6_6_char_foldcase_test() {
+    assert_eq!(eval("(char-foldcase #\\A)"), Value::Char('a'));
+    assert_eq!(eval("(char-foldcase #\\a)"), Value::Char('a'));
+    assert_eq!(eval("(char-foldcase #\\Z)"), Value::Char('z'));
+}
+
+#[test]
+fn s6_6_char_to_string() {
+    is_str("(char->string #\\a)", "a");
+    is_str("(char->string #\\space)", " ");
+}
+
+// §6.7 String case-insensitive operations
+#[test]
+fn s6_7_string_ci_comparisons() {
+    is_true("(string-ci=? \"hello\" \"HELLO\")");
+    is_true("(string-ci=? \"Hello\" \"hELLO\")");
+    is_false("(string-ci=? \"hello\" \"world\")");
+    is_true("(string-ci<? \"abc\" \"DEF\")");
+    is_false("(string-ci<? \"def\" \"ABC\")");
+    is_true("(string-ci>? \"def\" \"ABC\")");
+    is_false("(string-ci>? \"abc\" \"DEF\")");
+    is_true("(string-ci<=? \"abc\" \"ABC\")");
+    is_true("(string-ci<=? \"abc\" \"DEF\")");
+    is_true("(string-ci>=? \"def\" \"ABC\")");
+    is_true("(string-ci>=? \"abc\" \"ABC\")");
+}
+
+#[test]
+fn s6_7_string_trim_split_join() {
+    // Non-R7RS extensions, but registered — verify they work
+    is_str("(string-trim \"  hello  \")", "hello");
+    // string-split returns list of strings (displayed with quotes)
+    assert_eq!(
+        format!("{}", eval("(string-split \"a,b,c\" \",\")")),
+        "(\"a\" \"b\" \"c\")"
+    );
+    is_str("(string-join '(\"a\" \"b\" \"c\") \",\")", "a,b,c");
+}
+
+#[test]
+fn s6_7_string_contains_test() {
+    is_true("(string-contains \"hello world\" \"world\")");
+    is_false("(string-contains \"hello\" \"xyz\")");
+    is_true("(string-contains \"hello\" \"\")");
+}
+
+// §6.8 Vector additional operations
+#[test]
+fn s6_8_vector_append_test() {
+    assert_eq!(
+        format!("{}", eval("(vector-append #(1 2) #(3 4))")),
+        "#(1 2 3 4)"
+    );
+    assert_eq!(format!("{}", eval("(vector-append #() #(1))")), "#(1)");
+}
+
+#[test]
+fn s6_8_vector_copy_bang() {
+    assert_eq!(
+        format!(
+            "{}",
+            eval(
+                "(let ((v (vector 1 2 3 4 5)))
+                              (vector-copy! v 1 #(10 20))
+                              v)"
+            )
+        ),
+        "#(1 10 20 4 5)"
+    );
+}
+
+#[test]
+fn s6_8_vector_string_roundtrip() {
+    is_str("(vector->string #(#\\h #\\i))", "hi");
+    assert_eq!(
+        format!("{}", eval("(string->vector \"hello\")")),
+        "#(#\\h #\\e #\\l #\\l #\\o)"
+    );
+}
+
+// §6.9 Bytevector additional operations
+#[test]
+fn s6_9_bytevector_copy_bang() {
+    assert_eq!(
+        format!(
+            "{}",
+            eval(
+                "(let ((bv (bytevector 1 2 3 4 5)))
+                              (bytevector-copy! bv 1 #u8(10 20))
+                              bv)"
+            )
+        ),
+        "#u8(1 10 20 4 5)"
+    );
+}
+
+#[test]
+fn s6_9_bytevector_list_conversion() {
+    assert_eq!(
+        format!("{}", eval("(bytevector->list #u8(1 2 3))")),
+        "(1 2 3)"
+    );
+    assert_eq!(
+        format!("{}", eval("(list->bytevector '(10 20 30))")),
+        "#u8(10 20 30)"
+    );
+}
+
+// §6.13 Binary file I/O
+#[test]
+fn s6_13_binary_file_io() {
+    // Write and read binary data
+    eval(
+        "(let ((p (open-binary-output-file \"/tmp/mae-scheme-binary-test.dat\")))
+           (write-u8 65 p)
+           (write-u8 66 p)
+           (write-u8 67 p)
+           (close-port p))",
+    );
+    is_int(
+        "(let ((p (open-binary-input-file \"/tmp/mae-scheme-binary-test.dat\")))
+           (let ((b (read-u8 p)))
+             (close-port p)
+             b))",
+        65,
+    );
+    // Cleanup
+    eval("(delete-file \"/tmp/mae-scheme-binary-test.dat\")");
+}
+
+// §6.13 write-shared
+#[test]
+fn s6_13_write_shared() {
+    // write-shared should produce output for shared structures
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm
+        .eval(
+            "(let ((p (open-output-string)))
+                 (write-shared '(1 2 3) p)
+                 (get-output-string p))",
+        )
+        .unwrap();
+    assert_eq!(result, Value::String(Rc::from("(1 2 3)")));
+}
+
+// String mutation error messages are helpful
+#[test]
+fn s6_7_string_mutation_errors() {
+    let err = eval_err("(string-set! \"hello\" 0 #\\H)");
+    assert!(
+        err.contains("immutable"),
+        "string-set! should mention immutability: {err}"
+    );
+    let err = eval_err("(string-copy! \"hello\" 0 \"world\")");
+    assert!(
+        err.contains("immutable"),
+        "string-copy! should mention immutability: {err}"
+    );
+    let err = eval_err("(string-fill! \"hello\" #\\x)");
+    assert!(
+        err.contains("immutable"),
+        "string-fill! should mention immutability: {err}"
+    );
+}
+
+// list-set! error message is helpful
+#[test]
+fn s6_4_list_set_error() {
+    let err = eval_err("(list-set! '(1 2 3) 1 99)");
+    assert!(
+        err.contains("immutable"),
+        "list-set! should mention immutability: {err}"
+    );
+}
+
+#[test]
+fn s7_1_cond_expand_library_availability() {
+    // Verify all 13 R7RS-small libraries are recognized via cond-expand
+    is_int("(cond-expand ((library (scheme base)) 1) (else 0))", 1);
+    is_int(
+        "(cond-expand ((library (scheme case-lambda)) 1) (else 0))",
+        1,
+    );
+    is_int("(cond-expand ((library (scheme char)) 1) (else 0))", 1);
+    is_int("(cond-expand ((library (scheme cxr)) 1) (else 0))", 1);
+    is_int("(cond-expand ((library (scheme eval)) 1) (else 0))", 1);
+    is_int("(cond-expand ((library (scheme file)) 1) (else 0))", 1);
+    is_int("(cond-expand ((library (scheme inexact)) 1) (else 0))", 1);
+    is_int("(cond-expand ((library (scheme lazy)) 1) (else 0))", 1);
+    is_int("(cond-expand ((library (scheme load)) 1) (else 0))", 1);
+    is_int(
+        "(cond-expand ((library (scheme process-context)) 1) (else 0))",
+        1,
+    );
+    is_int("(cond-expand ((library (scheme read)) 1) (else 0))", 1);
+    is_int("(cond-expand ((library (scheme time)) 1) (else 0))", 1);
+    is_int("(cond-expand ((library (scheme write)) 1) (else 0))", 1);
+    is_int("(cond-expand ((library (scheme r5rs)) 1) (else 0))", 1);
+    // Unknown library should not match
+    is_int(
+        "(cond-expand ((library (scheme nonexistent)) 1) (else 0))",
+        0,
+    );
+}

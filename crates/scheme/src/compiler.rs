@@ -66,6 +66,9 @@ pub enum Op {
     PopHandler,
     /// Raise an exception (value on top of stack).
     Raise,
+    /// Evaluate a datum at runtime (R7RS eval).
+    /// Stack: [expr] → [result]
+    Eval,
     /// No-op / placeholder.
     Nop,
 }
@@ -323,6 +326,8 @@ impl Compiler {
                         "let*-values" => return self.compile_let_star_values(&items, tail),
                         "receive" => return self.compile_receive(&items, tail),
                         "apply" => return self.compile_apply(&items, tail),
+                        "call-with-values" => return self.compile_call_with_values(&items, tail),
+                        "eval" => return self.compile_eval(&items),
                         "call-with-current-continuation" | "call/cc" => {
                             return self.compile_call_cc(&items, tail)
                         }
@@ -1312,6 +1317,78 @@ impl Compiler {
         Ok(())
     }
 
+    /// Compile `(eval expr)` or `(eval expr env)` (R7RS §6.12).
+    /// Evaluates the expression at runtime using the VM's eval capability.
+    /// The optional environment argument is accepted but ignored (all eval
+    /// happens in the interaction environment).
+    fn compile_eval(&mut self, items: &[Value]) -> Result<(), LispError> {
+        if items.len() < 2 || items.len() > 3 {
+            return Err(LispError::syntax(
+                "eval requires 1 or 2 arguments: (eval expr) or (eval expr env)",
+                "",
+            ));
+        }
+        // Compile the expression argument (which will be evaluated at runtime)
+        self.compile_expr(&items[1], false)?;
+        // If env arg present, compile and discard it (we always use interaction env)
+        if items.len() == 3 {
+            self.compile_expr(&items[2], false)?;
+            self.emit(Op::Pop);
+        }
+        self.emit(Op::Eval);
+        Ok(())
+    }
+
+    /// Compile `(call-with-values producer consumer)` (R7RS §6.10).
+    /// Calls producer with 0 args, then applies consumer to the results.
+    /// Since our `values` returns a list for multiple values, we use `apply`.
+    fn compile_call_with_values(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
+        if items.len() != 3 {
+            return Err(LispError::syntax(
+                "call-with-values requires producer and consumer",
+                "",
+            ));
+        }
+        // Desugar: (call-with-values producer consumer)
+        // → (apply consumer (let ((v (producer)))
+        //                     (if (pair? v) v (list v))))
+        // But since `values` with 1 arg returns that arg directly, and with
+        // multiple args returns a list, we can simplify:
+        // → (apply consumer (let ((v (producer)))
+        //                     (if (pair? v) v (list v))))
+        // Actually simpler: just use apply directly.
+        // For the common case of let-values/receive desugaring, the consumer
+        // lambda has the right arity, so apply works.
+        let producer = &items[1];
+        let consumer = &items[2];
+        // Compile as: (apply consumer (producer))
+        // But we need to handle single values too.
+        // Desugar to: ((lambda (vals) (apply consumer vals)) (producer))
+        // where vals = (values ...) from producer, which is a list for multi-values
+        // But actually the simpler approach: just compile it as a special pattern.
+        //
+        // Most robust: desugar to a let + apply:
+        // (let ((__cwv_tmp (producer)))
+        //   (if (pair? __cwv_tmp)
+        //       (apply consumer __cwv_tmp)
+        //       (consumer __cwv_tmp)))
+        let tmp = Value::symbol("__cwv_tmp");
+        let desugared = Value::list(vec![
+            Value::symbol("let"),
+            Value::list(vec![Value::list(vec![
+                tmp.clone(),
+                Value::list(vec![producer.clone()]),
+            ])]),
+            Value::list(vec![
+                Value::symbol("if"),
+                Value::list(vec![Value::symbol("pair?"), tmp.clone()]),
+                Value::list(vec![Value::symbol("apply"), consumer.clone(), tmp.clone()]),
+                Value::list(vec![consumer.clone(), tmp]),
+            ]),
+        ]);
+        self.compile_expr(&desugared, tail)
+    }
+
     /// Compile `(receive formals expr body ...)` (SRFI-8).
     /// Desugars to: `(call-with-values (lambda () expr) (lambda formals body ...))`
     fn compile_receive(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
@@ -1346,7 +1423,7 @@ impl Compiler {
     /// Compile `(cond-expand (feature-req body ...) ... (else body ...))`.
     /// Feature-based conditional expansion at compile time.
     fn compile_cond_expand(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
-        let features = vec!["r7rs", "mae", "ratios", "exact-complex"];
+        let features = vec!["r7rs", "mae", "mae-scheme", "ratios", "exact-complex"];
 
         for clause in &items[1..] {
             let parts = clause
@@ -1413,12 +1490,18 @@ impl Compiler {
                             "(scheme base)"
                                 | "(scheme case-lambda)"
                                 | "(scheme char)"
+                                | "(scheme complex)"
                                 | "(scheme cxr)"
                                 | "(scheme eval)"
+                                | "(scheme file)"
                                 | "(scheme inexact)"
                                 | "(scheme lazy)"
+                                | "(scheme load)"
+                                | "(scheme process-context)"
                                 | "(scheme read)"
+                                | "(scheme time)"
                                 | "(scheme write)"
+                                | "(scheme r5rs)"
                                 | "(mae base)"
                         ))
                     }

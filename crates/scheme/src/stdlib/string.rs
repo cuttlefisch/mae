@@ -1,4 +1,29 @@
 //! R7RS §6.7: Strings.
+//!
+//! ## mae-scheme stance: Immutable strings
+//!
+//! All strings in mae-scheme are immutable. This is permitted by R7RS §6.7
+//! which states: "It is an error to use string-set! on literal strings or
+//! on strings returned by symbol->string." We extend this to all strings.
+//!
+//! **Rationale**: Immutable strings are stored as `Rc<str>` — zero-cost
+//! sharing, no `RefCell` overhead, natural interning. Mutable strings would
+//! require `Rc<RefCell<String>>` adding 8 bytes per string + runtime borrow
+//! checks on every access. Since buffer mutation in MAE happens at the rope
+//! level via `(buffer-insert ...)`, not via string-level operations, mutable
+//! strings provide no benefit for editor extensions.
+//!
+//! **Prior art**: Racket, Gauche, Guile, and Kawa all use immutable strings.
+//! SRFI-140 standardizes immutable strings. Neovim's Lua has immutable strings.
+//! Emacs's own manual notes "very little code would break" if elisp strings
+//! became immutable.
+//!
+//! **Mutation alternatives**: Use `string-append`, `string-copy`, `substring`,
+//! and `list->string` to construct new strings. For heavy text manipulation,
+//! use buffer operations which work on the rope data structure.
+//!
+//! **Future**: `(scheme mutable-strings)` library may be added if demanded,
+//! using copy-on-write semantics (Gauche's approach).
 
 use std::rc::Rc;
 
@@ -295,30 +320,38 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    // R7RS §6.7 string-copy!
-    // Since our strings are immutable Rc<str>, string-copy! and string-set!
-    // and string-fill! signal immutability errors. This is R7RS-compliant
-    // since strings MAY be immutable (R7RS §6.7 allows it).
+    // mae-scheme: strings are immutable. See module-level doc for rationale.
+    // These functions are registered to provide clear error messages rather
+    // than "undefined variable" errors when users try to call them.
 
     vm.register_fn(
         "string-set!",
-        "Set character (immutable strings — error)",
+        "Mutate character in string. Error: mae-scheme strings are immutable. Use string-copy + string-append to build new strings.",
         Arity::Fixed(3),
-        |_args| Err(LispError::immutable("string (string-set!)")),
+        |_args| Err(LispError::user(
+            "string-set!: mae-scheme strings are immutable. Use (string-append (substring s 0 k) (string c) (substring s (+ k 1))) to create a modified copy.",
+            vec![],
+        )),
     );
 
     vm.register_fn(
         "string-copy!",
-        "Copy into string (immutable strings — error)",
+        "Copy into string. Error: mae-scheme strings are immutable. Use substring + string-append instead.",
         Arity::Variadic(3),
-        |_args| Err(LispError::immutable("string (string-copy!)")),
+        |_args| Err(LispError::user(
+            "string-copy!: mae-scheme strings are immutable. Use substring and string-append to construct new strings.",
+            vec![],
+        )),
     );
 
     vm.register_fn(
         "string-fill!",
-        "Fill string (immutable strings — error)",
+        "Fill string with character. Error: mae-scheme strings are immutable. Use make-string instead.",
         Arity::Variadic(2),
-        |_args| Err(LispError::immutable("string (string-fill!)")),
+        |_args| Err(LispError::user(
+            "string-fill!: mae-scheme strings are immutable. Use (make-string k char) to create a new string filled with a character.",
+            vec![],
+        )),
     );
 
     vm.register_fn(

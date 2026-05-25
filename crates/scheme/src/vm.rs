@@ -691,6 +691,17 @@ impl Vm {
                 Op::Values | Op::CallWithValues => {
                     return Err(LispError::internal(format!("unimplemented opcode: {op:?}")));
                 }
+
+                Op::Eval => {
+                    // R7RS §6.12: evaluate a datum at runtime.
+                    // Stack has the expression (as a Value/datum).
+                    let datum = self.stack.pop().unwrap_or(Value::Void);
+                    // Convert datum to string, then parse and eval it.
+                    // This handles quoted data: (eval '(+ 1 2) ...)
+                    let code = format!("{datum}");
+                    let result = self.eval(&code)?;
+                    self.stack.push(result);
+                }
             }
         }
     }
