@@ -193,10 +193,7 @@ fn pitfall_callcc_in_map() {
 
 #[test]
 fn pitfall_callcc_with_dynamic_wind() {
-    // dynamic-wind out-guard fires when escaping via continuation
-    // NOTE: Our escape continuations don't yet unwind dynamic-wind.
-    // This test documents current behavior ("in" only, out-guard skipped).
-    // Full R7RS requires "inout". TODO: fix when upgrading to full continuations.
+    // R7RS §6.10: dynamic-wind out-guard MUST fire when escaping via continuation
     is_str(
         r#"(let ((log '()))
            (define (add! x) (set! log (cons x log)))
@@ -207,7 +204,7 @@ fn pitfall_callcc_with_dynamic_wind() {
                           (lambda () (k (lambda () (add! 'body))))
                           (lambda () (add! 'out)))))))
              (apply string-append (map symbol->string (reverse log)))))"#,
-        "in", // Current: out-guard not called on escape. R7RS requires "inout".
+        "inout",
     );
 }
 

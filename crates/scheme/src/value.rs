@@ -141,11 +141,13 @@ pub enum Port {
     FileInput {
         reader: Box<dyn std::io::Read>,
         name: String,
+        binary: bool,
     },
     /// Output to a file.
     FileOutput {
         writer: Box<dyn std::io::Write>,
         name: String,
+        binary: bool,
     },
     /// Standard input.
     Stdin,
@@ -153,21 +155,32 @@ pub enum Port {
     Stdout,
     /// Standard error.
     Stderr,
-    /// Closed port.
-    Closed,
+    /// Closed port — retains original kind for R7RS predicate semantics.
+    /// R7RS §6.13.1: `input-port?` returns `#t` even on closed input ports.
+    Closed(PortKind),
+}
+
+/// The kind of a port — preserved after close for predicate queries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortKind {
+    Input,
+    Output,
 }
 
 impl Port {
     /// Returns true if this port is open (not closed).
     pub fn is_open(&self) -> bool {
-        !matches!(self, Port::Closed)
+        !matches!(self, Port::Closed(_))
     }
 
     /// Returns true if this is an input port (open or closed).
     pub fn is_input(&self) -> bool {
         matches!(
             self,
-            Port::StringInput { .. } | Port::FileInput { .. } | Port::Stdin
+            Port::StringInput { .. }
+                | Port::FileInput { .. }
+                | Port::Stdin
+                | Port::Closed(PortKind::Input)
         )
     }
 
@@ -175,8 +188,31 @@ impl Port {
     pub fn is_output(&self) -> bool {
         matches!(
             self,
-            Port::StringOutput { .. } | Port::FileOutput { .. } | Port::Stdout | Port::Stderr
+            Port::StringOutput { .. }
+                | Port::FileOutput { .. }
+                | Port::Stdout
+                | Port::Stderr
+                | Port::Closed(PortKind::Output)
         )
+    }
+
+    /// Returns true if this is a binary port.
+    pub fn is_binary(&self) -> bool {
+        matches!(
+            self,
+            Port::FileInput { binary: true, .. } | Port::FileOutput { binary: true, .. }
+        )
+    }
+
+    /// The kind of this port (input or output).
+    pub fn kind(&self) -> PortKind {
+        match self {
+            Port::StringInput { .. } | Port::FileInput { .. } | Port::Stdin => PortKind::Input,
+            Port::StringOutput { .. } | Port::FileOutput { .. } | Port::Stdout | Port::Stderr => {
+                PortKind::Output
+            }
+            Port::Closed(k) => *k,
+        }
     }
 }
 
@@ -192,7 +228,7 @@ impl fmt::Debug for Port {
             Port::Stdin => write!(f, "Stdin"),
             Port::Stdout => write!(f, "Stdout"),
             Port::Stderr => write!(f, "Stderr"),
-            Port::Closed => write!(f, "Closed"),
+            Port::Closed(k) => write!(f, "Closed({k:?})"),
         }
     }
 }
@@ -236,6 +272,16 @@ pub struct Closure {
     pub doc: Option<String>,
 }
 
+/// A dynamic-wind extent entry.
+/// Tracks the before/after thunks for dynamic-wind interaction with call/cc.
+#[derive(Clone, Debug)]
+pub struct Winder {
+    /// The `before` thunk — called when entering this dynamic extent.
+    pub before: Value,
+    /// The `after` thunk — called when leaving this dynamic extent.
+    pub after: Value,
+}
+
 /// Captured continuation for call/cc.
 #[derive(Clone, Debug)]
 pub struct Continuation {
@@ -245,9 +291,13 @@ pub struct Continuation {
     pub frames: Vec<CallFrame>,
     /// Whether this continuation has been invoked.
     pub invoked: bool,
+    /// Snapshot of the dynamic-wind stack at capture time.
+    /// Used to compute which before/after thunks to run when
+    /// this continuation is invoked.
+    pub winders: Vec<Winder>,
 }
 
-/// A single call frame (activation record).
+/// A single call frame (activation record), captured by continuations.
 #[derive(Clone, Debug)]
 pub struct CallFrame {
     /// Index into the code pool.
@@ -258,6 +308,12 @@ pub struct CallFrame {
     pub bp: usize,
     /// Function name (for stack traces).
     pub function_name: Option<String>,
+    /// Captured upvalues for this closure invocation.
+    /// Shared cells so mutations through closures are visible across captures.
+    pub upvalues: Vec<Rc<RefCell<Value>>>,
+    /// Cells for locals that have been captured as upvalues.
+    /// Shared cells ensure mutations are visible across continuation boundaries.
+    pub local_cells: HashMap<usize, Rc<RefCell<Value>>>,
 }
 
 // ---------------------------------------------------------------------------

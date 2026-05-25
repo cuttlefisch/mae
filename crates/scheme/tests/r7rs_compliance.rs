@@ -6527,6 +6527,58 @@ fn s6_13_port_predicates_closed() {
         .unwrap(),
         Value::Bool(true),
     );
+
+    // R7RS §6.13.1: input-port? returns #t even on closed input ports
+    assert_eq!(
+        vm.eval(
+            r#"
+            (let ((p (open-input-string "hello")))
+              (close-port p)
+              (input-port? p))
+        "#
+        )
+        .unwrap(),
+        Value::Bool(true),
+    );
+
+    // R7RS §6.13.1: output-port? returns #t even on closed output ports
+    assert_eq!(
+        vm.eval(
+            r#"
+            (let ((p (open-output-string)))
+              (close-port p)
+              (output-port? p))
+        "#
+        )
+        .unwrap(),
+        Value::Bool(true),
+    );
+
+    // input-port-open? returns #f on closed ports
+    assert_eq!(
+        vm.eval(
+            r#"
+            (let ((p (open-input-string "hello")))
+              (close-port p)
+              (input-port-open? p))
+        "#
+        )
+        .unwrap(),
+        Value::Bool(false),
+    );
+
+    // output-port-open? returns #f on closed ports
+    assert_eq!(
+        vm.eval(
+            r#"
+            (let ((p (open-output-string)))
+              (close-port p)
+              (output-port-open? p))
+        "#
+        )
+        .unwrap(),
+        Value::Bool(false),
+    );
 }
 
 // =============================================================================
@@ -6960,4 +7012,229 @@ fn s6_10_dynamic_wind_nested() {
         ),
         eval("'(in1 in2 body out2 out1)"),
     );
+}
+
+// =============================================================================
+// §6.10 dynamic-wind + call/cc interaction (R7RS §6.10)
+// =============================================================================
+
+#[test]
+fn s6_10_dynamic_wind_callcc() {
+    // R7RS requires that when a continuation crosses dynamic-wind boundaries,
+    // the appropriate before/after thunks fire.
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+
+    // Test 1: continuation captured inside dynamic-wind, invoked from outside
+    // When k is invoked from outside the extent, `before` should fire again
+    // and when the thunk returns, `after` should fire.
+    let result = vm
+        .eval(
+            r#"
+        (let ((k #f)
+              (count 0))
+          (dynamic-wind
+            (lambda () (set! count (+ count 1)))
+            (lambda ()
+              (call/cc (lambda (c) (set! k c)))
+              count)
+            (lambda () (set! count (+ count 100))))
+          ;; At this point: before ran once (count=1), body ran (count=1),
+          ;; after ran once (count=101).
+          ;; Don't invoke k again to avoid infinite loop in this test.
+          count)
+    "#,
+        )
+        .unwrap();
+    // Before ran once (1), after ran once (+100) = 101
+    assert_eq!(result, Value::Int(101));
+
+    // Test 2: dynamic-wind after thunk fires on call/cc escape.
+    // We use a global to track side effects since continuation restoration
+    // restores the stack (which would overwrite local bindings).
+    let mut vm2 = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm2);
+    vm2.eval("(define __dw_after_ran__ #f)").unwrap();
+    let result2 = vm2
+        .eval(
+            r#"
+        (call/cc
+          (lambda (escape)
+            (dynamic-wind
+              (lambda () #f)
+              (lambda () (escape 'done))
+              (lambda () (set! __dw_after_ran__ #t)))))
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result2, Value::symbol("done"));
+    // After thunk should have run when escape left the dynamic extent
+    assert_eq!(vm2.eval("__dw_after_ran__").unwrap(), Value::Bool(true),);
+}
+
+// ---------------------------------------------------------------------------
+// §6.11 file-error? and read-error? condition predicates
+// ---------------------------------------------------------------------------
+
+#[test]
+fn s6_11_file_error_predicate() {
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+
+    // file-error? should return #t for I/O errors from file operations
+    let result = vm
+        .eval(
+            r#"
+        (guard (exn
+                ((file-error? exn) 'caught-file-error)
+                (#t 'other-error))
+          (open-input-file "/nonexistent/path/that/does/not/exist"))
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result, Value::symbol("caught-file-error"));
+}
+
+#[test]
+fn s6_11_file_error_not_on_regular_error() {
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+
+    // file-error? should return #f for regular errors
+    let result = vm
+        .eval(
+            r#"
+        (guard (exn
+                ((file-error? exn) 'file-error)
+                (#t 'other))
+          (error "not a file error"))
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result, Value::symbol("other"));
+}
+
+#[test]
+fn s6_11_read_error_predicate() {
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+
+    // read-error? should return #t for malformed input
+    let result = vm
+        .eval(
+            r#"
+        (guard (exn
+                ((read-error? exn) 'caught-read-error)
+                (#t 'other-error))
+          (read (open-input-string "(unclosed")))
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result, Value::symbol("caught-read-error"));
+}
+
+// ---------------------------------------------------------------------------
+// §6.4 member and assoc with custom comparator
+// ---------------------------------------------------------------------------
+
+#[test]
+fn s6_4_member_custom_comparator() {
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+
+    // 2-arg member (default equal?)
+    assert_eq!(
+        vm.eval("(member 2 '(1 2 3))").unwrap(),
+        vm.eval("'(2 3)").unwrap(),
+    );
+
+    // 3-arg member with custom comparator
+    assert_eq!(
+        vm.eval(r#"(member 5 '(1 2 8 4) (lambda (a b) (< b a)))"#)
+            .unwrap(),
+        vm.eval("'(1 2 8 4)").unwrap(),
+    );
+
+    // 3-arg member not found
+    assert_eq!(
+        vm.eval(r#"(member 0 '(1 2 3) (lambda (a b) (= a b)))"#)
+            .unwrap(),
+        Value::Bool(false),
+    );
+}
+
+#[test]
+fn s6_4_assoc_custom_comparator() {
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+
+    // 2-arg assoc (default equal?)
+    assert_eq!(
+        vm.eval("(assoc 2 '((1 . a) (2 . b) (3 . c)))").unwrap(),
+        vm.eval("'(2 . b)").unwrap(),
+    );
+
+    // 3-arg assoc with custom comparator
+    assert_eq!(
+        vm.eval(
+            r#"(assoc 2.0 '((1 . a) (2 . b) (3 . c))
+                          (lambda (a b) (= (exact a) (exact b))))"#
+        )
+        .unwrap(),
+        vm.eval("'(2 . b)").unwrap(),
+    );
+
+    // 3-arg assoc not found
+    assert_eq!(
+        vm.eval(r#"(assoc 5 '((1 . a) (2 . b)) =)"#).unwrap(),
+        Value::Bool(false),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// §6.13 with-output-to-file / with-input-from-file port redirection
+// ---------------------------------------------------------------------------
+
+#[test]
+fn s6_13_with_output_to_file_redirect() {
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+
+    let tmp = std::env::temp_dir().join("mae_test_redirect_output.txt");
+    let path = tmp.to_str().unwrap();
+
+    // with-output-to-file should redirect display output to the file
+    vm.eval(&format!(
+        r#"
+        (with-output-to-file "{path}"
+          (lambda () (display "hello from redirect")))
+    "#
+    ))
+    .unwrap();
+
+    let contents = std::fs::read_to_string(&tmp).unwrap();
+    assert_eq!(contents, "hello from redirect");
+    std::fs::remove_file(&tmp).ok();
+}
+
+#[test]
+fn s6_13_with_input_from_file_redirect() {
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+
+    let tmp = std::env::temp_dir().join("mae_test_redirect_input.txt");
+    let path = tmp.to_str().unwrap();
+    std::fs::write(&tmp, "42").unwrap();
+
+    // with-input-from-file should redirect read input from the file
+    let result = vm
+        .eval(&format!(
+            r#"
+        (with-input-from-file "{path}"
+          (lambda () (read (current-input-port))))
+    "#
+        ))
+        .unwrap();
+    assert_eq!(result, Value::Int(42));
+    std::fs::remove_file(&tmp).ok();
 }

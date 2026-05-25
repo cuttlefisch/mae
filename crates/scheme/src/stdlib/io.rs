@@ -22,12 +22,29 @@
 //! `open-input-string` and `open-output-string` / `get-output-string` provide
 //! in-memory I/O. These are the most commonly used port types in extension code.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::lisp_error::{Arity, LispError};
 use crate::reader::Reader;
 use crate::value::{display_value, Port, Value};
 use crate::vm::Vm;
+
+/// Create a LispError with a proper R7RS file-error tagged object.
+fn file_error(message: String, path: &str) -> LispError {
+    let err_obj = Value::Vector(Rc::new(RefCell::new(vec![
+        Value::symbol("error-object"),
+        Value::string(message.clone()),
+        Value::string("file-error"),
+        Value::list(vec![Value::string(path)]),
+    ])));
+    let mut err = LispError::user(message, vec![path.to_string()]);
+    err.error_value = Some(Box::new(err_obj));
+    err
+}
+
+// Note: read-error objects are synthesized by the VM's handle_exception()
+// from ErrorKind::Read. No explicit read_error() helper needed here.
 
 /// Determine width of UTF-8 character from its first byte.
 fn utf8_char_width(first: u8) -> usize {
@@ -46,7 +63,7 @@ fn write_to_port(port_val: &Value, text: &str) -> Result<(), LispError> {
         Value::Port(port_cell) => {
             let mut port = port_cell.borrow_mut();
             match &mut *port {
-                Port::Closed => Err(LispError::user("write: port is closed", vec![])),
+                Port::Closed(_) => Err(LispError::user("write: port is closed", vec![])),
                 Port::StringOutput { buf } => {
                     buf.push_str(text);
                     Ok(())
@@ -74,32 +91,43 @@ fn write_to_port(port_val: &Value, text: &str) -> Result<(), LispError> {
 }
 
 pub fn register(vm: &mut Vm) {
+    // Create shared mutable cells for current ports — allows dynamic redirection
+    // by with-input-from-file / with-output-to-file via dynamic-wind.
+    let stdin_port = Value::Port(Rc::new(RefCell::new(Port::Stdin)));
+    let stdout_port = Value::Port(Rc::new(RefCell::new(Port::Stdout)));
+    let stderr_port = Value::Port(Rc::new(RefCell::new(Port::Stderr)));
+
+    let current_in: Rc<RefCell<Value>> = Rc::new(RefCell::new(stdin_port));
+    let current_out: Rc<RefCell<Value>> = Rc::new(RefCell::new(stdout_port));
+    let current_err: Rc<RefCell<Value>> = Rc::new(RefCell::new(stderr_port));
+
+    let co = current_out.clone();
     vm.register_fn(
         "display",
         "Display value (human-readable, no quotes on strings)",
         Arity::Variadic(1),
-        |args| {
+        move |args| {
             let text = display_value(&args[0]);
             if args.len() > 1 {
-                // Write to port
                 write_to_port(&args[1], &text)?;
             } else {
-                print!("{text}");
+                write_to_port(&co.borrow(), &text)?;
             }
             Ok(Value::Void)
         },
     );
 
+    let co = current_out.clone();
     vm.register_fn(
         "write",
         "Write value (machine-readable, with quotes)",
         Arity::Variadic(1),
-        |args| {
+        move |args| {
             let text = format!("{}", args[0]);
             if args.len() > 1 {
                 write_to_port(&args[1], &text)?;
             } else {
-                print!("{text}");
+                write_to_port(&co.borrow(), &text)?;
             }
             Ok(Value::Void)
         },
@@ -122,7 +150,7 @@ pub fn register(vm: &mut Vm) {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
-                        Port::Closed => Err(LispError::user("read: port is closed", vec![])),
+                        Port::Closed(_) => Err(LispError::user("read: port is closed", vec![])),
                         Port::StringInput { data, pos } => {
                             if *pos >= data.len() {
                                 return Ok(Value::Eof);
@@ -141,6 +169,7 @@ pub fn register(vm: &mut Vm) {
                         Port::FileInput {
                             reader: file_reader,
                             name,
+                            ..
                         } => {
                             use std::io::Read;
                             let mut contents = String::new();
@@ -165,14 +194,20 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("newline", "Print newline", Arity::Variadic(0), |args| {
-        if !args.is_empty() {
-            write_to_port(&args[0], "\n")?;
-        } else {
-            println!();
-        }
-        Ok(Value::Void)
-    });
+    let co = current_out.clone();
+    vm.register_fn(
+        "newline",
+        "Print newline",
+        Arity::Variadic(0),
+        move |args| {
+            if !args.is_empty() {
+                write_to_port(&args[0], "\n")?;
+            } else {
+                write_to_port(&co.borrow(), "\n")?;
+            }
+            Ok(Value::Void)
+        },
+    );
 
     // String output
     vm.register_fn(
@@ -246,7 +281,9 @@ pub fn register(vm: &mut Vm) {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
-                        Port::Closed => Err(LispError::user("read-char: port is closed", vec![])),
+                        Port::Closed(_) => {
+                            Err(LispError::user("read-char: port is closed", vec![]))
+                        }
                         Port::StringInput { data, pos } => {
                             if *pos >= data.len() {
                                 Ok(Value::Eof)
@@ -295,7 +332,9 @@ pub fn register(vm: &mut Vm) {
                 Value::Port(p) => {
                     let port = p.borrow();
                     match &*port {
-                        Port::Closed => Err(LispError::user("peek-char: port is closed", vec![])),
+                        Port::Closed(_) => {
+                            Err(LispError::user("peek-char: port is closed", vec![]))
+                        }
                         Port::StringInput { data, pos } => {
                             if *pos >= data.len() {
                                 Ok(Value::Eof)
@@ -313,55 +352,39 @@ pub fn register(vm: &mut Vm) {
     );
 
     // write-string to port
+    let co = current_out.clone();
     vm.register_fn(
         "write-string",
         "Write string to port",
         Arity::Variadic(1),
-        |args| {
+        move |args| {
             let s = args[0].as_str()?;
             if args.len() > 1 {
                 write_to_port(&args[1], s)?;
             } else {
-                print!("{s}");
+                write_to_port(&co.borrow(), s)?;
             }
             Ok(Value::Void)
         },
     );
 
-    // Port predicates
+    // Port predicates — R7RS §6.13.1: predicates return #t even on closed ports
     vm.register_fn(
         "input-port?",
-        "Is input port?",
+        "Is input port? (returns #t even when closed)",
         Arity::Fixed(1),
         |args| match &args[0] {
-            Value::Port(p) => {
-                let port = p.borrow();
-                Ok(Value::Bool(matches!(
-                    &*port,
-                    crate::value::Port::StringInput { .. }
-                        | crate::value::Port::Stdin
-                        | crate::value::Port::FileInput { .. }
-                )))
-            }
+            Value::Port(p) => Ok(Value::Bool(p.borrow().is_input())),
             _ => Ok(Value::Bool(false)),
         },
     );
 
     vm.register_fn(
         "output-port?",
-        "Is output port?",
+        "Is output port? (returns #t even when closed)",
         Arity::Fixed(1),
         |args| match &args[0] {
-            Value::Port(p) => {
-                let port = p.borrow();
-                Ok(Value::Bool(matches!(
-                    &*port,
-                    crate::value::Port::StringOutput { .. }
-                        | crate::value::Port::Stdout
-                        | crate::value::Port::Stderr
-                        | crate::value::Port::FileOutput { .. }
-                )))
-            }
+            Value::Port(p) => Ok(Value::Bool(p.borrow().is_output())),
             _ => Ok(Value::Bool(false)),
         },
     );
@@ -429,7 +452,10 @@ pub fn register(vm: &mut Vm) {
         "binary-port?",
         "Is binary port?",
         Arity::Fixed(1),
-        |_args| Ok(Value::Bool(false)), // We only have textual ports
+        |args| match &args[0] {
+            Value::Port(p) => Ok(Value::Bool(p.borrow().is_binary())),
+            _ => Ok(Value::Bool(false)),
+        },
     );
 
     vm.register_fn(
@@ -460,7 +486,8 @@ pub fn register(vm: &mut Vm) {
 
     vm.register_fn("close-port", "Close a port", Arity::Fixed(1), |args| {
         if let Value::Port(p) = &args[0] {
-            *p.borrow_mut() = Port::Closed;
+            let kind = p.borrow().kind();
+            *p.borrow_mut() = Port::Closed(kind);
         }
         Ok(Value::Void)
     });
@@ -471,7 +498,8 @@ pub fn register(vm: &mut Vm) {
         Arity::Fixed(1),
         |args| {
             if let Value::Port(p) = &args[0] {
-                *p.borrow_mut() = Port::Closed;
+                let kind = p.borrow().kind();
+                *p.borrow_mut() = Port::Closed(kind);
             }
             Ok(Value::Void)
         },
@@ -483,7 +511,8 @@ pub fn register(vm: &mut Vm) {
         Arity::Fixed(1),
         |args| {
             if let Value::Port(p) = &args[0] {
-                *p.borrow_mut() = Port::Closed;
+                let kind = p.borrow().kind();
+                *p.borrow_mut() = Port::Closed(kind);
             }
             Ok(Value::Void)
         },
@@ -509,7 +538,9 @@ pub fn register(vm: &mut Vm) {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
-                        Port::Closed => Err(LispError::user("read-line: port is closed", vec![])),
+                        Port::Closed(_) => {
+                            Err(LispError::user("read-line: port is closed", vec![]))
+                        }
                         Port::StringInput { data, pos } => {
                             if *pos >= data.len() {
                                 return Ok(Value::Eof);
@@ -570,25 +601,70 @@ pub fn register(vm: &mut Vm) {
     );
 
     // R7RS §6.13.1 Standard ports
+    // Current ports use shared cells so with-input-from-file/with-output-to-file
+    // can temporarily redirect them.
+    // current-input/output/error-port use the shared cells created at top
+    let ci = current_in.clone();
     vm.register_fn(
         "current-input-port",
         "Current default input port",
         Arity::Fixed(0),
-        |_args| Ok(Value::Port(Rc::new(std::cell::RefCell::new(Port::Stdin)))),
+        move |_args| Ok(ci.borrow().clone()),
     );
 
+    let co = current_out.clone();
     vm.register_fn(
         "current-output-port",
         "Current default output port",
         Arity::Fixed(0),
-        |_args| Ok(Value::Port(Rc::new(std::cell::RefCell::new(Port::Stdout)))),
+        move |_args| Ok(co.borrow().clone()),
     );
 
+    let ce = current_err;
     vm.register_fn(
         "current-error-port",
         "Current default error port",
         Arity::Fixed(0),
-        |_args| Ok(Value::Port(Rc::new(std::cell::RefCell::new(Port::Stderr)))),
+        move |_args| Ok(ce.borrow().clone()),
+    );
+
+    // Internal getters/setters for with-input-from-file / with-output-to-file
+    let ci = current_in.clone();
+    vm.register_fn(
+        "%current-input-port",
+        "Get current input port (internal)",
+        Arity::Fixed(0),
+        move |_args| Ok(ci.borrow().clone()),
+    );
+
+    let co = current_out.clone();
+    vm.register_fn(
+        "%current-output-port",
+        "Get current output port (internal)",
+        Arity::Fixed(0),
+        move |_args| Ok(co.borrow().clone()),
+    );
+
+    let ci = current_in;
+    vm.register_fn(
+        "%set-current-input-port!",
+        "Set current input port (internal)",
+        Arity::Fixed(1),
+        move |args| {
+            *ci.borrow_mut() = args[0].clone();
+            Ok(Value::Void)
+        },
+    );
+
+    let co = current_out.clone();
+    vm.register_fn(
+        "%set-current-output-port!",
+        "Set current output port (internal)",
+        Arity::Fixed(1),
+        move |args| {
+            *co.borrow_mut() = args[0].clone();
+            Ok(Value::Void)
+        },
     );
 
     // R7RS §6.13.3 Binary I/O — bytevector ports
@@ -673,7 +749,7 @@ pub fn register(vm: &mut Vm) {
                                 Err(e) => Err(LispError::user(format!("read-u8: {e}"), vec![])),
                             }
                         }
-                        Port::Closed => Err(LispError::user("read-u8: port is closed", vec![])),
+                        Port::Closed(_) => Err(LispError::user("read-u8: port is closed", vec![])),
                         _ => Err(LispError::type_error("input-port", "other port type")),
                     }
                 }
@@ -800,17 +876,18 @@ pub fn register(vm: &mut Vm) {
         |_args| Ok(Value::Bool(true)),
     );
 
-    // R7RS §6.13.2 write-char with port support (override Fixed(1) version)
+    // R7RS §6.13.2 write-char with port support
+    let co = current_out.clone();
     vm.register_fn(
         "write-char",
         "Write a character to port",
         Arity::Variadic(1),
-        |args| {
+        move |args| {
             let ch = args[0].as_char()?;
             if args.len() > 1 {
                 write_to_port(&args[1], &ch.to_string())?;
             } else {
-                print!("{ch}");
+                write_to_port(&co.borrow(), &ch.to_string())?;
             }
             Ok(Value::Void)
         },
@@ -847,11 +924,12 @@ pub fn register(vm: &mut Vm) {
         |args| {
             let path = args[0].as_str()?;
             let file = std::fs::File::open(path)
-                .map_err(|e| LispError::user(format!("open-input-file: {e}"), vec![]))?;
+                .map_err(|e| file_error(format!("open-input-file: {e}"), path))?;
             Ok(Value::Port(Rc::new(std::cell::RefCell::new(
                 Port::FileInput {
                     reader: Box::new(std::io::BufReader::new(file)),
                     name: path.to_string(),
+                    binary: false,
                 },
             ))))
         },
@@ -864,11 +942,12 @@ pub fn register(vm: &mut Vm) {
         |args| {
             let path = args[0].as_str()?;
             let file = std::fs::File::create(path)
-                .map_err(|e| LispError::user(format!("open-output-file: {e}"), vec![]))?;
+                .map_err(|e| file_error(format!("open-output-file: {e}"), path))?;
             Ok(Value::Port(Rc::new(std::cell::RefCell::new(
                 Port::FileOutput {
                     writer: Box::new(std::io::BufWriter::new(file)),
                     name: path.to_string(),
+                    binary: false,
                 },
             ))))
         },
@@ -1092,8 +1171,7 @@ pub fn register(vm: &mut Vm) {
 
     vm.register_fn("delete-file", "Delete a file", Arity::Fixed(1), |args| {
         let path = args[0].as_str()?;
-        std::fs::remove_file(path)
-            .map_err(|e| LispError::user(format!("delete-file: {e}"), vec![]))?;
+        std::fs::remove_file(path).map_err(|e| file_error(format!("delete-file: {e}"), path))?;
         Ok(Value::Void)
     });
 
@@ -1104,11 +1182,12 @@ pub fn register(vm: &mut Vm) {
         |args| {
             let path = args[0].as_str()?;
             let file = std::fs::File::open(path)
-                .map_err(|e| LispError::user(format!("open-binary-input-file: {e}"), vec![]))?;
+                .map_err(|e| file_error(format!("open-binary-input-file: {e}"), path))?;
             Ok(Value::Port(Rc::new(std::cell::RefCell::new(
                 Port::FileInput {
                     reader: Box::new(file),
                     name: path.to_string(),
+                    binary: true,
                 },
             ))))
         },
@@ -1121,11 +1200,12 @@ pub fn register(vm: &mut Vm) {
         |args| {
             let path = args[0].as_str()?;
             let file = std::fs::File::create(path)
-                .map_err(|e| LispError::user(format!("open-binary-output-file: {e}"), vec![]))?;
+                .map_err(|e| file_error(format!("open-binary-output-file: {e}"), path))?;
             Ok(Value::Port(Rc::new(std::cell::RefCell::new(
                 Port::FileOutput {
                     writer: Box::new(file),
                     name: path.to_string(),
+                    binary: true,
                 },
             ))))
         },

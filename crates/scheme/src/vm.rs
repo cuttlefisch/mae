@@ -19,7 +19,7 @@ use crate::env::Env;
 use crate::library::{self, LibraryRegistry};
 use crate::lisp_error::{Arity, LispError};
 use crate::reader;
-use crate::value::{CallFrame, Closure, Continuation, ForeignFn, Value};
+use crate::value::{CallFrame, Closure, Continuation, ForeignFn, Value, Winder};
 
 /// Result of evaluation — either done or yielding.
 pub enum EvalResult {
@@ -93,6 +93,10 @@ pub struct Vm {
     handlers: Vec<ExceptionHandler>,
     /// Search paths for `include` and `load`.
     pub load_paths: Vec<std::path::PathBuf>,
+    /// Dynamic-wind stack — tracks active before/after thunk pairs.
+    /// Captured by call/cc and used to compute which thunks to run
+    /// when a continuation crosses dynamic-wind boundaries.
+    pub winders: Vec<Winder>,
 }
 
 impl Vm {
@@ -107,6 +111,7 @@ impl Vm {
             libraries: LibraryRegistry::new(),
             handlers: Vec::new(),
             load_paths: Vec::new(),
+            winders: Vec::new(),
         }
     }
 
@@ -572,6 +577,8 @@ impl Vm {
                             ip: f.ip,
                             bp: f.bp,
                             function_name: f.name.clone(),
+                            upvalues: f.upvalues.clone(),
+                            local_cells: f.local_cells.clone(),
                         })
                         .collect();
 
@@ -589,6 +596,7 @@ impl Vm {
                         stack: captured_stack,
                         frames: captured_frames,
                         invoked: false,
+                        winders: self.winders.clone(),
                     };
                     // Push continuation as argument to the function (for Call(1))
                     self.stack.push(Value::Continuation(Rc::new(cont)));
@@ -692,6 +700,17 @@ impl Vm {
                     return Err(LispError::internal(format!("unimplemented opcode: {op:?}")));
                 }
 
+                Op::PushWinder => {
+                    // Stack: [before_thunk, after_thunk] → []
+                    let after = self.stack.pop().unwrap_or(Value::Void);
+                    let before = self.stack.pop().unwrap_or(Value::Void);
+                    self.winders.push(Winder { before, after });
+                }
+
+                Op::PopWinder => {
+                    self.winders.pop();
+                }
+
                 Op::Eval => {
                     // R7RS §6.12: evaluate a datum at runtime.
                     // Stack has the expression (as a Value/datum).
@@ -712,12 +731,30 @@ impl Vm {
             // Unwind to handler state
             self.stack.truncate(handler.stack_depth);
             self.frames.truncate(handler.frame_depth);
-            // Push the error value (structured if available, string fallback)
-            let exception = err
-                .error_value
-                .clone()
-                .map(|v| *v)
-                .unwrap_or_else(|| Value::string(err.message()));
+            // Push the error value (structured if available, synthesized for
+            // known error kinds, string fallback)
+            let exception = if let Some(v) = err.error_value.clone() {
+                *v
+            } else {
+                // Synthesize tagged error object for known error kinds
+                // so file-error? and read-error? work in guard clauses
+                use crate::lisp_error::ErrorKind;
+                let error_type = match &err.kind {
+                    ErrorKind::Read(_) => Some("read-error"),
+                    ErrorKind::Io { .. } => Some("file-error"),
+                    _ => None,
+                };
+                if let Some(etype) = error_type {
+                    Value::Vector(Rc::new(RefCell::new(vec![
+                        Value::symbol("error-object"),
+                        Value::string(err.message()),
+                        Value::string(etype),
+                        Value::Null,
+                    ])))
+                } else {
+                    Value::string(err.message())
+                }
+            };
             self.stack.push(exception);
             // Jump to handler code
             if let Some(frame) = self.frames.last_mut() {
@@ -857,6 +894,35 @@ impl Vm {
                 let val = self.stack.pop().unwrap_or(Value::Void);
                 self.stack.truncate(fn_pos);
 
+                // R7RS §6.10: dynamic-wind interaction with continuations.
+                // Find the common prefix of the current and target winder stacks,
+                // run `after` for exited extents, `before` for entered extents.
+                let target_winders = &cont.winders;
+                let common = self
+                    .winders
+                    .iter()
+                    .zip(target_winders.iter())
+                    .take_while(|(a, b)| {
+                        // Identity comparison on thunks (same closure = same extent)
+                        a.before.is_eq(&b.before) && a.after.is_eq(&b.after)
+                    })
+                    .count();
+
+                // Run `after` thunks for extents we're leaving (reverse order)
+                let leaving: Vec<Winder> = self.winders[common..].iter().rev().cloned().collect();
+                for w in &leaving {
+                    self.call_thunk(&w.after)?;
+                }
+
+                // Run `before` thunks for extents we're entering (forward order)
+                let entering: Vec<Winder> = target_winders[common..].to_vec();
+                for w in &entering {
+                    self.call_thunk(&w.before)?;
+                }
+
+                // Set winders to the target state
+                self.winders = target_winders.clone();
+
                 // Restore continuation state
                 self.stack = cont.stack.clone();
                 self.frames = cont
@@ -866,8 +932,8 @@ impl Vm {
                         code_id: cf.code_id,
                         ip: cf.ip,
                         bp: cf.bp,
-                        upvalues: Vec::new(),
-                        local_cells: HashMap::new(),
+                        upvalues: cf.upvalues.clone(),
+                        local_cells: cf.local_cells.clone(),
                         name: cf.function_name.clone(),
                     })
                     .collect();
@@ -882,6 +948,34 @@ impl Vm {
         }
 
         Ok(())
+    }
+
+    /// Call a zero-argument thunk (used by dynamic-wind traversal).
+    /// Saves and restores the VM state around the call so it doesn't
+    /// interfere with continuation restoration in progress.
+    fn call_thunk(&mut self, thunk: &Value) -> Result<Value, LispError> {
+        // Save VM state
+        let saved_stack = std::mem::take(&mut self.stack);
+        let saved_frames = std::mem::take(&mut self.frames);
+        let saved_handlers = std::mem::take(&mut self.handlers);
+
+        // Set up for the thunk call: push function, then call with 0 args
+        self.stack.push(thunk.clone());
+        let result = self.do_call(0, false);
+
+        // If the call set up frames (closure), run them
+        let thunk_result = if result.is_ok() && !self.frames.is_empty() {
+            self.run()
+        } else {
+            result.map(|_| self.stack.pop().unwrap_or(Value::Void))
+        };
+
+        // Restore VM state
+        self.stack = saved_stack;
+        self.frames = saved_frames;
+        self.handlers = saved_handlers;
+
+        thunk_result
     }
 
     /// Get current stack trace for debugging.

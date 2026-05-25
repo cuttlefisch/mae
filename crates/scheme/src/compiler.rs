@@ -69,6 +69,11 @@ pub enum Op {
     /// Evaluate a datum at runtime (R7RS eval).
     /// Stack: [expr] → [result]
     Eval,
+    /// Push a dynamic-wind extent onto the wind stack.
+    /// Stack: [before_thunk, after_thunk] → [] (both consumed)
+    PushWinder,
+    /// Pop the current dynamic-wind extent from the wind stack.
+    PopWinder,
     /// No-op / placeholder.
     Nop,
 }
@@ -328,6 +333,7 @@ impl Compiler {
                         "apply" => return self.compile_apply(&items, tail),
                         "call-with-values" => return self.compile_call_with_values(&items, tail),
                         "eval" => return self.compile_eval(&items),
+                        "dynamic-wind" => return self.compile_dynamic_wind(&items, tail),
                         "call-with-current-continuation" | "call/cc" => {
                             return self.compile_call_cc(&items, tail)
                         }
@@ -1336,6 +1342,99 @@ impl Compiler {
             self.emit(Op::Pop);
         }
         self.emit(Op::Eval);
+        Ok(())
+    }
+
+    /// Compile `(dynamic-wind before thunk after)` (R7RS §6.10).
+    ///
+    /// Generates bytecode that:
+    ///   1. Evaluates before/thunk/after, binds to locals
+    ///   2. Calls before()
+    ///   3. PushWinder (registers before/after on wind stack for call/cc)
+    ///   4. PushHandler (exception safety: ensures after runs on error)
+    ///   5. Calls thunk() → result
+    ///   6. PopHandler, PopWinder, calls after()
+    ///   7. Exception path: PopWinder, after(), re-raise
+    fn compile_dynamic_wind(&mut self, items: &[Value], _tail: bool) -> Result<(), LispError> {
+        if items.len() != 4 {
+            return Err(LispError::syntax(
+                "dynamic-wind requires 3 arguments: (dynamic-wind before thunk after)",
+                "",
+            ));
+        }
+
+        let before = &items[1];
+        let thunk = &items[2];
+        let after = &items[3];
+
+        // Bind the three thunks to locals so we can reference them multiple times
+        let before_local = self.current_scope_mut().add_local("__dw_before__".into());
+        self.compile_expr(before, false)?;
+        self.emit(Op::StoreLocal(before_local));
+
+        let thunk_local = self.current_scope_mut().add_local("__dw_thunk__".into());
+        self.compile_expr(thunk, false)?;
+        self.emit(Op::StoreLocal(thunk_local));
+
+        let after_local = self.current_scope_mut().add_local("__dw_after__".into());
+        self.compile_expr(after, false)?;
+        self.emit(Op::StoreLocal(after_local));
+
+        // Call before()
+        self.emit(Op::LoadLocal(before_local));
+        self.emit(Op::Call(0));
+        self.emit(Op::Pop);
+
+        // PushWinder: register before/after on the VM wind stack
+        self.emit(Op::LoadLocal(before_local));
+        self.emit(Op::LoadLocal(after_local));
+        self.emit(Op::PushWinder);
+
+        // PushHandler for exception safety
+        let handler_idx = self.emit_placeholder(Op::PushHandler(0));
+
+        // Call thunk()
+        self.emit(Op::LoadLocal(thunk_local));
+        self.emit(Op::Call(0));
+
+        // Normal path: pop handler, pop winder, call after(), return result
+        self.emit(Op::PopHandler);
+        self.emit(Op::PopWinder);
+
+        // Save result in a local, call after(), restore result
+        let result_local = self.current_scope_mut().add_local("__dw_result__".into());
+        self.emit(Op::StoreLocal(result_local));
+
+        self.emit(Op::LoadLocal(after_local));
+        self.emit(Op::Call(0));
+        self.emit(Op::Pop); // discard after's return value
+
+        self.emit(Op::LoadLocal(result_local));
+
+        // Jump past the exception handler
+        let jump_past_idx = self.emit_placeholder(Op::Jump(0));
+
+        // Exception handler: exn is on stack
+        let handler_start = self.current_scope().code.current_offset();
+        self.patch_jump(handler_idx, handler_start);
+
+        // Pop winder, save exn, call after(), re-raise
+        self.emit(Op::PopWinder);
+
+        let exn_local = self.current_scope_mut().add_local("__dw_exn__".into());
+        self.emit(Op::StoreLocal(exn_local));
+
+        self.emit(Op::LoadLocal(after_local));
+        self.emit(Op::Call(0));
+        self.emit(Op::Pop);
+
+        self.emit(Op::LoadLocal(exn_local));
+        self.emit(Op::Raise);
+
+        // Patch jump-past
+        let after_handler = self.current_scope().code.current_offset();
+        self.patch_jump(jump_past_idx, after_handler);
+
         Ok(())
     }
 

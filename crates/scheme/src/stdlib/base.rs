@@ -741,29 +741,7 @@ fn register_pairs_lists(vm: &mut Vm) {
     });
 
     // Association lists
-    vm.register_fn(
-        "assoc",
-        "Find in alist by equal?",
-        Arity::Fixed(2),
-        |args| {
-            let key = &args[0];
-            let mut cur = args[1].clone();
-            loop {
-                match cur {
-                    Value::Null => return Ok(Value::Bool(false)),
-                    Value::Pair(p) => {
-                        if let Value::Pair(entry) = &p.0 {
-                            if entry.0.is_equal(key) {
-                                return Ok(p.0.clone());
-                            }
-                        }
-                        cur = p.1.clone();
-                    }
-                    _ => return Err(LispError::type_error("list", format!("{}", args[1]))),
-                }
-            }
-        },
-    );
+    // assoc is defined in Scheme bootstrap (supports optional comparator)
 
     vm.register_fn("assv", "Find in alist by eqv?", Arity::Fixed(2), |args| {
         let key = &args[0];
@@ -803,28 +781,7 @@ fn register_pairs_lists(vm: &mut Vm) {
         }
     });
 
-    // Member
-    vm.register_fn(
-        "member",
-        "Find in list by equal?",
-        Arity::Fixed(2),
-        |args| {
-            let key = &args[0];
-            let mut cur = args[1].clone();
-            loop {
-                match cur {
-                    Value::Null => return Ok(Value::Bool(false)),
-                    Value::Pair(ref p) => {
-                        if p.0.is_equal(key) {
-                            return Ok(cur);
-                        }
-                        cur = p.1.clone();
-                    }
-                    _ => return Err(LispError::type_error("list", format!("{}", args[1]))),
-                }
-            }
-        },
-    );
+    // member is defined in Scheme bootstrap (supports optional comparator)
 
     vm.register_fn("memv", "Find in list by eqv?", Arity::Fixed(2), |args| {
         let key = &args[0];
@@ -1104,14 +1061,9 @@ fn register_list_ops(vm: &mut Vm) {
                   value
                   (begin (set! value (converter (car rest))) (void))))))
 
-        ;; R7RS §6.10 dynamic-wind
-        ;; Ensures `after` runs even if `thunk` raises an exception.
-        (define (dynamic-wind before thunk after)
-          (before)
-          (guard (exn (#t (after) (raise exn)))
-            (let ((result (thunk)))
-              (after)
-              result)))
+        ;; R7RS §6.10 dynamic-wind — implemented as a compiler special form.
+        ;; The compiler emits PushWinder/PopWinder opcodes that interact with
+        ;; the VM's wind stack for proper call/cc semantics.
 
         ;; R7RS §6.7 string-for-each and string-map (multi-string)
         (define (string-for-each f . strs)
@@ -1140,14 +1092,26 @@ fn register_list_ops(vm: &mut Vm) {
           (call-with-port (open-output-file filename) proc))
 
         ;; R7RS §6.13.1 with-input-from-file / with-output-to-file
-        ;; Simplified: opens the file and passes the port to the thunk
-        ;; (R7RS spec says redirect current-input/output-port, but that
-        ;; requires dynamic port parameters. This is the common usage pattern.)
+        ;; Uses dynamic-wind to ensure port is properly restored.
         (define (with-input-from-file filename thunk)
-          (call-with-input-file filename (lambda (port) (thunk))))
+          (let ((port (open-input-file filename))
+                (old-port (%current-input-port)))
+            (dynamic-wind
+              (lambda () (%set-current-input-port! port))
+              (lambda () (let ((result (thunk)))
+                           (close-input-port port)
+                           result))
+              (lambda () (%set-current-input-port! old-port)))))
 
         (define (with-output-to-file filename thunk)
-          (call-with-output-file filename (lambda (port) (thunk))))
+          (let ((port (open-output-file filename))
+                (old-port (%current-output-port)))
+            (dynamic-wind
+              (lambda () (%set-current-output-port! port))
+              (lambda () (let ((result (thunk)))
+                           (close-output-port port)
+                           result))
+              (lambda () (%set-current-output-port! old-port)))))
 
         ;; R7RS §4.2.5 Promises (delay/force)
         ;; Uses a mutable vector #(promise done? value/thunk)
@@ -1200,6 +1164,24 @@ fn register_list_ops(vm: &mut Vm) {
                           (vector-set! promise 1 #t)
                           (vector-set! promise 2 val)
                           val))))))
+
+        ;; R7RS §6.4: member with optional comparator
+        (define (member obj lst . rest)
+          (let ((compare (if (null? rest) equal? (car rest))))
+            (let loop ((l lst))
+              (cond
+                ((null? l) #f)
+                ((compare obj (car l)) l)
+                (else (loop (cdr l)))))))
+
+        ;; R7RS §6.4: assoc with optional comparator
+        (define (assoc obj alist . rest)
+          (let ((compare (if (null? rest) equal? (car rest))))
+            (let loop ((l alist))
+              (cond
+                ((null? l) #f)
+                ((compare obj (caar l)) (car l))
+                (else (loop (cdr l)))))))
 
         ;; R7RS §5.5 define-record-type
         ;; Implemented as a Rust-side function (registered below) because:
@@ -1643,11 +1625,21 @@ fn register_exceptions(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("file-error?", "Is file error?", Arity::Fixed(1), |_args| {
+    vm.register_fn("file-error?", "Is file error?", Arity::Fixed(1), |args| {
+        if let Some(fields) = get_error_object_fields(&args[0]) {
+            if let Value::String(s) = &fields[2] {
+                return Ok(Value::Bool(s.as_ref() == "file-error"));
+            }
+        }
         Ok(Value::Bool(false))
     });
 
-    vm.register_fn("read-error?", "Is read error?", Arity::Fixed(1), |_args| {
+    vm.register_fn("read-error?", "Is read error?", Arity::Fixed(1), |args| {
+        if let Some(fields) = get_error_object_fields(&args[0]) {
+            if let Value::String(s) = &fields[2] {
+                return Ok(Value::Bool(s.as_ref() == "read-error"));
+            }
+        }
         Ok(Value::Bool(false))
     });
 }
