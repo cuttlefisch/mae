@@ -736,6 +736,11 @@ impl<'a> Reader<'a> {
         )
     }
 
+    /// Current byte position in the input.
+    pub fn position(&self) -> usize {
+        self.pos
+    }
+
     /// Current source location.
     pub fn location(&self) -> SourceLocation {
         SourceLocation {

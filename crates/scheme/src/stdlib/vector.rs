@@ -82,9 +82,22 @@ fn register_vectors(vm: &mut Vm) {
     vm.register_fn(
         "vector->list",
         "Convert vector to list",
-        Arity::Fixed(1),
+        Arity::Variadic(1),
         |args| match &args[0] {
-            Value::Vector(v) => Ok(Value::list(v.borrow().clone())),
+            Value::Vector(v) => {
+                let vec = v.borrow();
+                let start = if args.len() > 1 {
+                    args[1].as_int()? as usize
+                } else {
+                    0
+                };
+                let end = if args.len() > 2 {
+                    args[2].as_int()? as usize
+                } else {
+                    vec.len()
+                };
+                Ok(Value::list(vec[start..end].to_vec()))
+            }
             _ => Err(LispError::type_error("vector", format!("{}", args[0]))),
         },
     );

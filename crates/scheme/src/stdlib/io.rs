@@ -3,6 +3,7 @@
 use std::rc::Rc;
 
 use crate::lisp_error::{Arity, LispError};
+use crate::reader::Reader;
 use crate::value::{display_value, Port, Value};
 use crate::vm::Vm;
 
@@ -78,6 +79,65 @@ pub fn register(vm: &mut Vm) {
                 print!("{text}");
             }
             Ok(Value::Void)
+        },
+    );
+
+    // R7RS §6.13.2 read — read one S-expression from port
+    vm.register_fn(
+        "read",
+        "Read one S-expression from port",
+        Arity::Variadic(0),
+        |args| {
+            if args.is_empty() {
+                // No port — reading from stdin not supported in this context
+                return Err(LispError::user(
+                    "read: no current-input-port (pass a port argument)",
+                    vec![],
+                ));
+            }
+            match &args[0] {
+                Value::Port(p) => {
+                    let mut port = p.borrow_mut();
+                    match &mut *port {
+                        Port::StringInput { data, pos } => {
+                            if *pos >= data.len() {
+                                return Ok(Value::Eof);
+                            }
+                            let remaining = &data[*pos..];
+                            let mut reader = Reader::new(remaining, "<read>");
+                            match reader.read() {
+                                Ok(Some(val)) => {
+                                    *pos += reader.position();
+                                    Ok(val)
+                                }
+                                Ok(None) => Ok(Value::Eof),
+                                Err(e) => Err(e),
+                            }
+                        }
+                        Port::FileInput {
+                            reader: file_reader,
+                            name,
+                        } => {
+                            use std::io::Read;
+                            let mut contents = String::new();
+                            file_reader.read_to_string(&mut contents).map_err(|e| {
+                                LispError::internal(format!("read: error reading {}: {e}", name))
+                            })?;
+                            if contents.is_empty() {
+                                return Ok(Value::Eof);
+                            }
+                            let mut reader = Reader::new(&contents, name.as_str());
+                            match reader.read() {
+                                Ok(Some(val)) => Ok(val),
+                                Ok(None) => Ok(Value::Eof),
+                                Err(e) => Err(e),
+                            }
+                        }
+                        _ => Err(LispError::type_error("input-port", "output-port")),
+                    }
+                }
+                _ => Err(LispError::type_error("port", format!("{}", args[0]))),
+            }
         },
     );
 

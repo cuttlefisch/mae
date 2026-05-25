@@ -871,6 +871,33 @@ fn register_control(vm: &mut Vm) {
             ))
         },
     );
+
+    // R7RS §6.12 eval and environment specifiers
+    vm.register_fn(
+        "eval",
+        "Evaluate expression in environment (stub)",
+        Arity::Variadic(1),
+        |_args| {
+            Err(LispError::user(
+                "eval: not yet implemented (requires VM access at runtime)",
+                vec![],
+            ))
+        },
+    );
+
+    vm.register_fn(
+        "interaction-environment",
+        "Return the interaction environment",
+        Arity::Fixed(0),
+        |_args| Ok(Value::symbol("interaction")),
+    );
+
+    vm.register_fn(
+        "scheme-report-environment",
+        "Return the R7RS environment",
+        Arity::Fixed(1),
+        |_args| Ok(Value::symbol("r7rs")),
+    );
 }
 
 // -- §6.10 Higher-order list operations --

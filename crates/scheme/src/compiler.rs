@@ -995,11 +995,12 @@ impl Compiler {
                 "",
             ));
         }
-        // For now, simple case: (define-values (x) expr) → (define x expr)
         let formals = items[1]
             .to_vec()
             .map_err(|_| LispError::syntax("define-values formals must be a list", ""))?;
+
         if formals.len() == 1 {
+            // Simple case: (define-values (x) expr) → (define x expr)
             let name = formals[0]
                 .as_symbol()
                 .map_err(|_| LispError::syntax("define-values formal must be a symbol", ""))?
@@ -1010,10 +1011,45 @@ impl Compiler {
             self.emit(Op::Const(Value::Void));
             Ok(())
         } else {
-            Err(LispError::syntax(
-                "define-values with multiple values not yet supported",
-                "",
-            ))
+            // Multi-variable: (define-values (x y z) expr)
+            // Desugar to:
+            //   (begin
+            //     (define __dv_tmp (call-with-values (lambda () expr) list))
+            //     (define x (list-ref __dv_tmp 0))
+            //     (define y (list-ref __dv_tmp 1))
+            //     (define z (list-ref __dv_tmp 2)))
+            let tmp = "__dv_tmp";
+            let expr = items[2].clone();
+
+            // Build: (call-with-values (lambda () expr) list)
+            let cwv = Value::list(vec![
+                Value::symbol("call-with-values"),
+                Value::list(vec![Value::symbol("lambda"), Value::Null, expr]),
+                Value::symbol("list"),
+            ]);
+
+            // Compile: (define __dv_tmp <cwv>)
+            self.compile_expr(&cwv, false)?;
+            self.emit(Op::DefineGlobal(tmp.to_string()));
+
+            // For each formal, compile: (define <name> (list-ref __dv_tmp <i>))
+            for (i, formal) in formals.iter().enumerate() {
+                let name = formal
+                    .as_symbol()
+                    .map_err(|_| LispError::syntax("define-values formal must be a symbol", ""))?
+                    .name()
+                    .to_string();
+                let list_ref_expr = Value::list(vec![
+                    Value::symbol("list-ref"),
+                    Value::symbol(tmp),
+                    Value::Int(i as i64),
+                ]);
+                self.compile_expr(&list_ref_expr, false)?;
+                self.emit(Op::DefineGlobal(name));
+            }
+
+            self.emit(Op::Const(Value::Void));
+            Ok(())
         }
     }
 
