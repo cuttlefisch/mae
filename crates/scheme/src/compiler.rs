@@ -313,6 +313,8 @@ impl Compiler {
                         "call-with-current-continuation" | "call/cc" => {
                             return self.compile_call_cc(&items, tail)
                         }
+                        "cond-expand" => return self.compile_cond_expand(&items, tail),
+                        "syntax-error" => return self.compile_syntax_error(&items),
                         name => {
                             // Check for macro expansion
                             if let Some(mac) = self.macros.get(name).cloned() {
@@ -1109,6 +1111,108 @@ impl Compiler {
 
         let desugared = Value::list(vec![Value::symbol("call-with-values"), producer, consumer]);
         self.compile_expr(&desugared, tail)
+    }
+
+    // -----------------------------------------------------------------------
+    // cond-expand (R7RS §4.2.1) + syntax-error (R7RS §4.3.1)
+    // -----------------------------------------------------------------------
+
+    /// Compile `(cond-expand (feature-req body ...) ... (else body ...))`.
+    /// Feature-based conditional expansion at compile time.
+    fn compile_cond_expand(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
+        let features = vec!["r7rs", "mae", "ratios", "exact-complex"];
+
+        for clause in &items[1..] {
+            let parts = clause
+                .to_vec()
+                .map_err(|_| LispError::syntax("cond-expand clause must be a list", ""))?;
+            if parts.is_empty() {
+                continue;
+            }
+
+            // Check if this clause matches
+            if self.cond_expand_matches(&parts[0], &features)? {
+                // Compile the body expressions
+                return self.compile_begin(&parts[1..], tail);
+            }
+        }
+
+        // No clause matched — R7RS says this is an error
+        Err(LispError::syntax("cond-expand: no matching clause", ""))
+    }
+
+    fn cond_expand_matches(&self, req: &Value, features: &[&str]) -> Result<bool, LispError> {
+        match req {
+            Value::Symbol(sym) if sym.name() == "else" => Ok(true),
+            Value::Symbol(sym) => Ok(features.contains(&sym.name())),
+            Value::Pair(_) => {
+                let parts = req.to_vec().map_err(|_| {
+                    LispError::syntax("cond-expand requirement must be symbol or list", "")
+                })?;
+                if parts.is_empty() {
+                    return Ok(false);
+                }
+                match parts[0].as_symbol().map(|s| s.name().to_string()) {
+                    Ok(ref name) if name == "and" => {
+                        for part in &parts[1..] {
+                            if !self.cond_expand_matches(part, features)? {
+                                return Ok(false);
+                            }
+                        }
+                        Ok(true)
+                    }
+                    Ok(ref name) if name == "or" => {
+                        for part in &parts[1..] {
+                            if self.cond_expand_matches(part, features)? {
+                                return Ok(true);
+                            }
+                        }
+                        Ok(false)
+                    }
+                    Ok(ref name) if name == "not" => {
+                        if parts.len() != 2 {
+                            return Err(LispError::syntax("cond-expand not requires 1 arg", ""));
+                        }
+                        Ok(!self.cond_expand_matches(&parts[1], features)?)
+                    }
+                    Ok(ref name) if name == "library" => {
+                        // (library (scheme base)) — check if library is available
+                        // For now, we support the standard R7RS libraries
+                        if parts.len() != 2 {
+                            return Ok(false);
+                        }
+                        let lib_name = format!("{}", parts[1]);
+                        Ok(matches!(
+                            lib_name.as_str(),
+                            "(scheme base)"
+                                | "(scheme case-lambda)"
+                                | "(scheme char)"
+                                | "(scheme cxr)"
+                                | "(scheme eval)"
+                                | "(scheme inexact)"
+                                | "(scheme lazy)"
+                                | "(scheme read)"
+                                | "(scheme write)"
+                                | "(mae base)"
+                        ))
+                    }
+                    _ => Ok(false),
+                }
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Compile `(syntax-error message irritant ...)` — compile-time error.
+    fn compile_syntax_error(&mut self, items: &[Value]) -> Result<(), LispError> {
+        if items.len() < 2 {
+            return Err(LispError::syntax("syntax-error requires a message", ""));
+        }
+        let msg = match &items[1] {
+            Value::String(s) => s.to_string(),
+            other => format!("{other}"),
+        };
+        Err(LispError::syntax(&msg, ""))
     }
 
     // -----------------------------------------------------------------------

@@ -2087,3 +2087,144 @@ fn s4_2_6_parameterize() {
         10,
     );
 }
+
+// §4.2.1 cond-expand
+#[test]
+fn s4_2_1_cond_expand() {
+    // Feature present
+    is_int("(cond-expand (r7rs 42))", 42);
+    is_int("(cond-expand (mae 1) (else 2))", 1);
+    // Feature absent → else
+    is_int("(cond-expand (chicken 1) (else 2))", 2);
+    // Compound: and, or, not
+    is_int("(cond-expand ((and r7rs mae) 1) (else 2))", 1);
+    is_int("(cond-expand ((or chicken mae) 1) (else 2))", 1);
+    is_int("(cond-expand ((not r7rs) 1) (else 2))", 2);
+    is_int("(cond-expand ((not chicken) 1) (else 2))", 1);
+}
+
+// §4.3.1 syntax-error
+#[test]
+fn s4_3_1_syntax_error() {
+    let err = eval_err("(syntax-error \"test error message\")");
+    assert!(
+        err.contains("test error message"),
+        "syntax-error should produce compile-time error: {err}"
+    );
+}
+
+// §6.13 file I/O
+#[test]
+fn s6_13_file_io() {
+    // Write and read back via file ports
+    let tmp = "/tmp/mae-scheme-test-file-io.txt";
+    eval(&format!(
+        "(let ((p (open-output-file \"{tmp}\")))
+           (write-string \"hello file\" p)
+           (close-port p))"
+    ));
+    assert_eq!(
+        eval(&format!(
+            "(let ((p (open-input-file \"{tmp}\")))
+               (let ((line (read-line p)))
+                 (close-port p)
+                 line))"
+        )),
+        Value::String(Rc::from("hello file")),
+    );
+    std::fs::remove_file(tmp).ok();
+}
+
+// §6.13 call-with-input-file / call-with-output-file
+#[test]
+fn s6_13_call_with_file() {
+    let tmp = "/tmp/mae-scheme-test-call-with.txt";
+    eval(&format!(
+        "(call-with-output-file \"{tmp}\"
+           (lambda (p) (write-string \"test data\" p)))"
+    ));
+    assert_eq!(
+        eval(&format!(
+            "(call-with-input-file \"{tmp}\"
+               (lambda (p) (read-line p)))"
+        )),
+        Value::String(Rc::from("test data")),
+    );
+    std::fs::remove_file(tmp).ok();
+}
+
+// §6.14 process context
+#[test]
+fn s6_14_process_context() {
+    is_true("(pair? (command-line))");
+    // get-environment-variable returns string or #f
+    is_true(
+        "(let ((home (get-environment-variable \"HOME\")))
+               (or (string? home) (not home)))",
+    );
+    // get-environment-variables returns alist
+    is_true("(pair? (get-environment-variables))");
+}
+
+// §6.14 time
+#[test]
+fn s6_14_time() {
+    // current-second returns a float > 0
+    is_true("(> (current-second) 0)");
+    // current-jiffy returns an integer > 0
+    is_true("(> (current-jiffy) 0)");
+    // jiffies-per-second
+    is_int("(jiffies-per-second)", 1_000_000_000);
+}
+
+// §6.7 string->list with start/end
+#[test]
+fn s6_7_string_to_list_range() {
+    is_true("(equal? (string->list \"hello\" 1 3) '(#\\e #\\l))");
+    is_true("(equal? (string->list \"abc\") '(#\\a #\\b #\\c))");
+}
+
+// §6.7 string-copy with start/end
+#[test]
+fn s6_7_string_copy_range() {
+    assert_eq!(
+        eval("(string-copy \"hello\" 1 4)"),
+        Value::String(Rc::from("ell")),
+    );
+    assert_eq!(
+        eval("(string-copy \"hello\")"),
+        Value::String(Rc::from("hello")),
+    );
+}
+
+// §6.13 write-simple and write-shared
+#[test]
+fn s6_13_write_variants() {
+    // write-simple to string port
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (write-simple '(1 2 3) p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("(1 2 3)")),
+    );
+}
+
+// §6.13 read from file port
+#[test]
+fn s6_13_read_char_from_file() {
+    let tmp = "/tmp/mae-scheme-test-read-char.txt";
+    eval(&format!(
+        "(call-with-output-file \"{tmp}\"
+           (lambda (p) (write-char #\\X p)))"
+    ));
+    assert_eq!(
+        eval(&format!(
+            "(call-with-input-file \"{tmp}\"
+               (lambda (p) (read-char p)))"
+        )),
+        Value::Char('X'),
+    );
+    std::fs::remove_file(tmp).ok();
+}

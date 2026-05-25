@@ -126,11 +126,22 @@ pub fn register(vm: &mut Vm) {
     vm.register_fn(
         "string->list",
         "Convert string to list of chars",
-        Arity::Fixed(1),
+        Arity::Variadic(1),
         |args| {
             let s = args[0].as_str()?;
-            let chars: Vec<Value> = s.chars().map(Value::Char).collect();
-            Ok(Value::list(chars))
+            let chars: Vec<char> = s.chars().collect();
+            let start = if args.len() > 1 {
+                args[1].as_int()? as usize
+            } else {
+                0
+            };
+            let end = if args.len() > 2 {
+                args[2].as_int()? as usize
+            } else {
+                chars.len()
+            };
+            let result: Vec<Value> = chars[start..end].iter().map(|c| Value::Char(*c)).collect();
+            Ok(Value::list(result))
         },
     );
 
@@ -148,9 +159,21 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("string-copy", "Copy a string", Arity::Fixed(1), |args| {
+    vm.register_fn("string-copy", "Copy a string", Arity::Variadic(1), |args| {
         let s = args[0].as_str()?;
-        Ok(Value::String(Rc::from(s)))
+        let chars: Vec<char> = s.chars().collect();
+        let start = if args.len() > 1 {
+            args[1].as_int()? as usize
+        } else {
+            0
+        };
+        let end = if args.len() > 2 {
+            args[2].as_int()? as usize
+        } else {
+            chars.len()
+        };
+        let result: String = chars[start..end].iter().collect();
+        Ok(Value::String(Rc::from(result.as_str())))
     });
 
     vm.register_fn(

@@ -6,6 +6,17 @@ use crate::lisp_error::{Arity, LispError};
 use crate::value::{display_value, Port, Value};
 use crate::vm::Vm;
 
+/// Determine width of UTF-8 character from its first byte.
+fn utf8_char_width(first: u8) -> usize {
+    match first {
+        0..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => 1,
+    }
+}
+
 /// Write a string to a port value.
 fn write_to_port(port_val: &Value, text: &str) -> Result<(), LispError> {
     match port_val {
@@ -150,20 +161,37 @@ pub fn register(vm: &mut Vm) {
         Arity::Variadic(0),
         |args| {
             if args.is_empty() {
-                // Read from stdin — not supported in embedded context
                 return Ok(Value::Eof);
             }
             match &args[0] {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
-                        crate::value::Port::StringInput { data, pos } => {
+                        Port::StringInput { data, pos } => {
                             if *pos >= data.len() {
                                 Ok(Value::Eof)
                             } else {
                                 let ch = data[*pos..].chars().next().unwrap();
                                 *pos += ch.len_utf8();
                                 Ok(Value::Char(ch))
+                            }
+                        }
+                        Port::FileInput { reader, .. } => {
+                            use std::io::Read;
+                            let mut buf = [0u8; 4];
+                            match reader.read(&mut buf[..1]) {
+                                Ok(0) => Ok(Value::Eof),
+                                Ok(_) => {
+                                    // Handle UTF-8 multi-byte
+                                    let needed = utf8_char_width(buf[0]);
+                                    if needed > 1 {
+                                        let _ = reader.read_exact(&mut buf[1..needed]);
+                                    }
+                                    let s =
+                                        std::str::from_utf8(&buf[..needed]).unwrap_or("\u{FFFD}");
+                                    Ok(Value::Char(s.chars().next().unwrap_or('\u{FFFD}')))
+                                }
+                                Err(_) => Ok(Value::Eof),
                             }
                         }
                         _ => Err(LispError::type_error("input-port", "other port type")),
@@ -211,23 +239,11 @@ pub fn register(vm: &mut Vm) {
         |args| {
             let s = args[0].as_str()?;
             if args.len() > 1 {
-                match &args[1] {
-                    Value::Port(p) => {
-                        let mut port = p.borrow_mut();
-                        match &mut *port {
-                            crate::value::Port::StringOutput { buf: data } => {
-                                data.push_str(s);
-                                Ok(Value::Void)
-                            }
-                            _ => Err(LispError::type_error("output-port", "other port type")),
-                        }
-                    }
-                    _ => Err(LispError::type_error("port", format!("{}", args[1]))),
-                }
+                write_to_port(&args[1], s)?;
             } else {
                 print!("{s}");
-                Ok(Value::Void)
             }
+            Ok(Value::Void)
         },
     );
 
@@ -415,6 +431,26 @@ pub fn register(vm: &mut Vm) {
                                 let line = remaining.to_string();
                                 *pos = data.len();
                                 Ok(Value::String(Rc::from(line.as_str())))
+                            }
+                        }
+                        Port::FileInput { reader, .. } => {
+                            use std::io::BufRead;
+                            let mut line = String::new();
+                            let reader: &mut dyn std::io::Read = &mut **reader;
+                            let mut buf_reader = std::io::BufReader::new(reader);
+                            match buf_reader.read_line(&mut line) {
+                                Ok(0) => Ok(Value::Eof),
+                                Ok(_) => {
+                                    // Strip trailing newline
+                                    if line.ends_with('\n') {
+                                        line.pop();
+                                        if line.ends_with('\r') {
+                                            line.pop();
+                                        }
+                                    }
+                                    Ok(Value::String(Rc::from(line.as_str())))
+                                }
+                                Err(_) => Ok(Value::Eof),
                             }
                         }
                         _ => Err(LispError::type_error("input port", "output port")),
@@ -686,6 +722,152 @@ pub fn register(vm: &mut Vm) {
             Value::Int(n) => Ok(Value::Float(*n as f64)),
             Value::Float(_) => Ok(args[0].clone()),
             _ => Err(LispError::type_error("number", format!("{}", args[0]))),
+        },
+    );
+
+    // R7RS §6.13.2 File I/O
+    vm.register_fn(
+        "open-input-file",
+        "Open file for reading",
+        Arity::Fixed(1),
+        |args| {
+            let path = args[0].as_str()?;
+            let file = std::fs::File::open(path)
+                .map_err(|e| LispError::user(format!("open-input-file: {e}"), vec![]))?;
+            Ok(Value::Port(Rc::new(std::cell::RefCell::new(
+                Port::FileInput {
+                    reader: Box::new(std::io::BufReader::new(file)),
+                    name: path.to_string(),
+                },
+            ))))
+        },
+    );
+
+    vm.register_fn(
+        "open-output-file",
+        "Open file for writing",
+        Arity::Fixed(1),
+        |args| {
+            let path = args[0].as_str()?;
+            let file = std::fs::File::create(path)
+                .map_err(|e| LispError::user(format!("open-output-file: {e}"), vec![]))?;
+            Ok(Value::Port(Rc::new(std::cell::RefCell::new(
+                Port::FileOutput {
+                    writer: Box::new(std::io::BufWriter::new(file)),
+                    name: path.to_string(),
+                },
+            ))))
+        },
+    );
+
+    // R7RS §6.14 System interface
+    vm.register_fn(
+        "get-environment-variable",
+        "Get environment variable value",
+        Arity::Fixed(1),
+        |args| {
+            let name = args[0].as_str()?;
+            match std::env::var(name) {
+                Ok(val) => Ok(Value::String(Rc::from(val.as_str()))),
+                Err(_) => Ok(Value::Bool(false)),
+            }
+        },
+    );
+
+    vm.register_fn(
+        "get-environment-variables",
+        "Get all environment variables as alist",
+        Arity::Fixed(0),
+        |_args| {
+            let pairs: Vec<Value> = std::env::vars()
+                .map(|(k, v)| {
+                    Value::cons(
+                        Value::String(Rc::from(k.as_str())),
+                        Value::String(Rc::from(v.as_str())),
+                    )
+                })
+                .collect();
+            Ok(Value::list(pairs))
+        },
+    );
+
+    vm.register_fn(
+        "command-line",
+        "Return command-line arguments",
+        Arity::Fixed(0),
+        |_args| {
+            let args: Vec<Value> = std::env::args()
+                .map(|a| Value::String(Rc::from(a.as_str())))
+                .collect();
+            Ok(Value::list(args))
+        },
+    );
+
+    // R7RS §6.14 current-second (TAI seconds since epoch)
+    vm.register_fn(
+        "current-second",
+        "Current time in seconds since epoch",
+        Arity::Fixed(0),
+        |_args| {
+            use std::time::SystemTime;
+            let secs = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64();
+            Ok(Value::Float(secs))
+        },
+    );
+
+    vm.register_fn(
+        "current-jiffy",
+        "Current time in jiffies (nanoseconds)",
+        Arity::Fixed(0),
+        |_args| {
+            use std::time::SystemTime;
+            let nanos = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            Ok(Value::Int(nanos as i64))
+        },
+    );
+
+    vm.register_fn(
+        "jiffies-per-second",
+        "Number of jiffies per second",
+        Arity::Fixed(0),
+        |_args| Ok(Value::Int(1_000_000_000)),
+    );
+
+    // R7RS write-simple (no shared structure notation)
+    vm.register_fn(
+        "write-simple",
+        "Write value without shared structure notation",
+        Arity::Variadic(1),
+        |args| {
+            let text = format!("{}", args[0]);
+            if args.len() > 1 {
+                write_to_port(&args[1], &text)?;
+            } else {
+                print!("{text}");
+            }
+            Ok(Value::Void)
+        },
+    );
+
+    // write-shared (same as write for now — no shared structure support)
+    vm.register_fn(
+        "write-shared",
+        "Write value with shared structure notation",
+        Arity::Variadic(1),
+        |args| {
+            let text = format!("{}", args[0]);
+            if args.len() > 1 {
+                write_to_port(&args[1], &text)?;
+            } else {
+                print!("{text}");
+            }
+            Ok(Value::Void)
         },
     );
 }

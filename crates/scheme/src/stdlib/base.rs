@@ -972,11 +972,17 @@ fn register_list_ops(vm: &mut Vm) {
         (define (vector-map f . vecs)
           (list->vector (apply map f (map vector->list vecs))))
 
-        ;; R7RS §6.13 call-with-port
+        ;; R7RS §6.13 call-with-port and file convenience functions
         (define (call-with-port port proc)
           (let ((result (proc port)))
             (close-port port)
             result))
+
+        (define (call-with-input-file filename proc)
+          (call-with-port (open-input-file filename) proc))
+
+        (define (call-with-output-file filename proc)
+          (call-with-port (open-output-file filename) proc))
 
         ;; R7RS §4.2.5 Promises (delay/force)
         ;; Uses a mutable vector #(promise done? value/thunk)
