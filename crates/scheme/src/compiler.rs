@@ -855,7 +855,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_and(&mut self, exprs: &[Value], _tail: bool) -> Result<(), LispError> {
+    fn compile_and(&mut self, exprs: &[Value], tail: bool) -> Result<(), LispError> {
         if exprs.is_empty() {
             self.emit(Op::Const(Value::Bool(true)));
             return Ok(());
@@ -864,7 +864,7 @@ impl Compiler {
         let mut end_jumps = Vec::new();
         for (i, expr) in exprs.iter().enumerate() {
             let is_last = i == exprs.len() - 1;
-            self.compile_expr(expr, false)?;
+            self.compile_expr(expr, is_last && tail)?;
             if !is_last {
                 self.emit(Op::Dup);
                 let jump = self.emit_placeholder(Op::JumpIfFalse(0));
@@ -880,7 +880,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_or(&mut self, exprs: &[Value], _tail: bool) -> Result<(), LispError> {
+    fn compile_or(&mut self, exprs: &[Value], tail: bool) -> Result<(), LispError> {
         if exprs.is_empty() {
             self.emit(Op::Const(Value::Bool(false)));
             return Ok(());
@@ -889,7 +889,7 @@ impl Compiler {
         let mut end_jumps = Vec::new();
         for (i, expr) in exprs.iter().enumerate() {
             let is_last = i == exprs.len() - 1;
-            self.compile_expr(expr, false)?;
+            self.compile_expr(expr, is_last && tail)?;
             if !is_last {
                 self.emit(Op::Dup);
                 // Jump to end if true (skip remaining)

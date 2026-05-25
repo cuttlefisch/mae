@@ -3560,3 +3560,323 @@ fn edge_open_close_port() {
            (not (input-port-open? p)))",
     );
 }
+
+// ============================================================================
+// Stress tests: tricky R7RS edge cases for reliability
+// ============================================================================
+
+// --- Numeric precision and edge cases ---
+
+#[test]
+fn stress_exact_arithmetic_overflow() {
+    // Large integer multiplication
+    is_int("(* 1000000 1000000)", 1000000000000);
+    // Exact integer sqrt of perfect squares
+    is_int("(car (exact-integer-sqrt 144))", 12);
+    is_int("(cadr (exact-integer-sqrt 144))", 0);
+    // Non-perfect square
+    is_int("(car (exact-integer-sqrt 10))", 3);
+    is_int("(cadr (exact-integer-sqrt 10))", 1);
+}
+
+#[test]
+fn stress_numeric_boundary_values() {
+    is_true("(exact? 0)");
+    is_true("(inexact? 0.0)");
+    is_true("(= 0 0.0)");
+    is_true("(zero? 0)");
+    is_true("(zero? 0.0)");
+    is_true("(positive? 1)");
+    is_true("(negative? -1)");
+    is_true("(even? 0)");
+    is_true("(odd? 1)");
+    is_true("(odd? -1)");
+    // min/max edge cases
+    is_int("(min 1 2 3 -1 0)", -1);
+    is_int("(max 1 2 3 -1 0)", 3);
+}
+
+#[test]
+fn stress_gcd_lcm_edge_cases() {
+    is_int("(gcd 0 0)", 0);
+    is_int("(gcd 12 0)", 12);
+    is_int("(gcd 0 12)", 12);
+    is_int("(gcd -12 8)", 4);
+    is_int("(lcm 4 6)", 12);
+    is_int("(lcm 0 5)", 0);
+}
+
+// --- Guard/exception interaction with TCO ---
+
+#[test]
+fn stress_guard_in_tail_position() {
+    // guard body in tail position (moderate depth)
+    is_int(
+        "(define (f n)
+           (guard (exn (#t 0))
+             (if (= n 0) 42 (f (- n 1)))))
+         (f 100)",
+        42,
+    );
+}
+
+#[test]
+fn stress_nested_guard() {
+    // Inner guard catches, outer doesn't fire
+    is_int(
+        "(guard (outer (#t 1))
+           (guard (inner (#t 2))
+             (raise \"boom\")))",
+        2,
+    );
+}
+
+#[test]
+fn stress_guard_reraise() {
+    // Guard clause doesn't match → re-raised to outer
+    is_int(
+        "(guard (outer (#t 99))
+           (guard (inner ((string? inner) 0))
+             (raise 42)))",
+        99,
+    );
+}
+
+// --- Dynamic-wind ordering with multiple winds ---
+
+#[test]
+fn stress_dynamic_wind_nested() {
+    // Nested dynamic-wind: both cleanup thunks run
+    is_int(
+        "(let ((x 0))
+           (dynamic-wind
+             (lambda () (set! x (+ x 1)))
+             (lambda ()
+               (dynamic-wind
+                 (lambda () (set! x (+ x 10)))
+                 (lambda () (set! x (+ x 100)))
+                 (lambda () (set! x (+ x 1000)))))
+             (lambda () (set! x (+ x 10000))))
+           x)",
+        11111,
+    );
+}
+
+// --- Case-lambda exhaustive ---
+
+#[test]
+fn stress_case_lambda() {
+    is_int(
+        "(let ((f (case-lambda
+                    (() 0)
+                    ((x) x)
+                    ((x y) (+ x y))
+                    ((x y z) (+ x y z)))))
+           (+ (f) (f 1) (f 2 3) (f 4 5 6)))",
+        21,
+    );
+}
+
+// --- Closures capturing mutable state ---
+
+#[test]
+fn stress_closure_shared_state() {
+    is_int(
+        "(let ((counter 0))
+           (define (inc!) (set! counter (+ counter 1)) counter)
+           (define (dec!) (set! counter (- counter 1)) counter)
+           (inc!) (inc!) (inc!) (dec!)
+           counter)",
+        2,
+    );
+}
+
+#[test]
+fn stress_closure_in_list() {
+    // Create a list of closures sharing state
+    is_int(
+        "(let ((x 0))
+           (let ((add (lambda (n) (set! x (+ x n)) x))
+                 (get (lambda () x)))
+             (add 10)
+             (add 20)
+             (get)))",
+        30,
+    );
+}
+
+// --- String edge cases ---
+
+#[test]
+fn stress_string_empty_operations() {
+    is_int("(string-length \"\")", 0);
+    is_str("(substring \"\" 0 0)", "");
+    is_str("(string-append)", "");
+    is_str("(string-append \"\" \"\" \"\")", "");
+    is_str("(string-copy \"\")", "");
+}
+
+#[test]
+fn stress_string_unicode() {
+    // Multi-byte characters
+    is_int("(string-length \"αβγ\")", 3);
+    is_str("(substring \"αβγ\" 1 2)", "β");
+    is_true("(char=? (string-ref \"αβγ\" 2) #\\γ)");
+}
+
+// --- Vector operations ---
+
+#[test]
+fn stress_vector_large() {
+    is_int("(vector-length (make-vector 1000 0))", 1000);
+    is_int(
+        "(let ((v (make-vector 100 0)))
+           (vector-set! v 99 42)
+           (vector-ref v 99))",
+        42,
+    );
+}
+
+// --- Proper tail recursion in all derived forms ---
+
+#[test]
+fn stress_tco_or_chain() {
+    // or — last expression in tail position (TCO)
+    is_int(
+        "(define (f n) (if (= n 0) 42 (or #f (f (- n 1)))))
+         (f 50000)",
+        42,
+    );
+}
+
+#[test]
+fn stress_tco_and_chain() {
+    // and — last expression in tail position (TCO)
+    is_int(
+        "(define (f n) (if (= n 0) 42 (and #t (f (- n 1)))))
+         (f 50000)",
+        42,
+    );
+}
+
+// --- Define-record-type ---
+
+#[test]
+fn stress_record_type() {
+    is_true(
+        "(define-record-type <point>
+           (make-point x y)
+           point?
+           (x point-x)
+           (y point-y))
+         (let ((p (make-point 3 4)))
+           (and (point? p)
+                (= (point-x p) 3)
+                (= (point-y p) 4)))",
+    );
+}
+
+#[test]
+fn stress_record_type_predicate() {
+    is_false(
+        "(define-record-type <thing>
+           (make-thing v)
+           thing?
+           (v thing-v))
+         (thing? 42)",
+    );
+}
+
+// --- Parameterize edge cases ---
+
+#[test]
+fn stress_parameterize_nested() {
+    is_int(
+        "(define p (make-parameter 1))
+         (parameterize ((p 2))
+           (parameterize ((p 3))
+             (p)))",
+        3,
+    );
+    // After parameterize, value restored
+    is_int(
+        "(define p2 (make-parameter 10))
+         (parameterize ((p2 20))
+           (p2))
+         (p2)",
+        10,
+    );
+}
+
+// --- Bytevector edge cases ---
+
+#[test]
+fn stress_bytevector_ops() {
+    is_int("(bytevector-length (bytevector))", 0);
+    is_int("(bytevector-u8-ref (bytevector 10 20 30) 1)", 20);
+    is_true(
+        "(let ((bv (make-bytevector 3 0)))
+           (bytevector-u8-set! bv 1 255)
+           (= (bytevector-u8-ref bv 1) 255))",
+    );
+}
+
+// --- Multiple return values ---
+
+#[test]
+fn stress_values_receive() {
+    is_int(
+        "(receive (a b c)
+           (values 1 2 3)
+           (+ a b c))",
+        6,
+    );
+}
+
+#[test]
+fn stress_call_with_values() {
+    is_int(
+        "(call-with-values
+           (lambda () (values 10 20))
+           +)",
+        30,
+    );
+}
+
+// --- Do loop edge cases ---
+
+#[test]
+fn stress_do_empty_body() {
+    // do with no body, just test + step
+    is_int(
+        "(do ((i 0 (+ i 1)))
+             ((= i 10) i))",
+        10,
+    );
+}
+
+#[test]
+fn stress_do_multiple_vars() {
+    is_int(
+        "(do ((i 0 (+ i 1))
+              (j 10 (- j 1)))
+             ((= i j) i))",
+        5,
+    );
+}
+
+// --- Boolean edge cases ---
+
+#[test]
+fn stress_boolean_semantics() {
+    // Only #f is false
+    is_true("(if 0 #t #f)");
+    is_true("(if \"\" #t #f)");
+    is_true("(if '() #t #f)");
+    is_true("(if #t #t #f)");
+    is_false("(if #f #t #f)");
+    // boolean=?
+    is_true("(boolean=? #t #t)");
+    is_true("(boolean=? #f #f)");
+    is_false("(boolean=? #t #f)");
+}
