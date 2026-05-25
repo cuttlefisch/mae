@@ -293,6 +293,7 @@ impl Compiler {
                         "when" => return self.compile_when(&items, tail),
                         "unless" => return self.compile_unless(&items, tail),
                         "define-values" => return self.compile_define_values(&items),
+                        "define-record-type" => return self.compile_define_record_type(&items),
                         "define-macro" => return self.compile_define_macro(&items),
                         "define-syntax" => return self.compile_define_syntax(&items),
                         "guard" => return self.compile_guard(&items, tail),
@@ -300,6 +301,11 @@ impl Compiler {
                         "with-exception-handler" => {
                             return self.compile_with_exception_handler(&items, tail)
                         }
+                        "quasiquote" => return self.compile_quasiquote(&items),
+                        "case" => return self.compile_case(&items, tail),
+                        "case-lambda" => return self.compile_case_lambda(&items),
+                        "do" => return self.compile_do(&items, tail),
+                        "parameterize" => return self.compile_parameterize(&items, tail),
                         "apply" => return self.compile_apply(&items, tail),
                         "call-with-current-continuation" | "call/cc" => {
                             return self.compile_call_cc(&items, tail)
@@ -634,6 +640,8 @@ impl Compiler {
 
     fn compile_let(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
         // (let ((x 1) (y 2)) body...)
+        // Desugars to: ((lambda (x y) body...) 1 2)
+        // This is the R7RS §4.2.2 definition, and ensures locals get their own frame.
         if items.len() < 3 {
             return Err(LispError::syntax("let requires bindings and body", ""));
         }
@@ -647,12 +655,9 @@ impl Compiler {
             .to_vec()
             .map_err(|_| LispError::syntax("let bindings must be a list", ""))?;
 
-        let scope = &self.current_scope();
-        let saved_locals = scope.locals.len();
-        let saved_depth = scope.scope_depth;
-        self.current_scope_mut().scope_depth += 1;
+        let mut params = Vec::new();
+        let mut init_exprs = Vec::new();
 
-        // Evaluate all init expressions and bind
         for binding in &bindings {
             let pair = binding
                 .to_vec()
@@ -665,24 +670,30 @@ impl Compiler {
                 .map_err(|_| LispError::syntax("let variable must be a symbol", ""))?
                 .name()
                 .to_string();
-
-            self.compile_expr(&pair[1], false)?;
-            self.current_scope_mut().add_local(name);
+            params.push(name);
+            init_exprs.push(pair[1].clone());
         }
 
-        // Compile body
-        self.compile_begin(&items[2..], tail)?;
+        // Build: ((lambda (params...) body...) init-exprs...)
+        let formals = Value::list(params.iter().map(|p| Value::symbol(p)));
+        let mut lambda_items = vec![Value::symbol("lambda"), formals];
+        lambda_items.extend_from_slice(&items[2..]);
+        let lambda = Value::list(lambda_items);
 
-        // Pop locals (no explicit instruction needed — locals live on the stack)
-        let to_pop = self.current_scope().locals.len() - saved_locals;
-        // We need to save the result, pop the bindings, then push result back
-        if to_pop > 0 {
-            // The result is on top of stack, with `to_pop` locals below it
-            // We'll handle this in the VM by adjusting the stack after let
+        // Compile the lambda (the function)
+        self.compile_expr(&lambda, false)?;
+
+        // Compile the init expressions (the arguments)
+        for init in &init_exprs {
+            self.compile_expr(init, false)?;
         }
 
-        self.current_scope_mut().locals.truncate(saved_locals);
-        self.current_scope_mut().scope_depth = saved_depth;
+        // Call the lambda with the arguments
+        if tail {
+            self.emit(Op::TailCall(init_exprs.len()));
+        } else {
+            self.emit(Op::Call(init_exprs.len()));
+        }
 
         Ok(())
     }
@@ -744,6 +755,8 @@ impl Compiler {
     }
 
     fn compile_let_star(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
+        // (let* ((x 1) (y 2)) body...)
+        // Desugars to nested lets: (let ((x 1)) (let ((y 2)) body...))
         if items.len() < 3 {
             return Err(LispError::syntax("let* requires bindings and body", ""));
         }
@@ -752,33 +765,32 @@ impl Compiler {
             .to_vec()
             .map_err(|_| LispError::syntax("let* bindings must be a list", ""))?;
 
-        let saved_locals = self.current_scope().locals.len();
-        let saved_depth = self.current_scope().scope_depth;
-        self.current_scope_mut().scope_depth += 1;
-
-        // Sequential binding: each binding sees previous ones
-        for binding in &bindings {
-            let pair = binding
-                .to_vec()
-                .map_err(|_| LispError::syntax("let* binding must be (var expr)", ""))?;
-            if pair.len() != 2 {
-                return Err(LispError::syntax("let* binding must be (var expr)", ""));
-            }
-            let name = pair[0]
-                .as_symbol()
-                .map_err(|_| LispError::syntax("let* variable must be a symbol", ""))?
-                .name()
-                .to_string();
-            self.compile_expr(&pair[1], false)?;
-            self.current_scope_mut().add_local(name);
+        if bindings.is_empty() {
+            // No bindings — just compile the body
+            return self.compile_begin(&items[2..], tail);
         }
 
-        self.compile_begin(&items[2..], tail)?;
+        // Build nested let from inside out
+        let body: Vec<Value> = items[2..].to_vec();
+        let mut result = {
+            let mut inner = vec![
+                Value::symbol("let"),
+                Value::list(vec![bindings.last().unwrap().clone()]),
+            ];
+            inner.extend(body);
+            Value::list(inner)
+        };
 
-        self.current_scope_mut().locals.truncate(saved_locals);
-        self.current_scope_mut().scope_depth = saved_depth;
+        for binding in bindings[..bindings.len() - 1].iter().rev() {
+            result = Value::list(vec![
+                Value::symbol("let"),
+                Value::list(vec![binding.clone()]),
+                result,
+            ]);
+        }
 
-        Ok(())
+        let items_vec = result.to_vec().unwrap();
+        self.compile_let(&items_vec, tail)
     }
 
     fn compile_letrec(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
@@ -1001,6 +1013,163 @@ impl Compiler {
     }
 
     // -----------------------------------------------------------------------
+    // define-record-type (R7RS §5.5)
+    // -----------------------------------------------------------------------
+
+    /// Compile `(define-record-type <name> (ctor field ...) pred (field accessor [mutator]) ...)`.
+    /// Desugars to a begin block with define for constructor, predicate, and accessors.
+    fn compile_define_record_type(&mut self, items: &[Value]) -> Result<(), LispError> {
+        if items.len() < 4 {
+            return Err(LispError::syntax(
+                "define-record-type requires type-name, constructor, predicate, and fields",
+                "",
+            ));
+        }
+
+        let type_name = items[1]
+            .as_symbol()
+            .map_err(|_| LispError::syntax("record type name must be a symbol", ""))?
+            .name()
+            .to_string();
+
+        let ctor_parts = items[2]
+            .to_list()
+            .ok_or_else(|| LispError::syntax("constructor must be a list", ""))?;
+        if ctor_parts.is_empty() {
+            return Err(LispError::syntax("constructor needs a name", ""));
+        }
+        let ctor_name = ctor_parts[0]
+            .as_symbol()
+            .map_err(|_| LispError::syntax("constructor name must be a symbol", ""))?
+            .name()
+            .to_string();
+        let ctor_fields: Vec<String> = ctor_parts[1..]
+            .iter()
+            .map(|v| {
+                v.as_symbol()
+                    .map(|s| s.name().to_string())
+                    .map_err(|_| LispError::syntax("constructor field must be a symbol", ""))
+            })
+            .collect::<Result<_, _>>()?;
+
+        let pred_name = items[3]
+            .as_symbol()
+            .map_err(|_| LispError::syntax("predicate name must be a symbol", ""))?
+            .name()
+            .to_string();
+
+        let field_specs = &items[4..];
+
+        // Build the desugared code as a begin block
+        let mut defs = Vec::new();
+
+        // Constructor: (define (ctor f1 f2 ...) (vector 'type-name f1 f2 ...))
+        let formals = Value::list(ctor_fields.iter().map(|f| Value::symbol(f)));
+        let mut vec_args = vec![
+            Value::symbol("vector"),
+            Value::list(vec![Value::symbol("quote"), Value::symbol(&type_name)]),
+        ];
+        vec_args.extend(ctor_fields.iter().map(|f| Value::symbol(f)));
+        let ctor_body = Value::list(vec_args);
+        defs.push(Value::list(vec![
+            Value::symbol("define"),
+            Value::cons(Value::symbol(&ctor_name), formals),
+            ctor_body,
+        ]));
+
+        // Predicate: (define (pred obj) (and (vector? obj) (> (vector-length obj) 0) (eq? (vector-ref obj 0) 'type-name)))
+        let pred_body = Value::list(vec![
+            Value::symbol("and"),
+            Value::list(vec![Value::symbol("vector?"), Value::symbol("__rec_obj__")]),
+            Value::list(vec![
+                Value::symbol(">"),
+                Value::list(vec![
+                    Value::symbol("vector-length"),
+                    Value::symbol("__rec_obj__"),
+                ]),
+                Value::Int(0),
+            ]),
+            Value::list(vec![
+                Value::symbol("eq?"),
+                Value::list(vec![
+                    Value::symbol("vector-ref"),
+                    Value::symbol("__rec_obj__"),
+                    Value::Int(0),
+                ]),
+                Value::list(vec![Value::symbol("quote"), Value::symbol(&type_name)]),
+            ]),
+        ]);
+        defs.push(Value::list(vec![
+            Value::symbol("define"),
+            Value::list(vec![
+                Value::symbol(&pred_name),
+                Value::symbol("__rec_obj__"),
+            ]),
+            pred_body,
+        ]));
+
+        // Field accessors and mutators
+        for (i, spec) in field_specs.iter().enumerate() {
+            let parts = spec
+                .to_list()
+                .ok_or_else(|| LispError::syntax("field spec must be a list", ""))?;
+            if parts.len() < 2 {
+                return Err(LispError::syntax(
+                    "field spec needs at least (name accessor)",
+                    "",
+                ));
+            }
+
+            let idx = (i + 1) as i64; // field 0 is the type tag
+
+            // Accessor: (define (accessor obj) (vector-ref obj idx))
+            let accessor_name = parts[1]
+                .as_symbol()
+                .map_err(|_| LispError::syntax("accessor must be a symbol", ""))?
+                .name()
+                .to_string();
+            defs.push(Value::list(vec![
+                Value::symbol("define"),
+                Value::list(vec![
+                    Value::symbol(&accessor_name),
+                    Value::symbol("__rec_obj__"),
+                ]),
+                Value::list(vec![
+                    Value::symbol("vector-ref"),
+                    Value::symbol("__rec_obj__"),
+                    Value::Int(idx),
+                ]),
+            ]));
+
+            // Mutator (optional): (define (mutator obj val) (vector-set! obj idx val))
+            if parts.len() >= 3 {
+                let mutator_name = parts[2]
+                    .as_symbol()
+                    .map_err(|_| LispError::syntax("mutator must be a symbol", ""))?
+                    .name()
+                    .to_string();
+                defs.push(Value::list(vec![
+                    Value::symbol("define"),
+                    Value::list(vec![
+                        Value::symbol(&mutator_name),
+                        Value::symbol("__rec_obj__"),
+                        Value::symbol("__rec_val__"),
+                    ]),
+                    Value::list(vec![
+                        Value::symbol("vector-set!"),
+                        Value::symbol("__rec_obj__"),
+                        Value::Int(idx),
+                        Value::symbol("__rec_val__"),
+                    ]),
+                ]));
+            }
+        }
+
+        // Compile as (begin def1 def2 ...)
+        self.compile_begin(&defs, false)
+    }
+
+    // -----------------------------------------------------------------------
     // Function calls
     // -----------------------------------------------------------------------
 
@@ -1158,6 +1327,504 @@ impl Compiler {
             }
             MacroDef::SyntaxRules(rules) => macros::expand_syntax_rules(rules, items),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Quasiquote
+    // -----------------------------------------------------------------------
+
+    /// Compile `(quasiquote template)` — R7RS §4.2.8.
+    /// Expands quasiquote as a syntax transformation, then compiles the result.
+    /// This follows Chibi-Scheme's approach: quasiquote → cons/append tree.
+    fn compile_quasiquote(&mut self, items: &[Value]) -> Result<(), LispError> {
+        if items.len() != 2 {
+            return Err(LispError::syntax(
+                "quasiquote requires exactly 1 argument",
+                "",
+            ));
+        }
+        let expanded = Self::expand_qq(&items[1], 0)?;
+        self.compile_expr(&expanded, false)
+    }
+
+    /// Expand quasiquote template into cons/append/quote expressions.
+    /// Follows the Chibi-Scheme expansion algorithm:
+    /// - `(unquote x)` at depth 0 → x
+    /// - `(unquote-splicing x)` in car at depth 0 → (append x (expand cdr))
+    /// - Regular pair → (cons (expand car) (expand cdr))
+    /// - Atom → (quote atom)
+    fn expand_qq(template: &Value, depth: usize) -> Result<Value, LispError> {
+        match template {
+            Value::Pair(p) => {
+                // Check for (unquote expr) — the WHOLE form is (unquote expr)
+                if let Value::Symbol(s) = &p.0 {
+                    if s.name() == "unquote" {
+                        if let Some(items) = p.1.to_list() {
+                            if items.len() == 1 {
+                                if depth == 0 {
+                                    return Ok(items[0].clone());
+                                }
+                                let inner = Self::expand_qq(&items[0], depth - 1)?;
+                                return Ok(Value::list(vec![
+                                    Value::symbol("list"),
+                                    Value::list(vec![
+                                        Value::symbol("quote"),
+                                        Value::symbol("unquote"),
+                                    ]),
+                                    inner,
+                                ]));
+                            }
+                        }
+                        return Err(LispError::syntax("bad unquote", ""));
+                    }
+                    if s.name() == "quasiquote" {
+                        if let Some(items) = p.1.to_list() {
+                            if items.len() == 1 {
+                                let inner = Self::expand_qq(&items[0], depth + 1)?;
+                                return Ok(Value::list(vec![
+                                    Value::symbol("list"),
+                                    Value::list(vec![
+                                        Value::symbol("quote"),
+                                        Value::symbol("quasiquote"),
+                                    ]),
+                                    inner,
+                                ]));
+                            }
+                        }
+                    }
+                }
+
+                // Check car for (unquote-splicing expr)
+                if let Value::Pair(car_pair) = &p.0 {
+                    if let Value::Symbol(s) = &car_pair.0 {
+                        if s.name() == "unquote-splicing" && depth == 0 {
+                            if let Some(splice_args) = car_pair.1.to_list() {
+                                if splice_args.len() == 1 {
+                                    let cdr_expanded = Self::expand_qq(&p.1, depth)?;
+                                    return Ok(Value::list(vec![
+                                        Value::symbol("append"),
+                                        splice_args[0].clone(),
+                                        cdr_expanded,
+                                    ]));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Regular pair: (cons (expand car) (expand cdr))
+                // This handles the case where car is (unquote x) as an element:
+                // expand_qq on (unquote x) will match the Symbol("unquote") check above
+                // and return x directly, so (cons x (expand cdr)) is correct.
+                let car_exp = Self::expand_qq(&p.0, depth)?;
+                let cdr_exp = Self::expand_qq(&p.1, depth)?;
+                Ok(Value::list(vec![Value::symbol("cons"), car_exp, cdr_exp]))
+            }
+            // Atoms are self-quoting
+            _ => Ok(Value::list(vec![Value::symbol("quote"), template.clone()])),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Case expression
+    // -----------------------------------------------------------------------
+
+    /// Compile `(case expr clause ...)` — R7RS §4.2.1.
+    /// Desugars to `(let ((key expr)) (cond ...))` with `eqv?` tests.
+    fn compile_case(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
+        if items.len() < 3 {
+            return Err(LispError::syntax("case requires expr and clauses", ""));
+        }
+
+        let key_sym = Value::symbol("__case_key__");
+
+        // Build cond clauses from case clauses
+        let mut cond_clauses = Vec::new();
+        for clause in &items[2..] {
+            let parts = clause
+                .to_list()
+                .ok_or_else(|| LispError::syntax("case clause must be a list", ""))?;
+            if parts.is_empty() {
+                return Err(LispError::syntax("empty case clause", ""));
+            }
+
+            if let Value::Symbol(s) = &parts[0] {
+                if s.name() == "else" {
+                    cond_clauses.push(clause.clone());
+                    break;
+                }
+            }
+
+            // ((datum ...) body...) → ((or (eqv? key 'd1) (eqv? key 'd2) ...) body...)
+            let datums = parts[0]
+                .to_list()
+                .ok_or_else(|| LispError::syntax("case datums must be a list", ""))?;
+
+            let test = if datums.len() == 1 {
+                Value::list(vec![
+                    Value::symbol("eqv?"),
+                    key_sym.clone(),
+                    Value::list(vec![Value::symbol("quote"), datums[0].clone()]),
+                ])
+            } else {
+                let mut or_parts = vec![Value::symbol("or")];
+                for datum in &datums {
+                    or_parts.push(Value::list(vec![
+                        Value::symbol("eqv?"),
+                        key_sym.clone(),
+                        Value::list(vec![Value::symbol("quote"), datum.clone()]),
+                    ]));
+                }
+                Value::list(or_parts)
+            };
+
+            let mut cond_clause = vec![test];
+            cond_clause.extend(parts[1..].iter().cloned());
+            cond_clauses.push(Value::list(cond_clause));
+        }
+
+        let mut cond_expr_parts = vec![Value::symbol("cond")];
+        cond_expr_parts.extend(cond_clauses);
+        let cond_expr = Value::list(cond_expr_parts);
+
+        // (let ((key expr)) (cond ...))
+        let let_expr = Value::list(vec![
+            Value::symbol("let"),
+            Value::list(vec![Value::list(vec![key_sym, items[1].clone()])]),
+            cond_expr,
+        ]);
+
+        let items_vec = let_expr.to_vec().unwrap();
+        self.compile_let(&items_vec, tail)
+    }
+
+    // -----------------------------------------------------------------------
+    // Case-lambda
+    // -----------------------------------------------------------------------
+
+    /// Compile `(case-lambda clause ...)` — R7RS §4.2.9.
+    /// Each clause is ((formals ...) body ...).
+    /// Desugars to a lambda that dispatches on argument count.
+    fn compile_case_lambda(&mut self, items: &[Value]) -> Result<(), LispError> {
+        if items.len() < 2 {
+            return Err(LispError::syntax(
+                "case-lambda requires at least one clause",
+                "",
+            ));
+        }
+
+        // Parse all clauses to determine max arity
+        let mut clauses = Vec::new();
+        for clause in &items[1..] {
+            let parts = clause
+                .to_list()
+                .ok_or_else(|| LispError::syntax("case-lambda clause must be a list", ""))?;
+            if parts.is_empty() {
+                return Err(LispError::syntax("case-lambda clause needs formals", ""));
+            }
+            let (params, variadic) = self.parse_formals(&parts[0])?;
+            clauses.push((params, variadic, parts[1..].to_vec()));
+        }
+
+        // Build a single variadic lambda that dispatches on (length args)
+        // (lambda args
+        //   (let ((n (length args)))
+        //     (cond
+        //       ((= n arity1) (apply (lambda (formals1) body1) args))
+        //       ((= n arity2) (apply (lambda (formals2) body2) args))
+        //       ...)))
+        let args_sym = Value::symbol("__cl_args__");
+        let n_sym = Value::symbol("__cl_n__");
+
+        let mut cond_clauses = Vec::new();
+        for (params, variadic, body) in &clauses {
+            // Build the inner lambda
+            let formals = if *variadic && params.len() > 1 {
+                // (x y . rest) — dotted pair
+                let mut pairs = params.iter().map(|p| Value::symbol(p)).collect::<Vec<_>>();
+                let rest = pairs.pop().unwrap();
+                let mut result = rest;
+                for p in pairs.into_iter().rev() {
+                    result = Value::Pair(std::rc::Rc::new((p, result)));
+                }
+                result
+            } else if *variadic {
+                Value::symbol(&params[0])
+            } else {
+                Value::list(params.iter().map(|p| Value::symbol(p)))
+            };
+
+            let mut lambda_parts = vec![Value::symbol("lambda"), formals];
+            lambda_parts.extend(body.iter().cloned());
+            let lambda = Value::list(lambda_parts);
+
+            let required = if *variadic {
+                params.len().saturating_sub(1)
+            } else {
+                params.len()
+            };
+
+            // Test: (= n required) for fixed, (>= n required) for variadic
+            let test = if *variadic {
+                Value::list(vec![
+                    Value::symbol(">="),
+                    n_sym.clone(),
+                    Value::Int(required as i64),
+                ])
+            } else {
+                Value::list(vec![
+                    Value::symbol("="),
+                    n_sym.clone(),
+                    Value::Int(required as i64),
+                ])
+            };
+
+            // Body: (apply lambda args)
+            let apply_expr = Value::list(vec![Value::symbol("apply"), lambda, args_sym.clone()]);
+
+            cond_clauses.push(Value::list(vec![test, apply_expr]));
+        }
+
+        // Add error clause
+        cond_clauses.push(Value::list(vec![
+            Value::symbol("else"),
+            Value::list(vec![
+                Value::symbol("error"),
+                Value::string("case-lambda: no matching clause"),
+            ]),
+        ]));
+
+        // (lambda args (let ((n (length args))) (cond ...)))
+        let length_call = Value::list(vec![Value::symbol("length"), args_sym.clone()]);
+        let n_binding = Value::list(vec![Value::list(vec![n_sym.clone(), length_call])]);
+        let cond_expr = {
+            let mut parts = vec![Value::symbol("cond")];
+            parts.extend(cond_clauses);
+            Value::list(parts)
+        };
+        let let_expr = Value::list(vec![Value::symbol("let"), n_binding, cond_expr]);
+        let full_lambda = Value::list(vec![
+            Value::symbol("lambda"),
+            Value::symbol("__cl_args__"),
+            let_expr,
+        ]);
+
+        let items_vec = full_lambda.to_vec().unwrap();
+        self.compile_lambda(&items_vec)
+    }
+
+    // -----------------------------------------------------------------------
+    // Do iteration
+    // -----------------------------------------------------------------------
+
+    /// Compile `(do ((var init step) ...) (test expr ...) body ...)` — R7RS §4.2.4.
+    /// Desugars to named let.
+    fn compile_do(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
+        if items.len() < 3 {
+            return Err(LispError::syntax(
+                "do requires vars, test, and optionally body",
+                "",
+            ));
+        }
+
+        let var_specs = items[1]
+            .to_list()
+            .ok_or_else(|| LispError::syntax("do variable specs must be a list", ""))?;
+
+        let test_clause = items[2]
+            .to_list()
+            .ok_or_else(|| LispError::syntax("do test clause must be a list", ""))?;
+
+        if test_clause.is_empty() {
+            return Err(LispError::syntax("do test clause is empty", ""));
+        }
+
+        let body = &items[3..];
+
+        // Parse variable specifications: (var init [step])
+        let mut var_names = Vec::new();
+        let mut init_exprs = Vec::new();
+        let mut step_exprs = Vec::new();
+
+        for spec in &var_specs {
+            let parts = spec
+                .to_list()
+                .ok_or_else(|| LispError::syntax("do var spec must be a list", ""))?;
+            if parts.len() < 2 || parts.len() > 3 {
+                return Err(LispError::syntax(
+                    "do var spec must be (var init) or (var init step)",
+                    "",
+                ));
+            }
+            let name = parts[0]
+                .as_symbol()
+                .map_err(|_| LispError::syntax("do var must be a symbol", ""))?
+                .name()
+                .to_string();
+            var_names.push(name.clone());
+            init_exprs.push(parts[1].clone());
+            if parts.len() == 3 {
+                step_exprs.push(parts[2].clone());
+            } else {
+                step_exprs.push(Value::symbol(&name)); // no step = keep current
+            }
+        }
+
+        // Desugar to named let:
+        // (let __do_loop__ ((var1 init1) (var2 init2) ...)
+        //   (if test
+        //     (begin expr ...)
+        //     (begin body ... (__do_loop__ step1 step2 ...))))
+        let loop_name = "__do_loop__";
+        let bindings = Value::list(
+            var_names
+                .iter()
+                .zip(init_exprs.iter())
+                .map(|(name, init)| Value::list(vec![Value::symbol(name), init.clone()])),
+        );
+
+        let test = &test_clause[0];
+        let result_exprs = if test_clause.len() > 1 {
+            &test_clause[1..]
+        } else {
+            &[Value::Void][..]
+        };
+
+        // Build step call: (__do_loop__ step1 step2 ...)
+        let mut step_call = vec![Value::symbol(loop_name)];
+        step_call.extend(step_exprs.iter().cloned());
+        let step = Value::list(step_call);
+
+        // Build loop body: body... then recurse
+        let mut loop_body = Vec::new();
+        loop_body.extend(body.iter().cloned());
+        loop_body.push(step);
+        let else_branch = if loop_body.len() == 1 {
+            loop_body[0].clone()
+        } else {
+            let mut begin = vec![Value::symbol("begin")];
+            begin.extend(loop_body);
+            Value::list(begin)
+        };
+
+        let result_branch = if result_exprs.len() == 1 {
+            result_exprs[0].clone()
+        } else {
+            let mut begin = vec![Value::symbol("begin")];
+            begin.extend(result_exprs.iter().cloned());
+            Value::list(begin)
+        };
+
+        let if_expr = Value::list(vec![
+            Value::symbol("if"),
+            test.clone(),
+            result_branch,
+            else_branch,
+        ]);
+
+        let named_let = Value::list(vec![
+            Value::symbol("let"),
+            Value::symbol(loop_name),
+            bindings,
+            if_expr,
+        ]);
+
+        let items_vec = named_let.to_vec().unwrap();
+        self.compile_let(&items_vec, tail)
+    }
+
+    // -----------------------------------------------------------------------
+    // Parameterize
+    // -----------------------------------------------------------------------
+
+    /// Compile `(parameterize ((param val) ...) body ...)` — R7RS §4.2.6.
+    /// Desugars to dynamic-wind + parameter mutation.
+    fn compile_parameterize(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
+        if items.len() < 3 {
+            return Err(LispError::syntax(
+                "parameterize requires bindings and body",
+                "",
+            ));
+        }
+
+        let bindings = items[1]
+            .to_list()
+            .ok_or_else(|| LispError::syntax("parameterize bindings must be a list", ""))?;
+
+        // Desugar to:
+        // (let ((saved1 (param1)) (saved2 (param2)) ...)
+        //   (dynamic-wind
+        //     (lambda () (param1 val1) (param2 val2) ...)
+        //     (lambda () body ...)
+        //     (lambda () (param1 saved1) (param2 saved2) ...)))
+        //
+        // But since dynamic-wind may not be available yet, we can also use
+        // a simpler approach: save, set, body, restore.
+        // For now, use the simpler approach since it doesn't need dynamic-wind.
+
+        let mut save_bindings = Vec::new();
+        let mut set_before = Vec::new();
+        let mut set_after = Vec::new();
+
+        for (i, binding) in bindings.iter().enumerate() {
+            let parts = binding
+                .to_list()
+                .ok_or_else(|| LispError::syntax("parameterize binding must be a list", ""))?;
+            if parts.len() != 2 {
+                return Err(LispError::syntax(
+                    "parameterize binding must be (param val)",
+                    "",
+                ));
+            }
+            let param = &parts[0];
+            let val = &parts[1];
+            let saved_name = format!("__param_saved_{i}__");
+
+            // saved = (param) — call param with no args to get current value
+            save_bindings.push(Value::list(vec![
+                Value::symbol(&saved_name),
+                Value::list(vec![param.clone()]),
+            ]));
+
+            // (param val) — set new value
+            set_before.push(Value::list(vec![param.clone(), val.clone()]));
+
+            // (param saved) — restore old value
+            set_after.push(Value::list(vec![param.clone(), Value::symbol(&saved_name)]));
+        }
+
+        // Build: (let ((saved1 (p1)) ...) (p1 v1) ... (let ((result (begin body))) (p1 saved1) ... result))
+        let save_list = Value::list(save_bindings);
+
+        let mut body_parts = set_before;
+
+        // Result binding
+        let result_sym = Value::symbol("__param_result__");
+        let body_expr = if items[2..].len() == 1 {
+            items[2].clone()
+        } else {
+            let mut begin = vec![Value::symbol("begin")];
+            begin.extend(items[2..].iter().cloned());
+            Value::list(begin)
+        };
+
+        let result_binding = Value::list(vec![Value::list(vec![result_sym.clone(), body_expr])]);
+
+        let mut inner_body = set_after;
+        inner_body.push(result_sym);
+
+        let mut inner_let_parts = vec![Value::symbol("let"), result_binding];
+        inner_let_parts.extend(inner_body);
+        let inner_let = Value::list(inner_let_parts);
+
+        body_parts.push(inner_let);
+
+        let mut outer_parts = vec![Value::symbol("let"), save_list];
+        outer_parts.extend(body_parts);
+        let outer = Value::list(outer_parts);
+
+        let items_vec = outer.to_vec().unwrap();
+        self.compile_let(&items_vec, tail)
     }
 
     /// Compile `(apply fn arg ... list)`.

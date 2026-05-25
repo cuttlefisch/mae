@@ -838,8 +838,7 @@ fn register_control(vm: &mut Vm) {
 // -- §6.10 Higher-order list operations --
 
 fn register_list_ops(vm: &mut Vm) {
-    // map and for-each require calling Scheme closures, so they're
-    // implemented as Scheme code rather than foreign functions.
+    // Higher-order list ops and R7RS features implemented as Scheme code.
     // This follows the Chibi-Scheme pattern (init-7.scm).
     let bootstrap = r#"
         (define (map f lst)
@@ -872,6 +871,70 @@ fn register_list_ops(vm: &mut Vm) {
             (if (list? vals)
                 (apply consumer vals)
                 (consumer vals))))
+
+        ;; R7RS §6.4 Extended cXXXr accessors
+        (define (caaar x) (car (car (car x))))
+        (define (caadr x) (car (car (cdr x))))
+        (define (cadar x) (car (cdr (car x))))
+        (define (caddr x) (car (cdr (cdr x))))
+        (define (cdaar x) (cdr (car (car x))))
+        (define (cdadr x) (cdr (car (cdr x))))
+        (define (cddar x) (cdr (cdr (car x))))
+        (define (cdddr x) (cdr (cdr (cdr x))))
+
+        ;; R7RS §4.2.6 make-parameter — parameter objects as closures.
+        ;; A parameter is a closure wrapping a mutable cell.
+        ;; (param) → current value, (param v) → set value, returns void.
+        (define (make-parameter init . args)
+          (let ((value init)
+                (converter (if (null? args) (lambda (x) x) (car args))))
+            (lambda rest
+              (if (null? rest)
+                  value
+                  (begin (set! value (converter (car rest))) (void))))))
+
+        ;; R7RS §6.10 dynamic-wind
+        (define (dynamic-wind before thunk after)
+          (before)
+          (let ((result (thunk)))
+            (after)
+            result))
+
+        ;; R7RS §4.2.5 Promises (delay/force)
+        ;; Uses a mutable vector #(promise done? value/thunk)
+        (define (make-promise done? value)
+          (vector 'promise done? value))
+
+        (define (promise? obj)
+          (and (vector? obj)
+               (> (vector-length obj) 0)
+               (eq? (vector-ref obj 0) 'promise)))
+
+        (define-syntax delay
+          (syntax-rules ()
+            ((delay expr)
+             (make-promise #f (lambda () expr)))))
+
+        (define-syntax delay-force
+          (syntax-rules ()
+            ((delay-force expr)
+             (make-promise #f (lambda () expr)))))
+
+        (define (force promise)
+          (if (not (promise? promise))
+              promise
+              (if (vector-ref promise 1)
+                  (vector-ref promise 2)
+                  (let ((val ((vector-ref promise 2))))
+                    (vector-set! promise 1 #t)
+                    (vector-set! promise 2 val)
+                    val))))
+
+        ;; R7RS §5.5 define-record-type
+        ;; Implemented as a Rust-side function (registered below) because:
+        ;; 1. syntax-rules can't do arithmetic on field indices
+        ;; 2. define-macro doesn't support rest args (dotted pairs)
+        ;; The Rust implementation is registered in register_record_type().
     "#;
     vm.eval(bootstrap)
         .unwrap_or_else(|e| panic!("failed to bootstrap list ops: {e}"));
@@ -1279,5 +1342,128 @@ mod tests {
     fn test_error() {
         let e = eval_err("(error \"boom\" 1 2)");
         assert!(e.to_string().contains("boom"));
+    }
+
+    // -- Dynamic-wind --
+
+    #[test]
+    fn test_dynamic_wind_basic() {
+        // Simple test: before/thunk/after all execute
+        let val = eval(
+            "(let ((x '()))
+               (dynamic-wind
+                 (lambda () (set! x (cons 'in x)))
+                 (lambda () (set! x (cons 'body x)))
+                 (lambda () (set! x (cons 'out x))))
+               x)",
+        );
+        let list = val.to_list().unwrap();
+        assert_eq!(list.len(), 3, "dynamic-wind result: {val}");
+    }
+
+    #[test]
+    fn test_dynamic_wind_debug() {
+        // Even simpler: just test closure mutation with set!
+        let val = eval(
+            "(let ((x '()))
+               (let ((f (lambda () (set! x (cons 'a x)))))
+                 (f)
+                 (f)
+                 x))",
+        );
+        let list = val.to_list().unwrap();
+        assert_eq!(list.len(), 2, "closure mutation: {val}");
+    }
+
+    // -- Make-parameter --
+
+    #[test]
+    fn test_make_parameter() {
+        assert_eq!(eval("(let ((p (make-parameter 10))) (p))"), Value::Int(10));
+        assert_eq!(
+            eval("(let ((p (make-parameter 10))) (p 20) (p))"),
+            Value::Int(20)
+        );
+    }
+
+    // -- Quasiquote --
+
+    #[test]
+    fn test_quasiquote_basic() {
+        // Basic unquote
+        assert_eq!(eval("`42"), Value::Int(42));
+        assert_eq!(eval("(let ((x 10)) `,x)"), Value::Int(10));
+    }
+
+    #[test]
+    fn test_quasiquote_list() {
+        // Simple list — no unquotes
+        assert_eq!(eval("(equal? `(a) '(a))"), Value::Bool(true));
+        assert_eq!(eval("(equal? `(a b) '(a b))"), Value::Bool(true));
+        // With unquote variable
+        assert_eq!(eval("(equal? (let ((x 1)) `(,x)) '(1))"), Value::Bool(true),);
+        assert_eq!(
+            eval("(equal? (let ((x 1)) `(a ,x c)) '(a 1 c))"),
+            Value::Bool(true),
+        );
+    }
+
+    #[test]
+    fn test_quasiquote_splicing() {
+        // Splicing
+        assert_eq!(
+            eval("(equal? (let ((xs '(1 2 3))) `(a ,@xs b)) '(a 1 2 3 b))"),
+            Value::Bool(true)
+        );
+    }
+
+    // -- Case --
+
+    #[test]
+    fn test_case() {
+        assert_eq!(
+            eval("(case (+ 1 1) ((1) 'one) ((2) 'two) ((3) 'three))"),
+            Value::symbol("two")
+        );
+        assert_eq!(
+            eval("(case 5 ((1 2 3) 'small) (else 'big))"),
+            Value::symbol("big")
+        );
+    }
+
+    // -- Case-lambda --
+
+    #[test]
+    fn test_case_lambda() {
+        assert_eq!(
+            eval("(let ((f (case-lambda ((x) x) ((x y) (+ x y))))) (f 5))"),
+            Value::Int(5)
+        );
+        assert_eq!(
+            eval("(let ((f (case-lambda ((x) x) ((x y) (+ x y))))) (f 3 4))"),
+            Value::Int(7)
+        );
+    }
+
+    // -- Do --
+
+    #[test]
+    fn test_do() {
+        assert_eq!(
+            eval("(do ((i 0 (+ i 1)) (sum 0 (+ sum i))) ((= i 5) sum))"),
+            Value::Int(10)
+        );
+    }
+
+    // -- Delay/Force --
+
+    #[test]
+    fn test_delay_force() {
+        assert_eq!(eval("(force (delay (+ 1 2)))"), Value::Int(3));
+        // Test memoization
+        assert_eq!(
+            eval("(let ((p (delay (+ 1 2)))) (force p) (force p))"),
+            Value::Int(3)
+        );
     }
 }

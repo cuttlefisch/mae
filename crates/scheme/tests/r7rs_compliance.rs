@@ -149,6 +149,10 @@ fn s4_2_2_let() {
            (if (= n 0) acc (loop (- n 1) (+ acc n))))",
         55,
     );
+    // let as subexpression — locals must not corrupt enclosing stack
+    is_int("(+ 10 (let ((x 1)) (+ x 2)))", 13);
+    is_true("(equal? (let ((x 1)) (cons x '())) '(1))");
+    is_true("(not (let ((x 1)) (= x 2)))");
 }
 
 #[test]
@@ -171,6 +175,77 @@ fn s4_2_2_letrec() {
 fn s4_2_3_begin() {
     is_int("(begin 1 2 3)", 3);
     is_int("(begin (define x 1) (set! x 2) x)", 2);
+}
+
+// §4.2.6 Quasiquotation
+#[test]
+fn s4_2_6_quasiquote() {
+    is_true("(equal? `(a b c) '(a b c))");
+    is_true("(equal? (let ((x 1)) `(a ,x c)) '(a 1 c))");
+    is_true("(equal? (let ((x '(1 2))) `(a ,@x c)) '(a 1 2 c))");
+    is_int("`42", 42);
+    is_true("(equal? (let ((x 10)) `,x) 10)");
+}
+
+// §4.2.7 case
+#[test]
+fn s4_2_7_case() {
+    is_true(
+        "(equal? (case (+ 1 1)
+                  ((1) 'one)
+                  ((2) 'two)
+                  ((3) 'three))
+                'two)",
+    );
+    is_true(
+        "(equal? (case 99
+                  ((1) 'one)
+                  (else 'other))
+                'other)",
+    );
+}
+
+// §4.2.9 case-lambda
+#[test]
+fn s4_2_9_case_lambda() {
+    is_int(
+        "(let ((f (case-lambda
+                    ((x) x)
+                    ((x y) (+ x y))
+                    ((x y z) (+ x y z)))))
+           (+ (f 1) (f 2 3) (f 4 5 6)))",
+        21,
+    );
+}
+
+// §4.2.7 do
+#[test]
+fn s4_2_7_do() {
+    is_int(
+        "(do ((i 0 (+ i 1))
+              (sum 0 (+ sum i)))
+             ((= i 5) sum))",
+        10,
+    );
+}
+
+// §4.2.7 parameterize
+#[test]
+fn s4_2_7_parameterize() {
+    is_int(
+        "(let ((p (make-parameter 10)))
+           (parameterize ((p 42))
+             (p)))",
+        42,
+    );
+    // Parameter restored after parameterize
+    is_int(
+        "(let ((p (make-parameter 10)))
+           (parameterize ((p 42))
+             'ignored)
+           (p))",
+        10,
+    );
 }
 
 // ============================================================================

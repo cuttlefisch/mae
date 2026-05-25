@@ -366,25 +366,39 @@ impl Vm {
                 }
 
                 Op::LoadLocal(idx) => {
-                    let bp = self.frames.last().unwrap().bp;
-                    let abs_idx = bp + idx;
-                    let val = if abs_idx < self.stack.len() {
-                        self.stack[abs_idx].clone()
+                    // If this local has been captured as a mutable cell,
+                    // read from the cell (so closure mutations are visible).
+                    let frame = self.frames.last().unwrap();
+                    if let Some(cell) = frame.local_cells.get(&idx) {
+                        self.stack.push(cell.borrow().clone());
                     } else {
-                        Value::Undefined
-                    };
-                    self.stack.push(val);
+                        let bp = frame.bp;
+                        let abs_idx = bp + idx;
+                        let val = if abs_idx < self.stack.len() {
+                            self.stack[abs_idx].clone()
+                        } else {
+                            Value::Undefined
+                        };
+                        self.stack.push(val);
+                    }
                 }
 
                 Op::StoreLocal(idx) => {
                     let val = self.stack.pop().unwrap_or(Value::Void);
-                    let bp = self.frames.last().unwrap().bp;
-                    let abs_idx = bp + idx;
-                    // Extend stack if needed (internal defines create new locals)
-                    while abs_idx >= self.stack.len() {
-                        self.stack.push(Value::Undefined);
+                    // If this local has been captured as a mutable cell,
+                    // write to the cell (so closure reads see the update).
+                    let frame = self.frames.last_mut().unwrap();
+                    if let Some(cell) = frame.local_cells.get(&idx) {
+                        *cell.borrow_mut() = val;
+                    } else {
+                        let bp = frame.bp;
+                        let abs_idx = bp + idx;
+                        // Extend stack if needed (internal defines create new locals)
+                        while abs_idx >= self.stack.len() {
+                            self.stack.push(Value::Undefined);
+                        }
+                        self.stack[abs_idx] = val;
                     }
-                    self.stack[abs_idx] = val;
                 }
 
                 Op::LoadUpvalue(idx) => {
