@@ -670,8 +670,12 @@ impl Vm {
             // Unwind to handler state
             self.stack.truncate(handler.stack_depth);
             self.frames.truncate(handler.frame_depth);
-            // Push the error message as the exception value
-            let exception = Value::string(err.message());
+            // Push the error value (structured if available, string fallback)
+            let exception = err
+                .error_value
+                .clone()
+                .map(|v| *v)
+                .unwrap_or_else(|| Value::string(err.message()));
             self.stack.push(exception);
             // Jump to handler code
             if let Some(frame) = self.frames.last_mut() {

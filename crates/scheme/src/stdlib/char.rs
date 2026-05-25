@@ -57,7 +57,7 @@ pub fn register(vm: &mut Vm) {
     );
 
     vm.register_fn("char-numeric?", "Is numeric?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(args[0].as_char()?.is_ascii_digit()))
+        Ok(Value::Bool(args[0].as_char()?.is_numeric()))
     });
 
     vm.register_fn(

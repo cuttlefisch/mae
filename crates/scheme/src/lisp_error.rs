@@ -54,6 +54,10 @@ pub struct LispError {
     pub kind: ErrorKind,
     pub location: Option<SourceLocation>,
     pub stack_trace: Vec<StackFrame>,
+    /// Optional Scheme value representing this error (for guard handlers).
+    /// When `error` or `raise` creates a Scheme-level exception, the actual
+    /// value is stored here so `handle_exception` can push it on the stack.
+    pub error_value: Option<Box<crate::value::Value>>,
 }
 
 /// Stack frame for error reporting.
@@ -113,6 +117,7 @@ impl LispError {
             kind: ErrorKind::Read(msg.into()),
             location: None,
             stack_trace: Vec::new(),
+            error_value: None,
         }
     }
 
@@ -121,6 +126,7 @@ impl LispError {
             kind: ErrorKind::Read(msg.into()),
             location: Some(loc),
             stack_trace: Vec::new(),
+            error_value: None,
         }
     }
 
@@ -132,6 +138,7 @@ impl LispError {
             },
             location: None,
             stack_trace: Vec::new(),
+            error_value: None,
         }
     }
 
@@ -143,6 +150,7 @@ impl LispError {
             },
             location: None,
             stack_trace: Vec::new(),
+            error_value: None,
         }
     }
 
@@ -155,6 +163,7 @@ impl LispError {
             },
             location: None,
             stack_trace: Vec::new(),
+            error_value: None,
         }
     }
 
@@ -163,6 +172,7 @@ impl LispError {
             kind: ErrorKind::Undefined { name: name.into() },
             location: None,
             stack_trace: Vec::new(),
+            error_value: None,
         }
     }
 
@@ -174,6 +184,7 @@ impl LispError {
             },
             location: None,
             stack_trace: Vec::new(),
+            error_value: None,
         }
     }
 
@@ -185,6 +196,7 @@ impl LispError {
             },
             location: None,
             stack_trace: Vec::new(),
+            error_value: None,
         }
     }
 
@@ -193,6 +205,7 @@ impl LispError {
             kind: ErrorKind::Immutable { what: what.into() },
             location: None,
             stack_trace: Vec::new(),
+            error_value: None,
         }
     }
 
@@ -201,6 +214,7 @@ impl LispError {
             kind: ErrorKind::DivisionByZero,
             location: None,
             stack_trace: Vec::new(),
+            error_value: None,
         }
     }
 
@@ -209,6 +223,7 @@ impl LispError {
             kind: ErrorKind::Internal(msg.into()),
             location: None,
             stack_trace: Vec::new(),
+            error_value: None,
         }
     }
 
@@ -333,6 +348,7 @@ mod tests {
                 line: 15,
                 column: 1,
             }),
+            error_value: None,
             stack_trace: vec![
                 StackFrame {
                     function: "compute".into(),

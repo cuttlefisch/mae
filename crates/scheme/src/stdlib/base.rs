@@ -3,11 +3,32 @@
 //! Equivalence predicates, arithmetic, booleans, pairs/lists, symbols,
 //! control flow, and exceptions.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::lisp_error::{Arity, LispError};
 use crate::value::Value;
 use crate::vm::Vm;
+
+/// Check if a value is an error object (tagged vector starting with 'error-object).
+fn is_error_object(v: &Value) -> bool {
+    get_error_object_fields(v).is_some()
+}
+
+/// Extract error object fields if value is a tagged error vector.
+fn get_error_object_fields(v: &Value) -> Option<Vec<Value>> {
+    if let Value::Vector(rc) = v {
+        let fields = rc.borrow();
+        if fields.len() == 4 {
+            if let Value::Symbol(s) = &fields[0] {
+                if s.name() == "error-object" {
+                    return Some(fields.to_vec());
+                }
+            }
+        }
+    }
+    None
+}
 
 pub fn register(vm: &mut Vm) {
     register_equivalence(vm);
@@ -469,6 +490,23 @@ fn register_arithmetic(vm: &mut Vm) {
             _ => Err(LispError::type_error("number", format!("{}", args[0]))),
         },
     );
+
+    vm.register_fn(
+        "infinite?",
+        "Is infinite?",
+        Arity::Fixed(1),
+        |args| match &args[0] {
+            Value::Float(f) => Ok(Value::Bool(f.is_infinite())),
+            Value::Int(_) => Ok(Value::Bool(false)),
+            _ => Err(LispError::type_error("number", format!("{}", args[0]))),
+        },
+    );
+
+    vm.register_fn("nan?", "Is NaN?", Arity::Fixed(1), |args| match &args[0] {
+        Value::Float(f) => Ok(Value::Bool(f.is_nan())),
+        Value::Int(_) => Ok(Value::Bool(false)),
+        _ => Err(LispError::type_error("number", format!("{}", args[0]))),
+    });
 }
 
 // -- §6.3 Booleans --
@@ -979,11 +1017,13 @@ fn register_list_ops(vm: &mut Vm) {
                   (begin (set! value (converter (car rest))) (void))))))
 
         ;; R7RS §6.10 dynamic-wind
+        ;; Ensures `after` runs even if `thunk` raises an exception.
         (define (dynamic-wind before thunk after)
           (before)
-          (let ((result (thunk)))
-            (after)
-            result))
+          (guard (exn (#t (after) (raise exn)))
+            (let ((result (thunk)))
+              (after)
+              result)))
 
         ;; R7RS §6.7 string-for-each and string-map (multi-string)
         (define (string-for-each f . strs)
@@ -1013,8 +1053,17 @@ fn register_list_ops(vm: &mut Vm) {
 
         ;; R7RS §4.2.5 Promises (delay/force)
         ;; Uses a mutable vector #(promise done? value/thunk)
-        (define (make-promise done? value)
+        ;; Internal constructor
+        (define (%make-promise-internal done? value)
           (vector 'promise done? value))
+
+        ;; R7RS make-promise: wraps value in already-forced promise
+        (define (make-promise obj)
+          (if (and (vector? obj)
+                   (> (vector-length obj) 0)
+                   (eq? (vector-ref obj 0) 'promise))
+              obj
+              (%make-promise-internal #t obj)))
 
         (define (promise? obj)
           (and (vector? obj)
@@ -1024,12 +1073,12 @@ fn register_list_ops(vm: &mut Vm) {
         (define-syntax delay
           (syntax-rules ()
             ((delay expr)
-             (make-promise #f (lambda () expr)))))
+             (%make-promise-internal #f (lambda () expr)))))
 
         (define-syntax delay-force
           (syntax-rules ()
             ((delay-force expr)
-             (make-promise #f (lambda () expr)))))
+             (%make-promise-internal #f (lambda () expr)))))
 
         (define (force promise)
           (if (not (promise? promise))
@@ -1238,41 +1287,64 @@ fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
 // -- §6.11 Exceptions --
 
 fn register_exceptions(vm: &mut Vm) {
+    // error: Creates a tagged error object vector and raises it.
+    // The error object is #(error-object message type irritants-list)
     vm.register_fn("error", "Raise an error", Arity::Variadic(1), |args| {
         let msg = match &args[0] {
+            Value::String(s) => Value::String(s.clone()),
+            other => Value::string(format!("{other}")),
+        };
+        let irritants = Value::list(args[1..].to_vec());
+        // Build error object as tagged vector: #(error-object msg "error" irritants)
+        let err_obj = Value::Vector(Rc::new(RefCell::new(vec![
+            Value::symbol("error-object"),
+            msg.clone(),
+            Value::string("error"),
+            irritants,
+        ])));
+        // Store display form in LispError for Rust-side reporting
+        let display_msg = match &args[0] {
             Value::String(s) => s.to_string(),
             other => format!("{other}"),
         };
-        let irritants: Vec<String> = args[1..].iter().map(|v| format!("{v}")).collect();
-        Err(LispError::user(&msg, irritants))
+        let irritant_strs: Vec<String> = args[1..].iter().map(|v| format!("{v}")).collect();
+        let mut err = LispError::user(display_msg, irritant_strs);
+        // Stash the error object value so handle_exception can use it
+        err.error_value = Some(Box::new(err_obj));
+        Err(err)
     });
 
     vm.register_fn(
         "error-object?",
         "Is error object?",
         Arity::Fixed(1),
-        |_args| {
-            // Error objects don't exist as values in our implementation —
-            // they're Rust LispError. Always false for values.
-            Ok(Value::Bool(false))
-        },
+        |args| Ok(Value::Bool(is_error_object(&args[0]))),
     );
 
     vm.register_fn(
         "error-object-message",
         "Get error message",
         Arity::Fixed(1),
-        |args| match &args[0] {
-            Value::String(s) => Ok(Value::String(s.clone())),
-            _ => Err(LispError::type_error(
-                "error-object",
-                format!("{}", args[0]),
-            )),
+        |args| {
+            if let Some(fields) = get_error_object_fields(&args[0]) {
+                Ok(fields[1].clone()) // message field
+            } else {
+                // Fallback: treat string as error message
+                match &args[0] {
+                    Value::String(s) => Ok(Value::String(s.clone())),
+                    _ => Err(LispError::type_error(
+                        "error-object",
+                        format!("{}", args[0]),
+                    )),
+                }
+            }
         },
     );
 
     vm.register_fn("raise", "Raise exception value", Arity::Fixed(1), |args| {
-        Err(LispError::user(format!("{}", args[0]), vec![]))
+        let mut err = LispError::user(format!("{}", args[0]), vec![]);
+        err.error_value = Some(Box::new(args[0].clone()));
+        Err(err)
     });
 
     vm.register_fn(
@@ -1280,8 +1352,9 @@ fn register_exceptions(vm: &mut Vm) {
         "Raise continuable exception",
         Arity::Fixed(1),
         |args| {
-            // For now, same as raise (no continuable distinction)
-            Err(LispError::user(format!("{}", args[0]), vec![]))
+            let mut err = LispError::user(format!("{}", args[0]), vec![]);
+            err.error_value = Some(Box::new(args[0].clone()));
+            Err(err)
         },
     );
 
@@ -1289,14 +1362,26 @@ fn register_exceptions(vm: &mut Vm) {
         "error-object-irritants",
         "Get error irritants",
         Arity::Fixed(1),
-        |_args| Ok(Value::Null), // Irritants not preserved as values
+        |args| {
+            if let Some(fields) = get_error_object_fields(&args[0]) {
+                Ok(fields[3].clone()) // irritants field
+            } else {
+                Ok(Value::Null)
+            }
+        },
     );
 
     vm.register_fn(
         "error-object-type",
         "Get error type",
         Arity::Fixed(1),
-        |_args| Ok(Value::Bool(false)),
+        |args| {
+            if let Some(fields) = get_error_object_fields(&args[0]) {
+                Ok(fields[2].clone()) // type field
+            } else {
+                Ok(Value::string("error"))
+            }
+        },
     );
 
     vm.register_fn("file-error?", "Is file error?", Arity::Fixed(1), |_args| {

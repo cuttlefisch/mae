@@ -1217,9 +1217,14 @@ fn s6_11_guard_body_returns_normally() {
 
 #[test]
 fn s6_11_error_with_irritants() {
-    // error with irritants — guard catches
+    // error with irritants — guard catches error object
     is_true(
-        "(guard (exn (#t (string? exn)))
+        "(guard (exn (#t (error-object? exn)))
+           (error \"bad value\" 42))",
+    );
+    // Can extract message from error object
+    is_true(
+        "(guard (exn (#t (string? (error-object-message exn))))
            (error \"bad value\" 42))",
     );
 }
@@ -2227,4 +2232,1019 @@ fn s6_13_read_char_from_file() {
         Value::Char('X'),
     );
     std::fs::remove_file(tmp).ok();
+}
+
+// ============================================================================
+// Edge-case tests: Comprehensive R7RS compliance edge cases
+// ============================================================================
+
+// --- §6.2 Numeric edge cases ---
+
+#[test]
+fn edge_numeric_infinity_nan() {
+    // +inf.0 and -inf.0
+    is_true("(number? +inf.0)");
+    is_true("(number? -inf.0)");
+    is_true("(inexact? +inf.0)");
+
+    // NaN
+    is_true("(number? +nan.0)");
+    is_true("(inexact? +nan.0)");
+
+    // NaN is not equal to itself (IEEE 754)
+    is_false("(= +nan.0 +nan.0)");
+
+    // Arithmetic with infinity
+    is_true("(inexact? (+ +inf.0 1))");
+    is_true("(inexact? (* 2 +inf.0))");
+
+    // Comparisons with infinity
+    is_true("(> +inf.0 999999999)");
+    is_true("(< -inf.0 -999999999)");
+
+    // infinite? and nan? predicates
+    is_true("(infinite? +inf.0)");
+    is_true("(infinite? -inf.0)");
+    is_false("(infinite? 42)");
+    is_true("(nan? +nan.0)");
+    is_false("(nan? 0)");
+}
+
+#[test]
+fn edge_numeric_negative_zero() {
+    // R7RS: -0.0 is eqv? to 0.0
+    is_true("(eqv? 0.0 -0.0)");
+    is_true("(= 0.0 -0.0)");
+    is_true("(zero? -0.0)");
+}
+
+#[test]
+fn edge_numeric_exact_inexact() {
+    // exact->inexact / inexact->exact
+    assert_eq!(eval("(exact->inexact 5)"), Value::Float(5.0));
+    assert_eq!(eval("(inexact->exact 5.0)"), Value::Int(5));
+
+    // exact? and inexact?
+    is_true("(exact? 42)");
+    is_false("(exact? 3.14)");
+    is_true("(inexact? 3.14)");
+    is_false("(inexact? 42)");
+}
+
+#[test]
+fn edge_numeric_division_by_zero() {
+    // Division by zero should error
+    let err = eval_err("(/ 1 0)");
+    assert!(
+        err.contains("zero") || err.contains("division"),
+        "expected division error: {err}"
+    );
+
+    let err = eval_err("(quotient 5 0)");
+    assert!(
+        err.contains("zero") || err.contains("division"),
+        "expected division error: {err}"
+    );
+
+    let err = eval_err("(remainder 5 0)");
+    assert!(
+        err.contains("zero") || err.contains("division"),
+        "expected division error: {err}"
+    );
+
+    let err = eval_err("(modulo 5 0)");
+    assert!(
+        err.contains("zero") || err.contains("division"),
+        "expected division error: {err}"
+    );
+}
+
+#[test]
+fn edge_numeric_no_args() {
+    // (+) => 0, (*) => 1 (identity elements)
+    is_int("(+)", 0);
+    is_int("(*)", 1);
+}
+
+#[test]
+fn edge_numeric_unary_minus_div() {
+    // (- x) => negation, (/ x) => reciprocal
+    is_int("(- 5)", -5);
+    assert_eq!(eval("(/ 4)"), Value::Float(0.25));
+}
+
+#[test]
+fn edge_numeric_mixed_types() {
+    // Int + Float -> Float (contagion)
+    assert_eq!(eval("(+ 1 1.0)"), Value::Float(2.0));
+    assert_eq!(eval("(* 2 3.0)"), Value::Float(6.0));
+
+    // min/max with mixed types
+    is_true("(= (min 1 2.0) 1)");
+    is_true("(= (max 1 2.0) 2.0)");
+}
+
+#[test]
+fn edge_numeric_rounding() {
+    // Banker's rounding: half to even
+    is_int("(round 0.5)", 0); // 0 is even
+    is_int("(round 1.5)", 2); // 2 is even
+    is_int("(round 2.5)", 2); // 2 is even
+    is_int("(round 3.5)", 4); // 4 is even
+    is_int("(round -0.5)", 0); // 0 is even
+    is_int("(round -1.5)", -2); // -2 is even
+
+    // Non-halfway cases
+    is_int("(round 2.3)", 2);
+    is_int("(round 2.7)", 3);
+    is_int("(round -2.3)", -2);
+    is_int("(round -2.7)", -3);
+}
+
+#[test]
+fn edge_numeric_floor_ceiling_truncate() {
+    // Floor: toward -inf
+    is_int("(floor 2.7)", 2);
+    is_int("(floor -2.3)", -3);
+    is_int("(floor 5)", 5);
+
+    // Ceiling: toward +inf
+    is_int("(ceiling 2.3)", 3);
+    is_int("(ceiling -2.7)", -2);
+    is_int("(ceiling 5)", 5);
+
+    // Truncate: toward zero
+    is_int("(truncate 2.7)", 2);
+    is_int("(truncate -2.7)", -2);
+}
+
+#[test]
+fn edge_numeric_number_to_string_radix() {
+    assert_eq!(
+        eval("(number->string 255 16)"),
+        Value::String(Rc::from("ff"))
+    );
+    assert_eq!(
+        eval("(number->string 10 2)"),
+        Value::String(Rc::from("1010"))
+    );
+    assert_eq!(eval("(number->string 8 8)"), Value::String(Rc::from("10")));
+    assert_eq!(
+        eval("(number->string -5 10)"),
+        Value::String(Rc::from("-5"))
+    );
+}
+
+#[test]
+fn edge_numeric_string_to_number() {
+    is_int("(string->number \"42\")", 42);
+    is_int("(string->number \"ff\" 16)", 255);
+    is_int("(string->number \"1010\" 2)", 10);
+    is_false("(string->number \"not-a-number\")");
+    is_false("(string->number \"\")");
+}
+
+#[test]
+fn edge_numeric_chained_comparisons() {
+    // R7RS comparison operators take 2+ args and are transitive
+    is_true("(< 1 2 3 4 5)");
+    is_false("(< 1 2 3 3 5)");
+    is_true("(<= 1 2 3 3 5)");
+    is_true("(> 5 4 3 2 1)");
+    is_true("(= 3 3 3 3)");
+    is_false("(= 3 3 4 3)");
+}
+
+// --- §6.1 Equivalence edge cases ---
+
+#[test]
+fn edge_equivalence() {
+    // eq? for booleans (must be identical objects)
+    is_true("(eq? #t #t)");
+    is_true("(eq? #f #f)");
+    is_false("(eq? #t #f)");
+
+    // eq? for symbols
+    is_true("(eq? 'foo 'foo)");
+    is_false("(eq? 'foo 'bar)");
+
+    // eq? for chars
+    is_true("(eq? #\\a #\\a)");
+
+    // eq? for empty list
+    is_true("(eq? '() '())");
+
+    // eqv? for numbers
+    is_true("(eqv? 42 42)");
+    is_false("(eqv? 42 42.0)"); // exact != inexact
+
+    // equal? — structural
+    is_true("(equal? '(1 2 3) '(1 2 3))");
+    is_true("(equal? \"hello\" \"hello\")");
+    is_true("(equal? #(1 2 3) #(1 2 3))");
+    is_false("(equal? '(1 2) '(1 3))");
+}
+
+// --- §6.4 Pairs and lists edge cases ---
+
+#[test]
+fn edge_pairs_dotted() {
+    // Dotted pairs
+    is_int("(car '(1 . 2))", 1);
+    is_int("(cdr '(1 . 2))", 2);
+
+    // pair? vs list?
+    is_true("(pair? '(1 . 2))");
+    is_true("(pair? '(1 2 3))");
+    is_false("(pair? '())");
+
+    // list? requires proper list
+    is_true("(list? '())");
+    is_true("(list? '(1 2 3))");
+    is_false("(list? '(1 . 2))");
+}
+
+#[test]
+fn edge_list_operations() {
+    // length of empty list
+    is_int("(length '())", 0);
+
+    // append edge cases
+    is_true("(equal? (append '() '(1 2)) '(1 2))");
+    is_true("(equal? (append '(1) '()) '(1))");
+    is_true("(equal? (append '() '()) '())");
+
+    // reverse empty
+    is_true("(equal? (reverse '()) '())");
+    is_true("(equal? (reverse '(1)) '(1))");
+
+    // assoc/assv/assq
+    is_true("(equal? (assoc 'b '((a 1) (b 2) (c 3))) '(b 2))");
+    is_false("(assoc 'z '((a 1) (b 2)))");
+
+    // member/memv/memq
+    is_true("(equal? (member 3 '(1 2 3 4 5)) '(3 4 5))");
+    is_false("(member 6 '(1 2 3 4 5))");
+}
+
+#[test]
+fn edge_list_map_for_each() {
+    // map with empty list
+    is_true("(equal? (map car '()) '())");
+
+    // for-each return value is unspecified; just verify no error
+    eval("(for-each (lambda (x) x) '(1 2 3))");
+
+    // map preserves order
+    is_true("(equal? (map (lambda (x) (* x x)) '(1 2 3)) '(1 4 9))");
+
+    // multi-list map with different lengths — should stop at shortest
+    is_true("(equal? (map + '(1 2) '(10 20 30)) '(11 22))");
+}
+
+// --- §6.3 Boolean edge cases ---
+
+#[test]
+fn edge_booleans() {
+    // Only #f is falsy in Scheme
+    is_true("(if 0 #t #f)"); // 0 is truthy
+    is_true("(if \"\" #t #f)"); // empty string is truthy
+    is_true("(if '() #t #f)"); // empty list is truthy
+    is_true("(if #t #t #f)");
+    is_false("(if #f #t #f)");
+
+    // boolean? predicate
+    is_true("(boolean? #t)");
+    is_true("(boolean? #f)");
+    is_false("(boolean? 0)");
+    is_false("(boolean? '())");
+
+    // boolean=?
+    is_true("(boolean=? #t #t)");
+    is_true("(boolean=? #f #f)");
+    is_false("(boolean=? #t #f)");
+
+    // not
+    is_true("(not #f)");
+    is_false("(not #t)");
+    is_false("(not 42)"); // any non-#f is true
+    is_false("(not '())");
+}
+
+// --- §6.6 Character edge cases ---
+
+#[test]
+fn edge_char_unicode() {
+    // char-numeric? should handle Unicode digits
+    is_true("(char-numeric? #\\5)");
+    is_true("(char-alphabetic? #\\a)");
+    is_true("(char-alphabetic? #\\Z)");
+
+    // char->integer / integer->char round-trip
+    is_true("(char=? (integer->char (char->integer #\\A)) #\\A)");
+
+    // Unicode char
+    is_true("(char=? (integer->char 955) #\\λ)"); // Greek lambda
+    is_int("(char->integer #\\λ)", 955);
+
+    // digit-value
+    is_int("(digit-value #\\0)", 0);
+    is_int("(digit-value #\\9)", 9);
+    is_false("(digit-value #\\a)"); // not a digit
+}
+
+#[test]
+fn edge_char_case() {
+    assert_eq!(eval("(char-upcase #\\a)"), Value::Char('A'));
+    assert_eq!(eval("(char-downcase #\\A)"), Value::Char('a'));
+    // Already uppercase/lowercase
+    assert_eq!(eval("(char-upcase #\\A)"), Value::Char('A'));
+    assert_eq!(eval("(char-downcase #\\a)"), Value::Char('a'));
+    // Non-letter character
+    assert_eq!(eval("(char-upcase #\\5)"), Value::Char('5'));
+
+    // Case-insensitive comparison
+    is_true("(char-ci=? #\\a #\\A)");
+    is_true("(char-ci=? #\\Z #\\z)");
+}
+
+// --- §6.7 String edge cases ---
+
+#[test]
+fn edge_string_unicode_length() {
+    // string-length must count chars, not bytes
+    // "λ" is 2 bytes in UTF-8 but 1 character
+    is_int("(string-length \"λ\")", 1);
+    // "café" — é is multi-byte
+    is_int("(string-length \"café\")", 4);
+    // "日本語" — 3 chars, 9 bytes
+    is_int("(string-length \"日本語\")", 3);
+    // Empty string
+    is_int("(string-length \"\")", 0);
+}
+
+#[test]
+fn edge_string_ref_unicode() {
+    // string-ref must index by character, not byte
+    assert_eq!(eval("(string-ref \"café\" 3)"), Value::Char('é'));
+    assert_eq!(eval("(string-ref \"日本語\" 1)"), Value::Char('本'));
+}
+
+#[test]
+fn edge_substring_unicode() {
+    assert_eq!(
+        eval("(substring \"日本語\" 1 2)"),
+        Value::String(Rc::from("本")),
+    );
+    // substring without end = rest of string (by chars)
+    assert_eq!(
+        eval("(substring \"café\" 2)"),
+        Value::String(Rc::from("fé")),
+    );
+}
+
+#[test]
+fn edge_string_empty() {
+    // Empty string operations
+    assert_eq!(eval("(string-append)"), Value::String(Rc::from("")),);
+    assert_eq!(
+        eval("(string-append \"\" \"\")"),
+        Value::String(Rc::from("")),
+    );
+    is_true("(string=? \"\" \"\")");
+    is_false("(string<? \"\" \"\")");
+    is_true("(string<=? \"\" \"\")");
+}
+
+#[test]
+fn edge_string_immutable() {
+    // string-set! should error (immutable strings)
+    let err = eval_err("(string-set! \"hello\" 0 #\\H)");
+    assert!(
+        err.contains("immutable") || err.contains("Immutable"),
+        "expected immutable error: {err}"
+    );
+}
+
+#[test]
+fn edge_string_foldcase() {
+    assert_eq!(
+        eval("(string-foldcase \"ABC\")"),
+        Value::String(Rc::from("abc")),
+    );
+    assert_eq!(
+        eval("(string-foldcase \"already\")"),
+        Value::String(Rc::from("already")),
+    );
+}
+
+// --- §6.8 Vector edge cases ---
+
+#[test]
+fn edge_vector_empty() {
+    is_int("(vector-length #())", 0);
+    is_true("(equal? (vector->list #()) '())");
+    is_true("(equal? (list->vector '()) #())");
+}
+
+#[test]
+fn edge_vector_copy_overlap() {
+    // vector-copy with start/end
+    is_true("(equal? (vector-copy #(1 2 3 4 5) 1 3) #(2 3))");
+    // vector-copy!
+    is_true(
+        "(let ((v (vector 1 2 3 4 5)))
+           (vector-copy! v 1 #(10 20))
+           (equal? v #(1 10 20 4 5)))",
+    );
+}
+
+#[test]
+fn edge_vector_fill() {
+    is_true(
+        "(let ((v (make-vector 3 0)))
+           (vector-fill! v 7)
+           (equal? v #(7 7 7)))",
+    );
+}
+
+// --- §6.9 Bytevector edge cases ---
+
+#[test]
+fn edge_bytevector_operations() {
+    is_int("(bytevector-length #u8())", 0);
+    is_int("(bytevector-length #u8(1 2 3))", 3);
+    is_int("(bytevector-u8-ref #u8(10 20 30) 1)", 20);
+
+    // bytevector-copy
+    is_true("(equal? (bytevector-copy #u8(1 2 3 4 5) 1 3) #u8(2 3))");
+
+    // bytevector-append
+    is_true("(equal? (bytevector-append #u8(1 2) #u8(3 4)) #u8(1 2 3 4))");
+    is_true("(equal? (bytevector-append #u8() #u8()) #u8())");
+}
+
+// --- §6.5 Symbol edge cases ---
+
+#[test]
+fn edge_symbols() {
+    // symbol->string / string->symbol round-trip
+    is_true("(eq? (string->symbol \"hello\") 'hello)");
+    assert_eq!(
+        eval("(symbol->string 'hello)"),
+        Value::String(Rc::from("hello")),
+    );
+
+    // symbol=? (R7RS §6.5)
+    is_true("(symbol=? 'abc 'abc)");
+    is_false("(symbol=? 'abc 'def)");
+
+    // symbol? predicate
+    is_true("(symbol? 'x)");
+    is_false("(symbol? \"x\")");
+    is_false("(symbol? 42)");
+}
+
+// --- §6.10 Control edge cases ---
+
+#[test]
+fn edge_apply_multi_arg() {
+    // (apply fn a1 a2 ... list) — cons chain desugaring
+    is_int("(apply + 1 2 '(3))", 6);
+    is_int("(apply + 1 2 3 '(4))", 10);
+    is_int("(apply + '(1 2 3 4))", 10);
+}
+
+#[test]
+fn edge_values_and_call_with_values() {
+    // Single value
+    is_int("(call-with-values (lambda () 42) (lambda (x) x))", 42);
+
+    // Multiple values
+    is_int(
+        "(call-with-values (lambda () (values 1 2 3)) (lambda (a b c) (+ a b c)))",
+        6,
+    );
+
+    // values with one arg = identity
+    is_int("(values 42)", 42);
+}
+
+#[test]
+fn edge_dynamic_wind_order() {
+    // Verify in/thunk/out ordering
+    is_true(
+        "(let ((log '()))
+           (dynamic-wind
+             (lambda () (set! log (cons 'in log)))
+             (lambda () (set! log (cons 'body log)) 42)
+             (lambda () (set! log (cons 'out log))))
+           (equal? (reverse log) '(in body out)))",
+    );
+}
+
+#[test]
+fn edge_dynamic_wind_exception() {
+    // dynamic-wind out thunk runs even on exception
+    is_true(
+        "(let ((log '()))
+           (guard (e (#t #t))
+             (dynamic-wind
+               (lambda () (set! log (cons 'in log)))
+               (lambda () (error \"boom\"))
+               (lambda () (set! log (cons 'out log)))))
+           (equal? (reverse log) '(in out)))",
+    );
+}
+
+// --- §6.11 Exception edge cases ---
+
+#[test]
+fn edge_exceptions_guard() {
+    // guard with matching clause
+    is_int(
+        "(guard (e ((string? (error-object-message e)) 42))
+           (error \"test\"))",
+        42,
+    );
+
+    // guard with else
+    is_int(
+        "(guard (e (else 99))
+           (error \"anything\"))",
+        99,
+    );
+
+    // Nested guard
+    is_int(
+        "(guard (outer (else 0))
+           (guard (inner ((string? (error-object-message inner)) 42))
+             (error \"inner error\")))",
+        42,
+    );
+}
+
+#[test]
+fn edge_exceptions_error_irritants() {
+    // error-object-irritants returns the irritant values
+    is_true(
+        "(guard (e (#t (equal? (error-object-irritants e) '(1 2 3))))
+           (error \"test\" 1 2 3))",
+    );
+
+    // error-object-type returns the error type string
+    is_true(
+        "(guard (e (#t (string? (error-object-type e))))
+           (error \"typed\" 42))",
+    );
+}
+
+#[test]
+fn edge_exceptions_raise() {
+    // raise a non-error value
+    is_int(
+        "(guard (e ((number? e) e))
+           (raise 42))",
+        42,
+    );
+
+    // raise a string
+    assert_eq!(
+        eval(
+            "(guard (e ((string? e) e))
+               (raise \"hello\"))"
+        ),
+        Value::String(Rc::from("hello")),
+    );
+}
+
+// --- §4.2 Derived expression edge cases ---
+
+#[test]
+fn edge_let_forms() {
+    // Named let (loop)
+    is_int(
+        "(let loop ((n 10) (acc 0))
+           (if (= n 0) acc (loop (- n 1) (+ acc n))))",
+        55,
+    );
+
+    // letrec — mutual recursion
+    is_true(
+        "(letrec ((even? (lambda (n) (if (= n 0) #t (odd? (- n 1)))))
+                  (odd? (lambda (n) (if (= n 0) #f (even? (- n 1))))))
+           (even? 10))",
+    );
+
+    // let* ordering
+    is_int("(let* ((x 1) (y (+ x 1)) (z (+ y 1))) z)", 3);
+}
+
+#[test]
+fn edge_when_unless() {
+    // when: body executes if test is true
+    is_int("(let ((x 0)) (when #t (set! x 42)) x)", 42);
+    is_int("(let ((x 0)) (when #f (set! x 42)) x)", 0);
+
+    // unless: body executes if test is false
+    is_int("(let ((x 0)) (unless #f (set! x 42)) x)", 42);
+    is_int("(let ((x 0)) (unless #t (set! x 42)) x)", 0);
+}
+
+#[test]
+fn edge_do_loop() {
+    // do loop — standard R7RS iteration
+    is_int(
+        "(do ((i 0 (+ i 1))
+              (sum 0 (+ sum i)))
+             ((= i 10) sum))",
+        45,
+    );
+
+    // do with empty body
+    is_int(
+        "(do ((i 0 (+ i 1)))
+             ((= i 5) i))",
+        5,
+    );
+}
+
+// --- §3.5 Tail call positions ---
+
+#[test]
+fn edge_tco_do() {
+    // do in tail position should not overflow
+    is_int(
+        "(do ((i 0 (+ i 1)))
+             ((= i 100000) i))",
+        100000,
+    );
+}
+
+#[test]
+fn edge_tco_cond() {
+    // cond in tail position
+    is_int(
+        "(define (f n)
+           (cond ((= n 0) 42)
+                 (else (f (- n 1)))))
+         (f 100000)",
+        42,
+    );
+}
+
+#[test]
+fn edge_tco_case() {
+    // case in tail position
+    is_int(
+        "(define (f n)
+           (case n
+             ((0) 42)
+             (else (f (- n 1)))))
+         (f 100000)",
+        42,
+    );
+}
+
+#[test]
+fn edge_tco_when() {
+    // when in tail position
+    is_int(
+        "(define (count n)
+           (if (= n 0) 0
+               (begin
+                 (when (> n 0) (count (- n 1))))))
+         (count 100000)",
+        0,
+    );
+}
+
+// --- §4.2.5 Delayed evaluation ---
+
+#[test]
+fn edge_promises() {
+    // delay / force
+    is_int("(force (delay 42))", 42);
+
+    // make-promise
+    is_int("(force (make-promise 42))", 42);
+
+    // Memoization: force should cache
+    is_int(
+        "(let ((p (delay (begin 42))))
+           (force p)
+           (force p))",
+        42,
+    );
+
+    // promise?
+    is_true("(promise? (delay 42))");
+    is_false("(promise? 42)");
+}
+
+// --- §6.10 Parameters ---
+
+#[test]
+fn edge_parameterize() {
+    is_int(
+        "(define p (make-parameter 10))
+         (parameterize ((p 20))
+           (p))",
+        20,
+    );
+
+    // Nested parameterize
+    is_int(
+        "(define p (make-parameter 1))
+         (parameterize ((p 2))
+           (parameterize ((p 3))
+             (p)))",
+        3,
+    );
+
+    // Parameter restored after parameterize
+    is_int(
+        "(define p (make-parameter 1))
+         (parameterize ((p 99))
+           (p))
+         (p)",
+        1,
+    );
+}
+
+// --- Quasiquote edge cases ---
+
+#[test]
+fn edge_quasiquote() {
+    // Basic unquote
+    is_true("(equal? `(1 ,(+ 1 1) 3) '(1 2 3))");
+
+    // Splicing
+    is_true("(equal? `(1 ,@(list 2 3) 4) '(1 2 3 4))");
+
+    // Nested quasiquote
+    is_true("(equal? `(a `(b ,(+ 1 2))) '(a (quasiquote (b (unquote (+ 1 2))))))");
+
+    // Empty splicing
+    is_true("(equal? `(1 ,@'() 2) '(1 2))");
+}
+
+// --- Port edge cases ---
+
+#[test]
+fn edge_port_string_io() {
+    // Read from string port
+    assert_eq!(
+        eval(
+            "(let ((p (open-input-string \"hello\")))
+               (let ((c1 (read-char p))
+                     (c2 (read-char p)))
+                 (string c1 c2)))"
+        ),
+        Value::String(Rc::from("he")),
+    );
+
+    // EOF detection
+    is_true(
+        "(let ((p (open-input-string \"\")))
+           (eof-object? (read-char p)))",
+    );
+
+    // Write to string port
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (write-string \"hello\" p)
+               (write-string \" world\" p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("hello world")),
+    );
+}
+
+#[test]
+fn edge_port_eof() {
+    // eof-object
+    is_true("(eof-object? (eof-object))");
+    is_false("(eof-object? #f)");
+    is_false("(eof-object? 0)");
+
+    // read-char at EOF
+    is_true(
+        "(let ((p (open-input-string \"x\")))
+           (read-char p)
+           (eof-object? (read-char p)))",
+    );
+}
+
+#[test]
+fn edge_port_peek_char() {
+    // peek-char doesn't consume
+    is_true(
+        "(let ((p (open-input-string \"ab\")))
+           (let ((c1 (peek-char p))
+                 (c2 (read-char p))
+                 (c3 (read-char p)))
+             (and (char=? c1 #\\a)
+                  (char=? c2 #\\a)
+                  (char=? c3 #\\b))))",
+    );
+}
+
+#[test]
+fn edge_port_read_sexp() {
+    // read S-expression from string port
+    is_int(
+        "(let ((p (open-input-string \"42\")))
+           (read p))",
+        42,
+    );
+
+    is_true(
+        "(let ((p (open-input-string \"(1 2 3)\")))
+           (equal? (read p) '(1 2 3)))",
+    );
+
+    // Multiple reads
+    is_int(
+        "(let ((p (open-input-string \"1 2 3\")))
+           (read p) (read p) (read p))",
+        3,
+    );
+}
+
+// --- Type predicate edge cases ---
+
+#[test]
+fn edge_type_predicates() {
+    is_true("(number? 42)");
+    is_true("(number? 3.14)");
+    is_true("(number? +inf.0)");
+    is_true("(number? +nan.0)");
+    is_false("(number? \"42\")");
+
+    is_true("(integer? 42)");
+    is_true("(integer? 42.0)"); // exact integer as float
+    is_false("(integer? 3.14)");
+
+    is_true("(string? \"hello\")");
+    is_false("(string? 42)");
+
+    is_true("(char? #\\a)");
+    is_false("(char? \"a\")");
+
+    is_true("(procedure? car)");
+    is_true("(procedure? (lambda (x) x))");
+    is_false("(procedure? 42)");
+
+    is_true("(null? '())");
+    is_false("(null? #f)");
+    is_false("(null? '(1))");
+
+    is_true("(port? (open-input-string \"x\"))");
+    is_true("(input-port? (open-input-string \"x\"))");
+    is_true("(output-port? (open-output-string))");
+}
+
+// --- Display/write format edge cases ---
+
+#[test]
+fn edge_display_write() {
+    // display: strings without quotes, chars without #\
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (display \"hello\" p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("hello")),
+    );
+
+    // write: strings with quotes
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (write \"hello\" p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("\"hello\"")),
+    );
+
+    // display char without #\ prefix
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (display #\\a p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("a")),
+    );
+}
+
+// --- define-record-type ---
+
+#[test]
+fn edge_define_record_type() {
+    is_int(
+        "(define-record-type <point>
+           (make-point x y)
+           point?
+           (x point-x)
+           (y point-y))
+         (let ((p (make-point 3 4)))
+           (+ (point-x p) (point-y p)))",
+        7,
+    );
+
+    is_true(
+        "(define-record-type <point>
+           (make-point x y)
+           point?
+           (x point-x)
+           (y point-y))
+         (point? (make-point 1 2))",
+    );
+
+    is_false(
+        "(define-record-type <point>
+           (make-point x y)
+           point?
+           (x point-x)
+           (y point-y))
+         (point? '(1 2))",
+    );
+}
+
+// --- Tail patterns (R7RS §3.5 required tail positions) ---
+
+#[test]
+fn edge_tco_letrec() {
+    // letrec body in tail position
+    is_int(
+        "(letrec ((f (lambda (n) (if (= n 0) 42 (f (- n 1))))))
+           (f 100000))",
+        42,
+    );
+}
+
+#[test]
+fn edge_tco_let_star() {
+    // let* body in tail position
+    is_int(
+        "(define (f n) (let* ((x n)) (if (= x 0) 42 (f (- x 1)))))
+         (f 100000)",
+        42,
+    );
+}
+
+#[test]
+fn edge_tco_begin() {
+    // begin — last expression in tail position
+    is_int(
+        "(define (f n) (begin (if (= n 0) 42 (f (- n 1)))))
+         (f 100000)",
+        42,
+    );
+}
+
+// --- Multiple return values edge cases ---
+
+#[test]
+fn edge_let_values() {
+    is_int(
+        "(let-values (((a b c) (values 1 2 3)))
+           (+ a b c))",
+        6,
+    );
+}
+
+#[test]
+fn edge_receive() {
+    is_int(
+        "(receive (a b c)
+           (values 10 20 30)
+           (+ a b c))",
+        60,
+    );
+}
+
+// --- cond-expand ---
+
+#[test]
+fn edge_cond_expand_combinators() {
+    // library feature
+    is_int("(cond-expand ((library (scheme base)) 1) (else 2))", 1);
+    is_int("(cond-expand ((library (nonexistent lib)) 1) (else 2))", 2);
+
+    // and combinator
+    is_int("(cond-expand ((and r7rs mae) 1) (else 0))", 1);
+    is_int("(cond-expand ((and r7rs chicken) 1) (else 0))", 0);
+
+    // or combinator
+    is_int("(cond-expand ((or chicken mae) 1) (else 0))", 1);
+    is_int("(cond-expand ((or chicken guile) 1) (else 0))", 0);
+
+    // not combinator
+    is_int("(cond-expand ((not chicken) 1) (else 0))", 1);
+    is_int("(cond-expand ((not r7rs) 1) (else 0))", 0);
 }

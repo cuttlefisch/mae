@@ -40,7 +40,7 @@ pub fn register(vm: &mut Vm) {
         "string-length",
         "Length of string",
         Arity::Fixed(1),
-        |args| Ok(Value::Int(args[0].as_str()?.len() as i64)),
+        |args| Ok(Value::Int(args[0].as_str()?.chars().count() as i64)),
     );
 
     vm.register_fn(
@@ -63,18 +63,15 @@ pub fn register(vm: &mut Vm) {
         Arity::Variadic(2),
         |args| {
             let s = args[0].as_str()?;
+            // Handle UTF-8 properly via char indices
+            let chars: Vec<char> = s.chars().collect();
             let start = args[1].as_int()? as usize;
             let end = if args.len() > 2 {
                 args[2].as_int()? as usize
             } else {
-                s.len()
+                chars.len()
             };
-            if start > end || end > s.len() {
-                return Err(LispError::user("substring: index out of range", vec![]));
-            }
-            // Handle UTF-8 properly via char indices
-            let chars: Vec<char> = s.chars().collect();
-            if start > chars.len() || end > chars.len() {
+            if start > end || end > chars.len() {
                 return Err(LispError::user("substring: index out of range", vec![]));
             }
             let sub: String = chars[start..end].iter().collect();
