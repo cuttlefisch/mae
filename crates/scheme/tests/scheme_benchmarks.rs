@@ -2,12 +2,10 @@
 //!
 //! These programs are adapted from the classic Gabriel/Larceny/Gambit
 //! benchmark suites. Each test verifies correctness AND measures timing.
-//! The `#[ignore]` tests are long-running and should be run explicitly:
 //!
-//!   cargo test -p mae-scheme --test scheme_benchmarks -- --ignored --nocapture
-//!
-//! Performance targets (rough orders of magnitude on modern hardware):
-//!   - fib(30): < 2s (tree recursion, no optimization)
+//! Performance targets (rough orders of magnitude, debug mode):
+//!   - fib(20): < 5s (tree recursion)
+//!   - fib(30): < 30s (tree recursion, CI generous)
 //!   - tak(18,12,6): < 3s (deep recursion)
 //!   - sieve(10000): < 1s (vector mutation)
 //!   - nqueens(8): < 1s (backtracking search)
@@ -48,7 +46,6 @@ fn bench_fib_20() {
 }
 
 #[test]
-#[ignore]
 fn bench_fib_30() {
     let (result, elapsed) = timed_eval(
         "fib(30)",
@@ -59,7 +56,8 @@ fn bench_fib_30() {
     ",
     );
     assert_eq!(result, Value::Int(832040));
-    assert!(elapsed.as_secs() < 10, "fib(30) too slow: {elapsed:?}");
+    // Generous timeout for CI (debug mode, slow runners)
+    assert!(elapsed.as_secs() < 30, "fib(30) too slow: {elapsed:?}");
 }
 
 #[test]

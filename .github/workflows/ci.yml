@@ -144,6 +144,26 @@ jobs:
           ./target/release/mae --check-config
           test -f ~/.config/mae/packages.lock
 
+  scheme-runtime:
+    name: scheme / R7RS compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: R7RS compliance tests
+        run: cargo test -p mae-scheme --test r7rs_compliance -- --nocapture
+        timeout-minutes: 10
+      - name: Scheme torture tests
+        run: cargo test -p mae-scheme --test scheme_torture -- --nocapture
+        timeout-minutes: 5
+      - name: Scheme benchmark tests
+        run: cargo test -p mae-scheme --test scheme_benchmarks -- --nocapture
+        timeout-minutes: 10
+      - name: Unit tests
+        run: cargo test -p mae-scheme --lib
+        timeout-minutes: 5
+
   collab-e2e:
     name: collab / docker e2e
     # DISABLED: Docker E2E requires Scheme async/yield for reliable cross-container

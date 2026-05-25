@@ -402,6 +402,12 @@ test-scheme-all: build-tui
 ## test-scheme-ci: same as test-scheme-all (CI entry point)
 test-scheme-ci: test-scheme-all
 
+## test-scheme-r7rs: run R7RS compliance + torture + benchmark suites
+test-scheme-r7rs:
+	cargo test -p mae-scheme --test r7rs_compliance -- --nocapture
+	cargo test -p mae-scheme --test scheme_torture -- --nocapture
+	cargo test -p mae-scheme --test scheme_benchmarks -- --nocapture
+
 ## docker-collab-test: run collab CRDT E2E tests in Docker containers
 ## DISABLED from CI (see ci-docker-e2e). Can still be run manually.
 ## Requires proper Scheme async/yield for reliable coordination.
