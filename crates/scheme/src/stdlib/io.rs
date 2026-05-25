@@ -1033,6 +1033,65 @@ pub fn register(vm: &mut Vm) {
             std::process::exit(code);
         },
     );
+
+    // -- (scheme file) library --
+
+    vm.register_fn(
+        "file-exists?",
+        "Does file exist?",
+        Arity::Fixed(1),
+        |args| {
+            let path = args[0].as_str()?;
+            Ok(Value::Bool(std::path::Path::new(path).exists()))
+        },
+    );
+
+    vm.register_fn("delete-file", "Delete a file", Arity::Fixed(1), |args| {
+        let path = args[0].as_str()?;
+        std::fs::remove_file(path)
+            .map_err(|e| LispError::user(format!("delete-file: {e}"), vec![]))?;
+        Ok(Value::Void)
+    });
+
+    vm.register_fn(
+        "open-binary-input-file",
+        "Open binary input file",
+        Arity::Fixed(1),
+        |args| {
+            let path = args[0].as_str()?;
+            let file = std::fs::File::open(path)
+                .map_err(|e| LispError::user(format!("open-binary-input-file: {e}"), vec![]))?;
+            Ok(Value::Port(Rc::new(std::cell::RefCell::new(
+                Port::FileInput {
+                    reader: Box::new(file),
+                    name: path.to_string(),
+                },
+            ))))
+        },
+    );
+
+    vm.register_fn(
+        "open-binary-output-file",
+        "Open binary output file",
+        Arity::Fixed(1),
+        |args| {
+            let path = args[0].as_str()?;
+            let file = std::fs::File::create(path)
+                .map_err(|e| LispError::user(format!("open-binary-output-file: {e}"), vec![]))?;
+            Ok(Value::Port(Rc::new(std::cell::RefCell::new(
+                Port::FileOutput {
+                    writer: Box::new(file),
+                    name: path.to_string(),
+                },
+            ))))
+        },
+    );
+
+    // with-input-from-file / with-output-to-file can't redirect current-input/output-port
+    // in our implementation since ports aren't dynamic parameters. Register as stubs
+    // that open the file and pass it to the procedure.
+    // NOTE: R7RS specifies these redirect current-input/output-port, but that requires
+    // dynamic parameters which we implement in Phase 13e.
 }
 
 #[cfg(test)]

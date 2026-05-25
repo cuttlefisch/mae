@@ -16,6 +16,7 @@ use crate::vm::Vm;
 /// Register all R7RS standard library primitives.
 pub fn register_stdlib(vm: &mut Vm) {
     base::register(vm);
+    base::register_inexact(vm);
     char::register(vm);
     string::register(vm);
     vector::register(vm);

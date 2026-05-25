@@ -1374,6 +1374,59 @@ fn register_extra_numeric(vm: &mut Vm) {
     );
 }
 
+/// Register `(scheme inexact)` library functions.
+pub fn register_inexact(vm: &mut Vm) {
+    vm.register_fn("sin", "Sine", Arity::Fixed(1), |args| {
+        Ok(Value::Float(args[0].as_float()?.sin()))
+    });
+    vm.register_fn("cos", "Cosine", Arity::Fixed(1), |args| {
+        Ok(Value::Float(args[0].as_float()?.cos()))
+    });
+    vm.register_fn("tan", "Tangent", Arity::Fixed(1), |args| {
+        Ok(Value::Float(args[0].as_float()?.tan()))
+    });
+    vm.register_fn("asin", "Arc sine", Arity::Fixed(1), |args| {
+        Ok(Value::Float(args[0].as_float()?.asin()))
+    });
+    vm.register_fn("acos", "Arc cosine", Arity::Fixed(1), |args| {
+        Ok(Value::Float(args[0].as_float()?.acos()))
+    });
+    vm.register_fn(
+        "atan",
+        "Arc tangent (1 or 2 args)",
+        Arity::Variadic(1),
+        |args| {
+            if args.len() == 1 {
+                Ok(Value::Float(args[0].as_float()?.atan()))
+            } else {
+                Ok(Value::Float(args[0].as_float()?.atan2(args[1].as_float()?)))
+            }
+        },
+    );
+    vm.register_fn("exp", "Exponential (e^x)", Arity::Fixed(1), |args| {
+        Ok(Value::Float(args[0].as_float()?.exp()))
+    });
+    vm.register_fn(
+        "log",
+        "Natural logarithm (1 arg) or log base (2 args)",
+        Arity::Variadic(1),
+        |args| {
+            if args.len() == 1 {
+                Ok(Value::Float(args[0].as_float()?.ln()))
+            } else {
+                let x = args[0].as_float()?;
+                let base = args[1].as_float()?;
+                Ok(Value::Float(x.ln() / base.ln()))
+            }
+        },
+    );
+    vm.register_fn("finite?", "Is number finite?", Arity::Fixed(1), |args| {
+        Ok(Value::Bool(
+            args[0].as_float().map_or(true, |f| f.is_finite()),
+        ))
+    });
+}
+
 fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
     while b != 0 {
         let t = b;

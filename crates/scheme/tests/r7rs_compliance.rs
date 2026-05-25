@@ -3880,3 +3880,66 @@ fn stress_boolean_semantics() {
     is_true("(boolean=? #f #f)");
     is_false("(boolean=? #t #f)");
 }
+
+// ============================================================================
+// (scheme inexact) library tests
+// ============================================================================
+
+#[test]
+fn s6_inexact_trig() {
+    // sin/cos/tan
+    is_true("(< (abs (sin 0.0)) 0.0001)");
+    is_true("(< (abs (- (cos 0.0) 1.0)) 0.0001)");
+    is_true("(< (abs (tan 0.0)) 0.0001)");
+    // asin/acos/atan
+    is_true("(< (abs (asin 0.0)) 0.0001)");
+    is_true("(< (abs (- (acos 1.0) 0.0)) 0.0001)");
+    is_true("(< (abs (atan 0.0)) 0.0001)");
+    // atan with 2 args
+    is_true("(< (abs (- (atan 1.0 1.0) 0.7853981)) 0.001)");
+}
+
+#[test]
+fn s6_inexact_exp_log() {
+    // exp(0) = 1
+    is_true("(< (abs (- (exp 0) 1.0)) 0.0001)");
+    // log(1) = 0
+    is_true("(< (abs (log 1)) 0.0001)");
+    // log with base: log(8, 2) = 3
+    is_true("(< (abs (- (log 8 2) 3.0)) 0.0001)");
+}
+
+#[test]
+fn s6_inexact_finite() {
+    is_true("(finite? 42)");
+    is_true("(finite? 3.14)");
+    is_false("(finite? +inf.0)");
+    is_false("(finite? -inf.0)");
+    is_false("(finite? +nan.0)");
+}
+
+// ============================================================================
+// (scheme file) library tests
+// ============================================================================
+
+#[test]
+fn s6_file_exists() {
+    // Check that a known file doesn't exist
+    is_false("(file-exists? \"/tmp/mae-scheme-test-nonexistent-file-12345\")");
+}
+
+#[test]
+fn s6_file_operations() {
+    // Create, check exists, delete
+    is_true(
+        "(let ((path \"/tmp/mae-scheme-test-file-ops.txt\"))
+           (let ((p (open-output-file path)))
+             (write-string \"hello\" p)
+             (close-port p))
+           (let ((exists (file-exists? path)))
+             (delete-file path)
+             exists))",
+    );
+    // After delete, should not exist
+    is_false("(file-exists? \"/tmp/mae-scheme-test-file-ops.txt\")");
+}
