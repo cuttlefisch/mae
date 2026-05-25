@@ -1225,6 +1225,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         },
     );
 
+    // R7RS floor-quotient: floor(a/b) — rounds toward negative infinity
     vm.register_fn(
         "floor-quotient",
         "Floor division quotient",
@@ -1235,10 +1236,19 @@ fn register_extra_numeric(vm: &mut Vm) {
             if b == 0 {
                 return Err(LispError::user("division by zero", vec![]));
             }
-            Ok(Value::Int(a.div_euclid(b)))
+            // floor division: round quotient toward negative infinity
+            let q = a / b;
+            let r = a % b;
+            // Adjust if remainder has opposite sign to divisor
+            if r != 0 && (r ^ b) < 0 {
+                Ok(Value::Int(q - 1))
+            } else {
+                Ok(Value::Int(q))
+            }
         },
     );
 
+    // R7RS floor-remainder: a - floor-quotient(a,b) * b
     vm.register_fn(
         "floor-remainder",
         "Floor division remainder",
@@ -1249,7 +1259,13 @@ fn register_extra_numeric(vm: &mut Vm) {
             if b == 0 {
                 return Err(LispError::user("division by zero", vec![]));
             }
-            Ok(Value::Int(a.rem_euclid(b)))
+            let r = a % b;
+            // Adjust if remainder has opposite sign to divisor
+            if r != 0 && (r ^ b) < 0 {
+                Ok(Value::Int(r + b))
+            } else {
+                Ok(Value::Int(r))
+            }
         },
     );
 
@@ -1278,6 +1294,82 @@ fn register_extra_numeric(vm: &mut Vm) {
                 return Err(LispError::user("division by zero", vec![]));
             }
             Ok(Value::Int(a % b))
+        },
+    );
+
+    // R7RS §6.2.6 floor/ — returns two values (quotient, remainder)
+    vm.register_fn(
+        "floor/",
+        "Floor division returning (quotient remainder)",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_int()?;
+            let b = args[1].as_int()?;
+            if b == 0 {
+                return Err(LispError::user("division by zero", vec![]));
+            }
+            let q = a / b;
+            let r = a % b;
+            let (q, r) = if r != 0 && (r ^ b) < 0 {
+                (q - 1, r + b)
+            } else {
+                (q, r)
+            };
+            Ok(Value::list(vec![Value::Int(q), Value::Int(r)]))
+        },
+    );
+
+    // R7RS §6.2.6 truncate/ — returns two values (quotient, remainder)
+    vm.register_fn(
+        "truncate/",
+        "Truncated division returning (quotient remainder)",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_int()?;
+            let b = args[1].as_int()?;
+            if b == 0 {
+                return Err(LispError::user("division by zero", vec![]));
+            }
+            Ok(Value::list(vec![Value::Int(a / b), Value::Int(a % b)]))
+        },
+    );
+
+    // R7RS §6.2.6 rationalize — approximate x within diff
+    // For exact integers, returns x if diff >= 0
+    // For inexact, finds simplest rational within tolerance
+    vm.register_fn(
+        "rationalize",
+        "Simplest rational within tolerance",
+        Arity::Fixed(2),
+        |args| {
+            let x = args[0].as_float()?;
+            let diff = args[1].as_float()?;
+            if diff.is_infinite() || diff.is_nan() {
+                return Ok(Value::Float(0.0));
+            }
+            if x.is_infinite() || x.is_nan() {
+                return Ok(Value::Float(x));
+            }
+            // Simple implementation: round to nearest integer if within tolerance
+            let lo = x - diff.abs();
+            let hi = x + diff.abs();
+            // Find simplest rational p/q in [lo, hi] using Stern-Brocot
+            // Simplified: check if an integer is in range first
+            let lo_ceil = lo.ceil() as i64;
+            let hi_floor = hi.floor() as i64;
+            if lo_ceil <= hi_floor {
+                // An integer is in range — that's the simplest
+                if args[0].is_exact() && args[1].is_exact() {
+                    return Ok(Value::Int(lo_ceil));
+                }
+                return Ok(Value::Float(lo_ceil as f64));
+            }
+            // Otherwise return x rounded to reasonable precision
+            if args[0].is_exact() && args[1].is_exact() {
+                Ok(Value::Int(x.round() as i64))
+            } else {
+                Ok(Value::Float(x))
+            }
         },
     );
 }

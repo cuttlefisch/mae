@@ -315,6 +315,15 @@ impl Compiler {
                         }
                         "cond-expand" => return self.compile_cond_expand(&items, tail),
                         "syntax-error" => return self.compile_syntax_error(&items),
+                        "let-syntax" | "letrec-syntax" => {
+                            return self.compile_let_syntax(&items, tail)
+                        }
+                        "include" | "include-ci" => {
+                            return Err(LispError::syntax(
+                                "include/include-ci not yet implemented (Phase 13d)",
+                                "",
+                            ))
+                        }
                         name => {
                             // Check for macro expansion
                             if let Some(mac) = self.macros.get(name).cloned() {
@@ -1120,6 +1129,68 @@ impl Compiler {
         // let*-values has the same semantics as let-values when each binding
         // introduces independent variables (which they do in our desugaring)
         self.compile_let_values(items, tail)
+    }
+
+    /// Compile `(let-syntax ((name transformer) ...) body ...)` and
+    /// `(letrec-syntax ...)` — local macro definitions.
+    /// Both forms bind macros for the duration of the body.
+    fn compile_let_syntax(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
+        if items.len() < 3 {
+            return Err(LispError::syntax(
+                "let-syntax requires bindings and body",
+                "",
+            ));
+        }
+        let bindings = items[1]
+            .to_vec()
+            .map_err(|_| LispError::syntax("let-syntax bindings must be a list", ""))?;
+
+        // Save current macros, add local ones, compile body, restore
+        let saved_macros = self.macros.clone();
+
+        for binding in &bindings {
+            let clause = binding
+                .to_vec()
+                .map_err(|_| LispError::syntax("let-syntax clause must be a list", ""))?;
+            if clause.len() != 2 {
+                return Err(LispError::syntax(
+                    "let-syntax clause needs (name transformer)",
+                    "",
+                ));
+            }
+            let name = clause[0]
+                .as_symbol()
+                .map_err(|_| LispError::syntax("let-syntax name must be a symbol", ""))?
+                .name()
+                .to_string();
+            // Process the transformer (syntax-rules form)
+            let sr_items = clause[1].to_vec().map_err(|_| {
+                LispError::syntax("let-syntax transformer must be a syntax-rules form", "")
+            })?;
+            if sr_items.is_empty() {
+                return Err(LispError::syntax("let-syntax: empty transformer", ""));
+            }
+            match &sr_items[0] {
+                Value::Symbol(s) if s.name() == "syntax-rules" => {
+                    let rules = macros::parse_syntax_rules(&sr_items)?;
+                    self.macros.insert(name, MacroDef::SyntaxRules(rules));
+                }
+                _ => {
+                    return Err(LispError::syntax(
+                        "let-syntax: only syntax-rules supported",
+                        "",
+                    ))
+                }
+            }
+        }
+
+        // Compile body as begin
+        let body = &items[2..];
+        self.compile_begin(body, tail)?;
+
+        // Restore macros
+        self.macros = saved_macros;
+        Ok(())
     }
 
     /// Compile `(receive formals expr body ...)` (SRFI-8).

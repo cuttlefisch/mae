@@ -149,6 +149,31 @@ pub enum Port {
     Stdout,
     /// Standard error.
     Stderr,
+    /// Closed port.
+    Closed,
+}
+
+impl Port {
+    /// Returns true if this port is open (not closed).
+    pub fn is_open(&self) -> bool {
+        !matches!(self, Port::Closed)
+    }
+
+    /// Returns true if this is an input port (open or closed).
+    pub fn is_input(&self) -> bool {
+        matches!(
+            self,
+            Port::StringInput { .. } | Port::FileInput { .. } | Port::Stdin
+        )
+    }
+
+    /// Returns true if this is an output port (open or closed).
+    pub fn is_output(&self) -> bool {
+        matches!(
+            self,
+            Port::StringOutput { .. } | Port::FileOutput { .. } | Port::Stdout | Port::Stderr
+        )
+    }
 }
 
 impl fmt::Debug for Port {
@@ -163,6 +188,7 @@ impl fmt::Debug for Port {
             Port::Stdin => write!(f, "Stdin"),
             Port::Stdout => write!(f, "Stdout"),
             Port::Stderr => write!(f, "Stderr"),
+            Port::Closed => write!(f, "Closed"),
         }
     }
 }

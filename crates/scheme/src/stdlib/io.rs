@@ -418,7 +418,7 @@ pub fn register(vm: &mut Vm) {
         |args| match &args[0] {
             Value::Port(p) => {
                 let port = p.borrow();
-                Ok(Value::Bool(matches!(*port, Port::StringInput { .. })))
+                Ok(Value::Bool(port.is_input() && port.is_open()))
             }
             _ => Ok(Value::Bool(false)),
         },
@@ -431,31 +431,41 @@ pub fn register(vm: &mut Vm) {
         |args| match &args[0] {
             Value::Port(p) => {
                 let port = p.borrow();
-                Ok(Value::Bool(matches!(*port, Port::StringOutput { .. })))
+                Ok(Value::Bool(port.is_output() && port.is_open()))
             }
             _ => Ok(Value::Bool(false)),
         },
     );
 
-    vm.register_fn(
-        "close-port",
-        "Close a port",
-        Arity::Fixed(1),
-        |_args| Ok(Value::Void), // No-op for string ports
-    );
+    vm.register_fn("close-port", "Close a port", Arity::Fixed(1), |args| {
+        if let Value::Port(p) = &args[0] {
+            *p.borrow_mut() = Port::Closed;
+        }
+        Ok(Value::Void)
+    });
 
     vm.register_fn(
         "close-input-port",
         "Close input port",
         Arity::Fixed(1),
-        |_args| Ok(Value::Void),
+        |args| {
+            if let Value::Port(p) = &args[0] {
+                *p.borrow_mut() = Port::Closed;
+            }
+            Ok(Value::Void)
+        },
     );
 
     vm.register_fn(
         "close-output-port",
         "Close output port",
         Arity::Fixed(1),
-        |_args| Ok(Value::Void),
+        |args| {
+            if let Value::Port(p) = &args[0] {
+                *p.borrow_mut() = Port::Closed;
+            }
+            Ok(Value::Void)
+        },
     );
 
     vm.register_fn(

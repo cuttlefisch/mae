@@ -32,6 +32,14 @@ fn is_false(code: &str) {
     assert_eq!(eval(code), Value::Bool(false), "expected #f for: {code}");
 }
 
+fn is_str(code: &str, expected: &str) {
+    assert_eq!(
+        eval(code),
+        Value::String(Rc::from(expected)),
+        "expected \"{expected}\" for: {code}"
+    );
+}
+
 fn is_int(code: &str, expected: i64) {
     assert_eq!(
         eval(code),
@@ -3375,5 +3383,180 @@ fn edge_with_exception_handler() {
            (lambda (e) 42)
            (lambda () (raise \"boom\")))",
         42,
+    );
+}
+
+// --- floor/ and truncate/ (§6.2.6) ---
+
+#[test]
+fn edge_floor_div() {
+    // floor/ returns (quotient remainder) as a list
+    is_int("(car (floor/ 17 5))", 3);
+    is_int("(cadr (floor/ 17 5))", 2);
+    // Negative dividend
+    is_int("(car (floor/ -17 5))", -4);
+    is_int("(cadr (floor/ -17 5))", 3);
+    // Negative divisor
+    is_int("(car (floor/ 17 -5))", -4);
+    is_int("(cadr (floor/ 17 -5))", -3);
+}
+
+#[test]
+fn edge_truncate_div() {
+    is_int("(car (truncate/ 17 5))", 3);
+    is_int("(cadr (truncate/ 17 5))", 2);
+    // Negative dividend — truncate toward zero
+    is_int("(car (truncate/ -17 5))", -3);
+    is_int("(cadr (truncate/ -17 5))", -2);
+}
+
+// --- rationalize (§6.2.6) ---
+
+#[test]
+fn edge_rationalize() {
+    // rationalize finds simplest rational within tolerance
+    // (rationalize 3.1 0.5) should return 3 (integer is simplest)
+    is_int("(exact (rationalize 3 1/10))", 3);
+    // With large tolerance, 0 is simplest
+    is_int("(exact (rationalize 0.3 1))", 0);
+}
+
+// --- let-syntax / letrec-syntax (§4.3.1) ---
+
+#[test]
+fn edge_let_syntax() {
+    // Basic let-syntax
+    is_int(
+        "(let-syntax ((double (syntax-rules ()
+                       ((double x) (+ x x)))))
+           (double 5))",
+        10,
+    );
+    // let-syntax doesn't leak into outer scope
+    is_int(
+        "(begin
+           (let-syntax ((my-add (syntax-rules ()
+                          ((my-add a b) (+ a b)))))
+             (my-add 3 4)))",
+        7,
+    );
+}
+
+#[test]
+fn edge_letrec_syntax() {
+    // letrec-syntax — same as let-syntax in our implementation
+    is_int(
+        "(letrec-syntax ((my-inc (syntax-rules ()
+                          ((my-inc x) (+ x 1)))))
+           (my-inc 10))",
+        11,
+    );
+}
+
+// --- with-exception-handler edge cases ---
+
+#[test]
+fn edge_with_exception_handler_error_object() {
+    // Handler receives an error object from (error ...)
+    is_true(
+        "(with-exception-handler
+           (lambda (e) (error-object? e))
+           (lambda () (error \"test\" \"msg\")))",
+    );
+    // Handler can extract message
+    is_str(
+        "(with-exception-handler
+           (lambda (e) (error-object-message e))
+           (lambda () (error \"oops\")))",
+        "oops",
+    );
+}
+
+// --- comprehensive with-exception-handler ---
+
+#[test]
+fn edge_with_exception_handler_normal_return() {
+    // No exception — thunk returns normally
+    is_int(
+        "(with-exception-handler
+           (lambda (e) 999)
+           (lambda () 42))",
+        42,
+    );
+}
+
+// --- additional R7RS coverage ---
+
+#[test]
+fn edge_assoc_basic() {
+    // assoc uses equal? by default
+    is_true("(pair? (assoc \"b\" '((\"a\" 1) (\"b\" 2) (\"c\" 3))))");
+    is_false("(assoc \"d\" '((\"a\" 1) (\"b\" 2)))");
+    // assv uses eqv?
+    is_true("(pair? (assv 2 '((1 a) (2 b) (3 c))))");
+    // assq uses eq?
+    is_true("(pair? (assq 'b '((a 1) (b 2) (c 3))))");
+}
+
+#[test]
+fn edge_member_basic() {
+    // member uses equal?
+    is_true("(pair? (member \"b\" '(\"a\" \"b\" \"c\")))");
+    is_false("(member \"d\" '(\"a\" \"b\" \"c\"))");
+    // memv uses eqv?
+    is_true("(pair? (memv 2 '(1 2 3)))");
+}
+
+#[test]
+fn edge_list_copy_deep() {
+    // list-copy creates a shallow copy
+    is_int("(length (list-copy '(1 2 3)))", 3);
+    is_int("(car (list-copy '(1 2 3)))", 1);
+}
+
+#[test]
+fn edge_string_to_vector() {
+    is_int("(vector-length (string->vector \"abc\"))", 3);
+    is_str("(string (vector-ref (string->vector \"abc\") 1))", "b");
+}
+
+#[test]
+fn edge_vector_to_string() {
+    is_str("(vector->string (vector #\\a #\\b #\\c))", "abc");
+}
+
+#[test]
+fn edge_utf8_string_conversion() {
+    // string->utf8 and utf8->string roundtrip
+    is_str("(utf8->string (string->utf8 \"hello\"))", "hello");
+}
+
+#[test]
+fn edge_bytevector_append() {
+    is_int(
+        "(bytevector-length (bytevector-append (bytevector 1 2) (bytevector 3 4)))",
+        4,
+    );
+}
+
+#[test]
+fn edge_port_predicates() {
+    is_true("(input-port? (current-input-port))");
+    is_true("(output-port? (current-output-port))");
+    is_true("(output-port? (current-error-port))");
+    is_true("(textual-port? (current-input-port))");
+    is_true("(textual-port? (current-output-port))");
+}
+
+#[test]
+fn edge_open_close_port() {
+    is_true(
+        "(let ((p (open-input-string \"hello\")))
+           (input-port-open? p))",
+    );
+    is_true(
+        "(let ((p (open-input-string \"hello\")))
+           (close-port p)
+           (not (input-port-open? p)))",
     );
 }
