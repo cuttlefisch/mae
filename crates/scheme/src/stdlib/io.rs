@@ -319,6 +319,126 @@ pub fn register(vm: &mut Vm) {
             Ok(Value::String(Rc::from(result.as_str())))
         },
     );
+
+    // R7RS §6.13.1 Port predicates and standard ports
+    vm.register_fn(
+        "textual-port?",
+        "Is textual port?",
+        Arity::Fixed(1),
+        |args| Ok(Value::Bool(matches!(args[0], Value::Port(_)))),
+    );
+
+    vm.register_fn(
+        "binary-port?",
+        "Is binary port?",
+        Arity::Fixed(1),
+        |_args| Ok(Value::Bool(false)), // We only have textual ports
+    );
+
+    vm.register_fn(
+        "input-port-open?",
+        "Is input port open?",
+        Arity::Fixed(1),
+        |args| match &args[0] {
+            Value::Port(p) => {
+                let port = p.borrow();
+                Ok(Value::Bool(matches!(*port, Port::StringInput { .. })))
+            }
+            _ => Ok(Value::Bool(false)),
+        },
+    );
+
+    vm.register_fn(
+        "output-port-open?",
+        "Is output port open?",
+        Arity::Fixed(1),
+        |args| match &args[0] {
+            Value::Port(p) => {
+                let port = p.borrow();
+                Ok(Value::Bool(matches!(*port, Port::StringOutput { .. })))
+            }
+            _ => Ok(Value::Bool(false)),
+        },
+    );
+
+    vm.register_fn(
+        "close-port",
+        "Close a port",
+        Arity::Fixed(1),
+        |_args| Ok(Value::Void), // No-op for string ports
+    );
+
+    vm.register_fn(
+        "close-input-port",
+        "Close input port",
+        Arity::Fixed(1),
+        |_args| Ok(Value::Void),
+    );
+
+    vm.register_fn(
+        "close-output-port",
+        "Close output port",
+        Arity::Fixed(1),
+        |_args| Ok(Value::Void),
+    );
+
+    vm.register_fn(
+        "flush-output-port",
+        "Flush output port",
+        Arity::Variadic(0),
+        |_args| Ok(Value::Void), // No-op for string ports
+    );
+
+    // read-line from input port
+    vm.register_fn(
+        "read-line",
+        "Read a line from input port",
+        Arity::Variadic(0),
+        |args| {
+            if args.is_empty() {
+                return Err(LispError::user("read-line: no current-input-port", vec![]));
+            }
+            match &args[0] {
+                Value::Port(p) => {
+                    let mut port = p.borrow_mut();
+                    match &mut *port {
+                        Port::StringInput { data, pos } => {
+                            if *pos >= data.len() {
+                                return Ok(Value::Eof);
+                            }
+                            let remaining = &data[*pos..];
+                            if let Some(nl) = remaining.find('\n') {
+                                let line = &remaining[..nl];
+                                *pos += nl + 1;
+                                Ok(Value::String(Rc::from(line)))
+                            } else {
+                                let line = remaining.to_string();
+                                *pos = data.len();
+                                Ok(Value::String(Rc::from(line.as_str())))
+                            }
+                        }
+                        _ => Err(LispError::type_error("input port", "output port")),
+                    }
+                }
+                _ => Err(LispError::type_error("port", format!("{}", args[0]))),
+            }
+        },
+    );
+
+    // R7RS §6.14 features
+    vm.register_fn(
+        "features",
+        "Implementation features",
+        Arity::Fixed(0),
+        |_| {
+            Ok(Value::list(vec![
+                Value::symbol("r7rs"),
+                Value::symbol("mae"),
+                Value::symbol("ratios"),
+                Value::symbol("exact-complex"),
+            ]))
+        },
+    );
 }
 
 #[cfg(test)]

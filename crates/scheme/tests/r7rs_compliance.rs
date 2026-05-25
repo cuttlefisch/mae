@@ -1650,3 +1650,208 @@ fn integration_accumulate() {
         160,
     );
 }
+
+// ============================================================================
+// Additional R7RS compliance tests — gap coverage
+// ============================================================================
+
+// §6.2 Additional numeric operations
+#[test]
+fn s6_2_square() {
+    is_int("(square 5)", 25);
+    is_int("(square -3)", 9);
+}
+
+#[test]
+fn s6_2_exact_integer_sqrt() {
+    // Returns (s r) where n = s^2 + r
+    is_true("(equal? (exact-integer-sqrt 14) '(3 5))");
+    is_true("(equal? (exact-integer-sqrt 4) '(2 0))");
+}
+
+#[test]
+fn s6_2_numeric_type_predicates() {
+    is_true("(complex? 3)");
+    is_true("(real? 3)");
+    is_true("(rational? 3)");
+    is_true("(exact-integer? 3)");
+    is_true("(not (exact-integer? 3.0))");
+    is_true("(rational? 3.14)");
+    is_true("(not (rational? +inf.0))");
+}
+
+#[test]
+fn s6_2_floor_truncate_division() {
+    is_int("(floor-quotient 7 2)", 3);
+    is_int("(floor-remainder 7 2)", 1);
+    is_int("(truncate-quotient 7 2)", 3);
+    is_int("(truncate-remainder 7 2)", 1);
+    // Negative cases
+    is_int("(floor-quotient -7 2)", -4);
+    is_int("(floor-remainder -7 2)", 1);
+    is_int("(truncate-quotient -7 2)", -3);
+    is_int("(truncate-remainder -7 2)", -1);
+}
+
+// §6.4 Additional list operations
+#[test]
+fn s6_4_make_list() {
+    is_true("(equal? (make-list 3 'a) '(a a a))");
+    is_true("(equal? (make-list 0) '())");
+}
+
+#[test]
+fn s6_4_list_copy() {
+    is_true("(equal? (list-copy '(1 2 3)) '(1 2 3))");
+    is_true("(equal? (list-copy '()) '())");
+}
+
+#[test]
+fn s6_5_symbol_eq() {
+    is_true("(symbol=? 'foo 'foo)");
+    is_true("(not (symbol=? 'foo 'bar))");
+    is_true("(symbol=? 'x 'x 'x)");
+}
+
+// §6.6 char-foldcase
+#[test]
+fn s6_6_char_foldcase() {
+    assert_eq!(eval("(char-foldcase #\\A)"), Value::Char('a'));
+    assert_eq!(eval("(char-foldcase #\\a)"), Value::Char('a'));
+}
+
+// §6.7 string-foldcase
+#[test]
+fn s6_7_string_foldcase() {
+    assert_eq!(
+        eval("(string-foldcase \"HeLLo\")"),
+        Value::String(Rc::from("hello"))
+    );
+}
+
+// §6.8 vector-copy!
+#[test]
+fn s6_8_vector_copy_mutate() {
+    is_true(
+        "(let ((v1 (vector 1 2 3 4 5))
+              (v2 (vector 10 20 30)))
+           (vector-copy! v1 1 v2)
+           (equal? (vector->list v1) '(1 10 20 30 5)))",
+    );
+}
+
+// §6.8 vector<->string
+#[test]
+fn s6_8_vector_string_conversion() {
+    assert_eq!(
+        eval("(vector->string (vector #\\a #\\b #\\c))"),
+        Value::String(Rc::from("abc"))
+    );
+    is_true("(equal? (vector->list (string->vector \"abc\")) '(#\\a #\\b #\\c))");
+}
+
+// §6.9 bytevector-copy!
+#[test]
+fn s6_9_bytevector_copy_mutate() {
+    is_true(
+        "(let ((bv1 (bytevector 1 2 3 4 5))
+              (bv2 (bytevector 10 20 30)))
+           (bytevector-copy! bv1 1 bv2)
+           (= (bytevector-u8-ref bv1 0) 1))",
+    );
+    is_true(
+        "(let ((bv1 (bytevector 1 2 3 4 5))
+              (bv2 (bytevector 10 20 30)))
+           (bytevector-copy! bv1 1 bv2)
+           (= (bytevector-u8-ref bv1 1) 10))",
+    );
+}
+
+// §6.11 Exception predicates
+#[test]
+fn s6_11_error_predicates() {
+    is_true("(not (file-error? 42))");
+    is_true("(not (read-error? 42))");
+    is_true("(not (error-object? 42))");
+}
+
+// §6.13 Port operations
+#[test]
+fn s6_13_port_operations() {
+    is_true("(textual-port? (open-input-string \"hi\"))");
+    is_true("(not (binary-port? (open-input-string \"hi\")))");
+    is_true("(input-port-open? (open-input-string \"hi\"))");
+    is_true("(output-port-open? (open-output-string))");
+}
+
+#[test]
+fn s6_13_read_line() {
+    assert_eq!(
+        eval("(read-line (open-input-string \"hello\\nworld\"))"),
+        Value::String(Rc::from("hello")),
+    );
+}
+
+// §6.14 features
+#[test]
+fn s6_14_features() {
+    // memq returns sublist (truthy), not #t
+    is_true("(pair? (memq 'r7rs (features)))");
+    is_true("(pair? (memq 'mae (features)))");
+}
+
+// §4.2.2 let as subexpression regression
+#[test]
+fn s4_2_2_let_subexpression() {
+    // Regression: let as argument to function (stack corruption bug)
+    is_int("(+ 10 (let ((x 1)) (+ x 2)))", 13);
+    is_true("(not (let ((x 1)) (= x 2)))");
+    is_true("(equal? (list (let ((x 1)) x) (let ((y 2)) y)) '(1 2))");
+    // Nested lets as subexpressions
+    is_int("(+ (let ((a 1)) a) (let ((b 2)) b) (let ((c 3)) c))", 6);
+}
+
+// §4.2.2 let* as subexpression
+#[test]
+fn s4_2_2_let_star_subexpression() {
+    is_int("(+ 10 (let* ((x 1) (y (+ x 1))) y))", 12);
+    is_true("(equal? (let* ((x 1) (y 2)) (list x y)) '(1 2))");
+}
+
+// §6.7 string-for-each, string-map
+#[test]
+fn s6_7_string_for_each_map() {
+    assert_eq!(
+        eval("(string-map char-upcase \"hello\")"),
+        Value::String(Rc::from("HELLO")),
+    );
+}
+
+// §6.8 vector-for-each, vector-map
+#[test]
+fn s6_8_vector_for_each_map() {
+    is_true(
+        "(equal? (vector->list (vector-map (lambda (x) (+ x 1)) (vector 1 2 3)))
+                '(2 3 4))",
+    );
+}
+
+// §6.10 call-with-values
+#[test]
+fn s6_10_call_with_values_basic() {
+    is_int("(call-with-values (lambda () (values 1 2)) +)", 3);
+}
+
+// §4.2.5 delay/force comprehensive
+#[test]
+fn s4_2_5_delay_force_comprehensive() {
+    is_int("(force (delay 42))", 42);
+    is_int("(force (delay (+ 1 2)))", 3);
+    // force on non-promise returns value
+    is_int("(force 42)", 42);
+    // memoization — force returns cached value
+    is_true(
+        "(let ((p (delay (begin 42))))
+           (equal? (force p) (force p)))",
+    );
+}

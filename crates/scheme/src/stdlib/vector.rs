@@ -154,6 +154,88 @@ fn register_vectors(vm: &mut Vm) {
             Ok(Value::vector(result))
         },
     );
+
+    // vector-copy!: mutate target vector in-place
+    vm.register_fn(
+        "vector-copy!",
+        "Copy elements into vector",
+        Arity::Variadic(3),
+        |args| {
+            let to = match &args[0] {
+                Value::Vector(v) => v.clone(),
+                _ => return Err(LispError::type_error("vector", format!("{}", args[0]))),
+            };
+            let at = args[1].as_int()? as usize;
+            let from = match &args[2] {
+                Value::Vector(v) => v.borrow().clone(),
+                _ => return Err(LispError::type_error("vector", format!("{}", args[2]))),
+            };
+            let start = if args.len() > 3 {
+                args[3].as_int()? as usize
+            } else {
+                0
+            };
+            let end = if args.len() > 4 {
+                args[4].as_int()? as usize
+            } else {
+                from.len()
+            };
+            let mut to_vec = to.borrow_mut();
+            for (i, j) in (start..end).enumerate() {
+                if at + i < to_vec.len() && j < from.len() {
+                    to_vec[at + i] = from[j].clone();
+                }
+            }
+            Ok(Value::Void)
+        },
+    );
+
+    // vector->string and string->vector
+    vm.register_fn(
+        "vector->string",
+        "Convert char vector to string",
+        Arity::Variadic(1),
+        |args| {
+            let v = match &args[0] {
+                Value::Vector(v) => v.borrow().clone(),
+                _ => return Err(LispError::type_error("vector", format!("{}", args[0]))),
+            };
+            let start = if args.len() > 1 {
+                args[1].as_int()? as usize
+            } else {
+                0
+            };
+            let end = if args.len() > 2 {
+                args[2].as_int()? as usize
+            } else {
+                v.len()
+            };
+            let s: Result<String, _> = v[start..end].iter().map(|c| c.as_char()).collect();
+            Ok(Value::String(Rc::from(s?.as_str())))
+        },
+    );
+
+    vm.register_fn(
+        "string->vector",
+        "Convert string to char vector",
+        Arity::Variadic(1),
+        |args| {
+            let s = args[0].as_str()?;
+            let start = if args.len() > 1 {
+                args[1].as_int()? as usize
+            } else {
+                0
+            };
+            let chars: Vec<char> = s.chars().collect();
+            let end = if args.len() > 2 {
+                args[2].as_int()? as usize
+            } else {
+                chars.len()
+            };
+            let result: Vec<Value> = chars[start..end].iter().map(|c| Value::Char(*c)).collect();
+            Ok(Value::vector(result))
+        },
+    );
 }
 
 fn register_bytevectors(vm: &mut Vm) {
@@ -294,6 +376,41 @@ fn register_bytevectors(vm: &mut Vm) {
         |args| {
             let s = args[0].as_str()?;
             Ok(Value::bytevector(s.as_bytes().to_vec()))
+        },
+    );
+
+    // bytevector-copy!
+    vm.register_fn(
+        "bytevector-copy!",
+        "Copy bytes into bytevector",
+        Arity::Variadic(3),
+        |args| {
+            let to = match &args[0] {
+                Value::Bytevector(bv) => bv.clone(),
+                _ => return Err(LispError::type_error("bytevector", format!("{}", args[0]))),
+            };
+            let at = args[1].as_int()? as usize;
+            let from = match &args[2] {
+                Value::Bytevector(bv) => bv.borrow().clone(),
+                _ => return Err(LispError::type_error("bytevector", format!("{}", args[2]))),
+            };
+            let start = if args.len() > 3 {
+                args[3].as_int()? as usize
+            } else {
+                0
+            };
+            let end = if args.len() > 4 {
+                args[4].as_int()? as usize
+            } else {
+                from.len()
+            };
+            let mut to_vec = to.borrow_mut();
+            for (i, j) in (start..end).enumerate() {
+                if at + i < to_vec.len() && j < from.len() {
+                    to_vec[at + i] = from[j];
+                }
+            }
+            Ok(Value::Void)
         },
     );
 }

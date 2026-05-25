@@ -218,6 +218,43 @@ pub fn register(vm: &mut Vm) {
             Ok(Value::String(Rc::from(result.as_str())))
         },
     );
+
+    // R7RS §6.7 string-copy!
+    // Since our strings are immutable Rc<str>, string-copy! and string-set!
+    // and string-fill! signal immutability errors. This is R7RS-compliant
+    // since strings MAY be immutable (R7RS §6.7 allows it).
+
+    vm.register_fn(
+        "string-set!",
+        "Set character (immutable strings — error)",
+        Arity::Fixed(3),
+        |_args| Err(LispError::immutable("string (string-set!)")),
+    );
+
+    vm.register_fn(
+        "string-copy!",
+        "Copy into string (immutable strings — error)",
+        Arity::Variadic(3),
+        |_args| Err(LispError::immutable("string (string-copy!)")),
+    );
+
+    vm.register_fn(
+        "string-fill!",
+        "Fill string (immutable strings — error)",
+        Arity::Variadic(2),
+        |_args| Err(LispError::immutable("string (string-fill!)")),
+    );
+
+    vm.register_fn(
+        "string-foldcase",
+        "Unicode case-fold",
+        Arity::Fixed(1),
+        |args| {
+            let s = args[0].as_str()?;
+            // Case folding: lowercase is a reasonable approximation for ASCII
+            Ok(Value::String(Rc::from(s.to_lowercase().as_str())))
+        },
+    );
 }
 
 #[cfg(test)]

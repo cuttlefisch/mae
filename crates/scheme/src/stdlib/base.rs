@@ -740,9 +740,47 @@ fn register_pairs_lists(vm: &mut Vm) {
         }
     });
 
-    // map and for-each need VM access to call closures — register as stubs.
-    // They'll be implemented as Scheme once the module system lands,
-    // or as VM-integrated builtins later.
+    // make-list, list-set!, list-copy
+    vm.register_fn(
+        "make-list",
+        "Create list of k elements",
+        Arity::Variadic(1),
+        |args| {
+            let k = args[0].as_int()? as usize;
+            let fill = if args.len() > 1 {
+                args[1].clone()
+            } else {
+                Value::Undefined
+            };
+            Ok(Value::list(vec![fill; k]))
+        },
+    );
+
+    vm.register_fn(
+        "list-copy",
+        "Shallow copy a list",
+        Arity::Fixed(1),
+        |args| {
+            let elems = args[0]
+                .to_vec()
+                .map_err(|_| LispError::type_error("list", format!("{}", args[0])))?;
+            Ok(Value::list(elems))
+        },
+    );
+
+    vm.register_fn("symbol=?", "Compare symbols", Arity::Variadic(2), |args| {
+        for arg in args {
+            if !matches!(arg, Value::Symbol(_)) {
+                return Err(LispError::type_error("symbol", format!("{arg}")));
+            }
+        }
+        for i in 0..args.len() - 1 {
+            if !args[i].is_eq(&args[i + 1]) {
+                return Ok(Value::Bool(false));
+            }
+        }
+        Ok(Value::Bool(true))
+    });
 }
 
 // -- §6.5 Symbols --
@@ -900,6 +938,26 @@ fn register_list_ops(vm: &mut Vm) {
             (after)
             result))
 
+        ;; R7RS §6.7 string-for-each and string-map
+        (define (string-for-each f s)
+          (for-each f (string->list s)))
+
+        (define (string-map f s)
+          (list->string (map f (string->list s))))
+
+        ;; R7RS §6.8 vector-for-each and vector-map
+        (define (vector-for-each f v)
+          (for-each f (vector->list v)))
+
+        (define (vector-map f v)
+          (list->vector (map f (vector->list v))))
+
+        ;; R7RS §6.13 call-with-port
+        (define (call-with-port port proc)
+          (let ((result (proc port)))
+            (close-port port)
+            result))
+
         ;; R7RS §4.2.5 Promises (delay/force)
         ;; Uses a mutable vector #(promise done? value/thunk)
         (define (make-promise done? value)
@@ -996,6 +1054,123 @@ fn register_extra_numeric(vm: &mut Vm) {
             Ok(Value::Float(result))
         }
     });
+
+    // R7RS numeric predicates
+    vm.register_fn("complex?", "Is complex number?", Arity::Fixed(1), |args| {
+        // All numbers are complex in R7RS (no separate complex type)
+        Ok(Value::Bool(matches!(
+            args[0],
+            Value::Int(_) | Value::Float(_)
+        )))
+    });
+
+    vm.register_fn("real?", "Is real number?", Arity::Fixed(1), |args| {
+        Ok(Value::Bool(matches!(
+            args[0],
+            Value::Int(_) | Value::Float(_)
+        )))
+    });
+
+    vm.register_fn(
+        "rational?",
+        "Is rational number?",
+        Arity::Fixed(1),
+        |args| match &args[0] {
+            Value::Int(_) => Ok(Value::Bool(true)),
+            Value::Float(f) => Ok(Value::Bool(f.is_finite())),
+            _ => Ok(Value::Bool(false)),
+        },
+    );
+
+    vm.register_fn(
+        "exact-integer?",
+        "Is exact integer?",
+        Arity::Fixed(1),
+        |args| Ok(Value::Bool(matches!(args[0], Value::Int(_)))),
+    );
+
+    vm.register_fn(
+        "square",
+        "Square a number",
+        Arity::Fixed(1),
+        |args| match &args[0] {
+            Value::Int(n) => Ok(Value::Int(n.wrapping_mul(*n))),
+            Value::Float(f) => Ok(Value::Float(f * f)),
+            _ => Err(LispError::type_error("number", format!("{}", args[0]))),
+        },
+    );
+
+    vm.register_fn(
+        "exact-integer-sqrt",
+        "Integer square root",
+        Arity::Fixed(1),
+        |args| {
+            let n = args[0].as_int()?;
+            if n < 0 {
+                return Err(LispError::user("exact-integer-sqrt: negative", vec![]));
+            }
+            let s = (n as f64).sqrt() as i64;
+            let r = n - s * s;
+            // Return values as a pair (s . r)
+            Ok(Value::list(vec![Value::Int(s), Value::Int(r)]))
+        },
+    );
+
+    vm.register_fn(
+        "floor-quotient",
+        "Floor division quotient",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_int()?;
+            let b = args[1].as_int()?;
+            if b == 0 {
+                return Err(LispError::user("division by zero", vec![]));
+            }
+            Ok(Value::Int(a.div_euclid(b)))
+        },
+    );
+
+    vm.register_fn(
+        "floor-remainder",
+        "Floor division remainder",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_int()?;
+            let b = args[1].as_int()?;
+            if b == 0 {
+                return Err(LispError::user("division by zero", vec![]));
+            }
+            Ok(Value::Int(a.rem_euclid(b)))
+        },
+    );
+
+    vm.register_fn(
+        "truncate-quotient",
+        "Truncated division quotient",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_int()?;
+            let b = args[1].as_int()?;
+            if b == 0 {
+                return Err(LispError::user("division by zero", vec![]));
+            }
+            Ok(Value::Int(a / b))
+        },
+    );
+
+    vm.register_fn(
+        "truncate-remainder",
+        "Truncated division remainder",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_int()?;
+            let b = args[1].as_int()?;
+            if b == 0 {
+                return Err(LispError::user("division by zero", vec![]));
+            }
+            Ok(Value::Int(a % b))
+        },
+    );
 }
 
 fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
@@ -1045,6 +1220,38 @@ fn register_exceptions(vm: &mut Vm) {
 
     vm.register_fn("raise", "Raise exception value", Arity::Fixed(1), |args| {
         Err(LispError::user(format!("{}", args[0]), vec![]))
+    });
+
+    vm.register_fn(
+        "raise-continuable",
+        "Raise continuable exception",
+        Arity::Fixed(1),
+        |args| {
+            // For now, same as raise (no continuable distinction)
+            Err(LispError::user(format!("{}", args[0]), vec![]))
+        },
+    );
+
+    vm.register_fn(
+        "error-object-irritants",
+        "Get error irritants",
+        Arity::Fixed(1),
+        |_args| Ok(Value::Null), // Irritants not preserved as values
+    );
+
+    vm.register_fn(
+        "error-object-type",
+        "Get error type",
+        Arity::Fixed(1),
+        |_args| Ok(Value::Bool(false)),
+    );
+
+    vm.register_fn("file-error?", "Is file error?", Arity::Fixed(1), |_args| {
+        Ok(Value::Bool(false))
+    });
+
+    vm.register_fn("read-error?", "Is read error?", Arity::Fixed(1), |_args| {
+        Ok(Value::Bool(false))
     });
 }
 

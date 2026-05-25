@@ -103,6 +103,16 @@ pub fn register(vm: &mut Vm) {
     );
 
     vm.register_fn(
+        "char-foldcase",
+        "Case-fold character",
+        Arity::Fixed(1),
+        |args| {
+            let c = args[0].as_char()?;
+            Ok(Value::Char(c.to_lowercase().next().unwrap_or(c)))
+        },
+    );
+
+    vm.register_fn(
         "char->integer",
         "Character to integer",
         Arity::Fixed(1),
