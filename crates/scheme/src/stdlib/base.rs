@@ -879,15 +879,35 @@ fn register_list_ops(vm: &mut Vm) {
     // Higher-order list ops and R7RS features implemented as Scheme code.
     // This follows the Chibi-Scheme pattern (init-7.scm).
     let bootstrap = r#"
-        (define (map f lst)
+        ;; R7RS §6.10 map — single-list only; multi-list via internal helpers
+        (define (map1 f lst)
           (if (null? lst)
               '()
-              (cons (f (car lst)) (map f (cdr lst)))))
+              (cons (f (car lst)) (map1 f (cdr lst)))))
 
-        (define (for-each f lst)
+        (define (map f . lsts)
+          (if (null? (cdr lsts))
+              (map1 f (car lsts))
+              ;; Multi-list: extract cars and cdrs using map1
+              (if (null? (car lsts))
+                  '()
+                  (cons (apply f (map1 car lsts))
+                        (apply map f (map1 cdr lsts))))))
+
+        ;; R7RS §6.10 for-each — single and multi-list
+        (define (for-each1 f lst)
           (if (null? lst)
               (void)
-              (begin (f (car lst)) (for-each f (cdr lst)))))
+              (begin (f (car lst)) (for-each1 f (cdr lst)))))
+
+        (define (for-each f . lsts)
+          (if (null? (cdr lsts))
+              (for-each1 f (car lsts))
+              (if (null? (car lsts))
+                  (void)
+                  (begin
+                    (apply f (map1 car lsts))
+                    (apply for-each f (map1 cdr lsts))))))
 
         (define (filter pred lst)
           (cond ((null? lst) '())
@@ -938,19 +958,19 @@ fn register_list_ops(vm: &mut Vm) {
             (after)
             result))
 
-        ;; R7RS §6.7 string-for-each and string-map
-        (define (string-for-each f s)
-          (for-each f (string->list s)))
+        ;; R7RS §6.7 string-for-each and string-map (multi-string)
+        (define (string-for-each f . strs)
+          (apply for-each f (map string->list strs)))
 
-        (define (string-map f s)
-          (list->string (map f (string->list s))))
+        (define (string-map f . strs)
+          (list->string (apply map f (map string->list strs))))
 
-        ;; R7RS §6.8 vector-for-each and vector-map
-        (define (vector-for-each f v)
-          (for-each f (vector->list v)))
+        ;; R7RS §6.8 vector-for-each and vector-map (multi-vector)
+        (define (vector-for-each f . vecs)
+          (apply for-each f (map vector->list vecs)))
 
-        (define (vector-map f v)
-          (list->vector (map f (vector->list v))))
+        (define (vector-map f . vecs)
+          (list->vector (apply map f (map vector->list vecs))))
 
         ;; R7RS §6.13 call-with-port
         (define (call-with-port port proc)

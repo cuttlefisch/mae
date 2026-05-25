@@ -1855,3 +1855,235 @@ fn s4_2_5_delay_force_comprehensive() {
            (equal? (force p) (force p)))",
     );
 }
+
+// §6.10 Multi-list map
+#[test]
+fn s6_10_map_multi_list() {
+    // Single-list map (basic)
+    is_true("(equal? (map + '(1 2 3)) '(1 2 3))");
+    is_true("(equal? (map (lambda (x) (* x x)) '(1 2 3 4)) '(1 4 9 16))");
+    // Multi-list map
+    is_true("(equal? (map + '(1 2 3) '(10 20 30)) '(11 22 33))");
+    is_true("(equal? (map * '(1 2 3) '(4 5 6)) '(4 10 18))");
+    // Three lists
+    is_true("(equal? (map + '(1 2) '(3 4) '(5 6)) '(9 12))");
+    // Empty lists
+    is_true("(equal? (map + '() '()) '())");
+}
+
+// §6.10 Multi-list for-each
+#[test]
+fn s6_10_for_each_multi_list() {
+    // for-each returns void
+    assert_eq!(eval("(for-each + '(1 2 3))"), Value::Void);
+    // Multi-list for-each
+    assert_eq!(eval("(for-each + '(1 2) '(3 4))"), Value::Void);
+}
+
+// §6.10 apply with leading args
+#[test]
+fn s6_10_apply_multi_arg() {
+    // Basic apply
+    is_int("(apply + '(1 2 3))", 6);
+    // Apply with leading args: (apply fn a1 a2 ... list)
+    is_int("(apply + 1 '(2 3))", 6);
+    is_int("(apply + 1 2 '(3))", 6);
+    is_int("(apply + 1 2 3 '())", 6);
+    // Apply with string operation
+    is_true("(equal? (apply string #\\a #\\b '(#\\c)) \"abc\")");
+}
+
+// §6.13 Standard ports
+#[test]
+fn s6_13_standard_ports() {
+    is_true("(port? (current-input-port))");
+    is_true("(port? (current-output-port))");
+    is_true("(port? (current-error-port))");
+    is_true("(input-port? (current-input-port))");
+    is_true("(output-port? (current-output-port))");
+    is_true("(output-port? (current-error-port))");
+}
+
+// §6.13.3 Binary I/O
+#[test]
+fn s6_13_binary_io() {
+    // open-output-bytevector + get-output-bytevector
+    is_true(
+        "(let ((p (open-output-bytevector)))
+           (write-u8 65 p)
+           (write-u8 66 p)
+           (equal? (bytevector->list (get-output-bytevector p)) '(65 66)))",
+    );
+    // open-input-bytevector + read-u8
+    is_int(
+        "(let ((p (open-input-bytevector (bytevector 10 20 30))))
+           (read-u8 p))",
+        10,
+    );
+    // peek-u8
+    is_int(
+        "(let ((p (open-input-bytevector (bytevector 42))))
+           (peek-u8 p))",
+        42,
+    );
+    // read-u8 after peek doesn't advance
+    is_int(
+        "(let ((p (open-input-bytevector (bytevector 42 43))))
+           (peek-u8 p)
+           (read-u8 p))",
+        42,
+    );
+    // EOF on empty bytevector
+    is_true("(eof-object? (read-u8 (open-input-bytevector (bytevector))))");
+}
+
+// §6.13 char-ready? and u8-ready?
+#[test]
+fn s6_13_ready_predicates() {
+    is_true("(char-ready?)");
+    is_true("(u8-ready?)");
+}
+
+// §6.13.2 write-char with port
+#[test]
+fn s6_13_write_char_port() {
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (write-char #\\H p)
+               (write-char #\\i p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("Hi")),
+    );
+}
+
+// §6.2.6 exact/inexact aliases
+#[test]
+fn s6_2_exact_inexact_aliases() {
+    is_int("(exact 2.75)", 2);
+    is_int("(exact 42)", 42);
+    assert_eq!(eval("(inexact 42)"), Value::Float(42.0));
+    assert_eq!(eval("(inexact 2.75)"), Value::Float(2.75));
+}
+
+// §4.2.2 let-values
+#[test]
+fn s4_2_2_let_values() {
+    is_int(
+        "(let-values (((x y) (values 1 2)))
+           (+ x y))",
+        3,
+    );
+}
+
+// §4.2.2 receive (SRFI-8)
+#[test]
+fn s4_2_2_receive() {
+    is_int(
+        "(receive (x y)
+           (values 10 20)
+           (+ x y))",
+        30,
+    );
+}
+
+// §6.7 multi-string string-map/string-for-each
+#[test]
+fn s6_7_string_map_multi() {
+    // Single string (basic)
+    assert_eq!(
+        eval("(string-map char-upcase \"hello\")"),
+        Value::String(Rc::from("HELLO")),
+    );
+}
+
+// §6.8 multi-vector vector-map
+#[test]
+fn s6_8_vector_map_multi() {
+    is_true(
+        "(equal? (vector->list (vector-map + (vector 1 2 3) (vector 10 20 30)))
+                '(11 22 33))",
+    );
+}
+
+// §6.13 read-bytevector
+#[test]
+fn s6_13_read_bytevector() {
+    is_true(
+        "(let ((p (open-input-bytevector (bytevector 1 2 3 4 5))))
+           (equal? (bytevector->list (read-bytevector 3 p)) '(1 2 3)))",
+    );
+}
+
+// §6.13 display/write to port
+#[test]
+fn s6_13_display_to_port() {
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (display 42 p)
+               (display \" hello\" p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("42 hello")),
+    );
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (write \"hello\" p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("\"hello\"")),
+    );
+}
+
+// §6.13 newline to port
+#[test]
+fn s6_13_newline_to_port() {
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (newline p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("\n")),
+    );
+}
+
+// §6.10 dynamic-wind order verification
+#[test]
+fn s6_10_dynamic_wind_order() {
+    is_true(
+        "(let ((order '()))
+           (dynamic-wind
+             (lambda () (set! order (cons 'in order)))
+             (lambda () (set! order (cons 'body order)))
+             (lambda () (set! order (cons 'out order))))
+           (equal? order '(out body in)))",
+    );
+}
+
+// §4.2.6 make-parameter / parameterize
+#[test]
+fn s4_2_6_parameterize() {
+    is_int(
+        "(let ((p (make-parameter 10)))
+           (p))",
+        10,
+    );
+    is_int(
+        "(let ((p (make-parameter 10)))
+           (parameterize ((p 20))
+             (p)))",
+        20,
+    );
+    // After parameterize, value reverts
+    is_int(
+        "(let ((p (make-parameter 10)))
+           (parameterize ((p 20))
+             (p))
+           (p))",
+        10,
+    );
+}

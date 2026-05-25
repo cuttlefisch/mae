@@ -413,6 +413,57 @@ fn register_bytevectors(vm: &mut Vm) {
             Ok(Value::Void)
         },
     );
+
+    // bytevector->list and list->bytevector
+    vm.register_fn(
+        "bytevector->list",
+        "Convert bytevector to list of integers",
+        Arity::Variadic(1),
+        |args| match &args[0] {
+            Value::Bytevector(bv) => {
+                let vec = bv.borrow();
+                let start = if args.len() > 1 {
+                    args[1].as_int()? as usize
+                } else {
+                    0
+                };
+                let end = if args.len() > 2 {
+                    args[2].as_int()? as usize
+                } else {
+                    vec.len()
+                };
+                let items: Vec<Value> = vec[start..end]
+                    .iter()
+                    .map(|b| Value::Int(*b as i64))
+                    .collect();
+                Ok(Value::list(items))
+            }
+            _ => Err(LispError::type_error("bytevector", format!("{}", args[0]))),
+        },
+    );
+
+    vm.register_fn(
+        "list->bytevector",
+        "Convert list of integers to bytevector",
+        Arity::Fixed(1),
+        |args| {
+            let elems = args[0].to_vec()?;
+            let mut bytes = Vec::with_capacity(elems.len());
+            for e in &elems {
+                bytes.push(e.as_int()? as u8);
+            }
+            Ok(Value::bytevector(bytes))
+        },
+    );
+
+    // vector? and bytevector? predicates
+    vm.register_fn("vector?", "Is vector?", Arity::Fixed(1), |args| {
+        Ok(Value::Bool(matches!(args[0], Value::Vector(_))))
+    });
+
+    vm.register_fn("bytevector?", "Is bytevector?", Arity::Fixed(1), |args| {
+        Ok(Value::Bool(matches!(args[0], Value::Bytevector(_))))
+    });
 }
 
 #[cfg(test)]

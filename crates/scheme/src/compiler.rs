@@ -306,6 +306,9 @@ impl Compiler {
                         "case-lambda" => return self.compile_case_lambda(&items),
                         "do" => return self.compile_do(&items, tail),
                         "parameterize" => return self.compile_parameterize(&items, tail),
+                        "let-values" => return self.compile_let_values(&items, tail),
+                        "let*-values" => return self.compile_let_star_values(&items, tail),
+                        "receive" => return self.compile_receive(&items, tail),
                         "apply" => return self.compile_apply(&items, tail),
                         "call-with-current-continuation" | "call/cc" => {
                             return self.compile_call_cc(&items, tail)
@@ -1010,6 +1013,102 @@ impl Compiler {
                 "",
             ))
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // let-values / let*-values / receive (R7RS §4.2.2, SRFI-8)
+    // -----------------------------------------------------------------------
+
+    /// Compile `(let-values (((x y) expr) ...) body ...)`
+    /// Desugars to: `(let ((temp expr)) (let ((x (list-ref temp 0)) (y (list-ref temp 1))) body))`
+    /// For single-binding case, simplifies to call-with-values pattern.
+    fn compile_let_values(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
+        // (let-values ((formals expr) ...) body ...)
+        if items.len() < 3 {
+            return Err(LispError::syntax(
+                "let-values requires bindings and body",
+                "",
+            ));
+        }
+        let bindings = items[1]
+            .to_vec()
+            .map_err(|_| LispError::syntax("let-values bindings must be a list", ""))?;
+        let body = &items[2..];
+
+        // Build nested lets for each binding clause
+        let mut result = Value::list(
+            std::iter::once(Value::symbol("begin"))
+                .chain(body.iter().cloned())
+                .collect::<Vec<_>>(),
+        );
+
+        // Process bindings in reverse order (innermost first)
+        for binding in bindings.iter().rev() {
+            let clause = binding
+                .to_vec()
+                .map_err(|_| LispError::syntax("let-values clause must be a list", ""))?;
+            if clause.len() != 2 {
+                return Err(LispError::syntax(
+                    "let-values clause needs (formals expr)",
+                    "",
+                ));
+            }
+            let formals = clause[0]
+                .to_vec()
+                .map_err(|_| LispError::syntax("let-values formals must be a list", ""))?;
+            let expr = &clause[1];
+
+            // Desugar to: (call-with-values (lambda () expr) (lambda (formals) body))
+            let consumer_lambda =
+                Value::list(vec![Value::symbol("lambda"), Value::list(formals), result]);
+            let producer_lambda = Value::list(vec![
+                Value::symbol("lambda"),
+                Value::list(vec![]),
+                expr.clone(),
+            ]);
+            result = Value::list(vec![
+                Value::symbol("call-with-values"),
+                producer_lambda,
+                consumer_lambda,
+            ]);
+        }
+
+        self.compile_expr(&result, tail)
+    }
+
+    /// Compile `(let*-values ...)` — sequential version of let-values.
+    /// Same as let-values since each binding is visible to subsequent ones.
+    fn compile_let_star_values(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
+        // let*-values has the same semantics as let-values when each binding
+        // introduces independent variables (which they do in our desugaring)
+        self.compile_let_values(items, tail)
+    }
+
+    /// Compile `(receive formals expr body ...)` (SRFI-8).
+    /// Desugars to: `(call-with-values (lambda () expr) (lambda formals body ...))`
+    fn compile_receive(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
+        // (receive formals expr body ...)
+        if items.len() < 4 {
+            return Err(LispError::syntax(
+                "receive requires formals, expr, and body",
+                "",
+            ));
+        }
+        let formals = items[1].clone();
+        let expr = &items[2];
+        let body = &items[3..];
+
+        let producer = Value::list(vec![
+            Value::symbol("lambda"),
+            Value::list(vec![]),
+            expr.clone(),
+        ]);
+        let mut consumer_items = vec![Value::symbol("lambda"), formals];
+        consumer_items.extend_from_slice(body);
+        let consumer = Value::list(consumer_items);
+
+        let desugared = Value::list(vec![Value::symbol("call-with-values"), producer, consumer]);
+        self.compile_expr(&desugared, tail)
     }
 
     // -----------------------------------------------------------------------
@@ -1832,22 +1931,24 @@ impl Compiler {
         if items.len() < 3 {
             return Err(LispError::syntax("apply requires at least 2 arguments", ""));
         }
-        // (apply fn list) — compile fn and args-list, emit Apply
-        self.compile_expr(&items[1], false)?; // fn
-        self.compile_expr(&items[items.len() - 1], false)?; // last arg (must be list)
 
-        // If there are intermediate args: (apply fn a1 a2 ... list)
-        // Desugar to (apply fn (cons a1 (cons a2 ... list)))
-        // For now, only support 2-arg form; multi-arg is rare.
-        if items.len() > 3 {
-            // TODO: support (apply fn a1 a2 ... list)
-            return Err(LispError::syntax(
-                "apply with leading args not yet supported; use (apply fn (cons a list))",
-                "",
-            ));
+        if items.len() == 3 {
+            // Simple form: (apply fn list)
+            self.compile_expr(&items[1], false)?; // fn
+            self.compile_expr(&items[2], false)?; // args list
+            self.emit(Op::Apply);
+        } else {
+            // Multi-arg: (apply fn a1 a2 ... list)
+            // Desugar to: (apply fn (cons a1 (cons a2 ... list)))
+            // Build the cons chain from the end
+            let mut arg_list = items[items.len() - 1].clone(); // last arg (must be list)
+            for i in (2..items.len() - 1).rev() {
+                arg_list = Value::list(vec![Value::symbol("cons"), items[i].clone(), arg_list]);
+            }
+            self.compile_expr(&items[1], false)?; // fn
+            self.compile_expr(&arg_list, false)?; // constructed args list
+            self.emit(Op::Apply);
         }
-
-        self.emit(Op::Apply);
         Ok(())
     }
 

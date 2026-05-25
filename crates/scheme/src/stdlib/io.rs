@@ -439,6 +439,255 @@ pub fn register(vm: &mut Vm) {
             ]))
         },
     );
+
+    // R7RS §6.13.1 Standard ports
+    vm.register_fn(
+        "current-input-port",
+        "Current default input port",
+        Arity::Fixed(0),
+        |_args| Ok(Value::Port(Rc::new(std::cell::RefCell::new(Port::Stdin)))),
+    );
+
+    vm.register_fn(
+        "current-output-port",
+        "Current default output port",
+        Arity::Fixed(0),
+        |_args| Ok(Value::Port(Rc::new(std::cell::RefCell::new(Port::Stdout)))),
+    );
+
+    vm.register_fn(
+        "current-error-port",
+        "Current default error port",
+        Arity::Fixed(0),
+        |_args| Ok(Value::Port(Rc::new(std::cell::RefCell::new(Port::Stderr)))),
+    );
+
+    // R7RS §6.13.3 Binary I/O — bytevector ports
+    vm.register_fn(
+        "open-input-bytevector",
+        "Create input port from bytevector",
+        Arity::Fixed(1),
+        |args| match &args[0] {
+            Value::Bytevector(bv) => {
+                // Convert bytes to string for our StringInput port
+                let bytes = bv.borrow().clone();
+                let data = bytes.iter().map(|b| *b as char).collect::<String>();
+                Ok(Value::Port(Rc::new(std::cell::RefCell::new(
+                    Port::StringInput { data, pos: 0 },
+                ))))
+            }
+            _ => Err(LispError::type_error("bytevector", format!("{}", args[0]))),
+        },
+    );
+
+    vm.register_fn(
+        "open-output-bytevector",
+        "Create output bytevector port",
+        Arity::Fixed(0),
+        |_args| {
+            Ok(Value::Port(Rc::new(std::cell::RefCell::new(
+                Port::StringOutput { buf: String::new() },
+            ))))
+        },
+    );
+
+    vm.register_fn(
+        "get-output-bytevector",
+        "Get accumulated bytes from output bytevector port",
+        Arity::Fixed(1),
+        |args| match &args[0] {
+            Value::Port(p) => {
+                let port = p.borrow();
+                match &*port {
+                    Port::StringOutput { buf } => {
+                        let bytes: Vec<u8> = buf.bytes().collect();
+                        Ok(Value::bytevector(bytes))
+                    }
+                    _ => Err(LispError::type_error(
+                        "output-bytevector-port",
+                        "other port type",
+                    )),
+                }
+            }
+            _ => Err(LispError::type_error("port", format!("{}", args[0]))),
+        },
+    );
+
+    // R7RS §6.13.3 read-u8, peek-u8, write-u8
+    vm.register_fn(
+        "read-u8",
+        "Read a byte from port",
+        Arity::Variadic(0),
+        |args| {
+            if args.is_empty() {
+                return Ok(Value::Eof);
+            }
+            match &args[0] {
+                Value::Port(p) => {
+                    let mut port = p.borrow_mut();
+                    match &mut *port {
+                        Port::StringInput { data, pos } => {
+                            if *pos >= data.len() {
+                                Ok(Value::Eof)
+                            } else {
+                                let byte = data.as_bytes()[*pos];
+                                *pos += 1;
+                                Ok(Value::Int(byte as i64))
+                            }
+                        }
+                        _ => Err(LispError::type_error("input-port", "other port type")),
+                    }
+                }
+                _ => Err(LispError::type_error("port", format!("{}", args[0]))),
+            }
+        },
+    );
+
+    vm.register_fn(
+        "peek-u8",
+        "Peek at next byte from port",
+        Arity::Variadic(0),
+        |args| {
+            if args.is_empty() {
+                return Ok(Value::Eof);
+            }
+            match &args[0] {
+                Value::Port(p) => {
+                    let port = p.borrow();
+                    match &*port {
+                        Port::StringInput { data, pos } => {
+                            if *pos >= data.len() {
+                                Ok(Value::Eof)
+                            } else {
+                                Ok(Value::Int(data.as_bytes()[*pos] as i64))
+                            }
+                        }
+                        _ => Err(LispError::type_error("input-port", "other port type")),
+                    }
+                }
+                _ => Err(LispError::type_error("port", format!("{}", args[0]))),
+            }
+        },
+    );
+
+    vm.register_fn(
+        "write-u8",
+        "Write a byte to port",
+        Arity::Variadic(1),
+        |args| {
+            let byte = args[0].as_int()? as u8;
+            if args.len() > 1 {
+                write_to_port(&args[1], &String::from(byte as char))?;
+            } else {
+                print!("{}", byte as char);
+            }
+            Ok(Value::Void)
+        },
+    );
+
+    // R7RS §6.13.3 read-bytevector, write-bytevector
+    vm.register_fn(
+        "read-bytevector",
+        "Read k bytes from port",
+        Arity::Variadic(1),
+        |args| {
+            let k = args[0].as_int()? as usize;
+            if args.len() < 2 {
+                return Ok(Value::Eof);
+            }
+            match &args[1] {
+                Value::Port(p) => {
+                    let mut port = p.borrow_mut();
+                    match &mut *port {
+                        Port::StringInput { data, pos } => {
+                            if *pos >= data.len() {
+                                return Ok(Value::Eof);
+                            }
+                            let end = (*pos + k).min(data.len());
+                            let bytes: Vec<u8> = data.as_bytes()[*pos..end].to_vec();
+                            *pos = end;
+                            Ok(Value::bytevector(bytes))
+                        }
+                        _ => Err(LispError::type_error("input-port", "other port type")),
+                    }
+                }
+                _ => Err(LispError::type_error("port", format!("{}", args[1]))),
+            }
+        },
+    );
+
+    vm.register_fn(
+        "write-bytevector",
+        "Write bytevector to port",
+        Arity::Variadic(1),
+        |args| match &args[0] {
+            Value::Bytevector(bv) => {
+                let bytes = bv.borrow();
+                let text: String = bytes.iter().map(|b| *b as char).collect();
+                if args.len() > 1 {
+                    write_to_port(&args[1], &text)?;
+                } else {
+                    print!("{text}");
+                }
+                Ok(Value::Void)
+            }
+            _ => Err(LispError::type_error("bytevector", format!("{}", args[0]))),
+        },
+    );
+
+    // R7RS char-ready? and u8-ready?
+    vm.register_fn(
+        "char-ready?",
+        "Is character ready on port?",
+        Arity::Variadic(0),
+        |_args| Ok(Value::Bool(true)), // Always ready for string ports
+    );
+
+    vm.register_fn(
+        "u8-ready?",
+        "Is byte ready on port?",
+        Arity::Variadic(0),
+        |_args| Ok(Value::Bool(true)),
+    );
+
+    // R7RS §6.13.2 write-char with port support (override Fixed(1) version)
+    vm.register_fn(
+        "write-char",
+        "Write a character to port",
+        Arity::Variadic(1),
+        |args| {
+            let ch = args[0].as_char()?;
+            if args.len() > 1 {
+                write_to_port(&args[1], &ch.to_string())?;
+            } else {
+                print!("{ch}");
+            }
+            Ok(Value::Void)
+        },
+    );
+
+    // R7RS exact/inexact aliases (§6.2.6)
+    vm.register_fn(
+        "exact",
+        "Convert to exact",
+        Arity::Fixed(1),
+        |args| match &args[0] {
+            Value::Float(f) => Ok(Value::Int(*f as i64)),
+            Value::Int(_) => Ok(args[0].clone()),
+            _ => Err(LispError::type_error("number", format!("{}", args[0]))),
+        },
+    );
+
+    vm.register_fn(
+        "inexact",
+        "Convert to inexact",
+        Arity::Fixed(1),
+        |args| match &args[0] {
+            Value::Int(n) => Ok(Value::Float(*n as f64)),
+            Value::Float(_) => Ok(args[0].clone()),
+            _ => Err(LispError::type_error("number", format!("{}", args[0]))),
+        },
+    );
 }
 
 #[cfg(test)]
