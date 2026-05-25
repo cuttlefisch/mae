@@ -150,11 +150,6 @@ pub fn register(vm: &mut Vm) {
         Ok(Value::Void)
     });
 
-    vm.register_fn("write-char", "Write a character", Arity::Fixed(1), |args| {
-        print!("{}", args[0].as_char()?);
-        Ok(Value::Void)
-    });
-
     // String output
     vm.register_fn(
         "display-string",
