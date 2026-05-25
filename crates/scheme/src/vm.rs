@@ -137,7 +137,7 @@ impl Vm {
             return Ok(Value::Void);
         }
 
-        // Pre-process top-level forms: handle import and define-library
+        // Pre-process top-level forms: handle import, define-library, and load
         // before compilation, as they affect the global environment.
         let mut to_compile = Vec::new();
         for datum in &datums {
@@ -145,6 +145,8 @@ impl Vm {
                 self.process_import(datum)?;
             } else if self.is_define_library(datum) {
                 self.process_define_library(datum)?;
+            } else if self.is_top_level_load(datum) {
+                self.process_load(datum)?;
             } else {
                 to_compile.push(datum.clone());
             }
@@ -198,6 +200,30 @@ impl Vm {
             }
         }
         false
+    }
+
+    /// Check if a datum is a top-level `(load "file")` form.
+    fn is_top_level_load(&self, datum: &Value) -> bool {
+        if let Ok(items) = datum.to_vec() {
+            if let Some(Value::Symbol(s)) = items.first() {
+                return s.name() == "load" && items.len() == 2;
+            }
+        }
+        false
+    }
+
+    /// Process a top-level `(load "file")` — evaluate file in interaction environment.
+    fn process_load(&mut self, datum: &Value) -> Result<(), LispError> {
+        let items = datum
+            .to_vec()
+            .map_err(|_| LispError::syntax("load must be a list", format!("{datum}")))?;
+        let filename = items[1]
+            .as_str()
+            .map_err(|_| LispError::syntax("load: filename must be a string", ""))?;
+        let content = std::fs::read_to_string(filename)
+            .map_err(|e| LispError::user(format!("load: {e}"), vec![]))?;
+        self.eval(&content)?;
+        Ok(())
     }
 
     /// Process a top-level `(import <import-set> ...)` form.

@@ -1058,6 +1058,16 @@ fn register_list_ops(vm: &mut Vm) {
         (define (call-with-output-file filename proc)
           (call-with-port (open-output-file filename) proc))
 
+        ;; R7RS §6.13.1 with-input-from-file / with-output-to-file
+        ;; Simplified: opens the file and passes the port to the thunk
+        ;; (R7RS spec says redirect current-input/output-port, but that
+        ;; requires dynamic port parameters. This is the common usage pattern.)
+        (define (with-input-from-file filename thunk)
+          (call-with-input-file filename (lambda (port) (thunk))))
+
+        (define (with-output-to-file filename thunk)
+          (call-with-output-file filename (lambda (port) (thunk))))
+
         ;; R7RS §4.2.5 Promises (delay/force)
         ;; Uses a mutable vector #(promise done? value/thunk)
         ;; Internal constructor

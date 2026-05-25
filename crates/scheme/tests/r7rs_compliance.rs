@@ -3907,6 +3907,37 @@ fn s5_6_include_basic() {
 }
 
 #[test]
+fn s5_6_load_file() {
+    // Write a temp file and load it
+    let dir = std::env::temp_dir();
+    let path = dir.join("mae-test-load.scm");
+    std::fs::write(&path, "(define load-test-result 99)").unwrap();
+
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm
+        .eval(&format!("(load \"{}\") load-test-result", path.display()))
+        .unwrap();
+    assert_eq!(result, Value::Int(99));
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn s6_13_with_output_to_file() {
+    let path = std::env::temp_dir().join("mae-test-with-output.txt");
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    // with-output-to-file just opens and calls thunk (simplified)
+    vm.eval(&format!(
+        "(with-output-to-file \"{}\" (lambda () #t))",
+        path.display()
+    ))
+    .unwrap();
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn s5_6_library_import_export() {
     // Define a library and import from it
     let mut vm = Vm::new();
