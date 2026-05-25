@@ -6317,3 +6317,647 @@ fn s6_9_bytevector_ops_comprehensive() {
         eval("#u8(104 101 108 108 111)"),
     );
 }
+
+// =============================================================================
+// §6.4 cxr accessors (R7RS §6.4)
+// =============================================================================
+
+#[test]
+fn s6_4_cxr_accessors() {
+    // caar — (car (car x))
+    is_int("(caar '((1 2) 3))", 1);
+
+    // cadr — (car (cdr x))
+    is_int("(cadr '(1 2 3))", 2);
+
+    // cdar — (cdr (car x))
+    assert_eq!(eval("(cdar '((1 2 3) 4))"), eval("'(2 3)"),);
+
+    // cddr — (cdr (cdr x))
+    assert_eq!(eval("(cddr '(1 2 3 4))"), eval("'(3 4)"),);
+
+    // nested combinations
+    is_int("(caar '((5 6) (7 8)))", 5);
+    assert_eq!(eval("(cdar '((10 20 30)))"), eval("'(20 30)"),);
+    assert_eq!(eval("(cddr '(a b c d e))"), eval("'(c d e)"),);
+}
+
+// =============================================================================
+// §6.6 char<=? and char>=? (R7RS §6.6)
+// =============================================================================
+
+#[test]
+fn s6_6_char_comparison_lte_gte() {
+    // char<=?
+    is_true("(char<=? #\\a #\\b)");
+    is_true("(char<=? #\\a #\\a)");
+    is_false("(char<=? #\\b #\\a)");
+    is_true("(char<=? #\\A #\\Z)");
+    is_true("(char<=? #\\0 #\\9)");
+
+    // char>=?
+    is_true("(char>=? #\\b #\\a)");
+    is_true("(char>=? #\\a #\\a)");
+    is_false("(char>=? #\\a #\\b)");
+    is_true("(char>=? #\\Z #\\A)");
+    is_true("(char>=? #\\9 #\\0)");
+}
+
+// =============================================================================
+// §6.7 string>=? (R7RS §6.7)
+// =============================================================================
+
+#[test]
+fn s6_7_string_comparison_gte() {
+    is_true(r#"(string>=? "b" "a")"#);
+    is_true(r#"(string>=? "a" "a")"#);
+    is_false(r#"(string>=? "a" "b")"#);
+    is_true(r#"(string>=? "abc" "ab")"#);
+    is_true(r#"(string>=? "xyz" "xyz")"#);
+    is_false(r#"(string>=? "ab" "abc")"#);
+}
+
+// =============================================================================
+// §6.2 integer? with inexact values (R7RS §6.2.6)
+// =============================================================================
+
+#[test]
+fn s6_2_integer_inexact_edge_cases() {
+    // integer? on inexact integer-valued floats: R7RS says #t
+    is_true("(integer? 42.0)");
+    is_true("(integer? 0.0)");
+    is_true("(integer? -1.0)");
+
+    // integer? on non-integer floats: R7RS says #f
+    is_false("(integer? 3.15)");
+    is_false("(integer? 0.5)");
+    is_false("(integer? -2.7)");
+
+    // exact-integer? on floats: always #f (they're inexact)
+    is_false("(exact-integer? 42.0)");
+    is_false("(exact-integer? 0.0)");
+
+    // rational? — in mae-scheme, all reals are rational (no complex)
+    is_true("(rational? 42)");
+    is_true("(rational? 3.15)");
+
+    // complex? — R7RS permits #t for all numbers when no complex type
+    is_true("(complex? 42)");
+    is_true("(complex? 3.15)");
+
+    // positive? and negative? with inexact zero
+    is_false("(positive? 0.0)");
+    is_false("(negative? 0.0)");
+    is_true("(positive? 0.1)");
+    is_true("(negative? -0.1)");
+    is_false("(negative? 0)");
+
+    // zero? with inexact
+    is_true("(zero? 0.0)");
+    is_false("(zero? 0.1)");
+}
+
+// =============================================================================
+// §6.6 char predicates — edge cases (R7RS §6.6)
+// =============================================================================
+
+#[test]
+fn s6_6_char_predicate_edge_cases() {
+    // char-numeric? negative cases
+    is_false("(char-numeric? #\\a)");
+    is_false("(char-numeric? #\\space)");
+    is_false("(char-numeric? #\\!)");
+    is_true("(char-numeric? #\\0)");
+    is_true("(char-numeric? #\\9)");
+
+    // char-alphabetic? negative cases
+    is_false("(char-alphabetic? #\\0)");
+    is_false("(char-alphabetic? #\\space)");
+    is_false("(char-alphabetic? #\\!)");
+
+    // char-whitespace? edge cases
+    is_true("(char-whitespace? #\\space)");
+    is_true("(char-whitespace? #\\newline)");
+    is_true("(char-whitespace? #\\tab)");
+    is_false("(char-whitespace? #\\a)");
+    is_false("(char-whitespace? #\\0)");
+
+    // char-upper-case? / char-lower-case? edge cases
+    is_false("(char-upper-case? #\\a)");
+    is_false("(char-lower-case? #\\A)");
+    is_false("(char-upper-case? #\\1)");
+    is_false("(char-lower-case? #\\1)");
+
+    // char-ci comparisons
+    is_true("(char-ci=? #\\A #\\a)");
+    is_true("(char-ci<? #\\a #\\B)");
+    is_true("(char-ci>? #\\B #\\a)");
+    is_true("(char-ci<=? #\\a #\\A)");
+    is_true("(char-ci>=? #\\A #\\a)");
+}
+
+// =============================================================================
+// §6.7 string case-insensitive comparisons — comprehensive (R7RS §6.7)
+// =============================================================================
+
+#[test]
+fn s6_7_string_ci_comprehensive() {
+    is_true(r#"(string-ci=? "ABC" "abc")"#);
+    is_true(r#"(string-ci=? "Hello" "hELLO")"#);
+    is_false(r#"(string-ci=? "abc" "abd")"#);
+
+    is_true(r#"(string-ci<? "abc" "ABD")"#);
+    is_false(r#"(string-ci<? "abd" "ABC")"#);
+
+    is_true(r#"(string-ci>? "ABD" "abc")"#);
+    is_false(r#"(string-ci>? "abc" "ABD")"#);
+
+    is_true(r#"(string-ci<=? "abc" "ABC")"#);
+    is_true(r#"(string-ci<=? "abc" "ABD")"#);
+    is_false(r#"(string-ci<=? "abd" "ABC")"#);
+
+    is_true(r#"(string-ci>=? "ABC" "abc")"#);
+    is_true(r#"(string-ci>=? "abd" "ABC")"#);
+    is_false(r#"(string-ci>=? "abc" "ABD")"#);
+}
+
+// =============================================================================
+// §6.13 Port predicates on closed ports (R7RS §6.13)
+// =============================================================================
+
+#[test]
+fn s6_13_port_predicates_closed() {
+    // A closed port is still a port, still input/output
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+
+    // String port: open, check predicates, close, check again
+    assert_eq!(
+        vm.eval(
+            r#"
+            (let ((p (open-input-string "hello")))
+              (and (port? p) (input-port? p) (textual-port? p)))
+        "#
+        )
+        .unwrap(),
+        Value::Bool(true),
+    );
+
+    // After close, port? still #t but reads fail
+    assert_eq!(
+        vm.eval(
+            r#"
+            (let ((p (open-input-string "hello")))
+              (close-port p)
+              (port? p))
+        "#
+        )
+        .unwrap(),
+        Value::Bool(true),
+    );
+
+    // Output string port
+    assert_eq!(
+        vm.eval(
+            r#"
+            (let ((p (open-output-string)))
+              (and (port? p) (output-port? p) (textual-port? p)))
+        "#
+        )
+        .unwrap(),
+        Value::Bool(true),
+    );
+}
+
+// =============================================================================
+// §6.8 vector-set! error cases (R7RS §6.8)
+// =============================================================================
+
+#[test]
+fn s6_8_vector_error_cases() {
+    // vector-set! out of bounds
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+    assert!(vm.eval("(vector-set! (vector 1 2 3) 5 99)").is_err());
+
+    // vector-ref out of bounds
+    let mut vm2 = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm2);
+    assert!(vm2.eval("(vector-ref (vector 1 2 3) 5)").is_err());
+}
+
+// =============================================================================
+// §6.7 string-set! error (immutable strings — mae-scheme stance)
+// =============================================================================
+
+#[test]
+fn s6_7_immutable_string_errors() {
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+
+    // string-set! should error (mae-scheme strings are immutable)
+    assert!(vm.eval(r#"(string-set! "hello" 0 #\H)"#).is_err());
+
+    // string-copy! should error
+    let mut vm2 = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm2);
+    assert!(vm2.eval(r#"(string-copy! "hello" 0 "world")"#).is_err());
+
+    // string-fill! should error
+    let mut vm3 = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm3);
+    assert!(vm3.eval(r#"(string-fill! "hello" #\x)"#).is_err());
+}
+
+// =============================================================================
+// §6.10 map/for-each error propagation (R7RS §6.10)
+// =============================================================================
+
+#[test]
+fn s6_10_map_error_propagation() {
+    // map with error in callback should propagate
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+    assert!(vm.eval("(map (lambda (x) (/ 1 x)) '(1 0 2))").is_err());
+
+    // for-each with error in callback should propagate
+    let mut vm2 = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm2);
+    assert!(vm2
+        .eval("(for-each (lambda (x) (/ 1 x)) '(1 0 2))")
+        .is_err());
+}
+
+// =============================================================================
+// §6.2 number->string / string->number edge cases (R7RS §6.2.7)
+// =============================================================================
+
+#[test]
+fn s6_2_number_string_edge_cases() {
+    // number->string with various radices
+    assert_eq!(
+        eval("(number->string 255 16)"),
+        Value::String(Rc::from("ff")),
+    );
+    assert_eq!(eval("(number->string 7 2)"), Value::String(Rc::from("111")),);
+    assert_eq!(eval("(number->string 8 8)"), Value::String(Rc::from("10")),);
+    assert_eq!(eval("(number->string 0 16)"), Value::String(Rc::from("0")),);
+
+    // string->number with radix
+    is_int("(string->number \"ff\" 16)", 255);
+    is_int("(string->number \"111\" 2)", 7);
+    is_int("(string->number \"10\" 8)", 8);
+
+    // string->number failure returns #f
+    is_false("(string->number \"not-a-number\")");
+    is_false("(string->number \"\")");
+
+    // Negative numbers
+    assert_eq!(eval("(number->string -42)"), Value::String(Rc::from("-42")),);
+    is_int("(string->number \"-42\")", -42);
+
+    // Float conversion
+    assert_eq!(eval("(string->number \"3.15\")"), Value::Float(3.15),);
+}
+
+// =============================================================================
+// §6.4 list operations — edge cases (R7RS §6.4)
+// =============================================================================
+
+#[test]
+fn s6_4_list_edge_cases() {
+    // list-tail at boundary
+    assert_eq!(eval("(list-tail '(a b c) 3)"), Value::Null);
+    assert_eq!(eval("(list-tail '() 0)"), Value::Null);
+
+    // list-copy preserves structure
+    assert_eq!(eval("(list-copy '(1 2 3))"), eval("'(1 2 3)"),);
+    // list-copy of empty list
+    assert_eq!(eval("(list-copy '())"), Value::Null);
+
+    // append with empty lists
+    assert_eq!(eval("(append '() '(1 2))"), eval("'(1 2)"),);
+    assert_eq!(eval("(append '(1 2) '())"), eval("'(1 2)"),);
+    assert_eq!(eval("(append '() '())"), Value::Null);
+
+    // reverse of empty and singleton
+    assert_eq!(eval("(reverse '())"), Value::Null);
+    assert_eq!(eval("(reverse '(1))"), eval("'(1)"),);
+}
+
+// =============================================================================
+// §6.5 symbol edge cases (R7RS §6.5)
+// =============================================================================
+
+#[test]
+fn s6_5_symbol_edge_cases() {
+    // symbol->string returns immutable string representation
+    assert_eq!(
+        eval("(symbol->string 'hello)"),
+        Value::String(Rc::from("hello")),
+    );
+
+    // string->symbol round-trip
+    is_true(r#"(eq? (string->symbol "foo") 'foo)"#);
+
+    // symbol with special characters (via string->symbol)
+    assert_eq!(
+        eval(r#"(symbol->string (string->symbol "hello world"))"#),
+        Value::String(Rc::from("hello world")),
+    );
+}
+
+// =============================================================================
+// §6.9 bytevector edge cases (R7RS §6.9)
+// =============================================================================
+
+#[test]
+fn s6_9_bytevector_edge_cases() {
+    // bytevector-u8-set! valid range
+    assert_eq!(
+        eval("(let ((bv (bytevector 0 0 0))) (bytevector-u8-set! bv 1 255) (bytevector-u8-ref bv 1))"),
+        Value::Int(255),
+    );
+
+    // make-bytevector with fill
+    assert_eq!(
+        eval("(bytevector-u8-ref (make-bytevector 3 42) 2)"),
+        Value::Int(42),
+    );
+
+    // bytevector-length
+    is_int("(bytevector-length #u8())", 0);
+    is_int("(bytevector-length #u8(1 2 3))", 3);
+
+    // bytevector-copy with start/end
+    assert_eq!(
+        eval("(bytevector-copy #u8(0 1 2 3 4) 2 4)"),
+        eval("#u8(2 3)"),
+    );
+
+    // bytevector-append empty
+    assert_eq!(eval("(bytevector-append #u8() #u8())"), eval("#u8()"),);
+    assert_eq!(eval("(bytevector-append #u8() #u8(1))"), eval("#u8(1)"),);
+}
+
+// =============================================================================
+// §6.10 apply edge cases (R7RS §6.10)
+// =============================================================================
+
+#[test]
+fn s6_10_apply_edge_cases() {
+    // apply with empty list
+    is_int("(apply + '())", 0);
+    is_int("(apply * '())", 1);
+
+    // apply with multiple leading args
+    is_int("(apply + 1 2 '(3 4))", 10);
+    is_int("(apply + 1 '(2))", 3);
+
+    // apply with lambda
+    is_int("(apply (lambda (x y) (+ x y)) '(3 4))", 7);
+}
+
+// =============================================================================
+// §4.2.6 do — comprehensive (R7RS §4.2.6)
+// =============================================================================
+
+#[test]
+fn s4_2_6_do_comprehensive() {
+    // do with no body (just iteration)
+    is_int("(do ((i 0 (+ i 1))) ((= i 5) i))", 5);
+
+    // do with body side effect
+    assert_eq!(
+        eval(
+            "(let ((result '()))
+               (do ((i 0 (+ i 1)))
+                   ((= i 3) (reverse result))
+                 (set! result (cons i result))))"
+        ),
+        eval("'(0 1 2)"),
+    );
+
+    // do with multiple step variables
+    is_int(
+        "(do ((i 0 (+ i 1))
+              (j 10 (- j 1)))
+             ((= i 5) (+ i j)))",
+        10, // i=5, j=5
+    );
+
+    // do with no step expression (variable stays constant)
+    is_int(
+        "(do ((x 42)
+              (i 0 (+ i 1)))
+             ((= i 3) x))",
+        42,
+    );
+}
+
+// =============================================================================
+// §4.2.3 and/or — return value semantics (R7RS §4.2.3)
+// =============================================================================
+
+#[test]
+fn s4_2_3_and_or_return_values() {
+    // and returns last true value
+    is_int("(and 1 2 3)", 3);
+    assert_eq!(eval("(and 1 #f 3)"), Value::Bool(false));
+    // and with no args returns #t
+    is_true("(and)");
+    // and with single arg returns that arg
+    is_int("(and 42)", 42);
+
+    // or returns first true value
+    is_int("(or #f #f 3)", 3);
+    is_int("(or 1 2 3)", 1);
+    // or with no args returns #f
+    is_false("(or)");
+    // or with all false returns last
+    is_false("(or #f #f #f)");
+    // or with single arg
+    is_int("(or 42)", 42);
+}
+
+// =============================================================================
+// §4.1.6 define — internal definitions (R7RS §4.1.6 / §5.3.2)
+// =============================================================================
+
+#[test]
+fn s5_3_internal_definitions() {
+    // Internal define at start of body
+    is_int(
+        "(let ()
+           (define x 10)
+           (define y 20)
+           (+ x y))",
+        30,
+    );
+
+    // Internal define with mutual recursion
+    is_true(
+        "(let ()
+           (define (even? n) (if (= n 0) #t (odd? (- n 1))))
+           (define (odd? n) (if (= n 0) #f (even? (- n 1))))
+           (even? 10))",
+    );
+}
+
+// =============================================================================
+// §6.11 error-object accessors (R7RS §6.11)
+// =============================================================================
+
+#[test]
+fn s6_11_error_object_accessors() {
+    // error-object-message
+    assert_eq!(
+        eval(
+            r#"(guard (e (#t (error-object-message e)))
+                  (error "test message" 1 2))"#
+        ),
+        Value::String(Rc::from("test message")),
+    );
+
+    // error-object-irritants
+    assert_eq!(
+        eval(
+            r#"(guard (e (#t (error-object-irritants e)))
+                  (error "msg" 'a 'b 'c))"#
+        ),
+        eval("'(a b c)"),
+    );
+
+    // error-object? predicate
+    is_true(
+        r#"(guard (e (#t (error-object? e)))
+                 (error "test"))"#,
+    );
+    is_false("(error-object? 42)");
+    is_false(r#"(error-object? "not an error")"#);
+
+    // file-error? and read-error?
+    is_false(
+        r#"(guard (e (#t (file-error? e)))
+                  (error "not a file error"))"#,
+    );
+    is_false(
+        r#"(guard (e (#t (read-error? e)))
+                  (error "not a read error"))"#,
+    );
+}
+
+// =============================================================================
+// §6.13 string port comprehensive (R7RS §6.13)
+// =============================================================================
+
+#[test]
+fn s6_13_string_port_comprehensive() {
+    // Read multiple values from string port
+    let mut vm = Vm::new();
+    crate::stdlib::register_stdlib(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"
+            (let ((p (open-input-string "42 hello #t")))
+              (let* ((a (read p))
+                     (b (read p))
+                     (c (read p)))
+                (list a b c)))
+        "#
+        )
+        .unwrap(),
+        vm.eval("'(42 hello #t)").unwrap(),
+    );
+
+    // get-output-string accumulates writes
+    assert_eq!(
+        eval(
+            r#"
+            (let ((p (open-output-string)))
+              (write-char #\H p)
+              (write-char #\i p)
+              (get-output-string p))
+        "#
+        ),
+        Value::String(Rc::from("Hi")),
+    );
+
+    // Empty string port reads EOF immediately
+    assert_eq!(
+        eval(r#"(eof-object? (read (open-input-string "")))"#),
+        Value::Bool(true),
+    );
+}
+
+// =============================================================================
+// §6.2 exact/inexact conversion edge cases (R7RS §6.2.6)
+// =============================================================================
+
+#[test]
+fn s6_2_exact_inexact_conversion_edges() {
+    // exact->inexact
+    assert_eq!(eval("(exact->inexact 42)"), Value::Float(42.0));
+    assert_eq!(eval("(exact->inexact 0)"), Value::Float(0.0));
+
+    // inexact->exact
+    is_int("(inexact->exact 42.0)", 42);
+    is_int("(inexact->exact 0.0)", 0);
+    is_int("(inexact->exact -7.0)", -7);
+
+    // exact and inexact predicates
+    is_true("(exact? 42)");
+    is_false("(exact? 42.0)");
+    is_true("(inexact? 42.0)");
+    is_false("(inexact? 42)");
+
+    // exact->inexact already inexact is no-op
+    assert_eq!(eval("(exact->inexact 3.15)"), Value::Float(3.15));
+}
+
+// =============================================================================
+// §6.10 dynamic-wind — comprehensive (R7RS §6.10)
+// =============================================================================
+
+#[test]
+fn s6_10_dynamic_wind_nested() {
+    // Basic dynamic-wind: in/body/out all execute in order
+    assert_eq!(
+        eval(
+            r#"
+            (let ((log '()))
+              (dynamic-wind
+                (lambda () (set! log (cons 'in log)))
+                (lambda () (set! log (cons 'body log)) 42)
+                (lambda () (set! log (cons 'out log))))
+              (reverse log))
+        "#
+        ),
+        eval("'(in body out)"),
+    );
+
+    // dynamic-wind returns body value
+    is_int(
+        "(dynamic-wind (lambda () #f) (lambda () 99) (lambda () #f))",
+        99,
+    );
+
+    // Nested dynamic-wind
+    assert_eq!(
+        eval(
+            r#"
+            (let ((log '()))
+              (dynamic-wind
+                (lambda () (set! log (cons 'in1 log)))
+                (lambda ()
+                  (dynamic-wind
+                    (lambda () (set! log (cons 'in2 log)))
+                    (lambda () (set! log (cons 'body log)))
+                    (lambda () (set! log (cons 'out2 log)))))
+                (lambda () (set! log (cons 'out1 log))))
+              (reverse log))
+        "#
+        ),
+        eval("'(in1 in2 body out2 out1)"),
+    );
+}
