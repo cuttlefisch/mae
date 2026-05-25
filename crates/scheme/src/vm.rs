@@ -97,6 +97,23 @@ pub struct Vm {
     /// Captured by call/cc and used to compute which thunks to run
     /// when a continuation crosses dynamic-wind boundaries.
     pub winders: Vec<Winder>,
+    /// GC statistics for observability.
+    pub gc_stats: GcStats,
+}
+
+/// GC observability metrics (Stage 1: Rc-based, monitors for cycle leaks).
+#[derive(Clone, Debug, Default)]
+pub struct GcStats {
+    /// Number of eval calls processed.
+    pub eval_count: u64,
+    /// Number of gc-collect! calls.
+    pub collections_count: u64,
+    /// Number of globals at last measurement.
+    pub globals_count: usize,
+    /// Stack high-water mark.
+    pub stack_hwm: usize,
+    /// Frame high-water mark.
+    pub frame_hwm: usize,
 }
 
 impl Vm {
@@ -112,6 +129,7 @@ impl Vm {
             handlers: Vec::new(),
             load_paths: Vec::new(),
             winders: Vec::new(),
+            gc_stats: GcStats::default(),
         }
     }
 
@@ -184,7 +202,16 @@ impl Vm {
             self.code_pool.push(code_obj);
         }
 
-        self.execute(base + code_id)
+        let result = self.execute(base + code_id);
+
+        // Update GC stats
+        self.gc_stats.eval_count += 1;
+        if self.stack.len() > self.gc_stats.stack_hwm {
+            self.gc_stats.stack_hwm = self.stack.len();
+        }
+        self.gc_stats.globals_count = self.globals.len();
+
+        result
     }
 
     /// Check if a datum is a top-level `(import ...)` form.

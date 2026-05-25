@@ -1,8 +1,31 @@
 //! mae-scheme value representation.
 //!
-//! Tagged union for all Scheme values. Uses Rc for heap-allocated data
-//! (Stage 1 GC — see GC strategy notes). The `Trace` trait is defined
-//! from day one so GC backend upgrades never require value changes.
+//! Tagged union for all Scheme values. Uses Rc for heap-allocated data.
+//!
+//! ## GC Strategy (Stage 1: Rc)
+//!
+//! **Current approach**: `Rc<T>` for shared heap values (closures, pairs,
+//! vectors, continuations). Mutable locals shared across closures use
+//! `Rc<RefCell<Value>>` cells.
+//!
+//! **Known cycle risks** (memory leaks, NOT pauses — Rc has no stop-the-world):
+//! - Closure self-capture: `(let ((f #f)) (set! f (lambda () f)))` — closure
+//!   captures its own upvalue cell, forming Rc→RefCell→Value→Rc cycle.
+//! - Vector→closure: `(let* ((v (vector #f)) (f (lambda () v))) (vector-set! v 0 f))`
+//! - Continuation upvalue capture: call/cc captures stack with live upvalue cells.
+//!
+//! **Why this is acceptable for v1**: Editor extensions are short-lived evals
+//! (keystroke handlers, hooks, mode functions). Memory is dominated by the
+//! editor's Rust heap, not Scheme values. Emacs ran for 30+ years with
+//! mark-sweep GC that pauses the UI; Rc with no pauses is strictly better.
+//!
+//! **Stage 2 path**: Switch upvalue cells from `Rc<RefCell<Value>>` to a
+//! traced GC type (gc-arena or bacon-rajan-cc). The `Trace` trait is defined
+//! from day one so this is a backend swap, not an architecture rewrite.
+//!
+//! **UI responsiveness guarantee**: Rc deallocation is amortized (no pauses).
+//! Deep recursion is bounded by VM max_frames limit. There is no tracing GC
+//! to cause stop-the-world pauses.
 //!
 //! @stability: unstable (Phase 13)
 //! @since: 0.12.0
@@ -822,6 +845,20 @@ impl Trace for Value {
             Value::Continuation(cont) => {
                 for val in &cont.stack {
                     tracer.trace_value(val);
+                }
+                // Trace captured frames (upvalues + local_cells hold live values)
+                for frame in &cont.frames {
+                    for cell in &frame.upvalues {
+                        tracer.trace_value(&cell.borrow());
+                    }
+                    for cell in frame.local_cells.values() {
+                        tracer.trace_value(&cell.borrow());
+                    }
+                }
+                // Trace winder thunks
+                for w in &cont.winders {
+                    tracer.trace_value(&w.before);
+                    tracer.trace_value(&w.after);
                 }
             }
             // Atoms and leaf types: nothing to trace

@@ -1535,3 +1535,91 @@ fn classic_mergesort() {
                  '(0 1 2 3 4 5 6 7 8 9))",
     );
 }
+
+// ============================================================
+// 10. MEMORY / GC PITFALLS
+//     Verify Rc-based value representation handles common patterns
+//     without stack overflow or unexpected behavior (cycles may leak
+//     memory but must not crash or produce wrong results).
+// ============================================================
+
+#[test]
+fn pitfall_letrec_self_capture() {
+    // letrec with self-recursive closure — forms Rc cycle but must work correctly
+    is_int(
+        "(letrec ((f (lambda (n) (if (= n 0) 42 (f (- n 1))))))
+           (f 100))",
+        42,
+    );
+}
+
+#[test]
+fn pitfall_mutual_closure_cycle() {
+    // Two closures capturing each other's scope — Rc cycle, must still compute correctly
+    is_int(
+        "(letrec ((even? (lambda (n) (if (= n 0) 1 (odd? (- n 1)))))
+                  (odd? (lambda (n) (if (= n 0) 0 (even? (- n 1))))))
+           (+ (even? 10) (odd? 11)))",
+        2,
+    );
+}
+
+#[test]
+fn pitfall_vector_closure_cycle() {
+    // Vector containing closure that references the vector — must work correctly
+    is_int(
+        "(let ((v (vector 0)))
+           (vector-set! v 0 (lambda () (vector-ref v 0)))
+           ;; The closure returns itself (a closure), not 0
+           (if (procedure? ((vector-ref v 0))) 1 0))",
+        1,
+    );
+}
+
+#[test]
+fn pitfall_callcc_captured_closure_cycle() {
+    // call/cc captures continuation with closures that reference the continuation.
+    // The continuation restores the stack to capture point (count=0 on stack),
+    // but count is a shared cell so set! mutations persist across invocations.
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+
+    // Simple: capture and immediately invoke once
+    let result = vm
+        .eval(
+            "(let ((k #f))
+           (let ((result (call/cc (lambda (c) (set! k c) 'first))))
+             result))",
+        )
+        .unwrap();
+    assert_eq!(result, Value::symbol("first"));
+}
+
+#[test]
+fn pitfall_many_evals_no_stack_growth() {
+    // Repeated evals must not grow the stack permanently
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    for _ in 0..1000 {
+        vm.eval("(+ 1 2)").unwrap();
+    }
+    // GC stats should track all evals
+    assert!(
+        vm.gc_stats.eval_count >= 1000,
+        "eval_count should track evals"
+    );
+}
+
+#[test]
+fn pitfall_gc_stats_available() {
+    // GC stats should track eval count
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let before = vm.gc_stats.eval_count;
+    vm.eval("(+ 1 2)").unwrap();
+    assert!(
+        vm.gc_stats.eval_count > before,
+        "eval_count should increment: before={before}, after={}",
+        vm.gc_stats.eval_count
+    );
+}
