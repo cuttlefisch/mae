@@ -352,11 +352,16 @@ fn register_arithmetic(vm: &mut Vm) {
             };
             match &args[0] {
                 Value::Int(n) => {
+                    let (sign, abs_n) = if *n < 0 {
+                        ("-", n.unsigned_abs())
+                    } else {
+                        ("", *n as u64)
+                    };
                     let s = match radix {
-                        2 => format!("{n:b}"),
-                        8 => format!("{n:o}"),
+                        2 => format!("{sign}{abs_n:b}"),
+                        8 => format!("{sign}{abs_n:o}"),
                         10 => format!("{n}"),
-                        16 => format!("{n:x}"),
+                        16 => format!("{sign}{abs_n:x}"),
                         _ => {
                             return Err(LispError::user(
                                 "number->string: unsupported radix",

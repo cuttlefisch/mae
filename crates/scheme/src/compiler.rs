@@ -214,6 +214,8 @@ pub struct Compiler {
     pub macros: HashMap<String, MacroDef>,
     /// Search paths for `include` and `load` (R7RS §4.1.7).
     pub load_paths: Vec<std::path::PathBuf>,
+    /// Counter for generating unique names (e.g., do loop variables).
+    gensym_counter: usize,
 }
 
 impl Compiler {
@@ -221,9 +223,17 @@ impl Compiler {
         Compiler {
             code_pool: Vec::new(),
             scopes: vec![CompileScope::new()],
+            gensym_counter: 0,
             macros: HashMap::new(),
             load_paths: Vec::new(),
         }
+    }
+
+    /// Generate a unique name for internal use (e.g., do loop variables).
+    fn gensym(&mut self, prefix: &str) -> String {
+        let n = self.gensym_counter;
+        self.gensym_counter += 1;
+        format!("__{prefix}_{n}__")
     }
 
     /// Compile a top-level expression. Returns the index of the code object.
@@ -348,7 +358,11 @@ impl Compiler {
                 Ok(())
             }
 
-            _ => Err(LispError::syntax("cannot compile", format!("{expr}"))),
+            // Undefined, Void, Port, etc. — emit as constants
+            _ => {
+                self.emit(Op::Const(expr.clone()));
+                Ok(())
+            }
         }
     }
 
@@ -563,7 +577,11 @@ impl Compiler {
                     self.emit(Op::DefineGlobal(name));
                 } else {
                     // Local define (internal definition)
-                    let idx = self.current_scope_mut().add_local(name);
+                    // Use existing slot if pre-declared by compile_begin
+                    let idx = self
+                        .current_scope()
+                        .resolve_local(&name)
+                        .unwrap_or_else(|| self.current_scope_mut().add_local(name));
                     self.emit(Op::StoreLocal(idx));
                 }
                 self.emit(Op::Const(Value::Void));
@@ -591,7 +609,10 @@ impl Compiler {
                 if self.scopes.len() == 1 {
                     self.emit(Op::DefineGlobal(name));
                 } else {
-                    let idx = self.current_scope_mut().add_local(name);
+                    let idx = self
+                        .current_scope()
+                        .resolve_local(&name)
+                        .unwrap_or_else(|| self.current_scope_mut().add_local(name));
                     self.emit(Op::StoreLocal(idx));
                 }
                 self.emit(Op::Const(Value::Void));
@@ -641,6 +662,31 @@ impl Compiler {
             self.emit(Op::Const(Value::Void));
             return Ok(());
         }
+
+        // R7RS §5.3.2: Internal definitions at the start of a body have
+        // letrec* semantics. We must pre-declare all locals from leading
+        // defines so that forward references work (e.g., mutually recursive
+        // internal functions).
+        if self.scopes.len() > 1 {
+            // Scan for leading defines to pre-declare their local slots
+            let mut define_names = Vec::new();
+            for expr in exprs {
+                if let Some(name) = self.extract_define_name(expr) {
+                    define_names.push(name);
+                } else {
+                    break; // Non-define expression ends the definition block
+                }
+            }
+            // Pre-declare all locals with undefined values
+            for name in &define_names {
+                if self.current_scope().resolve_local(name).is_none() {
+                    let idx = self.current_scope_mut().add_local(name.clone());
+                    self.emit(Op::Const(Value::Undefined));
+                    self.emit(Op::StoreLocal(idx));
+                }
+            }
+        }
+
         for (i, expr) in exprs.iter().enumerate() {
             let is_last = i == exprs.len() - 1;
             self.compile_expr(expr, tail && is_last)?;
@@ -649,6 +695,26 @@ impl Compiler {
             }
         }
         Ok(())
+    }
+
+    /// Extract the name from a `(define ...)` form, if it is one.
+    fn extract_define_name(&self, expr: &Value) -> Option<String> {
+        let items = expr.to_vec().ok()?;
+        if items.is_empty() {
+            return None;
+        }
+        let head = items[0].as_symbol().ok()?;
+        if head.name() != "define" {
+            return None;
+        }
+        if items.len() < 3 {
+            return None;
+        }
+        match &items[1] {
+            Value::Symbol(s) => Some(s.name().to_string()),
+            Value::Pair(p) => p.0.as_symbol().ok().map(|s| s.name().to_string()),
+            _ => None,
+        }
     }
 
     fn compile_let(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
@@ -815,10 +881,6 @@ impl Compiler {
             .to_vec()
             .map_err(|_| LispError::syntax("letrec bindings must be a list", ""))?;
 
-        // letrec uses globals as a simple workaround for the mutable-cell
-        // upvalue problem (closures capture values, not references).
-        // This works because letrec semantics guarantee the names are
-        // only referenced after all inits complete.
         let mut names = Vec::new();
         let mut init_exprs = Vec::new();
         for binding in &bindings {
@@ -837,19 +899,42 @@ impl Compiler {
             init_exprs.push(pair[1].clone());
         }
 
-        // Define all names as globals with undefined
-        for name in &names {
-            self.emit(Op::Const(Value::Undefined));
-            self.emit(Op::DefineGlobal(name.clone()));
-        }
-
-        // Evaluate init expressions and assign to globals
+        // Desugar letrec to: ((lambda (n1 n2 ...) (set! n1 init1) (set! n2 init2) ... body...) undef undef ...)
+        // This ensures proper scoping (each letrec creates its own scope via lambda)
+        // and allows mutually recursive references (all names are in scope when inits run).
+        let formals = Value::list(names.iter().map(|n| Value::symbol(n)));
+        let mut lambda_body = Vec::new();
         for (name, init) in names.iter().zip(init_exprs.iter()) {
-            self.compile_expr(init, false)?;
-            self.emit(Op::StoreGlobal(name.clone()));
+            lambda_body.push(Value::list(vec![
+                Value::symbol("set!"),
+                Value::symbol(name),
+                init.clone(),
+            ]));
         }
+        lambda_body.extend_from_slice(&items[2..]);
 
-        self.compile_begin(&items[2..], tail)?;
+        let mut lambda_items = vec![Value::symbol("lambda"), formals];
+        lambda_items.extend(lambda_body);
+        let lambda = Value::list(lambda_items);
+
+        // Build call: (lambda-expr undef undef ...)
+        let mut call_items = vec![lambda];
+        for _ in &names {
+            call_items.push(Value::Undefined);
+        }
+        let call = Value::list(call_items);
+
+        let call_vec = call.to_vec().unwrap();
+        // Compile as a function call
+        self.compile_expr(&call_vec[0], false)?;
+        for arg in &call_vec[1..] {
+            self.compile_expr(arg, false)?;
+        }
+        if tail {
+            self.emit(Op::TailCall(names.len()));
+        } else {
+            self.emit(Op::Call(names.len()));
+        }
 
         Ok(())
     }
@@ -2050,7 +2135,7 @@ impl Compiler {
         //   (if test
         //     (begin expr ...)
         //     (begin body ... (__do_loop__ step1 step2 ...))))
-        let loop_name = "__do_loop__";
+        let loop_name = self.gensym("do_loop");
         let bindings = Value::list(
             var_names
                 .iter()
@@ -2066,7 +2151,7 @@ impl Compiler {
         };
 
         // Build step call: (__do_loop__ step1 step2 ...)
-        let mut step_call = vec![Value::symbol(loop_name)];
+        let mut step_call = vec![Value::symbol(&loop_name)];
         step_call.extend(step_exprs.iter().cloned());
         let step = Value::list(step_call);
 
@@ -2099,7 +2184,7 @@ impl Compiler {
 
         let named_let = Value::list(vec![
             Value::symbol("let"),
-            Value::symbol(loop_name),
+            Value::symbol(&loop_name),
             bindings,
             if_expr,
         ]);
