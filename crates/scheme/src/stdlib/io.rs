@@ -757,12 +757,23 @@ pub fn register(vm: &mut Vm) {
 
     vm.register_fn(
         "write-bytevector",
-        "Write bytevector to port",
+        "Write bytevector to port. Optional start/end select a range.",
         Arity::Variadic(1),
         |args| match &args[0] {
             Value::Bytevector(bv) => {
                 let bytes = bv.borrow();
-                let text: String = bytes.iter().map(|b| *b as char).collect();
+                let start = if args.len() > 2 {
+                    args[2].as_int()? as usize
+                } else {
+                    0
+                };
+                let end = if args.len() > 3 {
+                    args[3].as_int()? as usize
+                } else {
+                    bytes.len()
+                };
+                let slice = &bytes[start..end];
+                let text: String = slice.iter().map(|b| *b as char).collect();
                 if args.len() > 1 {
                     write_to_port(&args[1], &text)?;
                 } else {

@@ -48,6 +48,16 @@ fn is_int(code: &str, expected: i64) {
     );
 }
 
+/// Evaluate two expressions in the same VM and compare results.
+/// Useful when comparing values that reference the same mutable state.
+fn eval_eq(code: &str, expected: &str) {
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let left = vm.eval(code).unwrap();
+    let right = vm.eval(expected).unwrap();
+    assert_eq!(left, right, "eval_eq failed:\n  code: {code}\n  expected: {expected}\n  left:  {left}\n  right: {right}");
+}
+
 // ============================================================================
 // §4.1 Primitive expression types
 // ============================================================================
@@ -5025,5 +5035,1285 @@ fn s7_1_cond_expand_library_availability() {
     is_int(
         "(cond-expand ((library (scheme nonexistent)) 1) (else 0))",
         0,
+    );
+}
+
+// ============================================================
+// §6.13 call-with-port
+// ============================================================
+
+#[test]
+fn s6_13_call_with_port() {
+    // call-with-port opens port, calls proc, closes port after
+    is_true(
+        r#"(let ((p (open-input-string "hello")))
+             (let ((result (call-with-port p (lambda (port) (read-char port)))))
+               (char=? result #\h)))"#,
+    );
+    // Port should be usable inside the proc
+    assert_eq!(
+        eval(r#"(call-with-port (open-input-string "abc") read-line)"#),
+        Value::String(Rc::from("abc")),
+    );
+    // call-with-port returns the proc's result; port is closed after
+    assert_eq!(
+        eval(
+            r#"(let ((p (open-output-string)))
+                  (write-string "test" p)
+                  (call-with-port p (lambda (port) (get-output-string port))))"#
+        ),
+        Value::String(Rc::from("test")),
+    );
+}
+
+// ============================================================
+// §6.13.1 with-input-from-file / with-output-to-file
+// ============================================================
+
+#[test]
+fn s6_13_with_input_from_file() {
+    // with-output-to-file takes a zero-argument thunk (R7RS §6.13.1).
+    // mae-scheme simplified: thunk runs but port is NOT redirected to
+    // current-output-port (see SPEC_STANCES.md §8). Test with call-with-*
+    // which explicitly passes the port — the common and portable pattern.
+    let result = eval(
+        r#"(begin
+             (call-with-output-file "/tmp/mae-test-wif.txt"
+               (lambda (port) (write-string "hello from file" port)))
+             (call-with-input-file "/tmp/mae-test-wif.txt"
+               (lambda (port) (read-line port))))"#,
+    );
+    assert_eq!(result, Value::String(Rc::from("hello from file")));
+
+    // with-output-to-file thunk receives zero args
+    // (returns void since thunk can't write without port redirection)
+    eval(r#"(with-output-to-file "/tmp/mae-test-wof.txt" (lambda () #t))"#);
+
+    // with-input-from-file thunk receives zero args
+    eval(r#"(with-input-from-file "/tmp/mae-test-wif.txt" (lambda () #t))"#);
+}
+
+#[test]
+fn s6_13_call_with_input_output_file() {
+    // call-with-output-file + call-with-input-file roundtrip
+    let result = eval(
+        r#"(begin
+             (call-with-output-file "/tmp/mae-test-cwf.txt"
+               (lambda (port) (write-string "roundtrip" port)))
+             (call-with-input-file "/tmp/mae-test-cwf.txt"
+               (lambda (port) (read-line port))))"#,
+    );
+    assert_eq!(result, Value::String(Rc::from("roundtrip")));
+}
+
+// ============================================================
+// §4.2.5 delay-force (iterative forcing)
+// ============================================================
+
+#[test]
+fn s4_2_5_delay_force_iterative() {
+    // delay-force creates a promise that, when forced, evaluates to another promise
+    // This enables iterative lazy algorithms without stack growth
+    is_int("(force (delay-force (delay 42)))", 42);
+
+    // delay-force with immediate value wrapped in delay
+    is_int("(force (delay-force (make-promise 99)))", 99);
+
+    // Basic delay/force still works
+    is_int("(force (delay (+ 1 2)))", 3);
+
+    // make-promise wraps already-computed value
+    is_int("(force (make-promise 7))", 7);
+
+    // promise? predicate
+    is_true("(promise? (delay 1))");
+    is_true("(promise? (make-promise 1))");
+    is_false("(promise? 42)");
+    is_false("(promise? '())");
+}
+
+// ============================================================
+// §4.2.3 define-values
+// ============================================================
+
+#[test]
+fn s4_2_3_define_values() {
+    // define-values binds multiple values from a values expression
+    is_int(
+        "(begin (define-values (a b c) (values 1 2 3)) (+ a b c))",
+        6,
+    );
+
+    // Single value
+    is_int("(begin (define-values (x) (values 10)) x)", 10);
+
+    // define-values with computed expression
+    is_int(
+        "(begin (define-values (p q) (values (* 3 4) (+ 5 6))) (+ p q))",
+        23,
+    );
+}
+
+// ============================================================
+// §6.9 write-bytevector
+// ============================================================
+
+#[test]
+fn s6_9_write_bytevector() {
+    // write-bytevector to output port
+    assert_eq!(
+        eval(
+            r#"(let ((p (open-output-bytevector)))
+                 (write-bytevector #u8(65 66 67) p)
+                 (get-output-bytevector p))"#
+        ),
+        eval("#u8(65 66 67)"),
+    );
+
+    // write-bytevector with start/end range
+    assert_eq!(
+        eval(
+            r#"(let ((p (open-output-bytevector)))
+                 (write-bytevector #u8(10 20 30 40 50) p 1 4)
+                 (get-output-bytevector p))"#
+        ),
+        eval("#u8(20 30 40)"),
+    );
+}
+
+// ============================================================
+// §6.10 for-each (comprehensive)
+// ============================================================
+
+#[test]
+fn s6_10_for_each_comprehensive() {
+    // for-each with side effects (order matters)
+    assert_eq!(
+        eval(
+            r#"(let ((result '()))
+                 (for-each (lambda (x) (set! result (cons x result)))
+                           '(1 2 3))
+                 result)"#
+        ),
+        eval("'(3 2 1)"),
+    );
+
+    // for-each with two lists
+    assert_eq!(
+        eval(
+            r#"(let ((result '()))
+                 (for-each (lambda (x y) (set! result (cons (+ x y) result)))
+                           '(1 2 3) '(10 20 30))
+                 result)"#
+        ),
+        eval("'(33 22 11)"),
+    );
+
+    // for-each returns void
+    is_true("(void? (for-each + '()))");
+}
+
+// ============================================================
+// §6.10 map (comprehensive)
+// ============================================================
+
+#[test]
+fn s6_10_map_comprehensive() {
+    // map with single list
+    assert_eq!(
+        eval("(map (lambda (x) (* x x)) '(1 2 3 4))"),
+        eval("'(1 4 9 16)"),
+    );
+
+    // map with two lists
+    assert_eq!(eval("(map + '(1 2 3) '(10 20 30))"), eval("'(11 22 33)"),);
+
+    // map with empty list
+    eval_eq("(map car '())", "'()");
+
+    // map preserves order
+    assert_eq!(
+        eval("(map number->string '(1 2 3))"),
+        eval(r#"'("1" "2" "3")"#),
+    );
+}
+
+// ============================================================
+// §6.7 string-map / string-for-each
+// ============================================================
+
+#[test]
+fn s6_7_string_map_for_each() {
+    // string-map applies function to each character
+    assert_eq!(
+        eval(r#"(string-map char-upcase "hello")"#),
+        Value::String(Rc::from("HELLO")),
+    );
+
+    // string-for-each with side effects
+    assert_eq!(
+        eval(
+            r#"(let ((result '()))
+                 (string-for-each
+                   (lambda (c) (set! result (cons c result)))
+                   "abc")
+                 result)"#
+        ),
+        eval(r#"'(#\c #\b #\a)"#),
+    );
+}
+
+// ============================================================
+// §6.8 vector-map / vector-for-each
+// ============================================================
+
+#[test]
+fn s6_8_vector_map_for_each() {
+    // vector-map
+    assert_eq!(
+        eval("(vector-map + #(1 2 3) #(10 20 30))"),
+        eval("#(11 22 33)"),
+    );
+
+    // vector-map single vector
+    assert_eq!(
+        eval("(vector-map (lambda (x) (* x 2)) #(1 2 3))"),
+        eval("#(2 4 6)"),
+    );
+
+    // vector-for-each
+    assert_eq!(
+        eval(
+            r#"(let ((sum 0))
+                 (vector-for-each (lambda (x) (set! sum (+ sum x))) #(1 2 3 4))
+                 sum)"#
+        ),
+        Value::Int(10),
+    );
+}
+
+// ============================================================
+// §6.10 dynamic-wind (comprehensive)
+// ============================================================
+
+#[test]
+fn s6_10_dynamic_wind_comprehensive() {
+    // Basic dynamic-wind: before, thunk, after all execute
+    assert_eq!(
+        eval(
+            r#"(let ((log '()))
+                 (dynamic-wind
+                   (lambda () (set! log (cons 'before log)))
+                   (lambda () (set! log (cons 'during log)) 42)
+                   (lambda () (set! log (cons 'after log))))
+                 log)"#
+        ),
+        eval("'(after during before)"),
+    );
+
+    // dynamic-wind returns thunk's value
+    is_int(
+        "(dynamic-wind (lambda () #f) (lambda () 99) (lambda () #f))",
+        99,
+    );
+}
+
+// ============================================================
+// §4.2.6 make-parameter / parameterize (comprehensive)
+// ============================================================
+
+#[test]
+fn s4_2_6_parameterize_comprehensive() {
+    // make-parameter creates a parameter with initial value
+    is_int("(let ((p (make-parameter 10))) (p))", 10);
+
+    // parameterize changes value dynamically
+    is_int(
+        "(let ((p (make-parameter 10)))
+           (parameterize ((p 20)) (p)))",
+        20,
+    );
+
+    // Outer value restored after parameterize
+    is_int(
+        "(let ((p (make-parameter 10)))
+           (parameterize ((p 20)) (p))
+           (p))",
+        10,
+    );
+
+    // Nested parameterize
+    is_int(
+        "(let ((p (make-parameter 1)))
+           (parameterize ((p 2))
+             (parameterize ((p 3))
+               (p))))",
+        3,
+    );
+
+    // make-parameter with converter
+    is_int(
+        "(let ((p (make-parameter 0 (lambda (x) (* x 2)))))
+           (parameterize ((p 5)) (p)))",
+        10,
+    );
+}
+
+// ============================================================
+// §4.2.7 guard (comprehensive)
+// ============================================================
+
+#[test]
+fn s4_2_7_guard_comprehensive() {
+    // guard catches specific error types
+    is_int(
+        r#"(guard (exn
+                  ((string? (error-object-message exn)) 1)
+                  (else 0))
+             (error "test" "irritant"))"#,
+        1,
+    );
+
+    // guard with multiple clauses
+    is_int(
+        "(guard (exn
+                 ((equal? exn 'foo) 10)
+                 ((equal? exn 'bar) 20)
+                 (else 30))
+           (raise 'bar))",
+        20,
+    );
+
+    // guard body returns normally when no error
+    is_int("(guard (exn (else -1)) (+ 2 3))", 5);
+
+    // guard with error-object-irritants
+    assert_eq!(
+        eval(
+            r#"(guard (exn
+                      (else (error-object-irritants exn)))
+                 (error "msg" 'a 'b 'c))"#
+        ),
+        eval("'(a b c)"),
+    );
+}
+
+// ============================================================
+// §5.5 define-record-type (comprehensive)
+// ============================================================
+
+#[test]
+fn s5_5_define_record_type_comprehensive() {
+    // Full record type with constructor, predicate, accessors, mutators
+    is_true(
+        "(begin
+           (define-record-type <point>
+             (make-point x y)
+             point?
+             (x point-x)
+             (y point-y))
+           (let ((p (make-point 3 4)))
+             (and (point? p)
+                  (= (point-x p) 3)
+                  (= (point-y p) 4))))",
+    );
+
+    // Record predicate returns #f for non-records
+    is_false(
+        "(begin
+           (define-record-type <thing>
+             (make-thing v)
+             thing?
+             (v thing-v))
+           (thing? 42))",
+    );
+
+    // Multiple record types are independent
+    is_true(
+        "(begin
+           (define-record-type <a> (make-a x) a? (x a-x))
+           (define-record-type <b> (make-b y) b? (y b-y))
+           (let ((va (make-a 1)) (vb (make-b 2)))
+             (and (a? va) (b? vb)
+                  (not (a? vb)) (not (b? va)))))",
+    );
+}
+
+// ============================================================
+// §4.2.9 case-lambda (comprehensive)
+// ============================================================
+
+#[test]
+fn s4_2_9_case_lambda_comprehensive() {
+    // case-lambda dispatches on argument count
+    is_int(
+        "(let ((f (case-lambda
+                    ((x) x)
+                    ((x y) (+ x y))
+                    ((x y z) (+ x y z)))))
+           (+ (f 1) (f 2 3) (f 4 5 6)))",
+        21,
+    );
+
+    // case-lambda with rest args
+    // (f) → 0, (f 10) → 10+0=10, (f 10 20 30) → 10+2=12, total = 22
+    is_int(
+        "(let ((f (case-lambda
+                    (() 0)
+                    ((x . rest) (+ x (length rest))))))
+           (+ (f) (f 10) (f 10 20 30)))",
+        22,
+    );
+}
+
+// ============================================================
+// §4.2.4 do (comprehensive)
+// ============================================================
+
+#[test]
+fn s4_2_4_do_extended() {
+    // do loop with multiple variables
+    is_int(
+        "(do ((i 0 (+ i 1))
+              (sum 0 (+ sum i)))
+             ((= i 5) sum))",
+        10,
+    );
+
+    // do loop building a list
+    assert_eq!(
+        eval(
+            "(do ((i 0 (+ i 1))
+                  (result '() (cons i result)))
+                 ((= i 4) result))",
+        ),
+        eval("'(3 2 1 0)"),
+    );
+
+    // do loop with no step expression
+    is_int(
+        "(do ((x 10))
+             ((> x 5) x)
+           (set! x (- x 1)))",
+        10,
+    );
+}
+
+// ============================================================
+// §4.2.2 let-values / let*-values (comprehensive)
+// ============================================================
+
+#[test]
+fn s4_2_2_let_values_comprehensive() {
+    // let-values binds multiple values
+    is_int(
+        "(let-values (((a b c) (values 1 2 3)))
+           (+ a b c))",
+        6,
+    );
+
+    // let*-values sequential binding
+    is_int(
+        "(let*-values (((a b) (values 1 2))
+                       ((c) (values (+ a b))))
+           c)",
+        3,
+    );
+
+    // let-values with single value
+    is_int("(let-values (((x) (values 42))) x)", 42);
+}
+
+// ============================================================
+// §6.2 Numeric edge cases
+// ============================================================
+
+#[test]
+fn s6_2_numeric_edge_cases() {
+    // Exact arithmetic preserves exactness
+    is_true("(exact? (+ 1 2))");
+    is_true("(exact? (* 3 4))");
+
+    // Inexact arithmetic
+    is_true("(inexact? (+ 1.0 2))");
+    is_true("(inexact? (* 3 4.0))");
+
+    // Integer division edge cases
+    is_int("(quotient 7 2)", 3);
+    is_int("(quotient -7 2)", -3);
+    is_int("(remainder 7 2)", 1);
+    is_int("(remainder -7 2)", -1);
+    is_int("(modulo 7 2)", 1);
+    is_int("(modulo -7 2)", 1);
+
+    // floor/ceiling/truncate/round
+    is_int("(floor 2.7)", 2);
+    is_int("(floor -2.7)", -3);
+    is_int("(ceiling 2.3)", 3);
+    is_int("(ceiling -2.3)", -2);
+    is_int("(truncate 2.7)", 2);
+    is_int("(truncate -2.7)", -2);
+    is_int("(round 2.5)", 2); // banker's rounding
+    is_int("(round 3.5)", 4); // banker's rounding
+    is_int("(round 2.4)", 2);
+    is_int("(round -2.5)", -2); // banker's rounding
+
+    // min/max with mixed types
+    is_true("(inexact? (min 1 2.0))");
+    is_true("(inexact? (max 1 2.0))");
+}
+
+// ============================================================
+// §6.1 eqv? / equal? comprehensive
+// ============================================================
+
+#[test]
+fn s6_1_equivalence_comprehensive() {
+    // eqv? on numbers
+    is_true("(eqv? 1 1)");
+    is_false("(eqv? 1 1.0)"); // different exactness
+    is_true("(eqv? 1.0 1.0)");
+
+    // eqv? on characters
+    is_true(r"(eqv? #\a #\a)");
+    is_false(r"(eqv? #\a #\b)");
+
+    // eqv? on booleans
+    is_true("(eqv? #t #t)");
+    is_true("(eqv? #f #f)");
+    is_false("(eqv? #t #f)");
+
+    // eqv? on empty list
+    is_true("(eqv? '() '())");
+
+    // eqv? on symbols
+    is_true("(eqv? 'foo 'foo)");
+    is_false("(eqv? 'foo 'bar)");
+
+    // equal? does deep comparison
+    is_true("(equal? '(1 2 3) '(1 2 3))");
+    is_true("(equal? #(1 2 3) #(1 2 3))");
+    is_true(r#"(equal? "abc" "abc")"#);
+    is_false("(equal? '(1 2) '(1 3))");
+
+    // equal? on nested structures
+    is_true("(equal? '(1 (2 3)) '(1 (2 3)))");
+    is_true("(equal? #(1 #(2 3)) #(1 #(2 3)))");
+}
+
+// ============================================================
+// §6.4 list-tail / list-copy / make-list
+// ============================================================
+
+#[test]
+fn s6_4_list_operations_extended() {
+    // list-tail
+    eval_eq("(list-tail '(a b c d) 2)", "'(c d)");
+    eval_eq("(list-tail '(a b c) 0)", "'(a b c)");
+    eval_eq("(list-tail '(a b c) 3)", "'()");
+
+    // list-copy creates a fresh copy
+    eval_eq("(list-copy '(1 2 3))", "'(1 2 3)");
+    eval_eq("(list-copy '())", "'()");
+
+    // make-list
+    eval_eq("(make-list 3 'x)", "'(x x x)");
+    eval_eq("(make-list 0 'x)", "'()");
+}
+
+// ============================================================
+// §6.5 symbol->string / string->symbol
+// ============================================================
+
+#[test]
+fn s6_5_symbol_conversion() {
+    assert_eq!(
+        eval("(symbol->string 'hello)"),
+        Value::String(Rc::from("hello")),
+    );
+    assert_eq!(eval(r#"(string->symbol "world")"#), Value::symbol("world"),);
+    // Round-trip
+    is_true(r#"(eq? 'test (string->symbol (symbol->string 'test)))"#);
+}
+
+// ============================================================
+// §6.6 char->integer / integer->char
+// ============================================================
+
+#[test]
+fn s6_6_char_integer_conversion() {
+    is_int(r"(char->integer #\A)", 65);
+    is_int(r"(char->integer #\space)", 32);
+    assert_eq!(eval("(integer->char 65)"), Value::Char('A'));
+    assert_eq!(eval("(integer->char 955)"), Value::Char('λ'));
+
+    // Round-trip
+    is_true(r"(char=? #\Z (integer->char (char->integer #\Z)))");
+}
+
+// ============================================================
+// §6.13 Port predicates
+// ============================================================
+
+#[test]
+fn s6_13_port_predicates_extended() {
+    is_true(r#"(input-port? (open-input-string "x"))"#);
+    is_false(r#"(output-port? (open-input-string "x"))"#);
+    is_true("(output-port? (open-output-string))");
+    is_false("(input-port? (open-output-string))");
+
+    // port? is true for both
+    is_true(r#"(port? (open-input-string "x"))"#);
+    is_true("(port? (open-output-string))");
+    is_false("(port? 42)");
+
+    // input-port-open? / output-port-open?
+    is_true(r#"(input-port-open? (open-input-string "x"))"#);
+    is_true("(output-port-open? (open-output-string))");
+
+    // textual-port? / binary-port?
+    is_true(r#"(textual-port? (open-input-string "x"))"#);
+    is_true("(textual-port? (open-output-string))");
+}
+
+// ============================================================
+// §6.13 eof-object
+// ============================================================
+
+#[test]
+fn s6_13_eof_object() {
+    // eof-object returns the EOF value
+    is_true("(eof-object? (eof-object))");
+    is_false("(eof-object? 42)");
+    is_false("(eof-object? #f)");
+
+    // Reading past end of string port returns EOF
+    is_true(r#"(eof-object? (read-char (open-input-string "")))"#);
+    is_true(r#"(eof-object? (read-u8 (open-input-bytevector #u8())))"#);
+}
+
+// ============================================================
+// §6.13 read-line / read-string
+// ============================================================
+
+#[test]
+fn s6_13_read_line_read_string() {
+    // read-line reads up to newline
+    assert_eq!(
+        eval(r#"(read-line (open-input-string "hello\nworld"))"#),
+        Value::String(Rc::from("hello")),
+    );
+
+    // read-line at EOF
+    is_true(r#"(eof-object? (read-line (open-input-string "")))"#);
+
+    // read-string reads N characters
+    assert_eq!(
+        eval(r#"(read-string 3 (open-input-string "abcdef"))"#),
+        Value::String(Rc::from("abc")),
+    );
+}
+
+// ============================================================
+// §6.13 peek-char / peek-u8
+// ============================================================
+
+#[test]
+fn s6_13_peek_operations() {
+    // peek-char doesn't consume
+    is_true(
+        r#"(let ((p (open-input-string "ab")))
+             (let ((c1 (peek-char p))
+                   (c2 (read-char p)))
+               (char=? c1 c2)))"#,
+    );
+
+    // peek-u8 doesn't consume
+    is_true(
+        r#"(let ((p (open-input-bytevector #u8(10 20))))
+             (let ((b1 (peek-u8 p))
+                   (b2 (read-u8 p)))
+               (= b1 b2)))"#,
+    );
+}
+
+// ============================================================
+// §6.13 format
+// ============================================================
+
+#[test]
+fn s6_13_format() {
+    // format with ~a (display)
+    assert_eq!(
+        eval(r#"(format "hello ~a" "world")"#),
+        Value::String(Rc::from("hello world")),
+    );
+
+    // format with ~s (write)
+    assert_eq!(
+        eval(r#"(format "value: ~s" "test")"#),
+        Value::String(Rc::from(r#"value: "test""#)),
+    );
+
+    // format with ~%  (newline)
+    assert_eq!(eval(r#"(format "a~%b")"#), Value::String(Rc::from("a\nb")),);
+}
+
+// ============================================================
+// §6.14 System interface
+// ============================================================
+
+#[test]
+fn s6_14_system_interface_extended() {
+    // features returns a list
+    is_true("(list? (features))");
+
+    // command-line returns a list of strings
+    is_true("(list? (command-line))");
+
+    // current-second returns a number
+    is_true("(number? (current-second))");
+
+    // current-jiffy returns an exact integer
+    is_true("(exact? (current-jiffy))");
+
+    // jiffies-per-second returns a positive integer
+    is_true("(> (jiffies-per-second) 0)");
+}
+
+// ============================================================
+// §6.13 close-input-port / close-output-port
+// ============================================================
+
+#[test]
+fn s6_13_close_port_variants() {
+    // close-input-port
+    is_true(
+        r#"(let ((p (open-input-string "test")))
+             (close-input-port p)
+             #t)"#,
+    );
+
+    // close-output-port
+    is_true(
+        "(let ((p (open-output-string)))
+           (close-output-port p)
+           #t)",
+    );
+
+    // close-port works on both
+    is_true(
+        r#"(let ((p (open-input-string "x")))
+             (close-port p)
+             #t)"#,
+    );
+}
+
+// ============================================================
+// §6.13 flush-output-port
+// ============================================================
+
+#[test]
+fn s6_13_flush_output_port() {
+    // flush-output-port should not error
+    is_true(
+        "(let ((p (open-output-string)))
+           (write-string \"hello\" p)
+           (flush-output-port p)
+           #t)",
+    );
+}
+
+// ============================================================
+// §6.2 abs / square
+// ============================================================
+
+#[test]
+fn s6_2_abs_square() {
+    is_int("(abs 5)", 5);
+    is_int("(abs -5)", 5);
+    is_int("(abs 0)", 0);
+    assert_eq!(eval("(abs -3.5)"), Value::Float(3.5));
+
+    is_int("(square 5)", 25);
+    is_int("(square -3)", 9);
+    is_int("(square 0)", 0);
+    assert_eq!(eval("(square 2.5)"), Value::Float(6.25));
+}
+
+// ============================================================
+// §6.3 boolean=?
+// ============================================================
+
+#[test]
+fn s6_3_boolean_equal() {
+    is_true("(boolean=? #t #t)");
+    is_true("(boolean=? #f #f)");
+    is_false("(boolean=? #t #f)");
+    is_false("(boolean=? #f #t)");
+    // Multiple arguments
+    is_true("(boolean=? #t #t #t)");
+    is_false("(boolean=? #t #t #f)");
+}
+
+// ============================================================
+// §6.10 apply (comprehensive)
+// ============================================================
+
+#[test]
+fn s6_10_apply_extended() {
+    is_int("(apply + '(1 2 3))", 6);
+    is_int("(apply + 1 2 '(3))", 6);
+    is_int("(apply + 1 '(2 3))", 6);
+
+    // apply with no extra args
+    is_int("(apply car '((1 2 3)))", 1);
+
+    // apply with lambda
+    is_int("(apply (lambda (x y) (+ x y)) '(3 4))", 7);
+}
+
+// ============================================================
+// §6.10 values / call-with-values (comprehensive)
+// ============================================================
+
+#[test]
+fn s6_10_values_comprehensive() {
+    // Single value
+    is_int(
+        "(call-with-values (lambda () (values 42)) (lambda (x) x))",
+        42,
+    );
+
+    // Multiple values
+    is_int(
+        "(call-with-values (lambda () (values 1 2 3)) (lambda (a b c) (+ a b c)))",
+        6,
+    );
+
+    // values with receive
+    is_int("(receive (a b c) (values 10 20 30) (+ a b c))", 60);
+
+    // receive with rest args
+    is_int("(receive (a . rest) (values 1 2 3) (+ a (length rest)))", 3);
+}
+
+// ============================================================
+// §6.11 with-exception-handler (comprehensive)
+// ============================================================
+
+#[test]
+fn s6_11_with_exception_handler_comprehensive() {
+    // with-exception-handler catches raised values
+    is_int(
+        "(with-exception-handler
+           (lambda (e) 42)
+           (lambda () (raise 'boom)))",
+        42,
+    );
+
+    // guard is built on with-exception-handler
+    is_int(
+        "(guard (exn
+                 ((symbol? exn) 1)
+                 ((string? exn) 2))
+           (raise 'test))",
+        1,
+    );
+}
+
+// ============================================================
+// §6.13 write / display / write-simple
+// ============================================================
+
+#[test]
+fn s6_13_write_display_simple() {
+    // display does not quote strings
+    assert_eq!(
+        eval(
+            r#"(let ((p (open-output-string)))
+                 (display "hello" p)
+                 (get-output-string p))"#
+        ),
+        Value::String(Rc::from("hello")),
+    );
+
+    // write quotes strings
+    assert_eq!(
+        eval(
+            r#"(let ((p (open-output-string)))
+                 (write "hello" p)
+                 (get-output-string p))"#
+        ),
+        Value::String(Rc::from(r#""hello""#)),
+    );
+
+    // write-simple (same as write for non-shared data)
+    assert_eq!(
+        eval(
+            r#"(let ((p (open-output-string)))
+                 (write-simple '(1 2 3) p)
+                 (get-output-string p))"#
+        ),
+        Value::String(Rc::from("(1 2 3)")),
+    );
+
+    // display on various types
+    assert_eq!(
+        eval(
+            r#"(let ((p (open-output-string)))
+                 (display #t p)
+                 (get-output-string p))"#
+        ),
+        Value::String(Rc::from("#t")),
+    );
+
+    assert_eq!(
+        eval(
+            r#"(let ((p (open-output-string)))
+                 (display #\a p)
+                 (get-output-string p))"#
+        ),
+        Value::String(Rc::from("a")),
+    );
+}
+
+// ============================================================
+// §6.13 read (from string port)
+// ============================================================
+
+#[test]
+fn s6_13_read_from_port() {
+    // read parses S-expression from port
+    is_int(r#"(read (open-input-string "42"))"#, 42);
+
+    assert_eq!(
+        eval(r#"(read (open-input-string "(1 2 3)"))"#),
+        eval("'(1 2 3)"),
+    );
+
+    assert_eq!(
+        eval(r#"(read (open-input-string "'foo"))"#),
+        eval("'(quote foo)"),
+    );
+
+    // read at EOF
+    is_true(r#"(eof-object? (read (open-input-string "")))"#);
+}
+
+// ============================================================
+// §5.3 Multiple define forms
+// ============================================================
+
+#[test]
+fn s5_3_define_forms() {
+    // (define (f x) body) is sugar for (define f (lambda (x) body))
+    is_int("(begin (define (add1 x) (+ x 1)) (add1 5))", 6);
+
+    // (define (f x . rest) body) — variadic
+    is_int(
+        "(begin (define (sum x . rest) (apply + x rest)) (sum 1 2 3))",
+        6,
+    );
+
+    // Internal defines
+    is_int(
+        "(let ()
+           (define a 1)
+           (define b 2)
+           (+ a b))",
+        3,
+    );
+}
+
+// ============================================================
+// §4.1.6 quasiquote comprehensive
+// ============================================================
+
+#[test]
+fn s4_1_6_quasiquote_comprehensive() {
+    // Basic quasiquote
+    eval_eq("`(1 2 3)", "'(1 2 3)");
+
+    // Unquote
+    is_int("`,(+ 1 2)", 3);
+
+    // Unquote in list
+    eval_eq("`(1 ,(+ 1 1) 3)", "'(1 2 3)");
+
+    // Unquote-splicing
+    eval_eq("`(1 ,@(list 2 3) 4)", "'(1 2 3 4)");
+
+    // Nested quasiquote
+    assert_eq!(
+        eval("`(a `(b ,(+ 1 2)))"),
+        eval("'(a (quasiquote (b (unquote (+ 1 2)))))"),
+    );
+}
+
+// ============================================================
+// §4.3 syntax-rules comprehensive
+// ============================================================
+
+#[test]
+fn s4_3_syntax_rules_comprehensive() {
+    // Basic syntax-rules macro
+    is_int(
+        "(begin
+           (define-syntax my-if
+             (syntax-rules ()
+               ((my-if test then else)
+                (cond (test then) (#t else)))))
+           (my-if #t 1 2))",
+        1,
+    );
+
+    // Macro with ellipsis
+    is_int(
+        "(begin
+           (define-syntax my-begin
+             (syntax-rules ()
+               ((my-begin expr) expr)
+               ((my-begin expr rest ...)
+                (let ((x expr)) (my-begin rest ...)))))
+           (my-begin 1 2 3))",
+        3,
+    );
+
+    // let-syntax scoping
+    is_int(
+        "(let-syntax ((double (syntax-rules ()
+                                ((double x) (+ x x)))))
+           (double 5))",
+        10,
+    );
+
+    // letrec-syntax allows mutual reference
+    is_int(
+        "(letrec-syntax
+           ((my-or (syntax-rules ()
+                     ((my-or) #f)
+                     ((my-or e) e)
+                     ((my-or e1 e2 ...)
+                      (let ((t e1))
+                        (if t t (my-or e2 ...)))))))
+           (my-or #f #f 42))",
+        42,
+    );
+}
+
+// ============================================================
+// §5.6 define-library / import comprehensive
+// ============================================================
+
+#[test]
+fn s5_6_library_comprehensive() {
+    // define-library must be at top level (not inside begin)
+    // Each define-library + import needs its own eval call on the same VM
+
+    // define-library with begin body
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    vm.eval(
+        "(define-library (test math)
+           (export add)
+           (begin
+             (define (add a b) (+ a b))))",
+    )
+    .unwrap();
+    vm.eval("(import (test math))").unwrap();
+    assert_eq!(vm.eval("(add 3 4)").unwrap(), Value::Int(7));
+
+    // import with only
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    vm.eval(
+        "(define-library (test lib2)
+           (export foo bar)
+           (begin
+             (define foo 10)
+             (define bar 20)))",
+    )
+    .unwrap();
+    vm.eval("(import (only (test lib2) foo))").unwrap();
+    assert_eq!(vm.eval("foo").unwrap(), Value::Int(10));
+
+    // import with rename
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    vm.eval(
+        "(define-library (test lib3)
+           (export val)
+           (begin
+             (define val 99)))",
+    )
+    .unwrap();
+    vm.eval("(import (rename (test lib3) (val my-val)))")
+        .unwrap();
+    assert_eq!(vm.eval("my-val").unwrap(), Value::Int(99));
+
+    // import with prefix
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    vm.eval(
+        "(define-library (test lib4)
+           (export num)
+           (begin
+             (define num 77)))",
+    )
+    .unwrap();
+    vm.eval("(import (prefix (test lib4) t:))").unwrap();
+    assert_eq!(vm.eval("t:num").unwrap(), Value::Int(77));
+}
+
+// ============================================================
+// §7.1 Reader edge cases
+// ============================================================
+
+#[test]
+fn s7_1_reader_edge_cases() {
+    // Nested quoting
+    eval_eq("''x", "'(quote x)");
+
+    // Boolean literals
+    is_true("#true");
+    is_false("#false");
+
+    // Character names
+    assert_eq!(eval(r"#\space"), Value::Char(' '));
+    assert_eq!(eval(r"#\newline"), Value::Char('\n'));
+    assert_eq!(eval(r"#\tab"), Value::Char('\t'));
+
+    // Hex character
+    assert_eq!(eval(r"#\x41"), Value::Char('A'));
+    assert_eq!(eval(r"#\x03BB"), Value::Char('λ'));
+
+    // String escapes
+    assert_eq!(eval(r#"(string-length "\n\t\\\"")"#), Value::Int(4),);
+
+    // Datum comment
+    is_int("#;42 7", 7);
+    is_int("(+ 1 #;2 3)", 4);
+}
+
+// ============================================================
+// §6.2 number->string with radix
+// ============================================================
+
+#[test]
+fn s6_2_number_to_string_radix() {
+    assert_eq!(
+        eval("(number->string 255 16)"),
+        Value::String(Rc::from("ff")),
+    );
+    assert_eq!(eval("(number->string 7 2)"), Value::String(Rc::from("111")),);
+    assert_eq!(eval("(number->string 8 8)"), Value::String(Rc::from("10")),);
+    assert_eq!(
+        eval("(number->string 42 10)"),
+        Value::String(Rc::from("42")),
+    );
+}
+
+// ============================================================
+// §6.2 string->number with radix
+// ============================================================
+
+#[test]
+fn s6_2_string_to_number_radix() {
+    is_int(r#"(string->number "ff" 16)"#, 255);
+    is_int(r#"(string->number "111" 2)"#, 7);
+    is_int(r#"(string->number "10" 8)"#, 8);
+    is_int(r#"(string->number "42" 10)"#, 42);
+    // Invalid number returns #f
+    is_false(r#"(string->number "xyz")"#);
+}
+
+// ============================================================
+// §6.4 assoc with custom comparator
+// ============================================================
+
+#[test]
+fn s6_4_assoc_custom_compare() {
+    // assoc with default equal?
+    assert_eq!(
+        eval(r#"(assoc "b" '(("a" 1) ("b" 2) ("c" 3)))"#),
+        eval(r#"'("b" 2)"#),
+    );
+
+    // assoc returns #f when not found
+    is_false(r#"(assoc "d" '(("a" 1) ("b" 2)))"#);
+
+    // member with default equal?
+    assert_eq!(eval("(member 2 '(1 2 3))"), eval("'(2 3)"),);
+}
+
+// ============================================================
+// §6.8 vector operations comprehensive
+// ============================================================
+
+#[test]
+fn s6_8_vector_ops_comprehensive() {
+    // make-vector
+    eval_eq("(make-vector 3 0)", "#(0 0 0)");
+
+    // vector-fill!
+    assert_eq!(
+        eval("(let ((v (make-vector 3 0))) (vector-fill! v 9) v)"),
+        eval("#(9 9 9)"),
+    );
+
+    // vector-copy with range
+    assert_eq!(eval("(vector-copy #(a b c d e) 1 4)"), eval("#(b c d)"),);
+
+    // vector-copy!
+    assert_eq!(
+        eval("(let ((v (vector 1 2 3 4 5))) (vector-copy! v 1 #(10 20) 0 2) v)"),
+        eval("#(1 10 20 4 5)"),
+    );
+
+    // vector-append
+    assert_eq!(
+        eval("(vector-append #(1 2) #(3 4) #(5))"),
+        eval("#(1 2 3 4 5)"),
+    );
+
+    // vector->string / string->vector
+    assert_eq!(
+        eval(r#"(vector->string #(#\a #\b #\c))"#),
+        Value::String(Rc::from("abc")),
+    );
+    assert_eq!(eval(r#"(string->vector "abc")"#), eval(r"#(#\a #\b #\c)"),);
+}
+
+// ============================================================
+// §6.9 bytevector operations comprehensive
+// ============================================================
+
+#[test]
+fn s6_9_bytevector_ops_comprehensive() {
+    // make-bytevector
+    eval_eq("(make-bytevector 3 0)", "#u8(0 0 0)");
+    eval_eq("(make-bytevector 3 255)", "#u8(255 255 255)");
+
+    // bytevector-copy with range
+    assert_eq!(
+        eval("(bytevector-copy #u8(0 1 2 3 4) 1 4)"),
+        eval("#u8(1 2 3)"),
+    );
+
+    // bytevector-append
+    assert_eq!(
+        eval("(bytevector-append #u8(1 2) #u8(3 4))"),
+        eval("#u8(1 2 3 4)"),
+    );
+
+    // utf8->string / string->utf8
+    assert_eq!(
+        eval("(utf8->string #u8(104 101 108 108 111))"),
+        Value::String(Rc::from("hello")),
+    );
+    assert_eq!(
+        eval(r#"(string->utf8 "hello")"#),
+        eval("#u8(104 101 108 108 111)"),
     );
 }

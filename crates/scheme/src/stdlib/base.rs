@@ -282,9 +282,19 @@ fn register_arithmetic(vm: &mut Vm) {
 
     vm.register_fn("min", "Minimum of numbers", Arity::Variadic(1), |args| {
         let mut result = args[0].clone();
+        let mut has_inexact = matches!(&args[0], Value::Float(_));
         for a in &args[1..] {
+            if matches!(a, Value::Float(_)) {
+                has_inexact = true;
+            }
             if numeric_lt(a, &result)? {
                 result = a.clone();
+            }
+        }
+        // R7RS §6.2.6: if any argument is inexact, result is inexact
+        if has_inexact {
+            if let Value::Int(n) = result {
+                return Ok(Value::Float(n as f64));
             }
         }
         Ok(result)
@@ -292,9 +302,19 @@ fn register_arithmetic(vm: &mut Vm) {
 
     vm.register_fn("max", "Maximum of numbers", Arity::Variadic(1), |args| {
         let mut result = args[0].clone();
+        let mut has_inexact = matches!(&args[0], Value::Float(_));
         for a in &args[1..] {
+            if matches!(a, Value::Float(_)) {
+                has_inexact = true;
+            }
             if numeric_lt(&result, a)? {
                 result = a.clone();
+            }
+        }
+        // R7RS §6.2.6: if any argument is inexact, result is inexact
+        if has_inexact {
+            if let Value::Int(n) = result {
+                return Ok(Value::Float(n as f64));
             }
         }
         Ok(result)
@@ -1158,15 +1178,28 @@ fn register_list_ops(vm: &mut Vm) {
             ((delay-force expr)
              (%make-promise-internal #f (lambda () expr)))))
 
+        ;; R7RS §4.2.5: force must iteratively force promises returned by
+        ;; delay-force, enabling iterative lazy algorithms without stack growth.
         (define (force promise)
           (if (not (promise? promise))
               promise
               (if (vector-ref promise 1)
                   (vector-ref promise 2)
                   (let ((val ((vector-ref promise 2))))
-                    (vector-set! promise 1 #t)
-                    (vector-set! promise 2 val)
-                    val))))
+                    (if (promise? val)
+                        ;; delay-force case: the thunk returned another promise.
+                        ;; Transfer its contents into this promise and force again.
+                        (begin
+                          (vector-set! promise 1 (vector-ref val 1))
+                          (vector-set! promise 2 (vector-ref val 2))
+                          (vector-set! val 1 #t)
+                          (vector-set! val 2 promise)
+                          (force promise))
+                        ;; Normal delay case: memoize and return.
+                        (begin
+                          (vector-set! promise 1 #t)
+                          (vector-set! promise 2 val)
+                          val))))))
 
         ;; R7RS §5.5 define-record-type
         ;; Implemented as a Rust-side function (registered below) because:

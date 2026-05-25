@@ -51,7 +51,11 @@ impl InternedSymbol {
 
 impl PartialEq for InternedSymbol {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        // Compare by name, not ID. Within a single VM, same-name symbols share
+        // the same ID (fast path via Rc::ptr_eq on name). Across VMs, name
+        // comparison is the correct R7RS §6.5 semantics: symbols with the same
+        // spelling are equal.
+        self.id == other.id || self.name == other.name
     }
 }
 
@@ -577,6 +581,11 @@ impl Value {
 // ---------------------------------------------------------------------------
 
 impl PartialEq for Value {
+    /// Structural equality (R7RS `equal?` semantics).
+    ///
+    /// Pairs and vectors are compared recursively by structure, not by identity.
+    /// This matches R7RS §6.1: `equal?` recursively compares pairs, vectors,
+    /// strings, and bytevectors. Closures and ports use identity (Rc pointer).
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Value::Void, Value::Void) => true,
@@ -589,9 +598,17 @@ impl PartialEq for Value {
             (Value::Null, Value::Null) => true,
             (Value::Eof, Value::Eof) => true,
             (Value::Undefined, Value::Undefined) => true,
-            // Pairs, vectors, ports: identity comparison (Rc pointer)
-            (Value::Pair(a), Value::Pair(b)) => Rc::ptr_eq(a, b),
-            (Value::Vector(a), Value::Vector(b)) => Rc::ptr_eq(a, b),
+            // Pairs: structural comparison (recursive)
+            (Value::Pair(a), Value::Pair(b)) => Rc::ptr_eq(a, b) || (a.0 == b.0 && a.1 == b.1),
+            // Vectors: structural comparison (element-wise)
+            (Value::Vector(a), Value::Vector(b)) => {
+                Rc::ptr_eq(a, b) || a.borrow().as_slice() == b.borrow().as_slice()
+            }
+            // Bytevectors: structural comparison
+            (Value::Bytevector(a), Value::Bytevector(b)) => {
+                Rc::ptr_eq(a, b) || a.borrow().as_slice() == b.borrow().as_slice()
+            }
+            // Closures, ports: identity comparison
             (Value::Closure(a), Value::Closure(b)) => Rc::ptr_eq(a, b),
             (Value::Foreign(a), Value::Foreign(b)) => Rc::ptr_eq(a, b),
             _ => false,
@@ -877,11 +894,15 @@ mod tests {
         // Different-value atoms are not eq
         assert_ne!(Value::Int(1), Value::Int(2));
 
-        // Pairs: identity-based (not structural)
+        // Pairs: structural equality (R7RS equal? semantics)
         let p1 = Value::cons(Value::Int(1), Value::Null);
         let p2 = Value::cons(Value::Int(1), Value::Null);
-        assert_ne!(p1, p2); // different Rc
-        assert_eq!(p1, p1.clone()); // same Rc
+        assert_eq!(p1, p2); // same structure
+        assert_eq!(p1, p1.clone()); // same Rc (fast path)
+
+        // Identity (eq?) uses is_eq, not PartialEq
+        assert!(!p1.is_eq(&p2)); // different Rc pointers
+        assert!(p1.is_eq(&p1.clone())); // same Rc
     }
 
     #[test]
