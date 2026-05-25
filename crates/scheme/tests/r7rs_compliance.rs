@@ -3959,6 +3959,19 @@ fn s5_6_library_import_prefix() {
 }
 
 #[test]
+fn s6_sleep_ms() {
+    // sleep-ms should complete and return #t
+    is_true("(sleep-ms 1)");
+    // Verify timing (sleep at least 10ms)
+    is_true(
+        "(let ((start (current-jiffy)))
+           (sleep-ms 10)
+           (let ((elapsed (- (current-jiffy) start)))
+             (>= elapsed 5000000)))", // 5ms in nanoseconds (generous)
+    );
+}
+
+#[test]
 fn s5_6_library_import_rename() {
     let mut vm = Vm::new();
     stdlib::register_stdlib(&mut vm);

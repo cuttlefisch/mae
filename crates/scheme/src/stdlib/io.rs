@@ -1087,6 +1087,19 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
+    // -- sleep/timing --
+
+    vm.register_fn(
+        "sleep-ms",
+        "Sleep for N milliseconds (blocking)",
+        Arity::Fixed(1),
+        |args| {
+            let ms = args[0].as_int()?.max(0) as u64;
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            Ok(Value::Bool(true))
+        },
+    );
+
     // NOTE: with-input-from-file / with-output-to-file require dynamic parameters
     // to redirect current-input/output-port. Deferred to Phase 13e.
 
