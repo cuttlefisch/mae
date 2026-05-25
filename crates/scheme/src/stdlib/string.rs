@@ -119,6 +119,62 @@ pub fn register(vm: &mut Vm) {
         |args| Ok(Value::Bool(args[0].as_str()? >= args[1].as_str()?)),
     );
 
+    // Case-insensitive comparisons (R7RS §6.7)
+    vm.register_fn(
+        "string-ci=?",
+        "Case-insensitive string equality",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_str()?.to_lowercase();
+            let b = args[1].as_str()?.to_lowercase();
+            Ok(Value::Bool(a == b))
+        },
+    );
+
+    vm.register_fn(
+        "string-ci<?",
+        "Case-insensitive string less than",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_str()?.to_lowercase();
+            let b = args[1].as_str()?.to_lowercase();
+            Ok(Value::Bool(a < b))
+        },
+    );
+
+    vm.register_fn(
+        "string-ci>?",
+        "Case-insensitive string greater than",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_str()?.to_lowercase();
+            let b = args[1].as_str()?.to_lowercase();
+            Ok(Value::Bool(a > b))
+        },
+    );
+
+    vm.register_fn(
+        "string-ci<=?",
+        "Case-insensitive string less or equal",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_str()?.to_lowercase();
+            let b = args[1].as_str()?.to_lowercase();
+            Ok(Value::Bool(a <= b))
+        },
+    );
+
+    vm.register_fn(
+        "string-ci>=?",
+        "Case-insensitive string greater or equal",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_str()?.to_lowercase();
+            let b = args[1].as_str()?.to_lowercase();
+            Ok(Value::Bool(a >= b))
+        },
+    );
+
     // Conversion
     vm.register_fn(
         "string->list",

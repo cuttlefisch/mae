@@ -2263,10 +2263,12 @@ impl Compiler {
     }
 
     /// Compile `(with-exception-handler handler thunk)` — R7RS §6.11.
+    ///
+    /// Desugars to: `(let ((%h handler)) (guard (%e (#t (%h %e))) (thunk)))`
     fn compile_with_exception_handler(
         &mut self,
         items: &[Value],
-        _tail: bool,
+        tail: bool,
     ) -> Result<(), LispError> {
         if items.len() != 3 {
             return Err(LispError::syntax(
@@ -2275,37 +2277,32 @@ impl Compiler {
             ));
         }
 
-        // Compile handler function
-        self.compile_expr(&items[1], false)?;
+        // Desugar to: (let ((%handler <handler-expr>))
+        //               (guard (%exn (#t (%handler %exn)))
+        //                 (<thunk-expr>)))
+        let handler_sym = Value::symbol("%weh-handler");
+        let exn_sym = Value::symbol("%weh-exn");
 
-        // Push handler (the compiled handler closure is on the stack)
-        let handler_idx = self.emit_placeholder(Op::PushHandler(0));
+        let desugared = Value::list(vec![
+            Value::symbol("let"),
+            Value::list(vec![Value::list(vec![
+                handler_sym.clone(),
+                items[1].clone(),
+            ])]),
+            Value::list(vec![
+                Value::symbol("guard"),
+                Value::list(vec![
+                    exn_sym.clone(),
+                    Value::list(vec![
+                        Value::Bool(true),
+                        Value::list(vec![handler_sym, exn_sym]),
+                    ]),
+                ]),
+                Value::list(vec![items[2].clone()]),
+            ]),
+        ]);
 
-        // Compile and call the thunk: (thunk)
-        self.compile_expr(&items[2], false)?;
-        self.emit(Op::Call(0));
-
-        // Normal exit: pop handler
-        self.emit(Op::PopHandler);
-        // Also pop the handler closure from the stack
-        // Actually, PushHandler saves the handler in the handler stack,
-        // not on the value stack. Let me adjust...
-        let jump_past = self.emit_placeholder(Op::Jump(0));
-
-        // Handler: exception on stack, call the handler function with it
-        let handler_start = self.current_scope().code.current_offset();
-        self.patch_jump(handler_idx, handler_start);
-
-        // Exception is on stack. We need to call the handler with it.
-        // But the handler closure was consumed by PushHandler...
-        // For now, implement with-exception-handler via guard desugaring.
-        // TODO: proper with-exception-handler needs handler stored in VM
-        self.emit(Op::Raise); // re-raise for now
-
-        let after = self.current_scope().code.current_offset();
-        self.patch_jump(jump_past, after);
-
-        Ok(())
+        self.compile_expr(&desugared, tail)
     }
 
     // -----------------------------------------------------------------------

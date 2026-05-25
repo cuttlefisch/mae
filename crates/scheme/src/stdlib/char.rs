@@ -48,6 +48,50 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
+    vm.register_fn(
+        "char-ci<?",
+        "Case-insensitive char less than",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_char()?.to_lowercase().next().unwrap();
+            let b = args[1].as_char()?.to_lowercase().next().unwrap();
+            Ok(Value::Bool(a < b))
+        },
+    );
+
+    vm.register_fn(
+        "char-ci>?",
+        "Case-insensitive char greater than",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_char()?.to_lowercase().next().unwrap();
+            let b = args[1].as_char()?.to_lowercase().next().unwrap();
+            Ok(Value::Bool(a > b))
+        },
+    );
+
+    vm.register_fn(
+        "char-ci<=?",
+        "Case-insensitive char less or equal",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_char()?.to_lowercase().next().unwrap();
+            let b = args[1].as_char()?.to_lowercase().next().unwrap();
+            Ok(Value::Bool(a <= b))
+        },
+    );
+
+    vm.register_fn(
+        "char-ci>=?",
+        "Case-insensitive char greater or equal",
+        Arity::Fixed(2),
+        |args| {
+            let a = args[0].as_char()?.to_lowercase().next().unwrap();
+            let b = args[1].as_char()?.to_lowercase().next().unwrap();
+            Ok(Value::Bool(a >= b))
+        },
+    );
+
     // Classification
     vm.register_fn(
         "char-alphabetic?",

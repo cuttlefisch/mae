@@ -3248,3 +3248,132 @@ fn edge_cond_expand_combinators() {
     is_int("(cond-expand ((not chicken) 1) (else 0))", 1);
     is_int("(cond-expand ((not r7rs) 1) (else 0))", 0);
 }
+
+// --- Case-insensitive character comparisons (§6.6) ---
+
+#[test]
+fn edge_char_ci_comparisons() {
+    is_true("(char-ci=? #\\a #\\A)");
+    is_true("(char-ci<? #\\a #\\B)");
+    is_true("(char-ci>? #\\b #\\A)");
+    is_true("(char-ci<=? #\\a #\\A)");
+    is_true("(char-ci<=? #\\a #\\B)");
+    is_true("(char-ci>=? #\\b #\\A)");
+    is_true("(char-ci>=? #\\A #\\a)");
+    is_false("(char-ci<? #\\b #\\A)");
+    is_false("(char-ci>? #\\a #\\B)");
+}
+
+// --- Case-insensitive string comparisons (§6.7) ---
+
+#[test]
+fn edge_string_ci_comparisons() {
+    is_true("(string-ci=? \"Hello\" \"hello\")");
+    is_true("(string-ci=? \"ABC\" \"abc\")");
+    is_false("(string-ci=? \"abc\" \"abd\")");
+
+    is_true("(string-ci<? \"abc\" \"ABD\")");
+    is_false("(string-ci<? \"abd\" \"ABC\")");
+
+    is_true("(string-ci>? \"abd\" \"ABC\")");
+    is_true("(string-ci<=? \"ABC\" \"abc\")");
+    is_true("(string-ci>=? \"ABC\" \"abc\")");
+}
+
+// --- list-set! immutability (§6.4) ---
+
+#[test]
+fn edge_list_set_immutable() {
+    let err = eval_err("(list-set! '(1 2 3) 1 99)");
+    assert!(
+        err.contains("immutable") || err.contains("Immutable"),
+        "expected immutable error: {err}"
+    );
+}
+
+// --- read-string (§6.13) ---
+
+#[test]
+fn edge_read_string() {
+    assert_eq!(
+        eval(
+            "(let ((p (open-input-string \"hello world\")))
+               (read-string 5 p))"
+        ),
+        Value::String(Rc::from("hello")),
+    );
+
+    // Read past end — returns what's available
+    assert_eq!(
+        eval(
+            "(let ((p (open-input-string \"hi\")))
+               (read-string 10 p))"
+        ),
+        Value::String(Rc::from("hi")),
+    );
+
+    // Empty port → eof
+    is_true(
+        "(let ((p (open-input-string \"\")))
+           (eof-object? (read-string 5 p)))",
+    );
+}
+
+// --- features (§6.14) ---
+
+#[test]
+fn edge_features() {
+    is_true("(list? (features))");
+    // memq returns the sublist starting at the match, not #t
+    is_true("(pair? (memq 'r7rs (features)))");
+    is_true("(pair? (memq 'mae (features)))");
+}
+
+// --- error-object structured access ---
+
+#[test]
+fn edge_error_object_full() {
+    // error-object? distinguishes error objects from other values
+    is_true(
+        "(guard (e (#t (error-object? e)))
+           (error \"test\"))",
+    );
+    is_false(
+        "(guard (e (#t (error-object? e)))
+           (raise 42))",
+    );
+
+    // error-object-message
+    assert_eq!(
+        eval(
+            "(guard (e (#t (error-object-message e)))
+               (error \"hello world\"))"
+        ),
+        Value::String(Rc::from("hello world")),
+    );
+
+    // error-object-irritants
+    is_true(
+        "(guard (e (#t (equal? (error-object-irritants e) '(1 2 3))))
+           (error \"test\" 1 2 3))",
+    );
+
+    // error-object-type
+    is_true(
+        "(guard (e (#t (string? (error-object-type e))))
+           (error \"test\"))",
+    );
+}
+
+// --- with-exception-handler (§6.11) ---
+
+#[test]
+fn edge_with_exception_handler() {
+    // Basic usage
+    is_int(
+        "(with-exception-handler
+           (lambda (e) 42)
+           (lambda () (raise \"boom\")))",
+        42,
+    );
+}

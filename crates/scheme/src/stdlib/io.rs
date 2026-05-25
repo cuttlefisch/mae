@@ -930,6 +930,99 @@ pub fn register(vm: &mut Vm) {
             Ok(Value::Void)
         },
     );
+
+    // R7RS §6.13.2 read-string — read k characters from port
+    vm.register_fn(
+        "read-string",
+        "Read k characters from port",
+        Arity::Variadic(1),
+        |args| {
+            let k = args[0].as_int()? as usize;
+            let port_val = if args.len() > 1 {
+                args[1].clone()
+            } else {
+                return Err(LispError::user(
+                    "read-string: port argument required",
+                    vec![],
+                ));
+            };
+            if let Value::Port(port_rc) = &port_val {
+                let mut port = port_rc.borrow_mut();
+                let mut result = String::with_capacity(k);
+                for _ in 0..k {
+                    match &mut *port {
+                        Port::StringInput { data, pos } => {
+                            if let Some(ch) = data[*pos..].chars().next() {
+                                result.push(ch);
+                                *pos += ch.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+                        Port::FileInput { reader, .. } => {
+                            let mut buf = [0u8; 4];
+                            use std::io::Read;
+                            match reader.read(&mut buf[..1]) {
+                                Ok(0) => break,
+                                Ok(_) => {
+                                    let width = utf8_char_width(buf[0]);
+                                    if width > 1 {
+                                        let _ = reader.read_exact(&mut buf[1..width]);
+                                    }
+                                    if let Ok(s) = std::str::from_utf8(&buf[..width]) {
+                                        result.push_str(s);
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        _ => return Err(LispError::type_error("input-port", "other port type")),
+                    }
+                }
+                if result.is_empty() {
+                    Ok(Value::Eof)
+                } else {
+                    Ok(Value::String(Rc::from(result.as_str())))
+                }
+            } else {
+                Err(LispError::type_error("port", format!("{port_val}")))
+            }
+        },
+    );
+
+    // R7RS §6.14 exit / emergency-exit
+    vm.register_fn("exit", "Exit the program", Arity::Variadic(0), |args| {
+        let code = if args.is_empty() {
+            0
+        } else {
+            match &args[0] {
+                Value::Bool(true) => 0,
+                Value::Bool(false) => 1,
+                Value::Int(n) => *n as i32,
+                _ => 0,
+            }
+        };
+        Err(LispError::user(format!("exit: {code}"), vec![]))
+    });
+
+    vm.register_fn(
+        "emergency-exit",
+        "Emergency exit (immediate)",
+        Arity::Variadic(0),
+        |args| {
+            let code = if args.is_empty() {
+                0
+            } else {
+                match &args[0] {
+                    Value::Bool(true) => 0,
+                    Value::Bool(false) => 1,
+                    Value::Int(n) => *n as i32,
+                    _ => 0,
+                }
+            };
+            std::process::exit(code);
+        },
+    );
 }
 
 #[cfg(test)]

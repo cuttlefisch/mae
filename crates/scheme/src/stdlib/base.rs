@@ -556,6 +556,13 @@ fn register_pairs_lists(vm: &mut Vm) {
         }
     });
 
+    vm.register_fn(
+        "list-set!",
+        "Set element of list (immutable pairs — error)",
+        Arity::Fixed(3),
+        |_args| Err(LispError::immutable("pair (list-set!)")),
+    );
+
     vm.register_fn("list", "Construct list", Arity::Variadic(0), |args| {
         Ok(Value::list(args.to_vec()))
     });
