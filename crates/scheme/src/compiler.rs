@@ -1020,6 +1020,41 @@ impl Compiler {
                 }
             }
 
+            // Check for (test => proc) arrow form: R7RS §4.2.1
+            let is_arrow =
+                items.len() == 3 && matches!(&items[1], Value::Symbol(s) if s.name() == "=>");
+
+            if is_arrow {
+                // (test => proc): evaluate test, if truthy call (proc test-result)
+                // Emit: compile(test), Dup, JumpIfFalse(skip)
+                //   true path: StoreLocal(tmp), compile(proc), LoadLocal(tmp), Call(1)
+                //   false path: Pop (remove leftover test result from Dup)
+                self.compile_expr(&items[0], false)?;
+                self.emit(Op::Dup);
+                let skip_jump = self.emit_placeholder(Op::JumpIfFalse(0));
+
+                // True path: stack has test-result (Dup added copy, JumpIfFalse popped copy)
+                let tmp_name = self.gensym("cond_tmp");
+                let temp_idx = self.current_scope_mut().add_local(tmp_name);
+                self.emit(Op::StoreLocal(temp_idx));
+                self.compile_expr(&items[2], false)?;
+                self.emit(Op::LoadLocal(temp_idx));
+                if tail {
+                    self.emit(Op::TailCall(1));
+                } else {
+                    self.emit(Op::Call(1));
+                }
+
+                end_jumps.push(self.emit_placeholder(Op::Jump(0)));
+
+                let skip_target = self.current_offset();
+                self.patch_jump(skip_jump, skip_target);
+                // False path: pop leftover test-result from Dup
+                self.emit(Op::Pop);
+
+                continue;
+            }
+
             // (test body...)
             self.compile_expr(&items[0], false)?;
             let skip_jump = self.emit_placeholder(Op::JumpIfFalse(0));

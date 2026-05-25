@@ -962,11 +962,17 @@ fn register_list_ops(vm: &mut Vm) {
               '()
               (cons (f (car lst)) (map1 f (cdr lst)))))
 
+        ;; Check if any list in the list-of-lists is null
+        (define (any-null? lsts)
+          (if (null? lsts) #f
+              (if (null? (car lsts)) #t
+                  (any-null? (cdr lsts)))))
+
         (define (map f . lsts)
           (if (null? (cdr lsts))
               (map1 f (car lsts))
-              ;; Multi-list: extract cars and cdrs using map1
-              (if (null? (car lsts))
+              ;; Multi-list: stop at shortest list
+              (if (any-null? lsts)
                   '()
                   (cons (apply f (map1 car lsts))
                         (apply map f (map1 cdr lsts))))))
@@ -980,7 +986,7 @@ fn register_list_ops(vm: &mut Vm) {
         (define (for-each f . lsts)
           (if (null? (cdr lsts))
               (for-each1 f (car lsts))
-              (if (null? (car lsts))
+              (if (any-null? lsts)
                   (void)
                   (begin
                     (apply f (map1 car lsts))

@@ -92,10 +92,12 @@ fn pitfall_tco_in_case_body() {
 
 #[test]
 fn pitfall_tco_in_cond_arrow() {
-    // cond with => (arrow) clause — NOT YET IMPLEMENTED
-    // TODO: Add cond => support to compiler
-    // For now, verify that regular cond works
-    is_int("(cond (#t 42))", 42);
+    // cond with => (arrow) clause
+    is_int("(cond (#t => (lambda (x) (if x 42 0))))", 42);
+    // Arrow with false test (should skip)
+    is_int("(cond (#f => (lambda (x) 0)) (else 99))", 99);
+    // Arrow passes test result to proc
+    is_int("(cond ((+ 1 2) => (lambda (x) (* x 10))))", 30);
 }
 
 #[test]
@@ -1355,9 +1357,7 @@ fn pitfall_map_preserves_order() {
 #[test]
 fn pitfall_map_different_lengths() {
     // R7RS says map terminates at shortest list
-    // TODO: Our map errors on different-length lists instead of stopping.
-    // For now, test same-length map works correctly.
-    is_true("(equal? (map + '(1 2 3) '(10 20 30)) '(11 22 33))");
+    is_true("(equal? (map + '(1 2 3) '(10 20)) '(11 22))");
 }
 
 #[test]
