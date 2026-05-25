@@ -212,6 +212,8 @@ pub struct Compiler {
     scopes: Vec<CompileScope>,
     /// Macro definitions (populated during compilation).
     pub macros: HashMap<String, MacroDef>,
+    /// Search paths for `include` and `load` (R7RS §4.1.7).
+    pub load_paths: Vec<std::path::PathBuf>,
 }
 
 impl Compiler {
@@ -220,6 +222,7 @@ impl Compiler {
             code_pool: Vec::new(),
             scopes: vec![CompileScope::new()],
             macros: HashMap::new(),
+            load_paths: Vec::new(),
         }
     }
 
@@ -318,12 +321,8 @@ impl Compiler {
                         "let-syntax" | "letrec-syntax" => {
                             return self.compile_let_syntax(&items, tail)
                         }
-                        "include" | "include-ci" => {
-                            return Err(LispError::syntax(
-                                "include/include-ci not yet implemented (Phase 13d)",
-                                "",
-                            ))
-                        }
+                        "include" => return self.compile_include(&items, tail, false),
+                        "include-ci" => return self.compile_include(&items, tail, true),
                         name => {
                             // Check for macro expansion
                             if let Some(mac) = self.macros.get(name).cloned() {
@@ -1308,6 +1307,72 @@ impl Compiler {
             }
             _ => Ok(false),
         }
+    }
+
+    /// Compile `(include "file1" "file2" ...)` — read and splice file contents.
+    /// `include-ci` folds the source to lowercase before reading.
+    fn compile_include(
+        &mut self,
+        items: &[Value],
+        tail: bool,
+        case_insensitive: bool,
+    ) -> Result<(), LispError> {
+        if items.len() < 2 {
+            return Err(LispError::syntax(
+                "include requires at least one filename",
+                "",
+            ));
+        }
+        let mut all_exprs = Vec::new();
+        for item in &items[1..] {
+            let filename = item
+                .as_str()
+                .map_err(|_| LispError::syntax("include: filename must be a string", ""))?;
+
+            // Search load paths
+            let mut found = None;
+            let path = std::path::Path::new(filename);
+            if path.is_absolute() && path.exists() {
+                found = Some(path.to_path_buf());
+            } else {
+                for dir in &self.load_paths {
+                    let candidate = dir.join(filename);
+                    if candidate.exists() {
+                        found = Some(candidate);
+                        break;
+                    }
+                }
+                // Also try relative to CWD
+                if found.is_none() && path.exists() {
+                    found = Some(path.to_path_buf());
+                }
+            }
+
+            let resolved = found.ok_or_else(|| {
+                LispError::syntax(format!("include: file not found: {filename}"), "")
+            })?;
+
+            let mut source = std::fs::read_to_string(&resolved).map_err(|e| {
+                LispError::syntax(
+                    format!("include: error reading {}: {e}", resolved.display()),
+                    "",
+                )
+            })?;
+
+            if case_insensitive {
+                source = source.to_lowercase();
+            }
+
+            let datums = crate::reader::read_all(&source)?;
+            all_exprs.extend(datums);
+        }
+
+        if all_exprs.is_empty() {
+            self.emit(Op::Const(Value::Void));
+        } else {
+            self.compile_begin(&all_exprs, tail)?;
+        }
+        Ok(())
     }
 
     /// Compile `(syntax-error message irritant ...)` — compile-time error.

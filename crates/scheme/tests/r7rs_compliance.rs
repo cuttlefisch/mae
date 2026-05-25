@@ -3882,6 +3882,99 @@ fn stress_boolean_semantics() {
 }
 
 // ============================================================================
+// include / load / library system
+// ============================================================================
+
+#[test]
+fn s5_6_include_basic() {
+    // Write a temp file, include it
+    let dir = std::env::temp_dir();
+    let path = dir.join("mae-test-include.scm");
+    std::fs::write(&path, "(define include-test-val 42)").unwrap();
+
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    vm.load_paths.push(dir);
+    let result = vm
+        .eval(&format!(
+            "(include \"{}\") include-test-val",
+            path.display()
+        ))
+        .unwrap();
+    assert_eq!(result, Value::Int(42));
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn s5_6_library_import_export() {
+    // Define a library and import from it
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm
+        .eval(
+            "(define-library (test math)
+               (export square)
+               (begin
+                 (define (square x) (* x x))))
+             (import (test math))
+             (square 7)",
+        )
+        .unwrap();
+    assert_eq!(result, Value::Int(49));
+}
+
+#[test]
+fn s5_6_library_import_only() {
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm
+        .eval(
+            "(define-library (my-lib)
+               (export add1 sub1)
+               (begin
+                 (define (add1 x) (+ x 1))
+                 (define (sub1 x) (- x 1))))
+             (import (only (my-lib) add1))
+             (add1 10)",
+        )
+        .unwrap();
+    assert_eq!(result, Value::Int(11));
+}
+
+#[test]
+fn s5_6_library_import_prefix() {
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm
+        .eval(
+            "(define-library (util)
+               (export double)
+               (begin (define (double x) (* x 2))))
+             (import (prefix (util) u:))
+             (u:double 5)",
+        )
+        .unwrap();
+    assert_eq!(result, Value::Int(10));
+}
+
+#[test]
+fn s5_6_library_import_rename() {
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm
+        .eval(
+            "(define-library (ops)
+               (export multiply)
+               (begin (define (multiply x y) (* x y))))
+             (import (rename (ops) (multiply mul)))
+             (mul 3 4)",
+        )
+        .unwrap();
+    assert_eq!(result, Value::Int(12));
+}
+
+// ============================================================================
 // (scheme inexact) library tests
 // ============================================================================
 

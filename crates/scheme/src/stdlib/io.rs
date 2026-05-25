@@ -1087,11 +1087,23 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    // with-input-from-file / with-output-to-file can't redirect current-input/output-port
-    // in our implementation since ports aren't dynamic parameters. Register as stubs
-    // that open the file and pass it to the procedure.
-    // NOTE: R7RS specifies these redirect current-input/output-port, but that requires
-    // dynamic parameters which we implement in Phase 13e.
+    // NOTE: with-input-from-file / with-output-to-file require dynamic parameters
+    // to redirect current-input/output-port. Deferred to Phase 13e.
+
+    // (scheme load) — `load` reads a file and returns its contents as a string.
+    // Full R7RS load (eval in interaction environment) requires VM access;
+    // use `include` for compile-time file inclusion instead.
+    vm.register_fn(
+        "load",
+        "Read file contents (use include for compile-time inclusion)",
+        Arity::Fixed(1),
+        |args| {
+            let path = args[0].as_str()?;
+            let content = std::fs::read_to_string(path)
+                .map_err(|e| LispError::user(format!("load: {e}"), vec![]))?;
+            Ok(Value::String(Rc::from(content.as_str())))
+        },
+    );
 }
 
 #[cfg(test)]

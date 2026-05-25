@@ -91,6 +91,8 @@ pub struct Vm {
     pub libraries: LibraryRegistry,
     /// Exception handler stack.
     handlers: Vec<ExceptionHandler>,
+    /// Search paths for `include` and `load`.
+    pub load_paths: Vec<std::path::PathBuf>,
 }
 
 impl Vm {
@@ -104,6 +106,7 @@ impl Vm {
             macros: HashMap::new(),
             libraries: LibraryRegistry::new(),
             handlers: Vec::new(),
+            load_paths: Vec::new(),
         }
     }
 
@@ -152,8 +155,9 @@ impl Vm {
         }
 
         let mut compiler = Compiler::new();
-        // Seed compiler with macros from previous evals
+        // Seed compiler with macros and load paths from VM
         compiler.macros = self.macros.clone();
+        compiler.load_paths = self.load_paths.clone();
 
         let code_id = compiler.compile_top_level(&to_compile)?;
 
@@ -257,6 +261,7 @@ impl Vm {
         if !lib_def.body.is_empty() {
             let mut compiler = Compiler::new();
             compiler.macros = self.macros.clone();
+            compiler.load_paths = self.load_paths.clone();
             let code_id = compiler.compile_top_level(&lib_def.body)?;
             self.macros = compiler.macros;
 
