@@ -24,6 +24,7 @@ fn write_to_port(port_val: &Value, text: &str) -> Result<(), LispError> {
         Value::Port(port_cell) => {
             let mut port = port_cell.borrow_mut();
             match &mut *port {
+                Port::Closed => Err(LispError::user("write: port is closed", vec![])),
                 Port::StringOutput { buf } => {
                     buf.push_str(text);
                     Ok(())
@@ -99,6 +100,7 @@ pub fn register(vm: &mut Vm) {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
+                        Port::Closed => Err(LispError::user("read: port is closed", vec![])),
                         Port::StringInput { data, pos } => {
                             if *pos >= data.len() {
                                 return Ok(Value::Eof);
@@ -222,6 +224,7 @@ pub fn register(vm: &mut Vm) {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
+                        Port::Closed => Err(LispError::user("read-char: port is closed", vec![])),
                         Port::StringInput { data, pos } => {
                             if *pos >= data.len() {
                                 Ok(Value::Eof)
@@ -270,7 +273,8 @@ pub fn register(vm: &mut Vm) {
                 Value::Port(p) => {
                     let port = p.borrow();
                     match &*port {
-                        crate::value::Port::StringInput { data, pos } => {
+                        Port::Closed => Err(LispError::user("peek-char: port is closed", vec![])),
+                        Port::StringInput { data, pos } => {
                             if *pos >= data.len() {
                                 Ok(Value::Eof)
                             } else {
@@ -483,6 +487,7 @@ pub fn register(vm: &mut Vm) {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
+                        Port::Closed => Err(LispError::user("read-line: port is closed", vec![])),
                         Port::StringInput { data, pos } => {
                             if *pos >= data.len() {
                                 return Ok(Value::Eof);

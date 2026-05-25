@@ -125,6 +125,71 @@ fn close_output_port() {
 }
 
 #[test]
+fn read_on_closed_port_errors() {
+    let result = eval_err(
+        "(let ((p (open-input-string \"hello\")))
+           (close-port p)
+           (read-char p))",
+    );
+    assert!(
+        result.contains("closed"),
+        "Expected closed port error, got: {result}"
+    );
+}
+
+#[test]
+fn write_on_closed_port_errors() {
+    let result = eval_err(
+        "(let ((p (open-output-string)))
+           (close-port p)
+           (display \"hi\" p))",
+    );
+    assert!(
+        result.contains("closed"),
+        "Expected closed port error, got: {result}"
+    );
+}
+
+#[test]
+fn peek_on_closed_port_errors() {
+    let result = eval_err(
+        "(let ((p (open-input-string \"hello\")))
+           (close-port p)
+           (peek-char p))",
+    );
+    assert!(
+        result.contains("closed"),
+        "Expected closed port error, got: {result}"
+    );
+}
+
+#[test]
+fn read_line_on_closed_port_errors() {
+    let result = eval_err(
+        "(let ((p (open-input-string \"hello\")))
+           (close-port p)
+           (read-line p))",
+    );
+    assert!(
+        result.contains("closed"),
+        "Expected closed port error, got: {result}"
+    );
+}
+
+#[test]
+fn read_sexp_on_closed_port_errors() {
+    let result = eval_err(
+        "(let ((p (open-input-string \"42\")))
+           (close-port p)
+           (read p))",
+    );
+    assert!(
+        result.contains("closed"),
+        "Expected closed port error, got: {result}"
+    );
+}
+
+#[test]
 fn close_port_idempotent() {
     // Closing an already-closed port should not error
     is_true(
