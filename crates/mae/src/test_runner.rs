@@ -171,14 +171,20 @@ async fn run_tests_iteratively(
             .unwrap_or_else(|_| format!("test-{}", i));
         let name = name.trim().trim_matches('"').to_string();
 
-        // Run the test.
-        let result = match scheme.eval(&format!("(run-nth-test {})", i)) {
-            Ok(s) => s,
-            Err(e) => format!("FAIL:{}", e.message),
-        };
+        // Run the test with yield support — sleep-ms yields control so we
+        // can drain collab/shell events during the wait.
+        let result = eval_with_yields(
+            editor,
+            scheme,
+            &format!("(run-nth-test {})", i),
+            collab_event_rx,
+            collab_command_tx,
+            broadcaster,
+        )
+        .await;
         let result = result.trim().trim_matches('"').to_string();
 
-        // Apply side effects (buffer mutations, commands, sleeps, writes).
+        // Apply remaining side effects (buffer mutations, commands, writes).
         scheme.apply_to_editor(editor);
         process_side_effects(
             editor,
@@ -256,7 +262,74 @@ async fn run_tests_iteratively(
     }
 }
 
-/// Process all pending side effects: drain collab events, handle sleep-ms,
+/// Evaluate Scheme code with yield support.
+///
+/// Uses `eval_yielding` so that `sleep-ms` and `wait-for-file` yield control
+/// back to Rust. During yields, we drain collab events — enabling collab tests
+/// to observe state changes between sleep intervals.
+async fn eval_with_yields(
+    editor: &mut Editor,
+    scheme: &mut SchemeRuntime,
+    code: &str,
+    collab_event_rx: &mut mpsc::Receiver<CollabEvent>,
+    collab_command_tx: &mpsc::Sender<CollabCommand>,
+    broadcaster: &SharedBroadcaster,
+) -> String {
+    use mae_scheme::{vm::YieldRequest, SchemeEvalResult};
+
+    let mut eval_result = match scheme.eval_yielding(code) {
+        Ok(r) => r,
+        Err(e) => return format!("FAIL:{}", e.message),
+    };
+
+    loop {
+        match eval_result {
+            SchemeEvalResult::Done(s) => return s,
+            SchemeEvalResult::Yield(ref req) => {
+                match req {
+                    YieldRequest::Sleep(d) => {
+                        let ms = d.as_millis() as u64;
+                        // Apply side effects before sleeping (buffer mutations
+                        // from code that ran before the yield).
+                        scheme.apply_to_editor(editor);
+                        drain_events_for(
+                            editor,
+                            collab_event_rx,
+                            collab_command_tx,
+                            broadcaster,
+                            ms,
+                        )
+                        .await;
+                        scheme.inject_editor_state(editor);
+                    }
+                    YieldRequest::WaitForFile(path, timeout) => {
+                        let deadline = tokio::time::Instant::now()
+                            + Duration::from_millis(timeout.as_millis() as u64);
+                        let poll_interval = Duration::from_millis(50);
+                        loop {
+                            if path.exists() {
+                                break;
+                            }
+                            if tokio::time::Instant::now() >= deadline {
+                                return format!("FAIL:wait-for-file timed out: {}", path.display());
+                            }
+                            // Drain events during the wait
+                            drain_collab_events(editor, collab_event_rx);
+                            tokio::time::sleep(poll_interval).await;
+                        }
+                    }
+                }
+                // Resume the VM after handling the yield
+                eval_result = match scheme.resume_yield(mae_scheme::value::Value::Bool(true)) {
+                    Ok(r) => r,
+                    Err(e) => return format!("FAIL:{}", e.message),
+                };
+            }
+        }
+    }
+}
+
+/// Process all pending side effects: drain collab events,
 /// write-file, and re-inject editor state.
 async fn process_side_effects(
     editor: &mut Editor,
@@ -289,11 +362,6 @@ async fn process_side_effects(
 
     // Forward pending sync updates to state server (mirrors IdleTick in main loop).
     crate::sync_broadcast::drain_and_broadcast(editor, broadcaster, Some(collab_command_tx));
-
-    // Handle pending sleep-ms: sleep while draining collab events.
-    if let Some(ms) = scheme.take_sleep_ms() {
-        drain_events_for(editor, collab_event_rx, collab_command_tx, broadcaster, ms).await;
-    }
 
     // Drain any collab events that arrived (non-blocking).
     drain_collab_events(editor, collab_event_rx);

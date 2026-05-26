@@ -141,8 +141,6 @@ struct SharedState {
     pending_exit_code: Option<i32>,
     /// Pending file writes from `(write-file PATH CONTENT)`.
     pending_write_files: Vec<(String, String)>,
-    /// Pending sleep from `(sleep-ms N)`.
-    pending_sleep_ms: Option<u64>,
     /// Ex-commands to dispatch via `(execute-ex CMD-STRING)`.
     /// Routes through `execute_command()` which handles argument parsing.
     pending_ex_commands: Vec<String>,
@@ -282,6 +280,15 @@ pub struct SchemeRuntime {
     pub loaded_features: HashSet<String>,
 }
 
+/// Result of a yielding eval — either completed or suspended.
+#[derive(Debug)]
+pub enum SchemeEvalResult {
+    /// Evaluation completed, result is a display string.
+    Done(String),
+    /// VM yielded, caller must handle the request and call `resume_yield`.
+    Yield(crate::vm::YieldRequest),
+}
+
 /// Error type for Scheme operations.
 #[derive(Debug)]
 pub struct SchemeError {
@@ -309,8 +316,9 @@ impl SchemeRuntime {
         let mut vm = Vm::new();
         let shared = Arc::new(Mutex::new(SharedState::default()));
 
-        // Install R7RS standard library
+        // Install R7RS standard library + mae libraries
         crate::stdlib::register_stdlib(&mut vm);
+        crate::stdlib::register_mae_libs(&mut vm);
 
         // --- Keybinding registration ---
 
@@ -1663,56 +1671,6 @@ impl SchemeRuntime {
             },
         );
 
-        let s = shared.clone();
-        vm.register_fn(
-            "sleep-ms",
-            "Sleep for N milliseconds",
-            Arity::Fixed(1),
-            move |args: &[Value]| {
-                let ms = arg_int(args, 0, "sleep-ms")?;
-                s.lock().unwrap().pending_sleep_ms = Some(ms.max(0) as u64);
-                Ok(Value::Void)
-            },
-        );
-
-        // (wait-for-file PATH TIMEOUT-MS)
-        vm.register_fn(
-            "wait-for-file",
-            "Block until file exists",
-            Arity::Fixed(2),
-            move |args: &[Value]| {
-                let path = arg_string(args, 0, "wait-for-file")?;
-                let timeout_ms = arg_int(args, 1, "wait-for-file")?;
-                let timeout = std::time::Duration::from_millis(timeout_ms.max(0) as u64);
-                let poll = std::time::Duration::from_millis(100);
-                let start = std::time::Instant::now();
-                loop {
-                    if std::path::Path::new(&path).exists() {
-                        return Ok(Value::Bool(true));
-                    }
-                    if start.elapsed() >= timeout {
-                        return Ok(Value::Bool(false));
-                    }
-                    std::thread::sleep(poll);
-                }
-            },
-        );
-
-        // (current-milliseconds)
-        vm.register_fn(
-            "current-milliseconds",
-            "Monotonic time in milliseconds",
-            Arity::Fixed(0),
-            move |_args: &[Value]| {
-                use std::time::{SystemTime, UNIX_EPOCH};
-                let ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as i64;
-                Ok(Value::Int(ms))
-            },
-        );
-
         // (goto-char OFFSET)
         let s = shared.clone();
         vm.register_fn(
@@ -2188,11 +2146,6 @@ impl SchemeRuntime {
         std::mem::take(&mut self.shared.lock().unwrap().pending_write_files)
     }
 
-    /// Take the pending sleep request from `(sleep-ms N)`, if any.
-    pub fn take_sleep_ms(&mut self) -> Option<u64> {
-        self.shared.lock().unwrap().pending_sleep_ms.take()
-    }
-
     /// Always accumulate pending sync updates from the active buffer into
     /// SharedState. Called before `drain_and_broadcast` so Scheme tests can
     /// retrieve updates via `(buffer-drain-updates)` without a two-step flag
@@ -2245,6 +2198,63 @@ impl SchemeRuntime {
             err
         })?;
         Ok(())
+    }
+
+    /// Evaluate Scheme code, returning yield requests to the caller
+    /// instead of blocking. The caller handles the yield (sleep, wait-for-file)
+    /// and calls `resume_yield(value)` to continue.
+    ///
+    /// Returns `Ok(SchemeEvalResult::Done(display_string))` when evaluation completes,
+    /// or `Ok(SchemeEvalResult::Yield(request))` when the VM wants to suspend.
+    pub fn eval_yielding(&mut self, code: &str) -> Result<SchemeEvalResult, SchemeError> {
+        debug!(code_len = code.len(), "scheme eval_yielding");
+        use crate::vm::EvalResult;
+        match self.vm.eval_yielding(code) {
+            Ok(EvalResult::Done(v)) => Ok(SchemeEvalResult::Done(value_to_display(&v))),
+            Ok(EvalResult::Yield(req)) => {
+                debug!(request = ?req, "scheme eval yielded");
+                Ok(SchemeEvalResult::Yield(req))
+            }
+            Err(e) => {
+                let err = SchemeError::from(e);
+                error!(error = %err.message, "scheme eval_yielding error");
+                self.record_error(code, &err);
+                Err(err)
+            }
+        }
+    }
+
+    /// Resume execution after handling a yield request.
+    /// `resume_value` is the result pushed onto the stack (typically `#t`).
+    pub fn resume_yield(&mut self, resume_value: Value) -> Result<SchemeEvalResult, SchemeError> {
+        debug!("scheme resume_yield");
+        use crate::vm::EvalResult;
+        match self.vm.resume(resume_value) {
+            Ok(EvalResult::Done(v)) => Ok(SchemeEvalResult::Done(value_to_display(&v))),
+            Ok(EvalResult::Yield(req)) => {
+                debug!(request = ?req, "scheme resume yielded again");
+                Ok(SchemeEvalResult::Yield(req))
+            }
+            Err(e) => {
+                let err = SchemeError::from(e);
+                error!(error = %err.message, "scheme resume error");
+                Err(err)
+            }
+        }
+    }
+
+    /// Record an error in the error history.
+    fn record_error(&mut self, code: &str, err: &SchemeError) {
+        self.error_seq += 1;
+        let snapshot = SchemeErrorSnapshot {
+            expression: code[..code.len().min(200)].to_string(),
+            error_message: err.message.clone(),
+            seq: self.error_seq,
+        };
+        self.error_history.push(snapshot);
+        if self.error_history.len() > self.max_errors {
+            self.error_history.remove(0);
+        }
     }
 
     /// Inject read-only buffer information as Scheme globals.

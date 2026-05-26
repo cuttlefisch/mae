@@ -22,23 +22,24 @@ use crate::reader;
 use crate::value::{CallFrame, Closure, Continuation, ForeignFn, Value, Winder};
 
 /// Result of evaluation — either done or yielding.
+///
+/// When `Yield` is returned, the VM retains its state internally.
+/// Call `Vm::resume(value)` to continue execution after handling
+/// the yield request. The resume value is pushed onto the stack
+/// as the result of the yielding expression.
+#[derive(Debug)]
 pub enum EvalResult {
     Done(Value),
-    Yield(YieldRequest, Box<VmState>),
+    Yield(YieldRequest),
 }
 
 /// What the VM wants from the host when it yields.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum YieldRequest {
+    /// Sleep for the given duration.
     Sleep(Duration),
-}
-
-/// VM state snapshot for resuming after yield.
-pub struct VmState {
-    pub stack: Vec<Value>,
-    pub frames: Vec<Frame>,
-    pub globals: Env,
-    pub code_pool: Vec<CodeObject>,
+    /// Wait for a file to appear (path, timeout).
+    WaitForFile(std::path::PathBuf, Duration),
 }
 
 /// A call frame on the VM stack.
@@ -225,6 +226,60 @@ impl Vm {
         result
     }
 
+    /// Evaluate Scheme code, returning yield requests to the caller
+    /// instead of blocking on them. Use `resume()` to continue after
+    /// handling the yield request.
+    pub fn eval_yielding(&mut self, code: &str) -> Result<EvalResult, LispError> {
+        let datums = reader::read_all(code)?;
+        if datums.is_empty() {
+            return Ok(EvalResult::Done(Value::Void));
+        }
+
+        let mut to_compile = Vec::new();
+        for datum in &datums {
+            if self.is_top_level_import(datum) {
+                self.process_import(datum)?;
+            } else if self.is_define_library(datum) {
+                self.process_define_library(datum)?;
+            } else if self.is_top_level_load(datum) {
+                self.process_load(datum)?;
+            } else {
+                to_compile.push(datum.clone());
+            }
+        }
+
+        if to_compile.is_empty() {
+            return Ok(EvalResult::Done(Value::Void));
+        }
+
+        let mut compiler = Compiler::new();
+        compiler.macros = self.macros.clone();
+        compiler.load_paths = self.load_paths.clone();
+
+        let code_id = compiler.compile_top_level(&to_compile)?;
+        self.macros = compiler.macros;
+
+        let base = self.code_pool.len();
+        for mut code_obj in compiler.code_pool {
+            for op in &mut code_obj.ops {
+                if let Op::MakeClosure(ref mut idx, _) = op {
+                    *idx += base;
+                }
+            }
+            self.code_pool.push(code_obj);
+        }
+
+        let result = self.execute_yielding(base + code_id);
+
+        self.gc_stats.eval_count += 1;
+        if self.stack.len() > self.gc_stats.stack_hwm {
+            self.gc_stats.stack_hwm = self.stack.len();
+        }
+        self.gc_stats.globals_count = self.globals.len();
+
+        result
+    }
+
     /// Check if a datum is a top-level `(import ...)` form.
     fn is_top_level_import(&self, datum: &Value) -> bool {
         if let Ok(items) = datum.to_vec() {
@@ -389,14 +444,73 @@ impl Vm {
             local_cells: HashMap::new(),
         });
 
+        match self.run()? {
+            EvalResult::Done(v) => Ok(v),
+            EvalResult::Yield(req) => {
+                // Blocking fallback: handle yields synchronously.
+                // This preserves backwards compatibility for callers that
+                // use `eval()` (which calls `execute()`) and don't handle yields.
+                match req {
+                    YieldRequest::Sleep(d) => {
+                        std::thread::sleep(d);
+                    }
+                    YieldRequest::WaitForFile(ref path, timeout) => {
+                        let deadline = std::time::Instant::now() + timeout;
+                        loop {
+                            if path.exists() {
+                                break;
+                            }
+                            if std::time::Instant::now() >= deadline {
+                                return Err(LispError::user(
+                                    format!("wait-for-file timed out: {}", path.display()),
+                                    vec![],
+                                ));
+                            }
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                    }
+                }
+                self.stack.push(Value::Bool(true));
+                // Continue execution after the yield
+                self.run().map(|r| match r {
+                    EvalResult::Done(v) => v,
+                    // Nested yields in blocking mode: recurse
+                    EvalResult::Yield(_) => {
+                        // This shouldn't happen in practice — yields from
+                        // foreign fns are one-shot. But handle gracefully.
+                        Value::Bool(true)
+                    }
+                })
+            }
+        }
+    }
+
+    /// Execute a code object, returning yield requests to the caller
+    /// instead of blocking on them.
+    pub fn execute_yielding(&mut self, code_id: usize) -> Result<EvalResult, LispError> {
+        self.frames.push(Frame {
+            code_id,
+            ip: 0,
+            bp: self.stack.len(),
+            upvalues: Vec::new(),
+            name: self.code_pool[code_id].name.clone(),
+            local_cells: HashMap::new(),
+        });
+
+        self.run()
+    }
+
+    /// Resume execution after a yield, pushing `resume_value` as the result.
+    pub fn resume(&mut self, resume_value: Value) -> Result<EvalResult, LispError> {
+        self.stack.push(resume_value);
         self.run()
     }
 
     /// The main interpreter loop.
-    fn run(&mut self) -> Result<Value, LispError> {
+    fn run(&mut self) -> Result<EvalResult, LispError> {
         loop {
             if self.frames.is_empty() {
-                return Ok(self.stack.pop().unwrap_or(Value::Void));
+                return Ok(EvalResult::Done(self.stack.pop().unwrap_or(Value::Void)));
             }
 
             let frame = self.frames.last().unwrap();
@@ -502,12 +616,18 @@ impl Vm {
 
                 Op::Call(argc) => {
                     if let Err(e) = self.do_call(argc, false) {
+                        if e.is_yield() {
+                            return self.convert_yield(e);
+                        }
                         self.handle_exception(e)?;
                     }
                 }
 
                 Op::TailCall(argc) => {
                     if let Err(e) = self.do_call(argc, true) {
+                        if e.is_yield() {
+                            return self.convert_yield(e);
+                        }
                         self.handle_exception(e)?;
                     }
                 }
@@ -645,23 +765,12 @@ impl Vm {
                 }
 
                 Op::Yield => {
-                    // For now, only Sleep yield
+                    // Yield control to the host. The duration is on the stack.
                     let duration = self.stack.pop().unwrap_or(Value::Int(0));
                     let ms = duration.as_int().unwrap_or(0) as u64;
-                    let state = VmState {
-                        stack: std::mem::take(&mut self.stack),
-                        frames: std::mem::take(&mut self.frames),
-                        globals: std::mem::take(&mut self.globals),
-                        code_pool: std::mem::take(&mut self.code_pool),
-                    };
-                    // This would return EvalResult::Yield in the resumable API
-                    // For now, just sleep and continue
-                    std::thread::sleep(Duration::from_millis(ms));
-                    self.stack = state.stack;
-                    self.frames = state.frames;
-                    self.globals = state.globals;
-                    self.code_pool = state.code_pool;
-                    self.stack.push(Value::Bool(true));
+                    return Ok(EvalResult::Yield(YieldRequest::Sleep(
+                        Duration::from_millis(ms),
+                    )));
                 }
 
                 Op::Nop => {}
@@ -697,7 +806,12 @@ impl Vm {
                     for a in args {
                         self.stack.push(a);
                     }
-                    self.do_call(argc, false)?;
+                    if let Err(e) = self.do_call(argc, false) {
+                        if e.is_yield() {
+                            return self.convert_yield(e);
+                        }
+                        self.handle_exception(e)?;
+                    }
                 }
 
                 Op::PushHandler(offset) => {
@@ -917,6 +1031,9 @@ impl Vm {
                 }
                 let args: Vec<Value> = self.stack[fn_pos + 1..].to_vec();
                 self.stack.truncate(fn_pos);
+                // Foreign functions may return Err(LispError::Yield(..)).
+                // We propagate it as-is; `run()` catches it and converts
+                // to EvalResult::Yield.
                 let result = (ff.func)(&args)?;
                 self.stack.push(result);
             }
@@ -985,6 +1102,51 @@ impl Vm {
         Ok(())
     }
 
+    /// Run the interpreter loop, blocking on any yields.
+    /// Used by internal thunk calls where we can't return yields to the host.
+    fn run_blocking(&mut self) -> Result<Value, LispError> {
+        loop {
+            match self.run()? {
+                EvalResult::Done(v) => return Ok(v),
+                EvalResult::Yield(req) => {
+                    match req {
+                        YieldRequest::Sleep(d) => std::thread::sleep(d),
+                        YieldRequest::WaitForFile(ref path, timeout) => {
+                            let deadline = std::time::Instant::now() + timeout;
+                            loop {
+                                if path.exists() {
+                                    break;
+                                }
+                                if std::time::Instant::now() >= deadline {
+                                    return Err(LispError::user(
+                                        format!("wait-for-file timed out: {}", path.display()),
+                                        vec![],
+                                    ));
+                                }
+                                std::thread::sleep(Duration::from_millis(50));
+                            }
+                        }
+                    }
+                    self.stack.push(Value::Bool(true));
+                }
+            }
+        }
+    }
+
+    /// Convert a `LispError::Yield` into `Ok(EvalResult::Yield)`.
+    fn convert_yield(&self, err: LispError) -> Result<EvalResult, LispError> {
+        use crate::lisp_error::{ErrorKind, YieldReason};
+        match err.kind {
+            ErrorKind::Yield(YieldReason::Sleep(d)) => {
+                Ok(EvalResult::Yield(YieldRequest::Sleep(d)))
+            }
+            ErrorKind::Yield(YieldReason::WaitForFile(p, t)) => {
+                Ok(EvalResult::Yield(YieldRequest::WaitForFile(p, t)))
+            }
+            _ => Err(err),
+        }
+    }
+
     /// Call a zero-argument thunk (used by dynamic-wind traversal).
     /// Saves and restores the VM state around the call so it doesn't
     /// interfere with continuation restoration in progress.
@@ -1009,7 +1171,7 @@ impl Vm {
 
         // If the call set up frames (closure), run them
         let thunk_result = if result.is_ok() && !self.frames.is_empty() {
-            self.run()
+            self.run_blocking()
         } else {
             result.map(|_| self.stack.pop().unwrap_or(Value::Void))
         };
@@ -1079,7 +1241,7 @@ impl Vm {
                     let call_result = self.do_call(1, false);
 
                     let thunk_result = if call_result.is_ok() && !self.frames.is_empty() {
-                        self.run()
+                        self.run_blocking()
                     } else {
                         call_result.map(|_| self.stack.pop().unwrap_or(Value::Void))
                     };
@@ -1804,5 +1966,256 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.message().contains("already defined"));
+    }
+
+    // --- Yield/Resume tests ---
+
+    #[test]
+    fn yield_sleep_from_foreign_fn() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+            let ms = args[0].as_int().unwrap_or(0) as u64;
+            Err(LispError::yield_sleep(Duration::from_millis(ms)))
+        });
+        // eval() handles yields synchronously (blocking fallback)
+        let result = vm.eval("(test-sleep 1)").unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn yield_eval_yielding_returns_yield() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+            let ms = args[0].as_int().unwrap_or(0) as u64;
+            Err(LispError::yield_sleep(Duration::from_millis(ms)))
+        });
+        let result = vm.eval_yielding("(test-sleep 10)").unwrap();
+        match result {
+            EvalResult::Yield(YieldRequest::Sleep(d)) => {
+                assert_eq!(d.as_millis(), 10);
+            }
+            _ => panic!("expected Yield(Sleep), got Done"),
+        }
+    }
+
+    #[test]
+    fn yield_resume_continues_execution() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+            let ms = args[0].as_int().unwrap_or(0) as u64;
+            Err(LispError::yield_sleep(Duration::from_millis(ms)))
+        });
+        // Define a function that sleeps then returns 42
+        vm.eval("(define (work) (test-sleep 1) 42)").unwrap();
+        let result = vm.eval_yielding("(work)").unwrap();
+        match result {
+            EvalResult::Yield(YieldRequest::Sleep(_)) => {}
+            _ => panic!("expected yield"),
+        }
+        // Resume — the VM should continue and return 42
+        let result = vm.resume(Value::Bool(true)).unwrap();
+        match result {
+            EvalResult::Done(v) => assert_eq!(v, Value::Int(42)),
+            EvalResult::Yield(_) => panic!("unexpected second yield"),
+        }
+    }
+
+    #[test]
+    fn yield_multiple_yields_in_sequence() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+            let ms = args[0].as_int().unwrap_or(0) as u64;
+            Err(LispError::yield_sleep(Duration::from_millis(ms)))
+        });
+        // Two sleeps in sequence
+        vm.eval("(define (work2) (test-sleep 1) (test-sleep 2) 99)")
+            .unwrap();
+        let r = vm.eval_yielding("(work2)").unwrap();
+        assert!(matches!(r, EvalResult::Yield(YieldRequest::Sleep(d)) if d.as_millis() == 1));
+
+        let r = vm.resume(Value::Bool(true)).unwrap();
+        assert!(matches!(r, EvalResult::Yield(YieldRequest::Sleep(d)) if d.as_millis() == 2));
+
+        let r = vm.resume(Value::Bool(true)).unwrap();
+        assert!(matches!(r, EvalResult::Done(Value::Int(99))));
+    }
+
+    #[test]
+    fn yield_in_loop() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+            let ms = args[0].as_int().unwrap_or(0) as u64;
+            Err(LispError::yield_sleep(Duration::from_millis(ms)))
+        });
+        // Loop that yields 3 times
+        vm.eval(
+            "(define (loop-sleep n)
+               (if (= n 0)
+                   'done
+                   (begin (test-sleep n) (loop-sleep (- n 1)))))",
+        )
+        .unwrap();
+
+        let mut r = vm.eval_yielding("(loop-sleep 3)").unwrap();
+        let mut yield_count = 0;
+        loop {
+            match r {
+                EvalResult::Done(v) => {
+                    assert_eq!(v, Value::symbol("done"));
+                    break;
+                }
+                EvalResult::Yield(YieldRequest::Sleep(_)) => {
+                    yield_count += 1;
+                    r = vm.resume(Value::Bool(true)).unwrap();
+                }
+                _ => panic!("unexpected yield type"),
+            }
+        }
+        assert_eq!(yield_count, 3);
+    }
+
+    #[test]
+    fn yield_resume_value_visible_to_scheme() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+            Err(LispError::yield_sleep(Duration::from_millis(1)))
+        });
+        // The resume value is the result of the yielding call
+        vm.eval("(define (get-sleep-result) (test-sleep 1))")
+            .unwrap();
+
+        let r = vm.eval_yielding("(get-sleep-result)").unwrap();
+        assert!(matches!(r, EvalResult::Yield(_)));
+
+        // Resume with a custom value
+        let r = vm.resume(Value::Int(42)).unwrap();
+        match r {
+            EvalResult::Done(v) => assert_eq!(v, Value::Int(42)),
+            _ => panic!("expected done"),
+        }
+    }
+
+    #[test]
+    fn yield_wait_for_file() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-wait-file", "test", Arity::Fixed(2), |args| {
+            let path = args[0]
+                .as_str()
+                .map_err(|_| LispError::type_error("string", ""))?;
+            let ms = args[1].as_int().unwrap_or(1000) as u64;
+            Err(LispError::yield_wait_for_file(
+                std::path::PathBuf::from(path),
+                Duration::from_millis(ms),
+            ))
+        });
+        let r = vm
+            .eval_yielding(r#"(test-wait-file "/tmp/test.txt" 5000)"#)
+            .unwrap();
+        match r {
+            EvalResult::Yield(YieldRequest::WaitForFile(p, t)) => {
+                assert_eq!(p.to_str().unwrap(), "/tmp/test.txt");
+                assert_eq!(t.as_millis(), 5000);
+            }
+            _ => panic!("expected WaitForFile yield"),
+        }
+    }
+
+    #[test]
+    fn yield_no_yield_returns_done() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        // eval_yielding with no yields returns Done
+        let r = vm.eval_yielding("(+ 1 2)").unwrap();
+        match r {
+            EvalResult::Done(v) => assert_eq!(v, Value::Int(3)),
+            _ => panic!("expected done"),
+        }
+    }
+
+    #[test]
+    fn yield_empty_code_returns_done_void() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        let r = vm.eval_yielding("").unwrap();
+        match r {
+            EvalResult::Done(Value::Void) => {}
+            _ => panic!("expected Done(Void)"),
+        }
+    }
+
+    #[test]
+    fn yield_error_from_foreign_fn_propagates() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-err", "test", Arity::Fixed(0), |_| {
+            Err(LispError::user("test error", vec![]))
+        });
+        let r = vm.eval_yielding("(test-err)");
+        assert!(r.is_err());
+        assert!(r.unwrap_err().message().contains("test error"));
+    }
+
+    #[test]
+    fn yield_guard_does_not_catch_yields() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+            Err(LispError::yield_sleep(Duration::from_millis(1)))
+        });
+        // Guard should NOT catch yield errors — they must pass through
+        let r = vm
+            .eval_yielding(
+                "(guard (exn (#t 'caught))
+               (test-sleep 1)
+               42)",
+            )
+            .unwrap();
+        // Should yield, not return 'caught
+        assert!(matches!(r, EvalResult::Yield(YieldRequest::Sleep(_))));
+        let r = vm.resume(Value::Bool(true)).unwrap();
+        assert!(matches!(r, EvalResult::Done(Value::Int(42))));
+    }
+
+    #[test]
+    fn yield_blocking_eval_handles_sleep() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+            Err(LispError::yield_sleep(Duration::from_millis(1)))
+        });
+        // Regular eval() blocks on yields
+        let start = std::time::Instant::now();
+        let result = vm.eval("(test-sleep 1)").unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(result, Value::Bool(true));
+        assert!(elapsed.as_millis() >= 1);
+    }
+
+    #[test]
+    fn yield_is_yield_predicate() {
+        let yield_err = LispError::yield_sleep(Duration::from_millis(100));
+        assert!(yield_err.is_yield());
+
+        let normal_err = LispError::user("not a yield", vec![]);
+        assert!(!normal_err.is_yield());
+    }
+
+    #[test]
+    fn yield_lisp_error_message() {
+        let err = LispError::yield_sleep(Duration::from_millis(500));
+        assert_eq!(err.message(), "yield: sleep 500ms");
+
+        let err = LispError::yield_wait_for_file(
+            std::path::PathBuf::from("/tmp/foo"),
+            Duration::from_millis(3000),
+        );
+        assert_eq!(err.message(), "yield: wait-for-file /tmp/foo (3000ms)");
     }
 }

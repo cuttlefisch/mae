@@ -109,6 +109,20 @@ pub enum ErrorKind {
 
     /// Internal VM error (should not reach users).
     Internal(String),
+
+    /// Yield request from a foreign function.
+    /// The VM catches this and returns `EvalResult::Yield` to the host.
+    /// Not a real error — it's a cooperative suspension point.
+    Yield(YieldReason),
+}
+
+/// Why a foreign function wants to yield control to the host.
+#[derive(Clone, Debug)]
+pub enum YieldReason {
+    /// Sleep for the given duration.
+    Sleep(std::time::Duration),
+    /// Wait for a file to appear on disk (path, timeout).
+    WaitForFile(PathBuf, std::time::Duration),
 }
 
 impl LispError {
@@ -227,6 +241,31 @@ impl LispError {
         }
     }
 
+    /// Create a yield request (not a real error — cooperative suspension).
+    pub fn yield_sleep(duration: std::time::Duration) -> Self {
+        LispError {
+            kind: ErrorKind::Yield(YieldReason::Sleep(duration)),
+            location: None,
+            stack_trace: Vec::new(),
+            error_value: None,
+        }
+    }
+
+    /// Create a yield request for file waiting.
+    pub fn yield_wait_for_file(path: PathBuf, timeout: std::time::Duration) -> Self {
+        LispError {
+            kind: ErrorKind::Yield(YieldReason::WaitForFile(path, timeout)),
+            location: None,
+            stack_trace: Vec::new(),
+            error_value: None,
+        }
+    }
+
+    /// Returns true if this is a yield request, not a real error.
+    pub fn is_yield(&self) -> bool {
+        matches!(self.kind, ErrorKind::Yield(_))
+    }
+
     /// Attach a source location to this error.
     pub fn at(mut self, loc: SourceLocation) -> Self {
         self.location = Some(loc);
@@ -268,6 +307,12 @@ impl LispError {
             ErrorKind::DivisionByZero => "division by zero".to_string(),
             ErrorKind::Immutable { what } => format!("attempt to mutate immutable {what}"),
             ErrorKind::Internal(msg) => format!("internal error: {msg}"),
+            ErrorKind::Yield(reason) => match reason {
+                YieldReason::Sleep(d) => format!("yield: sleep {}ms", d.as_millis()),
+                YieldReason::WaitForFile(p, t) => {
+                    format!("yield: wait-for-file {} ({}ms)", p.display(), t.as_millis())
+                }
+            },
         }
     }
 }
@@ -371,5 +416,35 @@ mod tests {
         let s = format!("{err}");
         assert!(s.contains("Stack trace:"));
         assert!(s.contains("compute"));
+    }
+
+    #[test]
+    fn test_yield_sleep_constructor() {
+        let err = LispError::yield_sleep(std::time::Duration::from_millis(100));
+        assert!(err.is_yield());
+        assert_eq!(err.message(), "yield: sleep 100ms");
+    }
+
+    #[test]
+    fn test_yield_wait_for_file_constructor() {
+        let err = LispError::yield_wait_for_file(
+            PathBuf::from("/tmp/test"),
+            std::time::Duration::from_millis(5000),
+        );
+        assert!(err.is_yield());
+        assert_eq!(err.message(), "yield: wait-for-file /tmp/test (5000ms)");
+    }
+
+    #[test]
+    fn test_is_yield_false_for_normal_errors() {
+        assert!(!LispError::user("err", vec![]).is_yield());
+        assert!(!LispError::type_error("a", "b").is_yield());
+        assert!(!LispError::undefined("x").is_yield());
+        assert!(!LispError::internal("bug").is_yield());
+        assert!(!LispError::division_by_zero().is_yield());
+        assert!(!LispError::immutable("pair").is_yield());
+        assert!(!LispError::read("bad").is_yield());
+        assert!(!LispError::io("fail", None).is_yield());
+        assert!(!LispError::arity("f", Arity::Fixed(1), 2).is_yield());
     }
 }

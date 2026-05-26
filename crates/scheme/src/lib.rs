@@ -19,4 +19,6 @@ pub mod stdlib;
 pub mod value;
 pub mod vm;
 
-pub use runtime::{DeclaredPackage, SchemeError, SchemeErrorSnapshot, SchemeRuntime};
+pub use runtime::{
+    DeclaredPackage, SchemeError, SchemeErrorSnapshot, SchemeEvalResult, SchemeRuntime,
+};

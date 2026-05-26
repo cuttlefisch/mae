@@ -1244,18 +1244,6 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
-      "name": "sleep-ms",
-      "source": "crates/scheme/src/runtime.rs"
-    },
-    {
-      "name": "wait-for-file",
-      "source": "crates/scheme/src/runtime.rs"
-    },
-    {
-      "name": "current-milliseconds",
-      "source": "crates/scheme/src/runtime.rs"
-    },
-    {
       "name": "goto-char",
       "source": "crates/scheme/src/runtime.rs"
     },

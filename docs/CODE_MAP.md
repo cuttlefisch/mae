@@ -468,9 +468,6 @@ Source: `crates/sync/src/lib.rs`
 | `check-deprecated` | `crates/scheme/src/runtime.rs` |
 | `exit` | `crates/scheme/src/runtime.rs` |
 | `write-file` | `crates/scheme/src/runtime.rs` |
-| `sleep-ms` | `crates/scheme/src/runtime.rs` |
-| `wait-for-file` | `crates/scheme/src/runtime.rs` |
-| `current-milliseconds` | `crates/scheme/src/runtime.rs` |
 | `goto-char` | `crates/scheme/src/runtime.rs` |
 | `current-mode` | `crates/scheme/src/runtime.rs` |
 | `test-buffer-string` | `crates/scheme/src/runtime.rs` |
