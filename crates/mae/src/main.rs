@@ -10,6 +10,7 @@ mod gui_event;
 mod key_handling;
 mod lsp_bridge;
 pub mod pkg;
+mod scheme_lsp_bridge;
 mod shell_keys;
 mod shell_lifecycle;
 mod sync_broadcast;
@@ -1169,6 +1170,7 @@ struct GuiApp {
 impl GuiApp {
     /// Drain editor intents to LSP/DAP, manage shells and agents.
     fn drain_intents_and_lifecycle(&mut self) {
+        scheme_lsp_bridge::drain_scheme_lsp_intents(&mut self.editor, &self.scheme);
         lsp_bridge::drain_lsp_intents(&mut self.editor, &self.lsp_command_tx);
         dap_bridge::drain_dap_intents(&mut self.editor, &self.dap_command_tx);
         collab_bridge::drain_collab_intents(&mut self.editor, &self.collab_command_tx);

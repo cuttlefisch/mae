@@ -13,6 +13,7 @@ pub mod env;
 pub mod ffi;
 pub mod library;
 pub mod lisp_error;
+pub mod lsp;
 pub mod macros;
 pub mod reader;
 pub mod stdlib;

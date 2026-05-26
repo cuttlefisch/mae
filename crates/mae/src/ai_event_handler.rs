@@ -196,6 +196,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                         });
                     } else {
                         info!(?kind, "deferred AI tool — awaiting LSP response");
+                        crate::scheme_lsp_bridge::drain_scheme_lsp_intents(editor, ctx.scheme);
                         crate::lsp_bridge::drain_lsp_intents(editor, ctx.lsp_command_tx);
                         *ctx.deferred_ai_reply =
                             Some((kind, call.id.clone(), reply, tokio::time::Instant::now()));

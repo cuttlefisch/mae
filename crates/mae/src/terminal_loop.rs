@@ -327,6 +327,7 @@ pub(crate) async fn run_terminal_loop(
         }
 
         trace!("drain_intents_and_lifecycle enter");
+        crate::scheme_lsp_bridge::drain_scheme_lsp_intents(editor, scheme);
         drain_lsp_intents(editor, lsp_command_tx);
         drain_dap_intents(editor, dap_command_tx);
         crate::collab_bridge::drain_collab_intents(editor, collab_command_tx);

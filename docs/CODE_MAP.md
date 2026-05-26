@@ -320,6 +320,7 @@ Source: `crates/scheme/src/lib.rs`
 | `ffi` | mod |
 | `library` | mod |
 | `lisp_error` | mod |
+| `lsp` | mod |
 | `macros` | mod |
 | `reader` | mod |
 | `stdlib` | mod |

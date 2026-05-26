@@ -210,8 +210,11 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [x] **Phase 13c**: R7RS-small base library (261 functions, 13 libraries)
 - [x] **Phase 13d**: Hygienic macros + module system (`define-library`, `import`)
 - [x] **Phase 13e**: FFI layer — port all 177 editor registrations to mae-scheme VM
-- [ ] **Phase 13f**: Async/yield — wire `Op::Yield` to event loop, re-enable Docker E2E
-- [ ] **Phase 13g**: LSP + DAP for mae-scheme (completion, hover, breakpoints)
+- [x] **Phase 13f**: Async/yield — `sleep-ms`/`wait-for-file` yield to event loop, auto-flush wrappers, Docker E2E re-enabled
+- [ ] **Phase 13g**: LSP + DAP for mae-scheme — in-process Swank-style (first Scheme DAP ever)
+  - LSP: completion (live globals), hover (docstrings), diagnostics (check-syntax), symbols, signature help
+  - Source maps: compiler-tracked locations, `emit_at()` population
+  - DAP: yield-based breakpoints (Guile VM trap model), step modes, frame inspection
 - [ ] **Phase 13h**: Introspection + observability (`:describe-function`, profiling)
 - [ ] **Phase 13i**: Migration — update test files, simplify test runner
 - [ ] **Phase 13j**: Documentation + final cleanup
@@ -224,8 +227,15 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [x] No unmaintained transitive dependencies (`steel-core` removed)
 - [x] Module system prevents namespace collisions
 - [x] 1,700+ mae-scheme tests passing
-- [ ] `wait-for-file` and `wait-until` actually block/yield (Docker E2E re-enabled)
+- [x] `wait-for-file` and `wait-until` actually block/yield (Docker E2E re-enabled)
 - [ ] All existing `init.scm` configs load with at most deprecation warnings
+
+### Future: Scheme Introspection Enhancements (from prior art research)
+- [ ] **Execution history ring buffer** — MIT Scheme's debugger records expressions in a ring buffer, providing history for tail-called expressions that no longer appear on the stack. Valuable for debugging tail-recursive code in mae-scheme. Ref: [[RoamNotes: Scheme Debugger Architectures]]
+- [ ] **Cross-reference analysis** — SLIME/Swank provides `who-calls`, `who-binds`, `who-sets`, `who-references` via compiler metadata. mae-scheme could build a call graph during compilation for `:who-calls` / `:who-references` commands.
+- [ ] **Type-ranked completion** — scheme-langserver (Chez) ranks completion candidates by type compatibility. Could enhance mae-scheme LSP completion with arity/type hints from call context.
+- [ ] **Buffer-source mapping** — SBCL/Swank records source locations referencing editor buffers (not just files), enabling compile-in-place from REPL. mae-scheme could map `eval`-ed code back to the `*scheme-repl*` buffer.
+- [ ] **Live recompilation in debugger** — Swank's SLDB allows fixing a function while paused at a breakpoint, then resuming. mae-scheme's `define_global` already supports hot reload; wiring it to the DAP resume flow would complete the picture.
 
 ### Near-term: Other
 - [ ] **Version compatibility policy**: Semver enforcement on upgrade — protocol version negotiation in state-server (`initialize` params), config schema migration on major bumps, `make install-upgrade` blocking on incompatible major versions (currently warns only). Prerequisite for v1.0.

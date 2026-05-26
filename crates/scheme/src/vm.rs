@@ -147,6 +147,11 @@ impl Vm {
         }
     }
 
+    /// Read-only access to macro definitions (for LSP introspection).
+    pub fn macros(&self) -> &HashMap<String, MacroDef> {
+        &self.macros
+    }
+
     /// Register a Rust function as a global.
     pub fn register_fn<F>(&mut self, name: &str, doc: &str, arity: Arity, f: F)
     where

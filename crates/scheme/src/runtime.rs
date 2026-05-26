@@ -312,6 +312,11 @@ impl From<LispError> for SchemeError {
 }
 
 impl SchemeRuntime {
+    /// Read-only access to the VM for LSP introspection.
+    pub fn vm(&self) -> &Vm {
+        &self.vm
+    }
+
     pub fn new() -> Result<Self, SchemeError> {
         let mut vm = Vm::new();
         let shared = Arc::new(Mutex::new(SharedState::default()));

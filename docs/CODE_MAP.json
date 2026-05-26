@@ -783,6 +783,10 @@
           "kind": "mod"
         },
         {
+          "name": "lsp",
+          "kind": "mod"
+        },
+        {
           "name": "macros",
           "kind": "mod"
         },
