@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.10.4-dev · **Tests:** 3,895+ passing · **Status:** Alpha — Phases 1-11 complete, Phase 12 (collab) protocol-complete, Phase 13 (Scheme runtime) planned.
+**Current version:** v0.10.4-dev · **Tests:** 5,470+ passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete, Phase 13 (Scheme runtime) complete.
 
 ---
 
@@ -141,10 +141,11 @@
 
 ### Phase 13: MAE Scheme Runtime (v0.12.0)
 
-**Status**: Phases 13a–13e COMPLETE. Purpose-built R7RS-small runtime replaces
-the previous Steel dependency. 1,700+ mae-scheme tests passing, 261 stdlib
+**Status**: Phases 13a–13h COMPLETE. Purpose-built R7RS-small runtime replaces
+the previous Steel dependency. 1,800+ mae-scheme tests passing, 261 stdlib
 functions, 41 special forms, 23 opcodes, hygienic macros, module system, call/cc,
-dynamic-wind, exception handling. All 177 editor registrations ported.
+dynamic-wind, exception handling. All 177 editor registrations ported. In-process
+LSP + DAP for Scheme (first Scheme DAP ever). Introspection + observability.
 
 #### Core: R7RS-small Compliance (COMPLETE)
 
@@ -211,13 +212,14 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [x] **Phase 13d**: Hygienic macros + module system (`define-library`, `import`)
 - [x] **Phase 13e**: FFI layer — port all 177 editor registrations to mae-scheme VM
 - [x] **Phase 13f**: Async/yield — `sleep-ms`/`wait-for-file` yield to event loop, auto-flush wrappers, Docker E2E re-enabled
-- [ ] **Phase 13g**: LSP + DAP for mae-scheme — in-process Swank-style (first Scheme DAP ever)
+- [x] **Phase 13g**: LSP + DAP for mae-scheme — in-process Swank-style (first Scheme DAP ever)
   - LSP: completion (live globals), hover (docstrings), diagnostics (check-syntax), symbols, signature help
-  - Source maps: compiler-tracked locations, `emit_at()` population
+  - Source maps: compiler-tracked locations, `read_all_located()` + `compile_top_level_located()`
   - DAP: yield-based breakpoints (Guile VM trap model), step modes, frame inspection
-- [ ] **Phase 13h**: Introspection + observability (`:describe-function`, profiling)
-- [ ] **Phase 13i**: Migration — update test files, simplify test runner
-- [ ] **Phase 13j**: Documentation + final cleanup
+  - Bridge: `scheme_lsp_bridge.rs` + `scheme_dap_bridge.rs` intercept intents in-process
+- [x] **Phase 13h**: Introspection + observability — `introspect.rs`, docstring extraction, `gc-stats`, KB auto-seeding
+- [x] **Phase 13i**: Migration — Steel fully removed (13e), test files clean R7RS, no workarounds remain
+- [x] **Phase 13j**: Documentation — ADR-009, EXTENSION_GUIDE updated with libraries/async/debug/introspection
 
 #### Success Criteria
 
@@ -226,9 +228,12 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [x] `define_global` properly updates existing bindings (no shadowing)
 - [x] No unmaintained transitive dependencies (`steel-core` removed)
 - [x] Module system prevents namespace collisions
-- [x] 1,700+ mae-scheme tests passing
+- [x] 1,800+ mae-scheme tests passing (5,470 workspace total)
 - [x] `wait-for-file` and `wait-until` actually block/yield (Docker E2E re-enabled)
-- [ ] All existing `init.scm` configs load with at most deprecation warnings
+- [x] In-process LSP + DAP for Scheme files
+- [x] Introspection: `procedure-arity`, `procedure-documentation`, `gc-stats`, KB auto-seeding
+- [x] ADR-009 documenting the architecture decision
+- [x] All existing `init.scm` configs load with at most deprecation warnings
 
 ### Future: Scheme Introspection Enhancements (from prior art research)
 - [ ] **Execution history ring buffer** — MIT Scheme's debugger records expressions in a ring buffer, providing history for tail-called expressions that no longer appear on the stack. Valuable for debugging tail-recursive code in mae-scheme. Ref: [[RoamNotes: Scheme Debugger Architectures]]

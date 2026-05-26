@@ -264,6 +264,107 @@ Module authors MUST prefix their definitions with the module name:
 
 `mae pkg doctor` warns about unprefixed definitions.
 
+## R7RS Libraries
+
+mae-scheme supports R7RS `define-library` for structured code organization.
+All editor primitives are available as globals (no import needed), but libraries
+provide encapsulation for reusable code:
+
+```scheme
+(define-library (my-utils)
+  (import (scheme base))
+  (export count-words format-size)
+  (begin
+    (define (count-words str)
+      (length (string-split str " ")))
+    (define (format-size bytes)
+      (cond
+        ((> bytes 1048576) (string-append (number->string (/ bytes 1048576)) "MB"))
+        ((> bytes 1024) (string-append (number->string (/ bytes 1024)) "KB"))
+        (else (string-append (number->string bytes) "B"))))))
+```
+
+Use from another file:
+
+```scheme
+(import (my-utils))
+(message (string-append "Words: " (number->string (count-words (buffer-string)))))
+```
+
+### Built-in Libraries
+
+| Library | Purpose |
+|---------|---------|
+| `(scheme base)` | R7RS base language |
+| `(scheme write)` | `display`, `write`, `newline` |
+| `(scheme char)` | Character predicates and case conversion |
+| `(scheme cxr)` | `caaar` through `cddddr` |
+| `(mae async)` | Yield-based async: `sleep-ms`, `wait-for-file`, `wait-until` |
+
+## Async / Yield
+
+mae-scheme uses cooperative yielding for blocking operations. When a function
+yields, control returns to the editor event loop (UI stays responsive), and
+execution resumes when the condition is met:
+
+```scheme
+;; Sleep without blocking the event loop
+(sleep-ms 1000)
+
+;; Wait for a file to appear (with timeout)
+(wait-for-file "/tmp/output.json" 5000)
+
+;; Wait until a condition is true
+(wait-until (lambda () (file-exists? "/tmp/ready")) 3000)
+```
+
+These functions are available as globals. For explicit library import:
+`(import (mae async))`.
+
+## Introspection
+
+Inspect the runtime from Scheme:
+
+```scheme
+;; Procedure metadata
+(procedure-arity car)           ; => "1"
+(procedure-documentation car)   ; => "Return the first element of a pair"
+(procedure-name car)            ; => "car"
+
+;; GC / runtime stats (alist)
+(gc-stats)      ; => ((eval-count . 42) (collections . 3) ...)
+(gc-collect!)   ; Force a GC cycle
+
+;; Docstrings on user functions (first string in body)
+(define (greet name)
+  "Greet a user by name."
+  (string-append "Hello, " name "!"))
+
+(procedure-documentation greet)  ; => "Greet a user by name."
+```
+
+## Debugging Scheme Code
+
+MAE includes a built-in DAP adapter for Scheme. Set breakpoints and step
+through `.scm` files:
+
+```
+:debug-start scheme path/to/file.scm
+```
+
+Features:
+- **Breakpoints** at source lines (set via debug panel or `:debug-toggle-breakpoint`)
+- **Step modes**: step-in, step-over, step-out
+- **Frame inspection**: locals, upvalues, call stack
+- **Eval in context**: evaluate expressions at a breakpoint
+
+The Scheme LSP provides IDE support for `.scm` files:
+- **Completion**: R7RS keywords + all registered functions + user globals
+- **Hover**: docstrings with arity display
+- **Diagnostics**: syntax and compilation errors with source locations
+- **Go-to-definition**: jump to user-defined function source
+- **Signature help**: parameter names and arity
+
 ## Design Philosophy
 
 1. **Composition over inheritance** — register commands, not subclasses
@@ -306,6 +407,7 @@ C functions for buffer operations.
 | `:describe-key` | `SPC h k` | What command a key is bound to |
 | `:describe-command` | `SPC h c` | Command documentation |
 | `:describe-option` | `SPC h o` | All option values |
+| `:describe-configuration` | — | Health report: config.toml + init.scm validation |
 
 ## Related KB Nodes
 
