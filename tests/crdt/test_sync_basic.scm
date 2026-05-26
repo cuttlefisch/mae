@@ -5,28 +5,13 @@
 
 (describe-group "CRDT sync basics"
   (lambda ()
-    (it-test "setup clean buffer"
+    (it-test "enable sync, insert, and verify"
       (lambda ()
-        (create-buffer "*test-sync-basic*")))
-
-    (it-test "enable sync on buffer"
-      (lambda ()
-        (buffer-enable-sync 1)))
-
-    (it-test "sync is enabled"
-      (lambda ()
-        (should (buffer-sync-enabled?))))
-
-    (it-test "insert generates text in buffer"
-      (lambda ()
-        (buffer-insert "hello")))
-
-    (it-test "buffer has inserted text"
-      (lambda ()
-        (should-equal (buffer-string) "hello")))
-
-    (it-test "sync doc matches rope content"
-      (lambda ()
+        (create-buffer "*test-sync-basic*")
+        (buffer-enable-sync 1)
+        (should (buffer-sync-enabled?))
+        (buffer-insert "hello")
+        (should-equal (buffer-string) "hello")
         (should-equal (buffer-sync-content) (buffer-string))))
 
     (it-test "drain returns base64 updates"
@@ -36,8 +21,5 @@
 
     (it-test "disable sync"
       (lambda ()
-        (buffer-disable-sync)))
-
-    (it-test "sync is disabled after disable"
-      (lambda ()
+        (buffer-disable-sync)
         (should-not (buffer-sync-enabled?))))))

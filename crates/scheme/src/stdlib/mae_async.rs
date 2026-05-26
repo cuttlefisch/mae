@@ -21,7 +21,12 @@ use crate::library::{Library, LibraryName};
 use crate::vm::Vm;
 
 /// Exported function names from this library.
-const EXPORTS: &[&str] = &["sleep-ms", "wait-for-file", "current-milliseconds"];
+const EXPORTS: &[&str] = &[
+    "sleep-ms",
+    "wait-for-file",
+    "current-milliseconds",
+    "flush!",
+];
 
 /// Register the `(mae async)` library in the VM's library registry.
 ///

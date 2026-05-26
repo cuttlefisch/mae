@@ -167,11 +167,6 @@ jobs:
 
   collab-e2e:
     name: collab / docker e2e
-    # DISABLED: Docker E2E requires Scheme async/yield for reliable cross-container
-    # coordination. Protocol correctness is covered by collab_e2e.rs (28 tests),
-    # CRDT Scheme tests (142), and collab-local Scheme tests (85).
-    # Re-enable after Phase 13 Scheme runtime.
-    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

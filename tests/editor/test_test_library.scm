@@ -152,13 +152,13 @@
     ;; --- cursor-row / cursor-col ---
     (it-test "cursor-row returns a number"
       (lambda ()
-        (should (number? (cursor-row)))))
+        (should (number? (test-cursor-row)))))
 
     (it-test "cursor-col returns a number"
       (lambda ()
-        (should (number? (cursor-col)))))
+        (should (number? (test-cursor-col)))))
 
     ;; --- status-message ---
     (it-test "status-message returns a string"
       (lambda ()
-        (should (string? (status-message)))))))
+        (should (string? (test-status-message)))))))

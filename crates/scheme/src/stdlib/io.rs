@@ -1858,6 +1858,14 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
+    // -- flush! (yield-based pending op flush) --
+    vm.register_fn(
+        "flush!",
+        "Flush pending ops and refresh editor state mid-eval (yields to host)",
+        Arity::Fixed(0),
+        |_args| Err(LispError::yield_flush()),
+    );
+
     // with-input-from-file / with-output-to-file are implemented in Scheme
     // (stdlib/base.rs bootstrap) using dynamic-wind + %set-current-input-port!.
 

@@ -2448,7 +2448,8 @@ impl SchemeRuntime {
             move |_args: &[Value]| Ok(Value::Int(max_chars)),
         );
 
-        let line_begin = buf.rope().line_to_char(win.cursor_row) as i64;
+        let clamped_row = win.cursor_row.min(buf.line_count().saturating_sub(1));
+        let line_begin = buf.rope().line_to_char(clamped_row) as i64;
         self.vm.register_fn(
             "line-beginning-position",
             "Start of current line",
@@ -2456,8 +2457,8 @@ impl SchemeRuntime {
             move |_args: &[Value]| Ok(Value::Int(line_begin)),
         );
 
-        let line_end = if win.cursor_row + 1 < buf.line_count() {
-            buf.rope().line_to_char(win.cursor_row + 1) as i64 - 1
+        let line_end = if clamped_row + 1 < buf.line_count() {
+            buf.rope().line_to_char(clamped_row + 1) as i64 - 1
         } else {
             buf.rope().len_chars() as i64
         };

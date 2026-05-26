@@ -40,6 +40,8 @@ pub enum YieldRequest {
     Sleep(Duration),
     /// Wait for a file to appear (path, timeout).
     WaitForFile(std::path::PathBuf, Duration),
+    /// Flush pending ops and refresh editor state mid-eval.
+    Flush,
 }
 
 /// A call frame on the VM stack.
@@ -468,6 +470,10 @@ impl Vm {
                             }
                             std::thread::sleep(Duration::from_millis(50));
                         }
+                    }
+                    YieldRequest::Flush => {
+                        // In blocking mode, flush is a no-op — there's no
+                        // host event loop to sync with.
                     }
                 }
                 self.stack.push(Value::Bool(true));
@@ -1126,6 +1132,9 @@ impl Vm {
                                 std::thread::sleep(Duration::from_millis(50));
                             }
                         }
+                        YieldRequest::Flush => {
+                            // No-op in blocking mode.
+                        }
                     }
                     self.stack.push(Value::Bool(true));
                 }
@@ -1143,6 +1152,7 @@ impl Vm {
             ErrorKind::Yield(YieldReason::WaitForFile(p, t)) => {
                 Ok(EvalResult::Yield(YieldRequest::WaitForFile(p, t)))
             }
+            ErrorKind::Yield(YieldReason::Flush) => Ok(EvalResult::Yield(YieldRequest::Flush)),
             _ => Err(err),
         }
     }

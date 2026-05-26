@@ -123,6 +123,9 @@ pub enum YieldReason {
     Sleep(std::time::Duration),
     /// Wait for a file to appear on disk (path, timeout).
     WaitForFile(PathBuf, std::time::Duration),
+    /// Flush pending ops and refresh state mid-eval.
+    /// Used by tests to perform multiple mutations in a single test step.
+    Flush,
 }
 
 impl LispError {
@@ -251,6 +254,16 @@ impl LispError {
         }
     }
 
+    /// Create a yield request to flush pending ops.
+    pub fn yield_flush() -> Self {
+        LispError {
+            kind: ErrorKind::Yield(YieldReason::Flush),
+            location: None,
+            stack_trace: Vec::new(),
+            error_value: None,
+        }
+    }
+
     /// Create a yield request for file waiting.
     pub fn yield_wait_for_file(path: PathBuf, timeout: std::time::Duration) -> Self {
         LispError {
@@ -312,6 +325,7 @@ impl LispError {
                 YieldReason::WaitForFile(p, t) => {
                     format!("yield: wait-for-file {} ({}ms)", p.display(), t.as_millis())
                 }
+                YieldReason::Flush => "yield: flush".to_string(),
             },
         }
     }

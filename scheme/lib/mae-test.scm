@@ -233,6 +233,96 @@
         "PASS"
         (string-append "FAIL:" msg))))
 
+;; --- Auto-flush wrappers ---
+;;
+;; In the real editor, the event loop calls apply_to_editor after every
+;; Scheme eval, so buffer mutations take effect automatically. In tests,
+;; the runner simulates this between it-test steps. To allow multiple
+;; mutations within a single test, we wrap mutating functions to yield
+;; (flush!) after each call. The test runner catches the yield, applies
+;; pending ops, refreshes state, and resumes — making mutations appear
+;; immediate.
+;;
+;; This only affects test mode. In the real editor, flush! is a no-op
+;; yield that blocks and resumes immediately.
+
+(define %raw-buffer-insert buffer-insert)
+(define (buffer-insert text) (%raw-buffer-insert text) (flush!))
+
+(define %raw-goto-char goto-char)
+(define (goto-char offset) (%raw-goto-char offset) (flush!))
+
+(define %raw-cursor-goto cursor-goto)
+(define (cursor-goto row col) (%raw-cursor-goto row col) (flush!))
+
+(define %raw-create-buffer create-buffer)
+(define (create-buffer name) (%raw-create-buffer name) (flush!))
+
+(define %raw-run-command run-command)
+(define (run-command name) (%raw-run-command name) (flush!))
+
+(define %raw-execute-ex execute-ex)
+(define (execute-ex cmd) (%raw-execute-ex cmd) (flush!))
+
+(define %raw-open-file open-file)
+(define (open-file path) (%raw-open-file path) (flush!))
+
+(define %raw-buffer-delete-range buffer-delete-range)
+(define (buffer-delete-range start end) (%raw-buffer-delete-range start end) (flush!))
+
+(define %raw-buffer-replace-range buffer-replace-range)
+(define (buffer-replace-range start end text) (%raw-buffer-replace-range start end text) (flush!))
+
+(define %raw-buffer-undo buffer-undo)
+(define (buffer-undo) (%raw-buffer-undo) (flush!))
+
+(define %raw-buffer-redo buffer-redo)
+(define (buffer-redo) (%raw-buffer-redo) (flush!))
+
+(define %raw-buffer-undo-boundary buffer-undo-boundary)
+(define (buffer-undo-boundary) (%raw-buffer-undo-boundary) (flush!))
+
+(define %raw-buffer-enable-sync buffer-enable-sync)
+(define (buffer-enable-sync client-id) (%raw-buffer-enable-sync client-id) (flush!))
+
+(define %raw-buffer-disable-sync buffer-disable-sync)
+(define (buffer-disable-sync) (%raw-buffer-disable-sync) (flush!))
+
+(define %raw-switch-to-buffer switch-to-buffer)
+(define (switch-to-buffer idx) (%raw-switch-to-buffer idx) (flush!))
+
+(define %raw-set-option! set-option!)
+(define (set-option! key val) (%raw-set-option! key val) (flush!))
+
+(define %raw-add-hook! add-hook!)
+(define (add-hook! hook fn) (%raw-add-hook! hook fn) (flush!))
+
+(define %raw-remove-hook! remove-hook!)
+(define (remove-hook! hook fn) (%raw-remove-hook! hook fn) (flush!))
+
+(define %raw-advice-add! advice-add!)
+(define (advice-add! cmd kind fn) (%raw-advice-add! cmd kind fn) (flush!))
+
+(define %raw-advice-remove! advice-remove!)
+(define (advice-remove! cmd fn) (%raw-advice-remove! cmd fn) (flush!))
+
+(define %raw-buffer-load-sync-state buffer-load-sync-state)
+(define (buffer-load-sync-state state client-id)
+  (%raw-buffer-load-sync-state state client-id) (flush!))
+
+(define %raw-buffer-encode-state-vector buffer-encode-state-vector)
+(define (buffer-encode-state-vector) (%raw-buffer-encode-state-vector) (flush!))
+
+(define %raw-buffer-compute-diff buffer-compute-diff)
+(define (buffer-compute-diff sv) (%raw-buffer-compute-diff sv) (flush!))
+
+(define %raw-buffer-reconcile-to buffer-reconcile-to)
+(define (buffer-reconcile-to target) (%raw-buffer-reconcile-to target) (flush!))
+
+(define %raw-buffer-apply-update buffer-apply-update)
+(define (buffer-apply-update buf-name update)
+  (%raw-buffer-apply-update buf-name update) (flush!))
+
 ;; (run-tests) — execute all registered tests, print TAP output, exit.
 (define (run-tests)
   (define total (length *test-registry*))

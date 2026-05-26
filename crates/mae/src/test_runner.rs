@@ -318,6 +318,20 @@ async fn eval_with_yields(
                             tokio::time::sleep(poll_interval).await;
                         }
                     }
+                    YieldRequest::Flush => {
+                        // Apply pending ops (buffer-insert, create-buffer, etc.)
+                        // and refresh editor state so subsequent reads see updates.
+                        scheme.apply_to_editor(editor);
+                        process_side_effects(
+                            editor,
+                            scheme,
+                            collab_event_rx,
+                            collab_command_tx,
+                            broadcaster,
+                        )
+                        .await;
+                        scheme.inject_editor_state(editor);
+                    }
                 }
                 // Resume the VM after handling the yield
                 eval_result = match scheme.resume_yield(mae_scheme::value::Value::Bool(true)) {
