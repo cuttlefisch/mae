@@ -94,11 +94,12 @@ file acts as a gate:
 | `/sync/client-a-done` | client-a | — | client-a exited cleanly |
 | `/sync/client-b-done` | client-b | — | client-b exited cleanly |
 
-**Important**: `sleep-ms` is the primary coordination mechanism, NOT
-`wait-for-file`. The Scheme test runner processes `sleep-ms` between test
-steps and drains collab events during the sleep. `wait-for-file` uses
-`wait-until` which polls inside a single eval — it does NOT drain collab
-events between polls.
+**Coordination primitives**: Both `sleep-ms` and `wait-for-file` yield to
+the host event loop, which drains collab events during the wait. `wait-until`
+also works correctly — it calls `sleep-ms` between polls, yielding each time.
+In Docker E2E tests the real event loop processes yields natively. In headless
+tests (`mae --test`) the test runner handles yields by calling
+`apply_to_editor` + `inject_editor_state` between each yield/resume cycle.
 
 ## Container Lifecycle
 
