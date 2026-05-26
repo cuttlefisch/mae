@@ -3392,13 +3392,24 @@ fn edge_error_object_full() {
 
 #[test]
 fn edge_with_exception_handler() {
-    // Basic usage
+    // R7RS §6.11: with-exception-handler + raise-continuable allows handler to return
     is_int(
         "(with-exception-handler
            (lambda (e) 42)
-           (lambda () (raise \"boom\")))",
+           (lambda () (raise-continuable \"boom\")))",
         42,
     );
+
+    // R7RS §6.11: with-exception-handler + raise (non-continuable) —
+    // handler that returns is an error
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm.eval(
+        "(with-exception-handler
+           (lambda (e) 42)
+           (lambda () (raise \"boom\")))",
+    );
+    assert!(result.is_err(), "raise handler returned should be an error");
 }
 
 // --- floor/ and truncate/ (§6.2.6) ---
@@ -3472,18 +3483,22 @@ fn edge_letrec_syntax() {
 
 #[test]
 fn edge_with_exception_handler_error_object() {
-    // Handler receives an error object from (error ...)
+    // Handler receives an error object from (error ...) via guard
+    is_true(
+        "(guard (e (#t (error-object? e)))
+           (error \"test\" \"msg\"))",
+    );
+    // Handler can extract message via guard
+    is_str(
+        "(guard (e (#t (error-object-message e)))
+           (error \"oops\"))",
+        "oops",
+    );
+    // with-exception-handler + raise-continuable: handler receives exception
     is_true(
         "(with-exception-handler
-           (lambda (e) (error-object? e))
-           (lambda () (error \"test\" \"msg\")))",
-    );
-    // Handler can extract message
-    is_str(
-        "(with-exception-handler
-           (lambda (e) (error-object-message e))
-           (lambda () (error \"oops\")))",
-        "oops",
+           (lambda (e) (string? e))
+           (lambda () (raise-continuable \"hello\")))",
     );
 }
 
@@ -5936,15 +5951,28 @@ fn s6_10_values_comprehensive() {
 
 #[test]
 fn s6_11_with_exception_handler_comprehensive() {
-    // with-exception-handler catches raised values
+    // with-exception-handler + raise-continuable: handler can return
     is_int(
         "(with-exception-handler
            (lambda (e) 42)
-           (lambda () (raise 'boom)))",
+           (lambda () (raise-continuable 'boom)))",
         42,
     );
 
-    // guard is built on with-exception-handler
+    // with-exception-handler + raise: handler returning is an error
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    assert!(
+        vm.eval(
+            "(with-exception-handler
+               (lambda (e) 42)
+               (lambda () (raise 'boom)))"
+        )
+        .is_err(),
+        "raise handler returned should be an error"
+    );
+
+    // guard catches raised values and runs clauses
     is_int(
         "(guard (exn
                  ((symbol? exn) 1)
@@ -8820,5 +8848,350 @@ fn audit_parameterize_restores_on_exception() {
                   (error \"boom\")))
               (p))",
         10,
+    );
+}
+
+// ============================================================
+// Audit round 3: integer overflow promotion
+// ============================================================
+
+#[test]
+fn audit_addition_overflow_promotes_to_float() {
+    // i64::MAX + 1 should promote to float, not panic
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm.eval("(+ 9223372036854775807 1)").unwrap();
+    match result {
+        Value::Float(f) => assert!(f > 9.2e18, "expected large float, got {f}"),
+        other => panic!("expected Float, got {other:?}"),
+    }
+}
+
+#[test]
+fn audit_addition_no_overflow_stays_exact() {
+    // Normal addition should stay as integer
+    is_int("(+ 1000000 2000000)", 3000000);
+    is_int("(+ -5 10)", 5);
+    is_int("(+ 0 0)", 0);
+}
+
+#[test]
+fn audit_multiplication_overflow_promotes_to_float() {
+    // i64::MAX * 2 should promote to float, not panic
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm.eval("(* 9223372036854775807 2)").unwrap();
+    match result {
+        Value::Float(f) => assert!(f > 1.8e19, "expected large float, got {f}"),
+        other => panic!("expected Float, got {other:?}"),
+    }
+}
+
+#[test]
+fn audit_multiplication_no_overflow_stays_exact() {
+    is_int("(* 1000 2000)", 2000000);
+    is_int("(* -3 7)", -21);
+    is_int("(* 0 9223372036854775807)", 0);
+}
+
+#[test]
+fn audit_square_overflow_promotes_to_float() {
+    // (square large-int) should promote, not panic
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm.eval("(square 9223372036854775807)").unwrap();
+    match result {
+        Value::Float(f) => assert!(f > 8.5e37, "expected large float, got {f}"),
+        other => panic!("expected Float, got {other:?}"),
+    }
+}
+
+#[test]
+fn audit_square_no_overflow_stays_exact() {
+    is_int("(square 10)", 100);
+    is_int("(square -7)", 49);
+    is_int("(square 0)", 0);
+}
+
+// ============================================================
+// Audit round 3: call-with-values 0-value case
+// ============================================================
+
+#[test]
+fn audit_call_with_values_zero_values() {
+    // Producer returns 0 values, consumer takes 0 args
+    is_int("(call-with-values (lambda () (values)) (lambda () 42))", 42);
+}
+
+#[test]
+fn audit_call_with_values_single_non_values() {
+    // Producer returns a single value (not via values)
+    is_int("(call-with-values (lambda () 5) (lambda (x) (* x 10)))", 50);
+}
+
+#[test]
+fn audit_call_with_values_multiple() {
+    // Producer returns multiple values
+    is_int(
+        "(call-with-values (lambda () (values 10 20 30)) (lambda (a b c) (+ a b c)))",
+        60,
+    );
+}
+
+// ============================================================
+// Audit round 3: let*-values sequential binding
+// ============================================================
+
+#[test]
+fn audit_let_star_values_sequential() {
+    // Second binding should see first binding's values
+    is_int(
+        "(let*-values (((a b) (values 3 4))
+                       ((c) (values (+ a b))))
+           c)",
+        7,
+    );
+}
+
+#[test]
+fn audit_let_star_values_three_bindings() {
+    // Three sequential bindings, each using previous
+    is_int(
+        "(let*-values (((x) (values 2))
+                       ((y) (values (* x 3)))
+                       ((z) (values (+ x y))))
+           z)",
+        8,
+    );
+}
+
+#[test]
+fn audit_let_star_values_single_binding() {
+    // Degenerate case: single binding (same as let-values)
+    is_int(
+        "(let*-values (((a b) (values 10 20)))
+           (- b a))",
+        10,
+    );
+}
+
+// ============================================================
+// Audit round 3: case with => arrow clauses (R7RS §4.2.1)
+// ============================================================
+
+#[test]
+fn audit_case_arrow_basic() {
+    // (case key ((datum ...) => proc)) — proc receives the key
+    is_int(
+        "(case (* 2 3)
+           ((2 3 5 7) 'prime)
+           ((1 4 6 8 9) => (lambda (x) (* x 10))))",
+        60,
+    );
+}
+
+#[test]
+fn audit_case_else_arrow() {
+    // (case key (else => proc)) — proc receives the key
+    is_int(
+        "(case 99
+           ((1 2 3) 'small)
+           (else => (lambda (x) (+ x 1))))",
+        100,
+    );
+}
+
+#[test]
+fn audit_case_arrow_no_match_falls_through() {
+    // No match with no else should return void
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm
+        .eval(
+            "(case 42
+               ((1 2 3) => (lambda (x) x)))",
+        )
+        .unwrap();
+    // Unmatched case returns void
+    assert!(
+        matches!(result, Value::Void),
+        "expected Void for unmatched case, got {result:?}"
+    );
+}
+
+#[test]
+fn audit_case_mixed_arrow_and_normal() {
+    // Mix arrow and normal clauses
+    is_int(
+        "(case 5
+           ((1 2) 'low)
+           ((5 6) => (lambda (x) (* x x)))
+           (else 0))",
+        25,
+    );
+}
+
+// ============================================================
+// Audit round 3: raise-continuable
+// ============================================================
+
+#[test]
+fn audit_raise_continuable_returns_handler_value() {
+    // raise-continuable: handler's return value becomes result
+    is_int(
+        "(with-exception-handler
+           (lambda (exn) 42)
+           (lambda () (raise-continuable \"oops\")))",
+        42,
+    );
+}
+
+#[test]
+fn audit_raise_continuable_passes_exception_to_handler() {
+    // The exception value should reach the handler
+    is_true(
+        "(with-exception-handler
+           (lambda (exn) (string? exn))
+           (lambda () (raise-continuable \"test-value\")))",
+    );
+}
+
+// ============================================================
+// Audit round 3: parameterize dynamic-wind escape safety
+// ============================================================
+
+#[test]
+fn audit_parameterize_restores_on_call_cc_escape() {
+    // parameterize should restore when escaping via call/cc
+    is_int(
+        "(let ((p (make-parameter 10)))
+           (call-with-current-continuation
+             (lambda (k)
+               (parameterize ((p 99))
+                 (k (p)))))
+           (p))",
+        10,
+    );
+}
+
+#[test]
+fn audit_parameterize_nested() {
+    // Nested parameterize should work correctly
+    is_int(
+        "(let ((p (make-parameter 1)))
+           (parameterize ((p 2))
+             (parameterize ((p 3))
+               (p))))",
+        3,
+    );
+    // After both parameterize, original value restored
+    is_int(
+        "(let ((p (make-parameter 1)))
+           (parameterize ((p 2))
+             (parameterize ((p 3))
+               'ignore))
+           (p))",
+        1,
+    );
+}
+
+// ============================================================
+// Audit round 3: raise vs raise-continuable (R7RS §6.11)
+// ============================================================
+
+#[test]
+fn audit_raise_non_continuable_handler_returns_is_error() {
+    // R7RS §6.11: If handler returns from non-continuable raise, it's an error
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm.eval(
+        "(with-exception-handler
+           (lambda (e) 'returned)
+           (lambda () (raise 'boom)))",
+    );
+    assert!(
+        result.is_err(),
+        "non-continuable raise: handler return should be an error"
+    );
+}
+
+#[test]
+fn audit_raise_continuable_handler_returns_value() {
+    // R7RS §6.11: raise-continuable allows handler to return a value
+    is_int(
+        "(with-exception-handler
+           (lambda (e) (* e 10))
+           (lambda () (+ 1 (raise-continuable 5))))",
+        51,
+    );
+}
+
+#[test]
+fn audit_raise_continuable_handler_sees_exception() {
+    // Handler receives the exception object
+    is_true(
+        "(with-exception-handler
+           (lambda (e) (symbol? e))
+           (lambda () (raise-continuable 'test-sym)))",
+    );
+}
+
+#[test]
+fn audit_guard_catches_raise() {
+    // guard works with raise (unwind-based)
+    is_int(
+        "(guard (exn
+                 ((string? exn) 1)
+                 ((symbol? exn) 2))
+           (raise 'test))",
+        2,
+    );
+}
+
+#[test]
+fn audit_guard_catches_error() {
+    // guard works with error (which uses raise internally)
+    is_int(
+        "(guard (exn (#t 99))
+           (error \"fail\"))",
+        99,
+    );
+}
+
+#[test]
+fn audit_with_exception_handler_escape_via_call_cc() {
+    // Correct pattern: handler escapes via continuation
+    is_int(
+        "(call-with-current-continuation
+           (lambda (exit)
+             (with-exception-handler
+               (lambda (e) (exit 42))
+               (lambda () (raise 'boom)))))",
+        42,
+    );
+}
+
+#[test]
+fn audit_nested_handlers() {
+    // Inner handler escapes to outer guard
+    is_int(
+        "(guard (exn (#t 99))
+           (with-exception-handler
+             (lambda (e) (raise (string-append \"re-\" (symbol->string e))))
+             (lambda () (raise 'boom))))",
+        99,
+    );
+}
+
+#[test]
+fn audit_raise_continuable_resumes_execution() {
+    // After raise-continuable, execution continues at the call site
+    is_int(
+        "(with-exception-handler
+           (lambda (e) 10)
+           (lambda ()
+             (let ((x (raise-continuable 'ignored)))
+               (+ x 5))))",
+        15,
     );
 }

@@ -77,6 +77,13 @@ pub enum Op {
     PushWinder,
     /// Pop the current dynamic-wind extent from the wind stack.
     PopWinder,
+    /// Push a closure-based exception handler (for `with-exception-handler`).
+    /// Stack: [handler-closure] → []
+    /// Unlike PushHandler (guard), this handler does NOT unwind on raise.
+    /// Instead, the handler is called and its return value is available.
+    PushClosureHandler,
+    /// Pop the closure-based exception handler.
+    PopClosureHandler,
     /// No-op / placeholder.
     Nop,
 }
@@ -322,6 +329,10 @@ impl Compiler {
                         "define-syntax" => return self.compile_define_syntax(&items),
                         "guard" => return self.compile_guard(&items, tail),
                         "raise" => return self.compile_raise(&items),
+                        "raise-continuable" => return self.compile_raise_continuable(&items),
+                        "%with-closure-handler" => {
+                            return self.compile_closure_handler(&items, tail)
+                        }
                         "with-exception-handler" => {
                             return self.compile_with_exception_handler(&items, tail)
                         }
@@ -1270,11 +1281,43 @@ impl Compiler {
     }
 
     /// Compile `(let*-values ...)` — sequential version of let-values.
-    /// Same as let-values since each binding is visible to subsequent ones.
+    /// Each binding is visible to subsequent ones (R7RS §4.2.2).
+    /// Desugars to nested let-values.
     fn compile_let_star_values(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
-        // let*-values has the same semantics as let-values when each binding
-        // introduces independent variables (which they do in our desugaring)
-        self.compile_let_values(items, tail)
+        if items.len() < 3 {
+            return Err(LispError::syntax(
+                "let*-values requires bindings and body",
+                "",
+            ));
+        }
+
+        let bindings = items[1]
+            .to_list()
+            .ok_or_else(|| LispError::syntax("let*-values bindings must be a list", ""))?;
+
+        if bindings.is_empty() {
+            // No bindings: just compile the body
+            return self.compile_begin(&items[2..], tail);
+        }
+
+        if bindings.len() == 1 {
+            // Single binding: same as let-values
+            return self.compile_let_values(items, tail);
+        }
+
+        // Multiple bindings: nest let-values
+        // (let*-values ((f1 e1) (f2 e2) ...) body)
+        // → (let-values ((f1 e1))
+        //     (let*-values ((f2 e2) ...) body))
+        let first_binding = Value::list(vec![bindings[0].clone()]);
+        let rest_bindings = Value::list(bindings[1..].to_vec());
+        let mut inner = vec![Value::symbol("let*-values"), rest_bindings];
+        inner.extend(items[2..].iter().cloned());
+        let inner_expr = Value::list(inner);
+
+        let outer = Value::list(vec![Value::symbol("let-values"), first_binding, inner_expr]);
+        let items_vec = outer.to_vec().unwrap();
+        self.compile_let_values(&items_vec, tail)
     }
 
     /// Compile `(let-syntax ((name transformer) ...) body ...)` and
@@ -1498,6 +1541,12 @@ impl Compiler {
         //   (if (pair? __cwv_tmp)
         //       (apply consumer __cwv_tmp)
         //       (consumer __cwv_tmp)))
+        // (let ((__cwv_tmp (producer)))
+        //   (if (pair? __cwv_tmp)
+        //       (apply consumer __cwv_tmp)
+        //       (if (null? __cwv_tmp)
+        //           (consumer)          ; 0 values
+        //           (consumer __cwv_tmp)))) ; 1 value
         let tmp = Value::symbol("__cwv_tmp");
         let desugared = Value::list(vec![
             Value::symbol("let"),
@@ -1509,7 +1558,12 @@ impl Compiler {
                 Value::symbol("if"),
                 Value::list(vec![Value::symbol("pair?"), tmp.clone()]),
                 Value::list(vec![Value::symbol("apply"), consumer.clone(), tmp.clone()]),
-                Value::list(vec![consumer.clone(), tmp]),
+                Value::list(vec![
+                    Value::symbol("if"),
+                    Value::list(vec![Value::symbol("null?"), tmp.clone()]),
+                    Value::list(vec![consumer.clone()]),
+                    Value::list(vec![consumer.clone(), tmp]),
+                ]),
             ]),
         ]);
         self.compile_expr(&desugared, tail)
@@ -2165,6 +2219,17 @@ impl Compiler {
 
             if let Value::Symbol(s) = &parts[0] {
                 if s.name() == "else" {
+                    // Check for (else => proc) — R7RS §4.2.1
+                    if parts.len() == 3 {
+                        if let Value::Symbol(arrow) = &parts[1] {
+                            if arrow.name() == "=>" {
+                                // (else => proc) → (else (proc __case_key__))
+                                let call = Value::list(vec![parts[2].clone(), key_sym.clone()]);
+                                cond_clauses.push(Value::list(vec![Value::symbol("else"), call]));
+                                break;
+                            }
+                        }
+                    }
                     cond_clauses.push(clause.clone());
                     break;
                 }
@@ -2192,6 +2257,17 @@ impl Compiler {
                 }
                 Value::list(or_parts)
             };
+
+            // Check for ((datum ...) => proc) — R7RS §4.2.1
+            if parts.len() == 3 {
+                if let Value::Symbol(arrow) = &parts[1] {
+                    if arrow.name() == "=>" {
+                        let call = Value::list(vec![parts[2].clone(), key_sym.clone()]);
+                        cond_clauses.push(Value::list(vec![test, call]));
+                        continue;
+                    }
+                }
+            }
 
             let mut cond_clause = vec![test];
             cond_clause.extend(parts[1..].iter().cloned());
@@ -2740,9 +2816,74 @@ impl Compiler {
         Ok(())
     }
 
+    /// Compile `(raise-continuable obj)` — R7RS §6.11.
+    ///
+    /// Desugars to `(raise (vector 'continuable obj))`.
+    /// The `with-exception-handler` wrapper detects the `continuable` tag
+    /// and allows the handler's return value to flow back (Chibi pattern).
+    fn compile_raise_continuable(&mut self, items: &[Value]) -> Result<(), LispError> {
+        if items.len() != 2 {
+            return Err(LispError::syntax(
+                "raise-continuable requires exactly 1 argument",
+                "",
+            ));
+        }
+        // Desugar: (raise (vector 'continuable obj))
+        let desugared = Value::list(vec![
+            Value::symbol("raise"),
+            Value::list(vec![
+                Value::symbol("vector"),
+                Value::list(vec![Value::symbol("quote"), Value::symbol("continuable")]),
+                items[1].clone(),
+            ]),
+        ]);
+        self.compile_expr(&desugared, false)
+    }
+
+    /// Compile `(%with-closure-handler wrapper-closure thunk)`.
+    /// Internal form: pushes wrapper as closure handler, calls thunk, pops handler.
+    fn compile_closure_handler(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
+        if items.len() != 3 {
+            return Err(LispError::syntax(
+                "%with-closure-handler requires wrapper and thunk",
+                "",
+            ));
+        }
+
+        // Compile wrapper closure and push onto handler stack
+        self.compile_expr(&items[1], false)?;
+        self.emit(Op::PushClosureHandler);
+
+        // Compile (thunk) — call the thunk
+        self.compile_expr(&items[2], false)?;
+        self.emit(Op::Call(0));
+
+        // Pop handler after thunk completes normally
+        self.emit(Op::PopClosureHandler);
+
+        if tail {
+            self.emit(Op::Return);
+        }
+
+        Ok(())
+    }
+
     /// Compile `(with-exception-handler handler thunk)` — R7RS §6.11.
     ///
-    /// Desugars to: `(let ((%h handler)) (guard (%e (#t (%h %e))) (thunk)))`
+    /// Uses the VM's closure handler stack. The handler closure is pushed
+    /// onto the unified handler stack (alongside guard handlers). When
+    /// `raise` is called, the VM pops the top handler — if it's a closure
+    /// handler, it calls the function with the exception.
+    ///
+    /// The continuable/non-continuable distinction is handled by tagging:
+    /// `raise-continuable` wraps the exception as `#(continuable <exn>)`.
+    /// This wrapper installs a handler that:
+    /// - For continuable exceptions: unwraps and calls the user handler
+    /// - For non-continuable exceptions: calls the user handler, then raises
+    ///   an error if the handler returns
+    ///
+    /// Following Chibi-Scheme's approach, but at the VM level instead of
+    /// Scheme level, for proper continuation semantics.
     fn compile_with_exception_handler(
         &mut self,
         items: &[Value],
@@ -2755,28 +2896,86 @@ impl Compiler {
             ));
         }
 
-        // Desugar to: (let ((%handler <handler-expr>))
-        //               (guard (%exn (#t (%handler %exn)))
-        //                 (<thunk-expr>)))
-        let handler_sym = Value::symbol("%weh-handler");
-        let exn_sym = Value::symbol("%weh-exn");
+        // Build a wrapper closure that distinguishes continuable/non-continuable.
+        // (lambda (%exn)
+        //   (if (and (vector? %exn) (= (vector-length %exn) 2)
+        //            (eq? (vector-ref %exn 0) 'continuable))
+        //       (%h (vector-ref %exn 1))          ; continuable: return handler result
+        //       (begin (%h %exn)                   ; non-continuable: call handler
+        //              (error "exception handler returned"))))
+        let h = Value::symbol("%weh-h");
+        let exn = Value::symbol("%weh-exn");
+
+        let is_continuable = Value::list(vec![
+            Value::symbol("and"),
+            Value::list(vec![Value::symbol("vector?"), exn.clone()]),
+            Value::list(vec![
+                Value::symbol("="),
+                Value::list(vec![Value::symbol("vector-length"), exn.clone()]),
+                Value::Int(2),
+            ]),
+            Value::list(vec![
+                Value::symbol("eq?"),
+                Value::list(vec![
+                    Value::symbol("vector-ref"),
+                    exn.clone(),
+                    Value::Int(0),
+                ]),
+                Value::list(vec![Value::symbol("quote"), Value::symbol("continuable")]),
+            ]),
+        ]);
+
+        let continuable_body = Value::list(vec![
+            h.clone(),
+            Value::list(vec![
+                Value::symbol("vector-ref"),
+                exn.clone(),
+                Value::Int(1),
+            ]),
+        ]);
+
+        let non_continuable_body = Value::list(vec![
+            Value::symbol("begin"),
+            Value::list(vec![h.clone(), exn.clone()]),
+            Value::list(vec![
+                Value::symbol("error"),
+                Value::string("exception handler returned"),
+            ]),
+        ]);
+
+        let wrapper = Value::list(vec![
+            Value::symbol("lambda"),
+            Value::list(vec![exn.clone()]),
+            Value::list(vec![
+                Value::symbol("if"),
+                is_continuable,
+                continuable_body,
+                non_continuable_body,
+            ]),
+        ]);
+
+        // Desugar to:
+        // (let ((%weh-h handler))
+        //   <push-closure-handler wrapper>
+        //   (thunk)
+        //   <pop-closure-handler>)
+        //
+        // We compile this directly for precise control:
+        // 1. Compile handler → bind to local
+        // 2. Compile wrapper closure (captures handler local)
+        // 3. PushClosureHandler
+        // 4. Call thunk
+        // 5. PopClosureHandler
 
         let desugared = Value::list(vec![
             Value::symbol("let"),
-            Value::list(vec![Value::list(vec![
-                handler_sym.clone(),
-                items[1].clone(),
-            ])]),
+            Value::list(vec![Value::list(vec![h, items[1].clone()])]),
+            // We need a special form here. Let's use begin with embedded ops.
+            // Actually, simplest: wrap in a begin with the thunk call.
             Value::list(vec![
-                Value::symbol("guard"),
-                Value::list(vec![
-                    exn_sym.clone(),
-                    Value::list(vec![
-                        Value::Bool(true),
-                        Value::list(vec![handler_sym, exn_sym]),
-                    ]),
-                ]),
-                Value::list(vec![items[2].clone()]),
+                Value::symbol("%with-closure-handler"),
+                wrapper,
+                items[2].clone(),
             ]),
         ]);
 

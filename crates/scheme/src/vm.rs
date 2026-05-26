@@ -60,17 +60,28 @@ pub struct Frame {
     pub local_cells: HashMap<usize, Rc<RefCell<Value>>>,
 }
 
-/// An exception handler entry on the handler stack.
+/// An exception handler entry on the unified handler stack.
+///
+/// R7RS has two exception mechanisms that share one stack:
+/// - `guard`: unwinds to a handler offset (Guard variant)
+/// - `with-exception-handler`: calls a closure without unwinding (Closure variant)
+///
+/// Both `raise` and `raise-continuable` pop the top handler. The difference
+/// is in how they handle closure handlers: `raise-continuable` returns the
+/// handler's result, while `raise` errors if the handler returns.
 #[derive(Clone, Debug)]
-struct ExceptionHandler {
-    /// Code offset to jump to when an exception is raised.
-    handler_ip: usize,
-    /// Code ID of the frame containing the handler.
-    code_id: usize,
-    /// Stack depth at time of PushHandler (restore on exception).
-    stack_depth: usize,
-    /// Frame depth at time of PushHandler.
-    frame_depth: usize,
+enum ExceptionHandler {
+    /// Guard-based handler: unwinds stack/frames and jumps to handler code.
+    Guard {
+        handler_ip: usize,
+        code_id: usize,
+        stack_depth: usize,
+        frame_depth: usize,
+    },
+    /// Closure-based handler: calls the handler function with the exception.
+    /// Does NOT unwind — the handler runs in the current dynamic context
+    /// (with this handler popped, so re-raises reach outer handlers).
+    Closure(Value),
 }
 
 /// The virtual machine.
@@ -692,7 +703,7 @@ impl Vm {
                 Op::PushHandler(offset) => {
                     let frame = self.frames.last().unwrap();
                     let handler_ip = (frame.ip as i32 + offset) as usize;
-                    self.handlers.push(ExceptionHandler {
+                    self.handlers.push(ExceptionHandler::Guard {
                         handler_ip,
                         code_id: frame.code_id,
                         stack_depth: self.stack.len(),
@@ -700,31 +711,18 @@ impl Vm {
                     });
                 }
 
-                Op::PopHandler => {
+                Op::PopHandler | Op::PopClosureHandler => {
                     self.handlers.pop();
+                }
+
+                Op::PushClosureHandler => {
+                    let handler = self.stack.pop().unwrap_or(Value::Void);
+                    self.handlers.push(ExceptionHandler::Closure(handler));
                 }
 
                 Op::Raise => {
                     let exception = self.stack.pop().unwrap_or(Value::Void);
-                    if let Some(handler) = self.handlers.pop() {
-                        // Unwind stack and frames to handler's state
-                        self.stack.truncate(handler.stack_depth);
-                        self.frames.truncate(handler.frame_depth);
-                        // Push exception value for the handler code
-                        self.stack.push(exception);
-                        // Jump to handler
-                        if let Some(frame) = self.frames.last_mut() {
-                            frame.ip = handler.handler_ip;
-                            frame.code_id = handler.code_id;
-                        }
-                    } else {
-                        // No handler — convert to Rust error
-                        let msg = match &exception {
-                            Value::String(s) => s.to_string(),
-                            other => format!("{other}"),
-                        };
-                        return Err(LispError::internal(format!("unhandled exception: {msg}")));
-                    }
+                    self.dispatch_raise(exception)?;
                 }
 
                 Op::Values | Op::CallWithValues => {
@@ -769,44 +767,29 @@ impl Vm {
 
     /// Handle a Rust-level error by dispatching to exception handlers or propagating.
     fn handle_exception(&mut self, err: LispError) -> Result<(), LispError> {
-        if let Some(handler) = self.handlers.pop() {
-            // Unwind to handler state
-            self.stack.truncate(handler.stack_depth);
-            self.frames.truncate(handler.frame_depth);
-            // Push the error value (structured if available, synthesized for
-            // known error kinds, string fallback)
-            let exception = if let Some(v) = err.error_value.clone() {
-                *v
-            } else {
-                // Synthesize tagged error object for known error kinds
-                // so file-error? and read-error? work in guard clauses
-                use crate::lisp_error::ErrorKind;
-                let error_type = match &err.kind {
-                    ErrorKind::Read(_) => Some("read-error"),
-                    ErrorKind::Io { .. } => Some("file-error"),
-                    _ => None,
-                };
-                if let Some(etype) = error_type {
-                    Value::Vector(Rc::new(RefCell::new(vec![
-                        Value::symbol("error-object"),
-                        Value::string(err.message()),
-                        Value::string(etype),
-                        Value::Null,
-                    ])))
-                } else {
-                    Value::string(err.message())
-                }
-            };
-            self.stack.push(exception);
-            // Jump to handler code
-            if let Some(frame) = self.frames.last_mut() {
-                frame.ip = handler.handler_ip;
-                frame.code_id = handler.code_id;
-            }
-            Ok(())
+        // Build the exception value from the error
+        let exception = if let Some(v) = err.error_value.clone() {
+            *v
         } else {
-            Err(err)
-        }
+            use crate::lisp_error::ErrorKind;
+            let error_type = match &err.kind {
+                ErrorKind::Read(_) => Some("read-error"),
+                ErrorKind::Io { .. } => Some("file-error"),
+                _ => None,
+            };
+            if let Some(etype) = error_type {
+                Value::Vector(Rc::new(RefCell::new(vec![
+                    Value::symbol("error-object"),
+                    Value::string(err.message()),
+                    Value::string(etype),
+                    Value::Null,
+                ])))
+            } else {
+                Value::string(err.message())
+            }
+        };
+        // Use the same dispatch mechanism as Scheme-level raise
+        self.dispatch_raise(exception)
     }
 
     /// Handle function calls (both regular and tail calls).
@@ -996,15 +979,23 @@ impl Vm {
     /// Saves and restores the VM state around the call so it doesn't
     /// interfere with continuation restoration in progress.
     fn call_thunk(&mut self, thunk: &Value) -> Result<Value, LispError> {
+        self.call_thunk_with_args(thunk, &[])
+    }
+
+    /// Call a function with given arguments in a saved VM context.
+    fn call_thunk_with_args(&mut self, func: &Value, args: &[Value]) -> Result<Value, LispError> {
         // Save VM state
         let saved_stack = std::mem::take(&mut self.stack);
         let saved_frames = std::mem::take(&mut self.frames);
         let saved_handlers = std::mem::take(&mut self.handlers);
         let saved_winders = self.winders.clone();
 
-        // Set up for the thunk call: push function, then call with 0 args
-        self.stack.push(thunk.clone());
-        let result = self.do_call(0, false);
+        // Set up for the call: push function then args
+        self.stack.push(func.clone());
+        for arg in args {
+            self.stack.push(arg.clone());
+        }
+        let result = self.do_call(args.len(), false);
 
         // If the call set up frames (closure), run them
         let thunk_result = if result.is_ok() && !self.frames.is_empty() {
@@ -1020,6 +1011,89 @@ impl Vm {
         self.winders = saved_winders;
 
         thunk_result
+    }
+
+    /// Dispatch a raise or raise-continuable exception to handlers.
+    ///
+    /// R7RS §6.11: The handler is called with the remaining handler stack
+    /// (the closure handler was popped), so re-raises from the handler reach
+    /// outer handlers.
+    ///
+    /// For closure handlers, we call the handler in-line (via do_call) so that
+    /// re-raises and call/cc escapes work naturally. For non-continuable raise,
+    /// we wrap the handler call so that if the handler returns, a secondary
+    /// `&non-continuable` error is raised.
+    /// Dispatch an exception to the handler stack.
+    ///
+    /// Pops the top handler and dispatches:
+    /// - Guard: unwinds stack/frames and jumps to handler code
+    /// - Closure: calls the handler function with the exception value.
+    ///   The handler runs with this handler popped (so re-raises reach
+    ///   outer handlers). The handler's return value is pushed on the stack.
+    ///
+    /// For `raise` (non-continuable), the caller checks whether the exception
+    /// was tagged as continuable. `with-exception-handler` installs a wrapper
+    /// that calls `(error "exception handler returned")` if a non-continuable
+    /// handler returns. This follows the Chibi-Scheme pattern.
+    fn dispatch_raise(&mut self, exception: Value) -> Result<(), LispError> {
+        if let Some(handler) = self.handlers.pop() {
+            match handler {
+                ExceptionHandler::Guard {
+                    handler_ip,
+                    code_id,
+                    stack_depth,
+                    frame_depth,
+                } => {
+                    self.stack.truncate(stack_depth);
+                    self.frames.truncate(frame_depth);
+                    self.stack.push(exception);
+                    if let Some(frame) = self.frames.last_mut() {
+                        frame.ip = handler_ip;
+                        frame.code_id = code_id;
+                    }
+                    Ok(())
+                }
+                ExceptionHandler::Closure(func) => {
+                    // Call handler in-line. The handler runs with the current
+                    // handler stack (this closure handler already popped), so
+                    // re-raises from the handler reach outer handlers.
+                    //
+                    // We use call_thunk_with_args which saves/restores stack
+                    // and frames (isolation) but shares the handler stack.
+                    let saved_stack = std::mem::take(&mut self.stack);
+                    let saved_frames = std::mem::take(&mut self.frames);
+                    let saved_winders = self.winders.clone();
+
+                    self.stack.push(func);
+                    self.stack.push(exception);
+                    let call_result = self.do_call(1, false);
+
+                    let thunk_result = if call_result.is_ok() && !self.frames.is_empty() {
+                        self.run()
+                    } else {
+                        call_result.map(|_| self.stack.pop().unwrap_or(Value::Void))
+                    };
+
+                    self.stack = saved_stack;
+                    self.frames = saved_frames;
+                    self.winders = saved_winders;
+
+                    match thunk_result {
+                        Ok(result) => {
+                            self.stack.push(result);
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+            }
+        } else {
+            let msg = match &exception {
+                Value::String(s) => s.to_string(),
+                other => format!("{other}"),
+            };
+            Err(LispError::internal(format!("unhandled exception: {msg}")))
+        }
     }
 
     /// Get current stack trace for debugging.

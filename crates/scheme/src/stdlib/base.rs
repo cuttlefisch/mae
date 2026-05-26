@@ -183,7 +183,13 @@ fn register_arithmetic(vm: &mut Vm) {
                     if is_float {
                         float_sum += *n as f64;
                     } else {
-                        int_sum = int_sum.wrapping_add(*n);
+                        match int_sum.checked_add(*n) {
+                            Some(v) => int_sum = v,
+                            None => {
+                                float_sum = int_sum as f64 + *n as f64;
+                                is_float = true;
+                            }
+                        }
                     }
                 }
                 Value::Float(f) => {
@@ -241,7 +247,13 @@ fn register_arithmetic(vm: &mut Vm) {
                     if is_float {
                         float_prod *= *n as f64;
                     } else {
-                        int_prod = int_prod.wrapping_mul(*n);
+                        match int_prod.checked_mul(*n) {
+                            Some(v) => int_prod = v,
+                            None => {
+                                float_prod = int_prod as f64 * *n as f64;
+                                is_float = true;
+                            }
+                        }
                     }
                 }
                 Value::Float(f) => {
@@ -1366,7 +1378,10 @@ fn register_extra_numeric(vm: &mut Vm) {
         "Square a number",
         Arity::Fixed(1),
         |args| match &args[0] {
-            Value::Int(n) => Ok(Value::Int(n.wrapping_mul(*n))),
+            Value::Int(n) => match n.checked_mul(*n) {
+                Some(v) => Ok(Value::Int(v)),
+                None => Ok(Value::Float(*n as f64 * *n as f64)),
+            },
             Value::Float(f) => Ok(Value::Float(f * f)),
             _ => Err(LispError::type_error("number", format!("{}", args[0]))),
         },
@@ -1681,16 +1696,8 @@ fn register_exceptions(vm: &mut Vm) {
         Err(err)
     });
 
-    vm.register_fn(
-        "raise-continuable",
-        "Raise continuable exception",
-        Arity::Fixed(1),
-        |args| {
-            let mut err = LispError::user(format!("{}", args[0]), vec![]);
-            err.error_value = Some(Box::new(args[0].clone()));
-            Err(err)
-        },
-    );
+    // raise-continuable is compiled as a special form in the compiler.
+    // It wraps the exception as #(continuable <exn>) and raises it.
 
     vm.register_fn(
         "error-object-irritants",
