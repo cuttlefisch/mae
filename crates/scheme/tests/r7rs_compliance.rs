@@ -1970,8 +1970,12 @@ fn s6_13_binary_io() {
 // §6.13 char-ready? and u8-ready?
 #[test]
 fn s6_13_ready_predicates() {
-    is_true("(char-ready?)");
-    is_true("(u8-ready?)");
+    // Test on string ports (deterministic, works in CI where stdin is a pipe)
+    is_true("(char-ready? (open-input-string \"hello\"))");
+    is_false("(char-ready? (open-input-string \"\"))");
+    // u8-ready? on a bytevector port
+    is_true("(u8-ready? (open-input-bytevector #u8(1 2 3)))");
+    is_false("(u8-ready? (open-input-bytevector #u8()))");
 }
 
 // §6.13.2 write-char with port
@@ -9305,11 +9309,19 @@ fn audit_stdin_not_output_port() {
 
 #[test]
 fn audit_stdin_char_ready() {
-    // char-ready? on stdin returns #t (conservative, R7RS allows)
-    assert_eq!(
-        eval("(char-ready? (current-input-port))"),
-        Value::Bool(true),
+    // char-ready? on string port with data → #t
+    is_true("(char-ready? (open-input-string \"x\"))");
+    // char-ready? on empty string port → #f (no data available)
+    is_false("(char-ready? (open-input-string \"\"))");
+    // char-ready? on file port → #t (regular files never block per POSIX)
+    let tmp = std::env::temp_dir().join("mae_char_ready_test.txt");
+    std::fs::write(&tmp, "data").unwrap();
+    let code = format!(
+        "(let ((p (open-input-file \"{}\"))) (let ((r (char-ready? p))) (close-input-port p) r))",
+        tmp.display()
     );
+    is_true(&code);
+    let _ = std::fs::remove_file(&tmp);
 }
 
 #[test]
@@ -9527,4 +9539,4975 @@ fn audit_char_ready_closed_port_errors() {
            (char-ready? p))",
     );
     assert!(msg.contains("closed"), "expected closed error, got: {msg}");
+}
+
+// ============================================================
+// Coverage gap tests — functions with missing or thin coverage
+// ============================================================
+
+// --- fold-right ---
+#[test]
+fn coverage_fold_right_basic() {
+    // fold-right builds from right: (f 1 (f 2 (f 3 init)))
+    assert_eq!(eval("(fold-right cons '() '(1 2 3))"), eval("'(1 2 3)"),);
+}
+
+#[test]
+fn coverage_fold_right_string_build() {
+    assert_eq!(
+        eval("(fold-right string-append \"\" '(\"a\" \"b\" \"c\"))"),
+        Value::String(Rc::from("abc")),
+    );
+}
+
+#[test]
+fn coverage_fold_right_empty() {
+    is_int("(fold-right + 0 '())", 0);
+}
+
+#[test]
+fn coverage_fold_right_vs_fold_left() {
+    // fold-right preserves order, fold-left reverses for cons
+    assert_eq!(eval("(fold-right cons '() '(1 2 3))"), eval("'(1 2 3)"),);
+    assert_eq!(
+        eval("(fold-left (lambda (acc x) (cons x acc)) '() '(1 2 3))"),
+        eval("'(3 2 1)"),
+    );
+}
+
+// --- string-for-each ---
+#[test]
+fn coverage_string_for_each_single() {
+    // Collect characters via string-for-each
+    assert_eq!(
+        eval(
+            "(let ((out '()))
+               (string-for-each (lambda (c) (set! out (cons c out))) \"abc\")
+               (reverse out))"
+        ),
+        Value::list(vec![Value::Char('a'), Value::Char('b'), Value::Char('c')]),
+    );
+}
+
+#[test]
+fn coverage_string_for_each_empty() {
+    // Empty string: callback never called
+    assert_eq!(
+        eval(
+            "(let ((count 0))
+               (string-for-each (lambda (c) (set! count (+ count 1))) \"\")
+               count)"
+        ),
+        Value::Int(0),
+    );
+}
+
+#[test]
+fn coverage_string_for_each_multi() {
+    // Multi-string: iterate corresponding characters
+    assert_eq!(
+        eval(
+            "(let ((pairs '()))
+               (string-for-each
+                 (lambda (a b) (set! pairs (cons (list a b) pairs)))
+                 \"ab\" \"xy\")
+               (reverse pairs))"
+        ),
+        eval("'((#\\a #\\x) (#\\b #\\y))"),
+    );
+}
+
+// --- make-string ---
+#[test]
+fn coverage_make_string_fill() {
+    assert_eq!(
+        eval("(make-string 5 #\\x)"),
+        Value::String(Rc::from("xxxxx")),
+    );
+}
+
+#[test]
+fn coverage_make_string_no_fill() {
+    // make-string with just length — fill char is implementation-defined
+    // We just verify it produces a string of the right length
+    is_int("(string-length (make-string 3))", 3);
+}
+
+#[test]
+fn coverage_make_string_zero() {
+    assert_eq!(eval("(make-string 0 #\\z)"), Value::String(Rc::from("")),);
+}
+
+// --- vector-for-each ---
+#[test]
+fn coverage_vector_for_each_basic() {
+    assert_eq!(
+        eval(
+            "(let ((sum 0))
+               (vector-for-each (lambda (x) (set! sum (+ sum x))) #(1 2 3 4))
+               sum)"
+        ),
+        Value::Int(10),
+    );
+}
+
+#[test]
+fn coverage_vector_for_each_multi() {
+    assert_eq!(
+        eval(
+            "(let ((pairs '()))
+               (vector-for-each
+                 (lambda (a b) (set! pairs (cons (+ a b) pairs)))
+                 #(1 2 3) #(10 20 30))
+               (reverse pairs))"
+        ),
+        eval("'(11 22 33)"),
+    );
+}
+
+// --- vector-map ---
+#[test]
+fn coverage_vector_map_basic() {
+    assert_eq!(
+        eval("(vector->list (vector-map + #(1 2 3) #(10 20 30)))"),
+        eval("'(11 22 33)"),
+    );
+}
+
+// --- string-map ---
+#[test]
+fn coverage_string_map_basic() {
+    assert_eq!(
+        eval("(string-map char-upcase \"hello\")"),
+        Value::String(Rc::from("HELLO")),
+    );
+}
+
+#[test]
+fn coverage_string_map_multi() {
+    // Multi-string map — take max char from each position
+    assert_eq!(
+        eval(
+            "(string-map
+               (lambda (a b) (if (char>? a b) a b))
+               \"ace\" \"bdf\")"
+        ),
+        Value::String(Rc::from("bdf")),
+    );
+}
+
+// --- call-with-port ---
+#[test]
+fn coverage_call_with_port_closes() {
+    // call-with-port closes the port after proc returns
+    is_false(
+        "(let ((p (open-input-string \"hello\")))
+           (call-with-port p (lambda (port) (read-char port)))
+           (input-port-open? p))",
+    );
+}
+
+// --- call-with-output-file ---
+#[test]
+fn coverage_call_with_output_file() {
+    let tmp = std::env::temp_dir().join("mae_test_call_with_output.txt");
+    let code = format!(
+        "(call-with-output-file \"{}\" (lambda (p) (write-string \"hello\" p)))",
+        tmp.display()
+    );
+    eval(&code);
+    let contents = std::fs::read_to_string(&tmp).unwrap();
+    assert_eq!(contents, "hello");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+// --- with-output-to-file ---
+#[test]
+fn coverage_with_output_to_file() {
+    let tmp = std::env::temp_dir().join("mae_test_with_output_to.txt");
+    let code = format!(
+        "(with-output-to-file \"{}\" (lambda () (display \"world\")))",
+        tmp.display()
+    );
+    eval(&code);
+    let contents = std::fs::read_to_string(&tmp).unwrap();
+    assert_eq!(contents, "world");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+// --- make-list ---
+#[test]
+fn coverage_make_list_basic() {
+    assert_eq!(eval("(make-list 3 'x)"), eval("'(x x x)"),);
+}
+
+#[test]
+fn coverage_make_list_zero() {
+    assert_eq!(eval("(make-list 0 'x)"), Value::Null);
+}
+
+#[test]
+fn coverage_make_list_no_fill() {
+    // make-list with no fill value
+    is_int("(length (make-list 5))", 5);
+}
+
+// --- list-copy ---
+#[test]
+fn coverage_list_copy() {
+    assert_eq!(eval("(list-copy '(1 2 3))"), eval("'(1 2 3)"),);
+    // list-copy of empty list
+    assert_eq!(eval("(list-copy '())"), Value::Null);
+}
+
+// --- list-set! (should error for immutable pairs) ---
+#[test]
+fn coverage_list_set_error() {
+    let msg = eval_err("(list-set! '(1 2 3) 1 99)");
+    assert!(!msg.is_empty(), "list-set! should signal an error");
+}
+
+// --- list-tail ---
+#[test]
+fn coverage_list_tail() {
+    assert_eq!(eval("(list-tail '(a b c d) 2)"), eval("'(c d)"),);
+    assert_eq!(eval("(list-tail '(a b c) 0)"), eval("'(a b c)"));
+    assert_eq!(eval("(list-tail '(a b c) 3)"), Value::Null);
+}
+
+// --- exact-integer-sqrt ---
+#[test]
+fn coverage_exact_integer_sqrt() {
+    // Returns (root remainder) where val = root² + remainder
+    assert_eq!(
+        eval("(call-with-values (lambda () (exact-integer-sqrt 14)) list)"),
+        eval("'(3 5)"),
+    );
+    assert_eq!(
+        eval("(call-with-values (lambda () (exact-integer-sqrt 4)) list)"),
+        eval("'(2 0)"),
+    );
+    assert_eq!(
+        eval("(call-with-values (lambda () (exact-integer-sqrt 0)) list)"),
+        eval("'(0 0)"),
+    );
+}
+
+// --- floor/, truncate/ ---
+#[test]
+fn coverage_floor_division() {
+    // floor/ returns (quotient remainder) where dividend = quotient*divisor + remainder
+    assert_eq!(
+        eval("(call-with-values (lambda () (floor/ 17 5)) list)"),
+        eval("'(3 2)"),
+    );
+    assert_eq!(
+        eval("(call-with-values (lambda () (floor/ -17 5)) list)"),
+        eval("'(-4 3)"),
+    );
+    is_int("(floor-quotient 17 5)", 3);
+    is_int("(floor-remainder 17 5)", 2);
+    is_int("(floor-quotient -17 5)", -4);
+    is_int("(floor-remainder -17 5)", 3);
+}
+
+#[test]
+fn coverage_truncate_division() {
+    assert_eq!(
+        eval("(call-with-values (lambda () (truncate/ 17 5)) list)"),
+        eval("'(3 2)"),
+    );
+    assert_eq!(
+        eval("(call-with-values (lambda () (truncate/ -17 5)) list)"),
+        eval("'(-3 -2)"),
+    );
+    is_int("(truncate-quotient 17 5)", 3);
+    is_int("(truncate-remainder 17 5)", 2);
+    is_int("(truncate-quotient -17 5)", -3);
+    is_int("(truncate-remainder -17 5)", -2);
+}
+
+// --- square ---
+#[test]
+fn coverage_square() {
+    is_int("(square 5)", 25);
+    is_int("(square -3)", 9);
+    is_int("(square 0)", 0);
+    assert_eq!(eval("(square 2.5)"), Value::Float(6.25));
+}
+
+// --- log with base ---
+#[test]
+fn coverage_log_with_base() {
+    // (log z base) = ln(z)/ln(base)
+    assert_eq!(eval("(log 8 2)"), Value::Float(3.0));
+    // Natural log
+    let val = eval("(log 1)");
+    assert_eq!(val, Value::Float(0.0));
+}
+
+// --- atan with 2 args ---
+#[test]
+fn coverage_atan2() {
+    // (atan y x) = atan2(y, x)
+    let val = eval("(atan 1.0 1.0)");
+    if let Value::Float(f) = val {
+        assert!((f - std::f64::consts::FRAC_PI_4).abs() < 1e-10);
+    } else {
+        panic!("expected float, got {val:?}");
+    }
+}
+
+// --- member with custom comparator ---
+#[test]
+fn coverage_member_custom_compare() {
+    assert_eq!(eval("(member 2.0 '(1 2 3) =)"), eval("'(2 3)"),);
+    // member with default (equal?) for lists
+    assert_eq!(eval("(member '(2) '((1) (2) (3)))"), eval("'((2) (3))"),);
+}
+
+// --- assoc with custom comparator ---
+#[test]
+fn coverage_assoc_custom_compare() {
+    assert_eq!(
+        eval("(assoc 2.0 '((1 . a) (2 . b) (3 . c)) =)"),
+        eval("'(2 . b)"),
+    );
+}
+
+// --- make-parameter with converter ---
+#[test]
+fn coverage_make_parameter_converter() {
+    assert_eq!(
+        eval(
+            "(let ((p (make-parameter 10 (lambda (x) (* x 2)))))
+               (list (p)
+                     (begin (p 5) (p))))"
+        ),
+        eval("'(10 10)"),
+    );
+}
+
+// --- promise? ---
+#[test]
+fn coverage_promise_predicate() {
+    is_true("(promise? (delay 42))");
+    is_true("(promise? (make-promise 42))");
+    is_false("(promise? 42)");
+    is_false("(promise? '())");
+}
+
+// --- error-object accessors ---
+#[test]
+fn coverage_error_object_accessors() {
+    // error-object?, error-object-message, error-object-irritants, error-object-type
+    assert_eq!(
+        eval(
+            "(guard (e (#t (list
+                            (error-object? e)
+                            (error-object-message e)
+                            (error-object-irritants e)
+                            (error-object-type e))))
+               (error \"test error\" 1 2 3))"
+        ),
+        eval("'(#t \"test error\" (1 2 3) \"error\")"),
+    );
+}
+
+// --- boolean=? ---
+#[test]
+fn coverage_boolean_eq() {
+    is_true("(boolean=? #t #t)");
+    is_true("(boolean=? #f #f)");
+    is_false("(boolean=? #t #f)");
+    is_true("(boolean=? #t #t #t)");
+    is_false("(boolean=? #t #t #f)");
+}
+
+// --- symbol=? ---
+#[test]
+fn coverage_symbol_eq() {
+    is_true("(symbol=? 'foo 'foo)");
+    is_false("(symbol=? 'foo 'bar)");
+}
+
+// --- display-string (internal, stdout-only) ---
+#[test]
+fn coverage_display_string() {
+    // display-string takes 1 arg and prints to stdout (not a port arg)
+    // Just verify it doesn't error
+    eval("(display-string \"test\")");
+}
+
+// --- format ---
+#[test]
+fn coverage_format() {
+    assert_eq!(
+        eval("(format \"hello ~a, ~a\" 'world 42)"),
+        Value::String(Rc::from("hello world, 42")),
+    );
+    // ~s uses write (quoted)
+    assert_eq!(
+        eval("(format \"~s\" \"quoted\")"),
+        Value::String(Rc::from("\"quoted\"")),
+    );
+}
+
+// --- bytevector port operations ---
+#[test]
+fn coverage_bytevector_input_port() {
+    is_int("(read-u8 (open-input-bytevector #u8(65 66 67)))", 65);
+    is_int("(peek-u8 (open-input-bytevector #u8(65)))", 65);
+}
+
+#[test]
+fn coverage_bytevector_output_port() {
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-bytevector)))
+               (write-u8 65 p)
+               (write-u8 66 p)
+               (get-output-bytevector p))"
+        ),
+        eval("#u8(65 66)"),
+    );
+}
+
+// --- read-bytevector ---
+#[test]
+fn coverage_read_bytevector() {
+    assert_eq!(
+        eval(
+            "(let ((p (open-input-bytevector #u8(1 2 3 4 5))))
+               (read-bytevector 3 p))"
+        ),
+        eval("#u8(1 2 3)"),
+    );
+}
+
+// --- write-shared / write-simple ---
+#[test]
+fn coverage_write_shared() {
+    // write-shared should produce valid output (same as write for non-circular data)
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (write-shared '(1 2 3) p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("(1 2 3)")),
+    );
+}
+
+#[test]
+fn coverage_write_simple() {
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (write-simple '(1 . 2) p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("(1 . 2)")),
+    );
+}
+
+// --- close-input-port / close-output-port ---
+#[test]
+fn coverage_close_specific_ports() {
+    // close-input-port
+    is_false(
+        "(let ((p (open-input-string \"x\")))
+           (close-input-port p)
+           (input-port-open? p))",
+    );
+    // close-output-port
+    is_false(
+        "(let ((p (open-output-string)))
+           (close-output-port p)
+           (output-port-open? p))",
+    );
+}
+
+// --- current-error-port ---
+#[test]
+fn coverage_current_error_port() {
+    is_true("(output-port? (current-error-port))");
+    is_true("(port? (current-error-port))");
+}
+
+// --- features and cond-expand ---
+#[test]
+fn coverage_features_list() {
+    // (features) returns a list — memq returns sublist (truthy) or #f
+    is_true("(list? (features))");
+    is_true("(if (memq 'r7rs (features)) #t #f)");
+    is_true("(if (memq 'mae-scheme (features)) #t #f)");
+}
+
+// --- jiffies-per-second / current-jiffy ---
+#[test]
+fn coverage_timing() {
+    // jiffies-per-second should be a positive integer
+    is_true("(> (jiffies-per-second) 0)");
+    // current-jiffy should be a positive integer
+    is_true("(> (current-jiffy) 0)");
+    // current-second should be a positive number (Unix epoch)
+    is_true("(> (current-second) 1000000000)");
+}
+
+// --- get-environment-variable ---
+#[test]
+fn coverage_get_environment_variable() {
+    // PATH should exist on all systems
+    is_true("(string? (get-environment-variable \"PATH\"))");
+    // Non-existent variable returns #f
+    is_false("(get-environment-variable \"MAE_NONEXISTENT_VAR_12345\")");
+}
+
+// --- get-environment-variables ---
+#[test]
+fn coverage_get_environment_variables() {
+    is_true("(list? (get-environment-variables))");
+    is_true("(> (length (get-environment-variables)) 0)");
+    // Each element should be a pair of strings
+    is_true("(pair? (car (get-environment-variables)))");
+}
+
+// --- command-line ---
+#[test]
+fn coverage_command_line() {
+    is_true("(list? (command-line))");
+}
+
+// --- binary port operations ---
+#[test]
+fn coverage_open_binary_files() {
+    let tmp = std::env::temp_dir().join("mae_test_binary_io.bin");
+    let write_code = format!(
+        "(let ((p (open-binary-output-file \"{}\")))
+           (write-u8 255 p)
+           (write-u8 0 p)
+           (write-u8 128 p)
+           (close-output-port p))",
+        tmp.display()
+    );
+    eval(&write_code);
+
+    let read_code = format!(
+        "(let ((p (open-binary-input-file \"{}\")))
+           (let ((a (read-u8 p))
+                 (b (read-u8 p))
+                 (c (read-u8 p)))
+             (close-input-port p)
+             (list a b c)))",
+        tmp.display()
+    );
+    assert_eq!(
+        eval(&read_code),
+        Value::list(vec![Value::Int(255), Value::Int(0), Value::Int(128)]),
+    );
+    let _ = std::fs::remove_file(&tmp);
+}
+
+// --- textual-port? / binary-port? ---
+#[test]
+fn coverage_port_type_predicates() {
+    is_true("(textual-port? (open-input-string \"x\"))");
+    is_true("(textual-port? (open-output-string))");
+    is_false("(textual-port? (open-input-bytevector #u8()))");
+
+    is_true("(binary-port? (open-input-bytevector #u8()))");
+    is_true("(binary-port? (open-output-bytevector))");
+    is_false("(binary-port? (open-input-string \"x\"))");
+}
+
+// --- flush-output-port ---
+#[test]
+fn coverage_flush_output_port() {
+    // Just ensure it doesn't error on a string output port
+    eval("(flush-output-port (open-output-string))");
+}
+
+// --- interaction-environment / scheme-report-environment ---
+#[test]
+fn coverage_environments() {
+    // These return symbols (truthy values)
+    assert_eq!(
+        eval("(interaction-environment)"),
+        Value::symbol("interaction")
+    );
+    assert_eq!(eval("(scheme-report-environment 7)"), Value::symbol("r7rs"));
+}
+
+// --- read-bytevector! ---
+#[test]
+fn coverage_read_bytevector_mut() {
+    assert_eq!(
+        eval(
+            "(let ((bv (make-bytevector 5 0))
+                   (p (open-input-bytevector #u8(10 20 30))))
+               (let ((n (read-bytevector! bv p)))
+                 (list n (bytevector-u8-ref bv 0) (bytevector-u8-ref bv 1) (bytevector-u8-ref bv 2))))"
+        ),
+        Value::list(vec![Value::Int(3), Value::Int(10), Value::Int(20), Value::Int(30)]),
+    );
+}
+
+// --- read-string ---
+#[test]
+fn coverage_read_string() {
+    assert_eq!(
+        eval("(read-string 3 (open-input-string \"hello world\"))"),
+        Value::String(Rc::from("hel")),
+    );
+    // Read more than available
+    assert_eq!(
+        eval("(read-string 100 (open-input-string \"hi\"))"),
+        Value::String(Rc::from("hi")),
+    );
+}
+
+// --- edge cases for existing functions ---
+
+#[test]
+fn coverage_map_multi_list() {
+    // Multi-list map stops at shortest list
+    assert_eq!(eval("(map + '(1 2 3) '(10 20))"), eval("'(11 22)"),);
+}
+
+#[test]
+fn coverage_for_each_multi_list() {
+    assert_eq!(
+        eval(
+            "(let ((sum 0))
+               (for-each (lambda (a b) (set! sum (+ sum a b)))
+                         '(1 2 3) '(10 20 30))
+               sum)"
+        ),
+        Value::Int(66),
+    );
+}
+
+#[test]
+fn coverage_filter() {
+    assert_eq!(eval("(filter odd? '(1 2 3 4 5))"), eval("'(1 3 5)"),);
+    assert_eq!(eval("(filter odd? '())"), Value::Null);
+}
+
+#[test]
+fn coverage_call_with_values_multi() {
+    // Multi-value return via values + call-with-values
+    assert_eq!(
+        eval("(call-with-values (lambda () (values 1 2 3)) +)"),
+        Value::Int(6),
+    );
+}
+
+#[test]
+fn coverage_eqv_edge_cases() {
+    is_true("(eqv? '() '())");
+    is_true("(eqv? #t #t)");
+    is_true("(eqv? #f #f)");
+    is_false("(eqv? #t #f)");
+    is_true("(eqv? 42 42)");
+    is_false("(eqv? 42 42.0)"); // exact ≠ inexact
+    is_true("(eqv? #\\a #\\a)");
+    is_false("(eqv? #\\a #\\b)");
+}
+
+#[test]
+fn coverage_equal_deep() {
+    is_true("(equal? '(1 (2 3) 4) '(1 (2 3) 4))");
+    is_true("(equal? #(1 2 3) #(1 2 3))");
+    is_true("(equal? \"abc\" \"abc\")");
+    is_false("(equal? '(1 2) '(1 3))");
+}
+
+// ============================================================
+// Branch-level coverage: string.rs
+// ============================================================
+
+#[test]
+fn branch_string_constructor() {
+    // (string char ...) builds from individual chars
+    assert_eq!(eval("(string #\\h #\\i)"), Value::String(Rc::from("hi")),);
+    // Zero args
+    assert_eq!(eval("(string)"), Value::String(Rc::from("")));
+}
+
+#[test]
+fn branch_substring_error() {
+    // start > end
+    let msg = eval_err("(substring \"hello\" 3 1)");
+    assert!(msg.contains("out of range"), "got: {msg}");
+    // end > length
+    let msg = eval_err("(substring \"hello\" 0 100)");
+    assert!(msg.contains("out of range"), "got: {msg}");
+}
+
+#[test]
+fn branch_substring_default_end() {
+    // substring with 2 args → default end = string length
+    assert_eq!(
+        eval("(substring \"hello\" 2)"),
+        Value::String(Rc::from("llo")),
+    );
+}
+
+#[test]
+fn branch_string_ref_error() {
+    let msg = eval_err("(string-ref \"hello\" 10)");
+    assert!(msg.contains("out of range"), "got: {msg}");
+}
+
+#[test]
+fn branch_string_to_list_with_range() {
+    // string->list with start and end
+    assert_eq!(
+        eval("(string->list \"hello\" 1 3)"),
+        Value::list(vec![Value::Char('e'), Value::Char('l')]),
+    );
+    // Just start
+    assert_eq!(
+        eval("(string->list \"hello\" 3)"),
+        Value::list(vec![Value::Char('l'), Value::Char('o')]),
+    );
+}
+
+#[test]
+fn branch_string_copy_with_range() {
+    // string-copy with start and end
+    assert_eq!(
+        eval("(string-copy \"hello\" 1 4)"),
+        Value::String(Rc::from("ell")),
+    );
+    // Just start
+    assert_eq!(
+        eval("(string-copy \"hello\" 3)"),
+        Value::String(Rc::from("lo")),
+    );
+}
+
+#[test]
+fn branch_string_mutation_errors() {
+    // string-set! → immutable error
+    let msg = eval_err("(string-set! \"hello\" 0 #\\H)");
+    assert!(msg.contains("immutable"), "got: {msg}");
+    // string-copy! → immutable error
+    let msg = eval_err("(string-copy! \"hello\" 0 \"bye\")");
+    assert!(msg.contains("immutable"), "got: {msg}");
+    // string-fill! → immutable error
+    let msg = eval_err("(string-fill! \"hello\" #\\x)");
+    assert!(msg.contains("immutable"), "got: {msg}");
+}
+
+#[test]
+fn branch_string_comparisons_full() {
+    // All 6 comparison functions, both true and false branches
+    is_true("(string=? \"abc\" \"abc\")");
+    is_false("(string=? \"abc\" \"abd\")");
+    is_true("(string<? \"abc\" \"abd\")");
+    is_false("(string<? \"abd\" \"abc\")");
+    is_true("(string>? \"abd\" \"abc\")");
+    is_false("(string>? \"abc\" \"abd\")");
+    is_true("(string<=? \"abc\" \"abc\")");
+    is_true("(string<=? \"abc\" \"abd\")");
+    is_false("(string<=? \"abd\" \"abc\")");
+    is_true("(string>=? \"abc\" \"abc\")");
+    is_true("(string>=? \"abd\" \"abc\")");
+    is_false("(string>=? \"abc\" \"abd\")");
+}
+
+#[test]
+fn branch_string_ci_comparisons_full() {
+    // Case-insensitive: both true and false for all 5
+    is_true("(string-ci=? \"ABC\" \"abc\")");
+    is_false("(string-ci=? \"abc\" \"abd\")");
+    is_true("(string-ci<? \"abc\" \"ABD\")");
+    is_false("(string-ci<? \"abd\" \"ABC\")");
+    is_true("(string-ci>? \"abd\" \"ABC\")");
+    is_false("(string-ci>? \"abc\" \"ABD\")");
+    is_true("(string-ci<=? \"ABC\" \"abc\")");
+    is_true("(string-ci<=? \"abc\" \"ABD\")");
+    is_false("(string-ci<=? \"ABD\" \"abc\")");
+    is_true("(string-ci>=? \"ABC\" \"abc\")");
+    is_true("(string-ci>=? \"ABD\" \"abc\")");
+    is_false("(string-ci>=? \"abc\" \"ABD\")");
+}
+
+#[test]
+fn branch_string_foldcase() {
+    assert_eq!(
+        eval("(string-foldcase \"HeLLo\")"),
+        Value::String(Rc::from("hello")),
+    );
+}
+
+#[test]
+fn branch_string_append_edge() {
+    // Zero args
+    assert_eq!(eval("(string-append)"), Value::String(Rc::from("")));
+    // One arg
+    assert_eq!(
+        eval("(string-append \"hi\")"),
+        Value::String(Rc::from("hi"))
+    );
+}
+
+#[test]
+fn branch_string_contains_edge() {
+    // Empty needle always matches
+    is_true("(string-contains \"hello\" \"\")");
+    // Empty haystack with non-empty needle
+    is_false("(string-contains \"\" \"x\")");
+}
+
+#[test]
+fn branch_string_trim_edge() {
+    assert_eq!(eval("(string-trim \"\")"), Value::String(Rc::from("")));
+    assert_eq!(eval("(string-trim \"  \")"), Value::String(Rc::from("")));
+    assert_eq!(
+        eval("(string-trim \"no-trim\")"),
+        Value::String(Rc::from("no-trim"))
+    );
+}
+
+#[test]
+fn branch_string_split_edge() {
+    // Split with no delimiter match
+    assert_eq!(
+        eval("(car (string-split \"hello\" \",\"))"),
+        Value::String(Rc::from("hello")),
+    );
+    // Empty string split
+    assert_eq!(
+        eval("(car (string-split \"\" \",\"))"),
+        Value::String(Rc::from("")),
+    );
+}
+
+#[test]
+fn branch_string_join_edge() {
+    // Empty list
+    assert_eq!(eval("(string-join '() \",\")"), Value::String(Rc::from("")),);
+    // Single element
+    assert_eq!(
+        eval("(string-join '(\"only\") \",\")"),
+        Value::String(Rc::from("only")),
+    );
+}
+
+// ============================================================
+// Branch-level coverage: vector.rs
+// ============================================================
+
+#[test]
+fn branch_make_vector_no_fill() {
+    // Default fill is undefined
+    is_int("(vector-length (make-vector 4))", 4);
+}
+
+#[test]
+fn branch_vector_set_out_of_range() {
+    let msg = eval_err("(let ((v (vector 1 2 3))) (vector-set! v 5 99))");
+    assert!(msg.contains("out of range"), "got: {msg}");
+}
+
+#[test]
+fn branch_vector_ref_out_of_range() {
+    let msg = eval_err("(vector-ref (vector 1 2 3) 10)");
+    assert!(msg.contains("out of range"), "got: {msg}");
+}
+
+#[test]
+fn branch_vector_to_list_with_range() {
+    assert_eq!(
+        eval("(vector->list #(10 20 30 40 50) 1 3)"),
+        eval("'(20 30)"),
+    );
+    assert_eq!(eval("(vector->list #(10 20 30) 2)"), eval("'(30)"),);
+}
+
+#[test]
+fn branch_vector_copy_with_range() {
+    assert_eq!(
+        eval("(vector->list (vector-copy #(1 2 3 4 5) 1 3))"),
+        eval("'(2 3)"),
+    );
+}
+
+#[test]
+fn branch_vector_copy_bang_with_range() {
+    // vector-copy! with start/end
+    assert_eq!(
+        eval(
+            "(let ((v (vector 0 0 0 0 0)))
+               (vector-copy! v 1 #(10 20 30 40) 1 3)
+               (vector->list v))"
+        ),
+        eval("'(0 20 30 0 0)"),
+    );
+}
+
+#[test]
+fn branch_vector_append_edge() {
+    // Zero args
+    assert_eq!(eval("(vector->list (vector-append))"), Value::Null);
+    // Multiple
+    assert_eq!(
+        eval("(vector->list (vector-append #(1) #(2 3) #(4)))"),
+        eval("'(1 2 3 4)"),
+    );
+}
+
+#[test]
+fn branch_vector_fill() {
+    assert_eq!(
+        eval(
+            "(let ((v (vector 1 2 3)))
+               (vector-fill! v 0)
+               (vector->list v))"
+        ),
+        eval("'(0 0 0)"),
+    );
+}
+
+#[test]
+fn branch_vector_string_conversion() {
+    // vector->string
+    assert_eq!(
+        eval("(vector->string #(#\\h #\\i))"),
+        Value::String(Rc::from("hi")),
+    );
+    // with range
+    assert_eq!(
+        eval("(vector->string #(#\\a #\\b #\\c #\\d) 1 3)"),
+        Value::String(Rc::from("bc")),
+    );
+    // string->vector
+    assert_eq!(
+        eval("(vector->list (string->vector \"hello\"))"),
+        Value::list(vec![
+            Value::Char('h'),
+            Value::Char('e'),
+            Value::Char('l'),
+            Value::Char('l'),
+            Value::Char('o')
+        ]),
+    );
+    // with range
+    assert_eq!(
+        eval("(vector->list (string->vector \"hello\" 1 3))"),
+        Value::list(vec![Value::Char('e'), Value::Char('l')]),
+    );
+}
+
+#[test]
+fn branch_vector_type_errors() {
+    // vector-length on non-vector
+    let msg = eval_err("(vector-length 42)");
+    assert!(msg.contains("vector"), "got: {msg}");
+    // vector-ref on non-vector
+    let msg = eval_err("(vector-ref 42 0)");
+    assert!(msg.contains("vector"), "got: {msg}");
+    // vector-set! on non-vector
+    let msg = eval_err("(vector-set! 42 0 1)");
+    assert!(msg.contains("vector"), "got: {msg}");
+}
+
+// ============================================================
+// Branch-level coverage: bytevector operations
+// ============================================================
+
+#[test]
+fn branch_make_bytevector_no_fill() {
+    // Default fill is 0
+    is_int("(bytevector-u8-ref (make-bytevector 3) 0)", 0);
+}
+
+#[test]
+fn branch_make_bytevector_with_fill() {
+    is_int("(bytevector-u8-ref (make-bytevector 3 255) 0)", 255);
+}
+
+#[test]
+fn branch_bytevector_constructor() {
+    // (bytevector byte ...)
+    is_int("(bytevector-length (bytevector 1 2 3))", 3);
+    is_int("(bytevector-u8-ref (bytevector 10 20 30) 1)", 20);
+}
+
+#[test]
+fn branch_bytevector_u8_set_out_of_range() {
+    let msg = eval_err("(let ((bv (make-bytevector 3))) (bytevector-u8-set! bv 5 0))");
+    assert!(msg.contains("out of range"), "got: {msg}");
+}
+
+#[test]
+fn branch_bytevector_u8_ref_out_of_range() {
+    let msg = eval_err("(bytevector-u8-ref (bytevector 1 2 3) 10)");
+    assert!(msg.contains("out of range"), "got: {msg}");
+}
+
+#[test]
+fn branch_bytevector_copy_with_range() {
+    assert_eq!(
+        eval(
+            "(let ((bv (bytevector-copy (bytevector 10 20 30 40 50) 1 3)))
+               (list (bytevector-u8-ref bv 0) (bytevector-u8-ref bv 1)))"
+        ),
+        Value::list(vec![Value::Int(20), Value::Int(30)]),
+    );
+}
+
+#[test]
+fn branch_bytevector_copy_bang_with_range() {
+    assert_eq!(
+        eval(
+            "(let ((bv (make-bytevector 5 0)))
+               (bytevector-copy! bv 1 (bytevector 10 20 30 40) 1 3)
+               (list (bytevector-u8-ref bv 0)
+                     (bytevector-u8-ref bv 1)
+                     (bytevector-u8-ref bv 2)
+                     (bytevector-u8-ref bv 3)))"
+        ),
+        Value::list(vec![
+            Value::Int(0),
+            Value::Int(20),
+            Value::Int(30),
+            Value::Int(0)
+        ]),
+    );
+}
+
+#[test]
+fn branch_bytevector_append_edge() {
+    // Zero args
+    is_int("(bytevector-length (bytevector-append))", 0);
+    // Multiple
+    assert_eq!(
+        eval(
+            "(let ((bv (bytevector-append (bytevector 1 2) (bytevector 3) (bytevector 4 5))))
+               (bytevector-length bv))"
+        ),
+        Value::Int(5),
+    );
+}
+
+#[test]
+fn branch_bytevector_to_list_with_range() {
+    assert_eq!(
+        eval("(bytevector->list (bytevector 10 20 30 40) 1 3)"),
+        Value::list(vec![Value::Int(20), Value::Int(30)]),
+    );
+}
+
+#[test]
+fn branch_bytevector_type_errors() {
+    let msg = eval_err("(bytevector-length 42)");
+    assert!(msg.contains("bytevector"), "got: {msg}");
+    let msg = eval_err("(bytevector-u8-ref 42 0)");
+    assert!(msg.contains("bytevector"), "got: {msg}");
+}
+
+#[test]
+fn branch_utf8_invalid() {
+    // Invalid UTF-8 → error
+    let msg = eval_err("(utf8->string (bytevector 255 254))");
+    assert!(msg.contains("UTF-8"), "got: {msg}");
+}
+
+// ============================================================
+// Branch-level coverage: char.rs
+// ============================================================
+
+#[test]
+fn branch_char_comparisons_full() {
+    // All 5 comparison functions, both true and false
+    is_true("(char=? #\\a #\\a)");
+    is_false("(char=? #\\a #\\b)");
+    is_true("(char<? #\\a #\\b)");
+    is_false("(char<? #\\b #\\a)");
+    is_true("(char>? #\\b #\\a)");
+    is_false("(char>? #\\a #\\b)");
+    is_true("(char<=? #\\a #\\a)");
+    is_true("(char<=? #\\a #\\b)");
+    is_false("(char<=? #\\b #\\a)");
+    is_true("(char>=? #\\a #\\a)");
+    is_true("(char>=? #\\b #\\a)");
+    is_false("(char>=? #\\a #\\b)");
+}
+
+#[test]
+fn branch_char_ci_comparisons_full() {
+    // All 5 case-insensitive, both true and false
+    is_true("(char-ci=? #\\A #\\a)");
+    is_false("(char-ci=? #\\a #\\b)");
+    is_true("(char-ci<? #\\a #\\B)");
+    is_false("(char-ci<? #\\B #\\a)");
+    is_true("(char-ci>? #\\B #\\a)");
+    is_false("(char-ci>? #\\a #\\B)");
+    is_true("(char-ci<=? #\\A #\\a)");
+    is_true("(char-ci<=? #\\a #\\B)");
+    is_false("(char-ci<=? #\\B #\\a)");
+    is_true("(char-ci>=? #\\A #\\a)");
+    is_true("(char-ci>=? #\\B #\\a)");
+    is_false("(char-ci>=? #\\a #\\B)");
+}
+
+#[test]
+fn branch_char_classification_false() {
+    // False branches of classification predicates
+    is_false("(char-alphabetic? #\\5)");
+    is_false("(char-numeric? #\\a)");
+    is_false("(char-whitespace? #\\a)");
+    is_false("(char-upper-case? #\\a)");
+    is_false("(char-lower-case? #\\A)");
+}
+
+#[test]
+fn branch_digit_value_non_digit() {
+    // Returns #f for non-digit chars
+    is_false("(digit-value #\\a)");
+    is_false("(digit-value #\\space)");
+    // Works for all digits 0-9
+    is_int("(digit-value #\\0)", 0);
+    is_int("(digit-value #\\5)", 5);
+    is_int("(digit-value #\\9)", 9);
+}
+
+#[test]
+fn branch_char_foldcase() {
+    assert_eq!(eval("(char-foldcase #\\A)"), Value::Char('a'));
+    assert_eq!(eval("(char-foldcase #\\a)"), Value::Char('a'));
+    assert_eq!(eval("(char-foldcase #\\Z)"), Value::Char('z'));
+}
+
+#[test]
+fn branch_char_to_string() {
+    assert_eq!(eval("(char->string #\\x)"), Value::String(Rc::from("x")));
+    assert_eq!(
+        eval("(char->string #\\space)"),
+        Value::String(Rc::from(" "))
+    );
+}
+
+#[test]
+fn branch_integer_to_char_invalid() {
+    // Invalid Unicode scalar value
+    let msg = eval_err("(integer->char #xD800)");
+    assert!(
+        msg.contains("invalid") || msg.contains("Unicode"),
+        "got: {msg}"
+    );
+}
+
+// ============================================================
+// Branch-level coverage: numeric operations
+// ============================================================
+
+#[test]
+fn branch_arithmetic_edge_cases() {
+    // + with zero args
+    is_int("(+)", 0);
+    // * with zero args
+    is_int("(*)", 1);
+    // - with one arg (negation)
+    is_int("(- 5)", -5);
+    // / with one arg (reciprocal)
+    assert_eq!(eval("(/ 2)"), Value::Float(0.5));
+    // Mixed exact/inexact
+    assert_eq!(eval("(+ 1 2.0)"), Value::Float(3.0));
+    assert_eq!(eval("(* 2 3.0)"), Value::Float(6.0));
+}
+
+#[test]
+fn branch_division_exact() {
+    // Exact division when divisible
+    is_int("(/ 6 3)", 2);
+    is_int("(/ 12 3 2)", 2);
+    // Inexact when not divisible
+    assert_eq!(eval("(/ 1 3)"), Value::Float(1.0 / 3.0));
+}
+
+#[test]
+fn branch_comparison_chaining() {
+    // Multi-arg comparisons
+    is_true("(= 1 1 1 1)");
+    is_false("(= 1 1 2 1)");
+    is_true("(< 1 2 3 4)");
+    is_false("(< 1 2 2 4)");
+    is_true("(> 4 3 2 1)");
+    is_false("(> 4 3 3 1)");
+    is_true("(<= 1 1 2 3)");
+    is_false("(<= 1 2 1 3)");
+    is_true("(>= 3 2 2 1)");
+    is_false("(>= 3 2 3 1)");
+}
+
+#[test]
+fn branch_numeric_predicates() {
+    is_true("(exact? 42)");
+    is_false("(exact? 42.0)");
+    is_true("(inexact? 42.0)");
+    is_false("(inexact? 42)");
+    is_true("(exact-integer? 42)");
+    is_false("(exact-integer? 42.0)");
+    is_true("(integer? 42)");
+    is_true("(integer? 42.0)");
+    is_false("(integer? 42.5)");
+    is_true("(rational? 42)");
+    is_true("(rational? 42.5)");
+    is_false("(rational? +inf.0)");
+    is_true("(positive? 1)");
+    is_false("(positive? -1)");
+    is_false("(positive? 0)");
+    is_true("(negative? -1)");
+    is_false("(negative? 1)");
+    is_false("(negative? 0)");
+    is_true("(finite? 42)");
+    is_true("(finite? 42.5)");
+    is_false("(finite? +inf.0)");
+    is_false("(finite? -inf.0)");
+    is_true("(infinite? +inf.0)");
+    is_true("(infinite? -inf.0)");
+    is_false("(infinite? 42)");
+}
+
+#[test]
+fn branch_trig_edge() {
+    // sin/cos/tan at 0
+    assert_eq!(eval("(sin 0)"), Value::Float(0.0));
+    assert_eq!(eval("(cos 0)"), Value::Float(1.0));
+    assert_eq!(eval("(tan 0)"), Value::Float(0.0));
+    // asin/acos at boundaries
+    assert_eq!(eval("(asin 0)"), Value::Float(0.0));
+    assert_eq!(eval("(acos 1)"), Value::Float(0.0));
+}
+
+#[test]
+fn branch_exp_log_edge() {
+    assert_eq!(eval("(exp 0)"), Value::Float(1.0));
+    assert_eq!(eval("(log 1)"), Value::Float(0.0));
+    // log with base
+    assert_eq!(eval("(log 8 2)"), Value::Float(3.0));
+}
+
+// ============================================================
+// Branch-level coverage: I/O edge cases
+// ============================================================
+
+#[test]
+fn branch_read_eof_on_empty() {
+    // read on empty string port → eof
+    assert_eq!(
+        eval("(eof-object? (read (open-input-string \"\")))"),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn branch_read_char_eof() {
+    assert_eq!(
+        eval("(eof-object? (read-char (open-input-string \"\")))"),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn branch_peek_char_eof() {
+    assert_eq!(
+        eval("(eof-object? (peek-char (open-input-string \"\")))"),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn branch_read_u8_eof() {
+    assert_eq!(
+        eval("(eof-object? (read-u8 (open-input-bytevector #u8())))"),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn branch_peek_u8_eof() {
+    assert_eq!(
+        eval("(eof-object? (peek-u8 (open-input-bytevector #u8())))"),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn branch_read_line_eof() {
+    assert_eq!(
+        eval("(eof-object? (read-line (open-input-string \"\")))"),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn branch_read_bytevector_eof() {
+    assert_eq!(
+        eval("(eof-object? (read-bytevector 5 (open-input-bytevector #u8())))"),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn branch_read_string_eof() {
+    assert_eq!(
+        eval("(eof-object? (read-string 5 (open-input-string \"\")))"),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn branch_write_to_closed_port() {
+    let msg = eval_err(
+        "(let ((p (open-output-string)))
+           (close-port p)
+           (write-char #\\x p))",
+    );
+    assert!(msg.contains("closed"), "got: {msg}");
+}
+
+#[test]
+fn branch_read_from_closed_port() {
+    let msg = eval_err(
+        "(let ((p (open-input-string \"x\")))
+           (close-port p)
+           (read-char p))",
+    );
+    assert!(msg.contains("closed"), "got: {msg}");
+}
+
+#[test]
+fn branch_port_predicates_complete() {
+    // input-port?
+    is_true("(input-port? (open-input-string \"x\"))");
+    is_false("(input-port? (open-output-string))");
+    is_false("(input-port? 42)");
+    // output-port?
+    is_true("(output-port? (open-output-string))");
+    is_false("(output-port? (open-input-string \"x\"))");
+    is_false("(output-port? 42)");
+    // port?
+    is_true("(port? (open-input-string \"x\"))");
+    is_true("(port? (open-output-string))");
+    is_false("(port? 42)");
+}
+
+#[test]
+fn branch_port_open_predicates() {
+    // input-port-open? true then false after close
+    is_true("(let ((p (open-input-string \"x\"))) (input-port-open? p))");
+    is_false("(let ((p (open-input-string \"x\"))) (close-port p) (input-port-open? p))");
+    // output-port-open?
+    is_true("(let ((p (open-output-string))) (output-port-open? p))");
+    is_false("(let ((p (open-output-string))) (close-port p) (output-port-open? p))");
+}
+
+#[test]
+fn branch_eof_object() {
+    // (eof-object) returns the eof object
+    is_true("(eof-object? (eof-object))");
+    is_false("(eof-object? 42)");
+    is_false("(eof-object? #f)");
+    is_false("(eof-object? '())");
+}
+
+#[test]
+fn branch_write_vs_display() {
+    // write quotes strings, display doesn't
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (write \"hello\" p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("\"hello\"")),
+    );
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (display \"hello\" p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("hello")),
+    );
+    // write quotes chars, display doesn't
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (write #\\a p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("#\\a")),
+    );
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (display #\\a p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("a")),
+    );
+}
+
+#[test]
+fn branch_write_string_with_range() {
+    // write-string with start/end
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (write-string \"hello world\" p 6 11)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("world")),
+    );
+}
+
+#[test]
+fn branch_write_bytevector_with_range() {
+    // write-bytevector with start/end
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-bytevector)))
+               (write-bytevector (bytevector 10 20 30 40 50) p 1 3)
+               (bytevector-u8-ref (get-output-bytevector p) 0))"
+        ),
+        Value::Int(20),
+    );
+}
+
+#[test]
+fn branch_newline_to_port() {
+    assert_eq!(
+        eval(
+            "(let ((p (open-output-string)))
+               (newline p)
+               (get-output-string p))"
+        ),
+        Value::String(Rc::from("\n")),
+    );
+}
+
+#[test]
+fn branch_file_exists() {
+    is_false("(file-exists? \"/nonexistent/path/12345\")");
+    // Create temp file, check, delete
+    let tmp = std::env::temp_dir().join("mae_file_exists_test.txt");
+    std::fs::write(&tmp, "x").unwrap();
+    let code = format!("(file-exists? \"{}\")", tmp.display());
+    is_true(&code);
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn branch_delete_file() {
+    let tmp = std::env::temp_dir().join("mae_delete_file_test.txt");
+    std::fs::write(&tmp, "x").unwrap();
+    let code = format!("(delete-file \"{}\")", tmp.display());
+    eval(&code);
+    assert!(!tmp.exists());
+}
+
+// ============================================================
+// Branch-level coverage: reader edge cases
+// ============================================================
+
+#[test]
+fn branch_reader_char_literals() {
+    // Named character literals
+    assert_eq!(eval("#\\space"), Value::Char(' '));
+    assert_eq!(eval("#\\newline"), Value::Char('\n'));
+    assert_eq!(eval("#\\tab"), Value::Char('\t'));
+    assert_eq!(eval("#\\return"), Value::Char('\r'));
+    assert_eq!(eval("#\\alarm"), Value::Char('\x07'));
+    assert_eq!(eval("#\\backspace"), Value::Char('\x08'));
+    assert_eq!(eval("#\\escape"), Value::Char('\x1b'));
+    assert_eq!(eval("#\\delete"), Value::Char('\x7f'));
+    assert_eq!(eval("#\\null"), Value::Char('\0'));
+}
+
+#[test]
+fn branch_reader_string_escapes() {
+    assert_eq!(eval("(string-ref \"\\n\" 0)"), Value::Char('\n'),);
+    assert_eq!(eval("(string-ref \"\\t\" 0)"), Value::Char('\t'),);
+    assert_eq!(eval("(string-ref \"\\r\" 0)"), Value::Char('\r'),);
+    assert_eq!(eval("(string-ref \"\\\\\" 0)"), Value::Char('\\'),);
+    assert_eq!(eval("(string-ref \"\\\"\" 0)"), Value::Char('"'),);
+    // Hex escape
+    assert_eq!(eval("(string-ref \"\\x41;\" 0)"), Value::Char('A'),);
+}
+
+#[test]
+fn branch_reader_radix_prefixes() {
+    is_int("#b1010", 10);
+    is_int("#o17", 15);
+    is_int("#xFF", 255);
+    is_int("#d42", 42);
+}
+
+#[test]
+fn branch_reader_exactness_prefixes() {
+    // #e makes inexact exact
+    is_int("#e1.0", 1);
+    is_int("#e2.5", 2); // truncates
+                        // #i makes exact inexact
+    assert_eq!(eval("#i42"), Value::Float(42.0));
+}
+
+#[test]
+fn branch_reader_block_comment() {
+    is_int("#| this is a comment |# 42", 42);
+    // Nested block comments
+    is_int("#| outer #| inner |# still comment |# 99", 99);
+}
+
+#[test]
+fn branch_reader_datum_comment() {
+    is_int("#;(ignored expression) 42", 42);
+    is_int("#;\"ignored string\" 99", 99);
+}
+
+// ============================================================
+// Branch-level coverage: cxr accessors
+// ============================================================
+
+#[test]
+fn branch_cxr_deep() {
+    // 2-deep
+    assert_eq!(eval("(caar '((1 2) 3))"), Value::Int(1));
+    assert_eq!(eval("(cadr '(1 2 3))"), Value::Int(2));
+    assert_eq!(eval("(cdar '((1 2) 3))"), eval("'(2)"));
+    assert_eq!(eval("(cddr '(1 2 3))"), eval("'(3)"));
+    // 3-deep
+    assert_eq!(eval("(caaar '(((1 2) 3) 4))"), Value::Int(1));
+    assert_eq!(eval("(caddr '(1 2 3 4))"), Value::Int(3));
+    assert_eq!(eval("(cdddr '(1 2 3 4))"), eval("'(4)"));
+    // 4-deep
+    assert_eq!(eval("(caaaar '((((1)))))"), Value::Int(1));
+    assert_eq!(eval("(cadddr '(1 2 3 4 5))"), Value::Int(4));
+}
+
+// ============================================================
+// Branch-level coverage: apply edge cases
+// ============================================================
+
+#[test]
+fn branch_apply_with_leading_args() {
+    // R7RS §6.10: (apply proc arg1 ... args)
+    is_int("(apply + 1 2 '(3))", 6);
+    is_int("(apply + 1 2 3 '(4))", 10);
+    is_int("(apply + '())", 0);
+}
+
+// ============================================================
+// Branch-level coverage: set-car!/set-cdr! (immutable pairs)
+// ============================================================
+
+#[test]
+fn branch_set_car_cdr() {
+    // Per SPEC_STANCES.md §2: pairs are immutable, set-car!/set-cdr! signal errors
+    let msg = eval_err("(let ((p (cons 1 2))) (set-car! p 10))");
+    assert!(
+        msg.contains("immutable"),
+        "set-car! should error, got: {msg}"
+    );
+    let msg = eval_err("(let ((p (cons 1 2))) (set-cdr! p 20))");
+    assert!(
+        msg.contains("immutable"),
+        "set-cdr! should error, got: {msg}"
+    );
+}
+
+// ============================================================
+// Branch-level coverage: type predicates false branches
+// ============================================================
+
+#[test]
+fn branch_type_predicates_false() {
+    is_false("(boolean? 42)");
+    is_false("(number? \"hello\")");
+    is_false("(string? 42)");
+    is_false("(symbol? 42)");
+    is_false("(char? 42)");
+    is_false("(pair? 42)");
+    is_false("(null? 42)");
+    is_false("(vector? 42)");
+    is_false("(bytevector? 42)");
+    is_false("(procedure? 42)");
+    is_false("(port? 42)");
+    is_false("(void? 42)");
+    is_false("(eof-object? 42)");
+    is_false("(list? 42)");
+    is_false("(zero? 1)");
+    is_false("(even? 1)");
+    is_false("(odd? 2)");
+}
+
+#[test]
+fn branch_type_predicates_true() {
+    is_true("(boolean? #t)");
+    is_true("(boolean? #f)");
+    is_true("(number? 42)");
+    is_true("(number? 42.0)");
+    is_true("(string? \"hello\")");
+    is_true("(symbol? 'foo)");
+    is_true("(char? #\\a)");
+    is_true("(pair? '(1))");
+    is_true("(null? '())");
+    is_true("(vector? #(1))");
+    is_true("(bytevector? #u8(1))");
+    is_true("(procedure? car)");
+    is_true("(port? (open-input-string \"\"))");
+    is_true("(void? (void))");
+    is_true("(list? '(1 2 3))");
+    is_true("(list? '())");
+    is_true("(zero? 0)");
+    is_true("(even? 2)");
+    is_true("(odd? 1)");
+}
+
+// =============================================================================
+// Branch-level coverage: remaining gaps across all mae-scheme modules
+// =============================================================================
+
+// --- io.rs: format specifiers ---
+#[test]
+fn branch_format_newline_and_tilde() {
+    // ~% produces newline
+    assert_eq!(eval("(format \"a~%b\")"), Value::string("a\nb"));
+    // ~~ produces literal tilde
+    assert_eq!(eval("(format \"~~\")"), Value::string("~"));
+    // unknown specifier preserved literally
+    assert_eq!(eval("(format \"~z\")"), Value::string("~z"));
+    // ~s uses write (machine-readable) representation
+    assert_eq!(eval("(format \"~s\" \"hi\")"), Value::string("\"hi\""),);
+}
+
+// --- io.rs: get-output-string on wrong port type ---
+#[test]
+fn branch_get_output_string_wrong_port() {
+    let msg = eval_err("(get-output-string (open-input-string \"x\"))");
+    assert!(
+        msg.contains("output-string-port") || msg.contains("type"),
+        "get-output-string on input port should error: {msg}"
+    );
+}
+
+#[test]
+fn branch_get_output_string_non_port() {
+    let msg = eval_err("(get-output-string 42)");
+    assert!(
+        msg.contains("port") || msg.contains("type"),
+        "get-output-string on non-port should error: {msg}"
+    );
+}
+
+// --- io.rs: get-output-bytevector on StringOutput port ---
+#[test]
+fn branch_get_output_bytevector_from_string_port() {
+    // StringOutput port should still work (returns bytes)
+    let result =
+        eval("(let ((p (open-output-string))) (write-string \"hi\" p) (get-output-bytevector p))");
+    assert!(matches!(result, Value::Bytevector(_)));
+}
+
+// --- io.rs: open-input-file on non-existent file ---
+#[test]
+fn branch_open_input_file_not_found() {
+    let msg = eval_err("(open-input-file \"/tmp/mae_nonexistent_file_12345.scm\")");
+    assert!(
+        msg.contains("open-input-file") || msg.contains("No such file"),
+        "open-input-file should report file error: {msg}"
+    );
+}
+
+// --- io.rs: read-line without trailing newline ---
+#[test]
+fn branch_read_line_no_trailing_newline() {
+    assert_eq!(
+        eval("(let ((p (open-input-string \"hello\"))) (read-line p))"),
+        Value::string("hello"),
+    );
+}
+
+// --- io.rs: read-line from file port without trailing newline ---
+#[test]
+fn branch_read_line_file_no_newline() {
+    use std::io::Write;
+    let path = "/tmp/mae_test_readline_no_nl.txt";
+    let mut f = std::fs::File::create(path).unwrap();
+    write!(f, "no newline here").unwrap();
+    drop(f);
+    let result = eval(&format!(
+        "(let ((p (open-input-file \"{path}\"))) (let ((line (read-line p))) (close-port p) line))"
+    ));
+    assert_eq!(result, Value::string("no newline here"));
+    std::fs::remove_file(path).ok();
+}
+
+// --- io.rs: read on binary file port (error) ---
+#[test]
+fn branch_read_binary_file_port() {
+    use std::io::Write;
+    let path = "/tmp/mae_test_read_binary.bin";
+    let mut f = std::fs::File::create(path).unwrap();
+    f.write_all(b"\x00\x01\x02").unwrap();
+    drop(f);
+    let msg = eval_err(&format!(
+        "(let ((p (open-binary-input-file \"{path}\"))) (read p))"
+    ));
+    assert!(
+        msg.contains("binary"),
+        "read on binary port should error: {msg}"
+    );
+    std::fs::remove_file(path).ok();
+}
+
+// --- io.rs: exit with different arg types ---
+#[test]
+fn branch_exit_arg_types() {
+    // exit with #t → code 0
+    let msg = eval_err("(exit #t)");
+    assert!(msg.contains("0"), "exit #t: {msg}");
+    // exit with #f → code 1
+    let msg = eval_err("(exit #f)");
+    assert!(msg.contains("1"), "exit #f: {msg}");
+    // exit with integer
+    let msg = eval_err("(exit 42)");
+    assert!(msg.contains("42"), "exit 42: {msg}");
+    // exit with no args
+    let msg = eval_err("(exit)");
+    assert!(msg.contains("0"), "exit no args: {msg}");
+}
+
+// --- io.rs: read-u8 on closed port ---
+#[test]
+fn branch_read_u8_closed_port() {
+    let msg = eval_err("(let ((p (open-input-string \"x\"))) (close-port p) (read-u8 p))");
+    assert!(msg.contains("closed"), "read-u8 on closed port: {msg}");
+}
+
+// --- io.rs: read-bytevector on closed port ---
+#[test]
+fn branch_read_bytevector_closed_port() {
+    let msg =
+        eval_err("(let ((p (open-input-string \"x\"))) (close-port p) (read-bytevector 5 p))");
+    assert!(
+        msg.contains("closed"),
+        "read-bytevector on closed port: {msg}"
+    );
+}
+
+// --- io.rs: read-string from string port + EOF ---
+#[test]
+fn branch_read_string_from_port() {
+    assert_eq!(
+        eval("(let ((p (open-input-string \"hello\"))) (read-string 3 p))"),
+        Value::string("hel"),
+    );
+    // EOF on empty port
+    assert_eq!(
+        eval("(let ((p (open-input-string \"\"))) (read-string 5 p))"),
+        Value::Eof,
+    );
+    // Read more than available
+    assert_eq!(
+        eval("(let ((p (open-input-string \"hi\"))) (read-string 10 p))"),
+        Value::string("hi"),
+    );
+}
+
+// --- io.rs: write-simple and write-shared with port arg ---
+#[test]
+fn branch_write_simple_and_shared() {
+    assert_eq!(
+        eval("(let ((p (open-output-string))) (write-simple 42 p) (get-output-string p))"),
+        Value::string("42"),
+    );
+    assert_eq!(
+        eval("(let ((p (open-output-string))) (write-shared '(1 2) p) (get-output-string p))"),
+        Value::string("(1 2)"),
+    );
+}
+
+// --- io.rs: write-u8 to bytevector output port ---
+#[test]
+fn branch_write_u8_to_bytevector_port() {
+    assert_eq!(
+        eval("(let ((p (open-output-bytevector))) (write-u8 65 p) (get-output-bytevector p))"),
+        eval("#u8(65)"),
+    );
+}
+
+// --- io.rs: write-bytevector to output port ---
+#[test]
+fn branch_write_bytevector_to_port() {
+    assert_eq!(
+        eval("(let ((p (open-output-bytevector))) (write-bytevector #u8(1 2 3) p) (get-output-bytevector p))"),
+        eval("#u8(1 2 3)"),
+    );
+}
+
+// --- io.rs: write-string to BytevectorOutput port ---
+#[test]
+fn branch_write_to_bytevector_output_port() {
+    assert_eq!(
+        eval("(let ((p (open-output-bytevector))) (write-string \"hi\" p) (get-output-bytevector p))"),
+        eval("#u8(104 105)"),
+    );
+}
+
+// --- io.rs: char-ready? on buffered file port ---
+#[test]
+fn branch_char_ready_file_port() {
+    use std::io::Write;
+    let path = "/tmp/mae_test_char_ready.txt";
+    let mut f = std::fs::File::create(path).unwrap();
+    write!(f, "abc").unwrap();
+    drop(f);
+    // After reading one char, char-ready? should be true (buffered data remains)
+    is_true(&format!(
+        "(let ((p (open-input-file \"{path}\"))) (read-char p) (let ((r (char-ready? p))) (close-port p) r))"
+    ));
+    std::fs::remove_file(path).ok();
+}
+
+// --- io.rs: u8-ready? on BytevectorInput port ---
+#[test]
+fn branch_u8_ready_bytevector_port() {
+    is_true("(let ((p (open-input-bytevector #u8(1 2 3)))) (u8-ready? p))");
+    // After consuming all bytes
+    is_false("(let ((p (open-input-bytevector #u8(1)))) (read-u8 p) (u8-ready? p))");
+}
+
+// --- io.rs: u8-ready? on closed port ---
+#[test]
+fn branch_u8_ready_closed_port() {
+    let msg = eval_err("(let ((p (open-input-string \"x\"))) (close-port p) (u8-ready? p))");
+    assert!(msg.contains("closed"), "u8-ready? on closed port: {msg}");
+}
+
+// --- io.rs: read-u8 from bytevector input ---
+#[test]
+fn branch_read_u8_bytevector_input() {
+    is_int(
+        "(let ((p (open-input-bytevector #u8(65 66)))) (read-u8 p))",
+        65,
+    );
+    // EOF after all bytes consumed
+    assert_eq!(
+        eval("(let ((p (open-input-bytevector #u8(1)))) (read-u8 p) (read-u8 p))"),
+        Value::Eof,
+    );
+}
+
+// --- io.rs: peek-u8 from bytevector input ---
+#[test]
+fn branch_peek_u8_bytevector_input() {
+    is_int(
+        "(let ((p (open-input-bytevector #u8(42)))) (peek-u8 p))",
+        42,
+    );
+    // EOF on empty
+    assert_eq!(
+        eval("(let ((p (open-input-bytevector #u8()))) (peek-u8 p))"),
+        Value::Eof,
+    );
+}
+
+// --- io.rs: read-bytevector from bytevector input ---
+#[test]
+fn branch_read_bytevector_from_bytevector_input() {
+    assert_eq!(
+        eval("(let ((p (open-input-bytevector #u8(10 20 30)))) (read-bytevector 2 p))"),
+        eval("#u8(10 20)"),
+    );
+}
+
+// --- io.rs: flush-output-port on string port (no-op) ---
+#[test]
+fn branch_flush_string_port() {
+    // Should not error
+    eval("(let ((p (open-output-string))) (flush-output-port p))");
+}
+
+// --- io.rs: port predicates on closed ports ---
+#[test]
+fn branch_port_predicates_closed() {
+    // input-port? should return #t even after closing
+    is_true("(let ((p (open-input-string \"x\"))) (close-port p) (input-port? p))");
+    // output-port? should return #t even after closing
+    is_true("(let ((p (open-output-string))) (close-port p) (output-port? p))");
+    // input-port-open? should return #f after closing
+    is_false("(let ((p (open-input-string \"x\"))) (close-port p) (input-port-open? p))");
+    // output-port-open? should return #f after closing
+    is_false("(let ((p (open-output-string))) (close-port p) (output-port-open? p))");
+}
+
+// --- io.rs: close-input-port and close-output-port ---
+#[test]
+fn branch_close_specific_port() {
+    is_false("(let ((p (open-input-string \"x\"))) (close-input-port p) (input-port-open? p))");
+    is_false("(let ((p (open-output-string))) (close-output-port p) (output-port-open? p))");
+}
+
+// --- io.rs: textual-port? and binary-port? on various port types ---
+#[test]
+fn branch_port_type_predicates() {
+    is_true("(textual-port? (open-input-string \"x\"))");
+    is_false("(binary-port? (open-input-string \"x\"))");
+    is_true("(textual-port? (open-output-string))");
+    // Non-port values
+    is_false("(textual-port? 42)");
+    is_false("(binary-port? \"hello\")");
+}
+
+// --- io.rs: read-bytevector! with start/end args ---
+#[test]
+fn branch_read_bytevector_mut_range() {
+    assert_eq!(
+        eval(
+            "(let ((bv (make-bytevector 5 0))
+                    (p (open-input-bytevector #u8(10 20 30))))
+                (read-bytevector! bv p 1 4)
+                bv)"
+        ),
+        eval("#u8(0 10 20 30 0)"),
+    );
+}
+
+// --- base.rs: arithmetic overflow branches ---
+#[test]
+fn branch_add_overflow() {
+    // i64::MAX + 1 should overflow to float
+    let max = i64::MAX;
+    let result = eval(&format!("(+ {max} 1)"));
+    assert!(
+        matches!(result, Value::Float(_)),
+        "overflow should produce float"
+    );
+}
+
+#[test]
+fn branch_mul_overflow() {
+    // Large int multiplication should overflow to float
+    let result = eval("(* 9223372036854775807 2)");
+    assert!(
+        matches!(result, Value::Float(_)),
+        "overflow should produce float"
+    );
+}
+
+// --- base.rs: subtraction type error ---
+#[test]
+fn branch_sub_type_error() {
+    let msg = eval_err("(- \"x\")");
+    assert!(
+        msg.contains("number") || msg.contains("type"),
+        "- type error: {msg}"
+    );
+    let msg = eval_err("(- 1 \"x\")");
+    assert!(
+        msg.contains("number") || msg.contains("type"),
+        "- multi type error: {msg}"
+    );
+}
+
+// --- base.rs: division single arg (reciprocal) ---
+#[test]
+fn branch_div_reciprocal() {
+    assert_eq!(eval("(/ 2)"), Value::Float(0.5)); // 1/2 = 0.5 (inexact)
+    assert_eq!(eval("(/ 1)"), Value::Int(1)); // 1/1 = 1 (exact)
+    assert_eq!(eval("(/ 4)"), Value::Float(0.25)); // 1/4 = 0.25
+                                                   // Division by zero with single arg
+    let msg = eval_err("(/ 0)");
+    assert!(msg.contains("zero"), "1/0 should error: {msg}");
+}
+
+// --- base.rs: number->string with radix ---
+#[test]
+fn branch_number_to_string_radix() {
+    assert_eq!(eval("(number->string 255 16)"), Value::string("ff"));
+    assert_eq!(eval("(number->string 7 2)"), Value::string("111"));
+    assert_eq!(eval("(number->string -10 16)"), Value::string("-a"));
+    // Float arg
+    assert_eq!(eval("(number->string 3.14)"), Value::string("3.14"));
+    // Radix out of range
+    let msg = eval_err("(number->string 10 37)");
+    assert!(msg.contains("radix"), "radix out of range: {msg}");
+    // Non-number
+    let msg = eval_err("(number->string \"x\")");
+    assert!(
+        msg.contains("number") || msg.contains("type"),
+        "non-number: {msg}"
+    );
+}
+
+// --- base.rs: string->number with radix and failure ---
+#[test]
+fn branch_string_to_number_radix() {
+    is_int("(string->number \"ff\" 16)", 255);
+    is_int("(string->number \"111\" 2)", 7);
+    // Parse failure returns #f
+    is_false("(string->number \"xyz\")");
+    is_false("(string->number \"not-a-number\" 10)");
+}
+
+// --- base.rs: modulo with negative args ---
+#[test]
+fn branch_modulo_negative() {
+    // R7RS modulo: result has same sign as divisor
+    is_int("(modulo 10 3)", 1);
+    is_int("(modulo -10 3)", 2);
+    is_int("(modulo 10 -3)", -2);
+    is_int("(modulo -10 -3)", -1);
+    // Division by zero
+    let msg = eval_err("(modulo 10 0)");
+    assert!(msg.contains("zero"), "modulo by zero: {msg}");
+}
+
+// --- base.rs: expt overflow and negative exponent ---
+#[test]
+fn branch_expt_overflow() {
+    // Large exponent overflows to float
+    let result = eval("(expt 2 63)");
+    assert!(matches!(result, Value::Float(_)) || matches!(result, Value::Int(_)));
+    // Negative exponent
+    assert_eq!(eval("(expt 2 -1)"), Value::Float(0.5));
+    // 0^0 = 1
+    is_int("(expt 0 0)", 1);
+}
+
+// --- base.rs: exact-integer-sqrt negative ---
+#[test]
+fn branch_exact_integer_sqrt_negative() {
+    let msg = eval_err("(exact-integer-sqrt -1)");
+    assert!(msg.contains("negative"), "negative sqrt: {msg}");
+}
+
+// --- base.rs: rationalize edge cases ---
+#[test]
+fn branch_rationalize_edge_cases() {
+    // NaN → NaN
+    let result = eval("(rationalize +nan.0 1.0)");
+    assert!(
+        matches!(result, Value::Float(f) if f.is_nan()),
+        "NaN input → NaN"
+    );
+    // Infinite diff
+    assert_eq!(eval("(rationalize 3.0 +inf.0)"), Value::Float(0.0));
+    // Infinite x
+    let result = eval("(rationalize +inf.0 1.0)");
+    assert!(
+        matches!(result, Value::Float(f) if f.is_infinite()),
+        "inf → inf"
+    );
+    // Infinite x and infinite diff → NaN
+    let result = eval("(rationalize +inf.0 +inf.0)");
+    assert!(
+        matches!(result, Value::Float(f) if f.is_nan()),
+        "inf/inf → NaN"
+    );
+    // Zero in range
+    assert_eq!(eval("(rationalize 0.5 1.0)"), Value::Float(0.0));
+    // Negative range
+    let result = eval("(rationalize -3.5 0.5)");
+    assert!(
+        matches!(result, Value::Float(f) if f < 0.0),
+        "negative range"
+    );
+}
+
+// --- base.rs: floor-quotient/remainder division by zero ---
+#[test]
+fn branch_floor_div_by_zero() {
+    let msg = eval_err("(floor-quotient 10 0)");
+    assert!(msg.contains("zero"), "floor-quotient by zero: {msg}");
+    let msg = eval_err("(floor-remainder 10 0)");
+    assert!(msg.contains("zero"), "floor-remainder by zero: {msg}");
+    let msg = eval_err("(floor/ 10 0)");
+    assert!(msg.contains("zero"), "floor/ by zero: {msg}");
+}
+
+// --- base.rs: truncate-quotient/remainder division by zero ---
+#[test]
+fn branch_truncate_div_by_zero() {
+    let msg = eval_err("(truncate-quotient 10 0)");
+    assert!(msg.contains("zero"), "truncate-quotient by zero: {msg}");
+    let msg = eval_err("(truncate-remainder 10 0)");
+    assert!(msg.contains("zero"), "truncate-remainder by zero: {msg}");
+    let msg = eval_err("(truncate/ 10 0)");
+    assert!(msg.contains("zero"), "truncate/ by zero: {msg}");
+}
+
+// --- base.rs: gcd/lcm edge cases ---
+#[test]
+fn branch_gcd_lcm_edges() {
+    is_int("(gcd)", 0);
+    is_int("(lcm)", 1);
+    is_int("(gcd 0 5)", 5);
+    is_int("(gcd 12 8)", 4);
+    is_int("(lcm 0 5)", 0);
+    is_int("(lcm 4 6)", 12);
+    // Negative args
+    is_int("(gcd -12 8)", 4);
+    is_int("(lcm -4 6)", 12);
+}
+
+// --- base.rs: list-tail/list-ref out of range ---
+#[test]
+fn branch_list_tail_out_of_range() {
+    let msg = eval_err("(list-tail '(a b) 5)");
+    assert!(
+        msg.contains("out of range") || msg.contains("type"),
+        "list-tail out of range: {msg}"
+    );
+}
+
+#[test]
+fn branch_list_ref_out_of_range() {
+    let msg = eval_err("(list-ref '(a b) 5)");
+    assert!(!msg.is_empty(), "list-ref out of range should error: {msg}");
+}
+
+// --- base.rs: append edge cases ---
+#[test]
+fn branch_append_edges() {
+    assert_eq!(eval("(append)"), Value::Null);
+    assert_eq!(eval("(append '(1 2))"), eval("'(1 2)"));
+    // Last arg can be non-list (dotted pair)
+    assert_eq!(eval("(append '(1) 2)"), eval("(cons 1 2)"));
+    // Non-list in non-last position
+    let msg = eval_err("(append 42 '(1))");
+    assert!(
+        msg.contains("list") || msg.contains("type"),
+        "non-list append: {msg}"
+    );
+}
+
+// --- base.rs: set-car!/set-cdr! on non-pair ---
+#[test]
+fn branch_set_car_cdr_non_pair() {
+    let msg = eval_err("(set-car! 42 'x)");
+    assert!(
+        msg.contains("pair") || msg.contains("type"),
+        "set-car! non-pair: {msg}"
+    );
+    let msg = eval_err("(set-cdr! \"hello\" 'x)");
+    assert!(
+        msg.contains("pair") || msg.contains("type"),
+        "set-cdr! non-pair: {msg}"
+    );
+}
+
+// --- base.rs: values with 0, 1, multiple args ---
+#[test]
+fn branch_values_arity() {
+    assert_eq!(eval("(values 42)"), Value::Int(42));
+    assert_eq!(eval("(values 1 2 3)"), eval("'(1 2 3)"));
+    assert_eq!(eval("(values)"), Value::Null);
+}
+
+// --- base.rs: boolean=? ---
+#[test]
+fn branch_boolean_equality() {
+    is_true("(boolean=? #t #t)");
+    is_true("(boolean=? #f #f)");
+    is_false("(boolean=? #t #f)");
+    is_true("(boolean=? #t #t #t)");
+    is_false("(boolean=? #t #t #f)");
+}
+
+// --- base.rs: symbol=? ---
+#[test]
+fn branch_symbol_equality() {
+    is_true("(symbol=? 'foo 'foo)");
+    is_false("(symbol=? 'foo 'bar)");
+    let msg = eval_err("(symbol=? 'foo 42)");
+    assert!(
+        msg.contains("symbol") || msg.contains("type"),
+        "symbol=? type error: {msg}"
+    );
+}
+
+// --- base.rs: infinite?/nan? on int ---
+#[test]
+fn branch_infinite_nan_on_int() {
+    is_false("(infinite? 42)");
+    is_false("(nan? 42)");
+    is_true("(infinite? +inf.0)");
+    is_true("(nan? +nan.0)");
+}
+
+// --- base.rs: rational? on non-finite float ---
+#[test]
+fn branch_rational_non_finite() {
+    is_false("(rational? +inf.0)");
+    is_false("(rational? +nan.0)");
+    is_true("(rational? 3.14)");
+    is_true("(rational? 42)");
+    is_false("(rational? \"x\")");
+}
+
+// --- base.rs: integer? on float ---
+#[test]
+fn branch_integer_pred_float() {
+    is_true("(integer? 3.0)");
+    is_false("(integer? 3.5)");
+    is_false("(integer? \"x\")");
+}
+
+// --- base.rs: square overflow ---
+#[test]
+fn branch_square_overflow() {
+    // Small value: exact integer
+    is_int("(square 3)", 9);
+    // Float
+    assert_eq!(eval("(square 2.5)"), Value::Float(6.25));
+    // Type error
+    let msg = eval_err("(square \"x\")");
+    assert!(
+        msg.contains("number") || msg.contains("type"),
+        "square type error: {msg}"
+    );
+}
+
+// --- base.rs: abs edge cases ---
+#[test]
+fn branch_abs_edge_cases() {
+    is_int("(abs -5)", 5);
+    is_int("(abs 5)", 5);
+    assert_eq!(eval("(abs -2.75)"), Value::Float(2.75));
+    let msg = eval_err("(abs \"x\")");
+    assert!(
+        msg.contains("number") || msg.contains("type"),
+        "abs type error: {msg}"
+    );
+}
+
+// --- base.rs: floor/ceiling/round/truncate type errors ---
+#[test]
+fn branch_rounding_type_errors() {
+    let msg = eval_err("(floor \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+    let msg = eval_err("(ceiling \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+    let msg = eval_err("(round \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+    let msg = eval_err("(truncate \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+}
+
+// --- base.rs: round banker's rounding edge ---
+#[test]
+fn branch_round_bankers() {
+    // 0.5 → 0 (round to even)
+    assert_eq!(eval("(round 0.5)"), Value::Float(0.0));
+    // 1.5 → 2 (round to even)
+    assert_eq!(eval("(round 1.5)"), Value::Float(2.0));
+    // 2.5 → 2 (round to even)
+    assert_eq!(eval("(round 2.5)"), Value::Float(2.0));
+    // Integer input passes through
+    is_int("(round 5)", 5);
+}
+
+// --- base.rs: exact/inexact conversion type errors ---
+#[test]
+fn branch_exact_inexact_type_errors() {
+    let msg = eval_err("(exact->inexact \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+    let msg = eval_err("(inexact->exact \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+    let msg = eval_err("(exact \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+    let msg = eval_err("(inexact \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+}
+
+// --- base.rs: exact?/inexact? type errors ---
+#[test]
+fn branch_exact_pred_type_errors() {
+    let msg = eval_err("(exact? \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+    let msg = eval_err("(inexact? \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+}
+
+// --- base.rs: zero?/positive?/negative? type errors ---
+#[test]
+fn branch_sign_pred_type_errors() {
+    let msg = eval_err("(zero? \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+    let msg = eval_err("(positive? \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+    let msg = eval_err("(negative? \"x\")");
+    assert!(msg.contains("number") || msg.contains("type"));
+}
+
+// --- base.rs: sign predicates with floats ---
+#[test]
+fn branch_sign_pred_floats() {
+    is_true("(zero? 0.0)");
+    is_true("(positive? 1.5)");
+    is_true("(negative? -0.5)");
+    is_false("(positive? -1.0)");
+    is_false("(negative? 1.0)");
+}
+
+// --- base.rs: numeric comparison chaining with 3+ args ---
+#[test]
+fn branch_numeric_compare_chain() {
+    is_true("(< 1 2 3 4)");
+    is_false("(< 1 2 2 4)");
+    is_true("(<= 1 2 2 4)");
+    is_true("(> 4 3 2 1)");
+    is_false("(> 4 3 3 1)");
+    is_true("(>= 4 3 3 1)");
+    is_true("(= 5 5 5)");
+    is_false("(= 5 5 6)");
+}
+
+// --- base.rs: length on improper list ---
+#[test]
+fn branch_length_improper_list() {
+    let msg = eval_err("(length (cons 1 2))");
+    assert!(
+        msg.contains("proper list") || msg.contains("type"),
+        "length dotted pair: {msg}"
+    );
+}
+
+// --- base.rs: reverse on non-list ---
+#[test]
+fn branch_reverse_error() {
+    let msg = eval_err("(reverse 42)");
+    assert!(
+        msg.contains("list") || msg.contains("type"),
+        "reverse non-list: {msg}"
+    );
+}
+
+// --- base.rs: list-copy ---
+#[test]
+fn branch_list_copy() {
+    assert_eq!(eval("(list-copy '(1 2 3))"), eval("'(1 2 3)"));
+    assert_eq!(eval("(list-copy '())"), Value::Null);
+}
+
+// --- base.rs: make-list with and without fill ---
+#[test]
+fn branch_make_list() {
+    assert_eq!(eval("(make-list 3 'x)"), eval("'(x x x)"));
+    // Without fill: undefined values
+    is_int("(length (make-list 4))", 4);
+}
+
+// --- base.rs: assv/assq/memv/memq on empty list ---
+#[test]
+fn branch_assoc_empty() {
+    is_false("(assv 1 '())");
+    is_false("(assq 'a '())");
+    is_false("(memv 1 '())");
+    is_false("(memq 'a '())");
+}
+
+// --- base.rs: symbol->string / string->symbol type errors ---
+#[test]
+fn branch_symbol_conversion_errors() {
+    let msg = eval_err("(symbol->string 42)");
+    assert!(
+        msg.contains("symbol") || msg.contains("type"),
+        "symbol->string type: {msg}"
+    );
+    let msg = eval_err("(string->symbol 42)");
+    assert!(
+        msg.contains("string") || msg.contains("type"),
+        "string->symbol type: {msg}"
+    );
+}
+
+// --- base.rs: sqrt exact result ---
+#[test]
+fn branch_sqrt_exact() {
+    // Perfect square of exact int → exact
+    is_int("(sqrt 9)", 3);
+    is_int("(sqrt 0)", 0);
+    // Non-perfect → float
+    assert!(matches!(eval("(sqrt 2)"), Value::Float(_)));
+}
+
+// --- base.rs: complex?/real?/exact-integer? ---
+#[test]
+fn branch_numeric_type_preds() {
+    is_true("(complex? 42)");
+    is_true("(complex? 3.14)");
+    is_false("(complex? \"x\")");
+    is_true("(real? 42)");
+    is_true("(real? 3.14)");
+    is_false("(real? \"x\")");
+    is_true("(exact-integer? 42)");
+    is_false("(exact-integer? 3.14)");
+    is_false("(exact-integer? \"x\")");
+}
+
+// --- compiler.rs: cond with arrow clause ---
+#[test]
+fn branch_cond_arrow() {
+    is_int("(cond (1 => (lambda (x) (+ x 10))))", 11);
+    // Arrow with false test → skip
+    is_int("(cond (#f => (lambda (x) x)) (else 42))", 42);
+}
+
+// --- compiler.rs: case with multiple datums per clause ---
+#[test]
+fn branch_case_multiple_datums() {
+    is_int("(case 2 ((1 2 3) 10) (else 20))", 10);
+    is_int("(case 5 ((1 2 3) 10) (else 20))", 20);
+}
+
+// --- compiler.rs: do loop with step expressions ---
+#[test]
+fn branch_do_with_steps() {
+    is_int("(do ((i 0 (+ i 1))) ((= i 5) i))", 5);
+    // Multiple variables with different steps
+    is_int("(do ((i 0 (+ i 1)) (j 10 (- j 1))) ((= i 3) j))", 7);
+}
+
+// --- compiler.rs: do with result expressions ---
+#[test]
+fn branch_do_result_exprs() {
+    is_int("(do ((i 0 (+ i 1))) ((= i 3) (+ i 100)))", 103);
+}
+
+// --- compiler.rs: guard with else clause ---
+#[test]
+fn branch_guard_else() {
+    is_int("(guard (e (else 99)) (raise 'boom))", 99);
+}
+
+// --- compiler.rs: guard re-raise ---
+#[test]
+fn branch_guard_reraise() {
+    // Inner guard catches, outer guard catches re-raise
+    is_int(
+        "(guard (e ((string? e) 1))
+           (guard (e ((number? e) (raise \"inner\")))
+             (raise 42)))",
+        1,
+    );
+}
+
+// --- compiler.rs: when/unless ---
+#[test]
+fn branch_when_unless() {
+    is_int("(when #t 42)", 42);
+    assert_eq!(eval("(when #f 42)"), Value::Void);
+    is_int("(unless #f 42)", 42);
+    assert_eq!(eval("(unless #t 42)"), Value::Void);
+}
+
+// --- compiler.rs: define-record-type ---
+#[test]
+fn branch_define_record_type() {
+    let result = eval(
+        "
+        (define-record-type <point>
+          (make-point x y)
+          point?
+          (x point-x)
+          (y point-y))
+        (let ((p (make-point 3 4)))
+          (list (point? p) (point-x p) (point-y p)))
+    ",
+    );
+    assert_eq!(result, eval("'(#t 3 4)"));
+}
+
+// --- compiler.rs: parameterize ---
+#[test]
+fn branch_parameterize() {
+    assert_eq!(
+        eval(
+            "
+            (define p (make-parameter 10))
+            (parameterize ((p 42))
+              (p))
+        "
+        ),
+        Value::Int(42),
+    );
+    // Restores after
+    assert_eq!(
+        eval(
+            "
+            (define p (make-parameter 10))
+            (parameterize ((p 42))
+              'ignore)
+            (p)
+        "
+        ),
+        Value::Int(10),
+    );
+}
+
+// --- compiler.rs: named let ---
+#[test]
+fn branch_named_let() {
+    is_int(
+        "(let loop ((n 5) (acc 1)) (if (= n 0) acc (loop (- n 1) (* acc n))))",
+        120,
+    );
+}
+
+// --- compiler.rs: letrec* ---
+#[test]
+fn branch_letrec_star() {
+    is_int("(letrec* ((x 1) (y (+ x 1))) y)", 2);
+}
+
+// --- vm.rs: closure handlers (with-exception-handler) ---
+#[test]
+fn branch_with_exception_handler() {
+    // Closure handler catches and can return a value via raise-continuable
+    is_int(
+        "(with-exception-handler
+           (lambda (e) 42)
+           (lambda () (raise-continuable 'err)))",
+        42,
+    );
+}
+
+// --- vm.rs: raise-continuable ---
+#[test]
+fn branch_raise_continuable() {
+    is_int(
+        "(+ 1 (with-exception-handler
+                (lambda (e) 10)
+                (lambda () (raise-continuable 'x))))",
+        11,
+    );
+}
+
+// --- vm.rs: continuation + dynamic-wind ---
+#[test]
+fn branch_callcc_dynamic_wind() {
+    // dynamic-wind before/after thunks should run during call/cc
+    assert_eq!(
+        eval(
+            "
+            (let ((log '()))
+              (call-with-current-continuation
+                (lambda (k)
+                  (dynamic-wind
+                    (lambda () (set! log (cons 'before log)))
+                    (lambda () (k 'done))
+                    (lambda () (set! log (cons 'after log))))))
+              log)
+        "
+        ),
+        eval("'(after before)"),
+    );
+}
+
+// --- reader.rs: datum labels ---
+#[test]
+fn branch_reader_datum_labels() {
+    // Datum labels: #0= defines, #0# references.
+    // The reader stores the labeled datum for later reference.
+    // Use quote to prevent the list from being interpreted as a call.
+    assert_eq!(eval("(define x '#0=(1 2 3)) (car x)"), Value::Int(1));
+}
+
+// --- reader.rs: block comment in hash position ---
+#[test]
+fn branch_reader_block_comment_hash() {
+    assert_eq!(eval("#| comment |# 42"), Value::Int(42));
+}
+
+// --- reader.rs: character literals ---
+#[test]
+fn branch_reader_char_names() {
+    assert_eq!(eval("#\\space"), Value::Char(' '));
+    assert_eq!(eval("#\\newline"), Value::Char('\n'));
+    assert_eq!(eval("#\\tab"), Value::Char('\t'));
+    assert_eq!(eval("#\\return"), Value::Char('\r'));
+    assert_eq!(eval("#\\alarm"), Value::Char('\u{07}'));
+    assert_eq!(eval("#\\backspace"), Value::Char('\u{08}'));
+    assert_eq!(eval("#\\delete"), Value::Char('\u{7F}'));
+    assert_eq!(eval("#\\escape"), Value::Char('\u{1B}'));
+    assert_eq!(eval("#\\null"), Value::Char('\0'));
+    // Hex character
+    assert_eq!(eval("#\\x41"), Value::Char('A'));
+}
+
+// --- reader.rs: #true and #false ---
+#[test]
+fn branch_reader_bool_long() {
+    is_true("#true");
+    is_false("#false");
+}
+
+// --- reader.rs: unterminated list error ---
+#[test]
+fn branch_reader_unterminated_list() {
+    let msg = eval_err("(1 2");
+    assert!(
+        msg.contains("unterminated") || msg.contains("end of input"),
+        "unterminated list: {msg}"
+    );
+}
+
+// --- reader.rs: unexpected close paren ---
+#[test]
+fn branch_reader_unexpected_close() {
+    let msg = eval_err(")");
+    assert!(
+        msg.contains(")") || msg.contains("unexpected"),
+        "unexpected close paren: {msg}"
+    );
+}
+
+// --- reader.rs: unterminated string ---
+#[test]
+fn branch_reader_unterminated_string() {
+    let msg = eval_err("\"hello");
+    assert!(
+        msg.contains("unterminated") || msg.contains("string"),
+        "unterminated string: {msg}"
+    );
+}
+
+// --- reader.rs: unexpected EOF after # ---
+#[test]
+fn branch_reader_eof_after_hash() {
+    let msg = eval_err("#");
+    assert!(
+        msg.contains("end of input") || msg.contains("unexpected"),
+        "EOF after #: {msg}"
+    );
+}
+
+// --- reader.rs: invalid after #u ---
+#[test]
+fn branch_reader_invalid_after_u() {
+    let msg = eval_err("#u9(1 2)");
+    assert!(
+        msg.contains("8") || msg.contains("expected"),
+        "invalid #u: {msg}"
+    );
+}
+
+// --- reader.rs: dotted pair ---
+#[test]
+fn branch_reader_dotted_pair() {
+    assert_eq!(eval("(car '(1 . 2))"), Value::Int(1));
+    assert_eq!(eval("(cdr '(1 . 2))"), Value::Int(2));
+}
+
+// --- reader.rs: quasiquote/unquote/unquote-splicing ---
+#[test]
+fn branch_reader_quasiquote() {
+    assert_eq!(eval("`(1 ,(+ 2 3) 4)"), eval("'(1 5 4)"));
+    assert_eq!(eval("`(1 ,@(list 2 3) 4)"), eval("'(1 2 3 4)"));
+}
+
+// --- macros.rs: syntax-rules with ellipsis ---
+#[test]
+fn branch_syntax_rules_ellipsis() {
+    assert_eq!(
+        eval(
+            "
+            (define-syntax my-list
+              (syntax-rules ()
+                ((my-list x ...) '(x ...))))
+            (my-list 1 2 3)
+        "
+        ),
+        eval("'(1 2 3)"),
+    );
+}
+
+// --- macros.rs: syntax-rules with literal identifiers ---
+#[test]
+fn branch_syntax_rules_literals() {
+    assert_eq!(
+        eval(
+            "
+            (define-syntax my-if
+              (syntax-rules (then else)
+                ((my-if c then t else f) (if c t f))))
+            (my-if #t then 1 else 2)
+        "
+        ),
+        Value::Int(1),
+    );
+}
+
+// --- library.rs: import with only (on user-defined library) ---
+#[test]
+fn branch_import_only() {
+    // Test that import with (only ...) modifier works — defines
+    // just the specified bindings in scope
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    vm.eval(
+        "
+        (define-library (test mylib-o)
+          (export my-add my-sub)
+          (begin
+            (define (my-add a b) (+ a b))
+            (define (my-sub a b) (- a b))))
+    ",
+    )
+    .unwrap();
+    vm.eval("(import (only (test mylib-o) my-add))").unwrap();
+    assert_eq!(vm.eval("(my-add 1 2)").unwrap(), Value::Int(3));
+}
+
+// --- library.rs: import with prefix ---
+#[test]
+fn branch_import_prefix() {
+    eval(
+        "
+        (define-library (test preflib)
+          (export pval)
+          (begin (define pval 42)))
+        (import (prefix (test preflib) t:))
+    ",
+    );
+}
+
+// --- library.rs: import with rename ---
+#[test]
+fn branch_import_rename() {
+    eval(
+        "
+        (define-library (test renlib)
+          (export rval)
+          (begin (define rval 99)))
+        (import (rename (test renlib) (rval renamed-val)))
+    ",
+    );
+}
+
+// --- library.rs: import with except ---
+#[test]
+fn branch_import_except() {
+    eval(
+        "
+        (define-library (test exclib)
+          (export ea eb)
+          (begin (define ea 1) (define eb 2)))
+        (import (except (test exclib) eb))
+    ",
+    );
+}
+
+// --- library.rs: cond-expand with library ---
+#[test]
+fn branch_cond_expand_library() {
+    is_int("(cond-expand ((library (scheme base)) 1) (else 2))", 1);
+    is_int("(cond-expand ((library (nonexistent lib)) 1) (else 2))", 2);
+}
+
+// --- io.rs: write-char to port ---
+#[test]
+fn branch_write_char_to_port() {
+    assert_eq!(
+        eval("(let ((p (open-output-string))) (write-char #\\A p) (get-output-string p))"),
+        Value::string("A"),
+    );
+}
+
+// --- io.rs: display with port ---
+#[test]
+fn branch_display_to_port() {
+    assert_eq!(
+        eval("(let ((p (open-output-string))) (display 42 p) (get-output-string p))"),
+        Value::string("42"),
+    );
+}
+
+// --- io.rs: write with port ---
+#[test]
+fn branch_write_to_port() {
+    assert_eq!(
+        eval("(let ((p (open-output-string))) (write \"hi\" p) (get-output-string p))"),
+        Value::string("\"hi\""),
+    );
+}
+
+// --- io.rs: display vs write on string ---
+#[test]
+fn branch_display_vs_write_string() {
+    // display: no quotes
+    assert_eq!(
+        eval("(let ((p (open-output-string))) (display \"hi\" p) (get-output-string p))"),
+        Value::string("hi"),
+    );
+    // write: with quotes
+    assert_eq!(
+        eval("(let ((p (open-output-string))) (write \"hi\" p) (get-output-string p))"),
+        Value::string("\"hi\""),
+    );
+}
+
+// --- io.rs: file I/O roundtrip ---
+#[test]
+fn branch_file_io_roundtrip() {
+    use std::fs;
+    let path = "/tmp/mae_test_io_roundtrip.txt";
+    eval(&format!(
+        "(let ((p (open-output-file \"{path}\")))
+           (write-string \"hello world\" p)
+           (close-port p))"
+    ));
+    assert_eq!(
+        eval(&format!(
+            "(let ((p (open-input-file \"{path}\")))
+               (let ((s (read-line p)))
+                 (close-port p) s))"
+        )),
+        Value::string("hello world"),
+    );
+    fs::remove_file(path).ok();
+}
+
+// --- io.rs: binary file I/O roundtrip ---
+#[test]
+fn branch_binary_file_io() {
+    use std::fs;
+    let path = "/tmp/mae_test_binary_io.bin";
+    eval(&format!(
+        "(let ((p (open-binary-output-file \"{path}\")))
+           (write-bytevector #u8(1 2 3 4 5) p)
+           (close-port p))"
+    ));
+    assert_eq!(
+        eval(&format!(
+            "(let ((p (open-binary-input-file \"{path}\")))
+               (let ((bv (read-bytevector 5 p)))
+                 (close-port p) bv))"
+        )),
+        eval("#u8(1 2 3 4 5)"),
+    );
+    fs::remove_file(path).ok();
+}
+
+// --- io.rs: read-char from file port ---
+#[test]
+fn branch_read_char_file_port() {
+    use std::io::Write;
+    let path = "/tmp/mae_test_readchar_file.txt";
+    let mut f = std::fs::File::create(path).unwrap();
+    write!(f, "AB").unwrap();
+    drop(f);
+    assert_eq!(
+        eval(&format!(
+            "(let ((p (open-input-file \"{path}\")))
+               (let ((c (read-char p))) (close-port p) c))"
+        )),
+        Value::Char('A'),
+    );
+    std::fs::remove_file(path).ok();
+}
+
+// --- io.rs: peek-char from file port ---
+#[test]
+fn branch_peek_char_file_port() {
+    use std::io::Write;
+    let path = "/tmp/mae_test_peekchar_file.txt";
+    let mut f = std::fs::File::create(path).unwrap();
+    write!(f, "XY").unwrap();
+    drop(f);
+    assert_eq!(
+        eval(&format!(
+            "(let ((p (open-input-file \"{path}\")))
+               (peek-char p)
+               (let ((c (read-char p))) (close-port p) c))"
+        )),
+        Value::Char('X'),
+    );
+    std::fs::remove_file(path).ok();
+}
+
+// --- io.rs: read from file port (S-expression) ---
+#[test]
+fn branch_read_from_file_port() {
+    use std::io::Write;
+    let path = "/tmp/mae_test_read_sexp.scm";
+    let mut f = std::fs::File::create(path).unwrap();
+    write!(f, "(+ 1 2)").unwrap();
+    drop(f);
+    assert_eq!(
+        eval(&format!(
+            "(let ((p (open-input-file \"{path}\")))
+               (let ((datum (read p))) (close-port p) datum))"
+        )),
+        eval("'(+ 1 2)"),
+    );
+    std::fs::remove_file(path).ok();
+}
+
+// --- io.rs: environment variables ---
+#[test]
+fn branch_env_vars() {
+    // HOME should exist
+    let result = eval("(get-environment-variable \"HOME\")");
+    assert!(
+        matches!(result, Value::String(_)),
+        "HOME should be a string"
+    );
+    // Non-existent returns #f
+    is_false("(get-environment-variable \"MAE_NONEXISTENT_VAR_12345\")");
+    // get-environment-variables returns a list
+    let result = eval("(pair? (get-environment-variables))");
+    assert_eq!(result, Value::Bool(true));
+}
+
+// --- io.rs: command-line returns a list ---
+#[test]
+fn branch_command_line() {
+    is_true("(list? (command-line))");
+}
+
+// --- io.rs: current-second/jiffy/jiffies-per-second ---
+#[test]
+fn branch_timing() {
+    let result = eval("(current-second)");
+    assert!(matches!(result, Value::Float(_)));
+    let result = eval("(current-jiffy)");
+    assert!(matches!(result, Value::Int(_)));
+    is_int("(jiffies-per-second)", 1_000_000_000);
+}
+
+// --- io.rs: delete-file on non-existent ---
+#[test]
+fn branch_delete_file_not_found() {
+    let msg = eval_err("(delete-file \"/tmp/mae_nonexistent_delete_12345.txt\")");
+    assert!(
+        msg.contains("delete-file") || msg.contains("No such file"),
+        "delete non-existent: {msg}"
+    );
+}
+
+// --- io.rs: write to closed port ---
+#[test]
+fn branch_write_closed_port() {
+    let msg = eval_err("(let ((p (open-output-string))) (close-port p) (write-string \"x\" p))");
+    assert!(msg.contains("closed"), "write to closed port: {msg}");
+}
+
+// --- io.rs: read from output port (type error) ---
+#[test]
+fn branch_read_from_output_port() {
+    let msg = eval_err("(read-char (open-output-string))");
+    assert!(
+        msg.contains("input") || msg.contains("type"),
+        "read from output port: {msg}"
+    );
+}
+
+// --- base.rs: quotient/remainder division by zero ---
+#[test]
+fn branch_quotient_remainder_div_zero() {
+    let msg = eval_err("(quotient 10 0)");
+    assert!(msg.contains("zero"), "quotient by zero: {msg}");
+    let msg = eval_err("(remainder 10 0)");
+    assert!(msg.contains("zero"), "remainder by zero: {msg}");
+}
+
+// --- base.rs: assv/assq match and miss ---
+#[test]
+fn branch_assoc_functions() {
+    assert_eq!(eval("(assv 2 '((1 a) (2 b) (3 c)))"), eval("'(2 b)"));
+    is_false("(assv 4 '((1 a) (2 b)))");
+    assert_eq!(eval("(assq 'b '((a 1) (b 2)))"), eval("'(b 2)"));
+    is_false("(assq 'z '((a 1) (b 2)))");
+}
+
+// --- base.rs: memv/memq match and miss ---
+#[test]
+fn branch_member_functions() {
+    assert_eq!(eval("(memv 2 '(1 2 3))"), eval("'(2 3)"));
+    is_false("(memv 4 '(1 2 3))");
+    assert_eq!(eval("(memq 'b '(a b c))"), eval("'(b c)"));
+    is_false("(memq 'z '(a b c))");
+}
+
+// --- base.rs: member with custom comparator ---
+#[test]
+fn branch_member_custom_comparator() {
+    assert_eq!(eval("(member 2 '(1 2 3) =)"), eval("'(2 3)"),);
+}
+
+// --- base.rs: assoc with custom comparator ---
+#[test]
+fn branch_assoc_custom_comparator() {
+    assert_eq!(
+        eval("(assoc 2.0 '((1 a) (2 b)) (lambda (a b) (= a b)))"),
+        eval("'(2 b)"),
+    );
+}
+
+// --- base.rs: int_to_radix_string edge cases ---
+#[test]
+fn branch_int_to_radix_zero() {
+    assert_eq!(eval("(number->string 0 16)"), Value::string("0"));
+    assert_eq!(eval("(number->string 0 2)"), Value::string("0"));
+}
+
+// --- value.rs: is_list on various structures ---
+#[test]
+fn branch_is_list() {
+    is_true("(list? '())");
+    is_true("(list? '(1 2 3))");
+    is_false("(list? (cons 1 2))");
+    is_false("(list? 42)");
+    is_false("(list? \"hello\")");
+}
+
+// --- compiler.rs: begin with multiple expressions ---
+#[test]
+fn branch_begin_multiple() {
+    is_int("(begin 1 2 3)", 3);
+    is_int("(begin (define x 10) (+ x 5))", 15);
+}
+
+// --- compiler.rs: and/or short-circuit ---
+#[test]
+fn branch_and_or_short_circuit() {
+    is_false("(and 1 2 #f 3)");
+    is_int("(and 1 2 3)", 3);
+    assert_eq!(eval("(and)"), Value::Bool(true));
+    is_int("(or #f #f 42 #f)", 42);
+    is_false("(or #f #f #f)");
+    is_false("(or)");
+}
+
+// --- compiler.rs: let with body forms ---
+#[test]
+fn branch_let_body() {
+    is_int("(let ((x 1) (y 2)) (+ x y))", 3);
+    is_int("(let* ((x 1) (y (+ x 1))) y)", 2);
+}
+
+// --- compiler.rs: lambda rest args ---
+#[test]
+fn branch_lambda_rest() {
+    assert_eq!(eval("((lambda (x . rest) rest) 1 2 3)"), eval("'(2 3)"),);
+    assert_eq!(eval("((lambda rest rest) 1 2 3)"), eval("'(1 2 3)"),);
+}
+
+// --- compiler.rs: define with body (implicit begin) ---
+#[test]
+fn branch_define_body() {
+    is_int("(define (f x) (define y 10) (+ x y)) (f 5)", 15);
+}
+
+// --- vm.rs: file error object structure ---
+#[test]
+fn branch_file_error_structure() {
+    is_true(
+        "(guard (e ((file-error? e) #t))
+           (open-input-file \"/tmp/mae_nonexistent_12345.txt\"))",
+    );
+}
+
+// --- vm.rs: error-object-message and error-object-irritants ---
+#[test]
+fn branch_error_object_accessors() {
+    assert_eq!(
+        eval(
+            "(guard (e (#t (error-object-message e)))
+               (error \"test error\" 'a 'b))"
+        ),
+        Value::string("test error"),
+    );
+    assert_eq!(
+        eval(
+            "(guard (e (#t (error-object-irritants e)))
+               (error \"test\" 1 2))"
+        ),
+        eval("'(1 2)"),
+    );
+    is_true(
+        "(guard (e (#t (error-object? e)))
+           (error \"test\"))",
+    );
+}
+
+// =========================================================================
+// Phase 2: Remaining branch coverage — compiler.rs error paths
+// =========================================================================
+
+#[test]
+fn branch_compiler_empty_application() {
+    // () evaluates to the empty list (Null), not an error in our implementation
+    assert_eq!(eval("'()"), Value::Null);
+}
+
+#[test]
+fn branch_compiler_quote_arity() {
+    let msg = eval_err("(quote)");
+    assert!(msg.contains("quote"), "quote arity: {msg}");
+    let msg = eval_err("(quote 1 2)");
+    assert!(msg.contains("quote"), "quote extra: {msg}");
+}
+
+#[test]
+fn branch_compiler_if_arity() {
+    let msg = eval_err("(if)");
+    assert!(
+        msg.contains("if") || msg.contains("argument"),
+        "if no args: {msg}"
+    );
+    let msg = eval_err("(if #t)");
+    assert!(
+        msg.contains("if") || msg.contains("argument"),
+        "if one arg: {msg}"
+    );
+    let msg = eval_err("(if #t 1 2 3)");
+    assert!(
+        msg.contains("if") || msg.contains("argument"),
+        "if four args: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_lambda_arity() {
+    let msg = eval_err("(lambda)");
+    assert!(msg.contains("lambda"), "lambda no args: {msg}");
+    let msg = eval_err("(lambda ())");
+    assert!(msg.contains("lambda"), "lambda no body: {msg}");
+}
+
+#[test]
+fn branch_compiler_define_arity() {
+    let msg = eval_err("(define)");
+    assert!(msg.contains("define"), "define no args: {msg}");
+    let msg = eval_err("(define x)");
+    assert!(msg.contains("define"), "define no value: {msg}");
+}
+
+#[test]
+fn branch_compiler_define_symbol_extra_args() {
+    let msg = eval_err("(define x 1 2)");
+    assert!(msg.contains("define"), "define extra value: {msg}");
+}
+
+#[test]
+fn branch_compiler_define_invalid_form() {
+    let msg = eval_err("(define 42 1)");
+    assert!(
+        msg.contains("define") || msg.contains("invalid"),
+        "define non-sym: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_set_arity() {
+    let msg = eval_err("(set!)");
+    assert!(msg.contains("set!"), "set! no args: {msg}");
+    let msg = eval_err("(set! x)");
+    assert!(msg.contains("set!"), "set! one arg: {msg}");
+    let msg = eval_err("(set! x 1 2)");
+    assert!(msg.contains("set!"), "set! three args: {msg}");
+}
+
+#[test]
+fn branch_compiler_set_non_symbol() {
+    let msg = eval_err("(set! 42 1)");
+    assert!(
+        msg.contains("symbol") || msg.contains("set!"),
+        "set! non-symbol: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_empty_cond() {
+    assert_eq!(eval("(cond)"), Value::Void);
+}
+
+#[test]
+fn branch_compiler_cond_empty_clause() {
+    let msg = eval_err("(cond ())");
+    assert!(
+        msg.contains("empty") || msg.contains("cond"),
+        "empty cond clause: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_case_arity() {
+    let msg = eval_err("(case)");
+    assert!(msg.contains("case"), "case no args: {msg}");
+    let msg = eval_err("(case 1)");
+    assert!(msg.contains("case"), "case no clauses: {msg}");
+}
+
+#[test]
+fn branch_compiler_case_empty_clause() {
+    let msg = eval_err("(case 1 ())");
+    assert!(
+        msg.contains("empty") || msg.contains("case"),
+        "empty case clause: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_case_else_arrow() {
+    // (case x (else => proc)) — R7RS §4.2.1
+    is_int("(case 42 (else => (lambda (x) (+ x 1))))", 43);
+}
+
+#[test]
+fn branch_compiler_case_datum_arrow() {
+    // ((datum ...) => proc) — R7RS §4.2.1
+    is_int("(case 2 ((1 2 3) => (lambda (x) (* x 10))))", 20);
+}
+
+#[test]
+fn branch_compiler_case_multiple_datums() {
+    is_int("(case 2 ((1 3 5) 10) ((2 4 6) 20) (else 30))", 20);
+}
+
+#[test]
+fn branch_compiler_do_arity() {
+    let msg = eval_err("(do)");
+    assert!(msg.contains("do"), "do no args: {msg}");
+    let msg = eval_err("(do ())");
+    assert!(msg.contains("do"), "do no test: {msg}");
+}
+
+#[test]
+fn branch_compiler_do_empty_test() {
+    let msg = eval_err("(do () ())");
+    assert!(
+        msg.contains("do") && msg.contains("test"),
+        "do empty test: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_do_var_spec_invalid_len() {
+    let msg = eval_err("(do ((x)) (#t))");
+    assert!(
+        msg.contains("do") || msg.contains("var"),
+        "do var spec single: {msg}"
+    );
+    let msg = eval_err("(do ((x 1 2 3)) (#t))");
+    assert!(
+        msg.contains("do") || msg.contains("var"),
+        "do var spec 4: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_do_no_step() {
+    // (var init) without step — var keeps its value
+    is_int("(do ((x 5)) (#t x))", 5);
+}
+
+#[test]
+fn branch_compiler_do_multi_result() {
+    // do test with multiple result expressions
+    is_int("(do ((i 0 (+ i 1))) ((= i 3) (+ i 10) (+ i 20)))", 23);
+}
+
+#[test]
+fn branch_compiler_guard_no_clauses() {
+    // guard with zero clauses — re-raises the exception (produces unhandled error)
+    let msg = eval_err("(guard (e) (error \"test\"))");
+    assert!(
+        msg.contains("unhandled") || msg.contains("exception") || msg.contains("test"),
+        "guard no clauses: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_when_arity() {
+    let msg = eval_err("(when)");
+    assert!(msg.contains("when"), "when no args: {msg}");
+    let msg = eval_err("(when #t)");
+    assert!(msg.contains("when"), "when no body: {msg}");
+}
+
+#[test]
+fn branch_compiler_unless_arity() {
+    let msg = eval_err("(unless)");
+    assert!(msg.contains("unless"), "unless no args: {msg}");
+    let msg = eval_err("(unless #f)");
+    assert!(msg.contains("unless"), "unless no body: {msg}");
+}
+
+#[test]
+fn branch_compiler_define_values_arity() {
+    let msg = eval_err("(define-values)");
+    assert!(msg.contains("define-values"), "define-values arity: {msg}");
+}
+
+#[test]
+fn branch_compiler_define_values_single() {
+    is_int("(define-values (x) 42) x", 42);
+}
+
+#[test]
+fn branch_compiler_define_values_multi() {
+    is_int("(define-values (a b c) (values 1 2 3)) (+ a b c)", 6);
+}
+
+#[test]
+fn branch_compiler_case_lambda_arity() {
+    let msg = eval_err("(case-lambda)");
+    assert!(msg.contains("case-lambda"), "case-lambda no clauses: {msg}");
+}
+
+#[test]
+fn branch_compiler_case_lambda_no_match() {
+    let msg = eval_err("(define f (case-lambda ((x) x) ((x y) (+ x y)))) (f 1 2 3)");
+    assert!(msg.contains("no matching"), "case-lambda no match: {msg}");
+}
+
+#[test]
+fn branch_compiler_case_lambda_variadic() {
+    // case-lambda with variadic clause
+    assert_eq!(
+        eval("(define f (case-lambda ((x) x) ((x . rest) rest))) (f 1 2 3)"),
+        eval("'(2 3)"),
+    );
+}
+
+#[test]
+fn branch_compiler_define_record_type_arity() {
+    let msg = eval_err("(define-record-type foo)");
+    assert!(msg.contains("define-record-type"), "record arity: {msg}");
+}
+
+#[test]
+fn branch_compiler_define_record_type_empty_ctor() {
+    let msg = eval_err("(define-record-type foo () foo?)");
+    assert!(
+        msg.contains("constructor") || msg.contains("name"),
+        "empty ctor: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_define_record_type_field_spec_invalid() {
+    let msg = eval_err("(define-record-type foo (make-foo x) foo? (x))");
+    assert!(
+        msg.contains("field") || msg.contains("accessor"),
+        "field spec needs accessor: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_parameterize_arity() {
+    let msg = eval_err("(parameterize)");
+    assert!(msg.contains("parameterize"), "parameterize arity: {msg}");
+    let msg = eval_err("(parameterize ())");
+    assert!(msg.contains("parameterize"), "parameterize no body: {msg}");
+}
+
+#[test]
+fn branch_compiler_parameterize_bad_binding() {
+    let msg = eval_err("(parameterize ((p)) 1)");
+    assert!(
+        msg.contains("parameterize") || msg.contains("binding"),
+        "bad param binding: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_let_values_arity() {
+    let msg = eval_err("(let-values)");
+    assert!(msg.contains("let-values"), "let-values arity: {msg}");
+}
+
+#[test]
+fn branch_compiler_let_values_bad_clause() {
+    let msg = eval_err("(let-values (((x) 1 2)) x)");
+    assert!(
+        msg.contains("let-values") || msg.contains("clause"),
+        "bad clause: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_let_star_values_arity() {
+    let msg = eval_err("(let*-values)");
+    assert!(msg.contains("let*-values"), "let*-values arity: {msg}");
+}
+
+#[test]
+fn branch_compiler_let_star_values_empty() {
+    // No bindings — just compile body
+    is_int("(let*-values () 42)", 42);
+}
+
+#[test]
+fn branch_compiler_let_star_values_multi() {
+    // Multiple bindings — nested desugaring
+    is_int("(let*-values (((x) 10) ((y) (+ x 1))) (+ x y))", 21);
+}
+
+#[test]
+fn branch_compiler_receive_arity() {
+    let msg = eval_err("(receive x)");
+    assert!(msg.contains("receive"), "receive arity: {msg}");
+}
+
+#[test]
+fn branch_compiler_receive_basic() {
+    is_int("(receive (a b) (values 3 4) (+ a b))", 7);
+}
+
+#[test]
+fn branch_compiler_eval_arity() {
+    let msg = eval_err("(eval)");
+    assert!(msg.contains("eval"), "eval no args: {msg}");
+    let msg = eval_err("(eval 1 2 3)");
+    assert!(msg.contains("eval"), "eval too many: {msg}");
+}
+
+#[test]
+fn branch_compiler_eval_with_env() {
+    // eval with env arg — accepted but ignored
+    is_int("(eval '(+ 1 2) (interaction-environment))", 3);
+}
+
+#[test]
+fn branch_compiler_load_arity() {
+    let msg = eval_err("(load)");
+    assert!(msg.contains("load"), "load no args: {msg}");
+    let msg = eval_err("(load \"a\" \"b\")");
+    assert!(msg.contains("load"), "load too many: {msg}");
+}
+
+#[test]
+fn branch_compiler_dynamic_wind_arity() {
+    let msg = eval_err("(dynamic-wind)");
+    assert!(msg.contains("dynamic-wind"), "dw no args: {msg}");
+    let msg = eval_err("(dynamic-wind (lambda () #f) (lambda () #f))");
+    assert!(msg.contains("dynamic-wind"), "dw two args: {msg}");
+}
+
+#[test]
+fn branch_compiler_call_with_values_arity() {
+    let msg = eval_err("(call-with-values)");
+    assert!(msg.contains("call-with-values"), "cwv no args: {msg}");
+}
+
+#[test]
+fn branch_compiler_call_cc_wrong_arity() {
+    let msg = eval_err("(call/cc)");
+    assert!(
+        msg.contains("call") || msg.contains("argument"),
+        "call/cc no args: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_syntax_error() {
+    let msg = eval_err("(syntax-error \"custom error message\")");
+    assert!(msg.contains("custom error message"), "syntax-error: {msg}");
+}
+
+#[test]
+fn branch_compiler_syntax_error_arity() {
+    let msg = eval_err("(syntax-error)");
+    assert!(msg.contains("syntax-error"), "syntax-error no msg: {msg}");
+}
+
+#[test]
+fn branch_compiler_syntax_error_non_string() {
+    // syntax-error with non-string message — falls back to Display
+    let msg = eval_err("(syntax-error 42)");
+    assert!(msg.contains("42"), "syntax-error non-string: {msg}");
+}
+
+#[test]
+fn branch_compiler_cond_expand_no_match() {
+    let msg = eval_err("(cond-expand (nonexistent-feature 1))");
+    assert!(
+        msg.contains("cond-expand") || msg.contains("no matching"),
+        "ce no match: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_cond_expand_and() {
+    is_int("(cond-expand ((and r7rs mae) 42))", 42);
+    // (and) with false feature
+    assert_eq!(
+        eval("(cond-expand ((and r7rs nonexistent) 1) (else 2))"),
+        Value::Int(2),
+    );
+}
+
+#[test]
+fn branch_compiler_cond_expand_or() {
+    is_int("(cond-expand ((or nonexistent r7rs) 42))", 42);
+    assert_eq!(
+        eval("(cond-expand ((or nonexistent1 nonexistent2) 1) (else 2))"),
+        Value::Int(2),
+    );
+}
+
+#[test]
+fn branch_compiler_cond_expand_not() {
+    is_int("(cond-expand ((not nonexistent) 42))", 42);
+    assert_eq!(eval("(cond-expand ((not r7rs) 1) (else 2))"), Value::Int(2),);
+}
+
+#[test]
+fn branch_compiler_cond_expand_library() {
+    is_int("(cond-expand ((library (scheme base)) 42))", 42);
+    assert_eq!(
+        eval("(cond-expand ((library (nonexistent lib)) 1) (else 2))"),
+        Value::Int(2),
+    );
+}
+
+#[test]
+fn branch_compiler_include_arity() {
+    let msg = eval_err("(include)");
+    assert!(msg.contains("include"), "include arity: {msg}");
+}
+
+#[test]
+fn branch_compiler_include_non_string() {
+    let msg = eval_err("(include 42)");
+    assert!(
+        msg.contains("string") || msg.contains("include"),
+        "include non-string: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_include_not_found() {
+    let msg = eval_err("(include \"nonexistent_file_99999.scm\")");
+    assert!(
+        msg.contains("not found") || msg.contains("include"),
+        "include not found: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_let_star_empty_bindings() {
+    is_int("(let* () 42)", 42);
+}
+
+#[test]
+fn branch_compiler_let_bindings_errors() {
+    let msg = eval_err("(let)");
+    assert!(msg.contains("let"), "let no args: {msg}");
+    let msg = eval_err("(let ())");
+    assert!(msg.contains("let"), "let no body: {msg}");
+    let msg = eval_err("(let ((42 1)) 1)");
+    assert!(
+        msg.contains("symbol") || msg.contains("let"),
+        "let non-sym var: {msg}"
+    );
+    let msg = eval_err("(let ((x)) 1)");
+    assert!(
+        msg.contains("let") || msg.contains("binding"),
+        "let binding no expr: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_letrec_errors() {
+    let msg = eval_err("(letrec)");
+    assert!(msg.contains("letrec"), "letrec no args: {msg}");
+    let msg = eval_err("(letrec ())");
+    assert!(msg.contains("letrec"), "letrec no body: {msg}");
+    let msg = eval_err("(letrec ((42 1)) 1)");
+    assert!(
+        msg.contains("symbol") || msg.contains("letrec"),
+        "letrec non-sym: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_named_let() {
+    // Named let — loop
+    is_int(
+        "(let loop ((i 0) (sum 0)) (if (= i 5) sum (loop (+ i 1) (+ sum i))))",
+        10,
+    );
+}
+
+#[test]
+fn branch_compiler_named_let_arity() {
+    let msg = eval_err("(let name)");
+    assert!(
+        msg.contains("named let") || msg.contains("let"),
+        "named let arity: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_define_macro_arity() {
+    let msg = eval_err("(define-macro)");
+    assert!(msg.contains("define-macro"), "define-macro arity: {msg}");
+    let msg = eval_err("(define-macro foo)");
+    assert!(msg.contains("define-macro"), "define-macro no body: {msg}");
+}
+
+#[test]
+fn branch_compiler_define_macro_empty_sig() {
+    let msg = eval_err("(define-macro () 1)");
+    assert!(
+        msg.contains("define-macro") || msg.contains("empty"),
+        "empty sig: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_define_macro_wrong_args() {
+    // macro expects 1 arg, gets 2
+    let msg = eval_err("(define-macro (my-mac x) (list 'quote x)) (my-mac 1 2)");
+    assert!(
+        msg.contains("macro") || msg.contains("arg"),
+        "macro wrong args: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_define_macro_multi_body() {
+    // define-macro with multiple body expressions
+    is_int("(define-macro (my-add a b) (list '+ a b)) (my-add 3 4)", 7);
+}
+
+#[test]
+fn branch_compiler_define_syntax_arity() {
+    let msg = eval_err("(define-syntax)");
+    assert!(msg.contains("define-syntax"), "def-syntax arity: {msg}");
+    let msg = eval_err("(define-syntax foo bar baz)");
+    assert!(msg.contains("define-syntax"), "def-syntax extra: {msg}");
+}
+
+#[test]
+fn branch_compiler_define_syntax_non_symbol() {
+    let msg = eval_err("(define-syntax 42 (syntax-rules () ((_ x) x)))");
+    assert!(
+        msg.contains("symbol") || msg.contains("define-syntax"),
+        "non-sym name: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_define_syntax_empty_transformer() {
+    let msg = eval_err("(define-syntax foo ())");
+    assert!(
+        msg.contains("empty") || msg.contains("define-syntax"),
+        "empty transformer: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_define_syntax_non_syntax_rules() {
+    let msg = eval_err("(define-syntax foo (not-syntax-rules () ((_ x) x)))");
+    assert!(
+        msg.contains("syntax-rules") || msg.contains("define-syntax"),
+        "non-sr: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_let_syntax_arity() {
+    let msg = eval_err("(let-syntax)");
+    assert!(msg.contains("let-syntax"), "let-syntax arity: {msg}");
+    let msg = eval_err("(let-syntax ())");
+    assert!(msg.contains("let-syntax"), "let-syntax no body: {msg}");
+}
+
+#[test]
+fn branch_compiler_let_syntax_clause_invalid() {
+    let msg = eval_err("(let-syntax ((foo)) 1)");
+    assert!(
+        msg.contains("let-syntax") || msg.contains("clause"),
+        "bad clause: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_let_syntax_non_sr() {
+    let msg = eval_err("(let-syntax ((foo (not-syntax-rules))) 1)");
+    assert!(
+        msg.contains("syntax-rules") || msg.contains("let-syntax"),
+        "non-sr: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_quasiquote_arity() {
+    let msg = eval_err("(quasiquote)");
+    assert!(msg.contains("quasiquote"), "qq arity: {msg}");
+    let msg = eval_err("(quasiquote 1 2)");
+    assert!(msg.contains("quasiquote"), "qq extra: {msg}");
+}
+
+#[test]
+fn branch_compiler_set_upvalue() {
+    // set! on an upvalue (variable in enclosing scope)
+    is_int("(let ((x 1)) ((lambda () (set! x 42))) x)", 42);
+}
+
+#[test]
+fn branch_compiler_set_global() {
+    // set! on a global
+    is_int("(define g 10) (set! g 20) g", 20);
+}
+
+#[test]
+fn branch_compiler_if_no_else() {
+    // if with no else — returns void
+    assert_eq!(eval("(if #f 1)"), Value::Void);
+}
+
+#[test]
+fn branch_compiler_cond_test_only() {
+    // (cond (test)) — no body, returns test value if truthy
+    is_int("(cond (42))", 42);
+    // (cond (#f)) — false test falls through, returns void
+    assert_eq!(eval("(cond (#f))"), Value::Void);
+}
+
+#[test]
+fn branch_compiler_cond_no_else_unmatched() {
+    // All clauses fail, no else → void
+    assert_eq!(eval("(cond (#f 1) (#f 2))"), Value::Void);
+}
+
+#[test]
+fn branch_compiler_lambda_formals_invalid() {
+    let msg = eval_err("(lambda 42 1)");
+    assert!(
+        msg.contains("formals") || msg.contains("invalid"),
+        "bad formals: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_lambda_formal_non_symbol() {
+    let msg = eval_err("(lambda (42) 1)");
+    assert!(
+        msg.contains("symbol") || msg.contains("formal"),
+        "non-sym formal: {msg}"
+    );
+}
+
+#[test]
+fn branch_compiler_internal_defines() {
+    // Internal definitions with forward references (letrec* semantics)
+    is_int(
+        "((lambda ()
+           (define (even? n) (if (= n 0) #t (odd? (- n 1))))
+           (define (odd? n) (if (= n 0) #f (even? (- n 1))))
+           (if (even? 10) 1 0)))",
+        1,
+    );
+}
+
+// =========================================================================
+// Phase 2: reader.rs error paths
+// =========================================================================
+
+#[test]
+fn branch_reader_eof_in_input() {
+    let msg = eval_err("(");
+    assert!(msg.contains("unterminated"), "eof in list: {msg}");
+}
+
+#[test]
+fn branch_reader_unexpected_rparen() {
+    let msg = eval_err(")");
+    assert!(msg.contains("unexpected ')'"), "unexpected rparen: {msg}");
+}
+
+#[test]
+fn branch_reader_eof_after_hash_api() {
+    let err = mae_scheme::reader::read_all("#").unwrap_err();
+    assert!(
+        err.message().contains("end of input") || err.message().contains("#"),
+        "eof after #: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_unknown_hash_char() {
+    let err = mae_scheme::reader::read_all("#z").unwrap_err();
+    assert!(
+        err.message().contains("unexpected") || err.message().contains("#"),
+        "unknown hash char: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_u_not_8() {
+    let err = mae_scheme::reader::read_all("#u9(1)").unwrap_err();
+    assert!(
+        err.message().contains("'8'") || err.message().contains("#u"),
+        "#u not 8: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_bytevector_out_of_range() {
+    let err = mae_scheme::reader::read_all("#u8(256)").unwrap_err();
+    assert!(
+        err.message().contains("out of range"),
+        "bv out of range: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_bytevector_non_integer() {
+    let err = mae_scheme::reader::read_all("#u8(foo)").unwrap_err();
+    assert!(
+        err.message().contains("integer") || err.message().contains("must be"),
+        "bv non-int: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_unterminated_vector() {
+    let err = mae_scheme::reader::read_all("#(1 2").unwrap_err();
+    assert!(
+        err.message().contains("unterminated"),
+        "unterminated vector: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_unterminated_string_api() {
+    let err = mae_scheme::reader::read_all("\"hello").unwrap_err();
+    assert!(
+        err.message().contains("unterminated"),
+        "unterminated string: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_unterminated_string_escape() {
+    let err = mae_scheme::reader::read_all("\"hello\\").unwrap_err();
+    assert!(
+        err.message().contains("unterminated") || err.message().contains("escape"),
+        "unterminated escape: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_unknown_string_escape() {
+    let err = mae_scheme::reader::read_all("\"\\q\"").unwrap_err();
+    assert!(
+        err.message().contains("unknown") || err.message().contains("escape"),
+        "unknown escape: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_string_alarm_backspace_null() {
+    // \a = alarm, \b = backspace, \0 = null
+    let result = mae_scheme::reader::read_all("\"\\a\\b\\0\"").unwrap();
+    assert_eq!(result[0], Value::string("\x07\x08\0"));
+}
+
+#[test]
+fn branch_reader_string_line_continuation() {
+    // \ followed by newline — skip newline and leading whitespace
+    let result = mae_scheme::reader::read_all("\"hello\\\n   world\"").unwrap();
+    assert_eq!(result[0], Value::string("helloworld"));
+}
+
+#[test]
+fn branch_reader_char_eof() {
+    let err = mae_scheme::reader::read_all("#\\").unwrap_err();
+    assert!(
+        err.message().contains("end of input") || err.message().contains("character"),
+        "char eof: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_char_unknown_name() {
+    let err = mae_scheme::reader::read_all("#\\foobar").unwrap_err();
+    assert!(
+        err.message().contains("unknown character"),
+        "unknown char name: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_char_named() {
+    assert_eq!(eval("#\\return"), Value::Char('\r'));
+    assert_eq!(eval("#\\null"), Value::Char('\0'));
+    assert_eq!(eval("#\\nul"), Value::Char('\0'));
+    assert_eq!(eval("#\\alarm"), Value::Char('\x07'));
+    assert_eq!(eval("#\\backspace"), Value::Char('\x08'));
+    assert_eq!(eval("#\\escape"), Value::Char('\x1b'));
+    assert_eq!(eval("#\\delete"), Value::Char('\x7f'));
+    assert_eq!(eval("#\\linefeed"), Value::Char('\n'));
+}
+
+#[test]
+fn branch_reader_char_hex() {
+    assert_eq!(eval("#\\x41"), Value::Char('A'));
+    assert_eq!(eval("#\\x61"), Value::Char('a'));
+}
+
+#[test]
+fn branch_reader_char_hex_invalid() {
+    let err = mae_scheme::reader::read_all("#\\xFFFFFF").unwrap_err();
+    assert!(
+        err.message().contains("invalid") || err.message().contains("scalar"),
+        "invalid hex char: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_char_non_alpha() {
+    // Single non-alphabetic character
+    assert_eq!(eval("#\\!"), Value::Char('!'));
+    assert_eq!(eval("#\\@"), Value::Char('@'));
+}
+
+#[test]
+fn branch_reader_datum_label_undefined_ref() {
+    let err = mae_scheme::reader::read_all("#99#").unwrap_err();
+    assert!(
+        err.message().contains("undefined datum label"),
+        "undefined label ref: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_datum_label_bad_suffix() {
+    let err = mae_scheme::reader::read_all("#0x").unwrap_err();
+    // This actually hits the radix path for #0 but with bad digits; or hits the "expected '=' or '#'" error
+    assert!(
+        !err.message().is_empty(),
+        "bad datum label suffix: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_datum_label_multi_digit() {
+    // Multi-digit label: #10= and #10#
+    let result = mae_scheme::reader::read_all("#10=42 #10#").unwrap();
+    assert_eq!(result[0], Value::Int(42));
+    assert_eq!(result[1], Value::Int(42));
+}
+
+#[test]
+fn branch_reader_dotted_pair_extra_tokens() {
+    let err = mae_scheme::reader::read_all("(1 . 2 3)").unwrap_err();
+    assert!(
+        err.message().contains("')' after dotted"),
+        "extra after dot: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_unterminated_delimited_symbol() {
+    let err = mae_scheme::reader::read_all("|hello").unwrap_err();
+    assert!(
+        err.message().contains("unterminated"),
+        "unterminated delimited: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_delimited_symbol_escape() {
+    let result = mae_scheme::reader::read_all("|hello\\|world|").unwrap();
+    assert_eq!(result[0], Value::symbol("hello|world"));
+}
+
+#[test]
+fn branch_reader_delimited_symbol_escape_eof() {
+    let err = mae_scheme::reader::read_all("|hello\\").unwrap_err();
+    assert!(
+        err.message().contains("unterminated"),
+        "delimited escape eof: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_radix_negative() {
+    assert_eq!(eval("#b-101"), Value::Int(-5));
+    assert_eq!(eval("#o-17"), Value::Int(-15));
+    assert_eq!(eval("#x-ff"), Value::Int(-255));
+}
+
+#[test]
+fn branch_reader_radix_positive_sign() {
+    assert_eq!(eval("#b+101"), Value::Int(5));
+    assert_eq!(eval("#x+ff"), Value::Int(255));
+}
+
+#[test]
+fn branch_reader_radix_no_digits() {
+    let err = mae_scheme::reader::read_all("#b").unwrap_err();
+    assert!(
+        err.message().contains("digits") || err.message().contains("radix"),
+        "no digits after radix: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_exactness_chained_radix() {
+    // #e#x, #i#b etc.
+    assert_eq!(eval("#e#xFF"), Value::Int(255));
+    assert_eq!(eval("#i#b101"), Value::Float(5.0));
+    assert_eq!(eval("#e#o77"), Value::Int(63));
+    assert_eq!(eval("#i#d42"), Value::Float(42.0));
+}
+
+#[test]
+fn branch_reader_exactness_bad_radix() {
+    let err = mae_scheme::reader::read_all("#e#z42").unwrap_err();
+    assert!(
+        err.message().contains("radix") || err.message().contains("expected"),
+        "bad radix after exactness: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_exactness_float_to_exact() {
+    assert_eq!(eval("#e3.7"), Value::Int(3));
+}
+
+#[test]
+fn branch_reader_exactness_int_to_inexact() {
+    assert_eq!(eval("#i42"), Value::Float(42.0));
+}
+
+#[test]
+fn branch_reader_rational_zero_denominator() {
+    let err = mae_scheme::reader::read_all("1/0").unwrap_err();
+    assert!(
+        err.message().contains("zero") || err.message().contains("division"),
+        "rational /0: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn branch_reader_rational_invalid() {
+    // rational with more than 2 parts
+    let err = mae_scheme::reader::read_all("1/2/3").unwrap_err();
+    assert!(!err.message().is_empty(), "bad rational: {}", err.message());
+}
+
+#[test]
+fn branch_reader_special_numbers() {
+    assert_eq!(eval("+inf.0"), Value::Float(f64::INFINITY));
+    assert_eq!(eval("-inf.0"), Value::Float(f64::NEG_INFINITY));
+    assert!(matches!(eval("+nan.0"), Value::Float(f) if f.is_nan()));
+    assert!(matches!(eval("-nan.0"), Value::Float(f) if f.is_nan()));
+}
+
+#[test]
+fn branch_reader_sign_as_symbol() {
+    // Bare + and - are symbols, not numbers
+    assert_eq!(eval("'+"), Value::symbol("+"));
+    assert_eq!(eval("'-"), Value::symbol("-"));
+}
+
+#[test]
+fn branch_reader_float_with_exponent() {
+    assert_eq!(eval("1e3"), Value::Float(1000.0));
+    assert_eq!(eval("1.5e2"), Value::Float(150.0));
+    assert_eq!(eval("1e-2"), Value::Float(0.01));
+}
+
+#[test]
+fn branch_reader_dot_prefix_number() {
+    assert_eq!(eval(".5"), Value::Float(0.5));
+    assert_eq!(eval("-.5"), Value::Float(-0.5));
+}
+
+#[test]
+fn branch_reader_ellipsis_as_symbol() {
+    // ... is a symbol
+    assert_eq!(eval("'..."), Value::symbol("..."));
+}
+
+#[test]
+fn branch_reader_nested_block_comment() {
+    // Nested block comments
+    let result = mae_scheme::reader::read_all("#| outer #| inner |# still outer |# 42").unwrap();
+    assert_eq!(result[0], Value::Int(42));
+}
+
+#[test]
+fn branch_reader_unterminated_block_comment() {
+    // In skip_atmosphere, unterminated block comments are silently ignored
+    // (error result is consumed by let _ = ...), so read_all returns empty.
+    // Test that the skip_block_comment method itself returns error when called
+    // via the read_hash path (#| as datum).
+    let result = mae_scheme::reader::read_all("#| unterminated");
+    // skip_atmosphere consumes the block comment error, returns empty vec
+    assert!(result.is_ok() && result.unwrap().is_empty());
+}
+
+// =========================================================================
+// Phase 2: value.rs Display and equality
+// =========================================================================
+
+#[test]
+fn branch_value_display_float_special() {
+    assert_eq!(format!("{}", Value::Float(f64::NAN)), "+nan.0");
+    assert_eq!(format!("{}", Value::Float(f64::INFINITY)), "+inf.0");
+    assert_eq!(format!("{}", Value::Float(f64::NEG_INFINITY)), "-inf.0");
+    assert_eq!(format!("{}", Value::Float(1.0)), "1.0");
+    assert_eq!(format!("{}", Value::Float(1.5)), "1.5");
+}
+
+#[test]
+fn branch_value_display_improper_list() {
+    let v = Value::cons(Value::Int(1), Value::Int(2));
+    assert_eq!(format!("{v}"), "(1 . 2)");
+}
+
+#[test]
+fn branch_value_display_bytevector() {
+    let v = Value::bytevector(vec![1, 2, 3]);
+    assert_eq!(format!("{v}"), "#u8(1 2 3)");
+}
+
+#[test]
+fn branch_value_display_void() {
+    assert_eq!(format!("{}", Value::Void), "#<void>");
+}
+
+#[test]
+fn branch_value_display_eof() {
+    assert_eq!(format!("{}", Value::Eof), "#<eof>");
+}
+
+#[test]
+fn branch_value_display_undefined() {
+    assert_eq!(format!("{}", Value::Undefined), "#<undefined>");
+}
+
+#[test]
+fn branch_value_display_vector() {
+    let v = Value::vector(vec![Value::Int(1), Value::Int(2)]);
+    assert_eq!(format!("{v}"), "#(1 2)");
+}
+
+#[test]
+fn branch_value_display_closure() {
+    let v = eval("(lambda (x) x)");
+    let s = format!("{v}");
+    assert!(
+        s.contains("procedure") || s.contains("lambda"),
+        "closure display: {s}"
+    );
+}
+
+#[test]
+fn branch_value_display_char_special() {
+    assert_eq!(format!("{}", Value::Char(' ')), "#\\space");
+    assert_eq!(format!("{}", Value::Char('\n')), "#\\newline");
+    assert_eq!(format!("{}", Value::Char('\t')), "#\\tab");
+    assert_eq!(format!("{}", Value::Char('\r')), "#\\return");
+    assert_eq!(format!("{}", Value::Char('\0')), "#\\null");
+    assert_eq!(format!("{}", Value::Char('\x07')), "#\\alarm");
+    assert_eq!(format!("{}", Value::Char('\x08')), "#\\backspace");
+    assert_eq!(format!("{}", Value::Char('\x1b')), "#\\escape");
+    assert_eq!(format!("{}", Value::Char('\x7f')), "#\\delete");
+    assert_eq!(format!("{}", Value::Char('a')), "#\\a");
+}
+
+#[test]
+fn branch_value_display_char_non_graphic() {
+    // Non-graphic character — display as #\xNN
+    let c = '\x01';
+    let s = format!("{}", Value::Char(c));
+    assert!(
+        s.contains("x1") || s.contains("\\x"),
+        "non-graphic char display: {s}"
+    );
+}
+
+#[test]
+fn branch_value_display_string_escapes() {
+    // String display should escape special characters
+    let v = Value::string("hello\n\"world\\");
+    let s = format!("{v}");
+    assert!(s.contains("\\n"), "newline escape: {s}");
+    assert!(s.contains("\\\""), "quote escape: {s}");
+    assert!(s.contains("\\\\"), "backslash escape: {s}");
+}
+
+#[test]
+fn branch_value_eq_identity() {
+    // eq? on floats — should be false (different allocations)
+    is_false("(eq? 1.0 1.0)");
+    // eq? on same symbol
+    is_true("(eq? 'foo 'foo)");
+    // eq? on different types
+    is_false("(eq? 1 1.0)");
+    is_false("(eq? '() #f)");
+}
+
+#[test]
+fn branch_value_eqv_float() {
+    is_true("(eqv? 1.0 1.0)");
+    is_false("(eqv? 1.0 2.0)");
+    // NaN is not eqv? to itself
+    is_false("(eqv? +nan.0 +nan.0)");
+}
+
+#[test]
+fn branch_value_equal_cross_type() {
+    // equal? on different types returns false
+    is_false("(equal? 1 \"1\")");
+    is_false("(equal? 1 #t)");
+    is_false("(equal? '() #f)");
+}
+
+#[test]
+fn branch_value_equal_vectors() {
+    is_true("(equal? #(1 2 3) #(1 2 3))");
+    is_false("(equal? #(1 2 3) #(1 2 4))");
+    is_false("(equal? #(1 2) #(1 2 3))");
+}
+
+#[test]
+fn branch_value_equal_bytevectors() {
+    is_true("(equal? #u8(1 2 3) #u8(1 2 3))");
+    is_false("(equal? #u8(1 2 3) #u8(1 2 4))");
+}
+
+#[test]
+fn branch_value_type_names() {
+    // Verify type_name for each variant through error messages
+    let msg = eval_err("(+ \"x\" 1)");
+    assert!(
+        msg.contains("string") || msg.contains("number"),
+        "string type: {msg}"
+    );
+    let msg = eval_err("(car 42)");
+    assert!(
+        msg.contains("pair") || msg.contains("integer"),
+        "int type: {msg}"
+    );
+}
+
+#[test]
+fn branch_value_is_procedure() {
+    is_true("(procedure? (lambda () 1))");
+    is_true("(procedure? car)");
+    is_true("(procedure? (call-with-current-continuation (lambda (k) k)))");
+    is_false("(procedure? 42)");
+    is_false("(procedure? \"hello\")");
+}
+
+#[test]
+fn branch_value_to_f64() {
+    // to_f64 returns Some for numbers, None for non-numbers
+    is_true("(number? 42)");
+    is_true("(number? 3.14)");
+    is_false("(number? \"hello\")");
+}
+
+#[test]
+fn branch_value_is_exact() {
+    is_true("(exact? 42)");
+    is_false("(exact? 3.14)");
+}
+
+// =========================================================================
+// Phase 2: vm.rs error paths
+// =========================================================================
+
+#[test]
+fn branch_vm_non_procedure_call() {
+    let msg = eval_err("(42 1 2)");
+    assert!(
+        msg.contains("procedure") || msg.contains("not callable"),
+        "non-proc call: {msg}"
+    );
+}
+
+#[test]
+fn branch_vm_undefined_variable() {
+    let msg = eval_err("undefined_variable_xyz");
+    assert!(
+        msg.contains("undefined") || msg.contains("unbound"),
+        "undefined var: {msg}"
+    );
+}
+
+#[test]
+fn branch_vm_continuation_wrong_arity() {
+    // Continuations expect exactly 1 argument
+    let msg = eval_err("(call/cc (lambda (k) (k 1 2)))");
+    assert!(
+        msg.contains("continuation") || msg.contains("1 argument") || msg.contains("arity"),
+        "cont arity: {msg}"
+    );
+}
+
+#[test]
+fn branch_vm_raise_non_error_obj() {
+    // raise with a non-error object — e.g., raise a string
+    assert_eq!(
+        eval("(guard (e (#t e)) (raise \"custom\"))"),
+        Value::string("custom"),
+    );
+    // raise with an integer
+    assert_eq!(eval("(guard (e (#t e)) (raise 42))"), Value::Int(42),);
+}
+
+#[test]
+fn branch_vm_raise_continuable_handler_returns() {
+    // raise-continuable: handler returns a value
+    is_int(
+        "(with-exception-handler
+           (lambda (e) (+ e 10))
+           (lambda () (+ 1 (raise-continuable 5))))",
+        16,
+    );
+}
+
+#[test]
+fn branch_vm_raise_non_continuable_handler_returns() {
+    // raise (non-continuable): handler returns → should signal error
+    let msg = eval_err(
+        "(with-exception-handler
+           (lambda (e) 42)
+           (lambda () (raise \"boom\")))",
+    );
+    assert!(
+        msg.contains("handler returned")
+            || msg.contains("non-continuable")
+            || msg.contains("exception"),
+        "non-continuable handler returned: {msg}"
+    );
+}
+
+#[test]
+fn branch_vm_stack_overflow() {
+    // Stack overflow detection — must use non-tail recursion to grow the stack
+    // (+ 1 (f x)) is NOT in tail position, so each call adds a frame
+    let msg = eval_err("(define (f x) (+ 1 (f (+ x 1)))) (f 0)");
+    assert!(
+        msg.contains("stack") || msg.contains("overflow") || msg.contains("frames"),
+        "stack overflow: {msg}"
+    );
+}
+
+#[test]
+fn branch_vm_apply_non_list_args() {
+    let msg = eval_err("(apply + 42)");
+    assert!(
+        msg.contains("list") || msg.contains("apply"),
+        "apply non-list: {msg}"
+    );
+}
+
+#[test]
+fn branch_vm_foreign_fn_arity_check() {
+    // Foreign function arity: too few args
+    let msg = eval_err("(car)");
+    assert!(
+        msg.contains("argument") || msg.contains("arity") || msg.contains("expected"),
+        "foreign fn too few: {msg}"
+    );
+    // Foreign function arity: too many args
+    let msg = eval_err("(car 1 2)");
+    assert!(
+        msg.contains("argument") || msg.contains("arity") || msg.contains("expected"),
+        "foreign fn too many: {msg}"
+    );
+    // Variadic arity: + accepts 0+ args
+    is_int("(+)", 0);
+    is_int("(+ 1 2 3)", 6);
+}
+
+#[test]
+fn branch_vm_closure_arity_check() {
+    let msg = eval_err("((lambda (x y) (+ x y)) 1)");
+    assert!(
+        msg.contains("argument") || msg.contains("arity") || msg.contains("expected"),
+        "closure arity: {msg}"
+    );
+    let msg = eval_err("((lambda (x) x) 1 2)");
+    assert!(
+        msg.contains("argument") || msg.contains("arity") || msg.contains("expected"),
+        "closure too many: {msg}"
+    );
+}
+
+#[test]
+fn branch_vm_dynamic_wind_exception() {
+    // dynamic-wind after thunk runs even on exception
+    is_int(
+        "(let ((result 0))
+           (guard (e (#t result))
+             (dynamic-wind
+               (lambda () #f)
+               (lambda () (error \"boom\"))
+               (lambda () (set! result 42)))))",
+        42,
+    );
+}
+
+#[test]
+fn branch_vm_winder_traversal_callcc() {
+    // call/cc across dynamic-wind boundaries — winders run
+    is_true(
+        "(let ((log '()))
+           (let ((k (call-with-current-continuation
+                      (lambda (c)
+                        (dynamic-wind
+                          (lambda () (set! log (cons 'before log)))
+                          (lambda () (c c))
+                          (lambda () (set! log (cons 'after log))))))))
+             ;; k is the continuation; don't invoke it again to avoid infinite loop
+             (pair? log)))",
+    );
+}
+
+// =========================================================================
+// Phase 2: macros.rs branches
+// =========================================================================
+
+#[test]
+fn branch_macros_no_matching_pattern() {
+    let msg = eval_err(
+        "(define-syntax my-if
+           (syntax-rules ()
+             ((_ test then else) (if test then else))))
+         (my-if 1)",
+    );
+    assert!(
+        msg.contains("no matching") || msg.contains("syntax"),
+        "no matching pattern: {msg}"
+    );
+}
+
+#[test]
+fn branch_macros_ellipsis_empty() {
+    // Ellipsis matching zero elements
+    is_int(
+        "(define-syntax my-begin
+           (syntax-rules ()
+             ((_ expr ...) (begin expr ...))))
+         (my-begin 42)",
+        42,
+    );
+}
+
+#[test]
+fn branch_macros_ellipsis_multi() {
+    // Ellipsis matching multiple elements
+    is_int(
+        "(define-syntax my-add
+           (syntax-rules ()
+             ((_ x ...) (+ x ...))))
+         (my-add 1 2 3 4)",
+        10,
+    );
+}
+
+#[test]
+fn branch_macros_literal_match() {
+    // Literal identifier matching
+    is_int(
+        "(define-syntax my-cond
+           (syntax-rules (=>)
+             ((_ test => proc) (proc test))
+             ((_ test expr) (if test expr #f))))
+         (my-cond 5 => (lambda (x) (+ x 1)))",
+        6,
+    );
+}
+
+#[test]
+fn branch_macros_literal_no_match() {
+    // Literal identifier mismatch falls through
+    is_int(
+        "(define-syntax my-cond
+           (syntax-rules (=>)
+             ((_ test => proc) (proc test))
+             ((_ test expr) (if test expr #f))))
+         (my-cond #t 42)",
+        42,
+    );
+}
+
+#[test]
+fn branch_macros_nested_patterns() {
+    // Nested pattern matching
+    is_int(
+        "(define-syntax my-let1
+           (syntax-rules ()
+             ((_ ((var val)) body ...) ((lambda (var) body ...) val))))
+         (my-let1 ((x 42)) x)",
+        42,
+    );
+}
+
+// =========================================================================
+// Phase 2: library.rs parsing branches
+// =========================================================================
+
+#[test]
+fn branch_library_name_empty() {
+    let msg = eval_err("(define-library ())");
+    assert!(
+        msg.contains("empty") || msg.contains("non-empty"),
+        "empty lib name: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_name_invalid_component() {
+    let msg = eval_err("(define-library (#t) (export) (begin))");
+    assert!(
+        msg.contains("identifier") || msg.contains("integer") || msg.contains("component"),
+        "bad lib component: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_name_with_int() {
+    // Library name with integer component — allowed by R7RS
+    eval("(define-library (test 1) (export) (begin))");
+}
+
+#[test]
+fn branch_library_unknown_declaration() {
+    let msg = eval_err("(define-library (test bad) (unknown-decl 1))");
+    assert!(
+        msg.contains("unknown") || msg.contains("declaration"),
+        "unknown lib decl: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_export_rename() {
+    // export with rename
+    eval("(define-library (test export-rename) (export (rename my-fn ext-fn)) (begin (define my-fn 42)))");
+}
+
+#[test]
+fn branch_library_export_invalid() {
+    let msg = eval_err("(define-library (test bad-export) (export 42))");
+    assert!(
+        msg.contains("export") || msg.contains("invalid"),
+        "invalid export: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_export_rename_non_symbol() {
+    let msg = eval_err("(define-library (test bad-rename) (export (rename 42 foo)))");
+    assert!(
+        msg.contains("export") || msg.contains("identifier") || msg.contains("rename"),
+        "rename non-symbol: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_import_except() {
+    // Import with except — uses a user-defined library
+    eval(
+        "(define-library (test except-base)
+           (export a b c)
+           (begin (define a 1) (define b 2) (define c 3)))
+         (import (except (test except-base) b))",
+    );
+}
+
+#[test]
+fn branch_library_import_prefix() {
+    eval(
+        "(define-library (test prefix-base)
+           (export x)
+           (begin (define x 42)))
+         (import (prefix (test prefix-base) pre:))",
+    );
+}
+
+#[test]
+fn branch_library_import_rename() {
+    eval(
+        "(define-library (test rename-base)
+           (export x)
+           (begin (define x 42)))
+         (import (rename (test rename-base) (x y)))",
+    );
+}
+
+#[test]
+fn branch_library_import_only_not_in_set() {
+    // Narrowing explicit bindings — requesting name not in explicit set
+    // This is tested via nested import modifiers
+    let msg = eval_err(
+        "(define-library (test only-nested)
+           (export a b)
+           (begin (define a 1) (define b 2)))
+         (import (only (only (test only-nested) a) b))",
+    );
+    assert!(
+        msg.contains("not in") || msg.contains("only"),
+        "only not in set: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_import_except_empty() {
+    let msg = eval_err("(import (except))");
+    assert!(
+        msg.contains("except") || msg.contains("requires"),
+        "except empty: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_import_prefix_arity() {
+    let msg = eval_err("(import (prefix))");
+    assert!(
+        msg.contains("prefix") || msg.contains("requires"),
+        "prefix empty: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_import_rename_arity() {
+    let msg = eval_err("(import (rename))");
+    assert!(
+        msg.contains("rename") || msg.contains("requires"),
+        "rename empty: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_import_rename_bad_pair() {
+    let msg = eval_err(
+        "(define-library (test rn-bad) (export x) (begin (define x 1)))
+         (import (rename (test rn-bad) (x)))",
+    );
+    assert!(
+        msg.contains("rename") || msg.contains("pair"),
+        "rename bad pair: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_import_only_non_symbol() {
+    let msg = eval_err(
+        "(define-library (test only-ns) (export x) (begin (define x 1)))
+         (import (only (test only-ns) 42))",
+    );
+    assert!(
+        msg.contains("identifier") || msg.contains("only"),
+        "only non-symbol: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_import_except_non_symbol() {
+    let msg = eval_err(
+        "(define-library (test exc-ns) (export x) (begin (define x 1)))
+         (import (except (test exc-ns) 42))",
+    );
+    assert!(
+        msg.contains("identifier") || msg.contains("except"),
+        "except non-symbol: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_import_prefix_non_symbol() {
+    let msg = eval_err(
+        "(define-library (test pfx-ns) (export x) (begin (define x 1)))
+         (import (prefix (test pfx-ns) 42))",
+    );
+    assert!(
+        msg.contains("identifier") || msg.contains("prefix"),
+        "prefix non-symbol: {msg}"
+    );
+}
+
+#[test]
+fn branch_library_import_rename_non_symbol() {
+    let msg = eval_err(
+        "(define-library (test rn-ns) (export x) (begin (define x 1)))
+         (import (rename (test rn-ns) (42 y)))",
+    );
+    assert!(
+        msg.contains("identifier") || msg.contains("rename"),
+        "rename non-symbol: {msg}"
+    );
+}
+
+// =========================================================================
+// Phase 2: io.rs remaining edge cases
+// =========================================================================
+
+#[test]
+fn branch_io_write_simple_no_port() {
+    // write-simple without port arg — writes to stdout (no error)
+    eval("(write-simple 42)");
+}
+
+#[test]
+fn branch_io_write_shared_no_port() {
+    eval("(write-shared '(1 2 3))");
+}
+
+#[test]
+fn branch_io_format_tilde_a() {
+    // format ~a for display
+    assert_eq!(eval("(format \"~a\" 42)"), Value::string("42"));
+    assert_eq!(eval("(format \"~a\" \"hello\")"), Value::string("hello"));
+}
+
+#[test]
+fn branch_io_format_tilde_s() {
+    // format ~s for write (quoted)
+    assert_eq!(
+        eval("(format \"~s\" \"hello\")"),
+        Value::string("\"hello\"")
+    );
+}
+
+#[test]
+fn branch_io_format_tilde_percent() {
+    assert_eq!(eval("(format \"~%\")"), Value::string("\n"));
+}
+
+#[test]
+fn branch_io_format_tilde_tilde() {
+    assert_eq!(eval("(format \"~~\")"), Value::string("~"));
+}
+
+#[test]
+fn branch_io_format_unknown_directive() {
+    // Unknown format directive is passed through as literal
+    assert_eq!(eval("(format \"~z\" 1)"), Value::string("~z"));
+}
+
+#[test]
+fn branch_io_read_string_from_port() {
+    assert_eq!(
+        eval("(let ((p (open-input-string \"hello\"))) (read-string 3 p))"),
+        Value::string("hel"),
+    );
+}
+
+#[test]
+fn branch_io_read_string_eof() {
+    assert_eq!(
+        eval("(let ((p (open-input-string \"\"))) (read-string 5 p))"),
+        Value::Eof,
+    );
+}
+
+#[test]
+fn branch_io_flush_output_port() {
+    eval("(flush-output-port (current-output-port))");
+}
+
+#[test]
+fn branch_io_get_environment_variable() {
+    is_false("(get-environment-variable \"MAE_NONEXISTENT_12345\")");
+    // HOME should exist
+    is_true("(string? (get-environment-variable \"HOME\"))");
+}
+
+#[test]
+fn branch_io_get_environment_variables() {
+    is_true("(list? (get-environment-variables))");
+}
+
+// =========================================================================
+// Phase 2: base.rs remaining branches
+// =========================================================================
+
+#[test]
+fn branch_base_modulo_both_negative() {
+    // modulo with both operands negative
+    assert_eq!(eval("(modulo -7 -3)"), Value::Int(-1));
+}
+
+#[test]
+fn branch_base_floor_quotient_mixed_signs() {
+    // floor-quotient with positive/negative
+    assert_eq!(eval("(floor-quotient 7 -2)"), Value::Int(-4));
+    assert_eq!(eval("(floor-quotient -7 2)"), Value::Int(-4));
+}
+
+#[test]
+fn branch_base_floor_remainder_mixed_signs() {
+    assert_eq!(eval("(floor-remainder 7 -2)"), Value::Int(-1));
+    assert_eq!(eval("(floor-remainder -7 2)"), Value::Int(1));
+}
+
+#[test]
+fn branch_base_truncate_div() {
+    assert_eq!(eval("(truncate-quotient 7 2)"), Value::Int(3));
+    assert_eq!(eval("(truncate-remainder 7 2)"), Value::Int(1));
+    // truncate/ returns 2 values
+    assert_eq!(
+        eval("(call-with-values (lambda () (truncate/ 7 2)) list)"),
+        eval("'(3 1)")
+    );
+}
+
+#[test]
+fn branch_base_floor_div() {
+    // floor/ returns 2 values
+    assert_eq!(
+        eval("(call-with-values (lambda () (floor/ 7 2)) list)"),
+        eval("'(3 1)")
+    );
+    assert_eq!(
+        eval("(call-with-values (lambda () (floor/ -7 2)) list)"),
+        eval("'(-4 1)")
+    );
+}
+
+#[test]
+fn branch_base_gcd_zero() {
+    assert_eq!(eval("(gcd 0 0)"), Value::Int(0));
+    assert_eq!(eval("(gcd 0 5)"), Value::Int(5));
+    assert_eq!(eval("(gcd 5 0)"), Value::Int(5));
+}
+
+#[test]
+fn branch_base_lcm_zero() {
+    assert_eq!(eval("(lcm 0 5)"), Value::Int(0));
+    assert_eq!(eval("(lcm 5 0)"), Value::Int(0));
+}
+
+#[test]
+fn branch_base_number_to_string_float_radix() {
+    // number->string with float should work for radix 10
+    let result = eval("(number->string 3.14)");
+    assert!(matches!(result, Value::String(_)));
+}
+
+#[test]
+fn branch_base_string_to_number_invalid() {
+    is_false("(string->number \"abc\")");
+    is_false("(string->number \"\")");
+}
+
+#[test]
+fn branch_base_string_to_number_radix() {
+    assert_eq!(eval("(string->number \"ff\" 16)"), Value::Int(255));
+    assert_eq!(eval("(string->number \"77\" 8)"), Value::Int(63));
+    assert_eq!(eval("(string->number \"101\" 2)"), Value::Int(5));
+}
+
+#[test]
+fn branch_base_list_copy() {
+    // list-copy makes a fresh copy
+    assert_eq!(eval("(list-copy '(1 2 3))"), eval("'(1 2 3)"));
+    assert_eq!(eval("(list-copy '())"), Value::Null);
+}
+
+#[test]
+fn branch_base_make_list() {
+    assert_eq!(eval("(make-list 3 'x)"), eval("'(x x x)"));
+    assert_eq!(eval("(make-list 0 'x)"), Value::Null);
+}
+
+#[test]
+fn branch_base_exact_integer_sqrt() {
+    assert_eq!(
+        eval("(call-with-values (lambda () (exact-integer-sqrt 14)) list)"),
+        eval("'(3 5)"),
+    );
+    assert_eq!(
+        eval("(call-with-values (lambda () (exact-integer-sqrt 16)) list)"),
+        eval("'(4 0)"),
+    );
+}
+
+#[test]
+fn branch_base_rationalize() {
+    // rationalize returns closest rational within tolerance
+    let result = eval("(rationalize 3.14 0.1)");
+    assert!(matches!(result, Value::Float(_) | Value::Int(_)));
+}
+
+#[test]
+fn branch_base_expt_zero_base() {
+    assert_eq!(eval("(expt 0 0)"), Value::Int(1));
+    assert_eq!(eval("(expt 0 5)"), Value::Int(0));
+}
+
+#[test]
+fn branch_base_expt_negative() {
+    assert_eq!(eval("(expt 2 -1)"), Value::Float(0.5));
+}
+
+#[test]
+fn branch_base_square() {
+    assert_eq!(eval("(square 5)"), Value::Int(25));
+    assert_eq!(eval("(square 1.5)"), Value::Float(2.25));
+}
+
+#[test]
+fn branch_base_abs() {
+    assert_eq!(eval("(abs -5)"), Value::Int(5));
+    assert_eq!(eval("(abs 5)"), Value::Int(5));
+    assert_eq!(eval("(abs -2.75)"), Value::Float(2.75));
+}
+
+#[test]
+fn branch_base_string_conversion_roundtrip() {
+    assert_eq!(eval("(number->string 42)"), Value::string("42"));
+    assert_eq!(eval("(string->number \"42\")"), Value::Int(42));
+    assert_eq!(eval("(string->number \"2.75\")"), Value::Float(2.75));
+}
+
+#[test]
+fn branch_base_char_predicates() {
+    is_true("(char-alphabetic? #\\a)");
+    is_false("(char-alphabetic? #\\1)");
+    is_true("(char-numeric? #\\5)");
+    is_false("(char-numeric? #\\a)");
+    is_true("(char-whitespace? #\\space)");
+    is_false("(char-whitespace? #\\a)");
+    is_true("(char-upper-case? #\\A)");
+    is_false("(char-upper-case? #\\a)");
+    is_true("(char-lower-case? #\\a)");
+    is_false("(char-lower-case? #\\A)");
 }

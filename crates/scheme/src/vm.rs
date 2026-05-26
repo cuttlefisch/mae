@@ -905,6 +905,16 @@ impl Vm {
             }
 
             Value::Foreign(ff) => {
+                // Check arity before calling
+                match &ff.arity {
+                    Arity::Fixed(n) if argc != *n => {
+                        return Err(LispError::arity(&ff.name, Arity::Fixed(*n), argc));
+                    }
+                    Arity::Variadic(min) if argc < *min => {
+                        return Err(LispError::arity(&ff.name, Arity::Variadic(*min), argc));
+                    }
+                    _ => {}
+                }
                 let args: Vec<Value> = self.stack[fn_pos + 1..].to_vec();
                 self.stack.truncate(fn_pos);
                 let result = (ff.func)(&args)?;

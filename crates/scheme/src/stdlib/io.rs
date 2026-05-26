@@ -584,18 +584,32 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    // write-string to port
+    // write-string to port — R7RS §6.13.2: (write-string string [port [start [end]]])
     let co = current_out.clone();
     vm.register_fn(
         "write-string",
-        "Write string to port",
+        "Write string (or substring) to port",
         Arity::Variadic(1),
         move |args| {
             let s = args[0].as_str()?;
-            if args.len() > 1 {
-                write_to_port(&args[1], s)?;
+            let port = if args.len() > 1 {
+                args[1].clone()
             } else {
-                write_to_port(&co.borrow(), s)?;
+                co.borrow().clone()
+            };
+            if args.len() > 2 {
+                // start/end range
+                let chars: Vec<char> = s.chars().collect();
+                let start = args[2].as_int()? as usize;
+                let end = if args.len() > 3 {
+                    args[3].as_int()? as usize
+                } else {
+                    chars.len()
+                };
+                let sub: String = chars[start..end].iter().collect();
+                write_to_port(&port, &sub)?;
+            } else {
+                write_to_port(&port, s)?;
             }
             Ok(Value::Void)
         },
@@ -1259,6 +1273,26 @@ pub fn register(vm: &mut Vm) {
                                     break;
                                 }
                                 bv_mut[i] = src[*pos];
+                                *pos += 1;
+                                count += 1;
+                            }
+                            if count == 0 {
+                                Ok(Value::Eof)
+                            } else {
+                                Ok(Value::Int(count))
+                            }
+                        }
+                        Port::BytevectorInput { data, pos } => {
+                            if *pos >= data.len() {
+                                return Ok(Value::Eof);
+                            }
+                            let mut bv_mut = bv.borrow_mut();
+                            let mut count = 0;
+                            for i in start..end {
+                                if *pos >= data.len() {
+                                    break;
+                                }
+                                bv_mut[i] = data[*pos];
                                 *pos += 1;
                                 count += 1;
                             }

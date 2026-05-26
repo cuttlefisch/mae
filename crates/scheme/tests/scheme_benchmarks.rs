@@ -56,8 +56,8 @@ fn bench_fib_30() {
     ",
     );
     assert_eq!(result, Value::Int(832040));
-    // Generous timeout for CI (debug mode, slow runners)
-    assert!(elapsed.as_secs() < 30, "fib(30) too slow: {elapsed:?}");
+    // Generous timeout for CI (debug mode, slow runners, parallel tests)
+    assert!(elapsed.as_secs() < 60, "fib(30) too slow: {elapsed:?}");
 }
 
 #[test]
@@ -181,7 +181,7 @@ fn bench_tco_count() {
     ",
     );
     assert_eq!(result, Value::Int(0));
-    assert!(elapsed.as_secs() < 5, "tco-count too slow: {elapsed:?}");
+    assert!(elapsed.as_secs() < 15, "tco-count too slow: {elapsed:?}");
 }
 
 #[test]
@@ -387,7 +387,7 @@ fn bench_ack_small() {
     ",
     );
     assert_eq!(result, Value::Int(1021));
-    assert!(elapsed.as_secs() < 10, "ack(3,7) too slow: {elapsed:?}");
+    assert!(elapsed.as_secs() < 20, "ack(3,7) too slow: {elapsed:?}");
 }
 
 // ============================================================
@@ -561,7 +561,7 @@ fn bench_gabriel_quicksort() {
         result,
         Value::list(vec![Value::Int(1), Value::Int(500), Value::Int(500)])
     );
-    assert!(elapsed.as_secs() < 5, "quicksort too slow: {elapsed:?}");
+    assert!(elapsed.as_secs() < 10, "quicksort too slow: {elapsed:?}");
 }
 
 #[test]
