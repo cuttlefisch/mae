@@ -17,7 +17,7 @@
 //! @since: 0.12.0
 
 use crate::compiler::Compiler;
-use crate::lisp_error::Arity;
+use crate::lisp_error::{Arity, SourceLocation};
 use crate::reader;
 use crate::value::Value;
 use crate::vm::Vm;
@@ -294,6 +294,24 @@ pub fn hover(vm: &Vm, symbol: &str) -> Option<SchemeHover> {
         });
     }
 
+    None
+}
+
+/// Go-to-definition: find where a symbol is defined.
+///
+/// For closures, returns the source location from the CodeObject's source map.
+/// For foreign functions, returns None (defined in Rust, not Scheme source).
+pub fn goto_definition(vm: &Vm, symbol: &str) -> Option<SourceLocation> {
+    if let Some(Value::Closure(c)) = vm.globals.get(symbol) {
+        if let Some(code) = vm.code_pool.get(c.code_id) {
+            // Prefer the code object's source location
+            if let Some(loc) = &code.source {
+                return Some(loc.clone());
+            }
+            // Fall back to first non-None source map entry
+            return code.source_map.iter().find_map(|l| l.clone());
+        }
+    }
     None
 }
 
@@ -638,6 +656,34 @@ mod tests {
         let sig = signature_help(&vm, "map").unwrap();
         assert!(sig.label.contains("map"));
         assert_eq!(sig.parameters.len(), 3); // arg1, arg2, ...
+    }
+
+    #[test]
+    fn test_goto_definition_closure() {
+        let mut vm = Vm::new();
+        vm.eval_with_file("(define (foo x) (+ x 1))", "test.scm")
+            .unwrap();
+        let loc = goto_definition(&vm, "foo");
+        assert!(loc.is_some(), "should find definition for user-defined fn");
+        let loc = loc.unwrap();
+        assert_eq!(loc.file, "test.scm");
+        assert_eq!(loc.line, 1);
+    }
+
+    #[test]
+    fn test_goto_definition_foreign() {
+        let mut vm = Vm::new();
+        vm.register_fn("buffer-insert", "Insert", Arity::Fixed(1), |_| {
+            Ok(Value::Void)
+        });
+        // Foreign functions have no source location
+        assert!(goto_definition(&vm, "buffer-insert").is_none());
+    }
+
+    #[test]
+    fn test_goto_definition_missing() {
+        let vm = Vm::new();
+        assert!(goto_definition(&vm, "nonexistent").is_none());
     }
 
     #[test]

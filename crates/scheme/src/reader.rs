@@ -53,6 +53,35 @@ impl<'a> Reader<'a> {
         Ok(results)
     }
 
+    /// Read a single datum with its source location. Returns None at EOF.
+    pub fn read_located(&mut self) -> Result<Option<(Value, SourceLocation)>, LispError> {
+        self.skip_atmosphere();
+        if self.at_end() {
+            return Ok(None);
+        }
+        let loc = self.current_location();
+        let datum = self.read_datum()?;
+        Ok(Some((datum, loc)))
+    }
+
+    /// Read all datums with their source locations.
+    pub fn read_all_located(&mut self) -> Result<Vec<(Value, SourceLocation)>, LispError> {
+        let mut results = Vec::new();
+        while let Some(pair) = self.read_located()? {
+            results.push(pair);
+        }
+        Ok(results)
+    }
+
+    /// Get the current source location.
+    fn current_location(&self) -> SourceLocation {
+        SourceLocation {
+            file: self.file.clone(),
+            line: self.line,
+            column: self.column,
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Core reading
     // -----------------------------------------------------------------------
@@ -907,6 +936,14 @@ impl<'a> Reader<'a> {
 /// Parse a string of Scheme code into a list of Values.
 pub fn read_all(input: &str) -> Result<Vec<Value>, LispError> {
     Reader::new(input, "<string>").read_all()
+}
+
+/// Parse a string of Scheme code into located values (with source positions).
+pub fn read_all_located(
+    input: &str,
+    file: &str,
+) -> Result<Vec<(Value, SourceLocation)>, LispError> {
+    Reader::new(input, file).read_all_located()
 }
 
 /// Parse a single datum from a string.

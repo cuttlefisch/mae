@@ -126,13 +126,7 @@ impl CodeObject {
         }
     }
 
-    fn emit(&mut self, op: Op) {
-        self.source_map.push(None);
-        self.ops.push(op);
-    }
-
-    #[allow(dead_code)]
-    fn emit_at(&mut self, op: Op, loc: Option<SourceLocation>) {
+    fn emit(&mut self, op: Op, loc: Option<SourceLocation>) {
         self.source_map.push(loc);
         self.ops.push(op);
     }
@@ -234,6 +228,8 @@ pub struct Compiler {
     pub load_paths: Vec<std::path::PathBuf>,
     /// Counter for generating unique names (e.g., do loop variables).
     gensym_counter: usize,
+    /// Current source location for source map generation.
+    current_loc: Option<SourceLocation>,
 }
 
 impl Compiler {
@@ -244,6 +240,7 @@ impl Compiler {
             gensym_counter: 0,
             macros: HashMap::new(),
             load_paths: Vec::new(),
+            current_loc: None,
         }
     }
 
@@ -252,6 +249,33 @@ impl Compiler {
         let n = self.gensym_counter;
         self.gensym_counter += 1;
         format!("__{prefix}_{n}__")
+    }
+
+    /// Compile top-level expressions with source locations.
+    /// Each `(Value, SourceLocation)` pair provides the location for source map entries.
+    pub fn compile_top_level_located(
+        &mut self,
+        exprs: &[(Value, SourceLocation)],
+    ) -> Result<usize, LispError> {
+        for (i, (expr, loc)) in exprs.iter().enumerate() {
+            let is_last = i == exprs.len() - 1;
+            self.current_loc = Some(loc.clone());
+            self.compile_expr(expr, is_last)?;
+            if !is_last {
+                self.emit(Op::Pop);
+            }
+        }
+        if exprs.is_empty() {
+            self.current_loc = None;
+            self.emit(Op::Const(Value::Void));
+        }
+        self.current_loc = None;
+        self.emit(Op::Return);
+
+        let scope = self.scopes.pop().unwrap();
+        let idx = self.code_pool.len();
+        self.code_pool.push(scope.code);
+        Ok(idx)
     }
 
     /// Compile a top-level expression. Returns the index of the code object.
@@ -2987,7 +3011,8 @@ impl Compiler {
     // -----------------------------------------------------------------------
 
     fn emit(&mut self, op: Op) {
-        self.current_scope_mut().code.emit(op);
+        let loc = self.current_loc.clone();
+        self.current_scope_mut().code.emit(op, loc);
     }
 
     fn emit_placeholder(&mut self, op: Op) -> usize {

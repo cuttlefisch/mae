@@ -194,12 +194,44 @@ pub(crate) fn drain_scheme_lsp_intents(editor: &mut Editor, scheme: &SchemeRunti
             }
             // Notifications we can safely ignore for the in-process LSP
             LspIntent::DidSave { .. } | LspIntent::DidClose { .. } => {}
-            // Features not yet implemented for scheme LSP
-            LspIntent::GotoDefinition { .. } => {
-                editor.set_status(
-                    "[Scheme LSP] go-to-definition requires source maps (Phase 13g WU2)",
-                );
-                needs_redraw = true;
+            LspIntent::GotoDefinition {
+                uri,
+                line,
+                character,
+                ..
+            } => {
+                let line_text = get_buffer_line(editor, &uri, line as usize);
+                let (symbol, _) = scheme_lsp::extract_word_at(&line_text, character);
+                if let Some(loc) = scheme_lsp::goto_definition(vm, &symbol) {
+                    // Convert SourceLocation to LspLocation format
+                    let target_uri = if loc.file.starts_with('/') {
+                        format!("file://{}", loc.file)
+                    } else {
+                        uri.clone() // Same file
+                    };
+                    let target_line = loc.line.saturating_sub(1) as usize; // 1-indexed → 0-indexed
+                    let core_loc = mae_core::LspLocation {
+                        uri: target_uri,
+                        range: mae_core::LspRange {
+                            start_line: target_line as u32,
+                            start_character: loc.column.saturating_sub(1),
+                            end_line: target_line as u32,
+                            end_character: loc.column.saturating_sub(1),
+                        },
+                    };
+                    if let Some(other_file) = editor.apply_definition_result(vec![core_loc]) {
+                        // Need to open the file — queue it
+                        let path = other_file
+                            .uri
+                            .strip_prefix("file://")
+                            .unwrap_or(&other_file.uri);
+                        editor.open_file(path);
+                    }
+                    needs_redraw = true;
+                } else {
+                    editor.set_status(format!("[Scheme LSP] no definition for '{}'", symbol));
+                    needs_redraw = true;
+                }
             }
             LspIntent::FindReferences { .. } => {
                 editor.set_status("[Scheme LSP] find-references not yet implemented");

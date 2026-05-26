@@ -2197,7 +2197,8 @@ impl SchemeRuntime {
                 message: format!("Failed to read {}: {}", path.display(), e),
             }
         })?;
-        self.vm.eval(&content).map_err(|e| {
+        let file = path.to_string_lossy();
+        self.vm.eval_with_file(&content, &file).map_err(|e| {
             let err = SchemeError::from(e);
             error!(path = %path.display(), error = %err.message, "scheme file evaluation failed");
             err

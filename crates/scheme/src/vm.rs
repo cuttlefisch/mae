@@ -174,15 +174,20 @@ impl Vm {
 
     /// Evaluate a string of Scheme code.
     pub fn eval(&mut self, code: &str) -> Result<Value, LispError> {
-        let datums = reader::read_all(code)?;
-        if datums.is_empty() {
+        self.eval_with_file(code, "<eval>")
+    }
+
+    /// Evaluate a string of Scheme code with a source file name for diagnostics.
+    pub fn eval_with_file(&mut self, code: &str, file: &str) -> Result<Value, LispError> {
+        let located_datums = reader::read_all_located(code, file)?;
+        if located_datums.is_empty() {
             return Ok(Value::Void);
         }
 
         // Pre-process top-level forms: handle import, define-library, and load
         // before compilation, as they affect the global environment.
         let mut to_compile = Vec::new();
-        for datum in &datums {
+        for (datum, loc) in &located_datums {
             if self.is_top_level_import(datum) {
                 self.process_import(datum)?;
             } else if self.is_define_library(datum) {
@@ -190,7 +195,7 @@ impl Vm {
             } else if self.is_top_level_load(datum) {
                 self.process_load(datum)?;
             } else {
-                to_compile.push(datum.clone());
+                to_compile.push((datum.clone(), loc.clone()));
             }
         }
 
@@ -203,7 +208,7 @@ impl Vm {
         compiler.macros = self.macros.clone();
         compiler.load_paths = self.load_paths.clone();
 
-        let code_id = compiler.compile_top_level(&to_compile)?;
+        let code_id = compiler.compile_top_level_located(&to_compile)?;
 
         // Persist any new macro definitions back to the VM
         self.macros = compiler.macros;
@@ -237,13 +242,13 @@ impl Vm {
     /// instead of blocking on them. Use `resume()` to continue after
     /// handling the yield request.
     pub fn eval_yielding(&mut self, code: &str) -> Result<EvalResult, LispError> {
-        let datums = reader::read_all(code)?;
-        if datums.is_empty() {
+        let located_datums = reader::read_all_located(code, "<eval>")?;
+        if located_datums.is_empty() {
             return Ok(EvalResult::Done(Value::Void));
         }
 
         let mut to_compile = Vec::new();
-        for datum in &datums {
+        for (datum, loc) in &located_datums {
             if self.is_top_level_import(datum) {
                 self.process_import(datum)?;
             } else if self.is_define_library(datum) {
@@ -251,7 +256,7 @@ impl Vm {
             } else if self.is_top_level_load(datum) {
                 self.process_load(datum)?;
             } else {
-                to_compile.push(datum.clone());
+                to_compile.push((datum.clone(), loc.clone()));
             }
         }
 
@@ -263,7 +268,7 @@ impl Vm {
         compiler.macros = self.macros.clone();
         compiler.load_paths = self.load_paths.clone();
 
-        let code_id = compiler.compile_top_level(&to_compile)?;
+        let code_id = compiler.compile_top_level_located(&to_compile)?;
         self.macros = compiler.macros;
 
         let base = self.code_pool.len();
@@ -2232,5 +2237,46 @@ mod tests {
             Duration::from_millis(3000),
         );
         assert_eq!(err.message(), "yield: wait-for-file /tmp/foo (3000ms)");
+    }
+
+    #[test]
+    fn source_map_populated_after_eval() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval_with_file("(define x 42)\n(define y (+ x 1))", "test.scm")
+            .unwrap();
+        // The last code object should have source map entries
+        let code = vm.code_pool.last().unwrap();
+        // At least some entries should be non-None
+        let non_none = code.source_map.iter().filter(|l| l.is_some()).count();
+        assert!(
+            non_none > 0,
+            "source map should have non-None entries, got {} total entries",
+            code.source_map.len()
+        );
+        // Verify file name is correct
+        let first_loc = code.source_map.iter().find_map(|l| l.as_ref()).unwrap();
+        assert_eq!(first_loc.file, "test.scm");
+        // First define is on line 1
+        assert_eq!(first_loc.line, 1);
+    }
+
+    #[test]
+    fn source_map_tracks_lines() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval_with_file("(define a 1)\n(define b 2)\n(define c 3)", "multi.scm")
+            .unwrap();
+        let code = vm.code_pool.last().unwrap();
+        // Collect unique lines from source map
+        let lines: std::collections::HashSet<u32> = code
+            .source_map
+            .iter()
+            .filter_map(|l| l.as_ref().map(|loc| loc.line))
+            .collect();
+        // Should have entries for lines 1, 2, and 3
+        assert!(lines.contains(&1), "should have line 1");
+        assert!(lines.contains(&2), "should have line 2");
+        assert!(lines.contains(&3), "should have line 3");
     }
 }
