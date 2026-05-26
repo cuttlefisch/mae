@@ -9,9 +9,9 @@
 //!
 //! ### Current ports
 //! `current-input-port`, `current-output-port`, `current-error-port` return
-//! the process-level stdin/stdout/stderr. They are NOT dynamically
-//! parameterizable via `parameterize` (planned). `with-input-from-file`
-//! and `with-output-to-file` are simplified (see SPEC_STANCES.md §8).
+//! the process-level stdin/stdout/stderr. Port redirection via
+//! `with-input-from-file` / `with-output-to-file` is implemented in the
+//! Scheme bootstrap (base.rs) using `dynamic-wind` + internal port setters.
 //!
 //! ### Binary I/O
 //! `read-u8`, `peek-u8`, `write-u8`, `read-bytevector`, `write-bytevector`
@@ -29,6 +29,70 @@ use crate::lisp_error::{Arity, LispError};
 use crate::reader::Reader;
 use crate::value::{display_value, Port, Value};
 use crate::vm::Vm;
+
+/// Check if file descriptor has data available for reading (non-blocking).
+/// Uses POSIX `poll(2)` with timeout=0 for an instantaneous check.
+#[cfg(unix)]
+fn fd_ready(fd: libc::c_int) -> bool {
+    let mut pfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let result = unsafe { libc::poll(&mut pfd, 1, 0) };
+    result > 0 && (pfd.revents & libc::POLLIN) != 0
+}
+
+/// Fallback for non-Unix: always report ready (conservative).
+#[cfg(not(unix))]
+fn fd_ready(_fd: i32) -> bool {
+    true
+}
+
+/// Read one UTF-8 character from stdin.
+/// Reads bytes one at a time to handle multi-byte characters correctly.
+fn read_char_from_stdin() -> Result<Value, LispError> {
+    use std::io::Read;
+    let mut buf = [0u8; 4];
+    let stdin = std::io::stdin();
+    let mut handle = stdin.lock();
+    match handle.read(&mut buf[..1]) {
+        Ok(0) => Ok(Value::Eof),
+        Ok(_) => {
+            let needed = utf8_char_width(buf[0]);
+            if needed > 1 {
+                handle
+                    .read_exact(&mut buf[1..needed])
+                    .map_err(|e| LispError::user(format!("read-char: stdin: {e}"), vec![]))?;
+            }
+            let s = std::str::from_utf8(&buf[..needed]).unwrap_or("\u{FFFD}");
+            Ok(Value::Char(s.chars().next().unwrap_or('\u{FFFD}')))
+        }
+        Err(e) => Err(LispError::user(format!("read-char: stdin: {e}"), vec![])),
+    }
+}
+
+/// Read one line from stdin.
+fn read_line_from_stdin() -> Result<Value, LispError> {
+    use std::io::BufRead;
+    let stdin = std::io::stdin();
+    let mut handle = stdin.lock();
+    let mut line = String::new();
+    match handle.read_line(&mut line) {
+        Ok(0) => Ok(Value::Eof),
+        Ok(_) => {
+            // Strip trailing newline (and \r\n on Windows)
+            if line.ends_with('\n') {
+                line.pop();
+                if line.ends_with('\r') {
+                    line.pop();
+                }
+            }
+            Ok(Value::String(Rc::from(line.as_str())))
+        }
+        Err(e) => Err(LispError::user(format!("read-line: stdin: {e}"), vec![])),
+    }
+}
 
 /// Create a LispError with a proper R7RS file-error tagged object.
 fn file_error(message: String, path: &str) -> LispError {
@@ -140,7 +204,7 @@ fn write_to_port(port_val: &Value, text: &str) -> Result<(), LispError> {
 pub fn register(vm: &mut Vm) {
     // Create shared mutable cells for current ports — allows dynamic redirection
     // by with-input-from-file / with-output-to-file via dynamic-wind.
-    let stdin_port = Value::Port(Rc::new(RefCell::new(Port::Stdin)));
+    let stdin_port = Value::Port(Rc::new(RefCell::new(Port::Stdin { peeked: None })));
     let stdout_port = Value::Port(Rc::new(RefCell::new(Port::Stdout)));
     let stderr_port = Value::Port(Rc::new(RefCell::new(Port::Stderr)));
 
@@ -247,6 +311,39 @@ pub fn register(vm: &mut Vm) {
                             "read: cannot read from binary port",
                             vec![],
                         )),
+                        Port::Stdin { peeked } => {
+                            // Read a line from stdin, then parse as S-expression
+                            let prefix = peeked.take().map(|ch| ch.to_string());
+                            match read_line_from_stdin()? {
+                                Value::Eof => {
+                                    // Try parsing any peeked char as datum
+                                    if let Some(p) = prefix {
+                                        let mut reader = Reader::new(&p, "<stdin>");
+                                        match reader.read() {
+                                            Ok(Some(val)) => Ok(val),
+                                            Ok(None) => Ok(Value::Eof),
+                                            Err(e) => Err(e),
+                                        }
+                                    } else {
+                                        Ok(Value::Eof)
+                                    }
+                                }
+                                Value::String(s) => {
+                                    let input = if let Some(p) = prefix {
+                                        format!("{p}{s}")
+                                    } else {
+                                        s.to_string()
+                                    };
+                                    let mut reader = Reader::new(&input, "<stdin>");
+                                    match reader.read() {
+                                        Ok(Some(val)) => Ok(val),
+                                        Ok(None) => Ok(Value::Eof),
+                                        Err(e) => Err(e),
+                                    }
+                                }
+                                _ => Ok(Value::Eof),
+                            }
+                        }
                         _ => Err(LispError::type_error("input-port", "output-port")),
                     }
                 }
@@ -400,6 +497,14 @@ pub fn register(vm: &mut Vm) {
                                 Err(_) => Ok(Value::Eof),
                             }
                         }
+                        Port::Stdin { peeked } => {
+                            // Return peeked char if available, otherwise read from stdin
+                            if let Some(ch) = peeked.take() {
+                                Ok(Value::Char(ch))
+                            } else {
+                                read_char_from_stdin()
+                            }
+                        }
                         _ => Err(LispError::type_error("input-port", "other port type")),
                     }
                 }
@@ -454,6 +559,21 @@ pub fn register(vm: &mut Vm) {
                             } else {
                                 let ch = buf[*text_pos..].chars().next().unwrap();
                                 Ok(Value::Char(ch))
+                            }
+                        }
+                        Port::Stdin { peeked } => {
+                            // Peek: read char from stdin, store it for next read-char
+                            if let Some(ch) = *peeked {
+                                Ok(Value::Char(ch))
+                            } else {
+                                match read_char_from_stdin()? {
+                                    Value::Eof => Ok(Value::Eof),
+                                    Value::Char(ch) => {
+                                        *peeked = Some(ch);
+                                        Ok(Value::Char(ch))
+                                    }
+                                    other => Ok(other),
+                                }
                             }
                         }
                         _ => Err(LispError::type_error("input-port", "other port type")),
@@ -760,6 +880,28 @@ pub fn register(vm: &mut Vm) {
                                 Err(_) => Ok(Value::Eof),
                             }
                         }
+                        Port::Stdin { peeked } => {
+                            // If there's a peeked char, prepend it to the line
+                            let prefix = peeked.take().map(|ch| ch.to_string());
+                            match read_line_from_stdin()? {
+                                Value::Eof => {
+                                    if let Some(p) = prefix {
+                                        Ok(Value::String(Rc::from(p.as_str())))
+                                    } else {
+                                        Ok(Value::Eof)
+                                    }
+                                }
+                                Value::String(s) => {
+                                    if let Some(p) = prefix {
+                                        let combined = format!("{p}{s}");
+                                        Ok(Value::String(Rc::from(combined.as_str())))
+                                    } else {
+                                        Ok(Value::String(s))
+                                    }
+                                }
+                                other => Ok(other),
+                            }
+                        }
                         _ => Err(LispError::type_error("input port", "output port")),
                     }
                 }
@@ -937,6 +1079,15 @@ pub fn register(vm: &mut Vm) {
                             use std::io::Read;
                             let mut buf = [0u8; 1];
                             match reader.read(&mut buf) {
+                                Ok(0) => Ok(Value::Eof),
+                                Ok(_) => Ok(Value::Int(buf[0] as i64)),
+                                Err(e) => Err(LispError::user(format!("read-u8: {e}"), vec![])),
+                            }
+                        }
+                        Port::Stdin { .. } => {
+                            use std::io::Read;
+                            let mut buf = [0u8; 1];
+                            match std::io::stdin().lock().read(&mut buf) {
                                 Ok(0) => Ok(Value::Eof),
                                 Ok(_) => Ok(Value::Int(buf[0] as i64)),
                                 Err(e) => Err(LispError::user(format!("read-u8: {e}"), vec![])),
@@ -1198,7 +1349,19 @@ pub fn register(vm: &mut Vm) {
                             text_pos,
                             ..
                         } => Ok(Value::Bool(*text_pos < buf.len())),
-                        // Unbuffered file ports and stdin: conservatively #t
+                        Port::Stdin { peeked, .. } => {
+                            // If there's a peeked char, definitely ready.
+                            // Otherwise, use poll(2) to check stdin fd 0.
+                            if peeked.is_some() {
+                                Ok(Value::Bool(true))
+                            } else {
+                                Ok(Value::Bool(fd_ready(0)))
+                            }
+                        }
+                        // Unbuffered file ports: regular files always return
+                        // POLLIN from poll(2) — they never block. This is
+                        // correct per POSIX, not a conservative approximation.
+                        // At EOF, R7RS §6.13.2 requires #t as well.
                         _ => Ok(Value::Bool(true)),
                     }
                 }
@@ -1224,9 +1387,21 @@ pub fn register(vm: &mut Vm) {
                     let port = p.borrow();
                     match &*port {
                         Port::StringInput { data, pos } => Ok(Value::Bool(*pos < data.len())),
+                        Port::BytevectorInput { data, pos } => Ok(Value::Bool(*pos < data.len())),
+                        Port::Stdin { peeked, .. } => {
+                            // If there's a peeked char, a byte is definitely available.
+                            // Otherwise, use poll(2) to check stdin fd 0.
+                            if peeked.is_some() {
+                                Ok(Value::Bool(true))
+                            } else {
+                                Ok(Value::Bool(fd_ready(0)))
+                            }
+                        }
                         Port::Closed(_) => {
                             Err(LispError::user("u8-ready?: port is closed", vec![]))
                         }
+                        // Regular file ports: disk I/O never blocks in the
+                        // poll(2) sense. POSIX guarantees POLLIN for regular files.
                         _ => Ok(Value::Bool(true)),
                     }
                 }
@@ -1493,6 +1668,17 @@ pub fn register(vm: &mut Vm) {
                                 Err(_) => break,
                             }
                         }
+                        Port::Stdin { peeked } => {
+                            // Use peeked char first, then read from stdin
+                            if let Some(ch) = peeked.take() {
+                                result.push(ch);
+                            } else {
+                                match read_char_from_stdin() {
+                                    Ok(Value::Char(ch)) => result.push(ch),
+                                    _ => break,
+                                }
+                            }
+                        }
                         _ => return Err(LispError::type_error("input-port", "other port type")),
                     }
                 }
@@ -1610,8 +1796,8 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    // NOTE: with-input-from-file / with-output-to-file require dynamic parameters
-    // to redirect current-input/output-port. Deferred to Phase 13e.
+    // with-input-from-file / with-output-to-file are implemented in Scheme
+    // (stdlib/base.rs bootstrap) using dynamic-wind + %set-current-input-port!.
 
     // (scheme load) — `load` is a compiler special form (Op::Load) that reads
     // and evaluates a file in the interaction environment. See compiler.rs.

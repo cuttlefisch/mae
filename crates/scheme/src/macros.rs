@@ -18,6 +18,9 @@ pub struct SyntaxRules {
     pub literals: Vec<String>,
     /// (pattern, template) pairs tried in order.
     pub rules: Vec<(Value, Value)>,
+    /// Custom ellipsis identifier (default: "...").
+    /// R7RS §4.3.2 / SRFI 46: `(syntax-rules <ellipsis> (literals...) ...)`
+    pub ellipsis: String,
 }
 
 /// Expand a `syntax-rules` macro application.
@@ -25,6 +28,7 @@ pub struct SyntaxRules {
 /// Tries each rule's pattern against the form. On match, instantiates
 /// the template with captured bindings, using gensym for hygiene.
 pub fn expand_syntax_rules(transformer: &SyntaxRules, form: &[Value]) -> Result<Value, LispError> {
+    let ellipsis = &transformer.ellipsis;
     for (pattern, template) in &transformer.rules {
         let mut bindings = HashMap::new();
         let pat_items = pattern
@@ -35,9 +39,10 @@ pub fn expand_syntax_rules(transformer: &SyntaxRules, form: &[Value]) -> Result<
             &pat_items[1..],
             &form[1..],
             &transformer.literals,
+            ellipsis,
             &mut bindings,
         )? {
-            return instantiate_template(template, &bindings);
+            return instantiate_template(template, &bindings, ellipsis);
         }
     }
     Err(LispError::syntax(
@@ -58,14 +63,15 @@ fn match_pattern(
     pattern: &[Value],
     input: &[Value],
     literals: &[String],
+    ellipsis: &str,
     bindings: &mut HashMap<String, MatchResult>,
 ) -> Result<bool, LispError> {
     let mut pi = 0;
     let mut ii = 0;
 
     while pi < pattern.len() {
-        // Check for ellipsis: pattern[pi] followed by `...`
-        let has_ellipsis = pi + 1 < pattern.len() && is_ellipsis(&pattern[pi + 1]);
+        // Check for ellipsis: pattern[pi] followed by the ellipsis identifier
+        let has_ellipsis = pi + 1 < pattern.len() && is_ellipsis_id(&pattern[pi + 1], ellipsis);
 
         if has_ellipsis {
             // Match zero or more of pattern[pi]
@@ -78,7 +84,7 @@ fn match_pattern(
             // Consume input until we need to leave `remaining_patterns` for the rest
             while ii + remaining_patterns < input.len() {
                 let mut sub_bindings = HashMap::new();
-                if match_single(subpat, &input[ii], literals, &mut sub_bindings)? {
+                if match_single(subpat, &input[ii], literals, ellipsis, &mut sub_bindings)? {
                     collected.push(sub_bindings);
                     ii += 1;
                 } else {
@@ -106,7 +112,7 @@ fn match_pattern(
                 }
             } else if let Ok(sub_pats) = subpat.to_vec() {
                 // Collect names from nested pattern
-                let names = collect_pattern_names(subpat, literals);
+                let names = collect_pattern_names(subpat, literals, ellipsis);
                 for name in &names {
                     let values: Vec<Value> = collected
                         .iter()
@@ -131,7 +137,7 @@ fn match_pattern(
             if ii >= input.len() {
                 return Ok(false);
             }
-            if !match_single(&pattern[pi], &input[ii], literals, bindings)? {
+            if !match_single(&pattern[pi], &input[ii], literals, ellipsis, bindings)? {
                 return Ok(false);
             }
             pi += 1;
@@ -147,6 +153,7 @@ fn match_single(
     pattern: &Value,
     input: &Value,
     literals: &[String],
+    ellipsis: &str,
     bindings: &mut HashMap<String, MatchResult>,
 ) -> Result<bool, LispError> {
     match pattern {
@@ -177,7 +184,7 @@ fn match_single(
                 Ok(v) => v,
                 Err(_) => return Ok(false),
             };
-            match_pattern(&pat_items, &input_items, literals, bindings)
+            match_pattern(&pat_items, &input_items, literals, ellipsis, bindings)
         }
         // Literal constants
         Value::Int(a) => Ok(matches!(input, Value::Int(b) if a == b)),
@@ -197,29 +204,34 @@ pub enum MatchResult {
     Ellipsis(Vec<Value>),
 }
 
-fn is_ellipsis(v: &Value) -> bool {
-    matches!(v, Value::Symbol(s) if s.name() == "...")
+fn is_ellipsis_id(v: &Value, ellipsis: &str) -> bool {
+    matches!(v, Value::Symbol(s) if s.name() == ellipsis)
 }
 
 /// Collect all pattern variable names from a pattern.
-fn collect_pattern_names(pattern: &Value, literals: &[String]) -> Vec<String> {
+fn collect_pattern_names(pattern: &Value, literals: &[String], ellipsis: &str) -> Vec<String> {
     let mut names = Vec::new();
-    collect_names_inner(pattern, literals, &mut names);
+    collect_names_inner(pattern, literals, ellipsis, &mut names);
     names
 }
 
-fn collect_names_inner(pattern: &Value, literals: &[String], names: &mut Vec<String>) {
+fn collect_names_inner(
+    pattern: &Value,
+    literals: &[String],
+    ellipsis: &str,
+    names: &mut Vec<String>,
+) {
     match pattern {
         Value::Symbol(sym) => {
             let name = sym.name();
-            if name != "_" && name != "..." && !literals.contains(&name.to_string()) {
+            if name != "_" && name != ellipsis && !literals.contains(&name.to_string()) {
                 names.push(name.to_string());
             }
         }
         Value::Pair(_) => {
             if let Ok(items) = pattern.to_vec() {
                 for item in &items {
-                    collect_names_inner(item, literals, names);
+                    collect_names_inner(item, literals, ellipsis, names);
                 }
             }
         }
@@ -231,6 +243,7 @@ fn collect_names_inner(pattern: &Value, literals: &[String], names: &mut Vec<Str
 fn instantiate_template(
     template: &Value,
     bindings: &HashMap<String, MatchResult>,
+    ellipsis: &str,
 ) -> Result<Value, LispError> {
     match template {
         Value::Symbol(sym) => {
@@ -252,11 +265,24 @@ fn instantiate_template(
                 .to_vec()
                 .map_err(|_| LispError::syntax("invalid template", format!("{template}")))?;
 
-            // Check for ellipsis in template: (expr ...)
+            // R7RS §4.3.2: Ellipsis escape — (... template) in a template
+            // suppresses ellipsis processing within template.
+            // The default ellipsis is "...", so (... x) means x is literal.
+            if items.len() == 2 && ellipsis == "..." {
+                if let Value::Symbol(s) = &items[0] {
+                    if s.name() == "..." {
+                        // Ellipsis escape: return the inner template verbatim,
+                        // but still substitute non-ellipsis pattern variables.
+                        return instantiate_template_literal(&items[1], bindings);
+                    }
+                }
+            }
+
+            // Check for ellipsis in template: (expr <ellipsis>)
             let mut result = Vec::new();
             let mut i = 0;
             while i < items.len() {
-                if i + 1 < items.len() && is_ellipsis(&items[i + 1]) {
+                if i + 1 < items.len() && is_ellipsis_id(&items[i + 1], ellipsis) {
                     // Expand ellipsis
                     let sub_template = &items[i];
                     let ellipsis_names = collect_template_ellipsis_vars(sub_template, bindings);
@@ -277,19 +303,52 @@ fn instantiate_template(
                                         }
                                     }
                                 }
-                                result.push(instantiate_template(sub_template, &iter_bindings)?);
+                                result.push(instantiate_template(
+                                    sub_template,
+                                    &iter_bindings,
+                                    ellipsis,
+                                )?);
                             }
                         }
                     }
                     i += 2; // skip template + ellipsis
                 } else {
-                    result.push(instantiate_template(&items[i], bindings)?);
+                    result.push(instantiate_template(&items[i], bindings, ellipsis)?);
                     i += 1;
                 }
             }
             Ok(Value::list(result))
         }
         _ => Ok(template.clone()), // constants pass through
+    }
+}
+
+/// Instantiate a template literally — no ellipsis expansion.
+/// Used inside `(... template)` escape. Still substitutes single bindings.
+fn instantiate_template_literal(
+    template: &Value,
+    bindings: &HashMap<String, MatchResult>,
+) -> Result<Value, LispError> {
+    match template {
+        Value::Symbol(sym) => {
+            let name = sym.name();
+            match bindings.get(name) {
+                Some(MatchResult::Single(v)) => Ok(v.clone()),
+                // In literal context, ellipsis variables are NOT expanded
+                _ => Ok(template.clone()),
+            }
+        }
+        Value::Pair(_) | Value::Null => {
+            let items = template
+                .to_vec()
+                .map_err(|_| LispError::syntax("invalid template", format!("{template}")))?;
+            let result: Result<Vec<Value>, LispError> = items
+                .iter()
+                .map(|item| instantiate_template_literal(item, bindings))
+                .collect();
+            Ok(Value::list(result?))
+        }
+        _ => Ok(template.clone()),
     }
 }
 
@@ -329,10 +388,14 @@ fn collect_ellipsis_vars_inner(
 }
 
 /// Parse a `(syntax-rules (literals...) (pattern template) ...)` form.
+///
+/// R7RS §4.3.2 / SRFI 46: Also supports custom ellipsis identifier:
+///   `(syntax-rules <ellipsis> (literals...) (pattern template) ...)`
+/// where `<ellipsis>` is an identifier (symbol, not a list).
 pub fn parse_syntax_rules(items: &[Value]) -> Result<SyntaxRules, LispError> {
     // items[0] = "syntax-rules"
-    // items[1] = (literal ...)
-    // items[2..] = (pattern template) ...
+    // items[1] = <ellipsis> or (literal ...)
+    // If items[1] is a symbol (not a list), it's a custom ellipsis identifier.
     if items.len() < 3 {
         return Err(LispError::syntax(
             "syntax-rules requires at least one rule",
@@ -340,12 +403,32 @@ pub fn parse_syntax_rules(items: &[Value]) -> Result<SyntaxRules, LispError> {
         ));
     }
 
-    let literals = items[1]
+    // Detect custom ellipsis: items[1] is a symbol → custom ellipsis, items[2] is literals
+    let (ellipsis, literal_idx, rules_start) = if let Value::Symbol(_) = &items[1] {
+        // Custom ellipsis: (syntax-rules ::: (literals...) rules...)
+        if items.len() < 4 {
+            return Err(LispError::syntax(
+                "syntax-rules with custom ellipsis requires at least one rule",
+                format!("{}", Value::list(items.to_vec())),
+            ));
+        }
+        let ell = if let Value::Symbol(s) = &items[1] {
+            s.name().to_string()
+        } else {
+            unreachable!()
+        };
+        (ell, 2, 3)
+    } else {
+        // Default ellipsis: (syntax-rules (literals...) rules...)
+        ("...".to_string(), 1, 2)
+    };
+
+    let literals = items[literal_idx]
         .to_vec()
         .map_err(|_| {
             LispError::syntax(
                 "syntax-rules: invalid literal list",
-                format!("{}", items[1]),
+                format!("{}", items[literal_idx]),
             )
         })?
         .iter()
@@ -359,7 +442,7 @@ pub fn parse_syntax_rules(items: &[Value]) -> Result<SyntaxRules, LispError> {
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut rules = Vec::new();
-    for rule in &items[2..] {
+    for rule in &items[rules_start..] {
         let pair = rule.to_vec().map_err(|_| {
             LispError::syntax(
                 "syntax-rules: rule must be (pattern template)",
@@ -375,7 +458,11 @@ pub fn parse_syntax_rules(items: &[Value]) -> Result<SyntaxRules, LispError> {
         rules.push((pair[0].clone(), pair[1].clone()));
     }
 
-    Ok(SyntaxRules { literals, rules })
+    Ok(SyntaxRules {
+        literals,
+        rules,
+        ellipsis,
+    })
 }
 
 #[cfg(test)]
@@ -493,7 +580,7 @@ mod tests {
         let mut bindings = HashMap::new();
         let pattern = vec![Value::symbol("_"), Value::symbol("x")];
         let input = vec![Value::symbol("my-mac"), Value::Int(42)];
-        assert!(match_pattern(&pattern, &input, &[], &mut bindings).unwrap());
+        assert!(match_pattern(&pattern, &input, &[], "...", &mut bindings).unwrap());
         assert!(matches!(
             bindings.get("x"),
             Some(MatchResult::Single(Value::Int(42)))
@@ -510,7 +597,7 @@ mod tests {
             Value::Int(2),
             Value::Int(3),
         ];
-        assert!(match_pattern(&pattern, &input, &[], &mut bindings).unwrap());
+        assert!(match_pattern(&pattern, &input, &[], "...", &mut bindings).unwrap());
         if let Some(MatchResult::Ellipsis(vs)) = bindings.get("x") {
             assert_eq!(vs.len(), 3);
         } else {
@@ -530,7 +617,7 @@ mod tests {
             Value::symbol("x"),
             Value::symbol("..."),
         ]);
-        let result = instantiate_template(&template, &bindings).unwrap();
+        let result = instantiate_template(&template, &bindings, "...").unwrap();
         let items = result.to_vec().unwrap();
         assert_eq!(items.len(), 4); // list + 3 values
     }

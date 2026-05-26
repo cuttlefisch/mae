@@ -1,5 +1,7 @@
 //! R7RS §6.1-6.5, §6.10-6.12: Core primitives.
 //!
+//! Includes Stern-Brocot mediant search for `rationalize`.
+//!
 //! Equivalence predicates, arithmetic, booleans, pairs/lists, symbols,
 //! control flow, exceptions, and eval.
 //!
@@ -1531,9 +1533,10 @@ fn register_extra_numeric(vm: &mut Vm) {
         },
     );
 
-    // R7RS §6.2.6 rationalize — approximate x within diff
-    // For exact integers, returns x if diff >= 0
-    // For inexact, finds simplest rational within tolerance
+    // R7RS §6.2.6 rationalize — find simplest rational within tolerance.
+    // Uses Stern-Brocot mediant search: finds p/q with smallest denominator
+    // in the interval [x - |y|, x + |y|].
+    // Reference: Chibi-Scheme, Guile, Chez all use this algorithm.
     vm.register_fn(
         "rationalize",
         "Simplest rational within tolerance",
@@ -1541,37 +1544,146 @@ fn register_extra_numeric(vm: &mut Vm) {
         |args| {
             let x = args[0].as_float()?;
             let diff = args[1].as_float()?;
-            if diff.is_infinite() || diff.is_nan() {
+            if x.is_nan() || diff.is_nan() {
+                return Ok(Value::Float(f64::NAN));
+            }
+            if diff.is_infinite() {
+                if x.is_infinite() {
+                    return Ok(Value::Float(f64::NAN));
+                }
                 return Ok(Value::Float(0.0));
             }
-            if x.is_infinite() || x.is_nan() {
+            if x.is_infinite() {
                 return Ok(Value::Float(x));
             }
-            // Simple implementation: round to nearest integer if within tolerance
+
             let lo = x - diff.abs();
             let hi = x + diff.abs();
-            // Find simplest rational p/q in [lo, hi] using Stern-Brocot
-            // Simplified: check if an integer is in range first
-            let lo_ceil = lo.ceil() as i64;
-            let hi_floor = hi.floor() as i64;
-            if lo_ceil <= hi_floor {
-                // An integer is in range — that's the simplest
-                if args[0].is_exact() && args[1].is_exact() {
-                    return Ok(Value::Int(lo_ceil));
-                }
-                return Ok(Value::Float(lo_ceil as f64));
+            let exact = args[0].is_exact() && args[1].is_exact();
+
+            // If zero is in range, that's the simplest rational (denominator 1)
+            if lo <= 0.0 && hi >= 0.0 {
+                return if exact {
+                    Ok(Value::Int(0))
+                } else {
+                    Ok(Value::Float(0.0))
+                };
             }
-            // Otherwise return x rounded to reasonable precision
-            if args[0].is_exact() && args[1].is_exact() {
-                Ok(Value::Int(x.round() as i64))
+
+            // Work with positive range, negate result if needed
+            let negative = hi < 0.0;
+            let (lo, hi) = if negative { (-hi, -lo) } else { (lo, hi) };
+
+            // Stern-Brocot mediant search for simplest p/q in [lo, hi]
+            let (p, q) = stern_brocot_simplest(lo, hi);
+
+            let result = p as f64 / q as f64;
+            let result = if negative { -result } else { result };
+
+            if exact && q == 1 {
+                Ok(Value::Int(result as i64))
             } else {
-                Ok(Value::Float(x))
+                Ok(Value::Float(result))
             }
         },
     );
 }
 
 /// Register `(scheme inexact)` library functions.
+/// Stern-Brocot mediant search: find the simplest rational p/q in [lo, hi].
+/// "Simplest" means smallest denominator q, then smallest numerator p.
+/// Both lo and hi must be positive.
+///
+/// Algorithm: walk the Stern-Brocot tree, narrowing the mediant toward
+/// the target interval. When the mediant lands inside [lo, hi], we've
+/// found the simplest rational.
+///
+/// Reference: Stern (1858), Brocot (1861). Used by Chibi-Scheme, Guile,
+/// and Chez Scheme for their `rationalize` implementations.
+fn stern_brocot_simplest(lo: f64, hi: f64) -> (i64, i64) {
+    // Check if an integer is in range (simplest possible rational)
+    let lo_ceil = lo.ceil() as i64;
+    let hi_floor = hi.floor() as i64;
+    if lo_ceil <= hi_floor {
+        return (lo_ceil, 1);
+    }
+
+    // Stern-Brocot mediant search between a/b and c/d
+    let mut a: i64 = lo.floor() as i64;
+    let mut b: i64 = 1;
+    let mut c: i64 = a + 1;
+    let mut d: i64 = 1;
+
+    // Limit iterations to prevent infinite loops on edge cases
+    for _ in 0..100 {
+        let p = a + c;
+        let q = b + d;
+        let mediant = p as f64 / q as f64;
+
+        if mediant < lo {
+            // Mediant too low — move left bound right
+            // Use semi-convergent acceleration: jump multiple steps
+            let mut k = 1i64;
+            loop {
+                let np = a + k * c;
+                let nq = b + k * d;
+                if np as f64 / nq as f64 >= lo {
+                    break;
+                }
+                k *= 2;
+            }
+            // Binary search for exact step count
+            let mut lo_k = k / 2;
+            let mut hi_k = k;
+            while lo_k + 1 < hi_k {
+                let mid = lo_k + (hi_k - lo_k) / 2;
+                let np = a + mid * c;
+                let nq = b + mid * d;
+                if (np as f64 / nq as f64) < lo {
+                    lo_k = mid;
+                } else {
+                    hi_k = mid;
+                }
+            }
+            a += lo_k * c;
+            b += lo_k * d;
+        } else if mediant > hi {
+            // Mediant too high — move right bound left
+            let mut k = 1i64;
+            loop {
+                let np = k * a + c;
+                let nq = k * b + d;
+                if np as f64 / nq as f64 <= hi {
+                    break;
+                }
+                k *= 2;
+            }
+            let mut lo_k = k / 2;
+            let mut hi_k = k;
+            while lo_k + 1 < hi_k {
+                let mid = lo_k + (hi_k - lo_k) / 2;
+                let np = mid * a + c;
+                let nq = mid * b + d;
+                if (np as f64 / nq as f64) > hi {
+                    lo_k = mid;
+                } else {
+                    hi_k = mid;
+                }
+            }
+            c += lo_k * a;
+            d += lo_k * b;
+        } else {
+            // Mediant is in [lo, hi] — found the simplest rational
+            return (p, q);
+        }
+    }
+
+    // Fallback: best approximation found
+    let p = a + c;
+    let q = b + d;
+    (p, q)
+}
+
 pub fn register_inexact(vm: &mut Vm) {
     vm.register_fn("sin", "Sine", Arity::Fixed(1), |args| {
         Ok(Value::Float(args[0].as_float()?.sin()))

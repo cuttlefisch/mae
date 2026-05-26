@@ -9195,3 +9195,336 @@ fn audit_raise_continuable_resumes_execution() {
         15,
     );
 }
+
+// ============================================================
+// §4.3.2 — syntax-rules: custom ellipsis + ellipsis escape
+// ============================================================
+
+#[test]
+fn audit_syntax_rules_custom_ellipsis() {
+    // R7RS §4.3.2 / SRFI 46: custom ellipsis identifier
+    // (syntax-rules ::: () ...) uses ::: instead of ... as ellipsis
+    is_int(
+        "(define-syntax my-add
+           (syntax-rules ::: ()
+             ((_ x :::) (+ x :::))))
+         (my-add 1 2 3)",
+        6,
+    );
+}
+
+#[test]
+fn audit_syntax_rules_custom_ellipsis_zero_args() {
+    // Custom ellipsis with zero matched elements
+    assert_eq!(
+        eval(
+            "(define-syntax my-list2
+               (syntax-rules ::: ()
+                 ((_ x :::) (list x :::))))
+             (my-list2)"
+        ),
+        Value::Null,
+    );
+}
+
+#[test]
+fn audit_syntax_rules_custom_ellipsis_preserves_dots() {
+    // With custom ellipsis :::, the identifier ... is just a regular symbol
+    // (can be used as a literal or pattern variable)
+    is_int(
+        "(define-syntax uses-dots
+           (syntax-rules ::: ()
+             ((_ a) a)))
+         (uses-dots 42)",
+        42,
+    );
+}
+
+#[test]
+fn audit_syntax_rules_ellipsis_escape_literal_dots() {
+    // R7RS §4.3.2: (... ...) in a template produces a literal ... symbol.
+    // We wrap in quote so the expansion isn't evaluated as a variable lookup.
+    assert_eq!(
+        eval(
+            "(define-syntax emit-dots
+               (syntax-rules ()
+                 ((_) '(... ...))))
+             (emit-dots)"
+        ),
+        Value::symbol("..."),
+    );
+}
+
+#[test]
+fn audit_syntax_rules_ellipsis_escape_template() {
+    // (... template) suppresses ellipsis processing in template
+    // so (list ...) inside (... ...) is treated literally
+    assert_eq!(
+        eval(
+            "(define-syntax make-list-call
+               (syntax-rules ()
+                 ((_ x) (... (list x)))))
+             (make-list-call 5)"
+        ),
+        Value::list(vec![Value::Int(5)]),
+    );
+}
+
+#[test]
+fn audit_syntax_rules_ellipsis_escape_preserves_vars() {
+    // Ellipsis escape still substitutes pattern variables
+    is_int(
+        "(define-syntax apply-it
+           (syntax-rules ()
+             ((_ f x) (... (f x)))))
+         (apply-it + 3)",
+        3,
+    );
+}
+
+// ============================================================
+// §6.13 — stdin port operations
+// ============================================================
+
+#[test]
+fn audit_stdin_is_input_port() {
+    // current-input-port returns an input port
+    assert_eq!(
+        eval("(input-port? (current-input-port))"),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn audit_stdin_not_output_port() {
+    assert_eq!(
+        eval("(output-port? (current-input-port))"),
+        Value::Bool(false),
+    );
+}
+
+#[test]
+fn audit_stdin_char_ready() {
+    // char-ready? on stdin returns #t (conservative, R7RS allows)
+    assert_eq!(
+        eval("(char-ready? (current-input-port))"),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn audit_stdin_port_redirection_read_char() {
+    // call-with-input-file passes port to proc
+    let tmp = std::env::temp_dir().join("mae_stdin_test_read_char.txt");
+    std::fs::write(&tmp, "AB").unwrap();
+    let code = format!(
+        "(call-with-input-file \"{}\" (lambda (p) (read-char p)))",
+        tmp.display()
+    );
+    assert_eq!(eval(&code), Value::Char('A'));
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn audit_stdin_port_redirection_read_line() {
+    let tmp = std::env::temp_dir().join("mae_stdin_test_read_line.txt");
+    std::fs::write(&tmp, "hello world\nsecond line\n").unwrap();
+    let code = format!(
+        "(call-with-input-file \"{}\" (lambda (p) (read-line p)))",
+        tmp.display()
+    );
+    assert_eq!(eval(&code), Value::String(Rc::from("hello world")),);
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn audit_stdin_port_redirection_read() {
+    // with-input-from-file redirects current-input-port (thunk, no args)
+    let tmp = std::env::temp_dir().join("mae_stdin_test_read.txt");
+    std::fs::write(&tmp, "(+ 1 2)").unwrap();
+    let code = format!(
+        "(with-input-from-file \"{}\" (lambda () (eval (read))))",
+        tmp.display()
+    );
+    is_int(&code, 3);
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn audit_string_port_read_char_sequence() {
+    // Verify read-char works sequentially on string ports (proxy for stdin behavior)
+    assert_eq!(
+        eval(
+            "(let ((p (open-input-string \"abc\")))
+               (let ((a (read-char p))
+                     (b (read-char p))
+                     (c (read-char p))
+                     (d (read-char p)))
+                 (list a b c d)))"
+        ),
+        Value::list(vec![
+            Value::Char('a'),
+            Value::Char('b'),
+            Value::Char('c'),
+            Value::Eof,
+        ]),
+    );
+}
+
+#[test]
+fn audit_string_port_peek_then_read() {
+    // peek-char doesn't advance position
+    assert_eq!(
+        eval(
+            "(let ((p (open-input-string \"xy\")))
+               (let ((pk (peek-char p))
+                     (rd (read-char p)))
+                 (list pk rd)))"
+        ),
+        Value::list(vec![Value::Char('x'), Value::Char('x')]),
+    );
+}
+
+// ============================================================
+// §6.2.6 — rationalize (Stern-Brocot mediant search)
+// ============================================================
+
+#[test]
+fn audit_rationalize_exact_integer() {
+    // R7RS §6.2.6: simplest = smallest |p| among same denominator.
+    // (rationalize 3 1) → range [2, 4], simplest integer is 2 (|2| < |3| < |4|)
+    is_int("(rationalize 3 1)", 2);
+}
+
+#[test]
+fn audit_rationalize_zero_in_range() {
+    // Zero is always the simplest rational when in range
+    assert_eq!(eval("(rationalize 0.3 0.5)"), Value::Float(0.0));
+}
+
+#[test]
+fn audit_rationalize_negative() {
+    // Negative value: simplest rational in [-1.5, -0.5]
+    assert_eq!(eval("(rationalize -1.0 0.5)"), Value::Float(-1.0));
+}
+
+#[test]
+fn audit_rationalize_third() {
+    // (rationalize 1/3 1/10) should find a simple fraction near 1/3
+    // The simplest rational in [0.233..., 0.433...] is 1/3 (0.333...)
+    let result = eval("(rationalize 0.333 0.1)");
+    if let Value::Float(f) = result {
+        // Should be 1/3 = 0.333... (simplest rational with small denominator)
+        assert!((f - 1.0 / 3.0).abs() < 0.11, "got {f}");
+    } else {
+        panic!("expected float, got {result}");
+    }
+}
+
+#[test]
+fn audit_rationalize_half() {
+    // (rationalize 0.5 0.01) should return 0.5 (= 1/2, simplest in range)
+    assert_eq!(eval("(rationalize 0.5 0.01)"), Value::Float(0.5));
+}
+
+#[test]
+fn audit_rationalize_inf_diff() {
+    // Infinite tolerance → zero (simplest possible rational)
+    assert_eq!(eval("(rationalize 5.0 +inf.0)"), Value::Float(0.0));
+}
+
+#[test]
+fn audit_rationalize_nan() {
+    // NaN propagates
+    let result = eval("(rationalize +nan.0 1.0)");
+    if let Value::Float(f) = result {
+        assert!(f.is_nan());
+    } else {
+        panic!("expected NaN float");
+    }
+}
+
+#[test]
+fn audit_rationalize_inf_x() {
+    // Infinite x → x (no finite rational can approximate infinity)
+    assert_eq!(
+        eval("(rationalize +inf.0 1.0)"),
+        Value::Float(f64::INFINITY)
+    );
+}
+
+// ============================================================
+// §6.13.2 — char-ready? / u8-ready? (non-kludge verification)
+// ============================================================
+
+#[test]
+fn audit_char_ready_exhausted_string_port() {
+    // char-ready? on an exhausted string port should return #f
+    // (no more data available)
+    assert_eq!(
+        eval(
+            "(let ((p (open-input-string \"\")))
+               (char-ready? p))"
+        ),
+        Value::Bool(false),
+    );
+}
+
+#[test]
+fn audit_char_ready_after_full_read() {
+    // After reading all data, char-ready? should return #f
+    assert_eq!(
+        eval(
+            "(let ((p (open-input-string \"x\")))
+               (read-char p)
+               (char-ready? p))"
+        ),
+        Value::Bool(false),
+    );
+}
+
+#[test]
+fn audit_char_ready_with_data() {
+    // String port with data: char-ready? should return #t
+    assert_eq!(
+        eval(
+            "(let ((p (open-input-string \"hello\")))
+               (char-ready? p))"
+        ),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn audit_u8_ready_exhausted_bytevector_port() {
+    // u8-ready? on exhausted bytevector port should return #f
+    assert_eq!(
+        eval(
+            "(let ((p (open-input-bytevector #u8())))
+               (u8-ready? p))"
+        ),
+        Value::Bool(false),
+    );
+}
+
+#[test]
+fn audit_u8_ready_with_data() {
+    assert_eq!(
+        eval(
+            "(let ((p (open-input-bytevector #u8(1 2 3))))
+               (u8-ready? p))"
+        ),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn audit_char_ready_closed_port_errors() {
+    // char-ready? on a closed port should signal an error
+    let msg = eval_err(
+        "(let ((p (open-input-string \"x\")))
+           (close-port p)
+           (char-ready? p))",
+    );
+    assert!(msg.contains("closed"), "expected closed error, got: {msg}");
+}

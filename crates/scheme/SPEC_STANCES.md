@@ -172,16 +172,18 @@ passed, and invoked multiple times.
 **R7RS says**: These should make the opened port the "default port" for the
 dynamic extent of the thunk.
 
-**mae-scheme stance**: Currently simplified — these open the file and pass the
-port to the thunk. They do NOT redirect `current-input-port`/`current-output-port`
-because our port parameters are not yet dynamically parameterizable.
+**mae-scheme stance**: Fully implemented using `dynamic-wind` to redirect
+`current-input-port`/`current-output-port` for the dynamic extent of the thunk.
+Port restoration is guaranteed even if the thunk raises an exception or invokes
+a continuation.
 
-**Rationale**: The common usage pattern (opening a file and operating on it)
-works. Full port redirection requires `make-parameter`/`parameterize`
-integration with the port system (planned).
+**Implementation**: Scheme bootstrap in `stdlib/base.rs` uses internal
+`%set-current-input-port!` / `%set-current-output-port!` setters wrapped in
+`dynamic-wind` to save, set, and restore the current port.
 
-**Effect on extension authors**: Use `call-with-input-file`/`call-with-output-file`
-which explicitly pass the port. These work correctly.
+**Effect on extension authors**: Both `with-input-from-file` (thunk, no args)
+and `call-with-input-file` (passes port to proc) work correctly. Use
+`(read)` / `(read-char)` inside the thunk to read from the redirected port.
 
 ---
 

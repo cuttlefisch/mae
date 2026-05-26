@@ -189,8 +189,8 @@ pub enum Port {
         name: String,
         binary: bool,
     },
-    /// Standard input.
-    Stdin,
+    /// Standard input with optional peek buffer for peek-char.
+    Stdin { peeked: Option<char> },
     /// Standard output.
     Stdout,
     /// Standard error.
@@ -245,7 +245,7 @@ impl Port {
             Port::StringInput { .. }
                 | Port::BytevectorInput { .. }
                 | Port::FileInput { .. }
-                | Port::Stdin
+                | Port::Stdin { .. }
                 | Port::Closed(PortKind::Input)
         )
     }
@@ -280,7 +280,7 @@ impl Port {
             Port::StringInput { .. }
             | Port::BytevectorInput { .. }
             | Port::FileInput { .. }
-            | Port::Stdin => PortKind::Input,
+            | Port::Stdin { .. } => PortKind::Input,
             Port::StringOutput { .. }
             | Port::BytevectorOutput { .. }
             | Port::FileOutput { .. }
@@ -304,7 +304,7 @@ impl fmt::Debug for Port {
             Port::BytevectorOutput { buf } => write!(f, "BytevectorOutput(len={})", buf.len()),
             Port::FileInput { name, .. } => write!(f, "FileInput({name})"),
             Port::FileOutput { name, .. } => write!(f, "FileOutput({name})"),
-            Port::Stdin => write!(f, "Stdin"),
+            Port::Stdin { .. } => write!(f, "Stdin"),
             Port::Stdout => write!(f, "Stdout"),
             Port::Stderr => write!(f, "Stderr"),
             Port::Closed(k) => write!(f, "Closed({k:?})"),
