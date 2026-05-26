@@ -35,7 +35,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-core` | Buffer management (rope), event loop, core primitives | `ropey`, `crossbeam` |
 | `mae-renderer` | Display/rendering — `Renderer` trait + terminal backend | `ratatui`, `crossterm` |
 | `mae-gui` | GUI rendering backend — winit window + Skia 2D + native SVG | `winit`, `skia-safe` (features: `svg`) |
-| `mae-scheme` | Embedded Scheme runtime for configuration and packages | `steel` (or purpose-built) |
+| `mae-scheme` | Embedded Scheme runtime for configuration and packages | purpose-built R7RS-small |
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
@@ -104,7 +104,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Single-file editing with save/load
 
 ### Phase 2: Scheme Runtime — COMPLETE
-- Steel embedded as the extension language
+- mae-scheme R7RS-small runtime as the extension language
 - Buffer operations exposed to Scheme
 - Config file loading (`init.scm`)
 - Command binding from Scheme (`(define-key ...)`)
@@ -309,9 +309,8 @@ make test-scheme-all                # All local tests
 - **Rust-side iteration preferred.** Don't add `(run-tests)` at end of test files. The runner calls `run-nth-test` with `apply_to_editor` + `sync_scheme_state` between each step.
 
 ### Adding New Test Primitives
-- **Read-only state**: Add to `SharedState`, register `test-*` Rust function in `new()`, add Scheme forwarding in `install_mutable_buffer_accessors`, update in `sync_scheme_state`.
+- **Read-only state**: Add to `SharedState`, register Rust function in `new()` that reads from SharedState, update SharedState in `inject_editor_state`.
 - **Mutations**: Add pending field to `SharedState`, register Scheme function that sets it, process in `apply_to_editor`.
-- **Never call `inject_editor_state` between test registration and execution** — it shadows captured bindings (Steel `register_value` creates new cells).
 
 ## Developing MAE Inside MAE (MCP Tools)
 
@@ -510,7 +509,6 @@ These APIs are intended to remain stable through v1.0:
 - **Full architecture spec:** `README.md`
 - **Emacs source for reference:** the Emacs source tree (clone of emacs-mirror/emacs, `emacs-30` branch)
 - **Declarative project config:** `.project` in repo root (for declarative-project-mode in Emacs)
-- **Steel Scheme:** https://github.com/mattwparas/steel — primary candidate for embedded Scheme runtime
 - **ropey:** https://github.com/cessen/ropey — rope data structure for buffer management
 - **ratatui:** https://github.com/ratatui/ratatui — terminal UI framework
 - **tree-sitter-org:** org-mode grammar for tree-sitter

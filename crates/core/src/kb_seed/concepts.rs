@@ -1564,11 +1564,11 @@ execution from the Rust side. It is the canonical path for all tests.\n\n\
 5. Between each test: `apply_to_editor()` + `sync_scheme_state()`\n\
 6. Print TAP v14 output, exit 0 (pass) or 1 (fail)\n\n\
 ## SharedState Pattern\n\
-Steel's `register_value` creates new binding cells on each call, breaking \
-closures captured in earlier evals. The solution: store mutable state in \
-`Arc<Mutex<SharedState>>` and register Rust functions that read from it. \
-Scheme forwarding functions (`buffer-string`, `buffer-sync-enabled?`, \
-`current-mode`, `get-buffer-by-name`) call these Rust functions.\n\n\
+Mutable editor state is stored in `Arc<Mutex<SharedState>>` and registered \
+Rust functions read from it. Functions like `buffer-string`, \
+`buffer-sync-enabled?`, `current-mode`, and `get-buffer-by-name` always \
+return fresh data from SharedState. `inject_editor_state()` updates both \
+the VM globals and SharedState in a single call.\n\n\
 ## Adding New Test Primitives\n\
 - **Read-only**: Add to SharedState → register `test-*` Rust fn → add \
   Scheme forwarding in `install_mutable_buffer_accessors` → update in \

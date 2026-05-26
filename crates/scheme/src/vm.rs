@@ -1609,11 +1609,10 @@ mod tests {
         assert!(err.contains("bad"));
     }
 
-    // --- Void in tail position (Steel regression) ---
+    // --- Void in tail position ---
 
     #[test]
     fn test_void_in_tail() {
-        // This was a crash in Steel
         let result = eval("(define (f) (if #t (begin 42))) (f)");
         assert_eq!(result, Value::Int(42));
     }

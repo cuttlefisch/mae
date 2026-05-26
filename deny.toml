@@ -9,11 +9,7 @@ no-default-features = false
 exclude = ["mae-gui", "mae-test-fixtures"]
 
 [advisories]
-ignore = [
-    # bincode is unmaintained but pulled in transitively via steel-core.
-    # We can't remove it without replacing the Scheme runtime.
-    { id = "RUSTSEC-2025-0141", reason = "transitive dep via steel-core, no replacement available" },
-]
+ignore = []
 
 [licenses]
 allow = [

@@ -49,7 +49,7 @@ MAE is split into 10 crates (see `README.md` for the full layout):
 | `mae-core` | Buffer (rope), editor state, commands, keymap, syntax, babel, export |
 | `mae-renderer` | Terminal rendering (ratatui), status bar, popups |
 | `mae-gui` | GUI rendering (winit + Skia 2D), mouse, fonts, inline images |
-| `mae-scheme` | Steel Scheme runtime, init.scm loading, hook dispatch |
+| `mae-scheme` | R7RS-small Scheme runtime, init.scm loading, hook dispatch |
 | `mae-ai` | AI providers (Claude/OpenAI/Gemini/DeepSeek), tool execution |
 | `mae-lsp` | LSP client — connection, navigation, diagnostics, completion |
 | `mae-dap` | DAP client — breakpoints, stepping, watches |

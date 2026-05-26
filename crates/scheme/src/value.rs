@@ -317,7 +317,7 @@ impl fmt::Debug for Port {
 // ---------------------------------------------------------------------------
 
 /// A Rust function callable from Scheme.
-/// Returns Result for error propagation (solves Steel limitation #2).
+/// Returns Result for proper error propagation as Scheme exceptions.
 pub struct ForeignFn {
     pub name: String,
     #[allow(clippy::type_complexity)]

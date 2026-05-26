@@ -86,13 +86,9 @@ pub(crate) async fn run_scheme_tests(
     }
 
     // Load and evaluate each test file.
-    // We call inject_editor_state + install_mutable_buffer_accessors before
-    // each file to ensure the file's closures capture bindings in the current
-    // module context. sync_scheme_state then uses set! to update these.
     for file in &test_files {
         info!(file = %file.display(), "loading test file");
         scheme.inject_editor_state(editor);
-        install_mutable_buffer_accessors(editor, scheme);
 
         if let Err(e) = scheme.load_file(file) {
             eprintln!("mae-test: error loading {}: {}", file.display(), e.message);
@@ -144,8 +140,7 @@ async fn run_tests_iteratively(
     collab_command_tx: &mpsc::Sender<CollabCommand>,
     broadcaster: &SharedBroadcaster,
 ) -> i32 {
-    // Query test count. Do NOT call inject_editor_state here — it would create
-    // new bindings that shadow the ones test thunks captured at file-load time.
+    // Query test count.
     let count_str = match scheme.eval("(test-count)") {
         Ok(s) => s,
         Err(e) => {
@@ -163,8 +158,8 @@ async fn run_tests_iteratively(
     println!("TAP version 14");
     println!("1..{}", count);
 
-    // Initial sync so first test sees current editor state (mode, buffer text, etc.).
-    sync_scheme_state(editor, scheme);
+    // Sync state so first test sees current editor state.
+    scheme.inject_editor_state(editor);
 
     let mut pass_count = 0usize;
     let mut fail_count = 0usize;
@@ -176,9 +171,7 @@ async fn run_tests_iteratively(
             .unwrap_or_else(|_| format!("test-{}", i));
         let name = name.trim().trim_matches('"').to_string();
 
-        // Run the test — do NOT call inject_editor_state here, as it creates
-        // new bindings that shadow the ones test thunks captured. Instead,
-        // sync_scheme_state (below) uses set! to mutate existing binding cells.
+        // Run the test.
         let result = match scheme.eval(&format!("(run-nth-test {})", i)) {
             Ok(s) => s,
             Err(e) => format!("FAIL:{}", e.message),
@@ -196,10 +189,8 @@ async fn run_tests_iteratively(
         )
         .await;
 
-        // Sync Scheme state variables via set! — register_value creates new bindings
-        // that aren't visible to closures captured in previous evals. set! mutates
-        // the existing binding cell that closures already reference.
-        sync_scheme_state(editor, scheme);
+        // Refresh editor state so the next test sees updated globals.
+        scheme.inject_editor_state(editor);
 
         // Check for exit request mid-test.
         if let Some(code) = scheme.take_exit_code() {
@@ -263,171 +254,6 @@ async fn run_tests_iteratively(
     } else {
         0
     }
-}
-
-/// Install mutable buffer accessor functions in the Scheme environment.
-///
-/// After inject_editor_state (which uses register_fn to create closure-captured
-/// snapshots), we override buffer-string and buffer-text with Scheme-defined
-/// functions that read from mutable variables. This way:
-/// 1. Test file closures capture these Scheme functions (not Rust closures)
-/// 2. sync_scheme_state can update *buffer-text* etc. via set!
-/// 3. Test thunks see fresh buffer contents between test steps
-fn install_mutable_buffer_accessors(_editor: &Editor, scheme: &mut SchemeRuntime) {
-    // Override buffer-string, buffer-text, and sync inspection functions
-    // to read from SharedState via Rust functions. This avoids the Steel
-    // binding scope issue where set! on variables only updates the most
-    // recent binding, not earlier files' captures.
-    let code = r#"(begin
-          (define (buffer-string) (test-buffer-string))
-          (define (buffer-text name) (test-buffer-text name))
-          (define (buffer-sync-enabled?) (test-sync-enabled?))
-          (define (buffer-pending-updates) (test-pending-updates))
-          (define (buffer-sync-content) (test-sync-content))
-          (define (buffer-encode-state) (test-encode-state))
-          (define (get-buffer-by-name name) (test-get-buffer-by-name name))
-          (define (region-active?) (test-region-active?))
-          (define (region-beginning) (test-region-start))
-          (define (region-end) (test-region-end))
-          (define (buffer-search-forward pattern) (test-search-forward pattern))
-          (define (get-option name) (test-get-option name))
-          (define (cursor-row) (test-cursor-row))
-          (define (cursor-col) (test-cursor-col))
-          (define (status-message) (test-status-message)))"#;
-    let _ = scheme.eval(code);
-}
-
-/// Sync Scheme state variables using `set!` instead of `register_value`.
-///
-/// Steel's `register_value` creates a new binding cell, but closures captured
-/// in earlier evals reference the old cell. `set!` mutates in-place, so the
-/// test thunks see updated values.
-fn sync_scheme_state(editor: &Editor, scheme: &mut SchemeRuntime) {
-    let buf = editor.active_buffer();
-    let text = buf.text().replace('\\', "\\\\").replace('"', "\\\"");
-    let name = buf.name.replace('\\', "\\\\").replace('"', "\\\"");
-    let buf_count = editor.buffers.len();
-    let win = editor.window_mgr.focused_window();
-
-    // Mode string
-    let mode_str = match editor.mode {
-        mae_core::Mode::Normal => "normal",
-        mae_core::Mode::Insert => "insert",
-        mae_core::Mode::Visual(_) => "visual",
-        mae_core::Mode::Command => "command",
-        mae_core::Mode::ConversationInput => "conversation",
-        mae_core::Mode::Search => "search",
-        mae_core::Mode::FilePicker => "file-picker",
-        mae_core::Mode::FileBrowser => "file-browser",
-        mae_core::Mode::CommandPalette => "command-palette",
-        mae_core::Mode::ShellInsert => "shell-insert",
-    };
-    let sync_enabled = buf.sync_doc.is_some();
-
-    // Build a single set! expression to update all state variables.
-    let sync_code = format!(
-        r#"(begin
-          (set! *buffer-text* "{text}")
-          (set! *buffer-name* "{name}")
-          (set! *buffer-count* {buf_count})
-          (set! *buffer-modified?* {modified})
-          (set! *buffer-line-count* {lines})
-          (set! *cursor-row* {crow})
-          (set! *cursor-col* {ccol})
-          (set! *mode* "{mode}")
-          (set! *buffer-sync-enabled?* {sync_enabled}))"#,
-        text = text,
-        name = name,
-        buf_count = buf_count,
-        modified = if buf.modified { "#t" } else { "#f" },
-        lines = buf.line_count(),
-        crow = win.cursor_row,
-        ccol = win.cursor_col,
-        mode = mode_str,
-        sync_enabled = if sync_enabled { "#t" } else { "#f" },
-    );
-
-    // Update SharedState for Rust-backed test functions (current-mode, buffer-string, etc.)
-    let buf_text = buf.text();
-    debug!(
-        active_buf_name = %name,
-        active_buf_idx = editor.window_mgr.focused_window().buffer_idx,
-        text_len = buf_text.len(),
-        text_preview = %buf_text.chars().take(200).collect::<String>(),
-        sync_enabled = sync_enabled,
-        "sync_scheme_state: copying active buffer text to SharedState"
-    );
-    scheme.set_current_mode(mode_str);
-    scheme.set_current_buffer_text(&buf_text);
-    scheme.set_cursor_position(win.cursor_row, win.cursor_col);
-    scheme.set_last_status_message(&editor.status_msg);
-
-    if let Err(e) = scheme.eval(&sync_code) {
-        warn!(error = %e.message, "failed to sync scheme state variables");
-    }
-
-    // Update all buffer texts in SharedState for (buffer-text NAME).
-    let all_texts: Vec<(String, String)> = editor
-        .buffers
-        .iter()
-        .map(|b| (b.name.clone(), b.text()))
-        .collect();
-    scheme.set_all_buffer_texts(all_texts);
-
-    // Update buffer names in SharedState for (get-buffer-by-name).
-    let buffer_names: Vec<(usize, String)> = editor
-        .buffers
-        .iter()
-        .enumerate()
-        .map(|(i, b)| (i, b.name.clone()))
-        .collect();
-    scheme.set_buffer_names(buffer_names);
-
-    // Update option values in SharedState.
-    let option_values: Vec<(String, String)> = editor
-        .option_registry
-        .list()
-        .iter()
-        .filter_map(|o| {
-            editor
-                .get_option(&o.name)
-                .map(|(v, _)| (o.name.to_string(), v))
-        })
-        .collect();
-    scheme.set_option_values(option_values);
-
-    // Update region (visual selection) state in SharedState.
-    let (region_active, region_start, region_end) =
-        if matches!(editor.mode, mae_core::Mode::Visual(_)) {
-            let rope = &buf.rope();
-            let anchor_line = editor.vi.visual_anchor_row;
-            let anchor_col = editor.vi.visual_anchor_col;
-            let anchor_offset =
-                rope.line_to_char(anchor_line.min(rope.len_lines().saturating_sub(1))) + anchor_col;
-            let cursor_line = win.cursor_row;
-            let cursor_col = win.cursor_col;
-            let cursor_offset =
-                rope.line_to_char(cursor_line.min(rope.len_lines().saturating_sub(1))) + cursor_col;
-            let start = anchor_offset.min(cursor_offset);
-            let end = anchor_offset.max(cursor_offset);
-            (true, start, end)
-        } else {
-            (false, 0, 0)
-        };
-    scheme.set_region_state(region_active, region_start, region_end);
-
-    // Update sync state in SharedState.
-    let sync_content = buf.sync_doc.as_ref().map(|s| s.content());
-    let encoded = buf.sync_doc.as_ref().map(|s| {
-        use base64::Engine as _;
-        base64::engine::general_purpose::STANDARD.encode(s.encode_state())
-    });
-    scheme.set_sync_state(
-        sync_enabled,
-        buf.pending_sync_updates.len(),
-        sync_content,
-        encoded,
-    );
 }
 
 /// Process all pending side effects: drain collab events, handle sleep-ms,

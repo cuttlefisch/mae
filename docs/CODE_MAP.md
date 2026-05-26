@@ -317,6 +317,7 @@ Source: `crates/scheme/src/lib.rs`
 | `runtime` | mod |
 | `compiler` | mod |
 | `env` | mod |
+| `ffi` | mod |
 | `library` | mod |
 | `lisp_error` | mod |
 | `macros` | mod |
@@ -468,7 +469,6 @@ Source: `crates/sync/src/lib.rs`
 | `exit` | `crates/scheme/src/runtime.rs` |
 | `write-file` | `crates/scheme/src/runtime.rs` |
 | `sleep-ms` | `crates/scheme/src/runtime.rs` |
-| `file-exists?` | `crates/scheme/src/runtime.rs` |
 | `wait-for-file` | `crates/scheme/src/runtime.rs` |
 | `current-milliseconds` | `crates/scheme/src/runtime.rs` |
 | `goto-char` | `crates/scheme/src/runtime.rs` |

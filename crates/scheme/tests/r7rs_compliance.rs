@@ -1011,19 +1011,18 @@ fn type_predicates_comprehensive() {
 }
 
 // ============================================================================
-// Steel regression tests (must all pass per plan)
+// VM regression tests
 // ============================================================================
 
 #[test]
-fn steel_regression_void_in_tail_position() {
-    // Was a crash in Steel
+fn regression_void_in_tail_position() {
     assert_eq!(eval("(if #t (void))"), Value::Void);
     assert_eq!(eval("(begin 1 2 (void))"), Value::Void);
 }
 
 #[test]
-fn steel_regression_define_global_updates() {
-    // Steel's register_value created new cells instead of updating
+fn regression_define_global_updates() {
+    // define_global must update existing bindings, not create new shadow cells
     let mut vm = Vm::new();
     stdlib::register_stdlib(&mut vm);
     vm.define_global("x", Value::Int(1));
@@ -1033,9 +1032,8 @@ fn steel_regression_define_global_updates() {
 }
 
 #[test]
-fn steel_regression_error_from_ffi() {
-    // Steel couldn't propagate errors from Rust FFI
-    // Our register_fn returns Result, so errors propagate as Scheme exceptions
+fn regression_error_from_ffi() {
+    // register_fn returns Result, so errors propagate as Scheme exceptions
     let mut vm = Vm::new();
     stdlib::register_stdlib(&mut vm);
     let err = vm.eval("(+ 1 \"hello\")").unwrap_err();

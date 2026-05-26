@@ -1459,21 +1459,9 @@ pub fn dirs_candidate(rel: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    fn try_new_scheme() -> Option<SchemeRuntime> {
-        std::panic::catch_unwind(SchemeRuntime::new)
-            .ok()
-            .and_then(|r| r.ok())
-    }
-
     macro_rules! require_scheme {
         () => {
-            match try_new_scheme() {
-                Some(s) => s,
-                None => {
-                    eprintln!("SKIPPED: Steel runtime unavailable (concurrent test race)");
-                    return;
-                }
-            }
+            SchemeRuntime::new().expect("SchemeRuntime::new() should not fail")
         };
     }
 

@@ -125,8 +125,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build binary
         run: cargo build --release --workspace
-      - name: Create Steel home directory
-        run: mkdir -p ~/.local/share/steel
       - name: Validate init.scm
         run: ./target/release/mae --check-config
       - name: Editor tests

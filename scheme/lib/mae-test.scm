@@ -34,17 +34,15 @@
             (else (loop (+ i 1))))))))
 
 ;; (to-string VAL) — convert any value to a string representation.
-;; Handles Steel error objects via error-object-message.
 (define (to-string val)
   (cond
     ((string? val) val)
     ((number? val) (number->string val))
     ((boolean? val) (if val "#t" "#f"))
     ((symbol? val) (symbol->string val))
+    ((error-object? val) (error-object-message val))
     (else
-      ;; Try error-object-message for Steel error types.
-      (with-handler
-        (lambda (e) "<?>")
+      (guard (exn (#t "<?>"))
         (error-object-message val)))))
 
 ;; --- Test registration ---
@@ -121,10 +119,9 @@
 ;; fails if THUNK returns normally.
 (define (should-error thunk)
   (set! *assertion-count* (+ *assertion-count* 1))
-  (with-handler
-    (lambda (e) #t)
-    (begin (thunk)
-           (error "Expected error but none was raised"))))
+  (guard (exn (#t #t))
+    (thunk)
+    (error "Expected error but none was raised")))
 
 ;; (should-match HAYSTACK PATTERN) — assert HAYSTACK contains PATTERN substring.
 ;; Alias for should-contain with a more descriptive name for pattern-like usage.
@@ -136,8 +133,6 @@
       #t))
 
 ;; (should-mode EXPECTED) — assert current editor mode matches expected string.
-;; Uses (current-mode) which reads from SharedState via Rust, bypassing
-;; the Steel binding scope issue with *mode* across multi-file test runs.
 (define (should-mode expected)
   (should-equal (current-mode) expected))
 
@@ -190,7 +185,7 @@
 
 ;; --- Test runner ---
 
-;; Helper to run hooks (avoids for-each + lambda which Steel dislikes).
+;; Helper to run hooks.
 (define (run-hook-list hooks)
   (if (null? hooks)
       #t
@@ -202,17 +197,15 @@
 (define (run-single-test name thunk)
   ;; Run before-each hooks
   (run-hook-list *before-each-fns*)
-  (define status "PASS")
-  (define msg "")
-  (with-handler
-    (lambda (err)
-      (set! status "FAIL")
-      (set! msg (to-string err))
-      #f)
-    (thunk))
-  ;; Run after-each hooks
-  (run-hook-list *after-each-fns*)
-  (list status name msg))
+  (let ((status "PASS")
+        (msg ""))
+    (guard (err
+            (#t (set! status "FAIL")
+                (set! msg (to-string err))))
+      (thunk))
+    ;; Run after-each hooks
+    (run-hook-list *after-each-fns*)
+    (list status name msg)))
 
 ;; --- Rust-side iteration API ---
 ;; These allow the test runner to iterate tests from Rust,

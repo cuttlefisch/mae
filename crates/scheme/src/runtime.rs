@@ -2,19 +2,23 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use steel::steel_vm::engine::Engine;
-use steel::steel_vm::register_fn::RegisterFn;
-use steel::SteelVal;
 use tracing::{debug, error, info, warn};
 
 use mae_core::{parse_key_seq_spaced, Editor};
 
+use crate::ffi::{
+    arg_bool, arg_float, arg_int, arg_opt_string, arg_string, list_to_strings, value_to_display,
+};
+use crate::lisp_error::{Arity, LispError};
+use crate::value::Value;
+use crate::vm::Vm;
+
 /// Accumulated config data from Scheme evaluation.
-/// Shared between Rust and Steel via Arc<Mutex<>>.
+/// Shared between Rust and Scheme VM via Arc<Mutex<>>.
 ///
-/// register_fn requires Send + Sync + 'static. Rc<RefCell<>> doesn't
-/// satisfy those bounds. Arc<Mutex<>> does, and since Engine is
-/// single-threaded (!Send), the mutex is never contended.
+/// Foreign functions require Send + Sync + 'static closures.
+/// Arc<Mutex<>> satisfies these bounds, and since the VM is
+/// single-threaded, the mutex is never contended.
 #[derive(Default)]
 struct SharedState {
     /// (keymap_name, key_string, command_name)
@@ -155,28 +159,27 @@ struct SharedState {
     /// Accumulated sync updates from pending_sync_updates (base64-encoded).
     /// Always captured after each apply cycle; drained by `(buffer-drain-updates)`.
     accumulated_sync_updates: Vec<String>,
-    /// Current mode string for test inspection (updated by test runner).
+    /// Current mode string (updated by inject_editor_state).
     current_mode: String,
-    /// Active buffer text for test inspection (updated by test runner).
+    /// Active buffer text (updated by inject_editor_state).
     current_buffer_text: String,
-    /// All buffer texts for (buffer-text NAME) (updated by test runner).
+    /// All buffer texts for (buffer-text NAME) (updated by inject_editor_state).
     all_buffer_texts: Vec<(String, String)>,
-    /// Whether sync is enabled on active buffer (updated by test runner).
+    /// Whether sync is enabled on active buffer (updated by inject_editor_state).
     sync_enabled: bool,
-    /// Number of pending sync updates (updated by test runner).
+    /// Number of pending sync updates (updated by inject_editor_state).
     pending_update_count: usize,
-    /// Sync doc content (None if sync not enabled) (updated by test runner).
+    /// Sync doc content (None if sync not enabled) (updated by inject_editor_state).
     sync_content: Option<String>,
-    /// Encoded sync state (None if sync not enabled) (updated by test runner).
+    /// Encoded sync state (None if sync not enabled) (updated by inject_editor_state).
     encoded_state: Option<String>,
-    /// Buffer name→index mapping (updated by test runner for cross-test visibility).
+    /// Buffer name→index mapping (updated by inject_editor_state).
     buffer_names: Vec<(usize, String)>,
 
-    // --- Option state (updated by test runner) ---
     /// Snapshot of option values: (name, value_string).
     option_values: Vec<(String, String)>,
 
-    // --- Visual/region state (updated by test runner) ---
+    // --- Visual/region state (updated by inject_editor_state) ---
     /// Whether a visual selection is active.
     region_active: bool,
     /// Start offset of the visual selection.
@@ -184,12 +187,12 @@ struct SharedState {
     /// End offset of the visual selection.
     region_end: usize,
 
-    // --- Cursor state (updated by test runner) ---
-    /// Cursor row (0-indexed), updated by sync_scheme_state.
+    // --- Cursor state (updated by inject_editor_state) ---
+    /// Cursor row (0-indexed).
     cursor_row: usize,
-    /// Cursor column (0-indexed), updated by sync_scheme_state.
+    /// Cursor column (0-indexed).
     cursor_col: usize,
-    /// Last status message set by the editor (for test inspection).
+    /// Last status message set by the editor.
     last_status_message: String,
 
     // --- State vector / reconcile (new CRDT test primitives) ---
@@ -259,14 +262,13 @@ pub struct SchemeErrorSnapshot {
     pub seq: u64,
 }
 
-/// Wraps Steel's Engine and provides the Scheme extension API.
+/// Wraps the mae-scheme VM and provides the Scheme extension API.
 ///
-/// Design: the Engine and Editor live on the same thread. Scheme eval
+/// Design: the VM and Editor live on the same thread. Scheme eval
 /// blocks the event loop briefly — acceptable for config loading and
-/// interactive REPL. Phase 3 will need a dedicated Scheme thread with
-/// channel-based message passing for concurrent AI access.
+/// interactive REPL.
 pub struct SchemeRuntime {
-    engine: Engine,
+    vm: Vm,
     shared: Arc<Mutex<SharedState>>,
     /// Ring buffer of recent eval errors for debugger introspection.
     error_history: Vec<SchemeErrorSnapshot>,
@@ -294,294 +296,482 @@ impl std::fmt::Display for SchemeError {
 
 impl std::error::Error for SchemeError {}
 
-impl From<steel::SteelErr> for SchemeError {
-    fn from(err: steel::SteelErr) -> Self {
+impl From<LispError> for SchemeError {
+    fn from(err: LispError) -> Self {
         SchemeError {
-            message: format!("{}", err),
+            message: err.message(),
         }
     }
 }
 
 impl SchemeRuntime {
     pub fn new() -> Result<Self, SchemeError> {
-        let mut engine = Engine::new();
+        let mut vm = Vm::new();
         let shared = Arc::new(Mutex::new(SharedState::default()));
 
-        // Register define-key: (define-key MAP KEY COMMAND)
+        // Install R7RS standard library
+        crate::stdlib::register_stdlib(&mut vm);
+
+        // --- Keybinding registration ---
+
+        // (define-key MAP KEY COMMAND)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "define-key",
-            move |map: String, key: String, cmd: String| {
+            "Bind KEY to COMMAND in keymap MAP",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let map = arg_string(args, 0, "define-key")?;
+                let key = arg_string(args, 1, "define-key")?;
+                let cmd = arg_string(args, 2, "define-key")?;
                 s.lock().unwrap().keymap_bindings.push((map, key, cmd));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
-        // Register define-keymap: (define-keymap NAME PARENT)
+        // (define-keymap NAME PARENT)
         let s = shared.clone();
-        engine.register_fn("define-keymap", move |name: String, parent: String| {
-            s.lock().unwrap().keymap_defs.push((name, parent));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "define-keymap",
+            "Create a new keymap NAME with PARENT",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "define-keymap")?;
+                let parent = arg_string(args, 1, "define-keymap")?;
+                s.lock().unwrap().keymap_defs.push((name, parent));
+                Ok(Value::Void)
+            },
+        );
 
-        // Register define-command: (define-command NAME DOC SCHEME-FN-NAME)
+        // (define-command NAME DOC SCHEME-FN-NAME)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "define-command",
-            move |name: String, doc: String, fn_name: String| {
+            "Register a command NAME with doc and handler",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "define-command")?;
+                let doc = arg_string(args, 1, "define-command")?;
+                let fn_name = arg_string(args, 2, "define-command")?;
                 s.lock().unwrap().command_defs.push((name, doc, fn_name));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
-        // Register set-status: (set-status MSG)
+        // (set-status MSG)
         let s = shared.clone();
-        engine.register_fn("set-status", move |msg: String| {
-            s.lock().unwrap().status_message = Some(msg);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "set-status",
+            "Set the status bar message",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let msg = arg_string(args, 0, "set-status")?;
+                s.lock().unwrap().status_message = Some(msg);
+                Ok(Value::Void)
+            },
+        );
 
-        // Register set-theme: (set-theme NAME)
+        // (set-theme NAME)
         let s = shared.clone();
-        engine.register_fn("set-theme", move |name: String| {
-            s.lock().unwrap().theme_request = Some(name);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "set-theme",
+            "Set the color theme",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "set-theme")?;
+                s.lock().unwrap().theme_request = Some(name);
+                Ok(Value::Void)
+            },
+        );
 
         // --- Live editing primitives ---
 
-        // (buffer-insert TEXT) — insert text at the cursor position.
+        // (buffer-insert TEXT)
         let s = shared.clone();
-        engine.register_fn("buffer-insert", move |text: String| {
-            s.lock().unwrap().pending_insert = Some(text);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "buffer-insert",
+            "Insert text at cursor",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let text = arg_string(args, 0, "buffer-insert")?;
+                s.lock().unwrap().pending_insert = Some(text);
+                Ok(Value::Void)
+            },
+        );
 
-        // (cursor-goto ROW COL) — move cursor to absolute position (0-indexed).
+        // (cursor-goto ROW COL)
         let s = shared.clone();
-        engine.register_fn("cursor-goto", move |row: isize, col: isize| {
-            s.lock().unwrap().pending_cursor = Some((row.max(0) as usize, col.max(0) as usize));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "cursor-goto",
+            "Move cursor to absolute position (0-indexed)",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let row = arg_int(args, 0, "cursor-goto")?;
+                let col = arg_int(args, 1, "cursor-goto")?;
+                s.lock().unwrap().pending_cursor = Some((row.max(0) as usize, col.max(0) as usize));
+                Ok(Value::Void)
+            },
+        );
 
-        // (open-file PATH) — open a file in a new buffer.
+        // (open-file PATH)
         let s = shared.clone();
-        engine.register_fn("open-file", move |path: String| {
-            s.lock().unwrap().pending_open_file = Some(path);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "open-file",
+            "Open a file in a new buffer",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let path = arg_string(args, 0, "open-file")?;
+                s.lock().unwrap().pending_open_file = Some(path);
+                Ok(Value::Void)
+            },
+        );
 
-        // (run-command NAME) — dispatch a registered command by name.
+        // (run-command NAME)
         let s = shared.clone();
-        engine.register_fn("run-command", move |name: String| {
-            s.lock().unwrap().pending_commands.push(name);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "run-command",
+            "Dispatch a registered command by name",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "run-command")?;
+                s.lock().unwrap().pending_commands.push(name);
+                Ok(Value::Void)
+            },
+        );
 
-        // (execute-ex CMD-STRING) — route through ex-command parser.
-        // Handles argument splitting: (execute-ex "collab-join test.txt"),
-        // (execute-ex "saveas /path/to/file"), (execute-ex "w /path"), etc.
+        // (execute-ex CMD-STRING)
         let s = shared.clone();
-        engine.register_fn("execute-ex", move |cmd: String| {
-            s.lock().unwrap().pending_ex_commands.push(cmd);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "execute-ex",
+            "Route through ex-command parser",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let cmd = arg_string(args, 0, "execute-ex")?;
+                s.lock().unwrap().pending_ex_commands.push(cmd);
+                Ok(Value::Void)
+            },
+        );
 
-        // (message TEXT) — append to the *Messages* log.
+        // (message TEXT)
         let s = shared.clone();
-        engine.register_fn("message", move |text: String| {
-            s.lock().unwrap().pending_messages.push(text);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "message",
+            "Append to the *Messages* log",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let text = arg_string(args, 0, "message")?;
+                s.lock().unwrap().pending_messages.push(text);
+                Ok(Value::Void)
+            },
+        );
 
         // --- Hook system ---
 
         // (add-hook! HOOK-NAME FN-NAME)
         let s = shared.clone();
-        engine.register_fn("add-hook!", move |hook: String, fn_name: String| {
-            s.lock().unwrap().pending_hook_adds.push((hook, fn_name));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "add-hook!",
+            "Register a hook callback",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let hook = arg_string(args, 0, "add-hook!")?;
+                let fn_name = arg_string(args, 1, "add-hook!")?;
+                s.lock().unwrap().pending_hook_adds.push((hook, fn_name));
+                Ok(Value::Void)
+            },
+        );
 
         // (remove-hook! HOOK-NAME FN-NAME)
         let s = shared.clone();
-        engine.register_fn("remove-hook!", move |hook: String, fn_name: String| {
-            s.lock().unwrap().pending_hook_removes.push((hook, fn_name));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "remove-hook!",
+            "Remove a hook callback",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let hook = arg_string(args, 0, "remove-hook!")?;
+                let fn_name = arg_string(args, 1, "remove-hook!")?;
+                s.lock().unwrap().pending_hook_removes.push((hook, fn_name));
+                Ok(Value::Void)
+            },
+        );
 
         // --- Editor options ---
 
         // (set-option! KEY VALUE)
         let s = shared.clone();
-        engine.register_fn("set-option!", move |key: String, value: String| {
-            s.lock().unwrap().pending_options.push((key, value));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "set-option!",
+            "Set an editor option",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let key = arg_string(args, 0, "set-option!")?;
+                let value = arg_string(args, 1, "set-option!")?;
+                s.lock().unwrap().pending_options.push((key, value));
+                Ok(Value::Void)
+            },
+        );
 
-        // (set-local-option! KEY VALUE) — set a buffer-local option on the active buffer.
+        // (set-local-option! KEY VALUE)
         let s = shared.clone();
-        engine.register_fn("set-local-option!", move |key: String, value: String| {
-            s.lock().unwrap().pending_local_options.push((key, value));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "set-local-option!",
+            "Set a buffer-local option",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let key = arg_string(args, 0, "set-local-option!")?;
+                let value = arg_string(args, 1, "set-local-option!")?;
+                s.lock().unwrap().pending_local_options.push((key, value));
+                Ok(Value::Void)
+            },
+        );
 
-        // (display-buffer-policy KIND) — query active display rule for a BufferKind
-        {
-            // This is read-only from Scheme — just needs editor access at apply time.
-            // We return a static value by having the engine store nothing; the real
-            // query happens in apply_to_editor. For now, expose a simple version
-            // that doesn't need editor state.
-            engine.register_fn("display-buffer-policy", move |kind: String| -> SteelVal {
+        // (display-buffer-policy KIND)
+        vm.register_fn(
+            "display-buffer-policy",
+            "Query active display rule for a BufferKind",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let kind = arg_string(args, 0, "display-buffer-policy")?;
                 use mae_core::display_policy::{
                     action_to_string, parse_buffer_kind, DisplayPolicy,
                 };
                 match parse_buffer_kind(&kind) {
                     Some(bk) => {
                         let policy = DisplayPolicy::default();
-                        SteelVal::StringV(action_to_string(&policy.action_for(bk)).into())
+                        Ok(Value::string(action_to_string(&policy.action_for(bk))))
                     }
-                    None => SteelVal::StringV(format!("unknown kind: {}", kind).into()),
+                    None => Ok(Value::string(format!("unknown kind: {}", kind))),
                 }
-            });
-        }
+            },
+        );
 
-        // (set-display-rule! KIND ACTION) — override display policy from init.scm
+        // (set-display-rule! KIND ACTION)
         let s = shared.clone();
-        engine.register_fn("set-display-rule!", move |kind: String, action: String| {
-            s.lock().unwrap().pending_display_rules.push((kind, action));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "set-display-rule!",
+            "Override display policy",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let kind = arg_string(args, 0, "set-display-rule!")?;
+                let action = arg_string(args, 1, "set-display-rule!")?;
+                s.lock().unwrap().pending_display_rules.push((kind, action));
+                Ok(Value::Void)
+            },
+        );
 
-        // (set-buffer-kind-replaceable! KIND ENABLE) — mark a buffer kind as replaceable
+        // (set-buffer-kind-replaceable! KIND ENABLE)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "set-buffer-kind-replaceable!",
-            move |kind: String, enable: bool| {
+            "Mark a buffer kind as replaceable",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let kind = arg_string(args, 0, "set-buffer-kind-replaceable!")?;
+                let enable = arg_bool(args, 1, "set-buffer-kind-replaceable!")?;
                 s.lock()
                     .unwrap()
                     .pending_replaceable_kinds
                     .push((kind, enable));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
         // --- Shell terminal bindings ---
 
-        // (shell-send-input BUF-IDX TEXT) — send text to a terminal PTY
+        // (shell-send-input BUF-IDX TEXT)
         let s = shared.clone();
-        engine.register_fn("shell-send-input", move |buf_idx: isize, text: String| {
-            if buf_idx < 0 {
-                return SteelVal::Void; // ignore negative indices
-            }
-            s.lock()
-                .unwrap()
-                .pending_shell_inputs
-                .push((buf_idx as usize, text));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "shell-send-input",
+            "Send text to a terminal PTY",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let buf_idx = arg_int(args, 0, "shell-send-input")?;
+                let text = arg_string(args, 1, "shell-send-input")?;
+                if buf_idx >= 0 {
+                    s.lock()
+                        .unwrap()
+                        .pending_shell_inputs
+                        .push((buf_idx as usize, text));
+                }
+                Ok(Value::Void)
+            },
+        );
 
         let s = shared.clone();
-        engine.register_fn("recent-files-add!", move |path: String| {
-            s.lock().unwrap().pending_recent_files.push(path);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "recent-files-add!",
+            "Add a file to recent files",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let path = arg_string(args, 0, "recent-files-add!")?;
+                s.lock().unwrap().pending_recent_files.push(path);
+                Ok(Value::Void)
+            },
+        );
 
         let s = shared.clone();
-        engine.register_fn("recent-projects-add!", move |path: String| {
-            s.lock().unwrap().pending_recent_projects.push(path);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "recent-projects-add!",
+            "Add a project to recent projects",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let path = arg_string(args, 0, "recent-projects-add!")?;
+                s.lock().unwrap().pending_recent_projects.push(path);
+                Ok(Value::Void)
+            },
+        );
 
         // --- Agenda file management ---
 
         let s = shared.clone();
-        engine.register_fn("agenda-add!", move |path: String| {
-            s.lock().unwrap().pending_agenda_adds.push(path);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "agenda-add!",
+            "Add a path to org agenda files",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let path = arg_string(args, 0, "agenda-add!")?;
+                s.lock().unwrap().pending_agenda_adds.push(path);
+                Ok(Value::Void)
+            },
+        );
 
         let s = shared.clone();
-        engine.register_fn("agenda-remove!", move |path: String| {
-            s.lock().unwrap().pending_agenda_removes.push(path);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "agenda-remove!",
+            "Remove a path from org agenda files",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let path = arg_string(args, 0, "agenda-remove!")?;
+                s.lock().unwrap().pending_agenda_removes.push(path);
+                Ok(Value::Void)
+            },
+        );
 
         let s = shared.clone();
-        engine.register_fn("agenda-list", move || {
-            s.lock().unwrap().pending_agenda_list = true;
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "agenda-list",
+            "Display agenda file list",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                s.lock().unwrap().pending_agenda_list = true;
+                Ok(Value::Void)
+            },
+        );
+
+        // --- Visual buffer operations ---
 
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "visual-buffer-add-rect!",
-            move |x: f64, y: f64, w: f64, h: f64, fill: Option<String>, stroke: Option<String>| {
-                let mut state = s.lock().unwrap();
-                state.pending_visual_ops.push(VisualOp::AddRect {
-                    x: x as f32,
-                    y: y as f32,
-                    w: w as f32,
-                    h: h as f32,
-                    fill,
-                    stroke,
-                });
-                SteelVal::Void
+            "Add a rectangle to visual buffer",
+            Arity::Variadic(4),
+            move |args: &[Value]| {
+                let x = arg_float(args, 0, "visual-buffer-add-rect!")? as f32;
+                let y = arg_float(args, 1, "visual-buffer-add-rect!")? as f32;
+                let w = arg_float(args, 2, "visual-buffer-add-rect!")? as f32;
+                let h = arg_float(args, 3, "visual-buffer-add-rect!")? as f32;
+                let fill = arg_opt_string(args, 4, "visual-buffer-add-rect!");
+                let stroke = arg_opt_string(args, 5, "visual-buffer-add-rect!");
+                s.lock()
+                    .unwrap()
+                    .pending_visual_ops
+                    .push(VisualOp::AddRect {
+                        x,
+                        y,
+                        w,
+                        h,
+                        fill,
+                        stroke,
+                    });
+                Ok(Value::Void)
             },
         );
 
         let s = shared.clone();
-        engine.register_fn("visual-buffer-clear!", move || {
-            s.lock().unwrap().pending_visual_ops.push(VisualOp::Clear);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "visual-buffer-clear!",
+            "Clear all visual elements",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                s.lock().unwrap().pending_visual_ops.push(VisualOp::Clear);
+                Ok(Value::Void)
+            },
+        );
 
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "visual-buffer-add-line!",
-            move |x1: f64, y1: f64, x2: f64, y2: f64, color: String, thickness: f64| {
-                let mut state = s.lock().unwrap();
-                state.pending_visual_ops.push(VisualOp::AddLine {
-                    x1: x1 as f32,
-                    y1: y1 as f32,
-                    x2: x2 as f32,
-                    y2: y2 as f32,
-                    color,
-                    thickness: thickness as f32,
-                });
-                SteelVal::Void
+            "Add a line to visual buffer",
+            Arity::Fixed(6),
+            move |args: &[Value]| {
+                let x1 = arg_float(args, 0, "visual-buffer-add-line!")? as f32;
+                let y1 = arg_float(args, 1, "visual-buffer-add-line!")? as f32;
+                let x2 = arg_float(args, 2, "visual-buffer-add-line!")? as f32;
+                let y2 = arg_float(args, 3, "visual-buffer-add-line!")? as f32;
+                let color = arg_string(args, 4, "visual-buffer-add-line!")?;
+                let thickness = arg_float(args, 5, "visual-buffer-add-line!")? as f32;
+                s.lock()
+                    .unwrap()
+                    .pending_visual_ops
+                    .push(VisualOp::AddLine {
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        color,
+                        thickness,
+                    });
+                Ok(Value::Void)
             },
         );
 
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "visual-buffer-add-circle!",
-            move |cx: f64, cy: f64, r: f64, fill: Option<String>, stroke: Option<String>| {
-                let mut state = s.lock().unwrap();
-                state.pending_visual_ops.push(VisualOp::AddCircle {
-                    cx: cx as f32,
-                    cy: cy as f32,
-                    r: r as f32,
-                    fill,
-                    stroke,
-                });
-                SteelVal::Void
+            "Add a circle to visual buffer",
+            Arity::Variadic(3),
+            move |args: &[Value]| {
+                let cx = arg_float(args, 0, "visual-buffer-add-circle!")? as f32;
+                let cy = arg_float(args, 1, "visual-buffer-add-circle!")? as f32;
+                let r = arg_float(args, 2, "visual-buffer-add-circle!")? as f32;
+                let fill = arg_opt_string(args, 3, "visual-buffer-add-circle!");
+                let stroke = arg_opt_string(args, 4, "visual-buffer-add-circle!");
+                s.lock()
+                    .unwrap()
+                    .pending_visual_ops
+                    .push(VisualOp::AddCircle {
+                        cx,
+                        cy,
+                        r,
+                        fill,
+                        stroke,
+                    });
+                Ok(Value::Void)
             },
         );
 
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "visual-buffer-add-text!",
-            move |x: f64, y: f64, text: String, font_size: f64, color: String| {
-                let mut state = s.lock().unwrap();
-                state.pending_visual_ops.push(VisualOp::AddText {
-                    x: x as f32,
-                    y: y as f32,
-                    text,
-                    font_size: font_size as f32,
-                    color,
-                });
-                SteelVal::Void
+            "Add text to visual buffer",
+            Arity::Fixed(5),
+            move |args: &[Value]| {
+                let x = arg_float(args, 0, "visual-buffer-add-text!")? as f32;
+                let y = arg_float(args, 1, "visual-buffer-add-text!")? as f32;
+                let text = arg_string(args, 2, "visual-buffer-add-text!")?;
+                let font_size = arg_float(args, 3, "visual-buffer-add-text!")? as f32;
+                let color = arg_string(args, 4, "visual-buffer-add-text!")?;
+                s.lock()
+                    .unwrap()
+                    .pending_visual_ops
+                    .push(VisualOp::AddText {
+                        x,
+                        y,
+                        text,
+                        font_size,
+                        color,
+                    });
+                Ok(Value::Void)
             },
         );
 
@@ -589,294 +779,419 @@ impl SchemeRuntime {
 
         // (buffer-delete-range START END)
         let s = shared.clone();
-        engine.register_fn("buffer-delete-range", move |start: isize, end: isize| {
-            s.lock().unwrap().pending_delete_range =
-                Some((start.max(0) as usize, end.max(0) as usize));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "buffer-delete-range",
+            "Delete text in range",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let start = arg_int(args, 0, "buffer-delete-range")?;
+                let end = arg_int(args, 1, "buffer-delete-range")?;
+                s.lock().unwrap().pending_delete_range =
+                    Some((start.max(0) as usize, end.max(0) as usize));
+                Ok(Value::Void)
+            },
+        );
 
         // (buffer-replace-range START END TEXT)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "buffer-replace-range",
-            move |start: isize, end: isize, text: String| {
+            "Replace text in range",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let start = arg_int(args, 0, "buffer-replace-range")?;
+                let end = arg_int(args, 1, "buffer-replace-range")?;
+                let text = arg_string(args, 2, "buffer-replace-range")?;
                 s.lock().unwrap().pending_replace_range =
                     Some((start.max(0) as usize, end.max(0) as usize, text));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
         // (buffer-undo)
         let s = shared.clone();
-        engine.register_fn("buffer-undo", move || {
-            s.lock().unwrap().pending_undo = true;
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "buffer-undo",
+            "Undo the last edit",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                s.lock().unwrap().pending_undo = true;
+                Ok(Value::Void)
+            },
+        );
 
         // (buffer-redo)
         let s = shared.clone();
-        engine.register_fn("buffer-redo", move || {
-            s.lock().unwrap().pending_redo = true;
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "buffer-redo",
+            "Redo the last undone edit",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                s.lock().unwrap().pending_redo = true;
+                Ok(Value::Void)
+            },
+        );
 
-        // (buffer-undo-boundary) — mark an explicit CRDT undo boundary.
-        // Subsequent edits start a new undo item.
+        // (buffer-undo-boundary)
         let s = shared.clone();
-        engine.register_fn("buffer-undo-boundary", move || {
-            s.lock().unwrap().pending_undo_boundary = true;
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "buffer-undo-boundary",
+            "Mark an undo boundary",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                s.lock().unwrap().pending_undo_boundary = true;
+                Ok(Value::Void)
+            },
+        );
 
         // (switch-to-buffer IDX)
         let s = shared.clone();
-        engine.register_fn("switch-to-buffer", move |idx: isize| {
-            s.lock().unwrap().pending_switch_buffer = Some(idx.max(0) as usize);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "switch-to-buffer",
+            "Switch to buffer by index",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let idx = arg_int(args, 0, "switch-to-buffer")?;
+                s.lock().unwrap().pending_switch_buffer = Some(idx.max(0) as usize);
+                Ok(Value::Void)
+            },
+        );
 
         // (undefine-key! MAP KEY)
         let s = shared.clone();
-        engine.register_fn("undefine-key!", move |map: String, key: String| {
-            s.lock().unwrap().pending_key_removals.push((map, key));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "undefine-key!",
+            "Remove a keybinding",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let map = arg_string(args, 0, "undefine-key!")?;
+                let key = arg_string(args, 1, "undefine-key!")?;
+                s.lock().unwrap().pending_key_removals.push((map, key));
+                Ok(Value::Void)
+            },
+        );
 
-        // (set-group-name MAP PREFIX LABEL) — set which-key group label
+        // (set-group-name MAP PREFIX LABEL)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "set-group-name",
-            move |map: String, prefix: String, label: String| {
+            "Set which-key group label",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let map = arg_string(args, 0, "set-group-name")?;
+                let prefix = arg_string(args, 1, "set-group-name")?;
+                let label = arg_string(args, 2, "set-group-name")?;
                 s.lock()
                     .unwrap()
                     .pending_group_names
                     .push((map, prefix, label));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
-        // --- File I/O (no editor state needed) ---
+        // --- File I/O ---
 
-        // (read-file PATH) — reads a file, capped at 1MB
-        engine.register_fn("read-file", |path: String| -> SteelVal {
-            match std::fs::read_to_string(&path) {
-                Ok(content) if content.len() <= 1_048_576 => SteelVal::StringV(content.into()),
-                Ok(_) => SteelVal::StringV("ERROR: file exceeds 1MB limit".into()),
-                Err(e) => SteelVal::StringV(format!("ERROR: {}", e).into()),
-            }
-        });
+        // (read-file PATH)
+        vm.register_fn(
+            "read-file",
+            "Read a file (capped at 1MB)",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let path = arg_string(args, 0, "read-file")?;
+                match std::fs::read_to_string(&path) {
+                    Ok(content) if content.len() <= 1_048_576 => Ok(Value::string(content)),
+                    Ok(_) => Ok(Value::string("ERROR: file exceeds 1MB limit")),
+                    Err(e) => Ok(Value::string(format!("ERROR: {}", e))),
+                }
+            },
+        );
 
         // (file-exists? PATH)
-        engine.register_fn("file-exists?", |path: String| -> bool {
-            std::path::Path::new(&path).exists()
-        });
+        vm.register_fn(
+            "file-exists?",
+            "Check if a file exists",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let path = arg_string(args, 0, "file-exists?")?;
+                Ok(Value::Bool(std::path::Path::new(&path).exists()))
+            },
+        );
 
-        // (list-directory PATH) — returns list of (name is-dir?)
-        engine.register_fn("list-directory", |path: String| -> SteelVal {
-            match std::fs::read_dir(&path) {
-                Ok(entries) => {
-                    let items: Vec<SteelVal> = entries
-                        .flatten()
-                        .map(|e| {
-                            let name = e.file_name().to_string_lossy().into_owned();
-                            let is_dir = e.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-                            SteelVal::ListV(
-                                vec![SteelVal::StringV(name.into()), SteelVal::BoolV(is_dir)]
-                                    .into(),
-                            )
-                        })
-                        .collect();
-                    SteelVal::ListV(items.into())
+        // (list-directory PATH)
+        vm.register_fn(
+            "list-directory",
+            "List directory entries",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let path = arg_string(args, 0, "list-directory")?;
+                match std::fs::read_dir(&path) {
+                    Ok(entries) => {
+                        let items: Vec<Value> = entries
+                            .flatten()
+                            .map(|e| {
+                                let name = e.file_name().to_string_lossy().into_owned();
+                                let is_dir = e.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                                Value::list(vec![Value::string(name), Value::Bool(is_dir)])
+                            })
+                            .collect();
+                        Ok(Value::list(items))
+                    }
+                    Err(_) => Ok(Value::Null),
                 }
-                Err(_) => SteelVal::ListV(vec![].into()),
-            }
-        });
+            },
+        );
 
         // --- Package infrastructure ---
 
-        // (provide FEATURE) — mark feature as loaded.
-        // Steel has a built-in `provide` (module system) that shadows `register_fn`,
-        // so we register as `provide-feature` and also define a Scheme alias.
-        // Package files should use `(provide-feature "name")` for reliability.
+        // (provide-feature FEATURE)
         let s = shared.clone();
-        engine.register_fn("provide-feature", move |feature: String| {
-            s.lock().unwrap().loaded_features.insert(feature);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "provide-feature",
+            "Mark feature as loaded",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let feature = arg_string(args, 0, "provide-feature")?;
+                s.lock().unwrap().loaded_features.insert(feature);
+                Ok(Value::Void)
+            },
+        );
 
-        // (featurep FEATURE) — check if feature is loaded.
+        // (featurep FEATURE)
         let s = shared.clone();
-        engine.register_fn("featurep", move |feature: String| {
-            let loaded = s.lock().unwrap().loaded_features.contains(&feature);
-            SteelVal::BoolV(loaded)
-        });
+        vm.register_fn(
+            "featurep",
+            "Check if feature is loaded",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let feature = arg_string(args, 0, "featurep")?;
+                Ok(Value::Bool(
+                    s.lock().unwrap().loaded_features.contains(&feature),
+                ))
+            },
+        );
 
-        // (require-feature FEATURE) — request loading; resolved in process_requires().
-        // Named `require-feature` to avoid collision with Steel's built-in `require`.
+        // (require-feature FEATURE)
         let s = shared.clone();
-        engine.register_fn("require-feature", move |feature: String| {
-            let mut state = s.lock().unwrap();
-            if !state.loaded_features.contains(&feature) {
-                state.pending_requires.push(feature);
-            }
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "require-feature",
+            "Request loading a feature",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let feature = arg_string(args, 0, "require-feature")?;
+                let mut state = s.lock().unwrap();
+                if !state.loaded_features.contains(&feature) {
+                    state.pending_requires.push(feature);
+                }
+                Ok(Value::Void)
+            },
+        );
 
-        // (load-path) — return current load-path as list of strings.
+        // (load-path)
         let s = shared.clone();
-        engine.register_fn("load-path", move || {
-            let state = s.lock().unwrap();
-            let items: Vec<SteelVal> = state
-                .load_path
-                .iter()
-                .map(|p| SteelVal::StringV(p.to_string_lossy().into_owned().into()))
-                .collect();
-            SteelVal::ListV(items.into())
-        });
+        vm.register_fn(
+            "load-path",
+            "Return current load-path",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                let state = s.lock().unwrap();
+                let items: Vec<Value> = state
+                    .load_path
+                    .iter()
+                    .map(|p| Value::string(p.to_string_lossy().into_owned()))
+                    .collect();
+                Ok(Value::list(items))
+            },
+        );
 
-        // (add-to-load-path! DIR) — prepend directory to load-path.
+        // (add-to-load-path! DIR)
         let s = shared.clone();
-        engine.register_fn("add-to-load-path!", move |dir: String| {
-            let mut state = s.lock().unwrap();
-            state.load_path.insert(0, PathBuf::from(dir));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "add-to-load-path!",
+            "Prepend directory to load-path",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let dir = arg_string(args, 0, "add-to-load-path!")?;
+                s.lock().unwrap().load_path.insert(0, PathBuf::from(dir));
+                Ok(Value::Void)
+            },
+        );
 
-        // (autoload COMMAND-NAME FEATURE DOC) — register a command backed by autoload.
+        // (autoload COMMAND-NAME FEATURE DOC)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "autoload",
-            move |cmd_name: String, feature: String, doc: String| {
+            "Register a command backed by autoload",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let cmd_name = arg_string(args, 0, "autoload")?;
+                let feature = arg_string(args, 1, "autoload")?;
+                let doc = arg_string(args, 2, "autoload")?;
                 s.lock()
                     .unwrap()
                     .pending_autoloads
                     .push((cmd_name, feature, doc));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
         // --- Module system functions ---
 
-        // (when-flag FLAG-NAME THUNK) — evaluate thunk if flag is set.
-        // Flags are set as __mae-flag-MODULE-FLAG variables by the loader.
-        // This is a convenience wrapper that modules use in autoloads.scm.
-        engine
-            .run(
-                r#"
+        // (when-flag MODULE-NAME FLAG-NAME THUNK)
+        vm.eval(
+            r#"
 (define (when-flag module-name flag-name thunk)
-  ;; Flag variables are set as __mae-flag-MODULE-FLAG = #t by the loader.
-  ;; We can't easily check from Scheme since we don't know the module name here,
-  ;; so for now just evaluate the thunk. The loader only sets flags that are enabled.
   (thunk))
 "#,
-            )
-            .ok();
+        )
+        .ok();
 
-        // (define-option! NAME KIND DEFAULT DOC) — register a runtime option.
-        // Queued and applied in apply_to_editor().
+        // (define-option! NAME KIND DEFAULT DOC)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "define-option!",
-            move |name: String, kind: String, default: String, doc: String| {
+            "Register a runtime option",
+            Arity::Fixed(4),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "define-option!")?;
+                let kind = arg_string(args, 1, "define-option!")?;
+                let default = arg_string(args, 2, "define-option!")?;
+                let doc = arg_string(args, 3, "define-option!")?;
                 s.lock()
                     .unwrap()
                     .pending_dynamic_options
                     .push((name, kind, default, doc));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
-        // (module-loaded? NAME) — check if a module is active
+        // (module-loaded? NAME)
         let s = shared.clone();
-        engine.register_fn("module-loaded?", move |name: String| {
-            SteelVal::BoolV(s.lock().unwrap().active_modules.contains_key(&name))
-        });
+        vm.register_fn(
+            "module-loaded?",
+            "Check if a module is active",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "module-loaded?")?;
+                Ok(Value::Bool(
+                    s.lock().unwrap().active_modules.contains_key(&name),
+                ))
+            },
+        );
 
-        // (module-version NAME) — get version of active module, or #f
+        // (module-version NAME)
         let s = shared.clone();
-        engine.register_fn("module-version", move |name: String| {
-            match s.lock().unwrap().active_modules.get(&name) {
-                Some(v) => SteelVal::StringV(v.clone().into()),
-                None => SteelVal::BoolV(false),
-            }
-        });
+        vm.register_fn(
+            "module-version",
+            "Get version of active module",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "module-version")?;
+                match s.lock().unwrap().active_modules.get(&name) {
+                    Some(v) => Ok(Value::string(v.clone())),
+                    None => Ok(Value::Bool(false)),
+                }
+            },
+        );
 
-        // (module-list) — list all active module names
+        // (module-list)
         let s = shared.clone();
-        engine.register_fn("module-list", move || {
-            let state = s.lock().unwrap();
-            SteelVal::ListV(
-                state
-                    .active_modules
-                    .keys()
-                    .map(|k| SteelVal::StringV(k.clone().into()))
-                    .collect::<Vec<_>>()
-                    .into(),
-            )
-        });
+        vm.register_fn(
+            "module-list",
+            "List all active module names",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                let state = s.lock().unwrap();
+                Ok(Value::list(
+                    state
+                        .active_modules
+                        .keys()
+                        .map(|k| Value::string(k.clone()))
+                        .collect::<Vec<_>>(),
+                ))
+            },
+        );
 
-        // (register-module! NAME VERSION) — called by loader after loading a module
+        // (register-module! NAME VERSION)
         let s = shared.clone();
-        engine.register_fn("register-module!", move |name: String, version: String| {
-            s.lock().unwrap().active_modules.insert(name, version);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "register-module!",
+            "Register a loaded module",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "register-module!")?;
+                let version = arg_string(args, 1, "register-module!")?;
+                s.lock().unwrap().active_modules.insert(name, version);
+                Ok(Value::Void)
+            },
+        );
 
-        // (when-module NAME THUNK) — evaluate thunk only if module is active.
-        // Defined in Scheme for ergonomics (thunk is a lambda).
-        engine
-            .run(
-                r#"
+        // (when-module NAME THUNK) — Scheme-level wrapper
+        vm.eval(
+            r#"
 (define (when-module name thunk)
   (when (module-loaded? name)
     (thunk)))
 "#,
-            )
-            .ok();
+        )
+        .ok();
 
-        // (module-flags NAME) — get enabled flags for a module.
-        // Returns the flags stored by the loader via flag variables.
-        // For now returns an empty list — flags are injected as individual
-        // Scheme variables (__mae-flag-<module>-<flag>), not collected.
-        // TODO: populate from loader when mae! parsing is implemented.
-        engine.register_fn("module-flags", move |_name: String| -> SteelVal {
-            SteelVal::ListV(vec![].into())
-        });
+        // (module-flags NAME)
+        vm.register_fn(
+            "module-flags",
+            "Get enabled flags for a module",
+            Arity::Fixed(1),
+            move |_args: &[Value]| Ok(Value::Null),
+        );
 
         // --- Declarative package management (mae!, package!) ---
 
-        // (mae-declare-module! NAME . FLAGS) — declare a module with optional flags.
-        // Called by the Scheme-level mae! helper for each module entry.
+        // (mae-declare-module! NAME FLAGS)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "mae-declare-module!",
-            move |name: String, flags: Vec<String>| {
+            "Declare a module with flags",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "mae-declare-module!")?;
+                let flags = if args.len() > 1 {
+                    list_to_strings(&args[1])
+                } else {
+                    vec![]
+                };
                 s.lock().unwrap().declared_modules.insert(name, flags);
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
-        // (mae-declared-modules) — return list of declared module names (for introspection).
+        // (mae-declared-modules)
         let s = shared.clone();
-        engine.register_fn("mae-declared-modules", move || {
-            let state = s.lock().unwrap();
-            SteelVal::ListV(
-                state
-                    .declared_modules
-                    .keys()
-                    .map(|k| SteelVal::StringV(k.clone().into()))
-                    .collect::<Vec<_>>()
-                    .into(),
-            )
-        });
+        vm.register_fn(
+            "mae-declared-modules",
+            "List declared module names",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                let state = s.lock().unwrap();
+                Ok(Value::list(
+                    state
+                        .declared_modules
+                        .keys()
+                        .map(|k| Value::string(k.clone()))
+                        .collect::<Vec<_>>(),
+                ))
+            },
+        );
 
-        // (package! NAME . KWARGS) — declare a third-party package.
-        // Keyword args: :source STRING, :pin STRING, :disable BOOL
-        // Implemented as a multi-arity function; kwargs parsed by Scheme wrapper.
+        // (mae-declare-package! NAME SOURCE PIN DISABLE)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "mae-declare-package!",
-            move |name: String, source: String, pin: String, disable: bool| {
+            "Declare a third-party package",
+            Arity::Fixed(4),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "mae-declare-package!")?;
+                let source = arg_string(args, 1, "mae-declare-package!")?;
+                let pin = arg_string(args, 2, "mae-declare-package!")?;
+                let disable = arg_bool(args, 3, "mae-declare-package!")?;
                 s.lock().unwrap().declared_packages.push(DeclaredPackage {
                     name,
                     source: if source.is_empty() {
@@ -887,22 +1202,14 @@ impl SchemeRuntime {
                     pin: if pin.is_empty() { None } else { Some(pin) },
                     disable,
                 });
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
-        // Define mae! and package! Scheme-level wrappers.
-        // mae! accepts category labels (:editor, :ui, :lang) and module entries.
-        // Categories are informational only — they don't affect behavior.
-        // Module entries can be bare names or (name +flag1 +flag2).
-        //
-        // Steel doesn't have Clojure-style keywords. We pre-define category
-        // symbols as strings so they can be used unquoted in mae! blocks.
-        engine
-            .run(
-                r#"
-;; Pre-define category labels so they're valid identifiers.
-;; Their values are strings starting with ":" — mae! skips them.
+        // Define mae! and package! Scheme-level wrappers
+        vm.eval(
+            r#"
+;; Pre-define category labels
 (define :editor ":editor")
 (define :ui ":ui")
 (define :lang ":lang")
@@ -915,38 +1222,27 @@ impl SchemeRuntime {
 (define :config ":config")
 (define :input ":input")
 
-;; (mae! :category1 "mod1" ("mod2" "+flag") :category2 "mod3" ...)
-;; Category labels (strings starting with ":") are ignored.
-;; String entries declare a module with no flags.
-;; List entries declare a module (first string) with flags (remaining strings).
 (define (mae! . args)
   (for-each
     (lambda (item)
       (cond
-        ;; Skip category strings (starting with ":")
         ((and (string? item)
               (> (string-length item) 0)
               (equal? (substring item 0 1) ":"))
          #f)
-        ;; List entry: ("module-name" "+flag1" "+flag2" ...)
         ((list? item)
          (mae-declare-module! (car item) (cdr item)))
-        ;; String entry: module with no flags
         ((string? item)
          (mae-declare-module! item '()))
-        ;; Symbol entry: convert to string
         ((symbol? item)
          (mae-declare-module! (symbol->string item) '()))
         (else #f)))
     args))
 
-;; Keyword symbols for package! kwargs.
 (define :source ":source")
 (define :pin ":pin")
 (define :disable ":disable")
 
-;; (package! NAME :source SRC :pin SHA :disable BOOL)
-;; All keyword args are optional.
 (define (package! name . kwargs)
   (define (kwarg-ref key default)
     (let loop ((rest kwargs))
@@ -961,62 +1257,93 @@ impl SchemeRuntime {
                         (kwarg-ref ":pin" "")
                         (if (kwarg-ref ":disable" #f) #t #f)))
 "#,
-            )
-            .ok();
+        )
+        .ok();
 
-        // (undefine-command! NAME) — remove a command (for module unload)
+        // (undefine-command! NAME)
         let s = shared.clone();
-        engine.register_fn("undefine-command!", move |name: String| {
-            s.lock().unwrap().pending_command_unregisters.push(name);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "undefine-command!",
+            "Remove a command",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "undefine-command!")?;
+                s.lock().unwrap().pending_command_unregisters.push(name);
+                Ok(Value::Void)
+            },
+        );
 
-        // (undefine-option! NAME) — remove an option (for module unload)
+        // (undefine-option! NAME)
         let s = shared.clone();
-        engine.register_fn("undefine-option!", move |name: String| {
-            s.lock().unwrap().pending_option_unregisters.push(name);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "undefine-option!",
+            "Remove an option",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "undefine-option!")?;
+                s.lock().unwrap().pending_option_unregisters.push(name);
+                Ok(Value::Void)
+            },
+        );
 
-        // (unload-feature NAME) — remove from loaded_features
+        // (unload-feature NAME)
         let s = shared.clone();
-        engine.register_fn("unload-feature", move |name: String| {
-            let removed = s.lock().unwrap().loaded_features.remove(&name);
-            SteelVal::BoolV(removed)
-        });
+        vm.register_fn(
+            "unload-feature",
+            "Remove from loaded_features",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "unload-feature")?;
+                let removed = s.lock().unwrap().loaded_features.remove(&name);
+                Ok(Value::Bool(removed))
+            },
+        );
 
-        // (define-kb-node! ID TITLE BODY) — register a KB node from Scheme.
+        // (define-kb-node! ID TITLE BODY)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "define-kb-node!",
-            move |id: String, title: String, body: String| {
+            "Register a KB node from Scheme",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "define-kb-node!")?;
+                let title = arg_string(args, 1, "define-kb-node!")?;
+                let body = arg_string(args, 2, "define-kb-node!")?;
                 s.lock().unwrap().pending_kb_nodes.push((id, title, body));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
         // (deprecate-function! OLD-NAME NEW-NAME SINCE-VERSION)
-        // Registers a deprecation warning. When OLD-NAME is called,
-        // a warning is emitted once and the call is logged.
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "deprecate-function!",
-            move |old_name: String, new_name: String, since: String| {
+            "Register a deprecation warning",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let old_name = arg_string(args, 0, "deprecate-function!")?;
+                let new_name = arg_string(args, 1, "deprecate-function!")?;
+                let since = arg_string(args, 2, "deprecate-function!")?;
                 s.lock()
                     .unwrap()
                     .deprecated_functions
                     .insert(old_name, (new_name, since));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
         // (register-ai-tool! NAME DESCRIPTION HANDLER-FN PERMISSION)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "register-ai-tool!",
-            move |name: String, desc: String, handler: String, perm: String| {
+            "Register an AI tool from Scheme",
+            Arity::Fixed(4),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "register-ai-tool!")?;
+                let desc = arg_string(args, 1, "register-ai-tool!")?;
+                let handler = arg_string(args, 2, "register-ai-tool!")?;
+                let perm = arg_string(args, 3, "register-ai-tool!")?;
                 let mut st = s.lock().unwrap();
-                // Collect any pre-registered params/required for this tool
                 let params = st.pending_ai_tool_params.remove(&name).unwrap_or_default();
                 let required = st
                     .pending_ai_tool_required
@@ -1030,53 +1357,76 @@ impl SchemeRuntime {
                     handler_fn: handler,
                     permission: perm,
                 });
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
         // (ai-tool-param! TOOL-NAME PARAM-NAME PARAM-TYPE DESCRIPTION)
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "ai-tool-param!",
-            move |tool: String, pname: String, ptype: String, pdesc: String| {
+            "Add a parameter to an AI tool",
+            Arity::Fixed(4),
+            move |args: &[Value]| {
+                let tool = arg_string(args, 0, "ai-tool-param!")?;
+                let pname = arg_string(args, 1, "ai-tool-param!")?;
+                let ptype = arg_string(args, 2, "ai-tool-param!")?;
+                let pdesc = arg_string(args, 3, "ai-tool-param!")?;
                 s.lock()
                     .unwrap()
                     .pending_ai_tool_params
                     .entry(tool)
                     .or_default()
                     .push((pname, ptype, pdesc));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
         // (ai-tool-require! TOOL-NAME PARAM-NAME)
         let s = shared.clone();
-        engine.register_fn("ai-tool-require!", move |tool: String, pname: String| {
-            s.lock()
-                .unwrap()
-                .pending_ai_tool_required
-                .entry(tool)
-                .or_default()
-                .push(pname);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "ai-tool-require!",
+            "Mark an AI tool parameter as required",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let tool = arg_string(args, 0, "ai-tool-require!")?;
+                let pname = arg_string(args, 1, "ai-tool-require!")?;
+                s.lock()
+                    .unwrap()
+                    .pending_ai_tool_required
+                    .entry(tool)
+                    .or_default()
+                    .push(pname);
+                Ok(Value::Void)
+            },
+        );
 
         // (register-splash-art! NAME ART-STRING)
         let s = shared.clone();
-        engine.register_fn("register-splash-art!", move |name: String, art: String| {
-            s.lock()
-                .unwrap()
-                .pending_splash_arts
-                .push((name, art, None));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "register-splash-art!",
+            "Register custom splash art",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "register-splash-art!")?;
+                let art = arg_string(args, 1, "register-splash-art!")?;
+                s.lock()
+                    .unwrap()
+                    .pending_splash_arts
+                    .push((name, art, None));
+                Ok(Value::Void)
+            },
+        );
 
         // (register-splash-art-image! NAME IMAGE-PATH)
-        // Resolves relative paths against current_module_dir if set.
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "register-splash-art-image!",
-            move |name: String, path: String| {
+            "Register splash art image",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "register-splash-art-image!")?;
+                let path = arg_string(args, 1, "register-splash-art-image!")?;
                 let mut st = s.lock().unwrap();
                 let resolved = {
                     let p = PathBuf::from(&path);
@@ -1092,366 +1442,512 @@ impl SchemeRuntime {
                 };
                 st.pending_splash_arts
                     .push((name, String::new(), Some(resolved)));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
-        // --- A5: String utilities (no editor state needed) ---
+        // --- String utilities ---
 
-        engine.register_fn("string-split", |s: String, sep: String| -> SteelVal {
-            SteelVal::ListV(
-                s.split(&sep)
-                    .map(|part| SteelVal::StringV(part.into()))
-                    .collect::<Vec<_>>()
-                    .into(),
-            )
-        });
-
-        engine.register_fn("string-join", |lst: Vec<String>, sep: String| -> String {
-            lst.join(&sep)
-        });
-
-        engine.register_fn("string-trim", |s: String| -> String {
-            s.trim().to_string()
-        });
-
-        engine.register_fn("string-contains?", |s: String, sub: String| -> bool {
-            s.contains(&sub)
-        });
-
-        engine.register_fn(
-            "string-replace",
-            |s: String, from: String, to: String| -> String { s.replace(&from, &to) },
+        vm.register_fn(
+            "string-split",
+            "Split a string by separator",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let s = arg_string(args, 0, "string-split")?;
+                let sep = arg_string(args, 1, "string-split")?;
+                Ok(Value::list(
+                    s.split(&sep).map(Value::string).collect::<Vec<_>>(),
+                ))
+            },
         );
 
-        engine.register_fn("string-upcase", |s: String| -> String { s.to_uppercase() });
+        vm.register_fn(
+            "string-join",
+            "Join a list of strings with separator",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let lst = list_to_strings(&args[0]);
+                let sep = arg_string(args, 1, "string-join")?;
+                Ok(Value::string(lst.join(&sep)))
+            },
+        );
 
-        engine.register_fn("string-downcase", |s: String| -> String {
-            s.to_lowercase()
-        });
+        vm.register_fn(
+            "string-trim",
+            "Trim whitespace from string",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let s = arg_string(args, 0, "string-trim")?;
+                Ok(Value::string(s.trim()))
+            },
+        );
 
-        // --- A4: Process execution ---
+        vm.register_fn(
+            "string-contains?",
+            "Check if string contains substring",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let s = arg_string(args, 0, "string-contains?")?;
+                let sub = arg_string(args, 1, "string-contains?")?;
+                Ok(Value::Bool(s.contains(&sub)))
+            },
+        );
 
-        engine.register_fn("shell-command", |cmd: String| -> String {
-            use std::process::Command;
-            match Command::new("sh").arg("-c").arg(&cmd).output() {
-                Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    if stdout.len() > 1_048_576 {
-                        stdout[..1_048_576].to_string()
-                    } else {
-                        stdout.into_owned()
+        vm.register_fn(
+            "string-replace",
+            "Replace occurrences in string",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let s = arg_string(args, 0, "string-replace")?;
+                let from = arg_string(args, 1, "string-replace")?;
+                let to = arg_string(args, 2, "string-replace")?;
+                Ok(Value::string(s.replace(&from, &to)))
+            },
+        );
+
+        vm.register_fn(
+            "string-upcase",
+            "Convert to uppercase",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let s = arg_string(args, 0, "string-upcase")?;
+                Ok(Value::string(s.to_uppercase()))
+            },
+        );
+
+        vm.register_fn(
+            "string-downcase",
+            "Convert to lowercase",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let s = arg_string(args, 0, "string-downcase")?;
+                Ok(Value::string(s.to_lowercase()))
+            },
+        );
+
+        // --- Process execution ---
+
+        vm.register_fn(
+            "shell-command",
+            "Execute a shell command",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let cmd = arg_string(args, 0, "shell-command")?;
+                use std::process::Command;
+                match Command::new("sh").arg("-c").arg(&cmd).output() {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        if stdout.len() > 1_048_576 {
+                            Ok(Value::string(&stdout[..1_048_576]))
+                        } else {
+                            Ok(Value::string(stdout.into_owned()))
+                        }
                     }
+                    Err(e) => Ok(Value::string(format!("ERROR: {}", e))),
                 }
-                Err(e) => format!("ERROR: {}", e),
-            }
-        });
+            },
+        );
 
-        // --- A3: Buffer creation/kill (via SharedState) ---
-
-        let s = shared.clone();
-        engine.register_fn("create-buffer", move |name: String| {
-            s.lock().unwrap().pending_create_buffer = Some(name);
-            SteelVal::Void
-        });
+        // --- Buffer creation/kill ---
 
         let s = shared.clone();
-        engine.register_fn("kill-buffer-by-name", move |name: String| {
-            s.lock().unwrap().pending_kill_buffer = Some(name);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "create-buffer",
+            "Create a new buffer",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "create-buffer")?;
+                s.lock().unwrap().pending_create_buffer = Some(name);
+                Ok(Value::Void)
+            },
+        );
 
-        // --- Phase E: Advice system ---
-
-        // (advice-add! COMMAND KIND FN-NAME)
-        // KIND is ":before" or ":after"
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
+            "kill-buffer-by-name",
+            "Kill a buffer by name",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "kill-buffer-by-name")?;
+                s.lock().unwrap().pending_kill_buffer = Some(name);
+                Ok(Value::Void)
+            },
+        );
+
+        // --- Advice system ---
+
+        let s = shared.clone();
+        vm.register_fn(
             "advice-add!",
-            move |command: String, kind: String, fn_name: String| {
+            "Add advice to a command",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let command = arg_string(args, 0, "advice-add!")?;
+                let kind = arg_string(args, 1, "advice-add!")?;
+                let fn_name = arg_string(args, 2, "advice-add!")?;
                 s.lock()
                     .unwrap()
                     .pending_advice_adds
                     .push((command, kind, fn_name));
-                SteelVal::Void
+                Ok(Value::Void)
             },
         );
 
-        // (advice-remove! COMMAND FN-NAME)
         let s = shared.clone();
-        engine.register_fn("advice-remove!", move |command: String, fn_name: String| {
-            s.lock()
-                .unwrap()
-                .pending_advice_removes
-                .push((command, fn_name));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "advice-remove!",
+            "Remove advice from a command",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let command = arg_string(args, 0, "advice-remove!")?;
+                let fn_name = arg_string(args, 1, "advice-remove!")?;
+                s.lock()
+                    .unwrap()
+                    .pending_advice_removes
+                    .push((command, fn_name));
+                Ok(Value::Void)
+            },
+        );
 
-        // (check-deprecated NAME) — check if a function name is deprecated,
-        // log a warning (once), return #t if deprecated, #f otherwise.
+        // (check-deprecated NAME)
         let s = shared.clone();
-        engine.register_fn("check-deprecated", move |name: String| {
-            let mut state = s.lock().unwrap();
-            if let Some((new_name, since)) = state.deprecated_functions.get(&name).cloned() {
-                if state.deprecated_warned.insert(name.clone()) {
-                    warn!(
-                        "'{}' is deprecated since v{}, use '{}' instead",
-                        name, since, new_name
-                    );
-                    state.pending_messages.push(format!(
-                        "Warning: '{}' is deprecated since v{}, use '{}' instead",
-                        name, since, new_name
-                    ));
+        vm.register_fn(
+            "check-deprecated",
+            "Check if function is deprecated",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "check-deprecated")?;
+                let mut state = s.lock().unwrap();
+                if let Some((new_name, since)) = state.deprecated_functions.get(&name).cloned() {
+                    if state.deprecated_warned.insert(name.clone()) {
+                        warn!(
+                            "'{}' is deprecated since v{}, use '{}' instead",
+                            name, since, new_name
+                        );
+                        state.pending_messages.push(format!(
+                            "Warning: '{}' is deprecated since v{}, use '{}' instead",
+                            name, since, new_name
+                        ));
+                    }
+                    Ok(Value::Bool(true))
+                } else {
+                    Ok(Value::Bool(false))
                 }
-                SteelVal::BoolV(true)
-            } else {
-                SteelVal::BoolV(false)
-            }
-        });
+            },
+        );
 
         // --- Test framework primitives ---
 
-        // (exit CODE) — request process exit with given code.
-        // Accumulated in SharedState; the test runner checks after each eval.
         let s = shared.clone();
-        engine.register_fn("exit", move |code: isize| {
-            s.lock().unwrap().pending_exit_code = Some(code as i32);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "exit",
+            "Request process exit",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let code = arg_int(args, 0, "exit")?;
+                s.lock().unwrap().pending_exit_code = Some(code as i32);
+                Ok(Value::Void)
+            },
+        );
 
-        // (write-file PATH CONTENT) — write a string to disk.
-        // Useful for inter-container signaling in docker-based tests.
         let s = shared.clone();
-        engine.register_fn("write-file", move |path: String, content: String| {
-            s.lock().unwrap().pending_write_files.push((path, content));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "write-file",
+            "Write a string to disk",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let path = arg_string(args, 0, "write-file")?;
+                let content = arg_string(args, 1, "write-file")?;
+                s.lock().unwrap().pending_write_files.push((path, content));
+                Ok(Value::Void)
+            },
+        );
 
-        // (sleep-ms N) — request a sleep of N milliseconds.
-        // Accumulated in SharedState; the test runner handles the actual sleep
-        // and drains collab/shell events during the wait.
         let s = shared.clone();
-        engine.register_fn("sleep-ms", move |ms: isize| {
-            s.lock().unwrap().pending_sleep_ms = Some(ms.max(0) as u64);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "sleep-ms",
+            "Sleep for N milliseconds",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let ms = arg_int(args, 0, "sleep-ms")?;
+                s.lock().unwrap().pending_sleep_ms = Some(ms.max(0) as u64);
+                Ok(Value::Void)
+            },
+        );
 
-        // (file-exists? PATH) — check if a file exists on disk.
-        engine.register_fn("file-exists?", move |path: String| -> bool {
-            std::path::Path::new(&path).exists()
-        });
-
-        // (wait-for-file PATH TIMEOUT-MS) — block until file exists.
-        // Uses real thread::sleep (100ms poll). Returns #t on success, #f on timeout.
-        // Note: blocks the main thread — collab events won't drain during wait.
-        // Fine for file-based signal coordination; use sleep-ms for CRDT waits.
-        engine.register_fn(
+        // (wait-for-file PATH TIMEOUT-MS)
+        vm.register_fn(
             "wait-for-file",
-            move |path: String, timeout_ms: isize| -> bool {
+            "Block until file exists",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let path = arg_string(args, 0, "wait-for-file")?;
+                let timeout_ms = arg_int(args, 1, "wait-for-file")?;
                 let timeout = std::time::Duration::from_millis(timeout_ms.max(0) as u64);
                 let poll = std::time::Duration::from_millis(100);
                 let start = std::time::Instant::now();
                 loop {
                     if std::path::Path::new(&path).exists() {
-                        return true;
+                        return Ok(Value::Bool(true));
                     }
                     if start.elapsed() >= timeout {
-                        return false;
+                        return Ok(Value::Bool(false));
                     }
                     std::thread::sleep(poll);
                 }
             },
         );
 
-        // (current-milliseconds) — monotonic time in milliseconds.
-        engine.register_fn("current-milliseconds", move || -> isize {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as isize
-        });
+        // (current-milliseconds)
+        vm.register_fn(
+            "current-milliseconds",
+            "Monotonic time in milliseconds",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64;
+                Ok(Value::Int(ms))
+            },
+        );
 
-        // (goto-char OFFSET) — move cursor to character offset (0-indexed).
-        // Accumulated as a pending cursor operation.
+        // (goto-char OFFSET)
         let s = shared.clone();
-        engine.register_fn("goto-char", move |offset: isize| {
-            // Store as a special sentinel: row=usize::MAX signals char-offset mode.
-            // The apply_to_editor handler converts offset → (row, col).
-            s.lock().unwrap().pending_cursor = Some((usize::MAX, offset.max(0) as usize));
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "goto-char",
+            "Move cursor to character offset",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let offset = arg_int(args, 0, "goto-char")?;
+                s.lock().unwrap().pending_cursor = Some((usize::MAX, offset.max(0) as usize));
+                Ok(Value::Void)
+            },
+        );
 
         // --- Test introspection via SharedState ---
 
-        // --- Test introspection functions via SharedState ---
-        // These read from SharedState (updated by test runner's sync_scheme_state),
-        // so they always return the latest value regardless of Steel binding scopes.
-
-        // (current-mode) — read the current mode.
         let s = shared.clone();
-        engine.register_fn("current-mode", move || -> String {
-            s.lock().unwrap().current_mode.clone()
-        });
+        vm.register_fn(
+            "current-mode",
+            "Read the current mode",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::string(s.lock().unwrap().current_mode.clone())),
+        );
 
-        // (test-buffer-string) — read active buffer text (test runner updates this).
         let s = shared.clone();
-        engine.register_fn("test-buffer-string", move || -> String {
-            s.lock().unwrap().current_buffer_text.clone()
-        });
+        vm.register_fn(
+            "test-buffer-string",
+            "Read active buffer text",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::string(s.lock().unwrap().current_buffer_text.clone())),
+        );
 
-        // (test-buffer-text NAME) — read named buffer text.
         let s = shared.clone();
-        engine.register_fn("test-buffer-text", move |name: String| -> SteelVal {
-            let state = s.lock().unwrap();
-            state
-                .all_buffer_texts
-                .iter()
-                .find(|(n, _)| n == &name || n.ends_with(&name))
-                .map(|(_, t)| SteelVal::StringV(t.clone().into()))
-                .unwrap_or(SteelVal::BoolV(false))
-        });
-
-        // (messages-buffer-text) — read *messages* buffer content (for diagnostics assertions).
-        let s = shared.clone();
-        engine.register_fn("messages-buffer-text", move || -> String {
-            let state = s.lock().unwrap();
-            state
-                .all_buffer_texts
-                .iter()
-                .find(|(n, _)| n == "*messages*")
-                .map(|(_, t)| t.clone())
-                .unwrap_or_default()
-        });
-
-        // (test-sync-enabled?) — whether sync is enabled on active buffer.
-        let s = shared.clone();
-        engine.register_fn("test-sync-enabled?", move || -> bool {
-            s.lock().unwrap().sync_enabled
-        });
-
-        // (test-pending-updates) — number of pending sync updates.
-        let s = shared.clone();
-        engine.register_fn("test-pending-updates", move || -> isize {
-            s.lock().unwrap().pending_update_count as isize
-        });
-
-        // (test-sync-content) — sync doc content or #f.
-        let s = shared.clone();
-        engine.register_fn("test-sync-content", move || -> SteelVal {
-            let state = s.lock().unwrap();
-            match &state.sync_content {
-                Some(c) => SteelVal::StringV(c.clone().into()),
-                None => SteelVal::BoolV(false),
-            }
-        });
-
-        // (test-encode-state) — encoded sync state or #f.
-        let s = shared.clone();
-        engine.register_fn("test-encode-state", move || -> SteelVal {
-            let state = s.lock().unwrap();
-            match &state.encoded_state {
-                Some(s) => SteelVal::StringV(s.clone().into()),
-                None => SteelVal::BoolV(false),
-            }
-        });
-
-        // (test-get-buffer-by-name NAME) — lookup buffer index by name from SharedState.
-        let s = shared.clone();
-        engine.register_fn("test-get-buffer-by-name", move |name: String| -> SteelVal {
-            let state = s.lock().unwrap();
-            state
-                .buffer_names
-                .iter()
-                .find(|(_, n)| n == &name)
-                .map(|(i, _)| SteelVal::IntV(*i as isize))
-                .unwrap_or(SteelVal::BoolV(false))
-        });
-
-        // (test-get-option NAME) — read option value from SharedState (fresh each step).
-        let s = shared.clone();
-        engine.register_fn("test-get-option", move |name: String| -> SteelVal {
-            let state = s.lock().unwrap();
-            state
-                .option_values
-                .iter()
-                .find(|(n, _)| n == &name)
-                .map(|(_, v)| SteelVal::StringV(v.clone().into()))
-                .unwrap_or(SteelVal::BoolV(false))
-        });
-
-        // (test-region-active?) — whether a visual selection is active.
-        let s = shared.clone();
-        engine.register_fn("test-region-active?", move || -> bool {
-            s.lock().unwrap().region_active
-        });
-
-        // (test-region-start) — start offset of the visual selection.
-        let s = shared.clone();
-        engine.register_fn("test-region-start", move || -> isize {
-            s.lock().unwrap().region_start as isize
-        });
-
-        // (test-region-end) — end offset of the visual selection.
-        let s = shared.clone();
-        engine.register_fn("test-region-end", move || -> isize {
-            s.lock().unwrap().region_end as isize
-        });
-
-        // (test-search-forward PATTERN) — search for PATTERN in active buffer text.
-        // Returns the character offset of the first match, or #f if not found.
-        let s = shared.clone();
-        engine.register_fn("test-search-forward", move |pattern: String| -> SteelVal {
-            let state = s.lock().unwrap();
-            match state.current_buffer_text.find(&pattern) {
-                Some(byte_offset) => {
-                    // Convert byte offset to char offset.
-                    let char_offset = state.current_buffer_text[..byte_offset].chars().count();
-                    SteelVal::IntV(char_offset as isize)
+        vm.register_fn(
+            "test-buffer-text",
+            "Read named buffer text",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "test-buffer-text")?;
+                let state = s.lock().unwrap();
+                match state
+                    .all_buffer_texts
+                    .iter()
+                    .find(|(n, _)| n == &name || n.ends_with(&name))
+                {
+                    Some((_, t)) => Ok(Value::string(t.clone())),
+                    None => Ok(Value::Bool(false)),
                 }
-                None => SteelVal::BoolV(false),
-            }
-        });
+            },
+        );
 
-        // (test-cursor-row) — cursor row (0-indexed) from SharedState.
         let s = shared.clone();
-        engine.register_fn("test-cursor-row", move || -> isize {
-            s.lock().unwrap().cursor_row as isize
-        });
+        vm.register_fn(
+            "messages-buffer-text",
+            "Read *messages* buffer content",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                let state = s.lock().unwrap();
+                Ok(Value::string(
+                    state
+                        .all_buffer_texts
+                        .iter()
+                        .find(|(n, _)| n == "*messages*")
+                        .map(|(_, t)| t.clone())
+                        .unwrap_or_default(),
+                ))
+            },
+        );
 
-        // (test-cursor-col) — cursor column (0-indexed) from SharedState.
         let s = shared.clone();
-        engine.register_fn("test-cursor-col", move || -> isize {
-            s.lock().unwrap().cursor_col as isize
-        });
+        vm.register_fn(
+            "test-sync-enabled?",
+            "Whether sync is enabled",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Bool(s.lock().unwrap().sync_enabled)),
+        );
 
-        // (test-status-message) — last status bar message from SharedState.
         let s = shared.clone();
-        engine.register_fn("test-status-message", move || -> String {
-            s.lock().unwrap().last_status_message.clone()
-        });
+        vm.register_fn(
+            "test-pending-updates",
+            "Number of pending sync updates",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().pending_update_count as i64)),
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "test-sync-content",
+            "Sync doc content or #f",
+            Arity::Fixed(0),
+            move |_args: &[Value]| match &s.lock().unwrap().sync_content {
+                Some(c) => Ok(Value::string(c.clone())),
+                None => Ok(Value::Bool(false)),
+            },
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "test-encode-state",
+            "Encoded sync state or #f",
+            Arity::Fixed(0),
+            move |_args: &[Value]| match &s.lock().unwrap().encoded_state {
+                Some(s) => Ok(Value::string(s.clone())),
+                None => Ok(Value::Bool(false)),
+            },
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "test-get-buffer-by-name",
+            "Lookup buffer index by name",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "test-get-buffer-by-name")?;
+                let state = s.lock().unwrap();
+                match state.buffer_names.iter().find(|(_, n)| n == &name) {
+                    Some((i, _)) => Ok(Value::Int(*i as i64)),
+                    None => Ok(Value::Bool(false)),
+                }
+            },
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "test-get-option",
+            "Read option value from SharedState",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "test-get-option")?;
+                let state = s.lock().unwrap();
+                match state.option_values.iter().find(|(n, _)| n == &name) {
+                    Some((_, v)) => Ok(Value::string(v.clone())),
+                    None => Ok(Value::Bool(false)),
+                }
+            },
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "test-region-active?",
+            "Whether visual selection is active",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Bool(s.lock().unwrap().region_active)),
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "test-region-start",
+            "Start offset of visual selection",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().region_start as i64)),
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "test-region-end",
+            "End offset of visual selection",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().region_end as i64)),
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "test-search-forward",
+            "Search for pattern in active buffer",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let pattern = arg_string(args, 0, "test-search-forward")?;
+                let state = s.lock().unwrap();
+                match state.current_buffer_text.find(&pattern) {
+                    Some(byte_offset) => {
+                        let char_offset = state.current_buffer_text[..byte_offset].chars().count();
+                        Ok(Value::Int(char_offset as i64))
+                    }
+                    None => Ok(Value::Bool(false)),
+                }
+            },
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "test-cursor-row",
+            "Cursor row (0-indexed)",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().cursor_row as i64)),
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "test-cursor-col",
+            "Cursor column (0-indexed)",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().cursor_col as i64)),
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "test-status-message",
+            "Last status bar message",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::string(s.lock().unwrap().last_status_message.clone())),
+        );
 
         // --- CRDT/sync test primitives ---
 
-        // (buffer-enable-sync CLIENT-ID) — enable sync on active buffer.
         let s = shared.clone();
-        engine.register_fn("buffer-enable-sync", move |client_id: isize| {
-            s.lock().unwrap().pending_enable_sync = Some(client_id.max(1) as u64);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "buffer-enable-sync",
+            "Enable sync on active buffer",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let client_id = arg_int(args, 0, "buffer-enable-sync")?;
+                s.lock().unwrap().pending_enable_sync = Some(client_id.max(1) as u64);
+                Ok(Value::Void)
+            },
+        );
 
-        // (buffer-disable-sync) — disable sync on active buffer.
         let s = shared.clone();
-        engine.register_fn("buffer-disable-sync", move || {
-            s.lock().unwrap().pending_disable_sync = true;
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "buffer-disable-sync",
+            "Disable sync on active buffer",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                s.lock().unwrap().pending_disable_sync = true;
+                Ok(Value::Void)
+            },
+        );
 
-        // (buffer-apply-update BUFFER-NAME UPDATE-BASE64) — apply encoded sync update.
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "buffer-apply-update",
-            move |buf_name: String, update_b64: String| {
+            "Apply encoded sync update",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let buf_name = arg_string(args, 0, "buffer-apply-update")?;
+                let update_b64 = arg_string(args, 1, "buffer-apply-update")?;
                 use base64::Engine as _;
                 match base64::engine::general_purpose::STANDARD.decode(&update_b64) {
                     Ok(bytes) => {
@@ -1459,96 +1955,112 @@ impl SchemeRuntime {
                             .unwrap()
                             .pending_sync_applies
                             .push((buf_name, bytes));
-                        SteelVal::BoolV(true)
+                        Ok(Value::Bool(true))
                     }
-                    Err(e) => SteelVal::StringV(format!("base64 decode error: {}", e).into()),
+                    Err(e) => Ok(Value::string(format!("base64 decode error: {}", e))),
                 }
             },
         );
 
-        // (buffer-load-sync-state STATE-BASE64 CLIENT-ID) — load full state into active buffer.
         let s = shared.clone();
-        engine.register_fn(
+        vm.register_fn(
             "buffer-load-sync-state",
-            move |state_b64: String, client_id: isize| {
+            "Load full state into active buffer",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let state_b64 = arg_string(args, 0, "buffer-load-sync-state")?;
+                let client_id = arg_int(args, 1, "buffer-load-sync-state")?;
                 use base64::Engine as _;
                 match base64::engine::general_purpose::STANDARD.decode(&state_b64) {
                     Ok(bytes) => {
                         s.lock().unwrap().pending_load_sync_state =
                             Some((bytes, client_id.max(1) as u64));
-                        SteelVal::BoolV(true)
+                        Ok(Value::Bool(true))
                     }
-                    Err(e) => SteelVal::StringV(format!("base64 decode error: {}", e).into()),
+                    Err(e) => Ok(Value::string(format!("base64 decode error: {}", e))),
                 }
             },
         );
 
-        // (buffer-encode-state-vector) — request encoding of the active buffer's state vector.
-        // The result is available via (buffer-get-state-vector) after the next apply cycle.
         let s = shared.clone();
-        engine.register_fn("buffer-encode-state-vector", move || {
-            s.lock().unwrap().pending_encode_state_vector = true;
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "buffer-encode-state-vector",
+            "Request encoding state vector",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                s.lock().unwrap().pending_encode_state_vector = true;
+                Ok(Value::Void)
+            },
+        );
 
-        // (buffer-get-state-vector) — retrieve the encoded state vector (base64) or #f.
         let s = shared.clone();
-        engine.register_fn("buffer-get-state-vector", move || -> SteelVal {
-            let state = s.lock().unwrap();
-            match &state.encoded_state_vector {
-                Some(sv) => SteelVal::StringV(sv.clone().into()),
-                None => SteelVal::BoolV(false),
-            }
-        });
+        vm.register_fn(
+            "buffer-get-state-vector",
+            "Retrieve encoded state vector",
+            Arity::Fixed(0),
+            move |_args: &[Value]| match &s.lock().unwrap().encoded_state_vector {
+                Some(sv) => Ok(Value::string(sv.clone())),
+                None => Ok(Value::Bool(false)),
+            },
+        );
 
-        // (buffer-compute-diff SV-BASE64) — compute diff from remote state vector.
-        // The result is available via (buffer-get-diff) after the next apply cycle.
         let s = shared.clone();
-        engine.register_fn("buffer-compute-diff", move |sv_b64: String| {
-            s.lock().unwrap().pending_compute_diff = Some(sv_b64);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "buffer-compute-diff",
+            "Compute diff from remote state vector",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let sv_b64 = arg_string(args, 0, "buffer-compute-diff")?;
+                s.lock().unwrap().pending_compute_diff = Some(sv_b64);
+                Ok(Value::Void)
+            },
+        );
 
-        // (buffer-get-diff) — retrieve the computed diff (base64) or #f.
         let s = shared.clone();
-        engine.register_fn("buffer-get-diff", move || -> SteelVal {
-            let state = s.lock().unwrap();
-            match &state.computed_diff {
-                Some(d) => SteelVal::StringV(d.clone().into()),
-                None => SteelVal::BoolV(false),
-            }
-        });
+        vm.register_fn(
+            "buffer-get-diff",
+            "Retrieve computed diff",
+            Arity::Fixed(0),
+            move |_args: &[Value]| match &s.lock().unwrap().computed_diff {
+                Some(d) => Ok(Value::string(d.clone())),
+                None => Ok(Value::Bool(false)),
+            },
+        );
 
-        // (buffer-reconcile-to TEXT) — reconcile sync doc to target text.
-        // The result (base64 update) is available via (buffer-get-reconcile-result).
         let s = shared.clone();
-        engine.register_fn("buffer-reconcile-to", move |text: String| {
-            s.lock().unwrap().pending_reconcile_to = Some(text);
-            SteelVal::Void
-        });
+        vm.register_fn(
+            "buffer-reconcile-to",
+            "Reconcile sync doc to target text",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let text = arg_string(args, 0, "buffer-reconcile-to")?;
+                s.lock().unwrap().pending_reconcile_to = Some(text);
+                Ok(Value::Void)
+            },
+        );
 
-        // (buffer-get-reconcile-result) — retrieve reconcile result (base64 update) or #f.
         let s = shared.clone();
-        engine.register_fn("buffer-get-reconcile-result", move || -> SteelVal {
-            let state = s.lock().unwrap();
-            match &state.reconcile_result {
-                Some(r) => SteelVal::StringV(r.clone().into()),
-                None => SteelVal::BoolV(false),
-            }
-        });
+        vm.register_fn(
+            "buffer-get-reconcile-result",
+            "Retrieve reconcile result",
+            Arity::Fixed(0),
+            move |_args: &[Value]| match &s.lock().unwrap().reconcile_result {
+                Some(r) => Ok(Value::string(r.clone())),
+                None => Ok(Value::Bool(false)),
+            },
+        );
 
-        // Register default values for state-injected variables.
-        // This prevents FreeIdentifier errors in init.scm during startup.
-        engine.register_value("*buffer-name*", SteelVal::StringV("scratch".into()));
-        engine.register_value("*buffer-modified?*", SteelVal::BoolV(false));
-        engine.register_value("*buffer-line-count*", SteelVal::IntV(0));
-        engine.register_value("*buffer-char-count*", SteelVal::IntV(0));
-        engine.register_value("*cursor-row*", SteelVal::IntV(1));
-        engine.register_value("*cursor-col*", SteelVal::IntV(1));
-        engine.register_value("*mode*", SteelVal::StringV("normal".into()));
-        engine.register_value("*shell-buffers*", SteelVal::ListV(vec![].into()));
+        // Register default values for state-injected variables
+        vm.define_global("*buffer-name*", Value::string("scratch"));
+        vm.define_global("*buffer-modified?*", Value::Bool(false));
+        vm.define_global("*buffer-line-count*", Value::Int(0));
+        vm.define_global("*buffer-char-count*", Value::Int(0));
+        vm.define_global("*cursor-row*", Value::Int(1));
+        vm.define_global("*cursor-col*", Value::Int(1));
+        vm.define_global("*mode*", Value::string("normal"));
+        vm.define_global("*shell-buffers*", Value::Null);
 
-        // Build default load-path: ~/.config/mae/packages/, ~/.config/mae/lisp/
+        // Build default load-path
         let default_load_path: Vec<PathBuf> = if let Ok(home) = std::env::var("HOME") {
             vec![
                 PathBuf::from(&home)
@@ -1564,14 +2076,14 @@ impl SchemeRuntime {
             vec![]
         };
 
-        // Seed SharedState load_path so Scheme functions can read/modify it.
+        // Seed SharedState load_path
         {
             let mut state = shared.lock().unwrap();
             state.load_path = default_load_path.clone();
         }
 
         Ok(SchemeRuntime {
-            engine,
+            vm,
             shared,
             error_history: Vec::new(),
             error_seq: 0,
@@ -1700,10 +2212,9 @@ impl SchemeRuntime {
     /// Errors are recorded in the error history for debugger introspection.
     pub fn eval(&mut self, code: &str) -> Result<String, SchemeError> {
         debug!(code_len = code.len(), "scheme eval");
-        let results = self.engine.run(code.to_string()).map_err(|e| {
+        let result = self.vm.eval(code).map_err(|e| {
             let err = SchemeError::from(e);
             error!(error = %err.message, code_preview = &code[..code.len().min(100)], "scheme eval error");
-            // Record error for debugger
             self.error_seq += 1;
             let snapshot = SchemeErrorSnapshot {
                 expression: code[..code.len().min(200)].to_string(),
@@ -1716,12 +2227,7 @@ impl SchemeRuntime {
             }
             err
         })?;
-        if results.is_empty() {
-            Ok(String::new())
-        } else {
-            let last = &results[results.len() - 1];
-            Ok(steel_val_to_string(last))
-        }
+        Ok(value_to_display(&result))
     }
 
     /// Load and evaluate a Scheme file.
@@ -1733,7 +2239,7 @@ impl SchemeRuntime {
                 message: format!("Failed to read {}: {}", path.display(), e),
             }
         })?;
-        self.engine.run(content).map_err(|e| {
+        self.vm.eval(&content).map_err(|e| {
             let err = SchemeError::from(e);
             error!(path = %path.display(), error = %err.message, "scheme file evaluation failed");
             err
@@ -1748,31 +2254,27 @@ impl SchemeRuntime {
         let win = editor.window_mgr.focused_window();
 
         // Scalar state
-        self.engine
-            .register_value("*buffer-name*", SteelVal::StringV(buf.name.clone().into()));
-        self.engine
-            .register_value("*buffer-modified?*", SteelVal::BoolV(buf.modified));
-        self.engine.register_value(
-            "*buffer-line-count*",
-            SteelVal::IntV(buf.line_count() as isize),
-        );
-        self.engine
-            .register_value("*cursor-row*", SteelVal::IntV(win.cursor_row as isize));
-        self.engine
-            .register_value("*cursor-col*", SteelVal::IntV(win.cursor_col as isize));
+        self.vm
+            .define_global("*buffer-name*", Value::string(buf.name.clone()));
+        self.vm
+            .define_global("*buffer-modified?*", Value::Bool(buf.modified));
+        self.vm
+            .define_global("*buffer-line-count*", Value::Int(buf.line_count() as i64));
+        self.vm
+            .define_global("*cursor-row*", Value::Int(win.cursor_row as i64));
+        self.vm
+            .define_global("*cursor-col*", Value::Int(win.cursor_col as i64));
 
-        // Full buffer text — accessible as `*buffer-text*`
+        // Full buffer text
         let text = buf.text();
-        self.engine
-            .register_value("*buffer-text*", SteelVal::StringV(text.into()));
+        self.vm
+            .define_global("*buffer-text*", Value::string(text.clone()));
 
         // Number of open buffers
-        self.engine.register_value(
-            "*buffer-count*",
-            SteelVal::IntV(editor.buffers.len() as isize),
-        );
+        self.vm
+            .define_global("*buffer-count*", Value::Int(editor.buffers.len() as i64));
 
-        // Current mode as a string
+        // Current mode
         let mode_str = match editor.mode {
             mae_core::Mode::Normal => "normal",
             mae_core::Mode::Insert => "insert",
@@ -1785,251 +2287,321 @@ impl SchemeRuntime {
             mae_core::Mode::CommandPalette => "command-palette",
             mae_core::Mode::ShellInsert => "shell-insert",
         };
-        self.engine
-            .register_value("*mode*", SteelVal::StringV(mode_str.into()));
+        self.vm.define_global("*mode*", Value::string(mode_str));
 
-        // *buffer-language* — current buffer's detected language (or "text")
+        // *buffer-language*
         let active_idx = editor.active_buffer_idx();
         let lang_str = editor
             .syntax
             .language_for(active_idx)
             .map(|l| l.id())
             .unwrap_or("text");
-        self.engine
-            .register_value("*buffer-language*", SteelVal::StringV(lang_str.into()));
+        self.vm
+            .define_global("*buffer-language*", Value::string(lang_str));
 
-        // *buffer-file-path* — current buffer's file path (empty if unsaved)
+        // *buffer-file-path*
         let file_path_str = buf
             .file_path()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
-        self.engine.register_value(
-            "*buffer-file-path*",
-            SteelVal::StringV(file_path_str.into()),
-        );
+        self.vm
+            .define_global("*buffer-file-path*", Value::string(file_path_str));
 
-        // (buffer-line N) — read a specific line (0-indexed). Capture
-        // a snapshot of all lines so the closure is self-contained.
+        // (buffer-line N)
         let lines: Vec<String> = (0..buf.line_count())
             .map(|i| buf.line_text(i).to_string())
             .collect();
         let lines = std::sync::Arc::new(lines);
-        self.engine.register_fn("buffer-line", move |n: isize| {
-            lines.get(n.max(0) as usize).cloned().unwrap_or_default()
-        });
+        self.vm.register_fn(
+            "buffer-line",
+            "Read a specific line (0-indexed)",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let n = arg_int(args, 0, "buffer-line")?;
+                Ok(Value::string(
+                    lines.get(n.max(0) as usize).cloned().unwrap_or_default(),
+                ))
+            },
+        );
 
-        // --- Shell state ---
-
-        // *shell-buffers* — list of buffer indices that are Shell-kind.
-        let shell_indices: Vec<SteelVal> = editor
+        // *shell-buffers*
+        let shell_indices: Vec<Value> = editor
             .buffers
             .iter()
             .enumerate()
             .filter(|(_, b)| b.kind == mae_core::BufferKind::Shell)
-            .map(|(i, _)| SteelVal::IntV(i as isize))
+            .map(|(i, _)| Value::Int(i as i64))
             .collect();
-        self.engine
-            .register_value("*shell-buffers*", SteelVal::ListV(shell_indices.into()));
+        self.vm
+            .define_global("*shell-buffers*", Value::list(shell_indices));
 
-        // (shell-cwd BUF-IDX) — return cached CWD for a shell buffer.
+        // (shell-cwd BUF-IDX)
         let cwds = editor.shell.viewport_cwds.clone();
-        self.engine.register_fn("shell-cwd", move |idx: isize| {
-            cwds.get(&(idx.max(0) as usize))
-                .cloned()
-                .unwrap_or_default()
-        });
-
-        // (shell-read-output BUF-IDX MAX-LINES) — read viewport snapshot.
-        let viewports = editor.shell.viewports.clone();
-        self.engine
-            .register_fn("shell-read-output", move |idx: isize, max: isize| {
-                let idx = idx.max(0) as usize;
-                let max = max.max(1) as usize;
-                viewports
-                    .get(&idx)
-                    .map(|lines| {
-                        let start = lines.len().saturating_sub(max);
-                        lines[start..].join("\n")
-                    })
-                    .unwrap_or_default()
-            });
-
-        // *current-command* — name of the command currently being dispatched
-        self.engine.register_value(
-            "*current-command*",
-            SteelVal::StringV(editor.current_command.clone().into()),
+        self.vm.register_fn(
+            "shell-cwd",
+            "Return cached CWD for a shell buffer",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let idx = arg_int(args, 0, "shell-cwd")?;
+                Ok(Value::string(
+                    cwds.get(&(idx.max(0) as usize))
+                        .cloned()
+                        .unwrap_or_default(),
+                ))
+            },
         );
 
-        // --- A1: Buffer introspection functions (callable forms) ---
+        // (shell-read-output BUF-IDX MAX-LINES)
+        let viewports = editor.shell.viewports.clone();
+        self.vm.register_fn(
+            "shell-read-output",
+            "Read viewport snapshot",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let idx = arg_int(args, 0, "shell-read-output")?.max(0) as usize;
+                let max = arg_int(args, 1, "shell-read-output")?.max(1) as usize;
+                Ok(Value::string(
+                    viewports
+                        .get(&idx)
+                        .map(|lines| {
+                            let start = lines.len().saturating_sub(max);
+                            lines[start..].join("\n")
+                        })
+                        .unwrap_or_default(),
+                ))
+            },
+        );
+
+        // *current-command*
+        self.vm.define_global(
+            "*current-command*",
+            Value::string(editor.current_command.clone()),
+        );
+
+        // --- Buffer introspection functions ---
 
         let buf_name = buf.name.clone();
-        self.engine
-            .register_fn("current-buffer-name", move || buf_name.clone());
+        self.vm.register_fn(
+            "current-buffer-name",
+            "Name of current buffer",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::string(buf_name.clone())),
+        );
 
         let file_path = buf.file_path().map(|p| p.display().to_string());
-        self.engine
-            .register_fn("current-buffer-file", move || -> SteelVal {
-                match &file_path {
-                    Some(p) => SteelVal::StringV(p.clone().into()),
-                    None => SteelVal::BoolV(false),
-                }
-            });
+        self.vm.register_fn(
+            "current-buffer-file",
+            "File path of current buffer",
+            Arity::Fixed(0),
+            move |_args: &[Value]| match &file_path {
+                Some(p) => Ok(Value::string(p.clone())),
+                None => Ok(Value::Bool(false)),
+            },
+        );
 
-        let line_num = (win.cursor_row + 1) as isize;
-        self.engine
-            .register_fn("current-line-number", move || line_num);
+        let line_num = (win.cursor_row + 1) as i64;
+        self.vm.register_fn(
+            "current-line-number",
+            "Current line number (1-indexed)",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(line_num)),
+        );
 
-        let col = win.cursor_col as isize;
-        self.engine.register_fn("current-column", move || col);
+        let col = win.cursor_col as i64;
+        self.vm.register_fn(
+            "current-column",
+            "Current column",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(col)),
+        );
 
-        let cursor_offset = buf.char_offset_at(win.cursor_row, win.cursor_col) as isize;
-        self.engine.register_fn("point", move || cursor_offset);
+        let cursor_offset = buf.char_offset_at(win.cursor_row, win.cursor_col) as i64;
+        self.vm.register_fn(
+            "point",
+            "Cursor character offset",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(cursor_offset)),
+        );
 
-        self.engine.register_fn("point-min", || 0isize);
+        self.vm.register_fn(
+            "point-min",
+            "Minimum point",
+            Arity::Fixed(0),
+            |_args: &[Value]| Ok(Value::Int(0)),
+        );
 
-        let max_chars = buf.rope().len_chars() as isize;
-        self.engine.register_fn("point-max", move || max_chars);
+        let max_chars = buf.rope().len_chars() as i64;
+        self.vm.register_fn(
+            "point-max",
+            "Maximum point",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(max_chars)),
+        );
 
-        let line_begin = buf.rope().line_to_char(win.cursor_row) as isize;
-        self.engine
-            .register_fn("line-beginning-position", move || line_begin);
+        let line_begin = buf.rope().line_to_char(win.cursor_row) as i64;
+        self.vm.register_fn(
+            "line-beginning-position",
+            "Start of current line",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(line_begin)),
+        );
 
         let line_end = if win.cursor_row + 1 < buf.line_count() {
-            buf.rope().line_to_char(win.cursor_row + 1) as isize - 1
+            buf.rope().line_to_char(win.cursor_row + 1) as i64 - 1
         } else {
-            buf.rope().len_chars() as isize
+            buf.rope().len_chars() as i64
         };
-        self.engine
-            .register_fn("line-end-position", move || line_end);
+        self.vm.register_fn(
+            "line-end-position",
+            "End of current line",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(line_end)),
+        );
 
-        // --- A2: Selection / region access ---
+        // --- Selection / region ---
+
+        // --- Selection / region --- reads from SharedState for always-fresh data
+        let s = self.shared.clone();
+        self.vm.register_fn(
+            "region-active?",
+            "Whether visual selection is active",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Bool(s.lock().unwrap().region_active)),
+        );
+
+        let s = self.shared.clone();
+        self.vm.register_fn(
+            "region-beginning",
+            "Start of region",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().region_start as i64)),
+        );
+        let s = self.shared.clone();
+        self.vm.register_fn(
+            "region-end",
+            "End of region",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().region_end as i64)),
+        );
 
         let is_visual = matches!(editor.mode, mae_core::Mode::Visual(_));
-        self.engine.register_fn("region-active?", move || is_visual);
-
-        // Compute region bounds (valid only in visual mode, but safe to call anytime)
-        let (region_beg, region_end, selection_text) = if is_visual {
+        let selection_text = if is_visual {
             let anchor_offset =
                 buf.char_offset_at(editor.vi.visual_anchor_row, editor.vi.visual_anchor_col);
             let cursor_off = buf.char_offset_at(win.cursor_row, win.cursor_col);
             let beg = anchor_offset.min(cursor_off);
-            let end = anchor_offset.max(cursor_off) + 1; // inclusive end
+            let end = anchor_offset.max(cursor_off) + 1;
             let end = end.min(buf.rope().len_chars());
-            let text: String = buf.rope().chars().skip(beg).take(end - beg).collect();
-            (beg as isize, end as isize, text)
+            buf.rope().chars().skip(beg).take(end - beg).collect()
         } else {
-            (0isize, 0isize, String::new())
+            String::new()
         };
-        let rb = region_beg;
-        self.engine.register_fn("region-beginning", move || rb);
-        let re = region_end;
-        self.engine.register_fn("region-end", move || re);
         let st = selection_text;
-        self.engine.register_fn("get-selection", move || st.clone());
-
-        // --- Round 2: extended introspection ---
-
-        // *buffer-char-count* — total chars in the active buffer
-        self.engine.register_value(
-            "*buffer-char-count*",
-            SteelVal::IntV(buf.rope().len_chars() as isize),
+        self.vm.register_fn(
+            "get-selection",
+            "Get selected text",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::string(st.clone())),
         );
 
-        // (buffer-text-range START END) — substring of buffer text
-        let text_for_range = buf.text();
-        self.engine
-            .register_fn("buffer-text-range", move |start: isize, end: isize| {
-                let s = start.max(0) as usize;
-                let e = end.max(0) as usize;
-                text_for_range
-                    .chars()
-                    .skip(s)
-                    .take(e.saturating_sub(s))
-                    .collect::<String>()
-            });
+        // *buffer-char-count*
+        self.vm.define_global(
+            "*buffer-char-count*",
+            Value::Int(buf.rope().len_chars() as i64),
+        );
 
-        // *buffer-list* — list of (index name kind modified?)
-        let buf_info: Vec<SteelVal> = editor
+        // (buffer-text-range START END)
+        let text_for_range = buf.text();
+        self.vm.register_fn(
+            "buffer-text-range",
+            "Substring of buffer text",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let start = arg_int(args, 0, "buffer-text-range")?.max(0) as usize;
+                let end = arg_int(args, 1, "buffer-text-range")?.max(0) as usize;
+                Ok(Value::string(
+                    text_for_range
+                        .chars()
+                        .skip(start)
+                        .take(end.saturating_sub(start))
+                        .collect::<String>(),
+                ))
+            },
+        );
+
+        // *buffer-list*
+        let buf_info: Vec<Value> = editor
             .buffers
             .iter()
             .enumerate()
             .map(|(i, b)| {
-                SteelVal::ListV(
-                    vec![
-                        SteelVal::IntV(i as isize),
-                        SteelVal::StringV(b.name.clone().into()),
-                        SteelVal::StringV(format!("{:?}", b.kind).into()),
-                        SteelVal::BoolV(b.modified),
-                    ]
-                    .into(),
-                )
+                Value::list(vec![
+                    Value::Int(i as i64),
+                    Value::string(b.name.clone()),
+                    Value::string(format!("{:?}", b.kind)),
+                    Value::Bool(b.modified),
+                ])
             })
             .collect();
-        self.engine
-            .register_value("*buffer-list*", SteelVal::ListV(buf_info.into()));
+        self.vm
+            .define_global("*buffer-list*", Value::list(buf_info));
 
-        // (get-buffer-by-name NAME) — returns index or #f
-        let buffer_names: Vec<(usize, String)> = editor
-            .buffers
-            .iter()
-            .enumerate()
-            .map(|(i, b)| (i, b.name.clone()))
-            .collect();
-        self.engine
-            .register_fn("get-buffer-by-name", move |name: String| -> SteelVal {
-                buffer_names
-                    .iter()
-                    .find(|(_, n)| n == &name)
-                    .map(|(i, _)| SteelVal::IntV(*i as isize))
-                    .unwrap_or(SteelVal::BoolV(false))
-            });
-
-        // *window-count*
-        self.engine.register_value(
-            "*window-count*",
-            SteelVal::IntV(editor.window_mgr.window_count() as isize),
+        // (get-buffer-by-name NAME) — reads from SharedState for always-fresh data
+        let s = self.shared.clone();
+        self.vm.register_fn(
+            "get-buffer-by-name",
+            "Get buffer index by name",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "get-buffer-by-name")?;
+                let state = s.lock().unwrap();
+                match state.buffer_names.iter().find(|(_, n)| n == &name) {
+                    Some((i, _)) => Ok(Value::Int(*i as i64)),
+                    None => Ok(Value::Bool(false)),
+                }
+            },
         );
 
-        // *window-list* — list of (id buffer-idx cursor-row cursor-col)
-        let win_info: Vec<SteelVal> = editor
+        // *window-count*
+        self.vm.define_global(
+            "*window-count*",
+            Value::Int(editor.window_mgr.window_count() as i64),
+        );
+
+        // *window-list*
+        let win_info: Vec<Value> = editor
             .window_mgr
             .iter_windows()
             .map(|w| {
-                SteelVal::ListV(
-                    vec![
-                        SteelVal::IntV(w.id as isize),
-                        SteelVal::IntV(w.buffer_idx as isize),
-                        SteelVal::IntV(w.cursor_row as isize),
-                        SteelVal::IntV(w.cursor_col as isize),
-                    ]
-                    .into(),
-                )
+                Value::list(vec![
+                    Value::Int(w.id as i64),
+                    Value::Int(w.buffer_idx as i64),
+                    Value::Int(w.cursor_row as i64),
+                    Value::Int(w.cursor_col as i64),
+                ])
             })
             .collect();
-        self.engine
-            .register_value("*window-list*", SteelVal::ListV(win_info.into()));
+        self.vm
+            .define_global("*window-list*", Value::list(win_info));
 
-        // *option-list* — list of (name kind default doc)
-        let opt_info: Vec<SteelVal> = editor
+        // *option-list*
+        let opt_info: Vec<Value> = editor
             .option_registry
             .list()
             .iter()
             .map(|o| {
-                SteelVal::ListV(
-                    vec![
-                        SteelVal::StringV(o.name.as_ref().into()),
-                        SteelVal::StringV(format!("{}", o.kind).into()),
-                        SteelVal::StringV(o.default_value.as_ref().into()),
-                        SteelVal::StringV(o.doc.as_ref().into()),
-                    ]
-                    .into(),
-                )
+                Value::list(vec![
+                    Value::string(o.name.as_ref()),
+                    Value::string(format!("{}", o.kind)),
+                    Value::string(o.default_value.as_ref()),
+                    Value::string(o.doc.as_ref()),
+                ])
             })
             .collect();
-        self.engine
-            .register_value("*option-list*", SteelVal::ListV(opt_info.into()));
+        self.vm
+            .define_global("*option-list*", Value::list(opt_info));
 
-        // Populate SharedState option_values so get-option has initial data.
+        // Populate SharedState option_values
         {
             let values: Vec<(String, String)> = editor
                 .option_registry
@@ -2044,38 +2616,37 @@ impl SchemeRuntime {
             self.shared.lock().unwrap().option_values = values;
         }
 
-        // (get-option NAME) — returns current value as string, or #f
-        // Reads from SharedState so values are fresh after sync_scheme_state.
+        // (get-option NAME)
         let s = self.shared.clone();
-        self.engine
-            .register_fn("get-option", move |name: String| -> SteelVal {
+        self.vm.register_fn(
+            "get-option",
+            "Get current option value",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "get-option")?;
                 let state = s.lock().unwrap();
-                state
-                    .option_values
-                    .iter()
-                    .find(|(n, _)| n == &name)
-                    .map(|(_, v)| SteelVal::StringV(v.clone().into()))
-                    .unwrap_or(SteelVal::BoolV(false))
-            });
+                match state.option_values.iter().find(|(n, _)| n == &name) {
+                    Some((_, v)) => Ok(Value::string(v.clone())),
+                    None => Ok(Value::Bool(false)),
+                }
+            },
+        );
 
-        // *command-list* — list of (name doc source)
-        let cmd_info: Vec<SteelVal> = editor
+        // *command-list*
+        let cmd_info: Vec<Value> = editor
             .commands
             .list_commands()
             .iter()
             .map(|c| {
-                SteelVal::ListV(
-                    vec![
-                        SteelVal::StringV(c.name.clone().into()),
-                        SteelVal::StringV(c.doc.clone().into()),
-                        SteelVal::StringV(format!("{:?}", c.source).into()),
-                    ]
-                    .into(),
-                )
+                Value::list(vec![
+                    Value::string(c.name.clone()),
+                    Value::string(c.doc.clone()),
+                    Value::string(format!("{:?}", c.source)),
+                ])
             })
             .collect();
-        self.engine
-            .register_value("*command-list*", SteelVal::ListV(cmd_info.into()));
+        self.vm
+            .define_global("*command-list*", Value::list(cmd_info));
 
         // (command-exists? NAME)
         let cmd_names: Vec<String> = editor
@@ -2084,21 +2655,26 @@ impl SchemeRuntime {
             .iter()
             .map(|c| c.name.clone())
             .collect();
-        self.engine
-            .register_fn("command-exists?", move |name: String| -> bool {
-                cmd_names.iter().any(|n| n == &name)
-            });
+        self.vm.register_fn(
+            "command-exists?",
+            "Check if command exists",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "command-exists?")?;
+                Ok(Value::Bool(cmd_names.iter().any(|n| n == &name)))
+            },
+        );
 
-        // *keymap-list* — list of keymap names
-        let keymap_names: Vec<SteelVal> = editor
+        // *keymap-list*
+        let keymap_names: Vec<Value> = editor
             .keymaps
             .keys()
-            .map(|k| SteelVal::StringV(k.clone().into()))
+            .map(|k| Value::string(k.clone()))
             .collect();
-        self.engine
-            .register_value("*keymap-list*", SteelVal::ListV(keymap_names.into()));
+        self.vm
+            .define_global("*keymap-list*", Value::list(keymap_names));
 
-        // (keymap-bindings MAP-NAME) — list of (key-display command-name)
+        // (keymap-bindings MAP-NAME)
         let keymaps_snapshot: std::collections::HashMap<String, Vec<(String, String)>> = editor
             .keymaps
             .iter()
@@ -2110,37 +2686,41 @@ impl SchemeRuntime {
                 (name.clone(), bindings)
             })
             .collect();
-        self.engine
-            .register_fn("keymap-bindings", move |name: String| -> SteelVal {
-                keymaps_snapshot
+        self.vm.register_fn(
+            "keymap-bindings",
+            "List bindings for a keymap",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "keymap-bindings")?;
+                Ok(keymaps_snapshot
                     .get(&name)
-                    .map(|bindings: &Vec<(String, String)>| {
-                        SteelVal::ListV(
+                    .map(|bindings| {
+                        Value::list(
                             bindings
                                 .iter()
-                                .map(|(k, c): &(String, String)| {
-                                    SteelVal::ListV(
-                                        vec![
-                                            SteelVal::StringV(k.clone().into()),
-                                            SteelVal::StringV(c.clone().into()),
-                                        ]
-                                        .into(),
-                                    )
+                                .map(|(k, c)| {
+                                    Value::list(vec![
+                                        Value::string(k.clone()),
+                                        Value::string(c.clone()),
+                                    ])
                                 })
-                                .collect::<Vec<_>>()
-                                .into(),
+                                .collect::<Vec<_>>(),
                         )
                     })
-                    .unwrap_or(SteelVal::ListV(vec![].into()))
-            });
+                    .unwrap_or(Value::Null))
+            },
+        );
 
-        // (buffer-string) — return full text of the active buffer (ERT naming).
-        let active_text = buf.text();
-        self.engine
-            .register_fn("buffer-string", move || -> String { active_text.clone() });
+        // (buffer-string) — reads from SharedState for always-fresh data
+        let s = self.shared.clone();
+        self.vm.register_fn(
+            "buffer-string",
+            "Full text of active buffer",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::string(s.lock().unwrap().current_buffer_text.clone())),
+        );
 
-        // (buffer-text NAME) — return full text of a named buffer.
-        // Reads from SharedState so values are fresh after sync_scheme_state.
+        // (buffer-text NAME)
         {
             let all_buf_texts: Vec<(String, String)> = editor
                 .buffers
@@ -2150,122 +2730,178 @@ impl SchemeRuntime {
             self.shared.lock().unwrap().all_buffer_texts = all_buf_texts;
         }
         let s = self.shared.clone();
-        self.engine
-            .register_fn("buffer-text", move |name: String| -> SteelVal {
+        self.vm.register_fn(
+            "buffer-text",
+            "Full text of named buffer",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "buffer-text")?;
                 let state = s.lock().unwrap();
-                state
+                match state
                     .all_buffer_texts
                     .iter()
                     .find(|(n, _)| n == &name || n.ends_with(&name))
-                    .map(|(_, t)| SteelVal::StringV(t.clone().into()))
-                    .unwrap_or(SteelVal::BoolV(false))
-            });
+                {
+                    Some((_, t)) => Ok(Value::string(t.clone())),
+                    None => Ok(Value::Bool(false)),
+                }
+            },
+        );
 
-        // (collab-status) — returns an alist with current collaboration state.
-        // Returns: ((status . "off") (server . "127.0.0.1:9473") (synced-docs . 0) (peer-count . 0))
+        // (collab-status)
         let collab_status_str = editor.collab.status.as_str().to_string();
         let collab_server_addr = editor.collab.server_address.clone();
         let collab_synced_docs = editor.collab.synced_docs;
-        self.engine
-            .register_fn("collab-status", move || -> SteelVal {
-                let make_pair = |k: &str, v: SteelVal| -> SteelVal {
-                    SteelVal::ListV(vec![SteelVal::StringV(k.into()), v].into())
-                };
-                SteelVal::ListV(
-                    vec![
-                        make_pair(
-                            "status",
-                            SteelVal::StringV(collab_status_str.clone().into()),
-                        ),
-                        make_pair(
-                            "server",
-                            SteelVal::StringV(collab_server_addr.clone().into()),
-                        ),
-                        make_pair("synced-docs", SteelVal::IntV(collab_synced_docs as isize)),
-                        make_pair("peer-count", SteelVal::IntV(0)),
-                    ]
-                    .into(),
-                )
-            });
+        self.vm.register_fn(
+            "collab-status",
+            "Current collaboration state",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                Ok(Value::list(vec![
+                    Value::list(vec![
+                        Value::string("status"),
+                        Value::string(collab_status_str.clone()),
+                    ]),
+                    Value::list(vec![
+                        Value::string("server"),
+                        Value::string(collab_server_addr.clone()),
+                    ]),
+                    Value::list(vec![
+                        Value::string("synced-docs"),
+                        Value::Int(collab_synced_docs as i64),
+                    ]),
+                    Value::list(vec![Value::string("peer-count"), Value::Int(0)]),
+                ]))
+            },
+        );
 
-        // (collab-synced-buffers) — returns a list of synced buffer names.
+        // (collab-synced-buffers)
         let synced_names: Vec<String> = editor.collab.synced_buffers.iter().cloned().collect();
-        self.engine
-            .register_fn("collab-synced-buffers", move || -> SteelVal {
-                SteelVal::ListV(
+        self.vm.register_fn(
+            "collab-synced-buffers",
+            "List synced buffer names",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                Ok(Value::list(
                     synced_names
                         .iter()
-                        .map(|n| SteelVal::StringV(n.clone().into()))
-                        .collect::<Vec<_>>()
-                        .into(),
-                )
-            });
+                        .map(|n| Value::string(n.clone()))
+                        .collect::<Vec<_>>(),
+                ))
+            },
+        );
 
-        // --- Sync/CRDT state inspection ---
+        // --- Sync/CRDT state --- reads from SharedState for always-fresh data
 
-        // (buffer-sync-enabled?) — #t if sync_doc is active on the current buffer.
         let sync_enabled = buf.sync_doc.is_some();
-        self.engine
-            .register_value("*buffer-sync-enabled?*", SteelVal::BoolV(sync_enabled));
-        self.engine
-            .register_fn("buffer-sync-enabled?", move || sync_enabled);
-
-        // (buffer-pending-updates) — number of pending sync updates on active buffer.
-        let pending_count = buf.pending_sync_updates.len() as isize;
-        self.engine
-            .register_fn("buffer-pending-updates", move || pending_count);
-
-        // (buffer-sync-content) — read content from the yrs doc (not the rope).
-        let sync_content = buf.sync_doc.as_ref().map(|s| s.content());
-        self.engine
-            .register_fn("buffer-sync-content", move || -> SteelVal {
-                match &sync_content {
-                    Some(c) => SteelVal::StringV(c.clone().into()),
-                    None => SteelVal::BoolV(false),
-                }
-            });
-
-        // (buffer-drain-updates) — take and return all accumulated sync updates.
-        // Updates are accumulated by capture_pending_sync_updates() after each
-        // apply cycle, so this is a simple take-and-return (no flag dance needed).
+        self.vm
+            .define_global("*buffer-sync-enabled?*", Value::Bool(sync_enabled));
         let s = self.shared.clone();
-        self.engine
-            .register_fn("buffer-drain-updates", move || -> SteelVal {
+        self.vm.register_fn(
+            "buffer-sync-enabled?",
+            "Whether sync is enabled",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Bool(s.lock().unwrap().sync_enabled)),
+        );
+
+        let s = self.shared.clone();
+        self.vm.register_fn(
+            "buffer-pending-updates",
+            "Number of pending sync updates",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().pending_update_count as i64)),
+        );
+
+        let s = self.shared.clone();
+        self.vm.register_fn(
+            "buffer-sync-content",
+            "Sync doc content",
+            Arity::Fixed(0),
+            move |_args: &[Value]| match &s.lock().unwrap().sync_content {
+                Some(c) => Ok(Value::string(c.clone())),
+                None => Ok(Value::Bool(false)),
+            },
+        );
+
+        let s = self.shared.clone();
+        self.vm.register_fn(
+            "buffer-drain-updates",
+            "Take accumulated sync updates",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
                 let mut state = s.lock().unwrap();
                 let updates = std::mem::take(&mut state.accumulated_sync_updates);
-                SteelVal::ListV(
-                    updates
-                        .into_iter()
-                        .map(|s| SteelVal::StringV(s.into()))
-                        .collect::<Vec<_>>()
-                        .into(),
-                )
-            });
+                Ok(Value::list(
+                    updates.into_iter().map(Value::string).collect::<Vec<_>>(),
+                ))
+            },
+        );
 
-        // (buffer-encode-state) — return full yrs document state as base64.
-        let encoded_state = buf.sync_doc.as_ref().map(|s| {
-            use base64::Engine as _;
-            base64::engine::general_purpose::STANDARD.encode(s.encode_state())
-        });
-        self.engine
-            .register_fn("buffer-encode-state", move || -> SteelVal {
-                match &encoded_state {
-                    Some(s) => SteelVal::StringV(s.clone().into()),
-                    None => SteelVal::BoolV(false),
-                }
-            });
+        let s = self.shared.clone();
+        self.vm.register_fn(
+            "buffer-encode-state",
+            "Full yrs document state as base64",
+            Arity::Fixed(0),
+            move |_args: &[Value]| match &s.lock().unwrap().encoded_state {
+                Some(st) => Ok(Value::string(st.clone())),
+                None => Ok(Value::Bool(false)),
+            },
+        );
 
-        // (undo-available?) — #t if undo stack is non-empty.
         let has_undo = buf.has_undo();
-        self.engine.register_fn("undo-available?", move || has_undo);
+        self.vm.register_fn(
+            "undo-available?",
+            "Whether undo stack is non-empty",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Bool(has_undo)),
+        );
 
-        // (redo-available?) — #t if redo stack is non-empty.
         let has_redo = buf.has_redo();
-        self.engine.register_fn("redo-available?", move || has_redo);
-    }
+        self.vm.register_fn(
+            "redo-available?",
+            "Whether redo stack is non-empty",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Bool(has_redo)),
+        );
 
-    /// Apply accumulated config changes to the editor.
-    /// Call this after loading init.scm or after REPL eval.
+        // Update SharedState so SharedState-backed functions (buffer-string,
+        // region-active?, get-buffer-by-name, etc.) return fresh data.
+        {
+            let mut state = self.shared.lock().unwrap();
+            state.current_buffer_text = text;
+            state.current_mode = mode_str.to_string();
+            state.cursor_row = win.cursor_row;
+            state.cursor_col = win.cursor_col;
+            state.last_status_message = editor.status_msg.clone();
+            state.buffer_names = editor
+                .buffers
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (i, b.name.clone()))
+                .collect();
+            state.sync_enabled = sync_enabled;
+            state.pending_update_count = buf.pending_sync_updates.len();
+            state.sync_content = buf.sync_doc.as_ref().map(|s| s.content());
+            state.encoded_state = buf.sync_doc.as_ref().map(|s| {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD.encode(s.encode_state())
+            });
+            // Region state
+            if matches!(editor.mode, mae_core::Mode::Visual(_)) {
+                let rope = buf.rope();
+                let anchor_offset =
+                    buf.char_offset_at(editor.vi.visual_anchor_row, editor.vi.visual_anchor_col);
+                let cursor_off = buf.char_offset_at(win.cursor_row, win.cursor_col);
+                state.region_active = true;
+                state.region_start = anchor_offset.min(cursor_off);
+                state.region_end = (anchor_offset.max(cursor_off) + 1).min(rope.len_chars());
+            } else {
+                state.region_active = false;
+                state.region_start = 0;
+                state.region_end = 0;
+            }
+        }
+    }
     pub fn apply_to_editor(&mut self, editor: &mut Editor) {
         let mut state = self.shared.lock().unwrap();
 
@@ -2923,10 +3559,8 @@ impl SchemeRuntime {
             );
         }
 
-        // Note: We do NOT call inject_editor_state here because Steel's
-        // register_value creates new binding cells. Closures captured in
-        // previous evals would still reference old cells. The test runner
-        // uses sync_scheme_state (with set!) to mutate existing cells.
+        // Note: We do NOT call inject_editor_state here — the caller
+        // is responsible for calling it before eval if needed.
     }
 
     /// Call a named Scheme function (for executing Scheme-backed commands).
@@ -2981,8 +3615,8 @@ impl SchemeRuntime {
         let content = std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
-        self.engine
-            .run(content)
+        self.vm
+            .eval(&content)
             .map_err(|e| format!("Error loading feature '{}': {}", name, e))?;
 
         // Check if provide was called during loading.
@@ -3053,8 +3687,7 @@ impl SchemeRuntime {
 
     /// Set a Scheme global variable (for injecting hook context, etc.).
     pub fn inject_value(&mut self, name: &str, value: &str) {
-        self.engine
-            .register_value(name, SteelVal::StringV(value.into()));
+        self.vm.define_global(name, Value::string(value));
     }
 
     /// Evaluate code and append input + result to a REPL output string.
@@ -3077,43 +3710,17 @@ impl SchemeRuntime {
     }
 }
 
-fn steel_val_to_string(val: &SteelVal) -> String {
-    match val {
-        SteelVal::Void => String::new(),
-        SteelVal::BoolV(b) => if *b { "#t" } else { "#f" }.to_string(),
-        SteelVal::IntV(n) => n.to_string(),
-        SteelVal::NumV(n) => format!("{}", n),
-        SteelVal::StringV(s) => s.to_string(),
-        SteelVal::CharV(c) => format!("#\\{}", c),
-        other => format!("{}", other),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use mae_core::{parse_key_seq, CommandSource, Editor};
 
-    /// Isolate Steel's filesystem state so tests don't race with other
-    /// test binaries accessing `~/.steel/cached-modules/`.
-    fn isolate_steel_home() {
-        static INIT: std::sync::Once = std::sync::Once::new();
-        INIT.call_once(|| {
-            let dir =
-                std::env::temp_dir().join(format!("steel-scheme-test-{}", std::process::id()));
-            let _ = std::fs::create_dir_all(&dir);
-            std::env::set_var("STEEL_HOME", &dir);
-        });
-    }
-
     fn new_runtime() -> SchemeRuntime {
-        isolate_steel_home();
         SchemeRuntime::new().unwrap()
     }
 
     #[test]
     fn new_runtime_creates_successfully() {
-        isolate_steel_home();
         let rt = SchemeRuntime::new();
         assert!(rt.is_ok());
     }
@@ -4004,8 +4611,6 @@ mod tests {
     fn provide_marks_feature() {
         let mut rt = new_runtime();
         // provide-feature is the Rust-registered canonical name.
-        // Steel's built-in `provide` shadows any redefinition, so packages
-        // must use `provide-feature`.
         rt.eval(r#"(provide-feature "my-feature")"#).unwrap();
         {
             let state = rt.shared.lock().unwrap();
@@ -4103,7 +4708,6 @@ mod tests {
 
     #[test]
     fn module_loaded_query() {
-        isolate_steel_home();
         let mut rt = SchemeRuntime::new().unwrap();
         // No modules registered → module-loaded? returns false
         let result = rt.eval(r#"(module-loaded? "dashboard")"#).unwrap();
@@ -4118,7 +4722,6 @@ mod tests {
 
     #[test]
     fn module_version_query() {
-        isolate_steel_home();
         let mut rt = SchemeRuntime::new().unwrap();
         let result = rt.eval(r#"(module-version "dashboard")"#).unwrap();
         assert!(result.contains("f"), "expected false, got: {}", result);
@@ -4135,7 +4738,6 @@ mod tests {
 
     #[test]
     fn module_list_query() {
-        isolate_steel_home();
         let mut rt = SchemeRuntime::new().unwrap();
         let result = rt.eval("(module-list)").unwrap();
         // Empty list
@@ -4157,7 +4759,6 @@ mod tests {
 
     #[test]
     fn define_option_applies() {
-        isolate_steel_home();
         let mut rt = SchemeRuntime::new().unwrap();
         rt.eval(r#"(define-option! "my_option" "string" "hello" "A test option")"#)
             .unwrap();
@@ -4170,7 +4771,6 @@ mod tests {
 
     #[test]
     fn undefine_command_applies() {
-        isolate_steel_home();
         let mut rt = SchemeRuntime::new().unwrap();
         let mut editor = Editor::new();
         // Editor starts with built-in commands
@@ -4182,7 +4782,6 @@ mod tests {
 
     #[test]
     fn unload_feature_removes() {
-        isolate_steel_home();
         let mut rt = SchemeRuntime::new().unwrap();
         rt.eval(r#"(provide-feature "test-mod")"#).unwrap();
         // Check via unload return value — true means it was present
@@ -4203,7 +4802,6 @@ mod tests {
 
     #[test]
     fn deprecation_warns_once() {
-        isolate_steel_home();
         let mut rt = SchemeRuntime::new().unwrap();
         rt.eval(r#"(deprecate-function! "old-fn" "new-fn" "0.9.0")"#)
             .unwrap();

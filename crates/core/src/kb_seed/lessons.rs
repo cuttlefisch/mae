@@ -130,7 +130,7 @@ to see thread states, performance stats, and lock contention.\n\n\
 
 pub(super) const LESSON_SCHEME: &str = "\
 ## Lesson 6: Scheme REPL\n\n\
-MAE is extensible via R7RS Scheme (Steel). [[concept:hooks|Hooks]] let \
+MAE is extensible via R7RS Scheme (mae-scheme). [[concept:hooks|Hooks]] let \
 Scheme code react to editor events.\n\n\
 ### Evaluate expressions\n\
   `SPC e e` — evaluate current line\n\

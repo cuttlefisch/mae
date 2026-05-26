@@ -771,6 +771,10 @@
           "kind": "mod"
         },
         {
+          "name": "ffi",
+          "kind": "mod"
+        },
+        {
           "name": "library",
           "kind": "mod"
         },
@@ -1241,10 +1245,6 @@
     },
     {
       "name": "sleep-ms",
-      "source": "crates/scheme/src/runtime.rs"
-    },
-    {
-      "name": "file-exists?",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
