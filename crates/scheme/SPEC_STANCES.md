@@ -243,3 +243,34 @@ GNU Emacs Lisp Reference Manual. This is a roadmap item for Phase 13g
   `scheme:*` namespace for all R7RS functions, `mae:*` for extensions.
 - **Navigation**: `:describe-function`, `:apropos`, and `:help scheme:*`
   commands provide runtime access.
+
+---
+
+## 12. Exception System Architecture (§6.11)
+
+**R7RS says**: `raise` calls the current exception handler. If the handler
+returns from a non-continuable raise, an exception with condition type
+`&non-continuable` is raised. `raise-continuable` allows the handler to
+return a value.
+
+**mae-scheme stance**: Follows Chibi-Scheme's architecture:
+
+- **Unified handler stack**: `guard` and `with-exception-handler` share one
+  stack with tagged entries (Guard for guard, Closure for with-exception-handler)
+- **Continuable tagging**: `raise-continuable` wraps the exception as
+  `#(continuable <exn>)` and calls `raise`. The `with-exception-handler`
+  wrapper detects this tag and returns the handler's value
+- **Non-continuable trap**: For plain `raise`, if the closure handler returns,
+  `(error "exception handler returned")` is raised (per R7RS §6.11)
+- **Handler isolation**: Closure handlers run with the calling handler popped
+  from the stack, so re-raises from within a handler reach outer handlers
+
+**Rationale**:
+- Chibi-Scheme is the R7RS reference implementation; its exception architecture
+  is battle-tested
+- The tag-based approach avoids adding complex VM opcodes while maintaining
+  correct semantics
+- Guard (unwind-based) and with-exception-handler (closure-based) coexist
+  cleanly on one stack with LIFO ordering
+
+**Prior art**: Chibi-Scheme `lib/init-7.scm` (with-exception-handler, raise-continuable)
