@@ -418,9 +418,13 @@ impl Vm {
                     self.stack.push(val);
                 }
 
-                Op::StoreGlobal(name) => {
+                Op::StoreGlobal(ref name) => {
                     let val = self.stack.pop().unwrap_or(Value::Void);
-                    self.globals.define(name, val);
+                    if !self.globals.set(name, val.clone()) {
+                        // R7RS §4.1.6: set! on undefined variable is an error.
+                        // Fall back to define for REPL convenience.
+                        self.globals.define(name.clone(), val);
+                    }
                 }
 
                 Op::DefineGlobal(name) => {
@@ -748,6 +752,17 @@ impl Vm {
                     let result = self.eval(&code)?;
                     self.stack.push(result);
                 }
+                Op::Load => {
+                    // R7RS §6.12: load and evaluate a file.
+                    let filename_val = self.stack.pop().unwrap_or(Value::Void);
+                    let filename = filename_val
+                        .as_str()
+                        .map_err(|_| LispError::type_error("string", format!("{filename_val}")))?;
+                    let content = std::fs::read_to_string(filename)
+                        .map_err(|e| LispError::user(format!("load: {e}"), vec![]))?;
+                    let result = self.eval(&content)?;
+                    self.stack.push(result);
+                }
             }
         }
     }
@@ -985,6 +1000,7 @@ impl Vm {
         let saved_stack = std::mem::take(&mut self.stack);
         let saved_frames = std::mem::take(&mut self.frames);
         let saved_handlers = std::mem::take(&mut self.handlers);
+        let saved_winders = self.winders.clone();
 
         // Set up for the thunk call: push function, then call with 0 args
         self.stack.push(thunk.clone());
@@ -1001,6 +1017,7 @@ impl Vm {
         self.stack = saved_stack;
         self.frames = saved_frames;
         self.handlers = saved_handlers;
+        self.winders = saved_winders;
 
         thunk_result
     }

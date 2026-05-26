@@ -58,6 +58,49 @@ fn utf8_char_width(first: u8) -> usize {
 }
 
 /// Write a string to a port value.
+/// Write raw bytes to a port (for write-bytevector, write-u8).
+fn write_bytes_to_port(port_val: &Value, bytes: &[u8]) -> Result<(), LispError> {
+    match port_val {
+        Value::Port(port_cell) => {
+            let mut port = port_cell.borrow_mut();
+            match &mut *port {
+                Port::Closed(_) => Err(LispError::user("write: port is closed", vec![])),
+                Port::BytevectorOutput { buf } => {
+                    buf.extend_from_slice(bytes);
+                    Ok(())
+                }
+                Port::StringOutput { buf } => {
+                    // Best-effort: interpret bytes as Latin-1 for string ports
+                    for &b in bytes {
+                        buf.push(b as char);
+                    }
+                    Ok(())
+                }
+                Port::Stdout => {
+                    use std::io::Write;
+                    std::io::stdout()
+                        .write_all(bytes)
+                        .map_err(|e| LispError::internal(format!("write error: {e}")))
+                }
+                Port::Stderr => {
+                    use std::io::Write;
+                    std::io::stderr()
+                        .write_all(bytes)
+                        .map_err(|e| LispError::internal(format!("write error: {e}")))
+                }
+                Port::FileOutput { writer, .. } => {
+                    use std::io::Write;
+                    writer
+                        .write_all(bytes)
+                        .map_err(|e| LispError::internal(format!("write error: {e}")))
+                }
+                _ => Err(LispError::type_error("output-port", "input-port")),
+            }
+        }
+        _ => Err(LispError::type_error("port", format!("{port_val}"))),
+    }
+}
+
 fn write_to_port(port_val: &Value, text: &str) -> Result<(), LispError> {
     match port_val {
         Value::Port(port_cell) => {
@@ -66,6 +109,10 @@ fn write_to_port(port_val: &Value, text: &str) -> Result<(), LispError> {
                 Port::Closed(_) => Err(LispError::user("write: port is closed", vec![])),
                 Port::StringOutput { buf } => {
                     buf.push_str(text);
+                    Ok(())
+                }
+                Port::BytevectorOutput { buf } => {
+                    buf.extend_from_slice(text.as_bytes());
                     Ok(())
                 }
                 Port::Stdout => {
@@ -134,19 +181,18 @@ pub fn register(vm: &mut Vm) {
     );
 
     // R7RS §6.13.2 read — read one S-expression from port
+    let ci = current_in.clone();
     vm.register_fn(
         "read",
         "Read one S-expression from port",
         Arity::Variadic(0),
-        |args| {
-            if args.is_empty() {
-                // No port — reading from stdin not supported in this context
-                return Err(LispError::user(
-                    "read: no current-input-port (pass a port argument)",
-                    vec![],
-                ));
-            }
-            match &args[0] {
+        move |args| {
+            let port_val = if args.is_empty() {
+                ci.borrow().clone()
+            } else {
+                args[0].clone()
+            };
+            match &port_val {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
@@ -167,25 +213,40 @@ pub fn register(vm: &mut Vm) {
                             }
                         }
                         Port::FileInput {
-                            reader: file_reader,
                             name,
-                            ..
+                            binary: false,
+                            text_buf,
+                            text_pos,
+                            reader,
                         } => {
-                            use std::io::Read;
-                            let mut contents = String::new();
-                            file_reader.read_to_string(&mut contents).map_err(|e| {
-                                LispError::internal(format!("read: error reading {}: {e}", name))
-                            })?;
-                            if contents.is_empty() {
+                            // Lazily buffer all text content
+                            if text_buf.is_none() {
+                                use std::io::Read;
+                                let mut contents = String::new();
+                                reader.read_to_string(&mut contents).map_err(|e| {
+                                    LispError::internal(format!("read: error reading {name}: {e}"))
+                                })?;
+                                *text_buf = Some(contents);
+                            }
+                            let buf = text_buf.as_ref().unwrap();
+                            if *text_pos >= buf.len() {
                                 return Ok(Value::Eof);
                             }
-                            let mut reader = Reader::new(&contents, name.as_str());
-                            match reader.read() {
-                                Ok(Some(val)) => Ok(val),
+                            let remaining = &buf[*text_pos..];
+                            let mut r = Reader::new(remaining, name.as_str());
+                            match r.read() {
+                                Ok(Some(val)) => {
+                                    *text_pos += r.position();
+                                    Ok(val)
+                                }
                                 Ok(None) => Ok(Value::Eof),
                                 Err(e) => Err(e),
                             }
                         }
+                        Port::FileInput { binary: true, .. } => Err(LispError::user(
+                            "read: cannot read from binary port",
+                            vec![],
+                        )),
                         _ => Err(LispError::type_error("input-port", "output-port")),
                     }
                 }
@@ -268,16 +329,19 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    // read-char from string port
+    // read-char from port (or current-input-port)
+    let ci = current_in.clone();
     vm.register_fn(
         "read-char",
         "Read a character from port",
         Arity::Variadic(0),
-        |args| {
-            if args.is_empty() {
-                return Ok(Value::Eof);
-            }
-            match &args[0] {
+        move |args| {
+            let port_val = if args.is_empty() {
+                ci.borrow().clone()
+            } else {
+                args[0].clone()
+            };
+            match &port_val {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
@@ -293,13 +357,38 @@ pub fn register(vm: &mut Vm) {
                                 Ok(Value::Char(ch))
                             }
                         }
-                        Port::FileInput { reader, .. } => {
+                        Port::FileInput {
+                            binary: false,
+                            text_buf,
+                            text_pos,
+                            reader,
+                            ..
+                        } => {
+                            if text_buf.is_none() {
+                                use std::io::Read;
+                                let mut contents = String::new();
+                                let _ = reader.read_to_string(&mut contents);
+                                *text_buf = Some(contents);
+                            }
+                            let buf = text_buf.as_ref().unwrap();
+                            if *text_pos >= buf.len() {
+                                Ok(Value::Eof)
+                            } else {
+                                let ch = buf[*text_pos..].chars().next().unwrap();
+                                *text_pos += ch.len_utf8();
+                                Ok(Value::Char(ch))
+                            }
+                        }
+                        Port::FileInput {
+                            binary: true,
+                            reader,
+                            ..
+                        } => {
                             use std::io::Read;
                             let mut buf = [0u8; 4];
                             match reader.read(&mut buf[..1]) {
                                 Ok(0) => Ok(Value::Eof),
                                 Ok(_) => {
-                                    // Handle UTF-8 multi-byte
                                     let needed = utf8_char_width(buf[0]);
                                     if needed > 1 {
                                         let _ = reader.read_exact(&mut buf[1..needed]);
@@ -319,19 +408,22 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    // peek-char
+    // peek-char from port (or current-input-port)
+    let ci = current_in.clone();
     vm.register_fn(
         "peek-char",
         "Peek at next character from port",
         Arity::Variadic(0),
-        |args| {
-            if args.is_empty() {
-                return Ok(Value::Eof);
-            }
-            match &args[0] {
+        move |args| {
+            let port_val = if args.is_empty() {
+                ci.borrow().clone()
+            } else {
+                args[0].clone()
+            };
+            match &port_val {
                 Value::Port(p) => {
-                    let port = p.borrow();
-                    match &*port {
+                    let mut port = p.borrow_mut();
+                    match &mut *port {
                         Port::Closed(_) => {
                             Err(LispError::user("peek-char: port is closed", vec![]))
                         }
@@ -340,6 +432,27 @@ pub fn register(vm: &mut Vm) {
                                 Ok(Value::Eof)
                             } else {
                                 let ch = data[*pos..].chars().next().unwrap();
+                                Ok(Value::Char(ch))
+                            }
+                        }
+                        Port::FileInput {
+                            binary: false,
+                            text_buf,
+                            text_pos,
+                            reader,
+                            ..
+                        } => {
+                            if text_buf.is_none() {
+                                use std::io::Read;
+                                let mut contents = String::new();
+                                let _ = reader.read_to_string(&mut contents);
+                                *text_buf = Some(contents);
+                            }
+                            let buf = text_buf.as_ref().unwrap();
+                            if *text_pos >= buf.len() {
+                                Ok(Value::Eof)
+                            } else {
+                                let ch = buf[*text_pos..].chars().next().unwrap();
                                 Ok(Value::Char(ch))
                             }
                         }
@@ -445,7 +558,10 @@ pub fn register(vm: &mut Vm) {
         "textual-port?",
         "Is textual port?",
         Arity::Fixed(1),
-        |args| Ok(Value::Bool(matches!(args[0], Value::Port(_)))),
+        |args| match &args[0] {
+            Value::Port(p) => Ok(Value::Bool(!p.borrow().is_binary())),
+            _ => Ok(Value::Bool(false)),
+        },
     );
 
     vm.register_fn(
@@ -518,23 +634,58 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
+    let co = current_out.clone();
     vm.register_fn(
         "flush-output-port",
         "Flush output port",
         Arity::Variadic(0),
-        |_args| Ok(Value::Void), // No-op for string ports
+        move |args| {
+            let port_val = if args.is_empty() {
+                co.borrow().clone()
+            } else {
+                args[0].clone()
+            };
+            if let Value::Port(p) = &port_val {
+                let mut port = p.borrow_mut();
+                match &mut *port {
+                    Port::FileOutput { writer, .. } => {
+                        use std::io::Write;
+                        writer
+                            .flush()
+                            .map_err(|e| LispError::user(format!("flush: {e}"), vec![]))?;
+                    }
+                    Port::Stdout => {
+                        use std::io::Write;
+                        std::io::stdout()
+                            .flush()
+                            .map_err(|e| LispError::user(format!("flush: {e}"), vec![]))?;
+                    }
+                    Port::Stderr => {
+                        use std::io::Write;
+                        std::io::stderr()
+                            .flush()
+                            .map_err(|e| LispError::user(format!("flush: {e}"), vec![]))?;
+                    }
+                    _ => {} // String ports don't need flushing
+                }
+            }
+            Ok(Value::Void)
+        },
     );
 
     // read-line from input port
+    let ci = current_in.clone();
     vm.register_fn(
         "read-line",
         "Read a line from input port",
         Arity::Variadic(0),
-        |args| {
-            if args.is_empty() {
-                return Err(LispError::user("read-line: no current-input-port", vec![]));
-            }
-            match &args[0] {
+        move |args| {
+            let port_val = if args.is_empty() {
+                ci.borrow().clone()
+            } else {
+                args[0].clone()
+            };
+            match &port_val {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
@@ -556,7 +707,41 @@ pub fn register(vm: &mut Vm) {
                                 Ok(Value::String(Rc::from(line.as_str())))
                             }
                         }
-                        Port::FileInput { reader, .. } => {
+                        Port::FileInput {
+                            binary: false,
+                            text_buf,
+                            text_pos,
+                            reader,
+                            ..
+                        } => {
+                            if text_buf.is_none() {
+                                use std::io::Read;
+                                let mut contents = String::new();
+                                let _ = reader.read_to_string(&mut contents);
+                                *text_buf = Some(contents);
+                            }
+                            let buf = text_buf.as_ref().unwrap();
+                            if *text_pos >= buf.len() {
+                                return Ok(Value::Eof);
+                            }
+                            let remaining = &buf[*text_pos..];
+                            if let Some(nl) = remaining.find('\n') {
+                                let line = &remaining[..nl];
+                                *text_pos += nl + 1;
+                                // Strip trailing \r
+                                let line = line.strip_suffix('\r').unwrap_or(line);
+                                Ok(Value::String(Rc::from(line)))
+                            } else {
+                                let line = remaining;
+                                *text_pos = buf.len();
+                                Ok(Value::String(Rc::from(line)))
+                            }
+                        }
+                        Port::FileInput {
+                            binary: true,
+                            reader,
+                            ..
+                        } => {
                             use std::io::BufRead;
                             let mut line = String::new();
                             let reader: &mut dyn std::io::Read = &mut **reader;
@@ -564,7 +749,6 @@ pub fn register(vm: &mut Vm) {
                             match buf_reader.read_line(&mut line) {
                                 Ok(0) => Ok(Value::Eof),
                                 Ok(_) => {
-                                    // Strip trailing newline
                                     if line.ends_with('\n') {
                                         line.pop();
                                         if line.ends_with('\r') {
@@ -594,8 +778,6 @@ pub fn register(vm: &mut Vm) {
                 Value::symbol("r7rs"),
                 Value::symbol("mae"),
                 Value::symbol("mae-scheme"),
-                Value::symbol("ratios"),
-                Value::symbol("exact-complex"),
             ]))
         },
     );
@@ -645,7 +827,7 @@ pub fn register(vm: &mut Vm) {
         move |_args| Ok(co.borrow().clone()),
     );
 
-    let ci = current_in;
+    let ci = current_in.clone();
     vm.register_fn(
         "%set-current-input-port!",
         "Set current input port (internal)",
@@ -674,11 +856,9 @@ pub fn register(vm: &mut Vm) {
         Arity::Fixed(1),
         |args| match &args[0] {
             Value::Bytevector(bv) => {
-                // Convert bytes to string for our StringInput port
-                let bytes = bv.borrow().clone();
-                let data = bytes.iter().map(|b| *b as char).collect::<String>();
+                let data = bv.borrow().clone();
                 Ok(Value::Port(Rc::new(std::cell::RefCell::new(
-                    Port::StringInput { data, pos: 0 },
+                    Port::BytevectorInput { data, pos: 0 },
                 ))))
             }
             _ => Err(LispError::type_error("bytevector", format!("{}", args[0]))),
@@ -691,7 +871,7 @@ pub fn register(vm: &mut Vm) {
         Arity::Fixed(0),
         |_args| {
             Ok(Value::Port(Rc::new(std::cell::RefCell::new(
-                Port::StringOutput { buf: String::new() },
+                Port::BytevectorOutput { buf: Vec::new() },
             ))))
         },
     );
@@ -704,6 +884,7 @@ pub fn register(vm: &mut Vm) {
             Value::Port(p) => {
                 let port = p.borrow();
                 match &*port {
+                    Port::BytevectorOutput { buf } => Ok(Value::bytevector(buf.clone())),
                     Port::StringOutput { buf } => {
                         let bytes: Vec<u8> = buf.bytes().collect();
                         Ok(Value::bytevector(bytes))
@@ -719,15 +900,18 @@ pub fn register(vm: &mut Vm) {
     );
 
     // R7RS §6.13.3 read-u8, peek-u8, write-u8
+    let ci = current_in.clone();
     vm.register_fn(
         "read-u8",
         "Read a byte from port",
         Arity::Variadic(0),
-        |args| {
-            if args.is_empty() {
-                return Ok(Value::Eof);
-            }
-            match &args[0] {
+        move |args| {
+            let port_val = if args.is_empty() {
+                ci.borrow().clone()
+            } else {
+                args[0].clone()
+            };
+            match &port_val {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
@@ -736,6 +920,15 @@ pub fn register(vm: &mut Vm) {
                                 Ok(Value::Eof)
                             } else {
                                 let byte = data.as_bytes()[*pos];
+                                *pos += 1;
+                                Ok(Value::Int(byte as i64))
+                            }
+                        }
+                        Port::BytevectorInput { data, pos } => {
+                            if *pos >= data.len() {
+                                Ok(Value::Eof)
+                            } else {
+                                let byte = data[*pos];
                                 *pos += 1;
                                 Ok(Value::Int(byte as i64))
                             }
@@ -758,15 +951,18 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
+    let ci = current_in.clone();
     vm.register_fn(
         "peek-u8",
         "Peek at next byte from port",
         Arity::Variadic(0),
-        |args| {
-            if args.is_empty() {
-                return Ok(Value::Eof);
-            }
-            match &args[0] {
+        move |args| {
+            let port_val = if args.is_empty() {
+                ci.borrow().clone()
+            } else {
+                args[0].clone()
+            };
+            match &port_val {
                 Value::Port(p) => {
                     let port = p.borrow();
                     match &*port {
@@ -775,6 +971,13 @@ pub fn register(vm: &mut Vm) {
                                 Ok(Value::Eof)
                             } else {
                                 Ok(Value::Int(data.as_bytes()[*pos] as i64))
+                            }
+                        }
+                        Port::BytevectorInput { data, pos } => {
+                            if *pos >= data.len() {
+                                Ok(Value::Eof)
+                            } else {
+                                Ok(Value::Int(data[*pos] as i64))
                             }
                         }
                         _ => Err(LispError::type_error("input-port", "other port type")),
@@ -789,28 +992,34 @@ pub fn register(vm: &mut Vm) {
         "write-u8",
         "Write a byte to port",
         Arity::Variadic(1),
-        |args| {
+        move |args| {
             let byte = args[0].as_int()? as u8;
             if args.len() > 1 {
-                write_to_port(&args[1], &String::from(byte as char))?;
+                write_bytes_to_port(&args[1], &[byte])?;
             } else {
-                print!("{}", byte as char);
+                use std::io::Write;
+                std::io::stdout()
+                    .write_all(&[byte])
+                    .map_err(|e| LispError::internal(format!("write error: {e}")))?;
             }
             Ok(Value::Void)
         },
     );
 
-    // R7RS §6.13.3 read-bytevector, write-bytevector
+    // R7RS §6.13.3 read-bytevector, read-bytevector!, write-bytevector
+    let ci = current_in.clone();
     vm.register_fn(
         "read-bytevector",
         "Read k bytes from port",
         Arity::Variadic(1),
-        |args| {
+        move |args| {
             let k = args[0].as_int()? as usize;
-            if args.len() < 2 {
-                return Ok(Value::Eof);
-            }
-            match &args[1] {
+            let port_val = if args.len() > 1 {
+                args[1].clone()
+            } else {
+                ci.borrow().clone()
+            };
+            match &port_val {
                 Value::Port(p) => {
                     let mut port = p.borrow_mut();
                     match &mut *port {
@@ -823,10 +1032,109 @@ pub fn register(vm: &mut Vm) {
                             *pos = end;
                             Ok(Value::bytevector(bytes))
                         }
+                        Port::BytevectorInput { data, pos } => {
+                            if *pos >= data.len() {
+                                return Ok(Value::Eof);
+                            }
+                            let end = (*pos + k).min(data.len());
+                            let bytes = data[*pos..end].to_vec();
+                            *pos = end;
+                            Ok(Value::bytevector(bytes))
+                        }
+                        Port::FileInput { reader, .. } => {
+                            use std::io::Read;
+                            let mut buf = vec![0u8; k];
+                            match reader.read(&mut buf) {
+                                Ok(0) => Ok(Value::Eof),
+                                Ok(n) => {
+                                    buf.truncate(n);
+                                    Ok(Value::bytevector(buf))
+                                }
+                                Err(e) => {
+                                    Err(LispError::user(format!("read-bytevector: {e}"), vec![]))
+                                }
+                            }
+                        }
+                        Port::Closed(_) => {
+                            Err(LispError::user("read-bytevector: port is closed", vec![]))
+                        }
                         _ => Err(LispError::type_error("input-port", "other port type")),
                     }
                 }
-                _ => Err(LispError::type_error("port", format!("{}", args[1]))),
+                _ => Err(LispError::type_error("port", format!("{}", port_val))),
+            }
+        },
+    );
+
+    // R7RS §6.13.3 read-bytevector! — read into existing bytevector
+    let ci = current_in.clone();
+    vm.register_fn(
+        "read-bytevector!",
+        "Read bytes into bytevector, return count or eof",
+        Arity::Variadic(2),
+        move |args| {
+            let bv = match &args[0] {
+                Value::Bytevector(bv) => bv.clone(),
+                _ => return Err(LispError::type_error("bytevector", format!("{}", args[0]))),
+            };
+            let port_val = if args.len() > 1 {
+                args[1].clone()
+            } else {
+                ci.borrow().clone()
+            };
+            let start = if args.len() > 2 {
+                args[2].as_int()? as usize
+            } else {
+                0
+            };
+            let end = if args.len() > 3 {
+                args[3].as_int()? as usize
+            } else {
+                bv.borrow().len()
+            };
+            match &port_val {
+                Value::Port(p) => {
+                    let mut port = p.borrow_mut();
+                    match &mut *port {
+                        Port::StringInput { data, pos } => {
+                            if *pos >= data.len() {
+                                return Ok(Value::Eof);
+                            }
+                            let src = data.as_bytes();
+                            let mut bv_mut = bv.borrow_mut();
+                            let mut count = 0;
+                            for i in start..end {
+                                if *pos >= src.len() {
+                                    break;
+                                }
+                                bv_mut[i] = src[*pos];
+                                *pos += 1;
+                                count += 1;
+                            }
+                            if count == 0 {
+                                Ok(Value::Eof)
+                            } else {
+                                Ok(Value::Int(count))
+                            }
+                        }
+                        Port::FileInput { reader, .. } => {
+                            use std::io::Read;
+                            let mut bv_mut = bv.borrow_mut();
+                            match reader.read(&mut bv_mut[start..end]) {
+                                Ok(0) => Ok(Value::Eof),
+                                Ok(n) => Ok(Value::Int(n as i64)),
+                                Err(e) => {
+                                    Err(LispError::user(format!("read-bytevector!: {e}"), vec![]))
+                                }
+                            }
+                        }
+                        Port::Closed(_) => {
+                            Err(LispError::user("read-bytevector!: port is closed", vec![]))
+                        }
+                        _ => Err(LispError::type_error("input-port", "other port type")),
+                    }
+                }
+                _ => Err(LispError::type_error("port", format!("{}", port_val))),
             }
         },
     );
@@ -849,11 +1157,13 @@ pub fn register(vm: &mut Vm) {
                     bytes.len()
                 };
                 let slice = &bytes[start..end];
-                let text: String = slice.iter().map(|b| *b as char).collect();
                 if args.len() > 1 {
-                    write_to_port(&args[1], &text)?;
+                    write_bytes_to_port(&args[1], slice)?;
                 } else {
-                    print!("{text}");
+                    use std::io::Write;
+                    std::io::stdout()
+                        .write_all(slice)
+                        .map_err(|e| LispError::internal(format!("write error: {e}")))?;
                 }
                 Ok(Value::Void)
             }
@@ -861,19 +1171,68 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    // R7RS char-ready? and u8-ready?
+    // R7RS §6.13.2 char-ready? — returns #t if read-char would not block.
+    // For string ports: check if data remains. For file/stdin: #t (conservative).
+    let ci = current_in.clone();
     vm.register_fn(
         "char-ready?",
-        "Is character ready on port?",
+        "Returns #t if a character is ready on the input port",
         Arity::Variadic(0),
-        |_args| Ok(Value::Bool(true)), // Always ready for string ports
+        move |args| {
+            let port_val = if args.is_empty() {
+                ci.borrow().clone()
+            } else {
+                args[0].clone()
+            };
+            match &port_val {
+                Value::Port(p) => {
+                    let mut port = p.borrow_mut();
+                    match &mut *port {
+                        Port::StringInput { data, pos } => Ok(Value::Bool(*pos < data.len())),
+                        Port::Closed(_) => {
+                            Err(LispError::user("char-ready?: port is closed", vec![]))
+                        }
+                        Port::FileInput {
+                            binary: false,
+                            text_buf: Some(buf),
+                            text_pos,
+                            ..
+                        } => Ok(Value::Bool(*text_pos < buf.len())),
+                        // Unbuffered file ports and stdin: conservatively #t
+                        _ => Ok(Value::Bool(true)),
+                    }
+                }
+                _ => Err(LispError::type_error("port", format!("{}", port_val))),
+            }
+        },
     );
 
+    // R7RS §6.13.3 u8-ready? — same semantics for binary ports.
+    let ci = current_in.clone();
     vm.register_fn(
         "u8-ready?",
-        "Is byte ready on port?",
+        "Returns #t if a byte is ready on the input port",
         Arity::Variadic(0),
-        |_args| Ok(Value::Bool(true)),
+        move |args| {
+            let port_val = if args.is_empty() {
+                ci.borrow().clone()
+            } else {
+                args[0].clone()
+            };
+            match &port_val {
+                Value::Port(p) => {
+                    let port = p.borrow();
+                    match &*port {
+                        Port::StringInput { data, pos } => Ok(Value::Bool(*pos < data.len())),
+                        Port::Closed(_) => {
+                            Err(LispError::user("u8-ready?: port is closed", vec![]))
+                        }
+                        _ => Ok(Value::Bool(true)),
+                    }
+                }
+                _ => Err(LispError::type_error("port", format!("{}", port_val))),
+            }
+        },
     );
 
     // R7RS §6.13.2 write-char with port support
@@ -930,6 +1289,8 @@ pub fn register(vm: &mut Vm) {
                     reader: Box::new(std::io::BufReader::new(file)),
                     name: path.to_string(),
                     binary: false,
+                    text_buf: None,
+                    text_pos: 0,
                 },
             ))))
         },
@@ -1065,19 +1426,17 @@ pub fn register(vm: &mut Vm) {
     );
 
     // R7RS §6.13.2 read-string — read k characters from port
+    let ci = current_in.clone();
     vm.register_fn(
         "read-string",
         "Read k characters from port",
         Arity::Variadic(1),
-        |args| {
+        move |args| {
             let k = args[0].as_int()? as usize;
             let port_val = if args.len() > 1 {
                 args[1].clone()
             } else {
-                return Err(LispError::user(
-                    "read-string: port argument required",
-                    vec![],
-                ));
+                ci.borrow().clone()
             };
             if let Value::Port(port_rc) = &port_val {
                 let mut port = port_rc.borrow_mut();
@@ -1092,7 +1451,32 @@ pub fn register(vm: &mut Vm) {
                                 break;
                             }
                         }
-                        Port::FileInput { reader, .. } => {
+                        Port::FileInput {
+                            binary: false,
+                            text_buf,
+                            text_pos,
+                            reader,
+                            ..
+                        } => {
+                            if text_buf.is_none() {
+                                use std::io::Read;
+                                let mut contents = String::new();
+                                let _ = reader.read_to_string(&mut contents);
+                                *text_buf = Some(contents);
+                            }
+                            let buf = text_buf.as_ref().unwrap();
+                            if let Some(ch) = buf[*text_pos..].chars().next() {
+                                result.push(ch);
+                                *text_pos += ch.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+                        Port::FileInput {
+                            binary: true,
+                            reader,
+                            ..
+                        } => {
                             let mut buf = [0u8; 4];
                             use std::io::Read;
                             match reader.read(&mut buf[..1]) {
@@ -1188,6 +1572,8 @@ pub fn register(vm: &mut Vm) {
                     reader: Box::new(file),
                     name: path.to_string(),
                     binary: true,
+                    text_buf: None,
+                    text_pos: 0,
                 },
             ))))
         },
@@ -1227,20 +1613,8 @@ pub fn register(vm: &mut Vm) {
     // NOTE: with-input-from-file / with-output-to-file require dynamic parameters
     // to redirect current-input/output-port. Deferred to Phase 13e.
 
-    // (scheme load) — `load` reads a file and returns its contents as a string.
-    // Full R7RS load (eval in interaction environment) requires VM access;
-    // use `include` for compile-time file inclusion instead.
-    vm.register_fn(
-        "load",
-        "Read file contents (use include for compile-time inclusion)",
-        Arity::Fixed(1),
-        |args| {
-            let path = args[0].as_str()?;
-            let content = std::fs::read_to_string(path)
-                .map_err(|e| LispError::user(format!("load: {e}"), vec![]))?;
-            Ok(Value::String(Rc::from(content.as_str())))
-        },
-    );
+    // (scheme load) — `load` is a compiler special form (Op::Load) that reads
+    // and evaluates a file in the interaction environment. See compiler.rs.
 }
 
 #[cfg(test)]

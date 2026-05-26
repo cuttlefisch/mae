@@ -75,6 +75,66 @@ fn get_error_object_fields(v: &Value) -> Option<Vec<Value>> {
     None
 }
 
+/// Apply a sequence of car/cdr operations encoded as bytes (b'a' or b'd').
+/// The path is applied right-to-left: "addr" means cdr(cdr(car(x))).
+fn apply_cxr_path(path: &[u8], val: &Value) -> Result<Value, LispError> {
+    let mut result = val.clone();
+    // Path is read right-to-left (innermost operation first)
+    for &ch in path.iter().rev() {
+        result = match ch {
+            b'a' => result.car()?,
+            b'd' => result.cdr()?,
+            _ => unreachable!(),
+        };
+    }
+    Ok(result)
+}
+
+/// Convert an integer to a string in the given radix (2..=36).
+fn int_to_radix_string(n: i64, radix: u32) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let negative = n < 0;
+    let mut abs = n.unsigned_abs();
+    let mut chars = Vec::new();
+    while abs > 0 {
+        chars.push(DIGITS[(abs % radix as u64) as usize] as char);
+        abs /= radix as u64;
+    }
+    if negative {
+        chars.push('-');
+    }
+    chars.reverse();
+    chars.into_iter().collect()
+}
+
+/// Register all cXr accessors (2-deep through 4-deep).
+/// R7RS §6.4 defines caar..cddr; (scheme cxr) adds 3-deep and 4-deep.
+fn register_cxr_accessors(vm: &mut Vm) {
+    // Generate all a/d combinations for depths 2, 3, 4
+    for depth in 2..=4 {
+        let count = 1usize << depth; // 4, 8, 16 combinations per depth
+        for i in 0..count {
+            let mut name = String::with_capacity(depth + 2);
+            name.push('c');
+            let mut path = Vec::with_capacity(depth);
+            for bit in (0..depth).rev() {
+                let ch = if (i >> bit) & 1 == 0 { b'a' } else { b'd' };
+                name.push(ch as char);
+                path.push(ch);
+            }
+            name.push('r');
+
+            let doc = format!("Composition of {depth} car/cdr operations");
+            vm.register_fn(&name, &doc, Arity::Fixed(1), move |args| {
+                apply_cxr_path(&path, &args[0])
+            });
+        }
+    }
+}
+
 pub fn register(vm: &mut Vm) {
     register_equivalence(vm);
     register_arithmetic(vm);
@@ -207,7 +267,11 @@ fn register_arithmetic(vm: &mut Vm) {
             if d == 0.0 {
                 return Err(LispError::division_by_zero());
             }
-            return Ok(Value::Float(1.0 / d));
+            let r = 1.0 / d;
+            if r.fract() == 0.0 && r.abs() < i64::MAX as f64 {
+                return Ok(Value::Int(r as i64));
+            }
+            return Ok(Value::Float(r));
         }
         let mut result = require_f64(&args[0])?;
         for a in &args[1..] {
@@ -266,7 +330,13 @@ fn register_arithmetic(vm: &mut Vm) {
         if b == 0 {
             return Err(LispError::division_by_zero());
         }
-        Ok(Value::Int(((a % b) + b) % b))
+        // Use wrapping arithmetic to avoid overflow with i64::MIN
+        let r = a.wrapping_rem(b);
+        if r == 0 || (r > 0) == (b > 0) {
+            Ok(Value::Int(r))
+        } else {
+            Ok(Value::Int(r.wrapping_add(b)))
+        }
     });
 
     vm.register_fn(
@@ -274,7 +344,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "Absolute value",
         Arity::Fixed(1),
         |args| match &args[0] {
-            Value::Int(n) => Ok(Value::Int(n.abs())),
+            Value::Int(n) => Ok(Value::Int(n.checked_abs().unwrap_or(i64::MAX))),
             Value::Float(f) => Ok(Value::Float(f.abs())),
             _ => Err(LispError::type_error("number", format!("{}", args[0]))),
         },
@@ -321,23 +391,24 @@ fn register_arithmetic(vm: &mut Vm) {
     });
 
     vm.register_fn(
+        // R7RS §6.2.6: floor/ceiling/round/truncate return inexact when given inexact.
         "floor",
-        "Floor to integer",
+        "Largest integer not greater than x",
         Arity::Fixed(1),
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(*n)),
-            Value::Float(f) => Ok(Value::Int(f.floor() as i64)),
+            Value::Float(f) => Ok(Value::Float(f.floor())),
             _ => Err(LispError::type_error("number", format!("{}", args[0]))),
         },
     );
 
     vm.register_fn(
         "ceiling",
-        "Ceiling to integer",
+        "Smallest integer not less than x",
         Arity::Fixed(1),
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(*n)),
-            Value::Float(f) => Ok(Value::Int(f.ceil() as i64)),
+            Value::Float(f) => Ok(Value::Float(f.ceil())),
             _ => Err(LispError::type_error("number", format!("{}", args[0]))),
         },
     );
@@ -350,23 +421,21 @@ fn register_arithmetic(vm: &mut Vm) {
             Value::Int(n) => Ok(Value::Int(*n)),
             Value::Float(f) => {
                 // R7RS requires banker's rounding (round half to even)
-                let rounded = {
-                    let v = *f;
-                    let floor = v.floor();
-                    let frac = v - floor;
-                    if (frac - 0.5).abs() < f64::EPSILON {
-                        // Exactly halfway — round to even
-                        let fl = floor as i64;
-                        if fl % 2 == 0 {
-                            fl
-                        } else {
-                            fl + 1
-                        }
+                let v = *f;
+                let floor_val = v.floor();
+                let frac = v - floor_val;
+                let rounded = if (frac - 0.5).abs() < f64::EPSILON {
+                    // Exactly halfway — round to even
+                    let fl = floor_val as i64;
+                    if fl % 2 == 0 {
+                        floor_val
                     } else {
-                        v.round() as i64
+                        floor_val + 1.0
                     }
+                } else {
+                    v.round()
                 };
-                Ok(Value::Int(rounded))
+                Ok(Value::Float(rounded))
             }
             _ => Err(LispError::type_error("number", format!("{}", args[0]))),
         },
@@ -378,7 +447,7 @@ fn register_arithmetic(vm: &mut Vm) {
         Arity::Fixed(1),
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(*n)),
-            Value::Float(f) => Ok(Value::Int(f.trunc() as i64)),
+            Value::Float(f) => Ok(Value::Float(f.trunc())),
             _ => Err(LispError::type_error("number", format!("{}", args[0]))),
         },
     );
@@ -415,25 +484,15 @@ fn register_arithmetic(vm: &mut Vm) {
             } else {
                 10
             };
+            if !(2..=36).contains(&radix) {
+                return Err(LispError::user(
+                    "number->string: radix must be 2..36",
+                    vec![],
+                ));
+            }
             match &args[0] {
                 Value::Int(n) => {
-                    let (sign, abs_n) = if *n < 0 {
-                        ("-", n.unsigned_abs())
-                    } else {
-                        ("", *n as u64)
-                    };
-                    let s = match radix {
-                        2 => format!("{sign}{abs_n:b}"),
-                        8 => format!("{sign}{abs_n:o}"),
-                        10 => format!("{n}"),
-                        16 => format!("{sign}{abs_n:x}"),
-                        _ => {
-                            return Err(LispError::user(
-                                "number->string: unsupported radix",
-                                vec![],
-                            ))
-                        }
-                    };
+                    let s = int_to_radix_string(*n, radix);
                     Ok(Value::String(Rc::from(s.as_str())))
                 }
                 Value::Float(f) => Ok(Value::String(Rc::from(format!("{f}").as_str()))),
@@ -726,19 +785,10 @@ fn register_pairs_lists(vm: &mut Vm) {
         Ok(Value::Bool(args[0].is_list()))
     });
 
-    // caar..cddr
-    vm.register_fn("caar", "car of car", Arity::Fixed(1), |args| {
-        args[0].car()?.car()
-    });
-    vm.register_fn("cadr", "car of cdr", Arity::Fixed(1), |args| {
-        args[0].cdr()?.car()
-    });
-    vm.register_fn("cdar", "cdr of car", Arity::Fixed(1), |args| {
-        args[0].car()?.cdr()
-    });
-    vm.register_fn("cddr", "cdr of cdr", Arity::Fixed(1), |args| {
-        args[0].cdr()?.cdr()
-    });
+    // R7RS §6.4 + (scheme cxr): generic cXr accessor registration.
+    // Parses the a/d path from the name and applies car/cdr right-to-left.
+    // Generates all 2-deep, 3-deep, and 4-deep combinations (28 functions).
+    register_cxr_accessors(vm);
 
     // Association lists
     // assoc is defined in Scheme bootstrap (supports optional comparator)
@@ -1040,15 +1090,10 @@ fn register_list_ops(vm: &mut Vm) {
                 (apply consumer vals)
                 (consumer vals))))
 
-        ;; R7RS §6.4 Extended cXXXr accessors
-        (define (caaar x) (car (car (car x))))
-        (define (caadr x) (car (car (cdr x))))
-        (define (cadar x) (car (cdr (car x))))
-        (define (caddr x) (car (cdr (cdr x))))
-        (define (cdaar x) (cdr (car (car x))))
-        (define (cdadr x) (cdr (car (cdr x))))
-        (define (cddar x) (cdr (cdr (car x))))
-        (define (cdddr x) (cdr (cdr (cdr x))))
+        ;; R7RS §6.4 + (scheme cxr): cXr accessors are registered
+        ;; programmatically in Rust via register_cxr_accessors().
+        ;; All 2-deep through 4-deep combinations (28 functions) are generated
+        ;; from a/d path encoding. No depth limit beyond stack size.
 
         ;; R7RS §4.2.6 make-parameter — parameter objects as closures.
         ;; A parameter is a closure wrapping a mutable cell.
@@ -1230,14 +1275,46 @@ fn register_extra_numeric(vm: &mut Vm) {
     });
 
     vm.register_fn("expt", "Raise to power", Arity::Fixed(2), |args| {
+        // Exact integer exponentiation when both args are exact and exp is non-negative integer
+        if args[0].is_exact() && args[1].is_exact() {
+            if let (Ok(b), Ok(e)) = (args[0].as_int(), args[1].as_int()) {
+                if e >= 0 {
+                    let mut result: i64 = 1;
+                    let mut base = b;
+                    let mut exp = e as u64;
+                    let mut overflow = false;
+                    while exp > 0 {
+                        if exp & 1 == 1 {
+                            match result.checked_mul(base) {
+                                Some(r) => result = r,
+                                None => {
+                                    overflow = true;
+                                    break;
+                                }
+                            }
+                        }
+                        exp >>= 1;
+                        if exp > 0 {
+                            match base.checked_mul(base) {
+                                Some(r) => base = r,
+                                None => {
+                                    overflow = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if !overflow {
+                        return Ok(Value::Int(result));
+                    }
+                    // Overflow: fall through to f64
+                }
+            }
+        }
         let base = require_f64(&args[0])?;
         let exp = require_f64(&args[1])?;
         let result = base.powf(exp);
-        if args[0].is_exact() && args[1].is_exact() && exp >= 0.0 && exp == exp.floor() {
-            Ok(Value::Int(result as i64))
-        } else {
-            Ok(Value::Float(result))
-        }
+        Ok(Value::Float(result))
     });
 
     vm.register_fn("sqrt", "Square root", Arity::Fixed(1), |args| {
@@ -1304,9 +1381,25 @@ fn register_extra_numeric(vm: &mut Vm) {
             if n < 0 {
                 return Err(LispError::user("exact-integer-sqrt: negative", vec![]));
             }
-            let s = (n as f64).sqrt() as i64;
+            if n == 0 {
+                return Ok(Value::list(vec![Value::Int(0), Value::Int(0)]));
+            }
+            // Newton's method on integers for precision with large values
+            let mut s = (n as f64).sqrt() as i64;
+            // Refine: ensure s*s <= n < (s+1)*(s+1)
+            loop {
+                let s2 = s.saturating_mul(s);
+                if s2 <= n {
+                    let next = (s + 1).saturating_mul(s + 1);
+                    if next > n {
+                        break;
+                    }
+                    s += 1;
+                } else {
+                    s -= 1;
+                }
+            }
             let r = n - s * s;
-            // Return values as a pair (s . r)
             Ok(Value::list(vec![Value::Int(s), Value::Int(r)]))
         },
     );
@@ -1823,10 +1916,16 @@ mod tests {
 
     #[test]
     fn test_rounding() {
-        assert_eq!(eval("(floor 2.7)"), Value::Int(2));
-        assert_eq!(eval("(ceiling 2.3)"), Value::Int(3));
-        assert_eq!(eval("(round 2.5)"), Value::Int(2)); // banker's rounding (R7RS)
-        assert_eq!(eval("(truncate -2.7)"), Value::Int(-2));
+        // R7RS: floor/ceiling/round/truncate return inexact when given inexact
+        assert_eq!(eval("(floor 2.7)"), Value::Float(2.0));
+        assert_eq!(eval("(ceiling 2.3)"), Value::Float(3.0));
+        assert_eq!(eval("(round 2.5)"), Value::Float(2.0)); // banker's rounding (R7RS)
+        assert_eq!(eval("(truncate -2.7)"), Value::Float(-2.0));
+        // Exact inputs return exact
+        assert_eq!(eval("(floor 5)"), Value::Int(5));
+        assert_eq!(eval("(ceiling 5)"), Value::Int(5));
+        assert_eq!(eval("(round 5)"), Value::Int(5));
+        assert_eq!(eval("(truncate 5)"), Value::Int(5));
     }
 
     // -- Equivalence --

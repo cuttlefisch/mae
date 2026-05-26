@@ -69,6 +69,9 @@ pub enum Op {
     /// Evaluate a datum at runtime (R7RS eval).
     /// Stack: [expr] → [result]
     Eval,
+    /// Load and evaluate a file at runtime (R7RS load).
+    /// Stack: [filename-string] → [result]
+    Load,
     /// Push a dynamic-wind extent onto the wind stack.
     /// Stack: [before_thunk, after_thunk] → [] (both consumed)
     PushWinder,
@@ -333,6 +336,7 @@ impl Compiler {
                         "apply" => return self.compile_apply(&items, tail),
                         "call-with-values" => return self.compile_call_with_values(&items, tail),
                         "eval" => return self.compile_eval(&items),
+                        "load" => return self.compile_load(&items),
                         "dynamic-wind" => return self.compile_dynamic_wind(&items, tail),
                         "call-with-current-continuation" | "call/cc" => {
                             return self.compile_call_cc(&items, tail)
@@ -1066,16 +1070,28 @@ impl Compiler {
                 continue;
             }
 
-            // (test body...)
+            // (test body...) or (test) — R7RS §4.2.1
+            // If no body, the test value itself is returned when true.
+            if items.len() == 1 {
+                // No body: (test) — return the test value if true.
+                // Compile test, dup, jump-if-false to skip (popping the dup),
+                // leaving test value on stack for the true path.
+                self.compile_expr(&items[0], false)?;
+                self.emit(Op::Dup);
+                let skip_jump = self.emit_placeholder(Op::JumpIfFalse(0));
+                // True path: test value is on stack from the Dup
+                end_jumps.push(self.emit_placeholder(Op::Jump(0)));
+                let skip_target = self.current_offset();
+                self.patch_jump(skip_jump, skip_target);
+                // False path: pop the leftover dup value
+                self.emit(Op::Pop);
+                continue;
+            }
+
             self.compile_expr(&items[0], false)?;
             let skip_jump = self.emit_placeholder(Op::JumpIfFalse(0));
 
-            if items.len() > 1 {
-                self.compile_begin(&items[1..], tail)?;
-            }
-            // If no body, the test result is the value (already on stack...
-            // but JumpIfFalse pops it). We need to re-evaluate. For now,
-            // cond clauses without body return void.
+            self.compile_begin(&items[1..], tail)?;
 
             end_jumps.push(self.emit_placeholder(Op::Jump(0)));
 
@@ -1345,6 +1361,17 @@ impl Compiler {
         Ok(())
     }
 
+    /// Compile `(load filename)` — R7RS §6.12.
+    /// Reads and evaluates file contents at runtime in the interaction environment.
+    fn compile_load(&mut self, items: &[Value]) -> Result<(), LispError> {
+        if items.len() != 2 {
+            return Err(LispError::syntax("load requires exactly 1 argument", ""));
+        }
+        self.compile_expr(&items[1], false)?;
+        self.emit(Op::Load);
+        Ok(())
+    }
+
     /// Compile `(dynamic-wind before thunk after)` (R7RS §6.10).
     ///
     /// Generates bytecode that:
@@ -1522,7 +1549,7 @@ impl Compiler {
     /// Compile `(cond-expand (feature-req body ...) ... (else body ...))`.
     /// Feature-based conditional expansion at compile time.
     fn compile_cond_expand(&mut self, items: &[Value], tail: bool) -> Result<(), LispError> {
-        let features = vec!["r7rs", "mae", "mae-scheme", "ratios", "exact-complex"];
+        let features = vec!["r7rs", "mae", "mae-scheme"];
 
         for clause in &items[1..] {
             let parts = clause
@@ -1797,7 +1824,18 @@ impl Compiler {
                 ));
             }
 
-            let idx = (i + 1) as i64; // field 0 is the type tag
+            let field_name = parts[0]
+                .as_symbol()
+                .map_err(|_| LispError::syntax("field name must be a symbol", ""))?
+                .name()
+                .to_string();
+
+            // Look up field position in constructor args (not field spec order)
+            let idx = ctor_fields
+                .iter()
+                .position(|f| f == &field_name)
+                .map(|pos| (pos + 1) as i64) // +1 because field 0 is the type tag
+                .unwrap_or((i + 1) as i64); // fallback for fields not in constructor
 
             // Accessor: (define (accessor obj) (vector-ref obj idx))
             let accessor_name = parts[1]
@@ -2470,35 +2508,37 @@ impl Compiler {
             set_after.push(Value::list(vec![param.clone(), Value::symbol(&saved_name)]));
         }
 
-        // Build: (let ((saved1 (p1)) ...) (p1 v1) ... (let ((result (begin body))) (p1 saved1) ... result))
+        // Build:
+        // (let ((saved1 (p1)) (saved2 (p2)) ...)
+        //   (dynamic-wind
+        //     (lambda () (p1 v1) (p2 v2) ...)
+        //     (lambda () body ...)
+        //     (lambda () (p1 saved1) (p2 saved2) ...)))
         let save_list = Value::list(save_bindings);
 
-        let mut body_parts = set_before;
+        // Before thunk: (lambda () (p1 v1) (p2 v2) ...)
+        let mut before_body = vec![Value::symbol("lambda"), Value::Null];
+        before_body.extend(set_before);
+        let before_thunk = Value::list(before_body);
 
-        // Result binding
-        let result_sym = Value::symbol("__param_result__");
-        let body_expr = if items[2..].len() == 1 {
-            items[2].clone()
-        } else {
-            let mut begin = vec![Value::symbol("begin")];
-            begin.extend(items[2..].iter().cloned());
-            Value::list(begin)
-        };
+        // Body thunk: (lambda () body ...)
+        let mut body_thunk_parts = vec![Value::symbol("lambda"), Value::Null];
+        body_thunk_parts.extend(items[2..].iter().cloned());
+        let body_thunk = Value::list(body_thunk_parts);
 
-        let result_binding = Value::list(vec![Value::list(vec![result_sym.clone(), body_expr])]);
+        // After thunk: (lambda () (p1 saved1) (p2 saved2) ...)
+        let mut after_body = vec![Value::symbol("lambda"), Value::Null];
+        after_body.extend(set_after);
+        let after_thunk = Value::list(after_body);
 
-        let mut inner_body = set_after;
-        inner_body.push(result_sym);
+        let dynamic_wind = Value::list(vec![
+            Value::symbol("dynamic-wind"),
+            before_thunk,
+            body_thunk,
+            after_thunk,
+        ]);
 
-        let mut inner_let_parts = vec![Value::symbol("let"), result_binding];
-        inner_let_parts.extend(inner_body);
-        let inner_let = Value::list(inner_let_parts);
-
-        body_parts.push(inner_let);
-
-        let mut outer_parts = vec![Value::symbol("let"), save_list];
-        outer_parts.extend(body_parts);
-        let outer = Value::list(outer_parts);
+        let outer = Value::list(vec![Value::symbol("let"), save_list, dynamic_wind]);
 
         let items_vec = outer.to_vec().unwrap();
         self.compile_let(&items_vec, tail)

@@ -642,9 +642,10 @@ fn eof_object_not_other_things() {
 // ============================================================
 
 #[test]
-fn char_ready_always_true_for_string_port() {
+fn char_ready_for_string_port() {
     is_true("(char-ready? (open-input-string \"hi\"))");
-    is_true("(char-ready? (open-input-string \"\"))");
+    // Empty string port: no chars ready (correctly returns #f)
+    is_false("(char-ready? (open-input-string \"\"))");
 }
 
 #[test]

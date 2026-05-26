@@ -86,7 +86,9 @@ impl Eq for InternedSymbol {}
 
 impl std::hash::Hash for InternedSymbol {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
+        // Must hash by name to satisfy the Hash contract: equal values must
+        // have equal hashes. PartialEq compares by name for cross-VM safety.
+        self.name.hash(state);
     }
 }
 
@@ -158,13 +160,28 @@ pub fn intern(name: &str) -> InternedSymbol {
 pub enum Port {
     /// Input from a string.
     StringInput { data: String, pos: usize },
+    /// Input from a bytevector (binary-safe).
+    BytevectorInput { data: Vec<u8>, pos: usize },
     /// Output to a string buffer.
     StringOutput { buf: String },
+    /// Output to a bytevector buffer (binary-safe).
+    BytevectorOutput { buf: Vec<u8> },
     /// Input from a file.
+    ///
+    /// Text-mode ports lazily buffer all content into `text_buf` on first
+    /// text read, then track position with `text_pos` — exactly like
+    /// `StringInput`. This enables sequential `read`, `read-char`, and
+    /// `peek-char` calls to share consistent position state.
+    ///
+    /// Binary-mode ports read directly from `reader`.
     FileInput {
         reader: Box<dyn std::io::Read>,
         name: String,
         binary: bool,
+        /// Lazily populated text buffer for text-mode ports.
+        text_buf: Option<String>,
+        /// Current read position within `text_buf`.
+        text_pos: usize,
     },
     /// Output to a file.
     FileOutput {
@@ -191,6 +208,31 @@ pub enum PortKind {
 }
 
 impl Port {
+    /// Ensure the text buffer is populated for text-mode FileInput ports.
+    /// Reads all remaining content from the underlying reader into `text_buf`.
+    /// Returns `Ok(())` on success, or an error if reading fails.
+    /// No-op if already buffered or if this is a binary port.
+    pub fn ensure_text_buffered(&mut self) -> Result<(), String> {
+        if let Port::FileInput {
+            reader,
+            name,
+            binary: false,
+            text_buf,
+            ..
+        } = self
+        {
+            if text_buf.is_none() {
+                use std::io::Read;
+                let mut contents = String::new();
+                reader
+                    .read_to_string(&mut contents)
+                    .map_err(|e| format!("error reading {name}: {e}"))?;
+                *text_buf = Some(contents);
+            }
+        }
+        Ok(())
+    }
+
     /// Returns true if this port is open (not closed).
     pub fn is_open(&self) -> bool {
         !matches!(self, Port::Closed(_))
@@ -201,6 +243,7 @@ impl Port {
         matches!(
             self,
             Port::StringInput { .. }
+                | Port::BytevectorInput { .. }
                 | Port::FileInput { .. }
                 | Port::Stdin
                 | Port::Closed(PortKind::Input)
@@ -212,6 +255,7 @@ impl Port {
         matches!(
             self,
             Port::StringOutput { .. }
+                | Port::BytevectorOutput { .. }
                 | Port::FileOutput { .. }
                 | Port::Stdout
                 | Port::Stderr
@@ -223,17 +267,25 @@ impl Port {
     pub fn is_binary(&self) -> bool {
         matches!(
             self,
-            Port::FileInput { binary: true, .. } | Port::FileOutput { binary: true, .. }
+            Port::FileInput { binary: true, .. }
+                | Port::FileOutput { binary: true, .. }
+                | Port::BytevectorInput { .. }
+                | Port::BytevectorOutput { .. }
         )
     }
 
     /// The kind of this port (input or output).
     pub fn kind(&self) -> PortKind {
         match self {
-            Port::StringInput { .. } | Port::FileInput { .. } | Port::Stdin => PortKind::Input,
-            Port::StringOutput { .. } | Port::FileOutput { .. } | Port::Stdout | Port::Stderr => {
-                PortKind::Output
-            }
+            Port::StringInput { .. }
+            | Port::BytevectorInput { .. }
+            | Port::FileInput { .. }
+            | Port::Stdin => PortKind::Input,
+            Port::StringOutput { .. }
+            | Port::BytevectorOutput { .. }
+            | Port::FileOutput { .. }
+            | Port::Stdout
+            | Port::Stderr => PortKind::Output,
             Port::Closed(k) => *k,
         }
     }
@@ -245,7 +297,11 @@ impl fmt::Debug for Port {
             Port::StringInput { pos, data } => {
                 write!(f, "StringInput(pos={}, len={})", pos, data.len())
             }
+            Port::BytevectorInput { pos, data } => {
+                write!(f, "BytevectorInput(pos={}, len={})", pos, data.len())
+            }
             Port::StringOutput { buf } => write!(f, "StringOutput(len={})", buf.len()),
+            Port::BytevectorOutput { buf } => write!(f, "BytevectorOutput(len={})", buf.len()),
             Port::FileInput { name, .. } => write!(f, "FileInput({name})"),
             Port::FileOutput { name, .. } => write!(f, "FileOutput({name})"),
             Port::Stdin => write!(f, "Stdin"),
@@ -707,7 +763,15 @@ impl fmt::Display for Value {
             Value::Bool(false) => write!(f, "#f"),
             Value::Int(n) => write!(f, "{n}"),
             Value::Float(n) => {
-                if n.fract() == 0.0 && n.is_finite() {
+                if n.is_nan() {
+                    write!(f, "+nan.0")
+                } else if n.is_infinite() {
+                    if *n > 0.0 {
+                        write!(f, "+inf.0")
+                    } else {
+                        write!(f, "-inf.0")
+                    }
+                } else if n.fract() == 0.0 {
                     write!(f, "{n:.1}")
                 } else {
                     write!(f, "{n}")
@@ -760,10 +824,49 @@ impl fmt::Display for Value {
 }
 
 /// Display variant for Scheme `display` (no quotes on strings, chars as-is).
+/// Format a value for `display` (R7RS §6.13.3).
+///
+/// Unlike `write` (the Display trait), `display` omits quotes on strings,
+/// renders characters as their character (not `#\x`), and recurses into
+/// lists and vectors with `display` semantics on each element.
 pub fn display_value(val: &Value) -> String {
     match val {
         Value::String(s) => s.to_string(),
         Value::Char(c) => c.to_string(),
+        Value::Pair(p) => {
+            let mut out = String::from("(");
+            out.push_str(&display_value(&p.0));
+            let mut current = &p.1;
+            loop {
+                match current {
+                    Value::Null => break,
+                    Value::Pair(p2) => {
+                        out.push(' ');
+                        out.push_str(&display_value(&p2.0));
+                        current = &p2.1;
+                    }
+                    other => {
+                        out.push_str(" . ");
+                        out.push_str(&display_value(other));
+                        break;
+                    }
+                }
+            }
+            out.push(')');
+            out
+        }
+        Value::Vector(v) => {
+            let v = v.borrow();
+            let mut out = String::from("#(");
+            for (i, elem) in v.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                out.push_str(&display_value(elem));
+            }
+            out.push(')');
+            out
+        }
         _ => format!("{val}"),
     }
 }

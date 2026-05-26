@@ -391,6 +391,218 @@ fn bench_ack_small() {
 }
 
 // ============================================================
+// GABRIEL/LARCENY CLASSIC BENCHMARKS
+// ============================================================
+
+#[test]
+fn bench_gabriel_tak() {
+    // Classic Takeuchi function — deep mutual recursion
+    let (result, elapsed) = timed_eval(
+        "tak(18,12,6)",
+        "
+        (define (tak x y z)
+          (if (not (< y x))
+              z
+              (tak (tak (- x 1) y z)
+                   (tak (- y 1) z x)
+                   (tak (- z 1) x y))))
+        (tak 18 12 6)
+    ",
+    );
+    assert_eq!(result, Value::Int(7));
+    assert!(elapsed.as_secs() < 10, "tak(18,12,6) too slow: {elapsed:?}");
+}
+
+#[test]
+fn bench_gabriel_cpstak() {
+    // CPS (continuation-passing style) TAK — tests closure allocation
+    let (result, elapsed) = timed_eval(
+        "cpstak(18,12,6)",
+        "
+        (define (cpstak x y z)
+          (define (tak x y z k)
+            (if (not (< y x))
+                (k z)
+                (tak (- x 1)
+                     y
+                     z
+                     (lambda (v1)
+                       (tak (- y 1)
+                            z
+                            x
+                            (lambda (v2)
+                              (tak (- z 1)
+                                   x
+                                   y
+                                   (lambda (v3)
+                                     (tak v1 v2 v3 k)))))))))
+          (tak x y z (lambda (a) a)))
+        (cpstak 18 12 6)
+    ",
+    );
+    assert_eq!(result, Value::Int(7));
+    assert!(
+        elapsed.as_secs() < 30,
+        "cpstak(18,12,6) too slow: {elapsed:?}"
+    );
+}
+
+#[test]
+fn bench_gabriel_deriv() {
+    // Symbolic differentiation — list manipulation + pattern matching
+    let (result, _elapsed) = timed_eval(
+        "deriv",
+        "
+        (define (deriv a)
+          (cond ((not (pair? a))
+                 (if (eq? a 'x) 1 0))
+                ((eq? (car a) '+)
+                 (cons '+ (map deriv (cdr a))))
+                ((eq? (car a) '-)
+                 (cons '- (map deriv (cdr a))))
+                ((eq? (car a) '*)
+                 (list '* a
+                       (cons '+ (map (lambda (a) (list '/ (deriv a) a)) (cdr a)))))
+                (else 0)))
+
+        ;; Run on a moderately complex expression
+        (define expr '(+ (* 3 x x) (* 2 x) 1))
+        (deriv expr)
+    ",
+    );
+    // Result should be a valid s-expression (derivative of 3x^2 + 2x + 1)
+    assert!(
+        result.is_list(),
+        "deriv should return a list, got: {result}"
+    );
+}
+
+#[test]
+fn bench_gabriel_nqueens() {
+    // N-queens solver — backtracking search
+    let (result, elapsed) = timed_eval(
+        "nqueens(8)",
+        "
+        (define (nqueens n)
+          (define (iota1 n)
+            (let loop ((i n) (l '()))
+              (if (= i 0) l (loop (- i 1) (cons i l)))))
+          (define (my-try x y z)
+            (if (null? x)
+                (if (null? y) 1 0)
+                (+ (if (ok? (car x) 1 z)
+                       (my-try (append (cdr x) y) '() (cons (car x) z))
+                       0)
+                   (my-try (cdr x) (cons (car x) y) z))))
+          (define (ok? row dist placed)
+            (if (null? placed)
+                #t
+                (and (not (= (car placed) (+ row dist)))
+                     (not (= (car placed) (- row dist)))
+                     (ok? row (+ dist 1) (cdr placed)))))
+          (my-try (iota1 n) '() '()))
+        (nqueens 8)
+    ",
+    );
+    assert_eq!(result, Value::Int(92)); // 92 solutions for 8-queens
+    assert!(elapsed.as_secs() < 10, "nqueens(8) too slow: {elapsed:?}");
+}
+
+#[test]
+fn bench_gabriel_primes() {
+    // Prime counting by trial division — arithmetic + looping
+    let (result, elapsed) = timed_eval(
+        "primes(1000)",
+        "
+        (define (prime? n)
+          (define (check d)
+            (cond ((> (* d d) n) #t)
+                  ((= (remainder n d) 0) #f)
+                  (else (check (+ d 1)))))
+          (if (< n 2) #f (check 2)))
+        (define (count-primes limit)
+          (let loop ((i 2) (count 0))
+            (if (> i limit) count
+                (loop (+ i 1) (if (prime? i) (+ count 1) count)))))
+        (count-primes 1000)
+    ",
+    );
+    assert_eq!(result, Value::Int(168)); // 168 primes below 1000
+    assert!(elapsed.as_secs() < 5, "primes(1000) too slow: {elapsed:?}");
+}
+
+#[test]
+fn bench_gabriel_quicksort() {
+    // Quicksort — list manipulation + recursion
+    let (result, elapsed) = timed_eval(
+        "quicksort",
+        "
+        (define (quicksort lst)
+          (if (or (null? lst) (null? (cdr lst)))
+              lst
+              (let ((pivot (car lst))
+                    (rest (cdr lst)))
+                (let ((less (filter (lambda (x) (< x pivot)) rest))
+                      (greater (filter (lambda (x) (>= x pivot)) rest)))
+                  (append (quicksort less) (list pivot) (quicksort greater))))))
+
+        ;; Sort a reversed list of 500 elements
+        (define (make-reversed-list n)
+          (let loop ((i 1) (acc '()))
+            (if (> i n) acc (loop (+ i 1) (cons i acc)))))
+        (define data (make-reversed-list 500))
+        (let* ((sorted (quicksort data))
+               (first (car sorted))
+               (last (list-ref sorted 499)))
+          (list first last (length sorted)))
+    ",
+    );
+    assert_eq!(
+        result,
+        Value::list(vec![Value::Int(1), Value::Int(500), Value::Int(500)])
+    );
+    assert!(elapsed.as_secs() < 5, "quicksort too slow: {elapsed:?}");
+}
+
+#[test]
+fn bench_gabriel_mbrot() {
+    // Mandelbrot set — floating-point arithmetic + iteration
+    let (result, elapsed) = timed_eval(
+        "mandelbrot",
+        "
+        (define (mandelbrot-count cr ci max-iter)
+          (let loop ((zr 0.0) (zi 0.0) (i 0))
+            (if (>= i max-iter) max-iter
+                (let ((zr2 (* zr zr)) (zi2 (* zi zi)))
+                  (if (> (+ zr2 zi2) 4.0)
+                      i
+                      (loop (+ (- zr2 zi2) cr)
+                            (+ (* 2.0 zr zi) ci)
+                            (+ i 1)))))))
+
+        ;; Count points in a 20x20 grid that are in the set
+        (define (count-mandelbrot size max-iter)
+          (let loop-y ((y 0) (count 0))
+            (if (>= y size) count
+                (let loop-x ((x 0) (c count))
+                  (if (>= x size)
+                      (loop-y (+ y 1) c)
+                      (let* ((cr (- (* 3.0 (/ (exact->inexact x) (exact->inexact size))) 2.0))
+                             (ci (- (* 2.0 (/ (exact->inexact y) (exact->inexact size))) 1.0))
+                             (iters (mandelbrot-count cr ci max-iter)))
+                        (loop-x (+ x 1) (if (= iters max-iter) (+ c 1) c))))))))
+        (count-mandelbrot 20 100)
+    ",
+    );
+    // Should count some points in the Mandelbrot set
+    assert!(
+        matches!(result, Value::Int(n) if n > 0),
+        "mandelbrot should find points in set"
+    );
+    assert!(elapsed.as_secs() < 10, "mandelbrot too slow: {elapsed:?}");
+}
+
+// ============================================================
 // STARTUP & OVERHEAD BENCHMARKS
 // ============================================================
 

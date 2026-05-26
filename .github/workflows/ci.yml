@@ -160,6 +160,9 @@ jobs:
       - name: Scheme benchmark tests
         run: cargo test -p mae-scheme --test scheme_benchmarks -- --nocapture
         timeout-minutes: 10
+      - name: Scheme real programs
+        run: cargo test -p mae-scheme --test scheme_programs -- --nocapture
+        timeout-minutes: 5
       - name: Unit tests
         run: cargo test -p mae-scheme --lib
         timeout-minutes: 5

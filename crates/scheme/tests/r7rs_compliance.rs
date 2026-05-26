@@ -48,6 +48,14 @@ fn is_int(code: &str, expected: i64) {
     );
 }
 
+fn is_float(code: &str, expected: f64) {
+    assert_eq!(
+        eval(code),
+        Value::Float(expected),
+        "expected {expected} for: {code}"
+    );
+}
+
 /// Evaluate two expressions in the same VM and compare results.
 /// Useful when comparing values that reference the same mutable state.
 fn eval_eq(code: &str, expected: &str) {
@@ -532,14 +540,13 @@ fn s6_2_number_conversions() {
 
 #[test]
 fn s6_2_floor_ceiling_truncate_round() {
-    // R7RS: these return exact integers for exact args, inexact for inexact
-    // Our impl returns Int for integer-valued results
-    is_int("(floor 2.7)", 2);
-    is_int("(ceiling 2.3)", 3);
-    is_int("(truncate 2.7)", 2);
-    is_int("(truncate -2.7)", -2);
-    is_int("(round 2.5)", 2); // banker's rounding
-    is_int("(round 3.5)", 4);
+    // R7RS §6.2.6: floor/ceiling/round/truncate return inexact for inexact args
+    is_float("(floor 2.7)", 2.0);
+    is_float("(ceiling 2.3)", 3.0);
+    is_float("(truncate 2.7)", 2.0);
+    is_float("(truncate -2.7)", -2.0);
+    is_float("(round 2.5)", 2.0); // banker's rounding
+    is_float("(round 3.5)", 4.0);
 }
 
 // ============================================================================
@@ -2364,36 +2371,34 @@ fn edge_numeric_mixed_types() {
 
 #[test]
 fn edge_numeric_rounding() {
-    // Banker's rounding: half to even
-    is_int("(round 0.5)", 0); // 0 is even
-    is_int("(round 1.5)", 2); // 2 is even
-    is_int("(round 2.5)", 2); // 2 is even
-    is_int("(round 3.5)", 4); // 4 is even
-    is_int("(round -0.5)", 0); // 0 is even
-    is_int("(round -1.5)", -2); // -2 is even
+    // R7RS: round returns inexact for inexact args (banker's rounding)
+    is_float("(round 0.5)", 0.0); // 0 is even
+    is_float("(round 1.5)", 2.0); // 2 is even
+    is_float("(round 2.5)", 2.0); // 2 is even
+    is_float("(round 3.5)", 4.0); // 4 is even
+    is_float("(round -0.5)", 0.0); // 0 is even
+    is_float("(round -1.5)", -2.0); // -2 is even
 
     // Non-halfway cases
-    is_int("(round 2.3)", 2);
-    is_int("(round 2.7)", 3);
-    is_int("(round -2.3)", -2);
-    is_int("(round -2.7)", -3);
+    is_float("(round 2.3)", 2.0);
+    is_float("(round 2.7)", 3.0);
+    is_float("(round -2.3)", -2.0);
+    is_float("(round -2.7)", -3.0);
 }
 
 #[test]
 fn edge_numeric_floor_ceiling_truncate() {
-    // Floor: toward -inf
-    is_int("(floor 2.7)", 2);
-    is_int("(floor -2.3)", -3);
-    is_int("(floor 5)", 5);
+    // R7RS: inexact args → inexact results
+    is_float("(floor 2.7)", 2.0);
+    is_float("(floor -2.3)", -3.0);
+    is_int("(floor 5)", 5); // exact → exact
 
-    // Ceiling: toward +inf
-    is_int("(ceiling 2.3)", 3);
-    is_int("(ceiling -2.7)", -2);
+    is_float("(ceiling 2.3)", 3.0);
+    is_float("(ceiling -2.7)", -2.0);
     is_int("(ceiling 5)", 5);
 
-    // Truncate: toward zero
-    is_int("(truncate 2.7)", 2);
-    is_int("(truncate -2.7)", -2);
+    is_float("(truncate 2.7)", 2.0);
+    is_float("(truncate -2.7)", -2.0);
 }
 
 #[test]
@@ -5546,17 +5551,44 @@ fn s6_2_numeric_edge_cases() {
     is_int("(modulo 7 2)", 1);
     is_int("(modulo -7 2)", 1);
 
-    // floor/ceiling/truncate/round
-    is_int("(floor 2.7)", 2);
-    is_int("(floor -2.7)", -3);
-    is_int("(ceiling 2.3)", 3);
-    is_int("(ceiling -2.3)", -2);
-    is_int("(truncate 2.7)", 2);
-    is_int("(truncate -2.7)", -2);
-    is_int("(round 2.5)", 2); // banker's rounding
-    is_int("(round 3.5)", 4); // banker's rounding
-    is_int("(round 2.4)", 2);
-    is_int("(round -2.5)", -2); // banker's rounding
+    // R7RS: floor/ceiling/truncate/round return inexact for inexact args
+    is_float("(floor 2.7)", 2.0);
+    is_float("(floor -2.7)", -3.0);
+    is_float("(ceiling 2.3)", 3.0);
+    is_float("(ceiling -2.3)", -2.0);
+    is_float("(truncate 2.7)", 2.0);
+    is_float("(truncate -2.7)", -2.0);
+    is_float("(round 2.5)", 2.0); // banker's rounding
+    is_float("(round 3.5)", 4.0); // banker's rounding
+    is_float("(round 2.4)", 2.0);
+    is_float("(round -2.5)", -2.0); // banker's rounding
+
+    // exact wrapping: (exact (round x)) converts back to integer
+    is_int("(exact (floor 2.7))", 2);
+    is_int("(exact (ceiling 2.3))", 3);
+    is_int("(exact (round 2.5))", 2);
+    is_int("(exact (truncate 2.7))", 2);
+
+    // R7RS special float literals
+    is_true("(nan? +nan.0)");
+    is_true("(infinite? +inf.0)");
+    is_true("(infinite? -inf.0)");
+    is_true("(finite? 1.0)");
+    is_false("(finite? +inf.0)");
+
+    // R7RS write representation for special floats
+    is_str(
+        r#"(let ((p (open-output-string))) (write +nan.0 p) (get-output-string p))"#,
+        "+nan.0",
+    );
+    is_str(
+        r#"(let ((p (open-output-string))) (write +inf.0 p) (get-output-string p))"#,
+        "+inf.0",
+    );
+    is_str(
+        r#"(let ((p (open-output-string))) (write -inf.0 p) (get-output-string p))"#,
+        "-inf.0",
+    );
 
     // min/max with mixed types
     is_true("(inexact? (min 1 2.0))");
@@ -7237,4 +7269,1556 @@ fn s6_13_with_input_from_file_redirect() {
         .unwrap();
     assert_eq!(result, Value::Int(42));
     std::fs::remove_file(&tmp).ok();
+}
+
+// =========================================================================
+// §4.2.1 cond clause without body returns test value
+// =========================================================================
+
+#[test]
+fn s4_2_cond_no_body_returns_test_value() {
+    // R7RS §4.2.1: (cond (test)) — if test is true, return test value
+    assert_eq!(eval("(cond (#t))"), Value::Bool(true));
+    assert_eq!(eval("(cond (1))"), Value::Int(1));
+    assert_eq!(eval("(cond (#f) (42))"), Value::Int(42));
+    assert_eq!(
+        eval(r#"(cond (#f) ("hello"))"#),
+        Value::String(Rc::from("hello"))
+    );
+    // With preceding false clause
+    assert_eq!(eval("(cond (#f) (3))"), Value::Int(3));
+}
+
+// =========================================================================
+// §6.13.2 read without port uses current-input-port
+// =========================================================================
+
+#[test]
+fn s6_13_read_uses_current_input_port() {
+    // read from string port passed as arg
+    assert_eq!(
+        eval("(let ((p (open-input-string \"42\"))) (read p))"),
+        Value::Int(42)
+    );
+    // read-char from string port using with-input-from-file redirect
+    // (we can test with-input-from-file + read together)
+    let tmp = std::env::temp_dir().join("mae_test_read_noarg.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "/");
+    std::fs::write(&tmp, "(+ 1 2)").unwrap();
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    let result = vm
+        .eval(&format!(
+            r#"(with-input-from-file "{path}" (lambda () (read)))"#
+        ))
+        .unwrap();
+    // read returns the datum (+ 1 2) as a list
+    let items = result.to_vec().unwrap();
+    assert_eq!(items.len(), 3);
+    std::fs::remove_file(&tmp).ok();
+}
+
+// =========================================================================
+// §6.13.3 read-bytevector! (destructive read into bytevector)
+// =========================================================================
+
+#[test]
+fn s6_13_read_bytevector_bang() {
+    assert_eq!(
+        eval(
+            r#"(let ((bv (make-bytevector 5 0))
+                   (p (open-input-string "abc")))
+               (read-bytevector! bv p)
+               (bytevector-u8-ref bv 0))"#
+        ),
+        Value::Int(97) // 'a'
+    );
+    // Returns count of bytes read
+    assert_eq!(
+        eval(
+            r#"(let ((bv (make-bytevector 10 0))
+                   (p (open-input-string "hi")))
+               (read-bytevector! bv p))"#
+        ),
+        Value::Int(2)
+    );
+}
+
+// =========================================================================
+// §6.12 load evaluates file contents
+// =========================================================================
+
+#[test]
+fn s6_12_load_evaluates_file() {
+    let tmp = std::env::temp_dir().join("mae_test_load_eval.scm");
+    let path = tmp.to_str().unwrap().replace('\\', "/");
+    std::fs::write(&tmp, "(define load-test-val 42)").unwrap();
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    vm.eval(&format!(r#"(load "{path}")"#)).unwrap();
+    let result = vm.eval("load-test-val").unwrap();
+    assert_eq!(result, Value::Int(42));
+    std::fs::remove_file(&tmp).ok();
+}
+
+// =========================================================================
+// §6.13.1 flush-output-port works on file ports
+// =========================================================================
+
+#[test]
+fn s6_13_flush_output_port_file() {
+    let tmp = std::env::temp_dir().join("mae_test_flush.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "/");
+    let mut vm = Vm::new();
+    stdlib::register_stdlib(&mut vm);
+    vm.eval(&format!(
+        r#"(let ((p (open-output-file "{path}")))
+           (write-string "flushed" p)
+           (flush-output-port p)
+           (close-output-port p))"#
+    ))
+    .unwrap();
+    let contents = std::fs::read_to_string(&tmp).unwrap();
+    assert_eq!(contents, "flushed");
+    std::fs::remove_file(&tmp).ok();
+}
+
+// =========================================================================
+// §7.1 String line continuation
+// =========================================================================
+
+#[test]
+fn s7_1_string_line_continuation() {
+    // R7RS §7.1.2: \<newline><intraline-whitespace> is nothing
+    assert_eq!(
+        eval("\"hello\\\n    world\""),
+        Value::String(Rc::from("helloworld"))
+    );
+    assert_eq!(eval("\"abc\\\n  def\""), Value::String(Rc::from("abcdef")));
+}
+
+// =============================================================================
+// Edge-case tests for sections with insufficient coverage
+// =============================================================================
+
+// §4.2.1 cond with => arrow clause
+#[test]
+fn edge_cond_arrow_false_test() {
+    // When the test is #f, the => clause is skipped
+    is_int("(cond (#f => car) (else 5))", 5);
+}
+
+#[test]
+fn edge_cond_arrow_true_test() {
+    // When the test is truthy, the result is passed to the proc
+    is_int("(cond ('(1 2 3) => car) (else 5))", 1);
+}
+
+#[test]
+fn edge_cond_arrow_numeric_test() {
+    // Non-#f value passes itself to the proc
+    is_int("(cond (42 => (lambda (x) (+ x 1))) (else 0))", 43);
+}
+
+// §4.2.3 and/or edge cases on return values
+#[test]
+fn edge_and_or_return_value_types() {
+    // and returns the first false-ish value
+    is_false("(and 1 #f 'never)");
+    // and with string returns it
+    is_str("(and 1 2 \"yes\")", "yes");
+    // or returns first truthy value, even if it's a string
+    is_str(r#"(or #f "found")"#, "found");
+    // or #f 5 -> 5
+    is_int("(or #f 5)", 5);
+    // or with only #f returns #f
+    is_false("(or #f)");
+    // and with single #f
+    is_false("(and #f)");
+}
+
+// §4.2.6 do loop — basic and with accumulator
+#[test]
+fn edge_do_loop_basic() {
+    // Simple counting loop
+    is_int("(do ((i 0 (+ i 1))) ((= i 5) i))", 5);
+}
+
+#[test]
+fn edge_do_loop_accumulator() {
+    // do loop that accumulates a result
+    is_int(
+        "(do ((i 0 (+ i 1))
+              (sum 0 (+ sum i)))
+             ((= i 5) sum))",
+        10,
+    );
+}
+
+#[test]
+fn edge_do_loop_reverse_list() {
+    // do loop building a list in reverse
+    is_true(
+        "(equal? (do ((lst '(1 2 3 4 5) (cdr lst))
+                      (acc '() (cons (car lst) acc)))
+                     ((null? lst) acc))
+                 '(5 4 3 2 1))",
+    );
+}
+
+// §5.3 define with body (shorthand)
+#[test]
+fn edge_define_with_body() {
+    is_int("(define (f x) (+ x 1)) (f 5)", 6);
+}
+
+#[test]
+fn edge_define_with_multi_body() {
+    // define with multiple body expressions returns last
+    is_int("(define (g x) (+ x 1) (+ x 2) (+ x 3)) (g 10)", 13);
+}
+
+// §6.1 eqv? on procedures
+#[test]
+fn edge_eqv_procedures() {
+    // Same procedure binding must be eqv? to itself
+    is_true("(let ((f (lambda (x) x))) (eqv? f f))");
+    // Two distinct lambdas with same body are NOT eqv?
+    is_false(
+        "(let ((f (lambda (x) x))
+               (g (lambda (x) x)))
+           (eqv? f g))",
+    );
+}
+
+// §6.2 exact->inexact and inexact->exact roundtrip
+#[test]
+fn edge_exact_inexact_roundtrip() {
+    // exact->inexact then inexact->exact roundtrip
+    is_int("(inexact->exact (exact->inexact 5))", 5);
+    // inexact->exact of 2.5 should give integer 2 (truncation behavior)
+    // Actually R7RS says inexact->exact returns exact value equal to argument
+    // For 2.0 that's 2
+    is_int("(inexact->exact 2.0)", 2);
+    // exact->inexact produces a float
+    assert_eq!(eval("(exact->inexact 3)"), Value::Float(3.0));
+}
+
+// §6.2 number->string with radix
+#[test]
+fn edge_number_to_string_radix_hex() {
+    is_str("(number->string 255 16)", "ff");
+}
+
+#[test]
+fn edge_number_to_string_radix_binary() {
+    is_str("(number->string 10 2)", "1010");
+}
+
+#[test]
+fn edge_number_to_string_radix_octal() {
+    is_str("(number->string 8 8)", "10");
+}
+
+// §6.2 string->number with radix
+#[test]
+fn edge_string_to_number_radix_hex() {
+    is_int(r#"(string->number "ff" 16)"#, 255);
+}
+
+#[test]
+fn edge_string_to_number_radix_binary() {
+    is_int(r#"(string->number "1010" 2)"#, 10);
+}
+
+#[test]
+fn edge_string_to_number_radix_octal() {
+    is_int(r#"(string->number "10" 8)"#, 8);
+}
+
+#[test]
+fn edge_string_to_number_invalid() {
+    // Invalid string->number returns #f
+    is_false(r#"(string->number "not-a-number")"#);
+    is_false(r#"(string->number "gg" 16)"#);
+}
+
+// §6.4 list-tail edge cases
+#[test]
+fn edge_list_tail_zero() {
+    // list-tail with 0 returns the whole list
+    is_true("(equal? (list-tail '(a b c d) 0) '(a b c d))");
+}
+
+#[test]
+fn edge_list_tail_end() {
+    // list-tail at exact end returns empty list
+    is_true("(null? (list-tail '(a b c) 3))");
+}
+
+// §6.4 list-copy independence
+#[test]
+fn edge_list_copy_independence() {
+    // Mutation of original doesn't affect copy (for mutable pairs, not applicable
+    // in mae-scheme with immutable pairs, but list-copy should still produce equal result)
+    is_true("(equal? (list-copy '(1 2 3)) '(1 2 3))");
+    // Empty list copy
+    is_true("(null? (list-copy '()))");
+}
+
+// §6.6 char-ci=? and friends
+#[test]
+fn edge_char_ci_eq() {
+    is_true("(char-ci=? #\\a #\\A)");
+    is_true("(char-ci=? #\\Z #\\z)");
+    is_false("(char-ci=? #\\a #\\b)");
+}
+
+#[test]
+fn edge_char_ci_lt_gt() {
+    is_true("(char-ci<? #\\a #\\B)");
+    is_false("(char-ci<? #\\b #\\A)");
+    is_true("(char-ci>? #\\c #\\A)");
+    is_true("(char-ci<=? #\\a #\\A)");
+    is_true("(char-ci>=? #\\a #\\A)");
+}
+
+// §6.7 string-copy! — mae-scheme strings are immutable, should error
+#[test]
+fn edge_string_copy_bang_immutable() {
+    let err = eval_err(r#"(string-copy! "hello" 0 "xy")"#);
+    assert!(
+        err.contains("immutable"),
+        "string-copy! should mention immutability: {err}"
+    );
+}
+
+// §6.7 string-downcase/upcase/foldcase
+#[test]
+fn edge_string_case_conversions() {
+    is_str(r#"(string-upcase "hello")"#, "HELLO");
+    is_str(r#"(string-downcase "HELLO")"#, "hello");
+    is_str(r#"(string-downcase "Hello World")"#, "hello world");
+    is_str(r#"(string-upcase "")"#, "");
+    is_str(r#"(string-foldcase "HeLLo")"#, "hello");
+}
+
+// §6.8 vector-copy basic
+#[test]
+fn edge_vector_copy_basic() {
+    is_true("(equal? (vector-copy #(1 2 3)) #(1 2 3))");
+    // Copy with start
+    is_true("(equal? (vector-copy #(a b c d e) 2) #(c d e))");
+    // Empty vector copy
+    is_true("(equal? (vector-copy #()) #())");
+}
+
+// §6.8 vector-fill! basic
+#[test]
+fn edge_vector_fill_basic() {
+    is_true(
+        "(let ((v (vector 1 2 3)))
+           (vector-fill! v 0)
+           (equal? v #(0 0 0)))",
+    );
+}
+
+#[test]
+fn edge_vector_fill_single() {
+    is_true(
+        "(let ((v (vector 42)))
+           (vector-fill! v 99)
+           (equal? v #(99)))",
+    );
+}
+
+// §6.9 bytevector-copy basic
+#[test]
+fn edge_bytevector_copy_basic() {
+    is_true("(equal? (bytevector-copy #u8(1 2 3)) #u8(1 2 3))");
+    // Copy with start/end
+    is_true("(equal? (bytevector-copy #u8(0 1 2 3 4) 1 3) #u8(1 2))");
+}
+
+// §6.10 call-with-values basic
+#[test]
+fn edge_call_with_values_basic() {
+    is_int("(call-with-values (lambda () (values 1 2)) +)", 3);
+}
+
+#[test]
+fn edge_call_with_values_single() {
+    // Single value
+    is_int("(call-with-values (lambda () 42) (lambda (x) x))", 42);
+}
+
+#[test]
+fn edge_call_with_values_three() {
+    // Three values
+    is_int("(call-with-values (lambda () (values 1 2 3)) +)", 6);
+}
+
+// §6.10 for-each mutation test
+#[test]
+fn edge_for_each_mutation() {
+    is_true(
+        "(let ((x '()))
+           (for-each (lambda (v) (set! x (cons v x))) '(1 2 3))
+           (equal? x '(3 2 1)))",
+    );
+}
+
+#[test]
+fn edge_for_each_empty() {
+    // for-each on empty list should do nothing
+    assert_eq!(
+        eval("(let ((x 0)) (for-each (lambda (v) (set! x (+ x 1))) '()) x)"),
+        Value::Int(0)
+    );
+}
+
+// §6.11 error with irritants
+#[test]
+fn edge_error_irritants_message() {
+    is_str(
+        r#"(guard (e (#t (error-object-message e))) (error "bad" 1 2))"#,
+        "bad",
+    );
+}
+
+#[test]
+fn edge_error_irritants_list() {
+    is_true(r#"(guard (e (#t (equal? (error-object-irritants e) '(1 2)))) (error "bad" 1 2))"#);
+}
+
+#[test]
+fn edge_error_irritants_type() {
+    // error-object-type returns "error" for errors created with (error ...)
+    is_str(
+        r#"(guard (e (#t (error-object-type e))) (error "bad" 1 2))"#,
+        "error",
+    );
+}
+
+// §6.13 open-input-string and read roundtrip
+#[test]
+fn edge_open_input_string_read() {
+    is_int(
+        "(let ((p (open-input-string \"42\")))
+           (read p))",
+        42,
+    );
+}
+
+#[test]
+fn edge_open_input_string_read_symbol() {
+    is_true(
+        "(let ((p (open-input-string \"hello\")))
+           (eq? (read p) 'hello))",
+    );
+}
+
+#[test]
+fn edge_open_input_string_read_list() {
+    is_true(
+        "(let ((p (open-input-string \"(1 2 3)\")))
+           (equal? (read p) '(1 2 3)))",
+    );
+}
+
+#[test]
+fn edge_open_input_string_eof() {
+    is_true(
+        "(let ((p (open-input-string \"\")))
+           (eof-object? (read p)))",
+    );
+}
+
+// §6.14 features returns a list
+#[test]
+fn edge_features_is_list() {
+    is_true("(list? (features))");
+}
+
+#[test]
+fn edge_features_contains_r7rs() {
+    // memq returns the tail, not #t; check it's not #f
+    is_false("(not (memq 'r7rs (features)))");
+}
+
+#[test]
+fn edge_features_contains_mae() {
+    is_false("(not (memq 'mae-scheme (features)))");
+}
+
+// §4.2.5 delay/force
+#[test]
+fn edge_delay_force_basic() {
+    is_int("(force (delay 42))", 42);
+}
+
+#[test]
+fn edge_delay_force_memoization() {
+    // force memoizes: side effects only happen once
+    is_int(
+        "(let ((count 0))
+           (define p (delay (begin (set! count (+ count 1)) count)))
+           (force p)
+           (force p)
+           count)",
+        1,
+    );
+}
+
+#[test]
+fn edge_delay_force_expression() {
+    is_int("(force (delay (+ 2 3)))", 5);
+}
+
+// ---------------------------------------------------------------------------
+// §6.13.3 — display vs write semantics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn s6_13_display_no_quotes_on_strings() {
+    // display should not quote strings
+    is_str(
+        r#"(let ((p (open-output-string)))
+             (display "hello" p)
+             (get-output-string p))"#,
+        "hello",
+    );
+}
+
+#[test]
+fn s6_13_write_quotes_strings() {
+    // write should quote strings
+    is_str(
+        r#"(let ((p (open-output-string)))
+             (write "hello" p)
+             (get-output-string p))"#,
+        r#""hello""#,
+    );
+}
+
+#[test]
+fn s6_13_display_char_as_character() {
+    // display should show the character itself
+    is_str(
+        r#"(let ((p (open-output-string)))
+             (display #\a p)
+             (get-output-string p))"#,
+        "a",
+    );
+}
+
+#[test]
+fn s6_13_write_char_with_prefix() {
+    // write should show #\a notation
+    is_str(
+        r#"(let ((p (open-output-string)))
+             (write #\a p)
+             (get-output-string p))"#,
+        "#\\a",
+    );
+}
+
+#[test]
+fn s6_13_display_list_of_strings() {
+    // display on a list should recursively display elements (no quotes)
+    is_str(
+        r#"(let ((p (open-output-string)))
+             (display '("hello" "world") p)
+             (get-output-string p))"#,
+        "(hello world)",
+    );
+}
+
+#[test]
+fn s6_13_write_list_of_strings() {
+    // write on a list should recursively write elements (with quotes)
+    is_str(
+        r#"(let ((p (open-output-string)))
+             (write '("hello" "world") p)
+             (get-output-string p))"#,
+        r#"("hello" "world")"#,
+    );
+}
+
+#[test]
+fn s6_13_display_vector_of_strings() {
+    is_str(
+        r#"(let ((p (open-output-string)))
+             (display (vector "a" "b") p)
+             (get-output-string p))"#,
+        "#(a b)",
+    );
+}
+
+#[test]
+fn s6_13_display_nested_list_of_chars() {
+    is_str(
+        r#"(let ((p (open-output-string)))
+             (display (list #\x (list #\y #\z)) p)
+             (get-output-string p))"#,
+        "(x (y z))",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// §6.13 — Sequential file port reads
+// ---------------------------------------------------------------------------
+
+#[test]
+fn s6_13_sequential_read_from_file_port() {
+    // read should parse one s-expression at a time, not consume the whole file
+    let dir = std::env::temp_dir().join("mae_test_seq_read");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("multi_sexp.scm");
+    std::fs::write(&path, "(+ 1 2) (+ 3 4) (+ 5 6)").unwrap();
+
+    let code = format!(
+        r#"(let ((p (open-input-file "{}")))
+             (let* ((a (read p))
+                    (b (read p))
+                    (c (read p))
+                    (d (read p)))
+               (close-input-port p)
+               (list a b c (eof-object? d))))"#,
+        path.display()
+    );
+    let result = eval(&code);
+    // Should read 3 s-expressions and then get EOF
+    assert_eq!(
+        result,
+        Value::list(vec![
+            Value::list(vec![Value::symbol("+"), Value::Int(1), Value::Int(2)]),
+            Value::list(vec![Value::symbol("+"), Value::Int(3), Value::Int(4)]),
+            Value::list(vec![Value::symbol("+"), Value::Int(5), Value::Int(6)]),
+            Value::Bool(true),
+        ])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s6_13_sequential_read_char_from_file_port() {
+    let dir = std::env::temp_dir().join("mae_test_seq_readchar");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("chars.txt");
+    std::fs::write(&path, "abc").unwrap();
+
+    let code = format!(
+        r#"(let ((p (open-input-file "{}")))
+             (let* ((a (read-char p))
+                    (b (read-char p))
+                    (c (read-char p))
+                    (d (read-char p)))
+               (close-input-port p)
+               (list a b c (eof-object? d))))"#,
+        path.display()
+    );
+    let result = eval(&code);
+    assert_eq!(
+        result,
+        Value::list(vec![
+            Value::Char('a'),
+            Value::Char('b'),
+            Value::Char('c'),
+            Value::Bool(true),
+        ])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s6_13_mixed_read_and_read_char_on_file_port() {
+    let dir = std::env::temp_dir().join("mae_test_mixed_read");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("mixed.scm");
+    std::fs::write(&path, "42 hello").unwrap();
+
+    let code = format!(
+        r#"(let ((p (open-input-file "{}")))
+             (let* ((num (read p))
+                    (space (read-char p))
+                    (sym (read p)))
+               (close-input-port p)
+               (list num space sym)))"#,
+        path.display()
+    );
+    let result = eval(&code);
+    assert_eq!(
+        result,
+        Value::list(vec![
+            Value::Int(42),
+            Value::Char(' '),
+            Value::symbol("hello"),
+        ])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s6_13_read_line_from_file_port() {
+    let dir = std::env::temp_dir().join("mae_test_readline");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("lines.txt");
+    std::fs::write(&path, "first\nsecond\nthird").unwrap();
+
+    let code = format!(
+        r#"(let ((p (open-input-file "{}")))
+             (let* ((a (read-line p))
+                    (b (read-line p))
+                    (c (read-line p))
+                    (d (read-line p)))
+               (close-input-port p)
+               (list a b c (eof-object? d))))"#,
+        path.display()
+    );
+    let result = eval(&code);
+    assert_eq!(
+        result,
+        Value::list(vec![
+            Value::String(Rc::from("first")),
+            Value::String(Rc::from("second")),
+            Value::String(Rc::from("third")),
+            Value::Bool(true),
+        ])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s6_13_peek_char_does_not_advance_file_port() {
+    let dir = std::env::temp_dir().join("mae_test_peek_file");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("peek.txt");
+    std::fs::write(&path, "xy").unwrap();
+
+    let code = format!(
+        r#"(let ((p (open-input-file "{}")))
+             (let* ((peeked (peek-char p))
+                    (read1 (read-char p))
+                    (read2 (read-char p)))
+               (close-input-port p)
+               (list peeked read1 read2)))"#,
+        path.display()
+    );
+    let result = eval(&code);
+    assert_eq!(
+        result,
+        Value::list(vec![Value::Char('x'), Value::Char('x'), Value::Char('y'),])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s6_13_char_ready_on_file_port() {
+    let dir = std::env::temp_dir().join("mae_test_charready");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("ready.txt");
+    std::fs::write(&path, "a").unwrap();
+
+    let code = format!(
+        r#"(let ((p (open-input-file "{}")))
+             (let* ((ready1 (char-ready? p))
+                    (_ (read-char p))
+                    (ready2 (char-ready? p)))
+               (close-input-port p)
+               (list ready1 ready2)))"#,
+        path.display()
+    );
+    let result = eval(&code);
+    assert_eq!(
+        result,
+        Value::list(vec![Value::Bool(true), Value::Bool(false)])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s6_13_read_string_from_file_port() {
+    let dir = std::env::temp_dir().join("mae_test_readstring");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("readstr.txt");
+    std::fs::write(&path, "hello world").unwrap();
+
+    let code = format!(
+        r#"(let ((p (open-input-file "{}")))
+             (let* ((a (read-string 5 p))
+                    (b (read-string 6 p)))
+               (close-input-port p)
+               (list a b)))"#,
+        path.display()
+    );
+    let result = eval(&code);
+    assert_eq!(
+        result,
+        Value::list(vec![
+            Value::String(Rc::from("hello")),
+            Value::String(Rc::from(" world")),
+        ])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ===========================================================================
+// Chibi-derived edge case tests (from Chibi-Scheme r7rs-tests.scm)
+// ===========================================================================
+
+// --- §4.1 Primitive expressions (Chibi) ---
+
+#[test]
+fn chibi_4_1_lambda_varargs() {
+    // (lambda x x) captures all args as a list
+    assert_eq!(
+        eval("((lambda x x) 3 4 5 6)"),
+        Value::list(vec![
+            Value::Int(3),
+            Value::Int(4),
+            Value::Int(5),
+            Value::Int(6)
+        ])
+    );
+}
+
+#[test]
+fn chibi_4_1_lambda_dotted_rest() {
+    // Dotted rest parameter
+    assert_eq!(
+        eval("((lambda (x y . z) z) 3 4 5 6)"),
+        Value::list(vec![Value::Int(5), Value::Int(6)])
+    );
+}
+
+#[test]
+fn chibi_4_1_if_condition_dispatch() {
+    // ((if #f + *) 3 4) — if as operator position
+    is_int("((if #f + *) 3 4)", 12);
+    is_int("((if #t + *) 3 4)", 7);
+}
+
+// --- §4.2 Derived expressions (Chibi) ---
+
+#[test]
+fn chibi_4_2_cond_arrow() {
+    // cond with => clause
+    is_int("(cond ((assv 'b '((a 1) (b 2))) => cadr) (else #f))", 2);
+}
+
+#[test]
+fn chibi_4_2_case_basic() {
+    // case dispatching
+    assert_eq!(
+        eval("(case (* 2 3) ((2 3 5 7) 'prime) ((1 4 6 8 9) 'composite))"),
+        Value::symbol("composite")
+    );
+    assert_eq!(
+        eval("(case (car '(c d)) ((a e i o u) 'vowel) ((w y) 'semivowel) (else 'other))"),
+        Value::symbol("other")
+    );
+}
+
+#[test]
+fn chibi_4_2_and_returns_last_true() {
+    // and returns last true value, not just #t
+    assert_eq!(
+        eval("(and 1 2 'c '(f g))"),
+        Value::list(vec![Value::symbol("f"), Value::symbol("g")])
+    );
+    is_true("(and)"); // empty and returns #t
+}
+
+#[test]
+fn chibi_4_2_or_returns_first_true() {
+    // or returns first true value
+    assert_eq!(
+        eval("(or (memq 'b '(a b c)) (/ 3 0))"),
+        Value::list(vec![Value::symbol("b"), Value::symbol("c")])
+    );
+    is_false("(or #f #f #f)");
+}
+
+#[test]
+fn chibi_4_2_named_let() {
+    // Named let for loops
+    is_int("(let loop ((x 0)) (if (= x 10) x (loop (+ x 1))))", 10);
+}
+
+#[test]
+fn chibi_4_2_letrec_star() {
+    // letrec* allows sequential references
+    is_int(
+        "(letrec* ((p (lambda (x) (+ 1 (q (- x 1)))))
+                   (q (lambda (y) (if (zero? y) 0 (+ 1 (p (- y 1))))))
+                   (x (p 5))
+                   (y x))
+           y)",
+        5,
+    );
+}
+
+#[test]
+fn chibi_4_2_do_loop() {
+    // do loop with multiple bindings
+    assert_eq!(
+        eval(
+            "(do ((vec (make-vector 5))
+                  (i 0 (+ i 1)))
+                 ((= i 5) vec)
+               (vector-set! vec i i))"
+        ),
+        eval("#(0 1 2 3 4)")
+    );
+}
+
+// --- §4.3 Macros (Chibi) ---
+
+#[test]
+fn chibi_4_3_let_syntax_hygiene() {
+    // let-syntax should be hygienic — `if` is rebound but doesn't affect the macro
+    assert_eq!(
+        eval(
+            "(let-syntax ((when (syntax-rules ()
+                             ((when test stmt1 stmt2 ...)
+                              (if test (begin stmt1 stmt2 ...))))))
+               (let ((if #t))
+                 (when if (set! if 'now))
+                 if))"
+        ),
+        Value::symbol("now")
+    );
+}
+
+#[test]
+fn chibi_4_3_basic_syntax_rules() {
+    // Basic syntax-rules macro
+    assert_eq!(
+        eval(
+            "(let-syntax ((swap! (syntax-rules ()
+                             ((swap! a b) (let ((t a)) (set! a b) (set! b t))))))
+               (let ((x 1) (y 2))
+                 (swap! x y)
+                 (list x y)))"
+        ),
+        Value::list(vec![Value::Int(2), Value::Int(1)])
+    );
+}
+
+// --- §5 Program Structure (Chibi) ---
+
+#[test]
+fn chibi_5_define_values() {
+    // define-values destructuring
+    is_int("(define-values (a b c) (values 1 2 3)) (+ a b c)", 6);
+}
+
+#[test]
+fn chibi_5_define_record_type() {
+    // define-record-type
+    is_true(
+        "(define-record-type <pare> (kons x y) pare? (x kar) (y kdr))
+         (pare? (kons 1 2))",
+    );
+    is_false(
+        "(define-record-type <pare> (kons x y) pare? (x kar) (y kdr))
+         (pare? (cons 1 2))",
+    );
+    is_int(
+        "(define-record-type <pare> (kons x y) pare? (x kar) (y kdr))
+         (kar (kons 1 2))",
+        1,
+    );
+    is_int(
+        "(define-record-type <pare> (kons x y) pare? (x kar) (y kdr))
+         (kdr (kons 1 2))",
+        2,
+    );
+}
+
+// --- §6.1 Equivalence (Chibi) ---
+
+#[test]
+fn chibi_6_1_eqv_edge_cases() {
+    is_true("(eqv? #t #t)");
+    is_true("(eqv? #f #f)");
+    is_true("(eqv? 'abc 'abc)");
+    is_true("(eqv? 2 2)");
+    is_true("(eqv? '() '())");
+    is_true("(eqv? car car)");
+    is_false("(eqv? #f 'nil)");
+    is_false("(eqv? '() #f)");
+    is_false("(eqv? 2 2.0)"); // exact vs inexact
+}
+
+#[test]
+fn chibi_6_1_equal_deep() {
+    is_true("(equal? '(a b c) '(a b c))");
+    is_true("(equal? '(a (b) c) '(a (b) c))");
+    is_true("(equal? #(1 2 3) #(1 2 3))");
+    is_true(r#"(equal? "abc" "abc")"#);
+}
+
+// --- §6.2 Numbers (Chibi) ---
+
+#[test]
+fn chibi_6_2_type_predicates() {
+    is_true("(number? 3)");
+    is_true("(real? 3)");
+    is_true("(integer? 3)");
+    is_true("(exact? 3)");
+    is_true("(inexact? 3.0)");
+    is_true("(integer? 3.0)"); // 3.0 is integer-valued
+    is_false("(integer? 3.1)");
+}
+
+#[test]
+fn chibi_6_2_arithmetic_edge() {
+    is_int("(+ 3 4)", 7);
+    is_int("(- 3 4)", -1);
+    is_int("(* 4)", 4);
+    is_int("(+)", 0);
+    is_int("(*)", 1);
+    is_int("(abs -7)", 7);
+    is_int("(abs 7)", 7);
+    is_int("(gcd 32 -36)", 4);
+    is_int("(gcd)", 0);
+    is_int("(lcm 32 -36)", 288);
+    is_int("(lcm)", 1);
+}
+
+#[test]
+fn chibi_6_2_exact_inexact_conversion() {
+    is_int("(exact 3.0)", 3);
+    assert_eq!(eval("(inexact 3)"), Value::Float(3.0));
+}
+
+#[test]
+fn chibi_6_2_number_string_roundtrip() {
+    // R7RS: (string->number (number->string x)) should equal x for exact numbers
+    is_int("(string->number (number->string 42))", 42);
+    is_int("(string->number (number->string -7))", -7);
+    is_int("(string->number (number->string 0))", 0);
+}
+
+// --- §6.3 Booleans (Chibi) ---
+
+#[test]
+fn chibi_6_3_boolean_equality() {
+    is_true("(boolean=? #t #t)");
+    is_true("(boolean=? #f #f)");
+    is_false("(boolean=? #t #f)");
+    is_true("(boolean=? #t #t #t)");
+    is_false("(boolean=? #t #t #f)");
+}
+
+// --- §6.4 Pairs and Lists (Chibi) ---
+
+#[test]
+fn chibi_6_4_list_ops() {
+    assert_eq!(
+        eval("(list 'a (+ 3 4) 'c)"),
+        Value::list(vec![Value::symbol("a"), Value::Int(7), Value::symbol("c")])
+    );
+    is_int("(length '(a b c))", 3);
+    is_int("(length '())", 0);
+    assert_eq!(
+        eval("(append '(a) '(b c d))"),
+        Value::list(vec![
+            Value::symbol("a"),
+            Value::symbol("b"),
+            Value::symbol("c"),
+            Value::symbol("d"),
+        ])
+    );
+    assert_eq!(
+        eval("(reverse '(a b c))"),
+        Value::list(vec![
+            Value::symbol("c"),
+            Value::symbol("b"),
+            Value::symbol("a")
+        ])
+    );
+}
+
+#[test]
+fn chibi_6_4_make_list() {
+    assert_eq!(
+        eval("(make-list 2 3)"),
+        Value::list(vec![Value::Int(3), Value::Int(3)])
+    );
+}
+
+#[test]
+fn chibi_6_4_list_copy_independence() {
+    // list-copy creates independent structure
+    is_true(
+        "(let* ((a '(1 2 3))
+                (b (list-copy a)))
+           (equal? a b))",
+    );
+}
+
+#[test]
+fn chibi_6_4_member_custom_compare() {
+    // member with custom comparator
+    assert_eq!(
+        eval("(member 2.0 '(1 2 3) =)"),
+        Value::list(vec![Value::Int(2), Value::Int(3)])
+    );
+}
+
+#[test]
+fn chibi_6_4_assoc_custom_compare() {
+    // assoc with custom comparator
+    assert_eq!(
+        eval("(assoc 2.0 '((1 a) (2 b) (3 c)) =)"),
+        Value::list(vec![Value::Int(2), Value::symbol("b")])
+    );
+}
+
+// --- §6.6 Characters (Chibi) ---
+
+#[test]
+fn chibi_6_6_char_predicates() {
+    is_true("(char-alphabetic? #\\a)");
+    is_false("(char-alphabetic? #\\1)");
+    is_true("(char-numeric? #\\1)");
+    is_false("(char-numeric? #\\a)");
+    is_true("(char-whitespace? #\\space)");
+    is_true("(char-whitespace? #\\newline)");
+    is_true("(char-upper-case? #\\A)");
+    is_false("(char-upper-case? #\\a)");
+    is_true("(char-lower-case? #\\a)");
+    is_false("(char-lower-case? #\\A)");
+}
+
+#[test]
+fn chibi_6_6_digit_value() {
+    is_int("(digit-value #\\0)", 0);
+    is_int("(digit-value #\\3)", 3);
+    is_int("(digit-value #\\9)", 9);
+    is_false("(digit-value #\\a)");
+    is_false("(digit-value #\\space)");
+}
+
+// --- §6.7 Strings (Chibi) ---
+
+#[test]
+fn chibi_6_7_string_ops() {
+    is_int(r#"(string-length "abc")"#, 3);
+    assert_eq!(eval(r#"(string-ref "abc" 1)"#), Value::Char('b'));
+    is_str(r#"(substring "abcdef" 2 4)"#, "cd");
+    is_str(r#"(string-append "hello" " " "world")"#, "hello world");
+    is_str(r#"(string-upcase "hello")"#, "HELLO");
+    is_str(r#"(string-downcase "HELLO")"#, "hello");
+}
+
+#[test]
+fn chibi_6_7_string_to_list_roundtrip() {
+    is_str("(list->string (string->list \"hello\"))", "hello");
+}
+
+// --- §6.8 Vectors (Chibi) ---
+
+#[test]
+fn chibi_6_8_vector_ops() {
+    is_int("(vector-length #(1 2 3))", 3);
+    is_int("(vector-ref #(1 2 3) 1)", 2);
+    assert_eq!(
+        eval("(vector->list #(1 2 3))"),
+        Value::list(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+    );
+    assert_eq!(eval("(list->vector '(1 2 3))"), eval("#(1 2 3)"));
+}
+
+#[test]
+fn chibi_6_8_vector_append() {
+    assert_eq!(eval("(vector-append #(1 2) #(3 4))"), eval("#(1 2 3 4)"));
+}
+
+// --- §6.9 Bytevectors (Chibi) ---
+
+#[test]
+fn chibi_6_9_bytevector_ops() {
+    is_int("(bytevector-length #u8(1 2 3))", 3);
+    is_int("(bytevector-u8-ref #u8(10 20 30) 1)", 20);
+    assert_eq!(
+        eval("(bytevector-append #u8(1 2) #u8(3 4))"),
+        eval("#u8(1 2 3 4)")
+    );
+}
+
+#[test]
+fn chibi_6_9_utf8_string_conversion() {
+    is_str(r#"(utf8->string #u8(65 66 67))"#, "ABC");
+    assert_eq!(eval(r#"(string->utf8 "ABC")"#), eval("#u8(65 66 67)"));
+}
+
+// --- §6.10 Control (Chibi) ---
+
+#[test]
+fn chibi_6_10_apply() {
+    is_int("(apply + '(3 4))", 7);
+    is_int("(apply + 1 2 '(3 4))", 10);
+}
+
+#[test]
+fn chibi_6_10_map_multi_list() {
+    // map with multiple lists
+    assert_eq!(
+        eval("(map + '(1 2 3) '(10 20 30))"),
+        Value::list(vec![Value::Int(11), Value::Int(22), Value::Int(33)])
+    );
+}
+
+#[test]
+fn chibi_6_10_string_map() {
+    is_str("(string-map char-upcase \"hello\")", "HELLO");
+}
+
+#[test]
+fn chibi_6_10_vector_map() {
+    assert_eq!(
+        eval("(vector-map + #(1 2 3) #(10 20 30))"),
+        eval("#(11 22 33)")
+    );
+}
+
+#[test]
+fn chibi_6_10_call_cc_escape() {
+    // Classic call/cc escape pattern
+    is_int(
+        "(+ 1 (call-with-current-continuation (lambda (k) (+ 2 (k 3)))))",
+        4,
+    );
+}
+
+#[test]
+fn chibi_6_10_call_with_values() {
+    is_int("(call-with-values (lambda () (values 4 5)) +)", 9);
+}
+
+#[test]
+fn chibi_6_10_dynamic_wind_ordering() {
+    // dynamic-wind before/after ordering
+    is_str(
+        r#"(let ((path '()))
+           (dynamic-wind
+             (lambda () (set! path (cons 'before path)))
+             (lambda () (set! path (cons 'during path)))
+             (lambda () (set! path (cons 'after path))))
+           (list->string (map (lambda (s) (string-ref (symbol->string s) 0)) (reverse path))))"#,
+        "bda",
+    );
+}
+
+// --- §6.11 Exceptions (Chibi) ---
+
+#[test]
+fn chibi_6_11_guard_basic() {
+    is_int(
+        "(guard (exn
+                 ((string? (error-object-message exn)) 42))
+           (error \"test\" \"oops\"))",
+        42,
+    );
+}
+
+#[test]
+fn chibi_6_11_error_object_properties() {
+    is_str(
+        r#"(guard (e (#t (error-object-message e)))
+           (error "test message" 1 2 3))"#,
+        "test message",
+    );
+    // irritants
+    assert_eq!(
+        eval(
+            r#"(guard (e (#t (error-object-irritants e)))
+               (error "msg" 1 2 3))"#
+        ),
+        Value::list(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+    );
+}
+
+// --- §6.13 I/O (Chibi) ---
+
+#[test]
+fn chibi_6_13_string_port_roundtrip() {
+    // write to string port, read back
+    is_int(
+        r#"(let ((p (open-output-string)))
+             (write 42 p)
+             (let ((s (get-output-string p)))
+               (read (open-input-string s))))"#,
+        42,
+    );
+}
+
+#[test]
+fn chibi_6_13_write_read_roundtrip_list() {
+    assert_eq!(
+        eval(
+            r#"(let ((p (open-output-string)))
+                 (write '(1 2 3) p)
+                 (let ((s (get-output-string p)))
+                   (read (open-input-string s))))"#
+        ),
+        Value::list(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+    );
+}
+
+// --- §6.14 System interface (Chibi) ---
+
+#[test]
+fn chibi_6_14_features_contains_r7rs() {
+    // memq returns the tail starting at the match (truthy), not #t
+    is_true("(if (memq 'r7rs (features)) #t #f)");
+}
+
+#[test]
+fn chibi_6_14_features_contains_mae_scheme() {
+    is_true("(if (memq 'mae-scheme (features)) #t #f)");
+}
+
+// =========================================================================
+// Regression tests for audit findings
+// =========================================================================
+
+// --- Issue #1: define-record-type accessor index when field spec order ≠ constructor order ---
+
+#[test]
+fn audit_record_type_accessor_index_mismatch() {
+    // Constructor takes (y x) but field specs list x first, then y.
+    // Accessor must return the correct field regardless of spec order.
+    let result = eval(
+        "(begin
+           (define-record-type <pt>
+             (make-pt y x)
+             pt?
+             (x pt-x)
+             (y pt-y))
+           (let ((p (make-pt 20 10)))
+             (list (pt-x p) (pt-y p))))",
+    );
+    assert_eq!(result, eval("'(10 20)"));
+}
+
+#[test]
+fn audit_record_type_accessor_matching_order() {
+    // When field spec order matches constructor order, still works
+    let result = eval(
+        "(begin
+           (define-record-type <pair>
+             (make-pair a b)
+             pair?
+             (a pair-a)
+             (b pair-b))
+           (let ((p (make-pair 1 2)))
+             (list (pair-a p) (pair-b p))))",
+    );
+    assert_eq!(result, eval("'(1 2)"));
+}
+
+// --- Issue #2: abs i64::MIN overflow ---
+
+#[test]
+fn audit_abs_min_int_no_panic() {
+    // abs of most negative fixnum should not panic
+    let result = eval(&format!("(abs {})", i64::MIN));
+    // Should return i64::MAX (saturated) rather than panicking
+    match result {
+        Value::Int(n) => assert!(n > 0, "abs of MIN should be positive, got {n}"),
+        _ => panic!("abs should return integer"),
+    }
+}
+
+// --- Issue #3: expt exact integer preservation ---
+
+#[test]
+fn audit_expt_exact_integer() {
+    // (expt 2 10) should return exact 1024, not float
+    is_int("(expt 2 10)", 1024);
+    is_int("(expt 3 5)", 243);
+    is_int("(expt 2 0)", 1);
+    is_int("(expt 5 1)", 5);
+}
+
+#[test]
+fn audit_expt_large_exact() {
+    // 2^53 is exactly representable in i64
+    is_int("(expt 2 53)", 1_i64 << 53);
+}
+
+#[test]
+fn audit_expt_overflow_to_float() {
+    // 2^63 overflows i64, should fall back to float
+    let r = eval("(expt 2 63)");
+    assert!(
+        matches!(r, Value::Float(_)),
+        "2^63 should overflow to float, got {r}"
+    );
+}
+
+// --- Issue #4: unary / exactness ---
+
+#[test]
+fn audit_unary_div_exact() {
+    // (/ 1) should return exact 1
+    is_int("(/ 1)", 1);
+    // (/ -1) should return exact -1
+    is_int("(/ -1)", -1);
+}
+
+// --- Issue #5: exact-integer-sqrt precision ---
+
+#[test]
+fn audit_exact_integer_sqrt_basic() {
+    assert_eq!(eval("(exact-integer-sqrt 14)"), eval("'(3 5)"));
+    assert_eq!(eval("(exact-integer-sqrt 0)"), eval("'(0 0)"));
+    assert_eq!(eval("(exact-integer-sqrt 1)"), eval("'(1 0)"));
+    assert_eq!(eval("(exact-integer-sqrt 4)"), eval("'(2 0)"));
+    assert_eq!(eval("(exact-integer-sqrt 5)"), eval("'(2 1)"));
+}
+
+// --- Issue #6: call_thunk winder preservation ---
+
+#[test]
+fn audit_dynamic_wind_nested_thunk_winders() {
+    // Nested dynamic-wind should properly save/restore winders in call_thunk
+    let result = eval(
+        "(let ((trace '()))
+           (dynamic-wind
+             (lambda () (set! trace (cons 'in1 trace)))
+             (lambda ()
+               (dynamic-wind
+                 (lambda () (set! trace (cons 'in2 trace)))
+                 (lambda () (set! trace (cons 'body trace)))
+                 (lambda () (set! trace (cons 'out2 trace)))))
+             (lambda () (set! trace (cons 'out1 trace))))
+           (reverse trace))",
+    );
+    assert_eq!(result, eval("'(in1 in2 body out2 out1)"));
+}
+
+// --- Issue #7: modulo i64::MIN overflow ---
+
+#[test]
+fn audit_modulo_large_negative() {
+    // modulo with large negative should not overflow
+    let result = eval("(modulo -9223372036854775807 3)");
+    match result {
+        Value::Int(n) => assert!(
+            (0..3).contains(&n),
+            "modulo result should be in [0,3), got {n}"
+        ),
+        _ => panic!("modulo should return integer"),
+    }
+}
+
+// --- Issue #8: output-bytevector binary safety ---
+
+#[test]
+fn audit_output_bytevector_high_bytes() {
+    // Bytes 128-255 should round-trip through bytevector port
+    let result = eval(
+        "(let ((p (open-output-bytevector)))
+           (write-u8 0 p)
+           (write-u8 127 p)
+           (write-u8 128 p)
+           (write-u8 255 p)
+           (let ((bv (get-output-bytevector p)))
+             (list (bytevector-u8-ref bv 0)
+                   (bytevector-u8-ref bv 1)
+                   (bytevector-u8-ref bv 2)
+                   (bytevector-u8-ref bv 3))))",
+    );
+    assert_eq!(result, eval("'(0 127 128 255)"));
+}
+
+// --- Additional audit regression tests ---
+
+#[test]
+fn audit_input_bytevector_high_bytes() {
+    // Bytes 128-255 should round-trip through bytevector input port
+    let result = eval(
+        "(let ((p (open-input-bytevector #u8(0 127 128 255))))
+           (list (read-u8 p) (read-u8 p) (read-u8 p) (read-u8 p)))",
+    );
+    assert_eq!(result, eval("'(0 127 128 255)"));
+}
+
+#[test]
+fn audit_input_bytevector_eof() {
+    is_true(
+        "(let ((p (open-input-bytevector #u8(42))))
+           (read-u8 p)
+           (eof-object? (read-u8 p)))",
+    );
+}
+
+#[test]
+fn audit_input_bytevector_peek() {
+    let result = eval(
+        "(let ((p (open-input-bytevector #u8(99))))
+           (let ((a (peek-u8 p)) (b (read-u8 p)))
+             (list a b)))",
+    );
+    assert_eq!(result, eval("'(99 99)"));
+}
+
+#[test]
+fn audit_input_bytevector_read_bytevector() {
+    let result = eval(
+        "(let ((p (open-input-bytevector #u8(1 2 3 4 5))))
+           (read-bytevector 3 p))",
+    );
+    assert_eq!(result, eval("#u8(1 2 3)"));
+}
+
+#[test]
+fn audit_textual_port_not_binary() {
+    // textual-port? should return #f for binary ports
+    is_false("(textual-port? (open-input-bytevector #u8()))");
+    is_false("(textual-port? (open-output-bytevector))");
+}
+
+#[test]
+fn audit_textual_port_is_text() {
+    is_true("(textual-port? (open-input-string \"\"))");
+    is_true("(textual-port? (open-output-string))");
+}
+
+#[test]
+fn audit_features_no_false_flags() {
+    // ratios and exact-complex should NOT be in features list
+    is_false("(if (memq 'ratios (features)) #t #f)");
+    is_false("(if (memq 'exact-complex (features)) #t #f)");
+}
+
+#[test]
+fn audit_reader_delimiter_quote() {
+    // A symbol followed by a quote should be two separate datums:
+    // x then 'y (which reads as (quote y))
+    let result = eval(
+        "(let ((p (open-input-string \"x'y\")))
+                         (let* ((a (read p)) (b (read p)))
+                           (list a b)))",
+    );
+    assert_eq!(result, eval("'(x (quote y))"));
+}
+
+#[test]
+fn audit_parameterize_restores_on_exception() {
+    // parameterize should restore values even when body raises
+    is_int(
+        "(let ((p (make-parameter 10)))
+              (guard (exn (else 'caught))
+                (parameterize ((p 99))
+                  (error \"boom\")))
+              (p))",
+        10,
+    );
 }

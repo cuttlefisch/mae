@@ -840,9 +840,25 @@ impl<'a> Reader<'a> {
             return true;
         }
         let c = self.input.as_bytes()[pos];
+        // R7RS §7.1.1: delimiters are whitespace or ( ) [ ] { } " ; | ` ' , #
         matches!(
             c,
-            b' ' | b'\t' | b'\n' | b'\r' | b'(' | b')' | b'"' | b';' | b'|'
+            b' ' | b'\t'
+                | b'\n'
+                | b'\r'
+                | b'('
+                | b')'
+                | b'['
+                | b']'
+                | b'{'
+                | b'}'
+                | b'"'
+                | b';'
+                | b'|'
+                | b'`'
+                | b'\''
+                | b','
+                | b'#'
         )
     }
 
