@@ -2675,4 +2675,117 @@ mod tests {
             .unwrap();
         assert!(matches!(r, EvalResult::Done(_)));
     }
+
+    // --- DAP performance tests ---
+
+    #[test]
+    fn perf_breakpoint_yield_resume() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+
+        let iterations = 100u32;
+        let start = std::time::Instant::now();
+
+        for _ in 0..iterations {
+            vm.breakpoints
+                .entry("perf.scm".into())
+                .or_default()
+                .insert(1);
+
+            let r = vm
+                .eval_with_file_yielding("(define a 1)\n(define b 2)", "perf.scm")
+                .unwrap();
+            assert!(matches!(r, EvalResult::Yield(YieldRequest::Breakpoint(_))));
+
+            let r2 = vm.resume(Value::Bool(true)).unwrap();
+            assert!(matches!(r2, EvalResult::Done(_)));
+
+            vm.last_break_line_clear();
+        }
+
+        let per_op = start.elapsed() / iterations;
+        assert!(
+            per_op.as_millis() < 5,
+            "breakpoint yield/resume too slow: {:?}/op (want <5ms)",
+            per_op
+        );
+    }
+
+    #[test]
+    fn perf_stepping_through_10_lines() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+
+        // Build 10-line program
+        let lines: Vec<String> = (0..10).map(|i| format!("(define v{} {})", i, i)).collect();
+        let code = lines.join("\n");
+
+        let iterations = 20u32;
+        let start = std::time::Instant::now();
+
+        for _ in 0..iterations {
+            // Break on line 1
+            vm.breakpoints
+                .entry("step-perf.scm".into())
+                .or_default()
+                .insert(1);
+
+            let mut r = vm.eval_with_file_yielding(&code, "step-perf.scm").unwrap();
+
+            // Step through all remaining lines
+            let mut steps = 0;
+            while matches!(r, EvalResult::Yield(YieldRequest::Breakpoint(_))) {
+                vm.step_mode = StepMode::StepIn;
+                r = vm.resume(Value::Bool(true)).unwrap();
+                steps += 1;
+            }
+            assert!(steps >= 9, "should step through at least 9 lines");
+            vm.last_break_line_clear();
+        }
+
+        let per_op = start.elapsed() / iterations;
+        assert!(
+            per_op.as_millis() < 20,
+            "stepping through 10 lines too slow: {:?}/op (want <20ms)",
+            per_op
+        );
+    }
+
+    #[test]
+    fn perf_debug_mode_overhead() {
+        let mut vm_normal = Vm::new();
+        register_builtins(&mut vm_normal);
+
+        let mut vm_debug = Vm::new();
+        register_builtins(&mut vm_debug);
+        vm_debug.debug_mode = true;
+        // No breakpoints — measures pure instrumentation overhead
+
+        let code = "(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(fib 15)";
+        let iterations = 10u32;
+
+        // Normal mode
+        let start_normal = std::time::Instant::now();
+        for _ in 0..iterations {
+            vm_normal.eval_with_file(code, "normal.scm").unwrap();
+        }
+        let normal_time = start_normal.elapsed();
+
+        // Debug mode (no breakpoints)
+        let start_debug = std::time::Instant::now();
+        for _ in 0..iterations {
+            vm_debug.eval_with_file(code, "debug.scm").unwrap();
+        }
+        let debug_time = start_debug.elapsed();
+
+        // Debug mode overhead should be <3x (BreakpointCheck opcode at top level only)
+        let ratio = debug_time.as_micros() as f64 / normal_time.as_micros().max(1) as f64;
+        assert!(
+            ratio < 3.0,
+            "debug mode overhead too high: {:.1}x (want <3x)",
+            ratio
+        );
+    }
 }

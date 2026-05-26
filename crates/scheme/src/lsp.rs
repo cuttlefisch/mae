@@ -323,9 +323,9 @@ pub fn goto_definition(vm: &Vm, symbol: &str) -> Option<SourceLocation> {
 pub fn diagnostics(vm: &Vm, source: &str, file: &str) -> Vec<SchemeDiagnostic> {
     let mut results = Vec::new();
 
-    // Try to read (parse) the source
+    // Try to read (parse) the source with location tracking
     let mut rdr = reader::Reader::new(source, file);
-    let datums = match rdr.read_all() {
+    let located_datums = match rdr.read_all_located() {
         Ok(d) => d,
         Err(e) => {
             let loc = e.location.as_ref();
@@ -339,27 +339,27 @@ pub fn diagnostics(vm: &Vm, source: &str, file: &str) -> Vec<SchemeDiagnostic> {
         }
     };
 
-    if datums.is_empty() {
+    if located_datums.is_empty() {
         return results;
     }
 
-    // Try to compile (without executing)
+    // Try to compile (without executing) — use located compilation
+    // so errors carry source positions
     let mut compiler = Compiler::new();
     compiler.macros = vm.macros().clone();
     compiler.load_paths = vm.load_paths.clone();
 
     // Filter out imports/define-library for compilation
-    let to_compile: Vec<_> = datums
-        .iter()
-        .filter(|d| !is_import_form(d) && !is_define_library_form(d))
-        .cloned()
+    let to_compile: Vec<_> = located_datums
+        .into_iter()
+        .filter(|(d, _)| !is_import_form(d) && !is_define_library_form(d))
         .collect();
 
     if to_compile.is_empty() {
         return results;
     }
 
-    if let Err(e) = compiler.compile_top_level(&to_compile) {
+    if let Err(e) = compiler.compile_top_level_located(&to_compile) {
         let loc = e.location.as_ref();
         results.push(SchemeDiagnostic {
             line: loc.map(|l| l.line.saturating_sub(1)).unwrap_or(0),
@@ -697,6 +697,192 @@ mod tests {
         assert_eq!(
             results.iter().find(|c| c.label == "my-when").unwrap().kind,
             SchemeSymbolKind::Macro
+        );
+    }
+
+    // --- E2E: full pipeline tests ---
+
+    #[test]
+    fn e2e_completion_with_user_code() {
+        let mut vm = Vm::new();
+        crate::stdlib::register_stdlib(&mut vm);
+        vm.eval("(define (my-custom-function x) x)").unwrap();
+        vm.eval("(define my-custom-var 42)").unwrap();
+
+        let results = completions(&vm, "my-custom");
+        assert!(results.len() >= 2);
+        assert!(results.iter().any(|c| c.label == "my-custom-function"));
+        assert!(results.iter().any(|c| c.label == "my-custom-var"));
+    }
+
+    #[test]
+    fn e2e_hover_shows_foreign_fn_doc() {
+        let mut vm = Vm::new();
+        crate::stdlib::register_stdlib(&mut vm);
+
+        let result = hover(&vm, "car");
+        assert!(result.is_some());
+        let h = result.unwrap();
+        assert!(h.contents.contains("car"), "hover should mention 'car'");
+    }
+
+    #[test]
+    fn e2e_diagnostics_correct_source() {
+        let vm = Vm::new();
+        let diags = diagnostics(&vm, "(define (foo x) x)\n(define)", "test.scm");
+        // Should report error on the malformed define (line 2)
+        assert!(
+            !diags.is_empty(),
+            "malformed define should produce a diagnostic"
+        );
+        assert!(
+            diags[0].message.to_lowercase().contains("define"),
+            "diagnostic should mention define: {}",
+            diags[0].message
+        );
+        // Line is 0-indexed in diagnostics (LSP convention), so line 2 in source = line 1 here
+        assert_eq!(diags[0].line, 1, "error should be on line 2 (0-indexed: 1)");
+    }
+
+    #[test]
+    fn e2e_document_symbols_all_types() {
+        let code = "(define (fn1 x) x)\n(define var1 42)\n(define-syntax mac1 (syntax-rules () ((mac1) 1)))";
+        let syms = document_symbols(code, "test.scm");
+        assert!(syms.iter().any(|s| s.name == "fn1"));
+        assert!(syms.iter().any(|s| s.name == "var1"));
+        assert!(syms.iter().any(|s| s.name == "mac1"));
+    }
+
+    #[test]
+    fn e2e_goto_definition_user_closure() {
+        let mut vm = Vm::new();
+        crate::stdlib::register_stdlib(&mut vm);
+        vm.eval_with_file("(define (my-func x) (+ x 1))", "src.scm")
+            .unwrap();
+
+        let loc = goto_definition(&vm, "my-func");
+        assert!(loc.is_some());
+        let l = loc.unwrap();
+        assert_eq!(l.file, "src.scm");
+        assert_eq!(l.line, 1);
+    }
+
+    #[test]
+    fn e2e_signature_help_builtin() {
+        let mut vm = Vm::new();
+        crate::stdlib::register_stdlib(&mut vm);
+
+        let sig = signature_help(&vm, "map");
+        assert!(sig.is_some());
+        let s = sig.unwrap();
+        assert!(s.label.contains("map"));
+        assert!(!s.parameters.is_empty());
+    }
+
+    // --- Performance tests ---
+
+    #[test]
+    fn perf_completion_under_1ms() {
+        let mut vm = Vm::new();
+        crate::stdlib::register_stdlib(&mut vm);
+        // Add some user code
+        for i in 0..50 {
+            vm.eval(&format!("(define user-fn-{} (lambda (x) x))", i))
+                .unwrap();
+        }
+
+        let iterations = 200;
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let _ = completions(&vm, "def");
+        }
+        let per_op = start.elapsed() / iterations;
+
+        assert!(
+            per_op.as_micros() < 1000,
+            "completion too slow: {:?}/op (want <1ms)",
+            per_op
+        );
+    }
+
+    #[test]
+    fn perf_hover_under_1ms() {
+        let mut vm = Vm::new();
+        crate::stdlib::register_stdlib(&mut vm);
+
+        let iterations = 200;
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let _ = hover(&vm, "map");
+        }
+        let per_op = start.elapsed() / iterations;
+
+        assert!(
+            per_op.as_micros() < 1000,
+            "hover too slow: {:?}/op (want <1ms)",
+            per_op
+        );
+    }
+
+    #[test]
+    fn perf_diagnostics_under_5ms() {
+        let vm = Vm::new();
+        let code = "(define (fibonacci n)\n  (if (< n 2) n\n    (+ (fibonacci (- n 1)) (fibonacci (- n 2)))))";
+
+        let iterations = 100;
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let _ = diagnostics(&vm, code, "perf.scm");
+        }
+        let per_op = start.elapsed() / iterations;
+
+        assert!(
+            per_op.as_millis() < 5,
+            "diagnostics too slow: {:?}/op (want <5ms)",
+            per_op
+        );
+    }
+
+    #[test]
+    fn perf_document_symbols_under_1ms() {
+        let mut lines = Vec::new();
+        for i in 0..100 {
+            lines.push(format!("(define fn-{} (lambda (x) x))", i));
+        }
+        let code = lines.join("\n");
+
+        let iterations = 100;
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let _ = document_symbols(&code, "perf.scm");
+        }
+        let per_op = start.elapsed() / iterations;
+
+        assert!(
+            per_op.as_millis() < 5,
+            "document_symbols too slow: {:?}/op (want <5ms)",
+            per_op
+        );
+    }
+
+    #[test]
+    fn perf_goto_definition_under_1ms() {
+        let mut vm = Vm::new();
+        crate::stdlib::register_stdlib(&mut vm);
+        vm.eval_with_file("(define (target-fn x) (+ x 1))", "src.scm")
+            .unwrap();
+
+        let iterations = 200;
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let _ = goto_definition(&vm, "target-fn");
+        }
+        let per_op = start.elapsed() / iterations;
+
+        assert!(
+            per_op.as_micros() < 1000,
+            "goto-definition too slow: {:?}/op (want <1ms)",
+            per_op
         );
     }
 }

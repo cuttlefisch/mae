@@ -270,7 +270,13 @@ impl Compiler {
             if self.debug_mode {
                 self.emit(Op::BreakpointCheck(loc.line));
             }
-            self.compile_expr(expr, is_last)?;
+            self.compile_expr(expr, is_last).map_err(|e| {
+                if e.location.is_none() {
+                    e.at(loc.clone())
+                } else {
+                    e
+                }
+            })?;
             if !is_last {
                 self.emit(Op::Pop);
             }
