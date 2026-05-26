@@ -16,22 +16,20 @@
 //! @since: 0.12.0
 
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::library::{Library, LibraryName};
-use crate::lisp_error::{Arity, LispError};
-use crate::value::Value;
 use crate::vm::Vm;
 
 /// Exported function names from this library.
 const EXPORTS: &[&str] = &["sleep-ms", "wait-for-file", "current-milliseconds"];
 
 /// Register the `(mae async)` library in the VM's library registry.
+///
+/// The primitives (sleep-ms, wait-for-file, current-milliseconds) are
+/// registered as globals by `io::register()` in `register_stdlib()`.
+/// This function creates the R7RS library wrapper so they can also be
+/// imported via `(import (mae async))`.
 pub fn register(vm: &mut Vm) {
-    // Register the primitive functions as globals first
-    register_primitives(vm);
-
-    // Then register as a proper R7RS library
     let mut exports = HashMap::new();
     for name in EXPORTS {
         if let Some(val) = vm.globals.get(name) {
@@ -45,63 +43,11 @@ pub fn register(vm: &mut Vm) {
     });
 }
 
-/// Register async primitives as globals (available without import).
-fn register_primitives(vm: &mut Vm) {
-    // (sleep-ms N) — yield for N milliseconds
-    vm.register_fn(
-        "sleep-ms",
-        "Yield for N milliseconds. In blocking eval, sleeps synchronously. \
-         In yielding eval, returns control to the host event loop.",
-        Arity::Fixed(1),
-        |args| {
-            let ms = args[0]
-                .as_int()
-                .map_err(|_| LispError::type_error("integer", args[0].type_name()))?;
-            Err(LispError::yield_sleep(std::time::Duration::from_millis(
-                ms.max(0) as u64,
-            )))
-        },
-    );
-
-    // (wait-for-file PATH TIMEOUT-MS) — yield until file exists
-    vm.register_fn(
-        "wait-for-file",
-        "Yield until file at PATH exists, or TIMEOUT-MS elapses. \
-         Returns #t if file appeared, raises error on timeout in blocking mode.",
-        Arity::Fixed(2),
-        |args| {
-            let path = args[0]
-                .as_str()
-                .map_err(|_| LispError::type_error("string", args[0].type_name()))?;
-            let timeout_ms = args[1]
-                .as_int()
-                .map_err(|_| LispError::type_error("integer", args[1].type_name()))?;
-            Err(LispError::yield_wait_for_file(
-                std::path::PathBuf::from(path),
-                std::time::Duration::from_millis(timeout_ms.max(0) as u64),
-            ))
-        },
-    );
-
-    // (current-milliseconds) — monotonic clock, no yield
-    vm.register_fn(
-        "current-milliseconds",
-        "Return the current time in milliseconds since the Unix epoch.",
-        Arity::Fixed(0),
-        |_args| {
-            let ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i64;
-            Ok(Value::Int(ms))
-        },
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::stdlib;
+    use crate::value::Value;
     use crate::vm::{EvalResult, YieldRequest};
 
     fn make_vm() -> Vm {

@@ -3,10 +3,9 @@
 ;;; Scenario: A shares a buffer, both A and B make edits, A undoes its
 ;;; own edit, verifies B's edit is preserved, then checks final convergence.
 ;;;
-;;; Coordination via /sync volume (file-based signaling with client B).
-;;; Timing: A signals first, B uses static sleep to ensure A is ready,
-;;; then signals back.  sleep-ms is processed by the test runner which
-;;; drains collab events during the wait.
+;;; Coordination via /sync volume (file-based signaling with wait-for-file).
+;;; wait-for-file is a native yield — the test runner drains collab events
+;;; during the wait, so CRDT updates arrive while polling.
 ;;;
 ;;; No (run-tests) — uses Rust-side iteration.
 
@@ -19,6 +18,7 @@
         (write-file "/sync/a-edit-done" "")
         (write-file "/sync/b-edit-done" "")
         (write-file "/sync/a-undo-done" "")
+        (write-file "/sync/b-undo-done" "")
         (write-file "/sync/a-all-done" "")))
 
     (it-test "connects to state server"
@@ -30,7 +30,6 @@
         (let ((status (collab-status)))
           (should (pair? status)))))
 
-    ;; Create the file first (open-file fails on non-existent files).
     (it-test "creates test file"
       (lambda ()
         (write-file "/workspace/undo-test.txt" "")))
@@ -69,11 +68,11 @@
         (write-file "/sync/a-edit-done" "ready")))
 
     ;; --- Wait for B's edit ---
-    ;; B needs: see signal (~instant) + join (5s) + insert (3s) + signal = ~10s
-    ;; Use 30s to be safe.
-    (it-test "waits for B's edit to propagate"
+    (it-test "waits for B's edit signal"
       (lambda ()
-        (sleep-ms 30000)))
+        (wait-for-file "/sync/b-edit-done" 60000)
+        ;; Allow CRDT propagation after signal.
+        (sleep-ms 2000)))
 
     (it-test "verifies B's edit arrived via CRDT"
       (lambda ()
@@ -97,10 +96,11 @@
       (lambda ()
         (write-file "/sync/a-undo-done" "done")))
 
-    ;; --- Wait for B to verify convergence ---
-    (it-test "waits for B to finish"
+    ;; --- Wait for B to undo + finish ---
+    (it-test "waits for B to finish undo"
       (lambda ()
-        (sleep-ms 15000)))
+        (wait-for-file "/sync/b-undo-done" 60000)
+        (sleep-ms 2000)))
 
     ;; --- Round 3: A redoes ---
     (it-test "A redoes its edit"
@@ -113,7 +113,6 @@
         (let ((text (buffer-string)))
           (should (string-contains? text "base"))
           (should (string-contains? text "from-A"))
-          ;; B undid its own edit during the wait, so from-B should be gone.
           (should-not (string-contains? text "from-B")))))
 
     (it-test "saves final state"
@@ -125,8 +124,7 @@
       (lambda ()
         (write-file "/sync/a-all-done" "done")))
 
-    ;; Brief wait for joiner to see the a-all-done signal and exit.
-    ;; With wait-for-file on the joiner side, this can be short.
-    (it-test "waits for joiner to finish"
+    ;; Brief wait for joiner to see the a-all-done signal.
+    (it-test "waits for joiner to exit"
       (lambda ()
-        (sleep-ms 10000)))))
+        (sleep-ms 5000)))))

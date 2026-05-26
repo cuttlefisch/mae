@@ -5,7 +5,7 @@
 ;;; and shared filesystem save scenarios.
 ;;;
 ;;; No (run-tests) — uses Rust-side iteration for inject/apply between tests.
-;;; Uses sleep-ms instead of wait-until (sleep is processed between test steps).
+;;; Uses wait-for-file for inter-client synchronization (native yield, event-loop-aware).
 
 (describe-group "Client A: Share workflow"
   (lambda ()
@@ -20,10 +20,6 @@
           (should (pair? status)))))
 
     ;; --- Scenario 1: Separate filesystems ---
-    ;; Each pending op (open-file, buffer-insert, run-command) is processed
-    ;; by apply_to_editor AFTER the test step. Split into separate steps so
-    ;; open-file completes before buffer-insert targets the new buffer.
-    ;; Create the file first (open-file fails on non-existent files).
     (it-test "creates test file"
       (lambda ()
         (write-file "/workspace/test.txt" "")))
@@ -49,10 +45,12 @@
       (lambda ()
         (write-file "/sync/a-shared" "ready")))
 
-    (it-test "receives Client B's edit"
+    (it-test "waits for Client B's edit"
       (lambda ()
-        ;; Wait for Client B to join, edit, and sync back.
-        (sleep-ms 30000)))
+        ;; Client B signals /sync/b-edit-done after joining + editing.
+        (wait-for-file "/sync/b-edit-done" 60000)
+        ;; Allow CRDT propagation after signal.
+        (sleep-ms 2000)))
 
     (it-test "verifies Client B's content"
       (lambda ()
@@ -78,7 +76,6 @@
       (lambda ()
         (write-file "/sync/a-saved-shared" "done")))
 
-    ;; Signal that this client is done.
     (it-test "signals client-a done"
       (lambda ()
         (write-file "/sync/client-a-done" "done")))))

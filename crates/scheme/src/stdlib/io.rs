@@ -1817,16 +1817,44 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    // -- sleep/timing --
+    // -- sleep/timing (yield-based) --
 
     vm.register_fn(
         "sleep-ms",
-        "Sleep for N milliseconds (blocking)",
+        "Sleep for N milliseconds (yields to event loop)",
         Arity::Fixed(1),
         |args| {
             let ms = args[0].as_int()?.max(0) as u64;
-            std::thread::sleep(std::time::Duration::from_millis(ms));
-            Ok(Value::Bool(true))
+            Err(LispError::yield_sleep(std::time::Duration::from_millis(ms)))
+        },
+    );
+
+    vm.register_fn(
+        "wait-for-file",
+        "Wait until file exists (yields to event loop)",
+        Arity::Fixed(2),
+        |args| {
+            let path = args[0]
+                .as_str()
+                .map_err(|_| LispError::type_error("string", args[0].type_name()))?;
+            let timeout_ms = args[1].as_int()?.max(0) as u64;
+            Err(LispError::yield_wait_for_file(
+                std::path::PathBuf::from(path),
+                std::time::Duration::from_millis(timeout_ms),
+            ))
+        },
+    );
+
+    vm.register_fn(
+        "current-milliseconds",
+        "Return the current time in milliseconds since the Unix epoch",
+        Arity::Fixed(0),
+        |_args| {
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+            Ok(Value::Int(ms))
         },
     );
 

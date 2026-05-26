@@ -176,12 +176,9 @@
               (loop (+ elapsed 50))))))
   (loop 0))
 
-;; (wait-for-file PATH TIMEOUT-MS) — poll until file exists on disk.
-;; Note: file-exists? must be provided by the runtime.
-(define (wait-for-file path timeout-ms)
-  (wait-until
-    (lambda () (file-exists? path))
-    timeout-ms))
+;; wait-for-file is a native yield primitive registered by (mae async).
+;; It yields to the host event loop, which can drain collab/shell events
+;; during the wait. No Scheme wrapper needed.
 
 ;; --- Test runner ---
 

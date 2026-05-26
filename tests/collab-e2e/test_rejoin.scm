@@ -2,6 +2,7 @@
 ;;;
 ;;; Shares a document, disconnects, edits while offline,
 ;;; reconnects and verifies the edit propagates.
+;;; Single-client test (no inter-client coordination needed).
 ;;;
 ;;; No (run-tests) — uses Rust-side iteration for inject/apply between tests.
 
