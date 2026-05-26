@@ -318,6 +318,9 @@ async fn eval_with_yields(
                             tokio::time::sleep(poll_interval).await;
                         }
                     }
+                    YieldRequest::Breakpoint(_) => {
+                        // In test mode, breakpoints can't pause — just resume.
+                    }
                     YieldRequest::Flush => {
                         // Apply pending ops (buffer-insert, create-buffer, etc.)
                         // and refresh editor state so subsequent reads see updates.

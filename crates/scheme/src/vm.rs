@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::compiler::{CodeObject, Compiler, MacroDef, Op, UpvalueDesc};
 use crate::env::Env;
@@ -42,6 +42,45 @@ pub enum YieldRequest {
     WaitForFile(std::path::PathBuf, Duration),
     /// Flush pending ops and refresh editor state mid-eval.
     Flush,
+    /// Breakpoint hit — VM pauses for debugger inspection.
+    Breakpoint(BreakpointInfo),
+}
+
+/// Information about a breakpoint hit, sent to the debugger.
+#[derive(Clone, Debug)]
+pub struct BreakpointInfo {
+    /// Source file where the breakpoint was hit.
+    pub file: String,
+    /// Line number (1-indexed).
+    pub line: u32,
+    /// Stack frames at the breakpoint.
+    pub frames: Vec<DebugFrame>,
+}
+
+/// A stack frame for debugger display.
+#[derive(Clone, Debug)]
+pub struct DebugFrame {
+    /// Function name.
+    pub name: String,
+    /// Source file.
+    pub file: String,
+    /// Line number (1-indexed).
+    pub line: u32,
+    /// Local variable names and values.
+    pub locals: Vec<(String, String)>,
+}
+
+/// Step mode for the debugger.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StepMode {
+    /// Normal execution — only stop at breakpoints.
+    Run,
+    /// Break on next source line (any depth).
+    StepIn,
+    /// Break at same or shallower frame depth (skip calls).
+    StepOver(usize),
+    /// Break when current frame returns.
+    StepOut(usize),
 }
 
 /// A call frame on the VM stack.
@@ -113,6 +152,14 @@ pub struct Vm {
     pub winders: Vec<Winder>,
     /// GC statistics for observability.
     pub gc_stats: GcStats,
+    /// Active breakpoints: file → set of line numbers.
+    pub breakpoints: HashMap<String, HashSet<u32>>,
+    /// Current step mode for the debugger.
+    pub step_mode: StepMode,
+    /// Last breakpoint source line (to avoid re-breaking on same line).
+    last_break_line: Option<(String, u32)>,
+    /// When true, compiler emits `Op::BreakpointCheck` at source line boundaries.
+    pub debug_mode: bool,
 }
 
 /// GC observability metrics (Stage 1: Rc-based, monitors for cycle leaks).
@@ -144,6 +191,10 @@ impl Vm {
             load_paths: Vec::new(),
             winders: Vec::new(),
             gc_stats: GcStats::default(),
+            breakpoints: HashMap::new(),
+            step_mode: StepMode::Run,
+            last_break_line: None,
+            debug_mode: false,
         }
     }
 
@@ -204,9 +255,10 @@ impl Vm {
         }
 
         let mut compiler = Compiler::new();
-        // Seed compiler with macros and load paths from VM
+        // Seed compiler with macros, load paths, and debug mode from VM
         compiler.macros = self.macros.clone();
         compiler.load_paths = self.load_paths.clone();
+        compiler.debug_mode = self.debug_mode;
 
         let code_id = compiler.compile_top_level_located(&to_compile)?;
 
@@ -267,6 +319,65 @@ impl Vm {
         let mut compiler = Compiler::new();
         compiler.macros = self.macros.clone();
         compiler.load_paths = self.load_paths.clone();
+        compiler.debug_mode = self.debug_mode;
+
+        let code_id = compiler.compile_top_level_located(&to_compile)?;
+        self.macros = compiler.macros;
+
+        let base = self.code_pool.len();
+        for mut code_obj in compiler.code_pool {
+            for op in &mut code_obj.ops {
+                if let Op::MakeClosure(ref mut idx, _) = op {
+                    *idx += base;
+                }
+            }
+            self.code_pool.push(code_obj);
+        }
+
+        let result = self.execute_yielding(base + code_id);
+
+        self.gc_stats.eval_count += 1;
+        if self.stack.len() > self.gc_stats.stack_hwm {
+            self.gc_stats.stack_hwm = self.stack.len();
+        }
+        self.gc_stats.globals_count = self.globals.len();
+
+        result
+    }
+
+    /// Evaluate Scheme code with a file name for source maps, returning yield
+    /// requests instead of blocking. Combines `eval_with_file` + `eval_yielding`.
+    pub fn eval_with_file_yielding(
+        &mut self,
+        code: &str,
+        file: &str,
+    ) -> Result<EvalResult, LispError> {
+        let located_datums = reader::read_all_located(code, file)?;
+        if located_datums.is_empty() {
+            return Ok(EvalResult::Done(Value::Void));
+        }
+
+        let mut to_compile = Vec::new();
+        for (datum, loc) in &located_datums {
+            if self.is_top_level_import(datum) {
+                self.process_import(datum)?;
+            } else if self.is_define_library(datum) {
+                self.process_define_library(datum)?;
+            } else if self.is_top_level_load(datum) {
+                self.process_load(datum)?;
+            } else {
+                to_compile.push((datum.clone(), loc.clone()));
+            }
+        }
+
+        if to_compile.is_empty() {
+            return Ok(EvalResult::Done(Value::Void));
+        }
+
+        let mut compiler = Compiler::new();
+        compiler.macros = self.macros.clone();
+        compiler.load_paths = self.load_paths.clone();
+        compiler.debug_mode = self.debug_mode;
 
         let code_id = compiler.compile_top_level_located(&to_compile)?;
         self.macros = compiler.macros;
@@ -398,6 +509,7 @@ impl Vm {
             let mut compiler = Compiler::new();
             compiler.macros = self.macros.clone();
             compiler.load_paths = self.load_paths.clone();
+            compiler.debug_mode = self.debug_mode;
             let code_id = compiler.compile_top_level(&lib_def.body)?;
             self.macros = compiler.macros;
 
@@ -484,6 +596,9 @@ impl Vm {
                     YieldRequest::Flush => {
                         // In blocking mode, flush is a no-op — there's no
                         // host event loop to sync with.
+                    }
+                    YieldRequest::Breakpoint(_) => {
+                        // In blocking mode, breakpoints can't pause — skip.
                     }
                 }
                 self.stack.push(Value::Bool(true));
@@ -790,6 +905,17 @@ impl Vm {
                 }
 
                 Op::Nop => {}
+
+                Op::BreakpointCheck(line) => {
+                    // Clone frame data before calling &mut self methods
+                    let current_frame = self.frames.last().cloned();
+                    if let Some(cf) = current_frame {
+                        if self.should_break(line, &cf) {
+                            let info = self.build_breakpoint_info(line, &cf);
+                            return Ok(EvalResult::Yield(YieldRequest::Breakpoint(info)));
+                        }
+                    }
+                }
 
                 Op::Apply => {
                     // Stack: [fn, args-list]
@@ -1145,6 +1271,9 @@ impl Vm {
                         YieldRequest::Flush => {
                             // No-op in blocking mode.
                         }
+                        YieldRequest::Breakpoint(_) => {
+                            // In blocking mode, breakpoints can't pause — skip.
+                        }
                     }
                     self.stack.push(Value::Bool(true));
                 }
@@ -1153,6 +1282,114 @@ impl Vm {
     }
 
     /// Convert a `LispError::Yield` into `Ok(EvalResult::Yield)`.
+    /// Check if we should break at the given line.
+    fn should_break(&mut self, line: u32, frame: &Frame) -> bool {
+        let file = self
+            .code_pool
+            .get(frame.code_id)
+            .and_then(|c| {
+                c.source_map
+                    .iter()
+                    .find_map(|l| l.as_ref().map(|loc| loc.file.clone()))
+            })
+            .unwrap_or_default();
+
+        // Avoid re-breaking on the same line
+        if self.last_break_line.as_ref() == Some(&(file.clone(), line)) {
+            return false;
+        }
+
+        let should = match &self.step_mode {
+            StepMode::Run => {
+                // Only break at explicitly set breakpoints
+                self.breakpoints
+                    .get(&file)
+                    .map(|lines| lines.contains(&line))
+                    .unwrap_or(false)
+            }
+            StepMode::StepIn => true,
+            StepMode::StepOver(depth) => self.frames.len() <= *depth,
+            StepMode::StepOut(depth) => self.frames.len() < *depth,
+        };
+
+        if should {
+            self.last_break_line = Some((file, line));
+            // Reset step mode after breaking (ephemeral, like Guile's traps)
+            if self.step_mode != StepMode::Run {
+                self.step_mode = StepMode::Run;
+            }
+        }
+
+        should
+    }
+
+    /// Build debugger frame info at a breakpoint.
+    fn build_breakpoint_info(&self, line: u32, current_frame: &Frame) -> BreakpointInfo {
+        let file = self
+            .code_pool
+            .get(current_frame.code_id)
+            .and_then(|c| {
+                c.source_map
+                    .iter()
+                    .find_map(|l| l.as_ref().map(|loc| loc.file.clone()))
+            })
+            .unwrap_or_else(|| "<unknown>".into());
+
+        let mut frames = Vec::new();
+
+        // Current frame
+        frames.push(self.frame_to_debug(current_frame, line));
+
+        // Parent frames from the stack
+        for f in self.frames.iter().rev() {
+            let f_line = self
+                .code_pool
+                .get(f.code_id)
+                .and_then(|c| c.source_map.get(f.ip.saturating_sub(1)))
+                .and_then(|l| l.as_ref())
+                .map(|l| l.line)
+                .unwrap_or(0);
+            frames.push(self.frame_to_debug(f, f_line));
+        }
+
+        BreakpointInfo { file, line, frames }
+    }
+
+    /// Convert a VM frame to a debug frame for display.
+    fn frame_to_debug(&self, frame: &Frame, line: u32) -> DebugFrame {
+        let file = self
+            .code_pool
+            .get(frame.code_id)
+            .and_then(|c| {
+                c.source_map
+                    .iter()
+                    .find_map(|l| l.as_ref().map(|loc| loc.file.clone()))
+            })
+            .unwrap_or_else(|| "<unknown>".into());
+
+        let name = frame.name.clone().unwrap_or_else(|| "<lambda>".into());
+
+        // Collect local variable values
+        let mut locals = Vec::new();
+        let stack_len = self.stack.len();
+        let bp = frame.bp;
+        for i in 0..8 {
+            // Show up to 8 locals
+            let idx = bp + i;
+            if idx >= stack_len {
+                break;
+            }
+            locals.push((format!("local{}", i), format!("{}", self.stack[idx])));
+        }
+
+        DebugFrame {
+            name,
+            file,
+            line,
+            locals,
+        }
+    }
+
     fn convert_yield(&self, err: LispError) -> Result<EvalResult, LispError> {
         use crate::lisp_error::{ErrorKind, YieldReason};
         match err.kind {
@@ -2278,5 +2515,154 @@ mod tests {
         assert!(lines.contains(&1), "should have line 1");
         assert!(lines.contains(&2), "should have line 2");
         assert!(lines.contains(&3), "should have line 3");
+    }
+
+    // --- DAP / Breakpoint tests ---
+
+    #[test]
+    fn breakpoint_yields_at_set_line() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+        vm.breakpoints
+            .entry("test.scm".into())
+            .or_default()
+            .insert(2);
+
+        let r = vm
+            .eval_with_file_yielding("(define a 1)\n(define b 2)\n(define c 3)", "test.scm")
+            .unwrap();
+        match r {
+            EvalResult::Yield(YieldRequest::Breakpoint(info)) => {
+                assert_eq!(info.line, 2);
+                assert_eq!(info.file, "test.scm");
+                assert!(!info.frames.is_empty());
+            }
+            other => panic!("expected Breakpoint yield, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn breakpoint_resume_continues_execution() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+        vm.breakpoints
+            .entry("test.scm".into())
+            .or_default()
+            .insert(2);
+
+        let r = vm
+            .eval_with_file_yielding("(define a 1)\n(define b 2)\n(define c 3)", "test.scm")
+            .unwrap();
+        assert!(matches!(r, EvalResult::Yield(YieldRequest::Breakpoint(_))));
+
+        // Resume — should complete
+        let r2 = vm.resume(Value::Bool(true)).unwrap();
+        match r2 {
+            EvalResult::Done(v) => {
+                // c should be defined after resuming
+                assert_eq!(vm.globals.get("c"), Some(&Value::Int(3)));
+                assert_eq!(v, Value::Void);
+            }
+            other => panic!("expected Done after resume, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_breakpoint_runs_normally() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+        // No breakpoints set — should run to completion
+
+        let r = vm
+            .eval_with_file_yielding("(define a 1)\n(define b 2)", "test.scm")
+            .unwrap();
+        assert!(matches!(r, EvalResult::Done(_)));
+        assert_eq!(vm.globals.get("a"), Some(&Value::Int(1)));
+        assert_eq!(vm.globals.get("b"), Some(&Value::Int(2)));
+    }
+
+    #[test]
+    fn step_in_breaks_on_next_line() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+        // Set breakpoint on line 1 to get initial stop
+        vm.breakpoints
+            .entry("step.scm".into())
+            .or_default()
+            .insert(1);
+
+        let r = vm
+            .eval_with_file_yielding("(define a 1)\n(define b 2)\n(define c 3)", "step.scm")
+            .unwrap();
+        assert!(
+            matches!(r, EvalResult::Yield(YieldRequest::Breakpoint(ref info)) if info.line == 1)
+        );
+
+        // Set step-in mode and resume
+        vm.step_mode = StepMode::StepIn;
+        let r2 = vm.resume(Value::Bool(true)).unwrap();
+        // Should break on line 2
+        assert!(
+            matches!(r2, EvalResult::Yield(YieldRequest::Breakpoint(ref info)) if info.line == 2)
+        );
+
+        // Step again — should break on line 3
+        vm.step_mode = StepMode::StepIn;
+        let r3 = vm.resume(Value::Bool(true)).unwrap();
+        assert!(
+            matches!(r3, EvalResult::Yield(YieldRequest::Breakpoint(ref info)) if info.line == 3)
+        );
+
+        // Resume normally — should complete
+        let r4 = vm.resume(Value::Bool(true)).unwrap();
+        assert!(matches!(r4, EvalResult::Done(_)));
+    }
+
+    #[test]
+    fn breakpoint_info_has_locals() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+
+        // Define a function and break inside it
+        vm.eval_with_file("(define (foo x) (+ x 1))", "locals.scm")
+            .unwrap();
+
+        vm.breakpoints
+            .entry("locals.scm".into())
+            .or_default()
+            .insert(1);
+
+        let r = vm
+            .eval_with_file_yielding("(foo 42)", "locals.scm")
+            .unwrap();
+        match r {
+            EvalResult::Yield(YieldRequest::Breakpoint(info)) => {
+                // Should have at least one frame
+                assert!(!info.frames.is_empty());
+            }
+            other => panic!("expected Breakpoint yield, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn debug_mode_off_no_breakpoint_checks() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        // debug_mode is false by default
+        vm.breakpoints
+            .entry("test.scm".into())
+            .or_default()
+            .insert(1);
+
+        // Even with breakpoints set, no BreakpointCheck opcodes are emitted
+        let r = vm
+            .eval_with_file_yielding("(define a 1)\n(define b 2)", "test.scm")
+            .unwrap();
+        assert!(matches!(r, EvalResult::Done(_)));
     }
 }

@@ -86,6 +86,10 @@ pub enum Op {
     PopClosureHandler,
     /// No-op / placeholder.
     Nop,
+    /// Debug breakpoint check — emitted at source line boundaries when debug mode
+    /// is enabled. At runtime, the VM checks if a breakpoint is set for the current
+    /// source location and yields if so. Carries the source line for fast lookup.
+    BreakpointCheck(u32),
 }
 
 /// Describes how to capture an upvalue when creating a closure.
@@ -230,6 +234,8 @@ pub struct Compiler {
     gensym_counter: usize,
     /// Current source location for source map generation.
     current_loc: Option<SourceLocation>,
+    /// When true, emit `Op::BreakpointCheck` at source line boundaries.
+    pub debug_mode: bool,
 }
 
 impl Compiler {
@@ -241,6 +247,7 @@ impl Compiler {
             macros: HashMap::new(),
             load_paths: Vec::new(),
             current_loc: None,
+            debug_mode: false,
         }
     }
 
@@ -260,6 +267,9 @@ impl Compiler {
         for (i, (expr, loc)) in exprs.iter().enumerate() {
             let is_last = i == exprs.len() - 1;
             self.current_loc = Some(loc.clone());
+            if self.debug_mode {
+                self.emit(Op::BreakpointCheck(loc.line));
+            }
             self.compile_expr(expr, is_last)?;
             if !is_last {
                 self.emit(Op::Pop);
