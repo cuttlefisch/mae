@@ -775,6 +775,10 @@
           "kind": "mod"
         },
         {
+          "name": "introspect",
+          "kind": "mod"
+        },
+        {
           "name": "library",
           "kind": "mod"
         },
@@ -927,6 +931,10 @@
     }
   },
   "scheme_primitives": [
+    {
+      "name": "gc-stats",
+      "source": "crates/scheme/src/runtime.rs"
+    },
     {
       "name": "define-key",
       "source": "crates/scheme/src/runtime.rs"

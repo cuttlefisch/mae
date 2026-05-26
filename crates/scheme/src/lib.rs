@@ -11,6 +11,7 @@ pub mod runtime;
 pub mod compiler;
 pub mod env;
 pub mod ffi;
+pub mod introspect;
 pub mod library;
 pub mod lisp_error;
 pub mod lsp;

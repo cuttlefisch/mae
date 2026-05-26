@@ -206,6 +206,10 @@ struct SharedState {
     pending_reconcile_to: Option<String>,
     /// Reconcile result (base64 update).
     reconcile_result: Option<String>,
+
+    // --- Introspection (Phase 13h) ---
+    /// Cached GC stats snapshot (updated each eval cycle).
+    gc_stats_snapshot: crate::vm::GcStats,
 }
 
 #[derive(Debug, Clone)]
@@ -326,9 +330,44 @@ impl SchemeRuntime {
         let mut vm = Vm::new();
         let shared = Arc::new(Mutex::new(SharedState::default()));
 
-        // Install R7RS standard library + mae libraries
+        // Install R7RS standard library + mae libraries + introspection
         crate::stdlib::register_stdlib(&mut vm);
         crate::stdlib::register_mae_libs(&mut vm);
+        crate::introspect::register_introspection(&mut vm);
+
+        // (gc-stats) — reads cached stats from SharedState
+        let s = shared.clone();
+        vm.register_fn(
+            "gc-stats",
+            "Return GC statistics as an association list.",
+            Arity::Fixed(0),
+            move |_args| {
+                let st = s.lock().unwrap();
+                let stats = &st.gc_stats_snapshot;
+                Ok(Value::list(vec![
+                    Value::cons(
+                        Value::symbol("eval-count"),
+                        Value::Int(stats.eval_count as i64),
+                    ),
+                    Value::cons(
+                        Value::symbol("collections"),
+                        Value::Int(stats.collections_count as i64),
+                    ),
+                    Value::cons(
+                        Value::symbol("globals-count"),
+                        Value::Int(stats.globals_count as i64),
+                    ),
+                    Value::cons(
+                        Value::symbol("stack-hwm"),
+                        Value::Int(stats.stack_hwm as i64),
+                    ),
+                    Value::cons(
+                        Value::symbol("frame-hwm"),
+                        Value::Int(stats.frame_hwm as i64),
+                    ),
+                ]))
+            },
+        );
 
         // --- Keybinding registration ---
 
@@ -2171,6 +2210,13 @@ impl SchemeRuntime {
         }
     }
 
+    /// Update cached GC stats in SharedState for Scheme-callable `(gc-stats)`.
+    fn sync_gc_stats(&self) {
+        if let Ok(mut st) = self.shared.lock() {
+            st.gc_stats_snapshot = self.vm.gc_stats.clone();
+        }
+    }
+
     /// Evaluate a Scheme expression and return the result as a string.
     /// Errors are recorded in the error history for debugger introspection.
     pub fn eval(&mut self, code: &str) -> Result<String, SchemeError> {
@@ -2190,6 +2236,7 @@ impl SchemeRuntime {
             }
             err
         })?;
+        self.sync_gc_stats();
         Ok(value_to_display(&result))
     }
 
@@ -2252,6 +2299,102 @@ impl SchemeRuntime {
                 Err(err)
             }
         }
+    }
+
+    // --- Introspection API (Phase 13h) ---
+
+    /// Describe a function by name. Returns formatted documentation.
+    pub fn describe_function(&self, name: &str) -> Option<String> {
+        crate::introspect::describe_function(&self.vm, name)
+            .map(|d| crate::introspect::format_doc(&d))
+    }
+
+    /// Search for functions matching a pattern.
+    pub fn apropos(&self, pattern: &str) -> Vec<crate::introspect::FunctionDoc> {
+        crate::introspect::apropos(&self.vm, pattern)
+    }
+
+    /// Get the full function registry.
+    pub fn function_registry(&self) -> Vec<crate::introspect::FunctionDoc> {
+        crate::introspect::function_registry(&self.vm)
+    }
+
+    /// Get current GC statistics.
+    pub fn gc_stats(&self) -> crate::vm::GcStats {
+        self.vm.gc_stats.clone()
+    }
+
+    /// Update the Editor's cached scheme stats for MCP introspection.
+    pub fn update_editor_scheme_stats(&self, editor: &mut mae_core::Editor) {
+        let stats = &self.vm.gc_stats;
+        editor.scheme_stats.eval_count = stats.eval_count;
+        editor.scheme_stats.collections_count = stats.collections_count;
+        editor.scheme_stats.globals_count = stats.globals_count;
+        editor.scheme_stats.stack_hwm = stats.stack_hwm;
+        editor.scheme_stats.function_count = crate::introspect::function_registry(&self.vm).len();
+        editor.scheme_stats.error_count = self.error_history.len();
+    }
+
+    /// Generate KB node data for all registered functions.
+    /// Returns (id, title, body, tags) tuples for insertion into KB.
+    pub fn kb_function_nodes(&self) -> Vec<(String, String, String, Vec<String>)> {
+        let mut nodes = Vec::new();
+        for doc in crate::introspect::function_registry(&self.vm) {
+            let id = format!("scheme:{}", doc.name);
+            let title = format!("Scheme: {}", doc.name);
+            let kind_str = doc.kind.to_string();
+            let arity_str = doc.arity.to_string();
+
+            let mut body = format!("## Signature\n```scheme\n({}", doc.name);
+            match &doc.arity {
+                crate::lisp_error::Arity::Fixed(n) => {
+                    for i in 0..*n {
+                        body.push_str(&format!(" arg{}", i + 1));
+                    }
+                }
+                crate::lisp_error::Arity::Variadic(n) => {
+                    for i in 0..*n {
+                        body.push_str(&format!(" arg{}", i + 1));
+                    }
+                    body.push_str(" . rest");
+                }
+                crate::lisp_error::Arity::Multi(ns) => {
+                    body.push_str(&format!(
+                        " <{}>",
+                        ns.iter()
+                            .map(|n| n.to_string())
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    ));
+                }
+            }
+            body.push_str(")\n```\n\n");
+
+            if !doc.doc.is_empty() {
+                body.push_str(&format!("{}\n\n", doc.doc));
+            }
+
+            body.push_str(&format!(
+                "**Kind:** {}\n**Arity:** {}\n\n",
+                kind_str, arity_str
+            ));
+
+            if let Some(ref file) = doc.source_file {
+                if let Some(line) = doc.source_line {
+                    body.push_str(&format!("**Source:** {}:{}\n\n", file, line));
+                }
+            }
+
+            body.push_str("See also: [[concept:scheme-api]], [[index]]");
+
+            let tags = vec![
+                "scheme".to_string(),
+                "api".to_string(),
+                kind_str.to_string(),
+            ];
+            nodes.push((id, title, body, tags));
+        }
+        nodes
     }
 
     /// Record an error in the error history.
@@ -3583,6 +3726,9 @@ impl SchemeRuntime {
 
         // Note: We do NOT call inject_editor_state here — the caller
         // is responsible for calling it before eval if needed.
+
+        // Update cached scheme stats for MCP introspection
+        self.update_editor_scheme_stats(editor);
     }
 
     /// Call a named Scheme function (for executing Scheme-backed commands).

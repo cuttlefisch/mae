@@ -524,6 +524,24 @@ pub enum InputLock {
     McpBusy,
 }
 
+/// Cached Scheme runtime statistics for MCP introspection.
+/// Updated by the binary crate after each scheme eval cycle.
+#[derive(Clone, Debug, Default)]
+pub struct SchemeStats {
+    /// Number of eval calls processed by the VM.
+    pub eval_count: u64,
+    /// Number of gc-collect! calls.
+    pub collections_count: u64,
+    /// Number of registered global bindings.
+    pub globals_count: usize,
+    /// Total registered functions (foreign + closure + macro).
+    pub function_count: usize,
+    /// Stack high-water mark.
+    pub stack_hwm: usize,
+    /// Number of recent errors in error history.
+    pub error_count: usize,
+}
+
 /// Snapshot of editor state for save/restore (push/pop state stack).
 /// Captures the buffer list, window layout, focus, and mode so tools
 /// Pending async git diff: spawned on a background thread, polled on idle ticks.
@@ -722,6 +740,8 @@ pub struct Editor {
     /// `eval-line` / `eval-buffer` push the captured text here; the
     /// event loop drains it after dispatch (same pattern as LSP intents).
     pub pending_scheme_eval: Vec<String>,
+    /// Cached Scheme runtime statistics for introspection.
+    pub scheme_stats: SchemeStats,
     /// AI session state (provider config, tokens, streaming, conversation pair, etc.).
     pub ai: AiState,
     /// Visual bell: when set, the renderer inverts the status bar background
@@ -1047,6 +1067,7 @@ impl Editor {
             splash_image_height: 20,
             splash_show_logo: true,
             pending_scheme_eval: Vec::new(),
+            scheme_stats: SchemeStats::default(),
             kb: KbContext::new(kb),
             config_dir_override: None,
             data_dir_override: None,

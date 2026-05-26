@@ -112,6 +112,8 @@ pub struct CodeObject {
     pub variadic: bool,
     /// Function name (for debugging).
     pub name: Option<String>,
+    /// Docstring (first string literal in body, Emacs convention).
+    pub doc: Option<String>,
     /// Source location for debugging.
     pub source: Option<SourceLocation>,
     /// Source map: instruction index → source location.
@@ -123,6 +125,7 @@ impl CodeObject {
         CodeObject {
             ops: Vec::new(),
             arity: 0,
+            doc: None,
             variadic: false,
             name: None,
             source: None,
@@ -560,13 +563,31 @@ impl Compiler {
             self.current_scope_mut().add_local(param.clone());
         }
 
-        // Compile body (last expression in tail position)
+        // Extract docstring: first string literal in body if body has >1 form
         let body = &items[2..];
-        self.compile_begin(body, true)?;
+        let docstring = if body.len() > 1 {
+            if let Value::String(s) = &body[0] {
+                Some(s.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Compile body (last expression in tail position)
+        // If docstring was extracted, skip it in the body
+        let effective_body = if docstring.is_some() {
+            &body[1..]
+        } else {
+            body
+        };
+        self.compile_begin(effective_body, true)?;
         self.emit(Op::Return);
 
         // Pop scope and create code object
-        let scope = self.scopes.pop().unwrap();
+        let mut scope = self.scopes.pop().unwrap();
+        scope.code.doc = docstring;
         let upvalues = scope.upvalues.clone();
         let code_idx = self.code_pool.len();
         self.code_pool.push(scope.code);

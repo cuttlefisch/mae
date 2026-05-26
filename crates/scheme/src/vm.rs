@@ -203,6 +203,11 @@ impl Vm {
         &self.macros
     }
 
+    /// Read-only access to the code pool (for introspection / source maps).
+    pub fn code_pool(&self) -> &[CodeObject] {
+        &self.code_pool
+    }
+
     /// Number of active call frames (for step-over/step-out depth tracking).
     pub fn frame_count(&self) -> usize {
         self.frames.len()
@@ -211,6 +216,36 @@ impl Vm {
     /// Clear the last breakpoint line to allow re-breaking after continue/step.
     pub fn last_break_line_clear(&mut self) {
         self.last_break_line = None;
+    }
+
+    /// Return GC statistics as a Scheme association list.
+    pub fn gc_stats_alist(&self) -> Value {
+        Value::list(vec![
+            Value::cons(
+                Value::symbol("eval-count"),
+                Value::Int(self.gc_stats.eval_count as i64),
+            ),
+            Value::cons(
+                Value::symbol("collections"),
+                Value::Int(self.gc_stats.collections_count as i64),
+            ),
+            Value::cons(
+                Value::symbol("globals-count"),
+                Value::Int(self.gc_stats.globals_count as i64),
+            ),
+            Value::cons(
+                Value::symbol("stack-hwm"),
+                Value::Int(self.gc_stats.stack_hwm as i64),
+            ),
+            Value::cons(
+                Value::symbol("frame-hwm"),
+                Value::Int(self.gc_stats.frame_hwm as i64),
+            ),
+            Value::cons(
+                Value::symbol("code-pool-size"),
+                Value::Int(self.code_pool.len() as i64),
+            ),
+        ])
     }
 
     /// Register a Rust function as a global.
@@ -857,7 +892,7 @@ impl Vm {
                         upvalues,
                         arity,
                         name: code.name.clone(),
-                        doc: None,
+                        doc: code.doc.clone(),
                     };
                     self.stack.push(Value::Closure(Rc::new(closure)));
                 }

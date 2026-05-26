@@ -318,6 +318,7 @@ Source: `crates/scheme/src/lib.rs`
 | `compiler` | mod |
 | `env` | mod |
 | `ffi` | mod |
+| `introspect` | mod |
 | `library` | mod |
 | `lisp_error` | mod |
 | `lsp` | mod |
@@ -389,6 +390,7 @@ Source: `crates/sync/src/lib.rs`
 
 | Function | Source |
 |----------|--------|
+| `gc-stats` | `crates/scheme/src/runtime.rs` |
 | `define-key` | `crates/scheme/src/runtime.rs` |
 | `define-keymap` | `crates/scheme/src/runtime.rs` |
 | `define-command` | `crates/scheme/src/runtime.rs` |

@@ -76,6 +76,9 @@ pub fn execute_introspect(editor: &Editor, args: &serde_json::Value) -> Result<S
     if section == "all" || section == "collaboration" {
         result.insert("collaboration".into(), build_collaboration_section(editor));
     }
+    if section == "all" || section == "scheme" {
+        result.insert("scheme".into(), build_scheme_section(editor));
+    }
     if section == "frame" {
         result.insert("frame".into(), build_frame_section(editor));
     }
@@ -365,6 +368,18 @@ fn build_ai_section(editor: &Editor) -> serde_json::Value {
         "context_window": editor.ai.context_window,
         "context_used_tokens": editor.ai.context_used_tokens,
         "context_usage_pct": context_usage_pct,
+    })
+}
+
+fn build_scheme_section(editor: &Editor) -> serde_json::Value {
+    let s = &editor.scheme_stats;
+    json!({
+        "eval_count": s.eval_count,
+        "gc_collections": s.collections_count,
+        "globals_count": s.globals_count,
+        "function_count": s.function_count,
+        "stack_hwm": s.stack_hwm,
+        "error_count": s.error_count,
     })
 }
 
