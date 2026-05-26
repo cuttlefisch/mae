@@ -203,6 +203,16 @@ impl Vm {
         &self.macros
     }
 
+    /// Number of active call frames (for step-over/step-out depth tracking).
+    pub fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Clear the last breakpoint line to allow re-breaking after continue/step.
+    pub fn last_break_line_clear(&mut self) {
+        self.last_break_line = None;
+    }
+
     /// Register a Rust function as a global.
     pub fn register_fn<F>(&mut self, name: &str, doc: &str, arity: Arity, f: F)
     where

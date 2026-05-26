@@ -836,7 +836,7 @@ impl Editor {
                     }
                     _ => {
                         self.set_status(
-                            "Usage: :debug-start <adapter> <program> [args...]  — adapters: lldb, debugpy, codelldb",
+                            "Usage: :debug-start <adapter> <program> [args...]  — adapters: lldb, debugpy, codelldb, scheme",
                         );
                     }
                 }

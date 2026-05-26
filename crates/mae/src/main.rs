@@ -10,6 +10,7 @@ mod gui_event;
 mod key_handling;
 mod lsp_bridge;
 pub mod pkg;
+mod scheme_dap_bridge;
 mod scheme_lsp_bridge;
 mod shell_keys;
 mod shell_lifecycle;
@@ -1172,6 +1173,7 @@ impl GuiApp {
     fn drain_intents_and_lifecycle(&mut self) {
         scheme_lsp_bridge::drain_scheme_lsp_intents(&mut self.editor, &self.scheme);
         lsp_bridge::drain_lsp_intents(&mut self.editor, &self.lsp_command_tx);
+        scheme_dap_bridge::drain_scheme_dap_intents(&mut self.editor, &mut self.scheme);
         dap_bridge::drain_dap_intents(&mut self.editor, &self.dap_command_tx);
         collab_bridge::drain_collab_intents(&mut self.editor, &self.collab_command_tx);
         collab_bridge::queue_awareness_update(&mut self.editor);

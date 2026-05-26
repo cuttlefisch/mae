@@ -317,6 +317,11 @@ impl SchemeRuntime {
         &self.vm
     }
 
+    /// Mutable access to the VM for DAP debugging (breakpoints, step mode, debug mode).
+    pub fn vm_mut(&mut self) -> &mut Vm {
+        &mut self.vm
+    }
+
     pub fn new() -> Result<Self, SchemeError> {
         let mut vm = Vm::new();
         let shared = Arc::new(Mutex::new(SharedState::default()));
