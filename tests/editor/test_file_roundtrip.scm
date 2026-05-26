@@ -8,12 +8,15 @@
 
 (describe-group "File roundtrip"
   (lambda ()
-    (it-test "write buffer to disk and read back"
+    (it-test "write buffer to disk"
       (lambda ()
         (create-buffer "*test-rt-source*")
         (buffer-insert "line one\nline two\nline three\n")
         (should-equal (buffer-string) *rt-content*)
-        (write-file *rt-path* (buffer-string))
+        (write-file *rt-path* (buffer-string))))
+
+    (it-test "verify file was written"
+      (lambda ()
         (should (file-exists? *rt-path*))))
 
     (it-test "open file and verify content"
