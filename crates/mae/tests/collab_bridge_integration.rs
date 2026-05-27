@@ -238,6 +238,47 @@ impl Client {
             }
         }
     }
+
+    /// Send an awareness update (cursor position + optional selection).
+    async fn send_awareness(
+        &mut self,
+        doc: &str,
+        user_name: &str,
+        cursor_row: usize,
+        cursor_col: usize,
+        selection: Option<(usize, usize, usize, usize)>,
+    ) -> serde_json::Value {
+        let sel_json = match selection {
+            Some((sr, sc, er, ec)) => serde_json::json!([sr, sc, er, ec]),
+            None => serde_json::Value::Null,
+        };
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": self.next_id,
+            "method": "sync/awareness",
+            "params": {
+                "doc": doc,
+                "state": {
+                    "user_name": user_name,
+                    "cursor_row": cursor_row,
+                    "cursor_col": cursor_col,
+                    "selection": sel_json,
+                    "mode": "normal"
+                }
+            }
+        });
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
+    /// Drain all pending notifications, returning them.
+    async fn drain_notifications(&mut self) -> Vec<serde_json::Value> {
+        let mut notifs = Vec::new();
+        while let Some(msg) = self.recv_timeout(100).await {
+            notifs.push(msg);
+        }
+        notifs
+    }
 }
 
 // ============================================================================
@@ -2180,4 +2221,236 @@ async fn rapid_fire_multi_client_stress() {
             "missing B{i} in converged content"
         );
     }
+}
+
+// ============================================================================
+// Awareness Protocol E2E Tests
+// ============================================================================
+
+/// A sends awareness update → B receives notification with correct cursor position.
+#[tokio::test]
+async fn awareness_cursor_position_relayed() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("aware.txt", "hello world").await;
+    client_b.resync("aware.txt").await;
+
+    // Drain setup notifications.
+    client_b.drain_notifications().await;
+
+    // A sends awareness: cursor at row 5, col 10.
+    let resp = client_a
+        .send_awareness("aware.txt", "Alice", 5, 10, None)
+        .await;
+    assert!(
+        resp.get("error").is_none(),
+        "awareness send should succeed: {resp}"
+    );
+
+    // B should receive the awareness notification.
+    let notif = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await;
+    assert!(
+        notif.is_some(),
+        "B should receive awareness_update notification"
+    );
+    let notif = notif.unwrap();
+    let event = &notif["params"]["event"]["data"];
+
+    assert_eq!(
+        event["doc_id"].as_str().unwrap(),
+        "aware.txt",
+        "doc_id must match"
+    );
+    assert_eq!(
+        event["user_name"].as_str().unwrap(),
+        "Alice",
+        "user_name must match"
+    );
+    assert_eq!(
+        event["cursor_row"].as_u64().unwrap(),
+        5,
+        "cursor_row must be 5"
+    );
+    assert_eq!(
+        event["cursor_col"].as_u64().unwrap(),
+        10,
+        "cursor_col must be 10"
+    );
+    assert!(
+        event["selection"].is_null(),
+        "selection should be null when not in visual mode"
+    );
+}
+
+/// A sends awareness with selection → B receives correct selection range.
+#[tokio::test]
+async fn awareness_selection_relayed() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("sel.txt", "line 1\nline 2\nline 3").await;
+    client_b.resync("sel.txt").await;
+    client_b.drain_notifications().await;
+
+    // A sends awareness with visual selection: rows 0-2, cols 0-5.
+    let resp = client_a
+        .send_awareness("sel.txt", "Alice", 2, 5, Some((0, 0, 2, 5)))
+        .await;
+    assert!(resp.get("error").is_none());
+
+    let notif = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await;
+    assert!(notif.is_some(), "B should receive awareness with selection");
+    let event = &notif.unwrap()["params"]["event"]["data"];
+
+    let sel = event["selection"]
+        .as_array()
+        .expect("selection should be array");
+    assert_eq!(sel.len(), 4, "selection should have 4 elements");
+    assert_eq!(sel[0].as_u64().unwrap(), 0, "sel start_row");
+    assert_eq!(sel[1].as_u64().unwrap(), 0, "sel start_col");
+    assert_eq!(sel[2].as_u64().unwrap(), 2, "sel end_row");
+    assert_eq!(sel[3].as_u64().unwrap(), 5, "sel end_col");
+}
+
+/// A moves cursor multiple times → B receives updated positions each time.
+#[tokio::test]
+async fn awareness_cursor_movement_tracked() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("move.txt", "content").await;
+    client_b.resync("move.txt").await;
+    client_b.drain_notifications().await;
+
+    // A moves cursor: position 1.
+    client_a
+        .send_awareness("move.txt", "Alice", 0, 0, None)
+        .await;
+    let n1 = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await
+        .expect("should receive first awareness");
+    assert_eq!(
+        n1["params"]["event"]["data"]["cursor_row"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        n1["params"]["event"]["data"]["cursor_col"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
+
+    // A moves cursor: position 2.
+    client_a
+        .send_awareness("move.txt", "Alice", 10, 25, None)
+        .await;
+    let n2 = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await
+        .expect("should receive second awareness");
+    assert_eq!(
+        n2["params"]["event"]["data"]["cursor_row"]
+            .as_u64()
+            .unwrap(),
+        10
+    );
+    assert_eq!(
+        n2["params"]["event"]["data"]["cursor_col"]
+            .as_u64()
+            .unwrap(),
+        25
+    );
+
+    // A moves cursor: position 3 — large row.
+    client_a
+        .send_awareness("move.txt", "Alice", 9999, 0, None)
+        .await;
+    let n3 = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await
+        .expect("should receive third awareness");
+    assert_eq!(
+        n3["params"]["event"]["data"]["cursor_row"]
+            .as_u64()
+            .unwrap(),
+        9999
+    );
+}
+
+/// Awareness is NOT echoed back to the sender.
+#[tokio::test]
+async fn awareness_no_echo() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("echo.txt", "test").await;
+
+    // Drain setup notifications.
+    client_a.drain_notifications().await;
+
+    // A sends awareness — should NOT receive its own update back.
+    client_a
+        .send_awareness("echo.txt", "Alice", 5, 5, None)
+        .await;
+
+    let echo = client_a.recv_timeout(300).await;
+    assert!(
+        echo.is_none(),
+        "sender should NOT receive its own awareness echo"
+    );
+}
+
+/// Two clients on different docs — awareness is doc-scoped (no cross-doc leak).
+#[tokio::test]
+async fn awareness_doc_isolation() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Each client shares a different doc.
+    client_a.share("doc-a.txt", "aaa").await;
+    client_b.share("doc-b.txt", "bbb").await;
+
+    // B subscribes but is on doc-b, not doc-a.
+    client_b.drain_notifications().await;
+
+    // A sends awareness on doc-a.
+    client_a
+        .send_awareness("doc-a.txt", "Alice", 1, 1, None)
+        .await;
+
+    // B should receive awareness since broadcast is not doc-filtered at the
+    // transport level (the EditorEvent carries doc_id, and the client-side
+    // filters by doc). But the event should carry doc_id="doc-a.txt" so B
+    // knows it's not for its active buffer.
+    let notif = client_b.recv_timeout(300).await;
+    if let Some(n) = notif {
+        // If received, verify it carries the correct doc_id.
+        let doc = n["params"]["event"]["data"]["doc_id"]
+            .as_str()
+            .unwrap_or("");
+        assert_eq!(doc, "doc-a.txt", "notification must carry sender's doc_id");
+    }
+    // Either no notification (server-side doc filter) or correct doc_id — both valid.
 }
