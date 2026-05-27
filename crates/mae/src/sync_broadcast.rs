@@ -21,15 +21,33 @@ pub fn drain_and_broadcast(
         if buf.pending_sync_updates.is_empty() {
             continue;
         }
-        let updates: Vec<Vec<u8>> = buf.pending_sync_updates.drain(..).collect();
         let buffer_name = buf.name.clone();
-        trace!(buffer = %buffer_name, update_count = updates.len(), "draining sync updates");
         // Use collab_doc_id for server communication (may differ from buffer name).
         let doc_id = buf
             .collab_doc_id
             .clone()
             .unwrap_or_else(|| buffer_name.clone());
         let is_collab_synced = editor.collab.synced_buffers.contains(&doc_id);
+
+        // If this buffer has a collab_doc_id (was shared/joined) but isn't
+        // currently in synced_buffers (e.g. during disconnect/reconnect),
+        // do NOT drain updates — they would be irretrievably lost.
+        // Leave them in pending_sync_updates for the next drain cycle after
+        // the buffer is re-added to synced_buffers.
+        if buf.collab_doc_id.is_some() && !is_collab_synced {
+            warn!(
+                buffer = %buffer_name,
+                doc = %doc_id,
+                pending_count = buf.pending_sync_updates.len(),
+                synced_buffers = ?editor.collab.synced_buffers,
+                "deferring sync update drain — collab buffer not in synced_buffers"
+            );
+            continue;
+        }
+
+        let updates: Vec<Vec<u8>> = buf.pending_sync_updates.drain(..).collect();
+        trace!(buffer = %buffer_name, update_count = updates.len(), "draining sync updates");
+
         let mut bc = broadcaster.lock().unwrap();
         for update in updates {
             let update_b64 = mae_sync::encoding::update_to_base64(&update);
@@ -41,16 +59,14 @@ pub fn drain_and_broadcast(
             bc.broadcast(&event);
 
             // Forward to state server if this buffer is collaboratively synced.
-            trace!(
-                buffer = %buffer_name,
-                doc = %doc_id,
-                update_bytes = update_b64.len(),
-                is_collab_synced,
-                "sync update broadcast"
-            );
             if is_collab_synced {
                 if let Some(tx) = collab_tx {
-                    info!(doc = %doc_id, update_b64_len = update_b64.len(), "forwarding sync update to state server");
+                    info!(
+                        buffer = %buffer_name,
+                        doc = %doc_id,
+                        update_b64_len = update_b64.len(),
+                        "forwarding sync update to state server"
+                    );
                     if tx
                         .try_send(crate::collab_bridge::CollabCommand::SendUpdate {
                             doc_id: doc_id.clone(),

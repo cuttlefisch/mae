@@ -5,17 +5,21 @@
 ;;;
 ;;; No (run-tests) — uses Rust-side iteration for inject/apply between tests.
 
+(load "/tests/lib/test-helpers.scm")
+
 (describe-group "Replicated repo (both have local files)"
   (lambda ()
 
     (it-test "connects to server"
       (lambda ()
-        (sleep-ms 5000)))
+        (wait-connected 30000)))
 
     (it-test "creates local file with unique content"
       (lambda ()
-        (write-file "/workspace/replica.txt" "local-only content\n")
-        (sleep-ms 200)
+        (write-file "/workspace/replica.txt" "local-only content\n")))
+
+    (it-test "opens local file"
+      (lambda ()
         (open-file "/workspace/replica.txt")
         (sleep-ms 200)))
 
@@ -26,7 +30,7 @@
     (it-test "shares the local file"
       (lambda ()
         (run-command "collab-share")
-        (sleep-ms 4000)))
+        (wait-synced "replica.txt" 15000)))
 
     (it-test "buffer still has correct content after share"
       (lambda ()

@@ -409,14 +409,16 @@ test-scheme-r7rs:
 	cargo test -p mae-scheme --test scheme_benchmarks -- --nocapture
 
 ## docker-collab-test: run collab CRDT E2E tests in Docker containers
-## DISABLED from CI (see ci-docker-e2e). Can still be run manually.
-## Requires proper Scheme async/yield for reliable coordination.
+## Uses `--wait` so compose exits once all client/verifier services complete,
+## then inspects the verifier exit code for pass/fail.
 docker-collab-test:
-	@echo "Running collab E2E tests (docker compose foreground)..."
-	@docker compose -f docker-compose.collab-test.yml up --build; \
+	@echo "Running collab E2E tests (docker compose)..."
+	@docker compose -f docker-compose.collab-test.yml up --build --wait 2>&1; \
 	RC=$$(docker compose -f docker-compose.collab-test.yml ps -a verifier --format '{{.ExitCode}}' 2>/dev/null); \
-	docker compose -f docker-compose.collab-test.yml logs --no-log-prefix; \
-	docker compose -f docker-compose.collab-test.yml down --volumes; \
+	echo "--- verifier output ---"; \
+	docker compose -f docker-compose.collab-test.yml logs --no-log-prefix verifier; \
+	echo "--- verifier exit code: $${RC:-unknown} ---"; \
+	docker compose -f docker-compose.collab-test.yml down --volumes --timeout 10; \
 	exit $${RC:-1}
 
 ## docker-network-test: run state-server network E2E tests in Docker

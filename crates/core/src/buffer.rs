@@ -1396,11 +1396,25 @@ impl Buffer {
         if let Some(sync) = &mut self.sync_doc {
             if sync.undo_mgr_active() {
                 let (ok, updates) = sync.undo();
+                tracing::info!(
+                    buffer = %self.name,
+                    undo_ok = ok,
+                    update_count = updates.len(),
+                    update_total_bytes = updates.iter().map(|u| u.len()).sum::<usize>(),
+                    text_after = %sync.content().chars().take(200).collect::<String>(),
+                    pending_before = self.pending_sync_updates.len(),
+                    "CRDT undo via UndoManager"
+                );
                 if !ok {
                     return;
                 }
                 self.rope = sync.rope().clone();
                 self.pending_sync_updates.extend(updates);
+                tracing::info!(
+                    buffer = %self.name,
+                    pending_after = self.pending_sync_updates.len(),
+                    "CRDT undo: updates queued in pending_sync_updates"
+                );
                 self.modified = true; // conservative; exact tracking deferred
                 self.bump_generation();
                 win.clamp_cursor(self);

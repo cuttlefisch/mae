@@ -472,19 +472,46 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 }
             }
             editor.collab.synced_docs = 0;
+            // Log pending updates that will be orphaned by clearing synced_buffers.
+            let orphaned_updates: usize = editor
+                .buffers
+                .iter()
+                .filter(|b| !b.pending_sync_updates.is_empty())
+                .map(|b| b.pending_sync_updates.len())
+                .sum();
+            if orphaned_updates > 0 {
+                warn!(
+                    orphaned_updates,
+                    synced_buffers_before = ?editor.collab.synced_buffers,
+                    "DISCONNECT: clearing synced_buffers with pending updates — these will be LOST"
+                );
+            }
             editor.collab.synced_buffers.clear();
+            editor.collab.confirmed_shares.clear();
             editor.mark_full_redraw();
         }
         CollabEvent::RemoteUpdate {
             doc_id,
             update_bytes,
-            wal_seq: _,
+            wal_seq,
         } => {
             if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
+                let text_before: String = editor.buffers[idx].text().chars().take(200).collect();
                 match editor.buffers[idx].apply_sync_update(&update_bytes) {
                     Ok(()) => {
-                        info!(doc = %doc_id, update_len = update_bytes.len(), buf_idx = idx,
-                            text_len = editor.buffers[idx].text().len(), "applied remote sync update");
+                        let text_after: String =
+                            editor.buffers[idx].text().chars().take(200).collect();
+                        info!(
+                            doc = %doc_id,
+                            wal_seq,
+                            update_len = update_bytes.len(),
+                            buf_idx = idx,
+                            buf_name = %editor.buffers[idx].name,
+                            text_before = %text_before,
+                            text_after = %text_after,
+                            text_changed = (text_before != text_after),
+                            "applied remote sync update"
+                        );
                         // Clear offline flag on successful remote update.
                         editor.buffers[idx].collab_offline = false;
                         editor.mark_full_redraw();
@@ -560,6 +587,8 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             // This insert is idempotent — ensures consistency if event ordering varies.
             editor.collab.synced_buffers.insert(doc_id.clone());
             editor.collab.synced_docs = editor.collab.synced_buffers.len();
+            // Mark as server-confirmed (not just optimistically requested).
+            editor.collab.confirmed_shares.insert(doc_id.clone());
             // Mark this buffer as the sharer (authoritative saver).
             if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
                 editor.buffers[idx].collab_is_sharer = true;
@@ -697,6 +726,8 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     }
                     editor.collab.synced_buffers.insert(doc_id.clone());
                     editor.collab.synced_docs = editor.collab.synced_buffers.len();
+                    // Mark as server-confirmed.
+                    editor.collab.confirmed_shares.insert(doc_id.clone());
                     // Only switch active buffer for newly created buffers (explicit join).
                     // For existing buffers (ForceSync resync), don't steal focus.
                     if !already_existed {

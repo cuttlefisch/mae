@@ -1468,6 +1468,10 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "collab-confirmed-shares",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "buffer-sync-enabled?",
       "source": "crates/scheme/src/runtime.rs"
     },

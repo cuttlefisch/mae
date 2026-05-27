@@ -2956,6 +2956,24 @@ impl SchemeRuntime {
             },
         );
 
+        // (collab-confirmed-shares) — doc IDs confirmed by the server.
+        // Unlike collab-synced-buffers which is optimistically updated on intent
+        // drain, this only contains doc IDs after BufferShared/BufferJoined events.
+        let confirmed: Vec<String> = editor.collab.confirmed_shares.iter().cloned().collect();
+        self.vm.register_fn(
+            "collab-confirmed-shares",
+            "List doc IDs confirmed by the server",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                Ok(Value::list(
+                    confirmed
+                        .iter()
+                        .map(|n| Value::string(n.clone()))
+                        .collect::<Vec<_>>(),
+                ))
+            },
+        );
+
         // --- Sync/CRDT state --- reads from SharedState for always-fresh data
 
         let sync_enabled = buf.sync_doc.is_some();

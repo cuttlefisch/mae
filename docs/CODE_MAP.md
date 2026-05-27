@@ -524,6 +524,7 @@ Source: `crates/sync/src/lib.rs`
 | `buffer-text` | `crates/scheme/src/runtime.rs` |
 | `collab-status` | `crates/scheme/src/runtime.rs` |
 | `collab-synced-buffers` | `crates/scheme/src/runtime.rs` |
+| `collab-confirmed-shares` | `crates/scheme/src/runtime.rs` |
 | `buffer-sync-enabled?` | `crates/scheme/src/runtime.rs` |
 | `buffer-pending-updates` | `crates/scheme/src/runtime.rs` |
 | `buffer-sync-content` | `crates/scheme/src/runtime.rs` |

@@ -292,6 +292,15 @@ async fn eval_with_yields(
                         // Apply side effects before sleeping (buffer mutations
                         // from code that ran before the yield).
                         scheme.apply_to_editor(editor);
+                        // Drain collab intents (share/join/etc.) so they reach
+                        // the bridge during the sleep, not just between steps.
+                        crate::collab_bridge::drain_collab_intents(editor, collab_command_tx);
+                        // Forward pending sync updates to state server.
+                        crate::sync_broadcast::drain_and_broadcast(
+                            editor,
+                            broadcaster,
+                            Some(collab_command_tx),
+                        );
                         drain_events_for(
                             editor,
                             collab_event_rx,

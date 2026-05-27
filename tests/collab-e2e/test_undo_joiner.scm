@@ -3,17 +3,21 @@
 ;;; Scenario: B joins A's shared buffer, makes its own edit, then verifies
 ;;; that A's undo does NOT undo B's edit (per-user undo isolation).
 ;;;
-;;; Coordination via /sync volume with wait-for-file (native yield).
-;;; The test runner drains collab events during waits.
+;;; SYNC STRATEGY: Content-based barriers via wait-for-content / wait-content-absent.
+;;; All CRDT-dependent assertions are preceded by content polls that drain
+;;; collab events until the expected state is reached. No fixed sleep-ms
+;;; for convergence.
 ;;;
 ;;; No (run-tests) — uses Rust-side iteration.
+
+(load "/tests/lib/test-helpers.scm")
 
 (describe-group "CRDT undo — joiner (Client B)"
   (lambda ()
 
     (it-test "connects to state server"
       (lambda ()
-        (sleep-ms 5000)))
+        (wait-connected 30000)))
 
     (it-test "verifies connection"
       (lambda ()
@@ -25,17 +29,12 @@
       (lambda ()
         (wait-for-file "/sync/a-edit-done" 60000)))
 
-    (it-test "verifies A's signal content"
-      (lambda ()
-        (should (string-contains?
-                  (read-file "/sync/a-edit-done")
-                  "ready"))))
-
     ;; --- Join the shared document ---
     (it-test "joins the shared document"
       (lambda ()
         (execute-ex "collab-join undo-test.txt")
-        (sleep-ms 5000)))
+        ;; Wait until the buffer actually appears.
+        (wait-buffer-exists "undo-test.txt" 30000)))
 
     (it-test "verifies join succeeded"
       (lambda ()
@@ -44,6 +43,11 @@
     (it-test "switches to joined buffer"
       (lambda ()
         (switch-to-buffer (get-buffer-by-name "undo-test.txt"))))
+
+    ;; --- Content barrier: wait for A's content to arrive via CRDT ---
+    (it-test "waits for A's content via CRDT"
+      (lambda ()
+        (wait-for-content "undo-test.txt" "from-A" 30000)))
 
     (it-test "has A's content"
       (lambda ()
@@ -58,7 +62,8 @@
         (run-command "enter-insert-mode")
         (buffer-insert "from-B\n")
         (run-command "enter-normal-mode")
-        (sleep-ms 3000)))
+        ;; Brief settle for CRDT transaction generation.
+        (sleep-ms 500)))
 
     (it-test "verifies B's edit is in buffer"
       (lambda ()
@@ -68,12 +73,15 @@
       (lambda ()
         (write-file "/sync/b-edit-done" "done")))
 
-    ;; --- Wait for A's undo ---
+    ;; --- Wait for A's undo to propagate via CRDT ---
     (it-test "waits for A's undo signal"
       (lambda ()
-        (wait-for-file "/sync/a-undo-done" 60000)
-        ;; Allow CRDT propagation.
-        (sleep-ms 2000)))
+        (wait-for-file "/sync/a-undo-done" 60000)))
+
+    ;; Content barrier: wait until "from-A" is actually removed by CRDT.
+    (it-test "waits for A's undo to propagate via CRDT"
+      (lambda ()
+        (wait-content-absent "undo-test.txt" "from-A" 30000)))
 
     (it-test "verifies A's undo removed only A's text"
       (lambda ()
@@ -86,7 +94,8 @@
     (it-test "B undoes its own edit"
       (lambda ()
         (run-command "undo")
-        (sleep-ms 2000)))
+        ;; Content barrier: wait until "from-B" is gone.
+        (wait-content-absent "undo-test.txt" "from-B" 30000)))
 
     (it-test "verifies B's undo removed only B's text"
       (lambda ()
@@ -103,7 +112,7 @@
     (it-test "saves B's final state"
       (lambda ()
         (execute-ex "saveas /workspace/undo-test.txt")
-        (sleep-ms 500)))
+        (sleep-ms 200)))
 
     ;; Wait for A to finish (redo + save + signal).
     (it-test "waits for A to finish"

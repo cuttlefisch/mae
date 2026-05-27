@@ -1555,3 +1555,386 @@ async fn concurrent_share_same_doc_converges() {
     // The second share (B) replaces A's content.
     assert_eq!(content_b, "content-B", "last share wins");
 }
+
+// ---------------------------------------------------------------------------
+// CRDT undo propagation regression tests
+// ---------------------------------------------------------------------------
+// These tests exercise the yrs UndoManager path (not reconcile_to) to ensure
+// undo-generated CRDT updates propagate correctly to remote peers.
+
+/// UndoManager undo generates updates that propagate through the server.
+/// This is the core undo propagation test — if this fails, the Docker E2E
+/// undo tests will also fail.
+#[tokio::test]
+async fn undo_manager_propagates_through_bridge() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut cb = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // A shares a doc with base content.
+    ca.share("undo-mgr.txt", "base\n").await;
+
+    // Both get initial state.
+    let mut ts_a = TextSync::from_state(&ca.full_state("undo-mgr.txt").await).unwrap();
+    ts_a.enable_undo();
+    let mut ts_b = TextSync::from_state(&cb.full_state("undo-mgr.txt").await).unwrap();
+    ts_b.enable_undo();
+
+    // A inserts "from-A" using origin-tagged transaction (tracked by UndoManager).
+    let ua = ts_a.insert(5, "from-A\n");
+    ca.send_update("undo-mgr.txt", &ua).await;
+
+    // B receives A's edit.
+    let notif = cb
+        .wait_for_notification("notifications/sync_update", 2000)
+        .await
+        .expect("B should receive A's insert");
+    let b64 = notif["params"]["event"]["data"]["update_base64"]
+        .as_str()
+        .unwrap();
+    ts_b.apply_update(&base64_to_update(b64).unwrap()).unwrap();
+    assert!(
+        ts_b.content().contains("from-A"),
+        "B should see A's insert: {}",
+        ts_b.content()
+    );
+
+    // B inserts "from-B".
+    let ub = ts_b.insert(ts_b.content().len() as u32, "from-B\n");
+    cb.send_update("undo-mgr.txt", &ub).await;
+
+    // A receives B's edit.
+    let notif_a = ca
+        .wait_for_notification("notifications/sync_update", 2000)
+        .await
+        .expect("A should receive B's insert");
+    let a_b64 = notif_a["params"]["event"]["data"]["update_base64"]
+        .as_str()
+        .unwrap();
+    ts_a.apply_update(&base64_to_update(a_b64).unwrap())
+        .unwrap();
+    assert!(
+        ts_a.content().contains("from-B"),
+        "A should see B's insert: {}",
+        ts_a.content()
+    );
+
+    // A undoes via UndoManager (NOT reconcile_to).
+    ts_a.undo_reset(); // Ensure the insert is a separate undo item.
+    let (undo_ok, undo_updates) = ts_a.undo();
+    assert!(undo_ok, "A's undo should succeed");
+    assert!(
+        !undo_updates.is_empty(),
+        "undo must generate CRDT update bytes"
+    );
+    assert!(
+        !ts_a.content().contains("from-A"),
+        "A's local state should not contain from-A after undo: {}",
+        ts_a.content()
+    );
+    assert!(
+        ts_a.content().contains("from-B"),
+        "A's local state should still contain from-B after undo: {}",
+        ts_a.content()
+    );
+
+    // Send ALL undo updates to the server.
+    for update in &undo_updates {
+        ca.send_update("undo-mgr.txt", update).await;
+    }
+
+    // B should receive the undo update(s).
+    for _ in 0..undo_updates.len() {
+        let notif_undo = cb
+            .wait_for_notification("notifications/sync_update", 2000)
+            .await
+            .expect("B should receive A's undo update");
+        let undo_b64 = notif_undo["params"]["event"]["data"]["update_base64"]
+            .as_str()
+            .unwrap();
+        ts_b.apply_update(&base64_to_update(undo_b64).unwrap())
+            .unwrap();
+    }
+
+    // B should see from-A removed, from-B preserved.
+    assert!(
+        !ts_b.content().contains("from-A"),
+        "B should NOT contain from-A after applying A's undo: {}",
+        ts_b.content()
+    );
+    assert!(
+        ts_b.content().contains("from-B"),
+        "B should still contain from-B after A's undo: {}",
+        ts_b.content()
+    );
+
+    // Verify server state also converged.
+    let server_content = ca.content("undo-mgr.txt").await;
+    assert!(
+        !server_content.contains("from-A"),
+        "server should NOT contain from-A: {}",
+        server_content
+    );
+    assert!(
+        server_content.contains("from-B"),
+        "server should contain from-B: {}",
+        server_content
+    );
+}
+
+/// Buffer::undo() with sync enabled generates pending_sync_updates
+/// that can be applied by a remote TextSync to achieve convergence.
+#[tokio::test]
+async fn buffer_undo_generates_valid_crdt_updates() {
+    init_tracing();
+
+    // Set up buffer A with sync + UndoManager.
+    let mut buf_a = Buffer::new();
+    buf_a.name = "undo-buf.txt".to_string();
+    buf_a.enable_sync(1);
+    let mut win = mae_core::window::Window::new(0, 0);
+
+    // Insert base content.
+    buf_a.insert_text_at(0, "base\n");
+    buf_a.pending_sync_updates.clear(); // Clear the base insert update.
+
+    // Mark undo boundary so the next insert is a separate undo item.
+    buf_a.sync_undo_boundary();
+
+    // Insert "from-A" (tracked by UndoManager).
+    buf_a.insert_text_at(5, "from-A\n");
+    let insert_updates: Vec<Vec<u8>> = buf_a.pending_sync_updates.drain(..).collect();
+    assert!(
+        !insert_updates.is_empty(),
+        "insert should generate sync updates"
+    );
+
+    // Set up remote doc B and apply A's edits.
+    let mut ts_b = TextSync::from_state(&buf_a.sync_doc.as_ref().unwrap().encode_state()).unwrap();
+    // Apply the insert update to B via the normal path (simulating what the server would do).
+    for u in &insert_updates {
+        ts_b.apply_update(u).unwrap();
+    }
+    assert_eq!(ts_b.content(), "base\nfrom-A\n");
+
+    // B adds its own content.
+    let ub = ts_b.insert(ts_b.content().len() as u32, "from-B\n");
+    buf_a
+        .apply_sync_update(&ub)
+        .expect("A should accept B's update");
+    assert!(
+        buf_a.text().contains("from-B"),
+        "A should see B's text: {}",
+        buf_a.text()
+    );
+
+    // Mark undo boundary before undo dispatch (simulates dispatch_builtin behavior).
+    buf_a.sync_undo_boundary();
+
+    // A undoes via Buffer::undo() — this should use the UndoManager path.
+    assert!(
+        buf_a.sync_doc.as_ref().unwrap().undo_mgr_active(),
+        "UndoManager should be active"
+    );
+    buf_a.undo(&mut win);
+
+    // Verify A's local state.
+    assert!(
+        !buf_a.text().contains("from-A"),
+        "A should not contain from-A after undo: {}",
+        buf_a.text()
+    );
+    assert!(
+        buf_a.text().contains("from-B"),
+        "A should still contain from-B after undo: {}",
+        buf_a.text()
+    );
+
+    // Verify undo generated pending_sync_updates.
+    assert!(
+        !buf_a.pending_sync_updates.is_empty(),
+        "Buffer::undo() must generate pending_sync_updates for CRDT propagation"
+    );
+
+    // Apply undo updates to B.
+    for u in &buf_a.pending_sync_updates {
+        ts_b.apply_update(u)
+            .expect("B should accept A's undo update");
+    }
+
+    // Verify convergence.
+    assert!(
+        !ts_b.content().contains("from-A"),
+        "B should not contain from-A after applying A's undo: {}",
+        ts_b.content()
+    );
+    assert!(
+        ts_b.content().contains("from-B"),
+        "B should still contain from-B after A's undo: {}",
+        ts_b.content()
+    );
+    assert_eq!(
+        buf_a.text(),
+        ts_b.content(),
+        "A and B should have identical content after undo propagation"
+    );
+}
+
+/// Redo after undo generates propagatable updates.
+#[tokio::test]
+async fn buffer_redo_generates_valid_crdt_updates() {
+    init_tracing();
+
+    let mut buf = Buffer::new();
+    buf.name = "redo-buf.txt".to_string();
+    buf.enable_sync(1);
+    let mut win = mae_core::window::Window::new(0, 0);
+
+    // Insert + boundary.
+    buf.insert_text_at(0, "hello");
+    buf.pending_sync_updates.clear();
+    buf.sync_undo_boundary();
+    buf.insert_text_at(5, " world");
+    buf.pending_sync_updates.clear();
+
+    // Set up remote.
+    let mut remote = TextSync::from_state(&buf.sync_doc.as_ref().unwrap().encode_state()).unwrap();
+    assert_eq!(remote.content(), "hello world");
+
+    // Undo.
+    buf.sync_undo_boundary();
+    buf.undo(&mut win);
+    assert_eq!(buf.text(), "hello");
+    for u in buf.pending_sync_updates.drain(..) {
+        remote.apply_update(&u).unwrap();
+    }
+    assert_eq!(remote.content(), "hello");
+
+    // Redo.
+    buf.sync_undo_boundary();
+    buf.redo(&mut win);
+    assert_eq!(buf.text(), "hello world");
+    assert!(
+        !buf.pending_sync_updates.is_empty(),
+        "redo must generate pending_sync_updates"
+    );
+    for u in &buf.pending_sync_updates {
+        remote.apply_update(u).unwrap();
+    }
+    assert_eq!(
+        remote.content(),
+        "hello world",
+        "remote should match after redo propagation"
+    );
+}
+
+/// Full undo propagation through the bridge with UndoManager — exercises the
+/// end-to-end flow: Buffer::undo() → pending_sync_updates → server → remote.
+/// Run 10 times to catch intermittent failures.
+#[tokio::test]
+async fn undo_propagation_stress() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    for iteration in 0..10 {
+        let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+        let mut cb = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+        let doc = format!("stress-undo-{iteration}.txt");
+        ca.share(&doc, "base\n").await;
+
+        let mut ts_a = TextSync::from_state(&ca.full_state(&doc).await).unwrap();
+        ts_a.enable_undo();
+        let mut ts_b = TextSync::from_state(&cb.full_state(&doc).await).unwrap();
+        ts_b.enable_undo();
+
+        // A inserts.
+        let ua = ts_a.insert(5, "from-A\n");
+        ca.send_update(&doc, &ua).await;
+        ts_a.undo_reset();
+
+        // B receives.
+        let n = cb
+            .wait_for_notification("notifications/sync_update", 2000)
+            .await
+            .expect("B should receive A's insert");
+        ts_b.apply_update(
+            &base64_to_update(
+                n["params"]["event"]["data"]["update_base64"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        // B inserts.
+        let ub = ts_b.insert(ts_b.content().len() as u32, "from-B\n");
+        cb.send_update(&doc, &ub).await;
+
+        // A receives.
+        let n2 = ca
+            .wait_for_notification("notifications/sync_update", 2000)
+            .await
+            .expect("A should receive B's insert");
+        ts_a.apply_update(
+            &base64_to_update(
+                n2["params"]["event"]["data"]["update_base64"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        // A undoes via UndoManager.
+        let (ok, undo_updates) = ts_a.undo();
+        assert!(ok, "iter {iteration}: undo should succeed");
+        assert!(
+            !undo_updates.is_empty(),
+            "iter {iteration}: undo must generate updates"
+        );
+
+        // Send undo to server.
+        for u in &undo_updates {
+            ca.send_update(&doc, u).await;
+        }
+
+        // B receives and applies undo.
+        for _ in 0..undo_updates.len() {
+            let n3 = cb
+                .wait_for_notification("notifications/sync_update", 2000)
+                .await
+                .unwrap_or_else(|| {
+                    panic!(
+                        "iter {iteration}: B should receive undo update. A content: {}, B content: {}",
+                        ts_a.content(),
+                        ts_b.content()
+                    )
+                });
+            ts_b.apply_update(
+                &base64_to_update(
+                    n3["params"]["event"]["data"]["update_base64"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        }
+
+        assert!(
+            !ts_b.content().contains("from-A"),
+            "iter {iteration}: B should not have from-A after undo: {}",
+            ts_b.content()
+        );
+        assert!(
+            ts_b.content().contains("from-B"),
+            "iter {iteration}: B should still have from-B: {}",
+            ts_b.content()
+        );
+    }
+}

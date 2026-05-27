@@ -194,6 +194,10 @@ pub struct CollabState {
     /// Pending save_committed to send on next drain tick.
     /// Format: (doc_id, save_epoch, content_hash, saved_by).
     pub pending_save_committed: Option<(String, u64, String, String)>,
+    /// Doc IDs confirmed by the server (via BufferShared/BufferJoined events).
+    /// Unlike `synced_buffers` which is optimistically updated on intent drain,
+    /// this set is only populated after the server acknowledges the share/join.
+    pub confirmed_shares: HashSet<String>,
     /// Remote user awareness state (cursors, selections, presence).
     pub remote_users: mae_sync::awareness::AwarenessMap,
     /// Pending awareness update to send (throttled at 50ms).
@@ -208,6 +212,7 @@ impl CollabState {
             status: CollabStatus::Off,
             synced_docs: 0,
             synced_buffers: HashSet::new(),
+            confirmed_shares: HashSet::new(),
             pending_intent: None,
             server_address: DEFAULT_COLLAB_ADDRESS.to_string(),
             auto_connect: false,
