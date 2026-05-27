@@ -328,10 +328,11 @@ async fn handle_doc_notification(
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
             let state = &params["state"];
             debug!(session = session_id, doc = %doc_name, "sync/awareness notification: relaying");
-            // Track doc for cleanup (same as request path).
+            // Track doc for cleanup and doc-scoped broadcast filtering.
             session_docs.insert(doc_name.clone());
             {
                 let mut bc = broadcaster.lock().unwrap();
+                bc.subscribe_doc(session_id, &doc_name);
                 bc.broadcast_except(
                     &EditorEvent::AwarenessUpdate {
                         doc_id: doc_name,
@@ -422,10 +423,14 @@ async fn handle_doc_request(
                     );
                 }
             };
-            // Track this doc for disconnect cleanup.
+            // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
             if session_docs.insert(doc_name.clone()) {
-                // First interaction — track client connect.
+                // First interaction — track client connect + subscribe to doc events.
                 let _ = doc_store.track_client_connect(&doc_name).await;
+                broadcaster
+                    .lock()
+                    .unwrap()
+                    .subscribe_doc(session_id, &doc_name);
                 debug!(session = session_id, doc = %doc_name, "sync/update: first interaction, tracking connect");
             }
             let update_b64 = match params["update"].as_str() {
@@ -498,8 +503,11 @@ async fn handle_doc_request(
                 doc = %doc_name,
                 "sync/awareness: relaying"
             );
+            // Track doc for cleanup and doc-scoped broadcast filtering.
+            session_docs.insert(doc_name.clone());
             {
                 let mut bc = broadcaster.lock().unwrap();
+                bc.subscribe_doc(session_id, &doc_name);
                 bc.broadcast_except(
                     &EditorEvent::AwarenessUpdate {
                         doc_id: doc_name.clone(),
@@ -541,9 +549,13 @@ async fn handle_doc_request(
 
         "sync/full_state" => {
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
-            // Track this doc for disconnect cleanup (joiners use full_state).
+            // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
             if session_docs.insert(doc_name.clone()) {
                 let _ = doc_store.track_client_connect(&doc_name).await;
+                broadcaster
+                    .lock()
+                    .unwrap()
+                    .subscribe_doc(session_id, &doc_name);
                 debug!(session = session_id, doc = %doc_name, "sync/full_state: first interaction, tracking connect");
             }
             match doc_store.encode_state(&doc_name).await {
@@ -627,9 +639,13 @@ async fn handle_doc_request(
             } else {
                 raw_name // fall through — will create new empty doc
             };
-            // Track this doc for disconnect cleanup (same as sync/full_state).
+            // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
             if session_docs.insert(doc_name.clone()) {
                 let _ = doc_store.track_client_connect(&doc_name).await;
+                broadcaster
+                    .lock()
+                    .unwrap()
+                    .subscribe_doc(session_id, &doc_name);
             }
             match doc_store.encode_state_and_sv(&doc_name).await {
                 Ok((state, sv)) => {
@@ -741,8 +757,12 @@ async fn handle_doc_request(
             // BUG D fix: use atomic share_doc (delete + create + connected_clients=1).
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
             info!(session = session_id, doc = %doc_name, "sync/share: processing");
-            // Track this doc for disconnect cleanup.
+            // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
             session_docs.insert(doc_name.clone());
+            broadcaster
+                .lock()
+                .unwrap()
+                .subscribe_doc(session_id, &doc_name);
             let update_b64 = match params["update"].as_str() {
                 Some(s) => s,
                 None => {
