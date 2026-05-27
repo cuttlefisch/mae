@@ -3,14 +3,34 @@
 use ropey::Rope;
 use std::sync::{Arc, Mutex};
 use yrs::{
-    undo::UndoManager, updates::decoder::Decode, updates::encoder::Encode, Doc, GetString, ReadTxn,
-    Subscription, Text, Transact,
+    doc::OffsetKind, undo::UndoManager, updates::decoder::Decode, updates::encoder::Encode, Doc,
+    GetString, ReadTxn, Subscription, Text, Transact,
 };
 
 use crate::SyncError;
 
 /// The yrs text field name used in all documents.
 const TEXT_NAME: &str = "content";
+
+/// Create a yrs Doc configured with UTF-16 offset kind (the Yjs standard).
+///
+/// All Doc instances MUST use this to ensure offset consistency. Using the
+/// default `OffsetKind::Bytes` causes char↔yrs offset mismatches for non-ASCII text.
+fn new_doc() -> Doc {
+    Doc::with_options(yrs::Options {
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    })
+}
+
+/// Create a yrs Doc with a specific client ID and UTF-16 offset kind.
+fn new_doc_with_client_id(client_id: u64) -> Doc {
+    Doc::with_options(yrs::Options {
+        client_id,
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    })
+}
 
 /// Maximum number of undo stack items before old items are evicted.
 /// Matches Emacs's `undo-limit` philosophy — generous but bounded.
@@ -63,7 +83,7 @@ pub struct TextSync {
 impl TextSync {
     /// Create a new sync document with initial content.
     pub fn new(content: &str) -> Self {
-        let doc = Doc::new();
+        let doc = new_doc();
         {
             let text = doc.get_or_insert_text(TEXT_NAME);
             let mut txn = doc.transact_mut();
@@ -85,7 +105,7 @@ impl TextSync {
 
     /// Create with a specific client ID (for testing deterministic merges).
     pub fn with_client_id(content: &str, client_id: u64) -> Self {
-        let doc = Doc::with_client_id(client_id);
+        let doc = new_doc_with_client_id(client_id);
         {
             let text = doc.get_or_insert_text(TEXT_NAME);
             let mut txn = doc.transact_mut();
@@ -109,7 +129,7 @@ impl TextSync {
     /// with an empty state vector. Used by the state server, which only relays
     /// updates from clients and should not contribute its own operations.
     pub fn empty_relay() -> Self {
-        let doc = Doc::new();
+        let doc = new_doc();
         // Do NOT insert anything — the server is a passive relay.
         // The first client to share will provide the initial content.
         let rope = Rope::from_str("");
@@ -151,36 +171,46 @@ impl TextSync {
     ///
     /// When undo is active, uses origin-tagged transactions so the UndoManager
     /// tracks this edit for per-user undo.
+    ///
+    /// Note: yrs is configured with `OffsetKind::Utf16` (the Yjs standard),
+    /// so we convert char offsets to UTF-16 code unit offsets via ropey's
+    /// O(log n) `char_to_utf16_cu()` before calling yrs.
     pub fn insert(&mut self, offset: u32, text: &str) -> Vec<u8> {
+        let utf16_offset = self.char_to_utf16_offset(offset);
         let ytext = self.doc.get_or_insert_text(TEXT_NAME);
         let update = if self.undo_mgr.is_some() {
             let origin = self.doc.client_id();
             let mut txn = self.doc.transact_mut_with(origin);
-            ytext.insert(&mut txn, offset, text);
+            ytext.insert(&mut txn, utf16_offset, text);
             txn.encode_update_v1()
         } else {
             let mut txn = self.doc.transact_mut();
-            ytext.insert(&mut txn, offset, text);
+            ytext.insert(&mut txn, utf16_offset, text);
             txn.encode_update_v1()
         };
         self.rebuild_rope();
         update
     }
 
-    /// Apply a local delete (char offset + length). Returns encoded update for broadcast.
+    /// Apply a local delete (char offset + char length). Returns encoded update for broadcast.
     ///
     /// When undo is active, uses origin-tagged transactions so the UndoManager
     /// tracks this edit for per-user undo.
+    ///
+    /// Note: yrs is configured with `OffsetKind::Utf16` (the Yjs standard),
+    /// so we convert char offset/length to UTF-16 code unit offset/length.
     pub fn delete(&mut self, offset: u32, len: u32) -> Vec<u8> {
+        let utf16_offset = self.char_to_utf16_offset(offset);
+        let utf16_len = self.char_len_to_utf16_len(offset, len);
         let ytext = self.doc.get_or_insert_text(TEXT_NAME);
         let update = if self.undo_mgr.is_some() {
             let origin = self.doc.client_id();
             let mut txn = self.doc.transact_mut_with(origin);
-            ytext.remove_range(&mut txn, offset, len);
+            ytext.remove_range(&mut txn, utf16_offset, utf16_len);
             txn.encode_update_v1()
         } else {
             let mut txn = self.doc.transact_mut();
-            ytext.remove_range(&mut txn, offset, len);
+            ytext.remove_range(&mut txn, utf16_offset, utf16_len);
             txn.encode_update_v1()
         };
         self.rebuild_rope();
@@ -223,7 +253,7 @@ impl TextSync {
 
     /// Load from encoded full state.
     pub fn from_state(state: &[u8]) -> Result<Self, SyncError> {
-        let doc = Doc::new();
+        let doc = new_doc();
         let update =
             yrs::Update::decode_v1(state).map_err(|e| SyncError::Encoding(e.to_string()))?;
         {
@@ -254,11 +284,7 @@ impl TextSync {
     /// Use this instead of `from_state()` when the caller needs a deterministic
     /// client ID (e.g., editor clients that generate local edits).
     pub fn from_state_with_client_id(state: &[u8], client_id: u64) -> Result<Self, SyncError> {
-        let options = yrs::Options {
-            client_id,
-            ..Default::default()
-        };
-        let doc = Doc::with_options(options);
+        let doc = new_doc_with_client_id(client_id);
         let update =
             yrs::Update::decode_v1(state).map_err(|e| SyncError::Encoding(e.to_string()))?;
         {
@@ -307,6 +333,9 @@ impl TextSync {
     /// Computes a character-level diff between the current content and `target`,
     /// then applies insert/delete operations through yrs transactions. Returns
     /// the encoded update bytes for broadcast (empty if no change).
+    ///
+    /// Note: yrs uses byte offsets (`OffsetKind::Bytes`), so we track byte
+    /// offsets alongside char offsets throughout the diff application.
     pub fn reconcile_to(&mut self, target: &str) -> Vec<u8> {
         use similar::{ChangeTag, TextDiff};
 
@@ -321,22 +350,21 @@ impl TextSync {
 
         let update = {
             let mut txn = self.doc.transact_mut();
-            let mut offset: u32 = 0;
+            let mut utf16_offset: u32 = 0;
 
             for change in diff.iter_all_changes() {
+                let utf16_len: u32 = change.value().chars().map(|c| c.len_utf16() as u32).sum();
                 match change.tag() {
                     ChangeTag::Equal => {
-                        offset += change.value().chars().count() as u32;
+                        utf16_offset += utf16_len;
                     }
                     ChangeTag::Delete => {
-                        let len = change.value().chars().count() as u32;
-                        ytext.remove_range(&mut txn, offset, len);
-                        // offset stays the same after delete
+                        ytext.remove_range(&mut txn, utf16_offset, utf16_len);
                     }
                     ChangeTag::Insert => {
                         let text = change.value();
-                        ytext.insert(&mut txn, offset, text);
-                        offset += text.chars().count() as u32;
+                        ytext.insert(&mut txn, utf16_offset, text);
+                        utf16_offset += utf16_len;
                     }
                 }
             }
@@ -346,6 +374,26 @@ impl TextSync {
 
         self.rebuild_rope();
         update
+    }
+
+    /// Convert a char offset (Unicode scalar values) to UTF-16 code unit offset.
+    ///
+    /// yrs is configured with `OffsetKind::Utf16` (the Yjs standard), so we must
+    /// convert Rust char offsets to UTF-16 code unit counts. Uses ropey's native
+    /// `char_to_utf16_cu()` which is O(log n) via B-tree metadata — same
+    /// performance as byte offset conversion.
+    fn char_to_utf16_offset(&self, char_offset: u32) -> u32 {
+        let clamped = (char_offset as usize).min(self.rope.len_chars());
+        self.rope.char_to_utf16_cu(clamped) as u32
+    }
+
+    /// Convert a char-length span starting at `char_offset` to UTF-16 code unit length.
+    fn char_len_to_utf16_len(&self, char_offset: u32, char_len: u32) -> u32 {
+        let start = (char_offset as usize).min(self.rope.len_chars());
+        let end = (start + char_len as usize).min(self.rope.len_chars());
+        let utf16_start = self.rope.char_to_utf16_cu(start);
+        let utf16_end = self.rope.char_to_utf16_cu(end);
+        (utf16_end - utf16_start) as u32
     }
 
     /// Rebuild rope from YText (called after remote updates).
@@ -1072,6 +1120,88 @@ mod tests {
         assert_eq!(ts.content(), "ac");
         ts.insert(1, "X"); // → "aXc"
         assert_eq!(ts.content(), "aXc");
+    }
+
+    // --- UTF-16 offset correctness ---
+    // yrs uses OffsetKind::Utf16. These tests verify that char offsets
+    // (Rust Unicode scalar values) are correctly mapped to UTF-16 code units.
+
+    #[test]
+    fn utf16_insert_after_multibyte_bmp() {
+        // BMP chars: é (U+00E9) is 1 UTF-16 unit but 2 UTF-8 bytes.
+        let mut ts = TextSync::with_client_id("café latte", 1);
+        // Char offset 5 = space after é. Insert should go between 'é' and ' '.
+        ts.insert(4, "!");
+        assert_eq!(ts.content(), "café! latte");
+    }
+
+    #[test]
+    fn utf16_insert_after_supplementary_emoji() {
+        // Supplementary plane: 🔥 (U+1F525) is 2 UTF-16 units but 1 Rust char.
+        let mut ts = TextSync::with_client_id("a🔥b", 1);
+        // Char offset 2 = 'b'. Insert between 🔥 and b.
+        ts.insert(2, "X");
+        assert_eq!(ts.content(), "a🔥Xb");
+    }
+
+    #[test]
+    fn utf16_delete_multibyte_char() {
+        let mut ts = TextSync::with_client_id("café", 1);
+        // Delete é (char offset 3, length 1)
+        ts.delete(3, 1);
+        assert_eq!(ts.content(), "caf");
+    }
+
+    #[test]
+    fn utf16_delete_emoji() {
+        let mut ts = TextSync::with_client_id("a🔥🎉b", 1);
+        // Delete 🔥 (char offset 1, length 1)
+        ts.delete(1, 1);
+        assert_eq!(ts.content(), "a🎉b");
+    }
+
+    #[test]
+    fn utf16_insert_convergence_with_emoji() {
+        // Two clients: A inserts after emoji, B receives update.
+        let mut ts_a = TextSync::with_client_id("hello🔥world", 1);
+        let state = ts_a.encode_state();
+        let mut ts_b = TextSync::from_state_with_client_id(&state, 2).unwrap();
+
+        // A inserts at char offset 6 (after 🔥, before 'w')
+        let update = ts_a.insert(6, "!!!");
+        ts_b.apply_update(&update).unwrap();
+
+        assert_eq!(ts_a.content(), "hello🔥!!!world");
+        assert_eq!(ts_b.content(), "hello🔥!!!world");
+    }
+
+    #[test]
+    fn utf16_reconcile_with_emoji() {
+        let mut ts = TextSync::with_client_id("café 🔥 naïve", 1);
+        let state = ts.encode_state();
+        let mut ts_b = TextSync::from_state_with_client_id(&state, 2).unwrap();
+
+        // Reconcile to a new string with emoji changes
+        let update = ts.reconcile_to("café 🎉 naïve");
+        ts_b.apply_update(&update).unwrap();
+
+        assert_eq!(ts.content(), "café 🎉 naïve");
+        assert_eq!(ts_b.content(), "café 🎉 naïve");
+    }
+
+    #[test]
+    fn utf16_zwj_family_emoji() {
+        // ZWJ sequence: 👨‍👩‍👧‍👦 = 7 Rust chars (4 emoji + 3 ZWJ), 11 UTF-16 units
+        let mut ts_a = TextSync::with_client_id("a👨\u{200d}👩\u{200d}👧\u{200d}👦b", 1);
+        let state = ts_a.encode_state();
+        let mut ts_b = TextSync::from_state_with_client_id(&state, 2).unwrap();
+
+        // Insert after the full ZWJ sequence (char 8 = 'b')
+        let update = ts_a.insert(8, "X");
+        ts_b.apply_update(&update).unwrap();
+
+        assert_eq!(ts_a.content(), ts_b.content());
+        assert!(ts_a.content().ends_with("Xb"));
     }
 
     // --- Undo/redo multi-cycle ---

@@ -496,6 +496,20 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             wal_seq,
         } => {
             if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
+                // Capture cursor char offsets for all windows viewing this buffer
+                // so we can restore them after the rope rebuild.
+                let window_cursors: Vec<(mae_core::WindowId, usize)> = editor
+                    .window_mgr
+                    .iter_windows()
+                    .filter(|w| w.buffer_idx == idx)
+                    .map(|w| {
+                        (
+                            w.id,
+                            editor.buffers[idx].char_offset_at(w.cursor_row, w.cursor_col),
+                        )
+                    })
+                    .collect();
+
                 let text_before: String = editor.buffers[idx].text().chars().take(200).collect();
                 match editor.buffers[idx].apply_sync_update(&update_bytes) {
                     Ok(()) => {
@@ -512,6 +526,16 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                             text_changed = (text_before != text_after),
                             "applied remote sync update"
                         );
+                        // Restore cursor positions: clamp to new rope length.
+                        for (win_id, char_offset) in &window_cursors {
+                            if let Some(win) = editor.window_mgr.window_mut(*win_id) {
+                                let (row, col) =
+                                    editor.buffers[idx].row_col_from_offset(*char_offset);
+                                win.cursor_row = row;
+                                win.cursor_col = col;
+                                win.clamp_cursor(&editor.buffers[idx]);
+                            }
+                        }
                         // Clear offline flag on successful remote update.
                         editor.buffers[idx].collab_offline = false;
                         editor.fire_hook("sync-update");

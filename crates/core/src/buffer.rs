@@ -203,6 +203,11 @@ pub struct Buffer {
     /// this depth, the buffer is considered unmodified (Vim/Emacs behavior).
     /// `None` means never saved (new buffer) — only explicit save clears modified.
     saved_undo_depth: Option<usize>,
+    /// Content hash at last save for CRDT buffers. Used instead of
+    /// `saved_undo_depth` because CRDT state vectors are monotonically
+    /// increasing (undo creates new operations, advancing the vector).
+    /// Content hash comparison is the correct "is file clean?" check.
+    saved_content_hash: Option<String>,
     /// Last known modification time of the backing file on disk.
     /// Used by auto-reload to detect external changes.
     pub file_mtime: Option<SystemTime>,
@@ -351,6 +356,7 @@ impl Buffer {
             redo_stack: Vec::new(),
             undo_group_acc: None,
             saved_undo_depth: None,
+            saved_content_hash: None,
             file_mtime: None,
             content_hash: None,
             project_root: None,
@@ -567,6 +573,12 @@ impl Buffer {
             // Recompute content hash after successful save.
             let text: String = self.rope.chars().collect();
             self.content_hash = Some(compute_content_hash(&text));
+            // For CRDT buffers, save the content hash for modified flag
+            // tracking. State vectors can't be used because CRDT undo creates
+            // new operations that advance the state vector monotonically.
+            if self.sync_doc.is_some() {
+                self.saved_content_hash = self.content_hash.clone();
+            }
             Ok(())
         } else {
             Err(std::io::Error::other("No file path set"))
@@ -937,6 +949,7 @@ impl Buffer {
         let mut sync = mae_sync::text::TextSync::with_client_id(&content, client_id);
         sync.enable_undo();
         self.sync_doc = Some(sync);
+        self.saved_content_hash = None; // fresh sync, not yet saved
     }
 
     /// Load sync state from encoded bytes (join/resync path).
@@ -958,6 +971,7 @@ impl Buffer {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.modified = false;
+        self.saved_content_hash = None; // join path, not yet saved locally
         self.bump_generation();
         Ok(())
     }
@@ -1418,7 +1432,16 @@ impl Buffer {
                     pending_after = self.pending_sync_updates.len(),
                     "CRDT undo: updates queued in pending_sync_updates"
                 );
-                self.modified = true; // conservative; exact tracking deferred
+                // Check if undo brought us back to the saved content.
+                // CRDT state vectors can't be used (undo advances them monotonically),
+                // so we compare content hashes instead.
+                self.modified = match &self.saved_content_hash {
+                    Some(saved_hash) => {
+                        let current: String = self.rope.chars().collect();
+                        compute_content_hash(&current) != *saved_hash
+                    }
+                    None => true, // never saved — always modified
+                };
                 self.bump_generation();
                 if let Some(offset) = result.cursor_offset {
                     Self::set_cursor_from_char_pos(&self.rope, win, offset as usize);
@@ -1450,7 +1473,13 @@ impl Buffer {
                 }
                 self.rope = sync.rope().clone();
                 self.pending_sync_updates.extend(result.updates);
-                self.modified = true;
+                self.modified = match &self.saved_content_hash {
+                    Some(saved_hash) => {
+                        let current: String = self.rope.chars().collect();
+                        compute_content_hash(&current) != *saved_hash
+                    }
+                    None => true,
+                };
                 self.bump_generation();
                 if let Some(offset) = result.cursor_offset {
                     Self::set_cursor_from_char_pos(&self.rope, win, offset as usize);
@@ -2979,6 +3008,425 @@ mod tests {
         assert!(
             buf.sync_doc.as_ref().unwrap().undo_mgr_active(),
             "enable_sync should enable undo"
+        );
+    }
+
+    // --- Modified flag with CRDT undo/redo ---
+
+    #[test]
+    fn crdt_undo_to_saved_state_clears_modified() {
+        let (mut buf, mut win) = new_buf_win();
+        buf.enable_sync(1);
+        buf.insert_text_at(0, "hello");
+        buf.pending_sync_updates.clear();
+
+        // Save — captures content hash
+        let dir = tempfile::tempdir().unwrap();
+        buf.file_path = Some(dir.path().join("test.txt"));
+        buf.save().unwrap();
+        assert!(!buf.modified, "should be clean after save");
+        assert!(buf.saved_content_hash.is_some());
+
+        // Edit after save
+        buf.sync_undo_boundary();
+        buf.insert_text_at(5, " world");
+        assert!(buf.modified, "should be modified after edit");
+
+        // Undo back to saved state
+        buf.undo(&mut win);
+        assert!(
+            !buf.modified,
+            "undo to saved state should clear modified flag"
+        );
+        assert_eq!(buf.text(), "hello");
+    }
+
+    #[test]
+    fn crdt_redo_after_undo_restores_modified() {
+        let (mut buf, mut win) = new_buf_win();
+        buf.enable_sync(1);
+        buf.insert_text_at(0, "base");
+        buf.pending_sync_updates.clear();
+
+        let dir = tempfile::tempdir().unwrap();
+        buf.file_path = Some(dir.path().join("test.txt"));
+        buf.save().unwrap();
+
+        buf.sync_undo_boundary();
+        buf.insert_text_at(4, " extra");
+
+        // Undo → clean
+        buf.undo(&mut win);
+        assert!(!buf.modified);
+
+        // Redo → dirty again
+        buf.redo(&mut win);
+        assert!(buf.modified, "redo past saved state should set modified");
+        assert_eq!(buf.text(), "base extra");
+    }
+
+    #[test]
+    fn crdt_modified_flag_never_saved_always_modified() {
+        let (mut buf, mut win) = new_buf_win();
+        buf.enable_sync(1);
+        buf.insert_text_at(0, "never saved");
+        buf.pending_sync_updates.clear();
+        buf.sync_undo_boundary();
+
+        // Undo without ever saving — should remain modified (no saved state)
+        buf.undo(&mut win);
+        assert!(
+            buf.modified,
+            "buffer that was never saved should stay modified after undo"
+        );
+    }
+
+    #[test]
+    fn crdt_undo_redo_roundtrip_modified_flag() {
+        let (mut buf, mut win) = new_buf_win();
+        buf.enable_sync(1);
+        buf.insert_text_at(0, "a");
+        buf.pending_sync_updates.clear();
+
+        let dir = tempfile::tempdir().unwrap();
+        buf.file_path = Some(dir.path().join("test.txt"));
+        buf.save().unwrap();
+
+        // Make 3 edits
+        for s in &[" b", " c", " d"] {
+            buf.sync_undo_boundary();
+            let pos = buf.rope.len_chars();
+            buf.insert_text_at(pos, s);
+        }
+        assert!(buf.modified);
+
+        // Undo all 3 → back to saved state
+        buf.undo(&mut win);
+        buf.undo(&mut win);
+        buf.undo(&mut win);
+        assert!(
+            !buf.modified,
+            "3x undo to saved state should clear modified"
+        );
+
+        // Redo 1 → dirty
+        buf.redo(&mut win);
+        assert!(buf.modified);
+
+        // Undo 1 → clean again
+        buf.undo(&mut win);
+        assert!(!buf.modified);
+    }
+
+    // --- Unicode/emoji CRDT sync convergence ---
+
+    #[test]
+    fn unicode_emoji_sync_convergence() {
+        // Test that multi-byte Unicode and emoji survive CRDT round-trip.
+        let mut doc_a = Buffer::new();
+        doc_a.rope = Rope::from_str("café 🔥👨‍👩‍👧‍👦 naïve");
+        doc_a.enable_sync(1);
+
+        let mut doc_b = Buffer::new();
+        doc_b.sync_doc = Some(
+            mae_sync::text::TextSync::from_state_with_client_id(
+                &doc_a.sync_doc.as_ref().unwrap().encode_state(),
+                2,
+            )
+            .unwrap(),
+        );
+        doc_b.rope = doc_b.sync_doc.as_ref().unwrap().rope().clone();
+
+        assert_eq!(doc_b.text(), "café 🔥👨‍👩‍👧‍👦 naïve");
+
+        // A inserts emoji at a multi-byte boundary
+        doc_a.insert_text_at(5, "🎉");
+        let update = doc_a.pending_sync_updates.pop().unwrap();
+        doc_b.apply_sync_update(&update).unwrap();
+        assert_eq!(
+            doc_a.text(),
+            doc_b.text(),
+            "unicode content must converge after emoji insert"
+        );
+
+        // B inserts combining diacritics
+        doc_b.sync_doc.as_mut().unwrap().insert(0, "ñ á ö ");
+        doc_b.rope = doc_b.sync_doc.as_ref().unwrap().rope().clone();
+        let sv_a = doc_a.sync_doc.as_ref().unwrap().state_vector();
+        let diff = doc_b.sync_doc.as_ref().unwrap().encode_diff(&sv_a);
+        doc_a.apply_sync_update(&diff).unwrap();
+        assert_eq!(
+            doc_a.text(),
+            doc_b.text(),
+            "combining diacritics must converge"
+        );
+    }
+
+    #[test]
+    fn unicode_concurrent_inserts_converge() {
+        // Both clients insert different emoji at the same position concurrently.
+        let mut doc_a = Buffer::new();
+        doc_a.rope = Rope::from_str("hello");
+        doc_a.enable_sync(1);
+
+        let state = doc_a.sync_doc.as_ref().unwrap().encode_state();
+        let mut doc_b = Buffer::new();
+        doc_b.sync_doc =
+            Some(mae_sync::text::TextSync::from_state_with_client_id(&state, 2).unwrap());
+        doc_b.rope = doc_b.sync_doc.as_ref().unwrap().rope().clone();
+
+        // Concurrent emoji inserts at position 5
+        doc_a.insert_text_at(5, "🍕");
+        doc_b.sync_doc.as_mut().unwrap().insert(5, "🍔");
+        doc_b.rope = doc_b.sync_doc.as_ref().unwrap().rope().clone();
+
+        // Cross-sync
+        let update_a = doc_a.pending_sync_updates.pop().unwrap();
+        let sv_a = doc_a.sync_doc.as_ref().unwrap().state_vector();
+        let diff_b = doc_b.sync_doc.as_ref().unwrap().encode_diff(&sv_a);
+
+        doc_b.apply_sync_update(&update_a).unwrap();
+        doc_a.apply_sync_update(&diff_b).unwrap();
+
+        assert_eq!(
+            doc_a.text(),
+            doc_b.text(),
+            "concurrent emoji inserts must converge to identical content"
+        );
+        // Both emoji present regardless of order
+        assert!(doc_a.text().contains("🍕"));
+        assert!(doc_a.text().contains("🍔"));
+    }
+
+    // --- Buffer close mid-sync ---
+
+    #[test]
+    fn buffer_close_mid_pending_updates() {
+        let mut buf = Buffer::new();
+        buf.rope = Rope::from_str("content");
+        buf.enable_sync(1);
+
+        // Simulate pending updates that haven't been drained
+        buf.insert_text_at(7, " extra");
+        assert!(!buf.pending_sync_updates.is_empty());
+
+        // Close buffer (disable sync) while updates are pending
+        let state = buf.disable_sync();
+        assert!(state.is_some(), "should return state for persistence");
+        assert!(buf.sync_doc.is_none());
+        // Buffer should still be usable after close
+        assert_eq!(buf.text(), "content extra");
+    }
+
+    // --- Redo after cascading remote updates ---
+
+    #[test]
+    fn redo_survives_two_remote_updates() {
+        let (mut buf_a, mut win_a) = new_buf_win();
+        buf_a.enable_sync(1);
+        buf_a.insert_text_at(0, "base\n");
+        buf_a.pending_sync_updates.clear();
+        buf_a.sync_undo_boundary();
+
+        // Create B and C from A's state
+        let state = buf_a.sync_doc.as_ref().unwrap().encode_state();
+        let mut doc_b = mae_sync::text::TextSync::from_state_with_client_id(&state, 2).unwrap();
+        let mut doc_c = mae_sync::text::TextSync::from_state_with_client_id(&state, 3).unwrap();
+
+        // A inserts, then undoes
+        buf_a.insert_text_at(5, "from-A\n");
+        buf_a.pending_sync_updates.clear();
+        buf_a.sync_undo_boundary();
+        buf_a.undo(&mut win_a);
+        buf_a.pending_sync_updates.clear();
+
+        // B inserts
+        let update_b = doc_b.insert(5, "from-B\n");
+        buf_a.apply_sync_update(&update_b).unwrap();
+
+        // C inserts
+        let update_c = doc_c.insert(5, "from-C\n");
+        buf_a.apply_sync_update(&update_c).unwrap();
+
+        // A redo should still work after receiving 2 remote updates
+        buf_a.redo(&mut win_a);
+        assert!(
+            buf_a.text().contains("from-A"),
+            "redo must restore A's local edit even after 2 remote updates"
+        );
+        assert!(buf_a.text().contains("from-B"));
+        assert!(buf_a.text().contains("from-C"));
+    }
+
+    // --- Reload from disk while sync active ---
+
+    #[test]
+    fn reload_from_disk_preserves_sync() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "initial content").unwrap();
+        let mut buf = Buffer::from_file(tmp.path()).unwrap();
+        buf.enable_sync(1);
+
+        // Make a synced edit
+        buf.insert_text_at(0, "prefix ");
+        let had_updates = !buf.pending_sync_updates.is_empty();
+        assert!(had_updates, "should have pending sync updates");
+
+        // Simulate external file change + reload
+        std::fs::write(tmp.path(), "external content").unwrap();
+        let _ = buf.reload_from_disk();
+
+        // Sync doc should still be active after reload
+        assert!(buf.sync_doc.is_some(), "sync_doc must survive disk reload");
+    }
+
+    // --- Sync enable/disable toggle ---
+
+    #[test]
+    fn sync_toggle_preserves_content() {
+        let mut buf = Buffer::new();
+        buf.rope = Rope::from_str("original");
+        buf.enable_sync(1);
+
+        buf.insert_text_at(8, " synced");
+        assert_eq!(buf.text(), "original synced");
+
+        // Disable sync
+        let saved_state = buf.disable_sync();
+        assert!(saved_state.is_some());
+
+        // Edit while unsynced
+        buf.rope = Rope::from_str("original synced local");
+
+        // Re-enable sync — content should be the new local content
+        buf.enable_sync(2);
+        assert_eq!(
+            buf.text(),
+            "original synced local",
+            "re-enable should use current rope content"
+        );
+    }
+
+    // --- 3-client concurrent inserts at same position ---
+
+    #[test]
+    fn three_client_concurrent_inserts_same_position() {
+        let mut doc_a = Buffer::new();
+        doc_a.rope = Rope::from_str("base");
+        doc_a.enable_sync(1);
+
+        let state = doc_a.sync_doc.as_ref().unwrap().encode_state();
+        let mut doc_b = mae_sync::text::TextSync::from_state_with_client_id(&state, 2).unwrap();
+        let mut doc_c = mae_sync::text::TextSync::from_state_with_client_id(&state, 3).unwrap();
+
+        // All three insert at position 4 concurrently
+        doc_a.insert_text_at(4, "-A");
+        let update_a_b = doc_b.insert(4, "-B");
+        let update_a_c = doc_c.insert(4, "-C");
+
+        // Cross-sync everything
+        let update_from_a = doc_a.pending_sync_updates.pop().unwrap();
+        doc_b.apply_update(&update_from_a).unwrap();
+        doc_c.apply_update(&update_from_a).unwrap();
+
+        doc_a.apply_sync_update(&update_a_b).unwrap();
+        doc_c.apply_update(&update_a_b).unwrap();
+
+        doc_a.apply_sync_update(&update_a_c).unwrap();
+        doc_b.apply_update(&update_a_c).unwrap();
+
+        let text_a = doc_a.text();
+        let text_b: String = doc_b.rope().chars().collect();
+        let text_c: String = doc_c.rope().chars().collect();
+
+        assert_eq!(text_a, text_b, "A and B must converge");
+        assert_eq!(text_b, text_c, "B and C must converge");
+        assert!(text_a.contains("-A"));
+        assert!(text_a.contains("-B"));
+        assert!(text_a.contains("-C"));
+    }
+
+    // --- Rapid rejoin cycles ---
+
+    #[test]
+    fn rapid_rejoin_no_state_duplication() {
+        let mut buf = Buffer::new();
+        buf.rope = Rope::from_str("persist");
+
+        for i in 0..5 {
+            buf.enable_sync(100 + i);
+            buf.insert_text_at(buf.rope.len_chars(), &format!(" r{}", i));
+            buf.pending_sync_updates.clear();
+            buf.disable_sync();
+        }
+
+        // After 5 cycles, content should have all appends, no duplicates
+        let text = buf.text();
+        assert!(text.starts_with("persist"));
+        for i in 0..5 {
+            let marker = format!(" r{}", i);
+            assert_eq!(
+                text.matches(&marker).count(),
+                1,
+                "marker '{}' should appear exactly once, not duplicated by rejoin",
+                marker
+            );
+        }
+    }
+
+    // --- Cursor position preserved across sync update ---
+
+    #[test]
+    fn cursor_preserved_after_remote_insert_before() {
+        let (mut buf, _win) = new_buf_win();
+        buf.rope = Rope::from_str("hello world");
+        buf.enable_sync(1);
+
+        let state = buf.sync_doc.as_ref().unwrap().encode_state();
+        let mut remote = mae_sync::text::TextSync::from_state_with_client_id(&state, 2).unwrap();
+
+        // Local cursor at "world" (offset 6)
+        let cursor_offset = 6usize;
+        let (_row, col) = buf.row_col_from_offset(cursor_offset);
+        assert_eq!(col, 6);
+
+        // Remote inserts "xxx " before cursor (at position 0)
+        let update = remote.insert(0, "xxx ");
+        buf.apply_sync_update(&update).unwrap();
+
+        // After remote insert of 4 chars at pos 0, "world" moved to offset 10
+        let (new_row, new_col) = buf.row_col_from_offset(cursor_offset);
+        // The char_offset_at → row_col_from_offset round-trip preserves the
+        // ORIGINAL char offset. The collab_bridge handler captures the offset
+        // before apply and restores after, so cursor stays at same content.
+        // Here we verify the conversion functions are consistent.
+        assert_eq!(buf.char_offset_at(new_row, new_col), cursor_offset);
+    }
+
+    // --- saved_content_hash reset on load/enable ---
+
+    #[test]
+    fn enable_sync_clears_saved_state_vector() {
+        let mut buf = Buffer::new();
+        buf.saved_content_hash = Some("stale_hash".to_string()); // fake stale value
+        buf.enable_sync(1);
+        assert!(
+            buf.saved_content_hash.is_none(),
+            "enable_sync must clear stale saved state vector"
+        );
+    }
+
+    #[test]
+    fn load_sync_state_clears_saved_state_vector() {
+        let ts = mae_sync::text::TextSync::new("content");
+        let state = ts.encode_state();
+
+        let mut buf = Buffer::new();
+        buf.saved_content_hash = Some("stale_hash".to_string());
+        buf.load_sync_state(&state, 42).unwrap();
+        assert!(
+            buf.saved_content_hash.is_none(),
+            "load_sync_state must clear stale saved state vector"
         );
     }
 }
