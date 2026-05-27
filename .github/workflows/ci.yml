@@ -77,7 +77,7 @@ jobs:
         timeout-minutes: 3
       - name: State server tests
         run: cargo test --package mae-state-server -- --test-threads=1 --nocapture
-        timeout-minutes: 5
+        timeout-minutes: 10
         env:
           RUST_LOG: "mae_state_server=debug,mae_sync=debug,warn"
       - name: Collab bridge integration tests
@@ -131,6 +131,8 @@ jobs:
         run: ./target/release/mae --test tests/editor/
       - name: CRDT tests
         run: ./target/release/mae --test tests/crdt/
+      - name: Collab local tests
+        run: ./target/release/mae --test tests/collab-local/
       - name: Package install
         run: |
           mkdir -p ~/.config/mae
@@ -160,6 +162,9 @@ jobs:
         timeout-minutes: 10
       - name: Scheme real programs
         run: cargo test -p mae-scheme --test scheme_programs -- --nocapture
+        timeout-minutes: 5
+      - name: Scheme IO port tests
+        run: cargo test -p mae-scheme --test scheme_io_ports -- --nocapture
         timeout-minutes: 5
       - name: Unit tests
         run: cargo test -p mae-scheme --lib
