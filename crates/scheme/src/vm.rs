@@ -104,6 +104,9 @@ pub struct Frame {
     /// Maps local index → shared cell. Ensures multiple closures
     /// capturing the same local share the same mutable cell.
     pub local_cells: HashMap<usize, Rc<RefCell<Value>>>,
+    /// Module environment from the closure that created this frame.
+    /// Used by `LoadGlobal` for library-scoped variable resolution.
+    pub module_env: Option<Rc<RefCell<Env>>>,
 }
 
 /// An exception handler entry on the unified handler stack.
@@ -164,6 +167,15 @@ pub struct Vm {
     last_break_line: Option<(String, u32)>,
     /// When true, compiler emits `Op::BreakpointCheck` at source line boundaries.
     pub debug_mode: bool,
+    /// Library environment for closures created during `define-library` body
+    /// evaluation. Shared between the VM and all closures created during
+    /// library body evaluation. `DefineGlobal` writes to both `self.globals`
+    /// AND this env. `MakeClosure` attaches it to the closure's `module_env`.
+    /// `LoadGlobal` checks `module_env` before `self.globals`.
+    ///
+    /// Uses `Rc<RefCell<Env>>` so defines during body evaluation are visible
+    /// to closures that already captured a reference to this env.
+    library_env: Option<Rc<RefCell<Env>>>,
 }
 
 /// GC observability metrics (Stage 1: Rc-based, monitors for cycle leaks).
@@ -199,6 +211,7 @@ impl Vm {
             step_mode: StepMode::Run,
             last_break_line: None,
             debug_mode: false,
+            library_env: None,
         }
     }
 
@@ -210,6 +223,41 @@ impl Vm {
     /// Read-only access to the code pool (for introspection / source maps).
     pub fn code_pool(&self) -> &[CodeObject] {
         &self.code_pool
+    }
+
+    /// Resolve a global variable name, checking module environment first.
+    ///
+    /// Lookup order:
+    /// 1. Current closure's `module_env` (library-scoped bindings)
+    /// 2. `self.globals` (interaction environment)
+    ///
+    /// This implements R7RS §5.6 library isolation: closures defined in
+    /// a library body resolve free variables against their module
+    /// environment, so library-internal bindings (e.g. private helpers)
+    /// survive after the interaction environment is restored.
+    fn resolve_global(&self, name: &str) -> Result<Value, LispError> {
+        // Check VM-level library_env first (active during library body eval)
+        if let Some(ref lib_env) = self.library_env {
+            if let Some(val) = lib_env.borrow().get(name) {
+                return Ok(val.clone());
+            }
+        }
+
+        // Check the current frame's module_env (for library-exported closures
+        // called after library body evaluation is complete)
+        if let Some(frame) = self.frames.last() {
+            if let Some(ref mod_env) = frame.module_env {
+                if let Some(val) = mod_env.borrow().get(name) {
+                    return Ok(val.clone());
+                }
+            }
+        }
+
+        // Fall back to interaction environment (globals)
+        self.globals
+            .get(name)
+            .cloned()
+            .ok_or_else(|| LispError::undefined(name))
     }
 
     /// Number of active call frames (for step-over/step-out depth tracking).
@@ -518,14 +566,20 @@ impl Vm {
     }
 
     /// Process a `(define-library ...)` form.
-    /// Evaluates the library body in a fresh scope and registers exports.
+    ///
+    /// Evaluates the library body in an isolated environment with proper
+    /// R7RS §5.6 scoping. Closures defined in the library body capture
+    /// the library's environment via `module_env`, so library-internal
+    /// bindings persist after the interaction environment is restored.
+    ///
+    /// This matches the Chibi-Scheme/Gauche pattern where closures close
+    /// over their defining module's environment.
     fn process_define_library(&mut self, datum: &Value) -> Result<(), LispError> {
         let items = datum
             .to_vec()
             .map_err(|_| LispError::syntax("define-library must be a list", format!("{datum}")))?;
         let lib_def = library::parse_define_library(&items)?;
 
-        // Check for circular dependency
         if self.libraries.contains(&lib_def.name) {
             return Err(LispError::syntax(
                 format!("library already defined: {}", lib_def.name),
@@ -533,7 +587,13 @@ impl Vm {
             ));
         }
 
-        // Process imports for the library
+        // Save interaction environment and start with a clean scope.
+        let saved_globals = self.globals.clone();
+        let saved_library_env = self.library_env.take();
+        self.globals = Env::new();
+
+        // Process imports into the clean environment — these are the
+        // ONLY bindings visible to the library body (isolation).
         for import_set in &lib_def.imports {
             let lib = self.libraries.get(&import_set.library).ok_or_else(|| {
                 LispError::syntax(
@@ -550,10 +610,47 @@ impl Vm {
             }
         }
 
-        // Save globals before library body evaluation to isolate internal defs.
-        let saved_globals = self.globals.clone();
+        // Create a shared library environment. During body evaluation:
+        // - DefineGlobal populates self.globals (the isolated env)
+        // - MakeClosure captures self.library_env as module_env
+        // - LoadGlobal in library closures will check module_env first
+        //
+        // We'll set library_env AFTER body evaluation from self.globals,
+        // since defines happen during evaluation. But closures are created
+        // during evaluation too... So we need the library_env to be the
+        // same Env that DefineGlobal writes to.
+        //
+        // Solution: library_env IS self.globals during body evaluation.
+        // We wrap self.globals in an Rc and set it as library_env.
+        // But Env isn't behind Rc in self.globals...
+        //
+        // Alternative: set library_env to a snapshot AFTER body evaluation,
+        // then patch the closures. But closures are already created.
+        //
+        // Correct approach: evaluate body with self.globals as the library
+        // env. After evaluation, snapshot self.globals into Rc<Env> and
+        // retroactively set it on all exported closures. For non-exported
+        // closures referenced by exported ones (via upvalues), the module_env
+        // propagates through the upvalue chain.
+        //
+        // Actually simplest: set library_env = Rc::new(Env::new()) before
+        // evaluation, and have DefineGlobal also write to library_env.
+        // Then closures created during evaluation get this shared env.
+        // But DefineGlobal writes to self.globals, not library_env...
+        //
+        // Let's use the clean approach: we make library_env point to
+        // the same data as globals via a post-evaluation snapshot.
+        // Closures created during evaluation will have library_env=None
+        // (it's not set yet). We patch them afterward.
 
-        // Evaluate the library body
+        // Create a shared library environment BEFORE body evaluation.
+        // This Rc<RefCell<Env>> is shared between the VM (for DefineGlobal
+        // writes) and all closures created during body evaluation (via
+        // MakeClosure). When a closure later does LoadGlobal, it checks
+        // its module_env first, finding library-private bindings.
+        self.library_env = Some(Rc::new(RefCell::new(self.globals.clone())));
+
+        // Evaluate the library body in the isolated environment.
         if !lib_def.body.is_empty() {
             let mut compiler = Compiler::new();
             compiler.macros = self.macros.clone();
@@ -575,27 +672,41 @@ impl Vm {
             self.execute(base + code_id)?;
         }
 
-        // Collect exports from the global environment (includes library-defined bindings)
+        // The library_env was set before evaluation, and DefineGlobal
+        // wrote to it during evaluation. Now it contains the full
+        // library environment (imports + body definitions).
+        // Closures created during evaluation already captured it.
+        let lib_env = self.library_env.clone().unwrap();
+
+        // Collect exports. Closures already have module_env set from
+        // MakeClosure during body evaluation. Non-closure values
+        // (constants, etc.) are exported directly.
         let mut exports = HashMap::new();
         for (export_name, internal_name) in &lib_def.exports {
             if let Some(value) = self.globals.get(internal_name) {
                 exports.insert(export_name.clone(), value.clone());
             } else {
-                // Restore globals before returning error
-                self.globals = saved_globals;
-                return Err(LispError::syntax(
-                    format!(
-                        "library {}: exported name '{}' not defined",
-                        lib_def.name, internal_name
-                    ),
-                    "",
-                ));
+                // Also check library_env for defines that went there
+                let found = lib_env.borrow().get(internal_name).cloned();
+                if let Some(value) = found {
+                    exports.insert(export_name.clone(), value);
+                } else {
+                    self.globals = saved_globals;
+                    self.library_env = saved_library_env;
+                    return Err(LispError::syntax(
+                        format!(
+                            "library {}: exported name '{}' not defined",
+                            lib_def.name, internal_name
+                        ),
+                        "",
+                    ));
+                }
             }
         }
 
-        // Restore globals — library body definitions don't leak into the global scope.
-        // Only exported bindings are available via (import ...).
+        // Restore the interaction environment.
         self.globals = saved_globals;
+        self.library_env = saved_library_env;
 
         self.libraries.register(library::Library {
             name: lib_def.name,
@@ -615,6 +726,7 @@ impl Vm {
             upvalues: Vec::new(),
             name: self.code_pool[code_id].name.clone(),
             local_cells: HashMap::new(),
+            module_env: None,
         });
 
         match self.run()? {
@@ -681,6 +793,7 @@ impl Vm {
             upvalues: Vec::new(),
             name: self.code_pool[code_id].name.clone(),
             local_cells: HashMap::new(),
+            module_env: None,
         });
 
         self.run()
@@ -721,11 +834,10 @@ impl Vm {
                 }
 
                 Op::LoadGlobal(name) => {
-                    let val = self
-                        .globals
-                        .get(&name)
-                        .cloned()
-                        .ok_or_else(|| LispError::undefined(&name))?;
+                    // Module-aware global lookup: check the current
+                    // closure's module_env first (library-scoped bindings),
+                    // then fall back to the interaction environment (globals).
+                    let val = self.resolve_global(&name)?;
                     self.stack.push(val);
                 }
 
@@ -734,13 +846,25 @@ impl Vm {
                     if !self.globals.set(name, val.clone()) {
                         // R7RS §4.1.6: set! on undefined variable is an error.
                         // Fall back to define for REPL convenience.
-                        self.globals.define(name.clone(), val);
+                        self.globals.define(name.clone(), val.clone());
+                    }
+                    // Also update library_env during library body evaluation.
+                    if let Some(ref lib_env) = self.library_env {
+                        let mut env = lib_env.borrow_mut();
+                        if !env.set(name, val.clone()) {
+                            env.define(name.clone(), val);
+                        }
                     }
                 }
 
                 Op::DefineGlobal(name) => {
                     let val = self.stack.pop().unwrap_or(Value::Void);
-                    self.globals.define(name, val);
+                    self.globals.define(name.clone(), val.clone());
+                    // Also write to library_env during library body evaluation,
+                    // so closures that captured this env see the binding.
+                    if let Some(ref lib_env) = self.library_env {
+                        lib_env.borrow_mut().define(name, val);
+                    }
                 }
 
                 Op::LoadLocal(idx) => {
@@ -903,6 +1027,7 @@ impl Vm {
                         arity,
                         name: code.name.clone(),
                         doc: code.doc.clone(),
+                        module_env: self.library_env.clone(),
                     };
                     self.stack.push(Value::Closure(Rc::new(closure)));
                 }
@@ -927,6 +1052,7 @@ impl Vm {
                             function_name: f.name.clone(),
                             upvalues: f.upvalues.clone(),
                             local_cells: f.local_cells.clone(),
+                            module_env: f.module_env.clone(),
                         })
                         .collect();
 
@@ -1169,6 +1295,7 @@ impl Vm {
                     frame.upvalues = closure.upvalues.clone();
                     frame.name = closure.name.clone();
                     frame.local_cells.clear(); // Reset for new invocation
+                    frame.module_env = closure.module_env.clone();
 
                     // Fix bp: it should be the start of args on the stack
                     frame.bp = self.stack.len()
@@ -1211,6 +1338,7 @@ impl Vm {
                         upvalues: closure.upvalues.clone(),
                         name: closure.name.clone(),
                         local_cells: HashMap::new(),
+                        module_env: closure.module_env.clone(),
                     });
                 }
             }
@@ -1284,6 +1412,7 @@ impl Vm {
                         upvalues: cf.upvalues.clone(),
                         local_cells: cf.local_cells.clone(),
                         name: cf.function_name.clone(),
+                        module_env: cf.module_env.clone(),
                     })
                     .collect();
 

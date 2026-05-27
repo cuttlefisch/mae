@@ -349,6 +349,20 @@ pub struct Closure {
     pub name: Option<String>,
     /// Docstring (first string literal after define).
     pub doc: Option<String>,
+    /// Module environment for library-scoped closures.
+    ///
+    /// When a closure is created inside a `define-library` body, it captures
+    /// a reference to the library's private environment. `LoadGlobal` checks
+    /// this env first, so library-internal bindings resolve correctly even
+    /// after the interaction environment is restored.
+    ///
+    /// Uses `Rc<RefCell<Env>>` so that definitions made during library body
+    /// evaluation (after this closure was created) are visible via the
+    /// shared reference.
+    ///
+    /// This implements proper R7RS §5.6 library isolation — closures close
+    /// over their module environment, matching Chibi-Scheme/Gauche behavior.
+    pub module_env: Option<Rc<RefCell<crate::env::Env>>>,
 }
 
 /// A dynamic-wind extent entry.
@@ -393,6 +407,8 @@ pub struct CallFrame {
     /// Cells for locals that have been captured as upvalues.
     /// Shared cells ensure mutations are visible across continuation boundaries.
     pub local_cells: HashMap<usize, Rc<RefCell<Value>>>,
+    /// Module environment for library-scoped variable resolution.
+    pub module_env: Option<Rc<RefCell<crate::env::Env>>>,
 }
 
 // ---------------------------------------------------------------------------

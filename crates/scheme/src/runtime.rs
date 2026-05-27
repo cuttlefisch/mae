@@ -330,8 +330,9 @@ impl SchemeRuntime {
         let mut vm = Vm::new();
         let shared = Arc::new(Mutex::new(SharedState::default()));
 
-        // Install R7RS standard library + mae libraries + introspection
+        // Install R7RS standard library + library facades + mae libraries + introspection
         crate::stdlib::register_stdlib(&mut vm);
+        crate::stdlib::register_r7rs_libraries(&mut vm);
         crate::stdlib::register_mae_libs(&mut vm);
         crate::introspect::register_introspection(&mut vm);
 
