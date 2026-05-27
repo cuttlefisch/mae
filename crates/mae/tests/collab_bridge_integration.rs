@@ -1623,10 +1623,10 @@ async fn undo_manager_propagates_through_bridge() {
 
     // A undoes via UndoManager (NOT reconcile_to).
     ts_a.undo_reset(); // Ensure the insert is a separate undo item.
-    let (undo_ok, undo_updates) = ts_a.undo();
-    assert!(undo_ok, "A's undo should succeed");
+    let undo_result = ts_a.undo();
+    assert!(undo_result.success, "A's undo should succeed");
     assert!(
-        !undo_updates.is_empty(),
+        !undo_result.updates.is_empty(),
         "undo must generate CRDT update bytes"
     );
     assert!(
@@ -1641,12 +1641,12 @@ async fn undo_manager_propagates_through_bridge() {
     );
 
     // Send ALL undo updates to the server.
-    for update in &undo_updates {
+    for update in &undo_result.updates {
         ca.send_update("undo-mgr.txt", update).await;
     }
 
     // B should receive the undo update(s).
-    for _ in 0..undo_updates.len() {
+    for _ in 0..undo_result.updates.len() {
         let notif_undo = cb
             .wait_for_notification("notifications/sync_update", 2000)
             .await
@@ -1891,20 +1891,20 @@ async fn undo_propagation_stress() {
         .unwrap();
 
         // A undoes via UndoManager.
-        let (ok, undo_updates) = ts_a.undo();
-        assert!(ok, "iter {iteration}: undo should succeed");
+        let undo_result = ts_a.undo();
+        assert!(undo_result.success, "iter {iteration}: undo should succeed");
         assert!(
-            !undo_updates.is_empty(),
+            !undo_result.updates.is_empty(),
             "iter {iteration}: undo must generate updates"
         );
 
         // Send undo to server.
-        for u in &undo_updates {
+        for u in &undo_result.updates {
             ca.send_update(&doc, u).await;
         }
 
         // B receives and applies undo.
-        for _ in 0..undo_updates.len() {
+        for _ in 0..undo_result.updates.len() {
             let n3 = cb
                 .wait_for_notification("notifications/sync_update", 2000)
                 .await

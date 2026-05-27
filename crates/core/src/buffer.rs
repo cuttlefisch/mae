@@ -984,6 +984,7 @@ impl Buffer {
     /// Notify sync_doc of a local insert. Queues update bytes for broadcast.
     fn sync_insert(&mut self, char_offset: usize, text: &str) {
         if let Some(sync) = &mut self.sync_doc {
+            sync.set_cursor_offset(char_offset as u32);
             let update = sync.insert(char_offset as u32, text);
             self.pending_sync_updates.push(update);
             if self.pending_sync_updates.len() > 1000 {
@@ -999,6 +1000,7 @@ impl Buffer {
     /// Notify sync_doc of a local delete. Queues update bytes for broadcast.
     fn sync_delete(&mut self, char_offset: usize, len: usize) {
         if let Some(sync) = &mut self.sync_doc {
+            sync.set_cursor_offset(char_offset as u32);
             let update = sync.delete(char_offset as u32, len as u32);
             self.pending_sync_updates.push(update);
             if self.pending_sync_updates.len() > 1000 {
@@ -1395,21 +1397,22 @@ impl Buffer {
         // replaying EditAction stacks via reconcile_to().
         if let Some(sync) = &mut self.sync_doc {
             if sync.undo_mgr_active() {
-                let (ok, updates) = sync.undo();
+                let result = sync.undo();
                 tracing::info!(
                     buffer = %self.name,
-                    undo_ok = ok,
-                    update_count = updates.len(),
-                    update_total_bytes = updates.iter().map(|u| u.len()).sum::<usize>(),
+                    undo_ok = result.success,
+                    update_count = result.updates.len(),
+                    update_total_bytes = result.updates.iter().map(|u| u.len()).sum::<usize>(),
+                    cursor_offset = ?result.cursor_offset,
                     text_after = %sync.content().chars().take(200).collect::<String>(),
                     pending_before = self.pending_sync_updates.len(),
                     "CRDT undo via UndoManager"
                 );
-                if !ok {
+                if !result.success {
                     return;
                 }
                 self.rope = sync.rope().clone();
-                self.pending_sync_updates.extend(updates);
+                self.pending_sync_updates.extend(result.updates);
                 tracing::info!(
                     buffer = %self.name,
                     pending_after = self.pending_sync_updates.len(),
@@ -1417,6 +1420,9 @@ impl Buffer {
                 );
                 self.modified = true; // conservative; exact tracking deferred
                 self.bump_generation();
+                if let Some(offset) = result.cursor_offset {
+                    Self::set_cursor_from_char_pos(&self.rope, win, offset as usize);
+                }
                 win.clamp_cursor(self);
                 return;
             }
@@ -1438,14 +1444,17 @@ impl Buffer {
         // When CRDT redo is active, delegate to yrs UndoManager.
         if let Some(sync) = &mut self.sync_doc {
             if sync.undo_mgr_active() {
-                let (ok, updates) = sync.redo();
-                if !ok {
+                let result = sync.redo();
+                if !result.success {
                     return;
                 }
                 self.rope = sync.rope().clone();
-                self.pending_sync_updates.extend(updates);
+                self.pending_sync_updates.extend(result.updates);
                 self.modified = true;
                 self.bump_generation();
+                if let Some(offset) = result.cursor_offset {
+                    Self::set_cursor_from_char_pos(&self.rope, win, offset as usize);
+                }
                 win.clamp_cursor(self);
                 return;
             }
@@ -2931,8 +2940,8 @@ mod tests {
         buf_a.pending_sync_updates.clear();
 
         // B undoes its insert → remote update arrives at A
-        let (_ok, b_undo_updates) = doc_b.undo();
-        for u in &b_undo_updates {
+        let b_undo_result = doc_b.undo();
+        for u in &b_undo_result.updates {
             buf_a.apply_sync_update(u).unwrap();
         }
         assert!(
