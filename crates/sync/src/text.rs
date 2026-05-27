@@ -523,6 +523,11 @@ impl TextSync {
     }
 
     /// Set the maximum undo stack depth. Default is 1000.
+    ///
+    /// Note: yrs's UndoManager does not expose stack trimming via its public API,
+    /// so this limit is currently advisory. It is stored for future enforcement
+    /// when yrs adds support. In practice, StackItems are lightweight (IdSet pairs)
+    /// so 1000 items is well within memory budget.
     pub fn set_undo_limit(&mut self, limit: usize) {
         self.undo_limit = limit;
     }

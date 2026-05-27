@@ -1938,3 +1938,246 @@ async fn undo_propagation_stress() {
         );
     }
 }
+
+// ============================================================================
+// Test Gap Coverage — multi-doc, backpressure, WAL recovery, corrupted state
+// ============================================================================
+
+/// Two clients editing two different documents simultaneously.
+/// Verifies per-document isolation — edits to doc A don't leak into doc B.
+#[tokio::test]
+async fn multi_doc_concurrent_editing() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Each client shares a different document.
+    client_a.share("alpha.txt", "AAA").await;
+    client_b.share("beta.txt", "BBB").await;
+
+    // To send valid updates, load the server's state and edit from there.
+    let state_a = client_a.full_state("alpha.txt").await;
+    let state_b = client_b.full_state("beta.txt").await;
+    let mut ts_a = TextSync::from_state(&state_a).unwrap();
+    let mut ts_b = TextSync::from_state(&state_b).unwrap();
+
+    let u1 = ts_a.insert(3, "-alpha-edit");
+    let u2 = ts_b.insert(3, "-beta-edit");
+
+    let r1 = client_a.send_update("alpha.txt", &u1).await;
+    let r2 = client_b.send_update("beta.txt", &u2).await;
+    assert!(r1.get("error").is_none(), "alpha update failed: {r1}");
+    assert!(r2.get("error").is_none(), "beta update failed: {r2}");
+
+    // Verify documents are isolated.
+    let alpha_content = client_a.content("alpha.txt").await;
+    let beta_content = client_b.content("beta.txt").await;
+    assert_eq!(alpha_content, "AAA-alpha-edit");
+    assert_eq!(beta_content, "BBB-beta-edit");
+
+    // Cross-read: client B reads alpha, client A reads beta.
+    let alpha_via_b = client_b.content("alpha.txt").await;
+    let beta_via_a = client_a.content("beta.txt").await;
+    assert_eq!(alpha_via_b, "AAA-alpha-edit");
+    assert_eq!(beta_via_a, "BBB-beta-edit");
+}
+
+/// Two clients collaborating on the SAME two documents simultaneously.
+/// Edits to doc1 from both clients converge, edits to doc2 from both converge,
+/// and the two documents remain independent.
+#[tokio::test]
+async fn multi_doc_shared_collab() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Client A shares both docs.
+    client_a.share("doc1.txt", "").await;
+    client_a.share("doc2.txt", "").await;
+
+    // Both clients join both docs (B resyncs to get initial state).
+    client_b.resync("doc1.txt").await;
+    client_b.resync("doc2.txt").await;
+
+    // Load server state for valid updates.
+    let state1 = client_a.full_state("doc1.txt").await;
+    let state2 = client_a.full_state("doc2.txt").await;
+
+    // Interleaved edits: A edits doc1, B edits doc2.
+    let mut ts_a1 = TextSync::from_state(&state1).unwrap();
+    let mut ts_b2 = TextSync::from_state(&state2).unwrap();
+
+    let u_a1 = ts_a1.insert(0, "A-in-doc1");
+    let u_b2 = ts_b2.insert(0, "B-in-doc2");
+
+    let r1 = client_a.send_update("doc1.txt", &u_a1).await;
+    let r2 = client_b.send_update("doc2.txt", &u_b2).await;
+    assert!(r1.get("error").is_none());
+    assert!(r2.get("error").is_none());
+
+    // Now A edits doc2, B edits doc1 — load latest state for each.
+    let state2b = client_a.full_state("doc2.txt").await;
+    let state1b = client_b.full_state("doc1.txt").await;
+    let mut ts_a2 = TextSync::from_state(&state2b).unwrap();
+    let mut ts_b1 = TextSync::from_state(&state1b).unwrap();
+    let u_a2 = ts_a2.insert(0, "A-in-doc2");
+    let u_b1 = ts_b1.insert(0, "B-in-doc1");
+
+    let r3 = client_a.send_update("doc2.txt", &u_a2).await;
+    let r4 = client_b.send_update("doc1.txt", &u_b1).await;
+    assert!(r3.get("error").is_none());
+    assert!(r4.get("error").is_none());
+
+    // Verify convergence.
+    let doc1_a = client_a.content("doc1.txt").await;
+    let doc1_b = client_b.content("doc1.txt").await;
+    assert_eq!(doc1_a, doc1_b, "doc1 must converge across clients");
+    assert!(doc1_a.contains("A-in-doc1"));
+    assert!(doc1_a.contains("B-in-doc1"));
+
+    let doc2_a = client_a.content("doc2.txt").await;
+    let doc2_b = client_b.content("doc2.txt").await;
+    assert_eq!(doc2_a, doc2_b, "doc2 must converge across clients");
+    assert!(doc2_a.contains("A-in-doc2"));
+    assert!(doc2_a.contains("B-in-doc2"));
+
+    // Documents must be independent.
+    assert!(
+        !doc1_a.contains("doc2"),
+        "doc1 must not contain doc2 content"
+    );
+    assert!(
+        !doc2_a.contains("doc1"),
+        "doc2 must not contain doc1 content"
+    );
+}
+
+/// WAL recovery through DocStore: append updates, drop the store, recreate
+/// from the same SQLite backend, and verify content is recovered.
+#[tokio::test]
+async fn wal_recovery_through_doc_store() {
+    init_tracing();
+    let backend: Arc<dyn mae_state_server::storage::StorageBackend> =
+        Arc::new(SqliteBackend::open_memory().unwrap());
+
+    // Phase 1: write updates through a DocStore.
+    {
+        let store = Arc::new(DocStore::new(Arc::clone(&backend), 500));
+        let bc = test_broadcaster();
+        let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+        client.share("recover.txt", "initial").await;
+
+        // Load server state and edit from it for a valid update.
+        let state = client.full_state("recover.txt").await;
+        let mut ts = TextSync::from_state(&state).unwrap();
+        let u1 = ts.insert(7, " content");
+        let r = client.send_update("recover.txt", &u1).await;
+        assert!(r.get("error").is_none());
+
+        let content = client.content("recover.txt").await;
+        assert_eq!(content, "initial content");
+
+        // Compact to persist state.
+        store.compact_all().await.unwrap();
+    }
+    // Store is dropped — simulates server restart.
+
+    // Phase 2: recreate from same backend and verify recovery.
+    {
+        let store = Arc::new(DocStore::new(Arc::clone(&backend), 500));
+        let bc = test_broadcaster();
+        let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+        // docs/content triggers get_or_create which loads from WAL/snapshot.
+        let content = client.content("recover.txt").await;
+        assert_eq!(
+            content, "initial content",
+            "content must survive store restart"
+        );
+    }
+}
+
+/// Corrupted state vector in resync request — server should return error,
+/// not crash or corrupt document state.
+#[tokio::test]
+async fn corrupted_state_vector_in_diff() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("diff-test.txt", "safe data").await;
+
+    // Send sync/diff with garbage state vector.
+    use base64::Engine;
+    let garbage_sv = base64::engine::general_purpose::STANDARD.encode([0xFF, 0xAB, 0x00, 0x99]);
+    let msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": client.next_id,
+        "method": "sync/diff",
+        "params": { "doc": "diff-test.txt", "sv": garbage_sv }
+    });
+    client.next_id += 1;
+    client.send(&msg).await;
+    let resp = client.recv().await;
+
+    assert!(
+        resp.get("error").is_some(),
+        "corrupted state vector should produce error, got: {resp}"
+    );
+
+    // Document content must be unchanged.
+    let content = client.content("diff-test.txt").await;
+    assert_eq!(
+        content, "safe data",
+        "content must be unchanged after bad diff request"
+    );
+}
+
+/// Rapid-fire updates from multiple clients — verify the server handles
+/// high throughput without dropping valid updates or corrupting state.
+#[tokio::test]
+async fn rapid_fire_multi_client_stress() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("stress.txt", "").await;
+    client_b.resync("stress.txt").await;
+
+    // Load server state for valid updates — each client gets its own fork.
+    let state = client_a.full_state("stress.txt").await;
+    let mut ts_a = TextSync::from_state_with_client_id(&state, 100).unwrap();
+    let mut ts_b = TextSync::from_state_with_client_id(&state, 200).unwrap();
+
+    for i in 0..20 {
+        let ua = ts_a.insert(ts_a.content().len() as u32, &format!("A{i}"));
+        let ub = ts_b.insert(ts_b.content().len() as u32, &format!("B{i}"));
+        let ra = client_a.send_update("stress.txt", &ua).await;
+        let rb = client_b.send_update("stress.txt", &ub).await;
+        assert!(ra.get("error").is_none(), "A update {i} failed: {ra}");
+        assert!(rb.get("error").is_none(), "B update {i} failed: {rb}");
+    }
+
+    // Both clients should see the same converged content.
+    let content_a = client_a.content("stress.txt").await;
+    let content_b = client_b.content("stress.txt").await;
+    assert_eq!(content_a, content_b, "stress test: clients must converge");
+
+    // All 40 insertions must be present.
+    for i in 0..20 {
+        assert!(
+            content_a.contains(&format!("A{i}")),
+            "missing A{i} in converged content"
+        );
+        assert!(
+            content_a.contains(&format!("B{i}")),
+            "missing B{i} in converged content"
+        );
+    }
+}
