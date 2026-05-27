@@ -344,6 +344,58 @@ async fn eval_with_yields(
                         .await;
                         scheme.inject_editor_state(editor);
                     }
+                    YieldRequest::Tick => {
+                        // Drain hooks and side effects, then resume.
+                        scheme.apply_to_editor(editor);
+                        crate::key_handling::drain_hook_evals(editor, scheme);
+                        process_side_effects(
+                            editor,
+                            scheme,
+                            collab_event_rx,
+                            collab_command_tx,
+                            broadcaster,
+                        )
+                        .await;
+                        scheme.inject_editor_state(editor);
+                    }
+                    YieldRequest::AwaitHook(ref hook_name, timeout) => {
+                        // In the test runner, we drain hooks each tick until the
+                        // target hook fires or we time out.
+                        let deadline = tokio::time::Instant::now()
+                            + Duration::from_millis(timeout.as_millis() as u64);
+                        let hook_name = hook_name.clone();
+                        let mut fired = false;
+                        while tokio::time::Instant::now() < deadline {
+                            scheme.apply_to_editor(editor);
+                            // Check if the hook has pending evals matching our name.
+                            let had_hook = editor
+                                .pending_hook_evals
+                                .iter()
+                                .any(|(h, _)| h == &hook_name);
+                            crate::key_handling::drain_hook_evals(editor, scheme);
+                            process_side_effects(
+                                editor,
+                                scheme,
+                                collab_event_rx,
+                                collab_command_tx,
+                                broadcaster,
+                            )
+                            .await;
+                            scheme.inject_editor_state(editor);
+                            if had_hook {
+                                fired = true;
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                        // Resume with #t if fired, #f if timeout.
+                        eval_result =
+                            match scheme.resume_yield(mae_scheme::value::Value::Bool(fired)) {
+                                Ok(r) => r,
+                                Err(e) => return format!("FAIL:{}", e.message),
+                            };
+                        continue;
+                    }
                 }
                 // Resume the VM after handling the yield
                 eval_result = match scheme.resume_yield(mae_scheme::value::Value::Bool(true)) {

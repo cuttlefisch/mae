@@ -1854,7 +1854,8 @@ impl Editor {
     }
 
     /// Set the editor mode and fire the `mode-change` hook.
-    pub fn set_mode(&mut self, mode: Mode) {
+    /// Returns `true` if the mode was changed, `false` if blocked or already in that mode.
+    pub fn set_mode(&mut self, mode: Mode) -> bool {
         // Block non-Normal modes for buffers that only allow Normal mode
         // (e.g. Dashboard, Modules).
         if mode != Mode::Normal
@@ -1866,12 +1867,21 @@ impl Editor {
         {
             use crate::BufferMode;
             if self.active_buffer().kind.normal_mode_only() {
-                return;
+                tracing::debug!(
+                    requested = ?mode,
+                    buffer = %self.active_buffer().name,
+                    kind = ?self.active_buffer().kind,
+                    "set_mode blocked: buffer is normal_mode_only"
+                );
+                return false;
             }
         }
         if self.mode != mode {
             self.mode = mode;
             self.fire_hook("mode-change");
+            true
+        } else {
+            false
         }
     }
 

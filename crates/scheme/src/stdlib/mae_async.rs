@@ -26,6 +26,8 @@ const EXPORTS: &[&str] = &[
     "wait-for-file",
     "current-milliseconds",
     "flush!",
+    "yield-tick",
+    "await-hook",
 ];
 
 /// Register the `(mae async)` library in the VM's library registry.
@@ -169,6 +171,49 @@ mod tests {
         // In blocking mode: sleep then return a value
         let result = vm.eval("(sleep-ms 1) (+ 1 2)").unwrap();
         assert_eq!(result, Value::Int(3));
+    }
+
+    #[test]
+    fn yield_tick_yields() {
+        let mut vm = make_vm();
+        let r = vm.eval_yielding("(yield-tick)").unwrap();
+        assert!(matches!(r, EvalResult::Yield(YieldRequest::Tick)));
+    }
+
+    #[test]
+    fn yield_tick_blocking_returns_true() {
+        let mut vm = make_vm();
+        let result = vm.eval("(yield-tick)").unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn await_hook_yields() {
+        let mut vm = make_vm();
+        let r = vm
+            .eval_yielding(r#"(await-hook "mode-change" 5000)"#)
+            .unwrap();
+        match r {
+            EvalResult::Yield(YieldRequest::AwaitHook(name, t)) => {
+                assert_eq!(name, "mode-change");
+                assert_eq!(t.as_millis(), 5000);
+            }
+            _ => panic!("expected AwaitHook yield, got {:?}", r),
+        }
+    }
+
+    #[test]
+    fn await_hook_type_errors() {
+        let mut vm = make_vm();
+        let err = vm.eval(r#"(await-hook 42 1000)"#).unwrap_err();
+        assert!(err.message().contains("type error"));
+    }
+
+    #[test]
+    fn await_hook_arity_error() {
+        let mut vm = make_vm();
+        let err = vm.eval(r#"(await-hook "test")"#).unwrap_err();
+        assert!(err.message().contains("expected 2"));
     }
 
     #[test]

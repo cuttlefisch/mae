@@ -9,18 +9,30 @@ impl Editor {
     pub(super) fn dispatch_visual(&mut self, name: &str) -> Option<bool> {
         match name {
             "enter-visual-char" => match self.mode {
-                Mode::Visual(VisualType::Char) => self.set_mode(Mode::Normal),
-                Mode::Visual(_) => self.set_mode(Mode::Visual(VisualType::Char)),
+                Mode::Visual(VisualType::Char) => {
+                    self.set_mode(Mode::Normal);
+                }
+                Mode::Visual(_) => {
+                    self.set_mode(Mode::Visual(VisualType::Char));
+                }
                 _ => self.enter_visual_mode(VisualType::Char),
             },
             "enter-visual-line" => match self.mode {
-                Mode::Visual(VisualType::Line) => self.set_mode(Mode::Normal),
-                Mode::Visual(_) => self.set_mode(Mode::Visual(VisualType::Line)),
+                Mode::Visual(VisualType::Line) => {
+                    self.set_mode(Mode::Normal);
+                }
+                Mode::Visual(_) => {
+                    self.set_mode(Mode::Visual(VisualType::Line));
+                }
                 _ => self.enter_visual_mode(VisualType::Line),
             },
             "enter-visual-block" => match self.mode {
-                Mode::Visual(VisualType::Block) => self.set_mode(Mode::Normal),
-                Mode::Visual(_) => self.set_mode(Mode::Visual(VisualType::Block)),
+                Mode::Visual(VisualType::Block) => {
+                    self.set_mode(Mode::Normal);
+                }
+                Mode::Visual(_) => {
+                    self.set_mode(Mode::Visual(VisualType::Block));
+                }
                 _ => self.enter_visual_mode(VisualType::Block),
             },
             "visual-delete" => {

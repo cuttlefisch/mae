@@ -176,9 +176,32 @@
               (loop (+ elapsed 50))))))
   (loop 0))
 
+;; (await-condition PRED TIMEOUT-MS) — yield-tick based condition wait.
+;; Unlike wait-until (which sleeps between polls), this yields to the event
+;; loop after each check, allowing hooks and side effects to process.
+;; Use this when waiting for state that changes through hooks or commands.
+;; Returns #t on success, signals error on timeout.
+(define (await-condition pred timeout-ms)
+  (define start (current-milliseconds))
+  (define (loop)
+    (if (pred)
+        #t
+        (if (>= (- (current-milliseconds) start) timeout-ms)
+            (error (string-append "await-condition timed out after "
+                                  (number->string timeout-ms) "ms"))
+            (begin
+              (yield-tick)
+              (loop)))))
+  (loop))
+
 ;; wait-for-file is a native yield primitive registered by (mae async).
 ;; It yields to the host event loop, which can drain collab/shell events
 ;; during the wait. No Scheme wrapper needed.
+;;
+;; yield-tick and await-hook are native yield primitives from (mae async).
+;; yield-tick: yield for one event loop iteration (hooks/side effects drain).
+;; await-hook: suspend until a named hook fires (or timeout).
+;; await-condition: Scheme helper that polls a predicate using yield-tick.
 
 ;; --- Test runner ---
 

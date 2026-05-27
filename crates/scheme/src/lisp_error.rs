@@ -126,6 +126,11 @@ pub enum YieldReason {
     /// Flush pending ops and refresh state mid-eval.
     /// Used by tests to perform multiple mutations in a single test step.
     Flush,
+    /// Yield for one event loop iteration — lets hooks/side effects drain.
+    Tick,
+    /// Suspend until a named hook fires (or timeout).
+    /// Returns #t when the hook fires, #f on timeout.
+    AwaitHook(String, std::time::Duration),
 }
 
 impl LispError {
@@ -274,6 +279,26 @@ impl LispError {
         }
     }
 
+    /// Create a yield request to wait one event loop iteration.
+    pub fn yield_tick() -> Self {
+        LispError {
+            kind: ErrorKind::Yield(YieldReason::Tick),
+            location: None,
+            stack_trace: Vec::new(),
+            error_value: None,
+        }
+    }
+
+    /// Create a yield request to wait for a named hook to fire.
+    pub fn yield_await_hook(name: String, timeout: std::time::Duration) -> Self {
+        LispError {
+            kind: ErrorKind::Yield(YieldReason::AwaitHook(name, timeout)),
+            location: None,
+            stack_trace: Vec::new(),
+            error_value: None,
+        }
+    }
+
     /// Returns true if this is a yield request, not a real error.
     pub fn is_yield(&self) -> bool {
         matches!(self.kind, ErrorKind::Yield(_))
@@ -326,6 +351,10 @@ impl LispError {
                     format!("yield: wait-for-file {} ({}ms)", p.display(), t.as_millis())
                 }
                 YieldReason::Flush => "yield: flush".to_string(),
+                YieldReason::Tick => "yield: tick".to_string(),
+                YieldReason::AwaitHook(name, t) => {
+                    format!("yield: await-hook {} ({}ms)", name, t.as_millis())
+                }
             },
         }
     }

@@ -1866,6 +1866,31 @@ pub fn register(vm: &mut Vm) {
         |_args| Err(LispError::yield_flush()),
     );
 
+    // -- yield-tick (yield one event loop iteration) --
+    vm.register_fn(
+        "yield-tick",
+        "Yield to the event loop for one iteration, letting hooks and side effects drain. Returns #t.",
+        Arity::Fixed(0),
+        |_args| Err(LispError::yield_tick()),
+    );
+
+    // -- await-hook (suspend until named hook fires or timeout) --
+    vm.register_fn(
+        "await-hook",
+        "Suspend until the named hook fires or timeout (ms) expires. Returns #t if hook fired, #f on timeout.",
+        Arity::Fixed(2),
+        |args| {
+            let name = args[0]
+                .as_str()
+                .map_err(|_| LispError::type_error("string", args[0].type_name()))?;
+            let timeout_ms = args[1].as_int()?.max(0) as u64;
+            Err(LispError::yield_await_hook(
+                name.to_string(),
+                std::time::Duration::from_millis(timeout_ms),
+            ))
+        },
+    );
+
     // with-input-from-file / with-output-to-file are implemented in Scheme
     // (stdlib/base.rs bootstrap) using dynamic-wind + %set-current-input-port!.
 

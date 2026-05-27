@@ -33,7 +33,7 @@ use mae_lsp::LspCommand;
 #[cfg(feature = "gui")]
 use mae_renderer::Renderer;
 use mae_scheme::SchemeRuntime;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use bootstrap::{init_logging, load_history, load_init_file, setup_ai, setup_dap, setup_lsp};
 use terminal_loop::{cleanup_stale_mcp_sockets, run_headless_self_test, run_terminal_loop};
@@ -59,7 +59,9 @@ fn main() -> io::Result<()> {
 
     // Sync PATH from user's shell (login/interactive) so we can find binaries
     // even when launched from a desktop environment with a minimal PATH.
+    debug!("syncing PATH from user shell");
     mae_shell::path::sync_path_from_shell();
+    debug!("PATH sync complete");
 
     // Set up panic hook to restore terminal on crash
     let default_hook = panic::take_hook();
@@ -319,9 +321,11 @@ fn main() -> io::Result<()> {
     // First-run wizard: runs only when stdin is a TTY, no config file exists,
     // no AI env vars are set, and MAE_SKIP_WIZARD is not set. Must run before
     // the renderer takes over the terminal.
+    debug!("checking first-run wizard");
     if let Err(e) = config::maybe_run_first_run_wizard() {
         eprintln!("warning: first-run wizard failed: {}", e);
     }
+    debug!("first-run wizard check complete");
 
     // --clean / -q: skip user config, init.scm, history, and project detection (like emacs -q)
     let clean_mode = args.iter().any(|a| a == "--clean" || a == "-q");
@@ -350,6 +354,7 @@ fn main() -> io::Result<()> {
         .find(|(i, a)| !a.starts_with('-') && connect_pos.is_none_or(|ci| *i != ci + 1))
         .map(|(_, a)| a.as_str());
 
+    debug!("creating editor instance");
     let mut editor = if let Some(path) = file_arg {
         match Buffer::from_file(std::path::Path::new(&path)) {
             Ok(buf) => {
@@ -371,6 +376,7 @@ fn main() -> io::Result<()> {
     };
     editor.message_log = message_log;
 
+    debug!("editor created, spawning watchdog");
     // Spawn the watchdog thread and wire heartbeat into the editor.
     let watchdog_state = watchdog::spawn_watchdog();
     editor.heartbeat = watchdog_state.heartbeat.clone();
@@ -407,6 +413,7 @@ fn main() -> io::Result<()> {
         info!("clean mode: skipping config.toml, init.scm, and history.scm");
     }
 
+    debug!("loading config file");
     // Apply editor preferences from config file.
     let (app_config, config_error) = if clean_mode {
         (config::Config::default(), None)
@@ -501,6 +508,7 @@ fn main() -> io::Result<()> {
         editor.syntax_reparse_debounce_ms = v;
     }
 
+    debug!("config applied, initializing scheme runtime");
     // Initialize Scheme runtime
     let mut scheme = match SchemeRuntime::new() {
         Ok(rt) => {
@@ -515,8 +523,10 @@ fn main() -> io::Result<()> {
 
     // Load init.scm and history.scm (skipped in clean mode)
     if !clean_mode {
+        debug!("loading init.scm and history");
         let _module_registry = load_init_file(&mut scheme, &mut editor);
         load_history(&mut scheme, &mut editor);
+        debug!("init.scm and history loaded");
     }
 
     // Load KB federation registry and import enabled instances.
@@ -585,6 +595,7 @@ fn main() -> io::Result<()> {
         .any(|a| a == "--no-gui" || a == "--tui" || a == "-nw");
     let use_gui = cfg!(feature = "gui") && !force_tui;
 
+    debug!("building tokio runtime");
     // Build the tokio runtime manually. The GUI path needs the event loop
     // on the main thread (winit requirement) with tokio on a background
     // thread. The terminal path runs tokio on the main thread as before.
@@ -686,6 +697,7 @@ fn main() -> io::Result<()> {
         };
 
         // MCP bridge: Unix socket for external agents (Claude Code, etc.)
+        debug!("setting up MCP server");
         cleanup_stale_mcp_sockets();
         let mcp_socket_path = format!("/tmp/mae-{}.sock", std::process::id());
         let (mcp_tool_tx, mcp_tool_rx) = tokio::sync::mpsc::channel::<mae_mcp::McpToolRequest>(16);
@@ -789,6 +801,7 @@ fn main() -> io::Result<()> {
 
     // Terminal path: run the async event loop on the main thread.
     // Spawn collab task inside block_on where tokio runtime is active.
+    info!("entering terminal event loop");
     rt.block_on(async {
         collab_bridge::spawn_collab_task(collab_spawn);
         run_terminal_loop(
@@ -1346,11 +1359,14 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     &self.permission_policy,
                     &self.lsp_command_tx,
                     &mut self.deferred_mcp_reply,
+                    &mut self.scheme,
                 );
                 if immediate && self.deferred_mcp_reply.is_empty() {
                     self.editor.ai.input_lock = mae_core::InputLock::None;
                     self.last_mcp_activity = None;
                 }
+                // Drain hooks queued by MCP-driven commands (e.g. mode-change).
+                key_handling::drain_hook_evals(&mut self.editor, &mut self.scheme);
                 // Drain sync updates immediately after MCP-driven edits.
                 sync_broadcast::drain_and_broadcast(
                     &mut self.editor,

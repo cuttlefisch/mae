@@ -302,6 +302,7 @@ make test-scheme-all                # All local tests
 
 ### Design Principles
 - **Real editor, not mocks.** Tests boot headless with full event loop. Same API for tests and users.
+- **Real event loops for event-loop behavior.** When behavior depends on the event loop (hooks firing, async yields, mode transitions with side effects), tests MUST exercise the actual event loop — not synthetic flushes or manual drain calls. A test that manually calls `drain_hook_evals` is testing the drain function, not the hook system. If behavior is tied to the event loop, spawn a real editor instance (PTY or MCP) and test through it. Never create synthetic event triggers to avoid using the event loop.
 - **One pending op per test step.** Each `it-test` is one eval→apply cycle. `buffer-insert` + `goto-char` in the same step may execute in unexpected order. Split into separate steps.
 - **SharedState pattern for cross-test reads.** Functions like `buffer-string`, `buffer-sync-enabled?`, `current-mode`, and `get-buffer-by-name` read from `Arc<Mutex<SharedState>>` (not closure-captured snapshots) so they see fresh state after `sync_scheme_state`.
 - **Assertions signal errors.** `should`/`should-equal`/`should-contain` signal Scheme errors caught by the runner. Use `should-mode` for mode checks.

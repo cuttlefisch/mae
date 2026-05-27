@@ -44,6 +44,10 @@ pub enum YieldRequest {
     Flush,
     /// Breakpoint hit — VM pauses for debugger inspection.
     Breakpoint(BreakpointInfo),
+    /// Yield for one event loop iteration — lets hooks/side effects drain.
+    Tick,
+    /// Suspend until a named hook fires (or timeout).
+    AwaitHook(String, Duration),
 }
 
 /// Information about a breakpoint hit, sent to the debugger.
@@ -644,6 +648,12 @@ impl Vm {
                     }
                     YieldRequest::Breakpoint(_) => {
                         // In blocking mode, breakpoints can't pause — skip.
+                    }
+                    YieldRequest::Tick => {
+                        // In blocking mode, tick is a no-op.
+                    }
+                    YieldRequest::AwaitHook(_, _) => {
+                        // In blocking mode, await-hook can't wait — resume immediately.
                     }
                 }
                 self.stack.push(Value::Bool(true));
@@ -1319,6 +1329,9 @@ impl Vm {
                         YieldRequest::Breakpoint(_) => {
                             // In blocking mode, breakpoints can't pause — skip.
                         }
+                        YieldRequest::Tick | YieldRequest::AwaitHook(_, _) => {
+                            // In blocking mode, no event loop — resume immediately.
+                        }
                     }
                     self.stack.push(Value::Bool(true));
                 }
@@ -1445,6 +1458,10 @@ impl Vm {
                 Ok(EvalResult::Yield(YieldRequest::WaitForFile(p, t)))
             }
             ErrorKind::Yield(YieldReason::Flush) => Ok(EvalResult::Yield(YieldRequest::Flush)),
+            ErrorKind::Yield(YieldReason::Tick) => Ok(EvalResult::Yield(YieldRequest::Tick)),
+            ErrorKind::Yield(YieldReason::AwaitHook(name, timeout)) => {
+                Ok(EvalResult::Yield(YieldRequest::AwaitHook(name, timeout)))
+            }
             _ => Err(err),
         }
     }

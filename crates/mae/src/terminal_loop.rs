@@ -627,12 +627,14 @@ pub(crate) async fn run_terminal_loop(
                 last_mcp_activity = Some(tokio::time::Instant::now());
                 let immediate = ai_event_handler::handle_mcp_request(
                     editor, mcp_req, all_tools, permission_policy,
-                    lsp_command_tx, &mut deferred_mcp_reply,
+                    lsp_command_tx, &mut deferred_mcp_reply, scheme,
                 );
                 if immediate && deferred_mcp_reply.is_empty() {
                     editor.ai.input_lock = mae_core::InputLock::None;
                     last_mcp_activity = None;
                 }
+                // Drain hooks queued by MCP-driven commands (e.g. mode-change).
+                crate::key_handling::drain_hook_evals(editor, scheme);
                 // Drain sync updates immediately after MCP-driven edits.
                 crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster, Some(collab_command_tx));
             }
