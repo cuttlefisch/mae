@@ -176,7 +176,7 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
     segments.push(Segment::new(file_info, 2));
 
     // Priority 3: diagnostics summary (hide if all zero).
-    let (e, w, _i, _h) = editor.diagnostics.severity_counts();
+    let (e, w, _i, _h) = editor.lsp.diagnostics.severity_counts();
     if e > 0 || w > 0 {
         segments.push(Segment::new(format!(" E:{} W:{}", e, w), 3));
     }
@@ -483,7 +483,7 @@ pub fn format_ai_info(editor: &Editor) -> String {
 }
 
 pub fn format_lsp_status(editor: &Editor) -> String {
-    if editor.lsp_servers.is_empty() {
+    if editor.lsp.servers.is_empty() {
         return String::new();
     }
 
@@ -494,7 +494,7 @@ pub fn format_lsp_status(editor: &Editor) -> String {
         .and_then(crate::lsp_intent::language_id_from_path);
 
     if let Some(ref lang) = active_lang {
-        if let Some(info) = editor.lsp_servers.get(lang.as_str()) {
+        if let Some(info) = editor.lsp.servers.get(lang.as_str()) {
             return match info.status {
                 LspServerStatus::Connected => " LSP:✓".to_string(),
                 LspServerStatus::Starting => format!(" LSP:⟳ {}", info.command),
@@ -506,7 +506,8 @@ pub fn format_lsp_status(editor: &Editor) -> String {
 
     // Fallback: no active language — show aggregate across all servers.
     let any_connected = editor
-        .lsp_servers
+        .lsp
+        .servers
         .values()
         .any(|s| s.status == LspServerStatus::Connected);
     if any_connected {
@@ -670,7 +671,7 @@ mod tests {
     #[test]
     fn lsp_status_connected() {
         let mut editor = Editor::new();
-        editor.lsp_servers.insert(
+        editor.lsp.servers.insert(
             "rust".to_string(),
             LspServerInfo {
                 status: LspServerStatus::Connected,
@@ -689,7 +690,7 @@ mod tests {
         buf.set_file_path(std::path::Path::new("/tmp/test.rs").to_path_buf());
         editor.buffers.push(buf);
         editor.window_mgr.focused_window_mut().buffer_idx = editor.buffers.len() - 1;
-        editor.lsp_servers.insert(
+        editor.lsp.servers.insert(
             "rust".to_string(),
             LspServerInfo {
                 status: LspServerStatus::Failed,
@@ -707,7 +708,7 @@ mod tests {
         buf.set_file_path(std::path::Path::new("/tmp/test.rs").to_path_buf());
         editor.buffers.push(buf);
         editor.window_mgr.focused_window_mut().buffer_idx = editor.buffers.len() - 1;
-        editor.lsp_servers.insert(
+        editor.lsp.servers.insert(
             "rust".to_string(),
             LspServerInfo {
                 status: LspServerStatus::Starting,
@@ -724,7 +725,7 @@ mod tests {
     fn lsp_status_irrelevant_starting_ignored() {
         // A server for a language with no open buffer should not show ⟳
         let mut editor = Editor::new();
-        editor.lsp_servers.insert(
+        editor.lsp.servers.insert(
             "python".to_string(),
             LspServerInfo {
                 status: LspServerStatus::Starting,
@@ -747,7 +748,7 @@ mod tests {
         editor.window_mgr.focused_window_mut().buffer_idx = editor.buffers.len() - 1;
 
         // Initially Starting — should show ⟳
-        editor.lsp_servers.insert(
+        editor.lsp.servers.insert(
             "rust".to_string(),
             LspServerInfo {
                 status: LspServerStatus::Starting,
@@ -763,7 +764,7 @@ mod tests {
         );
 
         // Simulate ServerStarted / diagnostics arrival → Connected
-        editor.lsp_servers.get_mut("rust").unwrap().status = LspServerStatus::Connected;
+        editor.lsp.servers.get_mut("rust").unwrap().status = LspServerStatus::Connected;
         let status = format_lsp_status(&editor);
         assert_eq!(status, " LSP:✓", "connected should show ✓, got: {}", status);
     }

@@ -622,7 +622,7 @@ fn main() -> io::Result<()> {
                 .map(|p| format!("file://{}", p.display()));
             setup_lsp(root_uri, &app_config)
         };
-        editor.lsp_servers = lsp_server_info;
+        editor.lsp.servers = lsp_server_info;
         info!("LSP task spawned");
 
         // AI session restoration
@@ -1633,8 +1633,8 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                         self.editor.focus_window_at(col, row);
 
                         // Dismiss stale popups on any mouse click.
-                        self.editor.hover_popup = None;
-                        self.editor.code_action_menu = None;
+                        self.editor.lsp.hover_popup = None;
+                        self.editor.lsp.code_action_menu = None;
 
                         // Try pixel-precise positioning via cached FrameLayout
                         // (handles scaled headings and folded lines correctly).
@@ -1960,7 +1960,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
         }
 
         // Debounced document highlight: request after 300ms cursor idle.
-        if self.editor.highlight_ranges.is_empty()
+        if self.editor.lsp.highlight_ranges.is_empty()
             && self.editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(300)
         {
             self.editor.lsp_request_document_highlight();

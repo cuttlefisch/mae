@@ -31,8 +31,8 @@ impl super::Editor {
         use crate::input::MouseButton;
 
         // Dismiss stale popups on any mouse click.
-        self.hover_popup = None;
-        self.code_action_menu = None;
+        self.lsp.hover_popup = None;
+        self.lsp.code_action_menu = None;
 
         // Shell buffers: route to pending_shell_click for the binary to drain.
         // Subtract window border offset (1 row top, 1 col left).

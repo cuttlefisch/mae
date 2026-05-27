@@ -1229,7 +1229,7 @@ impl Editor {
                             self.project = Some(crate::project::Project::from_root(root.clone()));
                             self.refresh_git_branch();
                             let root_path = root.display().to_string();
-                            self.pending_lsp_root_change = Some(format!("file://{}", root_path));
+                            self.lsp.pending_root_change = Some(format!("file://{}", root_path));
                         }
 
                         // Always persist to project list for the recent-projects palette.

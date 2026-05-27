@@ -55,21 +55,21 @@ impl Editor {
     // render perf 10x on large files.
     fn dispatch_builtin_inner(&mut self, name: &str) -> bool {
         // Auto-dismiss hover popup on any command that isn't hover-related.
-        if self.hover_popup.is_some()
+        if self.lsp.hover_popup.is_some()
             && !matches!(name, "lsp-hover" | "hover-scroll-down" | "hover-scroll-up")
         {
-            self.hover_popup = None;
+            self.lsp.hover_popup = None;
         }
         // Auto-dismiss signature help on non-related commands.
-        if self.signature_help.is_some() && !matches!(name, "lsp-signature-help") {
-            self.signature_help = None;
+        if self.lsp.signature_help.is_some() && !matches!(name, "lsp-signature-help") {
+            self.lsp.signature_help = None;
         }
         // Auto-dismiss peek definition on non-peek commands.
-        if self.peek_state.is_some() && !matches!(name, "lsp-peek-definition") {
-            self.peek_state = None;
+        if self.lsp.peek_state.is_some() && !matches!(name, "lsp-peek-definition") {
+            self.lsp.peek_state = None;
         }
         // Auto-dismiss code action menu on non-code-action commands.
-        if self.code_action_menu.is_some()
+        if self.lsp.code_action_menu.is_some()
             && !matches!(
                 name,
                 "lsp-code-action"
@@ -79,7 +79,7 @@ impl Editor {
                     | "lsp-code-action-dismiss"
             )
         {
-            self.code_action_menu = None;
+            self.lsp.code_action_menu = None;
         }
 
         // Consume the count prefix at the top of every dispatch.
@@ -479,11 +479,12 @@ impl Editor {
         self.fire_hook("buffer-close");
         // Dismiss hover popup if it belongs to the buffer being killed.
         if self
+            .lsp
             .hover_popup
             .as_ref()
             .is_some_and(|p| p.buffer_idx == idx)
         {
-            self.hover_popup = None;
+            self.lsp.hover_popup = None;
         }
         if self.buffers.len() <= 1 {
             self.lsp_notify_did_close_for_buffer(0);

@@ -145,14 +145,14 @@ fn open_file_from_different_project_does_not_switch_global() {
     // Open file A — sets global project (first file, project is None).
     editor.open_file(src_a.to_str().unwrap());
     let original_root = editor.project.as_ref().unwrap().root.clone();
-    editor.pending_lsp_root_change = None;
+    editor.lsp.pending_root_change = None;
 
     // Open file from a different project.
     editor.open_file(src_b.to_str().unwrap());
 
     // Global project unchanged.
     assert_eq!(editor.project.as_ref().unwrap().root, original_root);
-    assert!(editor.pending_lsp_root_change.is_none());
+    assert!(editor.lsp.pending_root_change.is_none());
     // But the new buffer knows its own project root.
     let buf_b = editor.buffers.last().unwrap();
     assert!(

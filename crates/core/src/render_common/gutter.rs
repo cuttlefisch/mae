@@ -119,7 +119,7 @@ pub fn collect_line_severities(buf: &Buffer, editor: &Editor) -> HashMap<u32, Di
     let mut map: HashMap<u32, DiagnosticSeverity> = HashMap::new();
     if let Some(path) = buf.file_path() {
         let uri = crate::path_to_uri(path);
-        if let Some(diags) = editor.diagnostics.get(&uri) {
+        if let Some(diags) = editor.lsp.diagnostics.get(&uri) {
             for d in diags {
                 let cur = map.get(&d.line).copied();
                 if severity_higher(cur, Some(d.severity)) {

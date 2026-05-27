@@ -54,16 +54,16 @@ pub(crate) fn drain_lsp_intents(
     lsp_tx: &tokio::sync::mpsc::Sender<LspCommand>,
 ) {
     // Late project detection: update LSP root_uri.
-    if let Some(root_uri) = editor.pending_lsp_root_change.take() {
+    if let Some(root_uri) = editor.lsp.pending_root_change.take() {
         let _ = lsp_tx.try_send(LspCommand::DidChangeWorkspaceFolders {
             added: vec![root_uri],
         });
     }
 
-    if editor.pending_lsp_requests.is_empty() {
+    if editor.lsp.pending_requests.is_empty() {
         return;
     }
-    let intents = std::mem::take(&mut editor.pending_lsp_requests);
+    let intents = std::mem::take(&mut editor.lsp.pending_requests);
     for intent in intents {
         let cmd = intent_to_lsp_command(intent);
         if lsp_tx.try_send(cmd).is_err() {
@@ -247,8 +247,8 @@ pub(crate) fn handle_lsp_event(
             // an actual successful response (diagnostics, hover, etc.) via
             // mark_connected_from_uri(). This prevents showing ✓ while the
             // server is still unable to answer queries.
-            if !editor.lsp_servers.contains_key(&language_id) {
-                editor.lsp_servers.insert(
+            if !editor.lsp.servers.contains_key(&language_id) {
+                editor.lsp.servers.insert(
                     language_id.clone(),
                     mae_core::LspServerInfo {
                         status: mae_core::LspServerStatus::Starting,
@@ -265,10 +265,10 @@ pub(crate) fn handle_lsp_event(
         }
         LspTaskEvent::ServerStartFailed { language_id, error } => {
             warn!(language = %language_id, error = %error, "LSP server failed to start");
-            if let Some(info) = editor.lsp_servers.get_mut(&language_id) {
+            if let Some(info) = editor.lsp.servers.get_mut(&language_id) {
                 info.status = mae_core::LspServerStatus::Failed;
             } else {
-                editor.lsp_servers.insert(
+                editor.lsp.servers.insert(
                     language_id.clone(),
                     mae_core::LspServerInfo {
                         status: mae_core::LspServerStatus::Failed,
@@ -282,10 +282,10 @@ pub(crate) fn handle_lsp_event(
         }
         LspTaskEvent::ServerExited { language_id } => {
             warn!(language = %language_id, "LSP server exited");
-            if let Some(info) = editor.lsp_servers.get_mut(&language_id) {
+            if let Some(info) = editor.lsp.servers.get_mut(&language_id) {
                 info.status = mae_core::LspServerStatus::Exited;
             } else {
-                editor.lsp_servers.insert(
+                editor.lsp.servers.insert(
                     language_id.clone(),
                     mae_core::LspServerInfo {
                         status: mae_core::LspServerStatus::Exited,
@@ -300,8 +300,8 @@ pub(crate) fn handle_lsp_event(
         LspTaskEvent::DefinitionResult { uri, locations } => {
             mark_connected_from_uri(editor, &uri);
             // Check if this was a peek request rather than a jump.
-            if editor.peek_definition_pending {
-                editor.peek_definition_pending = false;
+            if editor.lsp.peek_definition_pending {
+                editor.lsp.peek_definition_pending = false;
                 if let Some(loc) = locations.first() {
                     let file_path = loc
                         .uri
@@ -335,8 +335,8 @@ pub(crate) fn handle_lsp_event(
         }
         LspTaskEvent::ReferencesResult { uri, locations } => {
             mark_connected_from_uri(editor, &uri);
-            if editor.peek_references_pending {
-                editor.peek_references_pending = false;
+            if editor.lsp.peek_references_pending {
+                editor.lsp.peek_references_pending = false;
                 // Build peek reference locations with context lines from open buffers.
                 let peek_locs: Vec<mae_core::PeekReferenceLocation> = locations
                     .iter()
@@ -372,7 +372,7 @@ pub(crate) fn handle_lsp_event(
                     editor.set_status("[LSP] no references found");
                 } else {
                     let total = peek_locs.len();
-                    editor.peek_references = Some(mae_core::PeekReferencesState {
+                    editor.lsp.peek_references = Some(mae_core::PeekReferencesState {
                         locations: peek_locs,
                         current: 0,
                     });
@@ -418,10 +418,10 @@ pub(crate) fn handle_lsp_event(
             let count = diagnostics.len();
             let core_diags: Vec<CoreDiagnostic> =
                 diagnostics.into_iter().map(lsp_diag_to_core).collect();
-            let changed = editor.diagnostics.set(uri.clone(), core_diags);
+            let changed = editor.lsp.diagnostics.set(uri.clone(), core_diags);
             debug!(uri = %uri, count, "diagnostics published");
             if changed {
-                let (e, w, _, _) = editor.diagnostics.severity_counts();
+                let (e, w, _, _) = editor.lsp.diagnostics.severity_counts();
                 if e + w > 0 {
                     editor.set_status(format!("[LSP] {} errors, {} warnings", e, w));
                 }
@@ -580,7 +580,8 @@ pub(crate) fn handle_lsp_event(
             characters,
         } => {
             editor
-                .lsp_trigger_characters
+                .lsp
+                .trigger_characters
                 .insert(language_id, characters);
             false
         }
@@ -624,12 +625,12 @@ pub(crate) fn handle_lsp_event(
                     flatten_symbols(&s.children, depth + 1, out);
                 }
             }
-            if editor.symbol_outline_pending {
+            if editor.lsp.symbol_outline_pending {
                 let mut entries = Vec::new();
                 flatten_symbols(&symbols, 0, &mut entries);
                 editor.apply_symbol_outline_result(&entries);
                 true
-            } else if editor.breadcrumb_symbols_pending {
+            } else if editor.lsp.breadcrumb_symbols_pending {
                 let mut entries = Vec::new();
                 flatten_symbols(&symbols, 0, &mut entries);
                 editor.apply_breadcrumb_symbols(&entries);
@@ -815,7 +816,7 @@ fn mark_connected_from_uri(editor: &mut Editor, uri: &str) {
     if let Some(path) = uri_to_path(uri) {
         if let Some(lang) = mae_core::lsp_intent::language_id_from_path(std::path::Path::new(path))
         {
-            if let Some(info) = editor.lsp_servers.get_mut(&lang) {
+            if let Some(info) = editor.lsp.servers.get_mut(&lang) {
                 if info.status == mae_core::LspServerStatus::Starting {
                     info.status = mae_core::LspServerStatus::Connected;
                 }
@@ -902,7 +903,7 @@ mod tests {
     #[test]
     fn mark_connected_from_uri_transitions_starting() {
         let mut editor = Editor::new();
-        editor.lsp_servers.insert(
+        editor.lsp.servers.insert(
             "rust".to_string(),
             mae_core::LspServerInfo {
                 status: mae_core::LspServerStatus::Starting,
@@ -911,12 +912,12 @@ mod tests {
             },
         );
         assert_eq!(
-            editor.lsp_servers["rust"].status,
+            editor.lsp.servers["rust"].status,
             mae_core::LspServerStatus::Starting
         );
         mark_connected_from_uri(&mut editor, "file:///tmp/foo.rs");
         assert_eq!(
-            editor.lsp_servers["rust"].status,
+            editor.lsp.servers["rust"].status,
             mae_core::LspServerStatus::Connected,
             "diagnostics/response should transition Starting → Connected"
         );
@@ -925,7 +926,7 @@ mod tests {
     #[test]
     fn mark_connected_does_not_override_failed() {
         let mut editor = Editor::new();
-        editor.lsp_servers.insert(
+        editor.lsp.servers.insert(
             "rust".to_string(),
             mae_core::LspServerInfo {
                 status: mae_core::LspServerStatus::Failed,
@@ -935,7 +936,7 @@ mod tests {
         );
         mark_connected_from_uri(&mut editor, "file:///tmp/foo.rs");
         assert_eq!(
-            editor.lsp_servers["rust"].status,
+            editor.lsp.servers["rust"].status,
             mae_core::LspServerStatus::Failed,
             "should not override Failed status"
         );
@@ -945,6 +946,6 @@ mod tests {
     fn mark_connected_unknown_language_is_noop() {
         let mut editor = Editor::new();
         mark_connected_from_uri(&mut editor, "file:///tmp/foo.xyz");
-        assert!(editor.lsp_servers.is_empty());
+        assert!(editor.lsp.servers.is_empty());
     }
 }

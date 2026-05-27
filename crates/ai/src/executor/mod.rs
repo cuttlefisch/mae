@@ -776,7 +776,7 @@ mod tests {
         let mut b = Buffer::new();
         b.set_file_path(PathBuf::from("/tmp/a.rs"));
         let mut editor = Editor::with_buffer(b);
-        editor.diagnostics.set(
+        editor.lsp.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![Diagnostic {
                 line: 2,
@@ -981,7 +981,7 @@ mod tests {
             }
             ExecuteResult::Immediate(r) => panic!("expected Deferred, got Immediate: {}", r.output),
         }
-        assert_eq!(editor.pending_lsp_requests.len(), 1);
+        assert_eq!(editor.lsp.pending_requests.len(), 1);
     }
 
     #[test]

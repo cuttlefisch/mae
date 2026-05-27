@@ -40,21 +40,21 @@ fn intent_language_id(intent: &LspIntent) -> Option<&str> {
 /// Call this BEFORE `drain_lsp_intents` so scheme intents never reach the
 /// external LSP task. Returns true if any intent was handled (needs redraw).
 pub(crate) fn drain_scheme_lsp_intents(editor: &mut Editor, scheme: &SchemeRuntime) -> bool {
-    if editor.pending_lsp_requests.is_empty() {
+    if editor.lsp.pending_requests.is_empty() {
         return false;
     }
 
     // Partition: scheme intents handled here, others left for drain_lsp_intents
     let mut scheme_intents = Vec::new();
     let mut other_intents = Vec::new();
-    for intent in std::mem::take(&mut editor.pending_lsp_requests) {
+    for intent in std::mem::take(&mut editor.lsp.pending_requests) {
         if intent_language_id(&intent) == Some("scheme") {
             scheme_intents.push(intent);
         } else {
             other_intents.push(intent);
         }
     }
-    editor.pending_lsp_requests = other_intents;
+    editor.lsp.pending_requests = other_intents;
 
     if scheme_intents.is_empty() {
         return false;
@@ -86,7 +86,7 @@ pub(crate) fn drain_scheme_lsp_intents(editor: &mut Editor, scheme: &SchemeRunti
                     })
                     .collect();
                 let count = core_diags.len();
-                let changed = editor.diagnostics.set(uri.clone(), core_diags);
+                let changed = editor.lsp.diagnostics.set(uri.clone(), core_diags);
                 debug!(uri = %uri, count, "scheme diagnostics published");
                 if changed {
                     needs_redraw = true;
@@ -158,10 +158,10 @@ pub(crate) fn drain_scheme_lsp_intents(editor: &mut Editor, scheme: &SchemeRunti
                             }
                         })
                         .collect();
-                    if editor.symbol_outline_pending {
+                    if editor.lsp.symbol_outline_pending {
                         editor.apply_symbol_outline_result(&entries);
                         needs_redraw = true;
-                    } else if editor.breadcrumb_symbols_pending {
+                    } else if editor.lsp.breadcrumb_symbols_pending {
                         editor.apply_breadcrumb_symbols(&entries);
                         needs_redraw = true;
                     }
@@ -244,8 +244,8 @@ pub(crate) fn drain_scheme_lsp_intents(editor: &mut Editor, scheme: &SchemeRunti
     }
 
     // Mark scheme LSP as connected (synthetic — no external server)
-    if !editor.lsp_servers.contains_key("scheme") {
-        editor.lsp_servers.insert(
+    if !editor.lsp.servers.contains_key("scheme") {
+        editor.lsp.servers.insert(
             "scheme".to_string(),
             mae_core::LspServerInfo {
                 status: mae_core::LspServerStatus::Connected,

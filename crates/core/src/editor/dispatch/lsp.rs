@@ -13,7 +13,7 @@ impl Editor {
             "lsp-find-references" => self.lsp_request_references(),
             "lsp-hover" => {
                 // If hover popup is already visible, pressing K again scrolls down.
-                if self.hover_popup.is_some() {
+                if self.lsp.hover_popup.is_some() {
                     self.hover_scroll_down();
                     return Some(true);
                 }

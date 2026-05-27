@@ -219,7 +219,7 @@ pub(crate) async fn run_terminal_loop(
         }
 
         // Debounced document highlight: request after 300ms cursor idle.
-        if editor.highlight_ranges.is_empty()
+        if editor.lsp.highlight_ranges.is_empty()
             && editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(300)
         {
             editor.lsp_request_document_highlight();

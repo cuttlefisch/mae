@@ -447,7 +447,8 @@ impl Editor {
                         let uri = crate::lsp_intent::path_to_uri(p);
                         let language_id = crate::lsp_intent::language_id_from_path(p)
                             .unwrap_or_else(|| "plaintext".to_string());
-                        self.pending_lsp_requests
+                        self.lsp
+                            .pending_requests
                             .push(crate::lsp_intent::LspIntent::Rename {
                                 uri,
                                 language_id,

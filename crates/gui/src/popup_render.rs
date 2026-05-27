@@ -44,7 +44,7 @@ pub fn render_completion_popup(
     _win_width: usize,
     win_height: usize,
 ) {
-    let items = &editor.completion_items;
+    let items = &editor.lsp.completion_items;
     if items.is_empty() {
         return;
     }
@@ -114,7 +114,7 @@ pub fn render_completion_popup(
     let inner_width = popup_width.saturating_sub(2);
 
     for (i, item) in items.iter().take(max_items).enumerate() {
-        let is_selected = i == editor.completion_selected;
+        let is_selected = i == editor.lsp.completion_selected;
         let fg = if is_selected { selected_fg } else { normal_fg };
         let item_bg = if is_selected { selected_bg } else { normal_bg };
 
@@ -653,7 +653,7 @@ pub fn render_hover_popup(
     _win_width: usize,
     win_height: usize,
 ) {
-    let popup = match &editor.hover_popup {
+    let popup = match &editor.lsp.hover_popup {
         Some(p) => p,
         None => return,
     };
@@ -769,7 +769,7 @@ pub fn render_code_action_popup(
     _win_width: usize,
     win_height: usize,
 ) {
-    let menu = match &editor.code_action_menu {
+    let menu = match &editor.lsp.code_action_menu {
         Some(m) => m,
         None => return,
     };
@@ -1012,7 +1012,7 @@ pub fn render_signature_help_popup(
     win_row_offset: usize,
     win_height: usize,
 ) {
-    let state = match &editor.signature_help {
+    let state = match &editor.lsp.signature_help {
         Some(s) => s,
         None => return,
     };
@@ -1127,7 +1127,7 @@ pub fn render_peek_definition_popup(
     win_row_offset: usize,
     win_height: usize,
 ) {
-    let state = match &editor.peek_state {
+    let state = match &editor.lsp.peek_state {
         Some(s) => s,
         None => return,
     };
@@ -1214,7 +1214,7 @@ pub fn render_symbol_outline_popup(
     area_width: usize,
     area_height: usize,
 ) {
-    let state = match &editor.symbol_outline {
+    let state = match &editor.lsp.symbol_outline {
         Some(s) => s,
         None => return,
     };
