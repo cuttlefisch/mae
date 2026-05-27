@@ -6,6 +6,81 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(scheme)* Let/let* stack corruption + Phase 13d derived expressions ([0207360](https://github.com/cuttlefisch/mae/commit/0207360bd6b4dca4203936b24ee47ad6a4297a01))
+- *(scheme)* TCO for and/or + 24 stress tests (287 total R7RS tests) ([fd16796](https://github.com/cuttlefisch/mae/commit/fd1679602a3e9ab67fb0cafe1eec683b6f6e37e0))
+- *(scheme)* 3 critical compiler bugs + 128 torture/benchmark tests ([f7e48db](https://github.com/cuttlefisch/mae/commit/f7e48dbe3c9843fb6822f10eafe160c453be9794))
+- *(scheme)* Closed port operations now error properly ([003976b](https://github.com/cuttlefisch/mae/commit/003976b9eb91b5fa973b98638936afc87f7e0fa5))
+- *(scheme)* R7RS compliance — dynamic-wind+call/cc, file-error?, member/assoc comparator, port redirection ([0ee15c8](https://github.com/cuttlefisch/mae/commit/0ee15c841715cffa67a2ec1bba416cf930b604ce))
+- *(scheme)* 16 audit fixes — binary ports, parameterize, record-type, overflow safety ([1e3b882](https://github.com/cuttlefisch/mae/commit/1e3b882bc3f3451874e3bce6986b73ba6a9b30f8))
+- *(scheme)* VM foreign fn arity check + 215 branch-level tests (1115 R7RS) ([cdfab9f](https://github.com/cuttlefisch/mae/commit/cdfab9f46f7a909912aa32fd9d721a0c52911a57))
+- *(scheme)* Consolidate yield primitives + replace static sleeps in E2E tests ([79dbe76](https://github.com/cuttlefisch/mae/commit/79dbe768b3421cccfe011af5f462437d13aafb96))
+- *(test)* Split write-file + file-exists? into separate test steps ([711e590](https://github.com/cuttlefisch/mae/commit/711e59000e43113f8854fccaca7d62a672fa02ac))
+- *(collab)* Prevent CRDT undo update loss + Docker E2E orchestration ([c9b0a06](https://github.com/cuttlefisch/mae/commit/c9b0a06bc773f99a33113966c9580569e516b5c5))
+- *(collab)* CRDT undo cursor positioning + undo stack size limit API ([fb5120b](https://github.com/cuttlefisch/mae/commit/fb5120be8f8fc9c90526a223b79b149ea54b46ac))
+- *(crdt)* UTF-16 offset encoding + content hash modified flag + cursor drift ([92a20b8](https://github.com/cuttlefisch/mae/commit/92a20b8625991dbfb1c38d65c1a40affa6fc6314))
+
+### CI
+
+- *(scheme)* Add R7RS compliance CI job, un-ignore fib(30) benchmark ([3a45208](https://github.com/cuttlefisch/mae/commit/3a45208aed10d267d2a6911ead0d04915eb5ec0a))
+- Add missing test suites — IO ports, collab-local, timeout bump ([98e78f3](https://github.com/cuttlefisch/mae/commit/98e78f384932f800fde200b15490231081d320cf))
+
+### Documentation
+
+- *(scheme)* Document exception system architecture in SPEC_STANCES.md ([b8bb2eb](https://github.com/cuttlefisch/mae/commit/b8bb2eb677fb8b528c83d38ecaab4cff98222955))
+- *(collab)* Update E2E README — yield primitives now drain events ([9e6f004](https://github.com/cuttlefisch/mae/commit/9e6f0047adda1892b7b97b5edc10116740372035))
+- *(scheme)* Phase 13j — ADR-009 + EXTENSION_GUIDE + ROADMAP completion ([04c12d4](https://github.com/cuttlefisch/mae/commit/04c12d457fe7b53a3eb3f083eae4b04a0fdeaab6))
+
+### Features
+
+- *(scheme)* Phase 13a+13b — mae-scheme reader, compiler, and bytecode VM ([3f1ad27](https://github.com/cuttlefisch/mae/commit/3f1ad2767c5ba0bff6c3316cbe5cae12db609bf8))
+- *(scheme)* Phase 13c — R7RS standard library (48 new tests) ([ddd45e6](https://github.com/cuttlefisch/mae/commit/ddd45e63b301a5cfd5a2b5e1e36aa472165c4632))
+- *(scheme)* Phase 13d — hygienic macros, module system, R7RS hardening ([88ad180](https://github.com/cuttlefisch/mae/commit/88ad180ccaf18d13c93c72502ef57d573f1aa282))
+- *(scheme)* R7RS compliance hardening — ~40 missing functions, 22 new tests ([2177b38](https://github.com/cuttlefisch/mae/commit/2177b38d597008fb0a3c8bb22983af5b0d9b8661))
+- *(scheme)* R7RS compliance — multi-list map, ports, binary I/O, let-values ([7c9a332](https://github.com/cuttlefisch/mae/commit/7c9a332f3fb4c3c232a697536b9829e779c490fa))
+- *(scheme)* R7RS compliance — file I/O, cond-expand, time, process context ([37a29e5](https://github.com/cuttlefisch/mae/commit/37a29e52b9fc267258c366a0a0c07a15a4e07a77))
+- *(scheme)* Read, eval, define-values, vector->list ranges ([8917167](https://github.com/cuttlefisch/mae/commit/8917167d6a22dac3af671bd4319f334410f6226a))
+- *(scheme)* R7RS edge cases — case-insensitive ops, with-exception-handler, UTF-8 fixes ([10649ba](https://github.com/cuttlefisch/mae/commit/10649ba9c02b403382b0e3b45022aba8632c189b))
+- *(scheme)* Close R7RS gaps — floor/, truncate/, rationalize, let-syntax, port close ([9add982](https://github.com/cuttlefisch/mae/commit/9add9829285cc4d406f4bace8023b0b4de77e955))
+- *(scheme)* (scheme inexact) + (scheme file) libraries, 292 R7RS tests ([c827dd3](https://github.com/cuttlefisch/mae/commit/c827dd3425280f13e570f4d230665fc704f55158))
+- *(scheme)* Include, load, load_paths + library system tests (Phase 13d) ([1a3d53a](https://github.com/cuttlefisch/mae/commit/1a3d53ad6080016b51ee95b8fcadabd793e763ea))
+- *(scheme)* Blocking sleep-ms + timing test (Phase 13f foundation) ([00c82fc](https://github.com/cuttlefisch/mae/commit/00c82fca782ce555b0506bb8cba44b914f510705))
+- *(scheme)* Top-level load + with-output-to-file, 300 R7RS tests ([4c01ec9](https://github.com/cuttlefisch/mae/commit/4c01ec9adda24aa72b6ced8f94edddc650780ab0))
+- *(scheme)* Cond => arrow clause + map shortest-list, 428 tests ([cc5feb9](https://github.com/cuttlefisch/mae/commit/cc5feb9a8dcdd806f4cb29027adcfee4f7af058d))
+- *(scheme)* 105 IO/port test fixtures + remove dead write-char ([a9a126a](https://github.com/cuttlefisch/mae/commit/a9a126a7cafba794bb8c00a600f506d95e5bf9c8))
+- *(scheme)* Eval, call-with-values, radix/exactness, spec stances + 362 R7RS tests ([172aa9d](https://github.com/cuttlefisch/mae/commit/172aa9d77949dad9cefc388c257990c0cd57b820))
+- *(scheme)* Structural PartialEq, force/delay-force, min/max inexact + 409 R7RS tests ([694cb9e](https://github.com/cuttlefisch/mae/commit/694cb9e3d6e2072f2afb99e43ea95fc2c28754ce))
+- *(scheme)* Comprehensive R7RS test coverage — 431 compliance tests ([7be0924](https://github.com/cuttlefisch/mae/commit/7be0924d8b7c2e93fa0a8e808bfc8a87ce627593))
+- *(scheme)* GC observability, Trace completeness, cycle-risk documentation ([64005a3](https://github.com/cuttlefisch/mae/commit/64005a3bfe947c460a2f442cff7b93ea1d404bdd))
+- *(scheme)* R7RS §6.11 exception system (Chibi-Scheme pattern) ([7ba1909](https://github.com/cuttlefisch/mae/commit/7ba19094a575b7e8a79dcbdff6c117ec2bf59773))
+- *(scheme)* Eliminate spec-lawyering — proper char-ready?, rationalize, ellipsis, stdin ([be7abb0](https://github.com/cuttlefisch/mae/commit/be7abb06a4568aea0395276d0bb9c7d6ffb6466e))
+- *(scheme)* Phase 13e — replace Steel with mae-scheme VM + purge all references ([0b15c06](https://github.com/cuttlefisch/mae/commit/0b15c0684df5c699bc598c80f4be040fa0b7eea0))
+- *(scheme)* Phase 13f — async/yield infrastructure + (mae async) library ([a0e8732](https://github.com/cuttlefisch/mae/commit/a0e8732ef7ed0210fdc0fe56370722adf14d3533))
+- *(test)* Auto-flush wrappers + consolidated test architecture ([24f7772](https://github.com/cuttlefisch/mae/commit/24f77721e86ab6e2484ab90eb60132e175503111))
+- *(scheme)* Phase 13g — in-process Scheme LSP (Swank-style) ([29be90d](https://github.com/cuttlefisch/mae/commit/29be90d854035895eae4e194396659a306429c21))
+- *(scheme)* Source maps + go-to-definition for Scheme LSP ([2b1faeb](https://github.com/cuttlefisch/mae/commit/2b1faebdd62aeaf89c974db01501ba9dfbc0e28f))
+- *(scheme)* Phase 13g — DAP infrastructure (breakpoints, stepping, debug mode) ([91d0a14](https://github.com/cuttlefisch/mae/commit/91d0a1465983b77664411a1ccd574ab2892b6c72))
+- *(scheme)* Phase 13g — Scheme DAP bridge (in-process debugger) ([effb9b4](https://github.com/cuttlefisch/mae/commit/effb9b48baf328f9c7fa7d07f8fcce1b049a6086))
+- *(scheme)* Phase 13h — introspection + observability ([6085b63](https://github.com/cuttlefisch/mae/commit/6085b632744bb0d667e7de99eb484930975030ad))
+- *(scheme)* Yield-tick + await-hook primitives, MCP eval_scheme fix, set_mode resilience ([39caf8e](https://github.com/cuttlefisch/mae/commit/39caf8ef46ee17e05e10be362041bbd4f564ad16))
+- *(hooks)* Wire all 25 well-known hooks + event-driven test primitives ([c551562](https://github.com/cuttlefisch/mae/commit/c5515627f5f82ac555965fa96275f411ff12f061))
+- *(collab)* Doc-scoped event broadcasting + E2E test hardening ([b3fe991](https://github.com/cuttlefisch/mae/commit/b3fe991ef0e61909a08bd3fad49153d33e8eb009))
+- *(scheme)* Phase 13i — R7RS library system + proper §5.6 isolation ([002432d](https://github.com/cuttlefisch/mae/commit/002432d10da10312efd608b67ada232ff56d2485))
+
+### Refactor
+
+- *(core)* Extract LspContext from Editor struct (22 fields) ([9618461](https://github.com/cuttlefisch/mae/commit/9618461c2f54308c6cbd41945d4db884d27c8be0))
+
+### Testing
+
+- *(scheme)* 60 edge-case tests + 7 R7RS compliance fixes ([65c1cbc](https://github.com/cuttlefisch/mae/commit/65c1cbc9ac135d9441594c62c20c8ac51ca4bb7c))
+- *(scheme)* Phase 13g — E2E + performance tests for LSP & DAP ([f038045](https://github.com/cuttlefisch/mae/commit/f0380452798f7f8bbccb5816f7b7d0ef89d12381))
+- *(collab)* Close test gaps — multi-doc, WAL recovery, corrupted state, stress ([463e859](https://github.com/cuttlefisch/mae/commit/463e859ce444b7b1f0374513aa5b299ac3df5590))
+- Awareness E2E + editor test coverage gaps (marks, hooks, macros, surround, windows) ([dc13e13](https://github.com/cuttlefisch/mae/commit/dc13e13b2f64590dbdf95d1b021a46851cbb04bd))
+
+## [0.10.4] - 2026-05-24
+
+### Bug Fixes
+
 - *(collab)* Buffer status indicators, save guard, sharer notifications, reconnect backoff ([8de53b8](https://github.com/cuttlefisch/mae/commit/8de53b817c36fd4ec3302162d40d682f9118013e))
 - *(docker)* Add 7 missing crates to Dockerfile, fix collab E2E test_smoke ([b765978](https://github.com/cuttlefisch/mae/commit/b765978fc2857ea3bf332a9e6c6f4712ca92335b))
 - *(collab)* Remove (load) from undo E2E tests, fix verifier mounts ([ba3faa2](https://github.com/cuttlefisch/mae/commit/ba3faa2947bff91fb649d78ea919471e4b550205))
@@ -40,6 +115,10 @@ All notable changes to this project will be documented in this file.
 - *(sync)* Per-user CRDT undo via yrs UndoManager ([9d8f169](https://github.com/cuttlefisch/mae/commit/9d8f169aaf3bdede4ca7bc269fa5736fb23dcbef))
 - *(collab)* Awareness protocol — cursor/selection/presence sharing ([b6d3c1c](https://github.com/cuttlefisch/mae/commit/b6d3c1cbc4df8fa78d94707c59b8dbee64c8c3bc))
 - *(collab)* Long-lived session tests + debug observability ([5fa8d3c](https://github.com/cuttlefisch/mae/commit/5fa8d3c5c0624d5f8a187d1583b1390e7f1b4ead))
+
+### Miscellaneous
+
+- Bump version to 0.10.4 ([2bd047e](https://github.com/cuttlefisch/mae/commit/2bd047e0038e664b7d9b3bfee130403bc6c257c0))
 
 ### Refactor
 
