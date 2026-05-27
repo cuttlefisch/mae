@@ -501,7 +501,7 @@ Auth roadmap: PSK → SSH key exchange → OAuth/OIDC (via `initialize` params e
 These APIs are intended to remain stable through v1.0:
 
 - **Scheme API:** ~50 functions + ~25 variables (see `:help concept:scheme-api`)
-- **Hooks:** 18 hook points (see `:help concept:hooks`)
+- **Hooks:** 25 hook points (see `:help concept:hooks`)
 - **MCP tools:** 130+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
 - **Config options:** 91+ registered, persistable via `:set-save`
 

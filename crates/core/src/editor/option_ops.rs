@@ -45,6 +45,7 @@ impl super::Editor {
                 ))
             }
         }
+        self.fire_hook(&format!("option-change:{}", def_name));
         Ok(format!("{} = {} (buffer-local)", def_name, value))
     }
 

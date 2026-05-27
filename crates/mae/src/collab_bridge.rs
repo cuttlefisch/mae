@@ -514,6 +514,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                         );
                         // Clear offline flag on successful remote update.
                         editor.buffers[idx].collab_offline = false;
+                        editor.fire_hook("sync-update");
                         editor.mark_full_redraw();
                     }
                     Err(e) => {

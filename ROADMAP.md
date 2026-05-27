@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.10.4-dev · **Tests:** 5,470+ passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete, Phase 13 (Scheme runtime) complete.
+**Current version:** v0.10.4-dev · **Tests:** 5,494+ passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete, Phase 13 (Scheme runtime) complete.
 
 ---
 
@@ -54,8 +54,8 @@
 - [x] **Undo capture timeout tuning**: Fixed in 12f8ce4 — `capture_timeout_millis: u64::MAX` with explicit `undo_reset()` at dispatch boundaries. Vim insert-mode groups all chars into one undo item.
 - [ ] **Cursor drift on remote edits**: `apply_sync_update` rebuilds rope but doesn't adjust cursor. If remote peer inserts before cursor, local cursor points to wrong logical position. Fix requires architecture change (Buffer doesn't own Window) — adjust at call site in `collab_bridge.rs` or add cursor-offset return from `apply_sync_update`.
 - [ ] **Modified flag incorrect with CRDT undo**: CRDT undo path sets `modified = true` unconditionally. No `saved_undo_depth` tracking for CRDT path, so buffer can never report "unmodified" after undo returns to saved state.
-- [ ] **Docker E2E test disabled**: Removed from CI. `sleep-ms` is a pending operation (set-and-return), not a blocking call. `wait-until`/`wait-for-file` loops can't actually wait inside a single eval — they spin without real time passing. Cross-container coordination requires either: (a) async/yield wiring (Phase 13f), or (b) rewriting all coordination as separate test steps with sleep-ms between them (works but fragile). Protocol correctness is fully covered by collab_e2e.rs (23 tests), tests/crdt/ (142 tests), and tests/collab-local/ (85 tests). Re-enable after Phase 13f (async/yield).
-- [ ] **Undo stack size limit for CRDT**: yrs UndoManager has no built-in limit. Add `observe_item_added` callback to evict old items beyond threshold (cf. Emacs `undo-limit`).
+- [x] **Docker E2E test re-enabled**: Phase 13f async/yield wiring complete. `sleep-ms` and `wait-for-file` now yield to the event loop. Docker E2E re-enabled in CI (66 assertions + 9 verifier checks). New event-driven primitives: `yield-tick` (drain one event loop iteration), `await-hook` (suspend until named hook fires), `await-condition` (predicate wait without polling). *(39caf8e)*
+- [x] **Undo stack size limit for CRDT**: `set_undo_limit()` on TextSync with `DEFAULT_UNDO_LIMIT` (1000). *(fb5120b)*
 - [x] **Awareness protocol**: Cursor/selection sharing via `sync/awareness` JSON-RPC relay. 8-color WCAG AA palette, 50ms throttle, 30s timeout, echo filtering. GUI (2px bar + labels + off-screen ▲/▼) and TUI (underline + initial + ▲/▼) rendering. Status bar presence. Auto-derived user identity (git → $USER → hostname). 12 tests.
 - [x] **Heartbeat/keepalive**: Detect silent client death, clean up stale `connected_clients`. *(b8d4b6a)*
 
@@ -117,14 +117,15 @@
   - Phase E (state-server): TCP transport, WAL persistence, per-doc locking ✅
   - Phase F: Awareness protocol ✅, per-user undo ✅, multi-machine sync
 - [ ] **Networked feature E2E coverage gate**: Every networked feature (sync, save, awareness, auth) requires E2E test coverage before release. Coverage targets:
-  - Save protocol: save_intent → hash check → save_committed → peer notification (~80% — concurrent save, epoch validation, metadata round-trip)
-  - WAL gap recovery: trigger gap via server restart, verify ForceSync completes (~50% — compaction verified, WAL stats tracked)
-  - Disconnect/reconnect: pending sends, timeout, partition, duplicate updates (~80% — sharer disconnect, client stats, peer notification)
-  - Multi-document: doc ID collisions, focus switching, cross-doc isolation (40% today)
-  - Error paths: oversized updates, malformed CRDT, server errors (~70% — invalid CRDT bytes, concurrent share, nonexistent doc)
-  - Notifications: sharer_left, peer_count_changed, peer_saved (60% today)
-  - SQLite persistence: WAL durability, crash recovery (~40% — compaction reduces WAL, epoch persistence)
-  Methodology: verify protocol soundness → validate test methodology → ensure containers work without tests → wire tests one by one. Same approach as the collab E2E suite (afae68a).
+  - Save protocol: save_intent → hash check → save_committed → peer notification (~80%)
+  - WAL gap recovery: trigger gap via server restart, verify ForceSync completes (~50%)
+  - Disconnect/reconnect: pending sends, timeout, partition, duplicate updates (~80%)
+  - Multi-document: doc ID collisions, focus switching, cross-doc isolation (~60% — multi-doc tests added 463e859)
+  - Error paths: oversized updates, malformed CRDT, server errors (~70%)
+  - Notifications: sharer_left, peer_count_changed, peer_saved (~60%)
+  - SQLite persistence: WAL durability, crash recovery (~60% — WAL recovery test added 463e859)
+  - Awareness: cursor/selection relay, timeout, echo filtering (~80% — E2E awareness tests dc13e13)
+  Methodology: verify protocol soundness → validate test methodology → ensure containers work without tests → wire tests one by one. Event-driven testing primitives (`yield-tick`, `await-hook`, `await-condition`) eliminate sleep-based coordination.
 
 ### KB Enterprise Readiness & Hardening
 
@@ -228,7 +229,7 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [x] `define_global` properly updates existing bindings (no shadowing)
 - [x] No unmaintained transitive dependencies (`steel-core` removed)
 - [x] Module system prevents namespace collisions
-- [x] 1,800+ mae-scheme tests passing (5,470 workspace total)
+- [x] 1,800+ mae-scheme tests passing (5,494 workspace total)
 - [x] `wait-for-file` and `wait-until` actually block/yield (Docker E2E re-enabled)
 - [x] In-process LSP + DAP for Scheme files
 - [x] Introspection: `procedure-arity`, `procedure-documentation`, `gc-stats`, KB auto-seeding

@@ -190,6 +190,13 @@ pub fn load_module_autoloads(
         ));
     }
 
+    // Fire after-load hook for the module autoloads file
+    let autoload_name = autoloads_path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    editor.fire_hook(&format!("after-load:{}", autoload_name));
+
     // Register module in Scheme runtime's active modules
     let reg_expr = format!(
         "(register-module! \"{}\" \"{}\")",

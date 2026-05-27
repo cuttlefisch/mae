@@ -42,7 +42,14 @@ impl Editor {
             }
         }
 
+        let pre_buf_idx = self.active_buffer_idx();
+        self.fire_hook("command-pre");
         let result = self.dispatch_builtin_inner(name);
+        self.fire_hook("command-post");
+        if self.active_buffer_idx() != pre_buf_idx {
+            self.fire_hook("buffer-switch");
+        }
+
         let elapsed_us = _cmd_start.elapsed().as_micros() as u64;
         self.perf_stats.record_command(_cmd_name, elapsed_us);
         result

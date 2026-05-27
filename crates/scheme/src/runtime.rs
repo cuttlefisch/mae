@@ -3281,6 +3281,7 @@ impl SchemeRuntime {
             let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = new_row;
             win.cursor_col = end.saturating_sub(line_start);
+            editor.fire_hook("after-insert");
         }
 
         // (cursor-goto ROW COL) or (goto-char OFFSET)
@@ -3317,6 +3318,7 @@ impl SchemeRuntime {
             let end = end.min(len);
             if start < end {
                 editor.buffers[idx].delete_range(start, end);
+                editor.fire_hook("after-delete");
             }
         }
 
