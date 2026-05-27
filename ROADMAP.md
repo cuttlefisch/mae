@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.10.4-dev · **Tests:** 3,895+ passing · **Status:** Alpha — Phases 1-11 complete, Phase 12 (collab) protocol-complete, Phase 13 (Scheme runtime) planned.
+**Current version:** v0.10.4-dev · **Tests:** 5,494+ passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete, Phase 13 (Scheme runtime) complete.
 
 ---
 
@@ -9,7 +9,7 @@
 | Phase | Status | Summary |
 |-------|--------|---------|
 | 1. Core + Renderer | ✅ Complete | Buffer (rope), event loop, terminal renderer, vi modal editing |
-| 2. Scheme Runtime | ✅ Complete | Steel R7RS-small, `init.scm`, `define-key`, `set-option!`, REPL |
+| 2. Scheme Runtime | ✅ Complete | R7RS-small (mae-scheme), `init.scm`, `define-key`, `set-option!`, REPL |
 | 3. AI Integration | ✅ Complete | Claude/OpenAI/Gemini/DeepSeek, 450+ tool-calling, conversation UI, permissions |
 | 4. LSP + DAP + Syntax | ✅ Complete | Full LSP (rename, format, outline, breadcrumbs, peek), DAP (watches, exceptions), 13-language tree-sitter |
 | 5. Knowledge Base | ✅ Complete | SQLite + FTS5, org parser, 200+ nodes, bidirectional links, federation |
@@ -54,8 +54,8 @@
 - [x] **Undo capture timeout tuning**: Fixed in 12f8ce4 — `capture_timeout_millis: u64::MAX` with explicit `undo_reset()` at dispatch boundaries. Vim insert-mode groups all chars into one undo item.
 - [ ] **Cursor drift on remote edits**: `apply_sync_update` rebuilds rope but doesn't adjust cursor. If remote peer inserts before cursor, local cursor points to wrong logical position. Fix requires architecture change (Buffer doesn't own Window) — adjust at call site in `collab_bridge.rs` or add cursor-offset return from `apply_sync_update`.
 - [ ] **Modified flag incorrect with CRDT undo**: CRDT undo path sets `modified = true` unconditionally. No `saved_undo_depth` tracking for CRDT path, so buffer can never report "unmodified" after undo returns to saved state.
-- [ ] **Docker E2E test disabled**: Removed from CI. Steel Scheme's `sleep-ms` is a pending operation (set-and-return), not a blocking call. `wait-until`/`wait-for-file` loops can't actually wait inside a single eval — they spin without real time passing. Cross-container coordination requires either: (a) a Scheme runtime with blocking/async wait primitives, or (b) rewriting all coordination as separate test steps with sleep-ms between them (works but fragile). Protocol correctness is fully covered by collab_e2e.rs (23 tests), tests/crdt/ (142 tests), and tests/collab-local/ (85 tests). Re-enable after Scheme runtime replacement.
-- [ ] **Undo stack size limit for CRDT**: yrs UndoManager has no built-in limit. Add `observe_item_added` callback to evict old items beyond threshold (cf. Emacs `undo-limit`).
+- [x] **Docker E2E test re-enabled**: Phase 13f async/yield wiring complete. `sleep-ms` and `wait-for-file` now yield to the event loop. Docker E2E re-enabled in CI (66 assertions + 9 verifier checks). New event-driven primitives: `yield-tick` (drain one event loop iteration), `await-hook` (suspend until named hook fires), `await-condition` (predicate wait without polling). *(39caf8e)*
+- [x] **Undo stack size limit for CRDT**: `set_undo_limit()` on TextSync with `DEFAULT_UNDO_LIMIT` (1000). *(fb5120b)*
 - [x] **Awareness protocol**: Cursor/selection sharing via `sync/awareness` JSON-RPC relay. 8-color WCAG AA palette, 50ms throttle, 30s timeout, echo filtering. GUI (2px bar + labels + off-screen ▲/▼) and TUI (underline + initial + ▲/▼) rendering. Status bar presence. Auto-derived user identity (git → $USER → hostname). 12 tests.
 - [x] **Heartbeat/keepalive**: Detect silent client death, clean up stale `connected_clients`. *(b8d4b6a)*
 
@@ -117,14 +117,15 @@
   - Phase E (state-server): TCP transport, WAL persistence, per-doc locking ✅
   - Phase F: Awareness protocol ✅, per-user undo ✅, multi-machine sync
 - [ ] **Networked feature E2E coverage gate**: Every networked feature (sync, save, awareness, auth) requires E2E test coverage before release. Coverage targets:
-  - Save protocol: save_intent → hash check → save_committed → peer notification (~80% — concurrent save, epoch validation, metadata round-trip)
-  - WAL gap recovery: trigger gap via server restart, verify ForceSync completes (~50% — compaction verified, WAL stats tracked)
-  - Disconnect/reconnect: pending sends, timeout, partition, duplicate updates (~80% — sharer disconnect, client stats, peer notification)
-  - Multi-document: doc ID collisions, focus switching, cross-doc isolation (40% today)
-  - Error paths: oversized updates, malformed CRDT, server errors (~70% — invalid CRDT bytes, concurrent share, nonexistent doc)
-  - Notifications: sharer_left, peer_count_changed, peer_saved (60% today)
-  - SQLite persistence: WAL durability, crash recovery (~40% — compaction reduces WAL, epoch persistence)
-  Methodology: verify protocol soundness → validate test methodology → ensure containers work without tests → wire tests one by one. Same approach as the collab E2E suite (afae68a).
+  - Save protocol: save_intent → hash check → save_committed → peer notification (~80%)
+  - WAL gap recovery: trigger gap via server restart, verify ForceSync completes (~50%)
+  - Disconnect/reconnect: pending sends, timeout, partition, duplicate updates (~80%)
+  - Multi-document: doc ID collisions, focus switching, cross-doc isolation (~60% — multi-doc tests added 463e859)
+  - Error paths: oversized updates, malformed CRDT, server errors (~70%)
+  - Notifications: sharer_left, peer_count_changed, peer_saved (~60%)
+  - SQLite persistence: WAL durability, crash recovery (~60% — WAL recovery test added 463e859)
+  - Awareness: cursor/selection relay, timeout, echo filtering (~80% — E2E awareness tests dc13e13)
+  Methodology: verify protocol soundness → validate test methodology → ensure containers work without tests → wire tests one by one. Event-driven testing primitives (`yield-tick`, `await-hook`, `await-condition`) eliminate sleep-based coordination.
 
 ### KB Enterprise Readiness & Hardening
 
@@ -141,53 +142,32 @@
 
 ### Phase 13: MAE Scheme Runtime (v0.12.0)
 
-**Motivation**: Steel Scheme has served MAE well from prototype through alpha, but
-we've hit fundamental limitations that block feature development:
+**Status**: Phases 13a–13h COMPLETE. Purpose-built R7RS-small runtime replaces
+the previous Steel dependency. 1,800+ mae-scheme tests passing, 261 stdlib
+functions, 41 special forms, 23 opcodes, hygienic macros, module system, call/cc,
+dynamic-wind, exception handling. All 177 editor registrations ported. In-process
+LSP + DAP for Scheme (first Scheme DAP ever). Introspection + observability.
 
-1. **No blocking primitives**: `sleep-ms` is a pending operation (set-and-return),
-   not a blocking call. `wait-until`/`wait-for-file` loops inside a single eval
-   spin without real time passing. This blocks Docker E2E tests and any future
-   async coordination (e.g. LSP response polling, DAP breakpoint waits).
+#### Core: R7RS-small Compliance (COMPLETE)
 
-2. **No proper error signaling from Rust**: `register_fn` can only return values,
-   not raise Scheme errors. Test assertions must use Scheme-level `(error ...)`,
-   and Rust-backed functions that fail can only return sentinel values that callers
-   must manually check. This prevents clean test infrastructure and robust error
-   handling in `mae:` namespace functions.
-
-3. **`register_value` shadowing**: Each call creates a new binding cell instead of
-   updating the existing one. Forces workaround in test runner (`set!` instead of
-   re-registration). See `steel_quirks.md`.
-
-4. **Void tail-call crash**: Certain tail-call patterns with void returns cause
-   panics. Limits test structure. Filed upstream but unresolved.
-
-5. **Unmaintained dependency chain**: `bincode` (RUSTSEC-2025-0141) is transitive
-   via `steel-core`. We can't fix this without forking Steel or replacing it.
-
-6. **No namespace system**: All user functions, MAE primitives, and test helpers
-   share a flat global namespace. As the API surface grows (currently 144 Scheme
-   primitives, 504 commands), collisions become likely.
-
-**Design**: MAE-native R7RS-small implementation with `mae:` extension namespace.
-
-#### Core: R7RS-small Compliance
-
-- **Standard library**: R7RS-small base (`(scheme base)`, `(scheme write)`,
-  `(scheme time)`, `(scheme file)`, `(scheme process-context)`, etc.)
-- **Proper tail calls**: Required by spec, enables iterative control flow
-- **First-class continuations**: `call/cc` for advanced control flow (error
-  handling, coroutines, generators)
-- **Hygienic macros**: `syntax-rules` (R7RS) + `syntax-case` (R6RS extension)
-- **Multiple values**: `values` / `call-with-values` / `receive`
-- **Libraries**: `(define-library ...)` / `(import ...)` / `(export ...)`
-- **Exact/inexact numeric tower**: Bignums, rationals, complex (at minimum
-  fixnums + flonums for initial release)
+- **Standard library**: All R7RS-small libraries implemented (`(scheme base)`,
+  `(scheme write)`, `(scheme time)`, `(scheme file)`, `(scheme process-context)`,
+  `(scheme char)`, `(scheme read)`, `(scheme lazy)`, `(scheme case-lambda)`,
+  `(scheme inexact)`, `(scheme cxr)`, `(scheme eval)`, `(scheme r5rs)`)
+- **Proper tail calls**: All tail contexts (if, cond, case, when, unless, and, or,
+  begin, let, do, guard, dynamic-wind)
+- **First-class continuations**: `call/cc`, `call-with-current-continuation`,
+  `dynamic-wind` with VM-level winder stack
+- **Hygienic macros**: `syntax-rules` with SRFI-46 custom ellipsis
+- **Multiple values**: `values` / `call-with-values` (list representation)
+- **Libraries**: `(define-library ...)` / `(import ...)` / `(export ...)` with
+  `only`, `except`, `prefix`, `rename` modifiers
+- **Numeric tower**: i64 fixnums + f64 floats (no bignums/rationals/complex)
+- **Exception system**: R7RS §6.11, Chibi-Scheme unified handler stack pattern
 
 #### Extensions: `mae:` Namespace
 
-Inspired by Emacs Lisp's `emacs-` prefix, Guile's module system, and Racket's
-`#lang` facility. All MAE-specific functionality lives in `(mae ...)` libraries:
+All MAE-specific functionality lives in `(mae ...)` libraries:
 
 ```scheme
 (import (scheme base)
@@ -208,11 +188,12 @@ Inspired by Emacs Lisp's `emacs-` prefix, Guile's module system, and Racket's
 |----------|-----------|-----------|
 | R7RS-small core, not R7RS-large | Small spec = complete implementation. Large spec is optional modules | Chibi-Scheme, Chicken, Guile |
 | `mae:` namespace, not flat global | Prevent collisions as API grows. Clear provenance | Emacs `emacs-`, Guile modules, Racket collections |
-| Async/yield via delimited continuations | `sleep`, `wait-for-file`, `wait-until` actually block/yield | Guile fibers, Racket threads, Chez `engine` |
-| Rust FFI raises Scheme errors | `register_fn` returns `Result<SteelVal, SchemeError>` | Guile's `scm_throw`, Racket's `raise` |
-| GC: tracing (Immix or similar) | No `Rc<RefCell<>>` cycles. Concurrent collection designed in from day one | Architecture Principle #1 |
+| Async/yield via VM opcodes | `sleep`, `wait-for-file`, `wait-until` yield to host event loop | Guile fibers, Racket threads, Chez `engine` |
+| Rust FFI raises Scheme errors | `register_fn` returns `Result<Value, LispError>` | Guile's `scm_throw`, Racket's `raise` |
+| Rc-based GC (stage 1) | Simple, correct. Tracing GC planned for stage 2 | Architecture Principle #1 |
 | Bytecode VM, not tree-walking | Performance for hot paths (rendering hooks, input processing) | Guile 3.0, Chez, Racket BC |
-| Compatible `init.scm` migration | Existing user configs must work with deprecation warnings | Emacs 28→29 migration pattern |
+| Immutable strings (Rc<str>) | Thread-safe, SRFI-140 compatible | Racket, Chibi-Scheme |
+| Immutable pairs (Rc) | No RefCell overhead, simpler GC | Racket (default) |
 
 #### Prior Art Study
 
@@ -221,31 +202,46 @@ Inspired by Emacs Lisp's `emacs-` prefix, Guile's module system, and Racket's
 | **Emacs Lisp** | Dynamic scope option for hooks, `defadvice`, `defcustom` pattern, buffer-local variables | Dynamic scope as default, no modules, no TCO, no hygiene |
 | **Guile Scheme** | Module system (`define-module`), delimited continuations, Rust/C FFI patterns | Slow startup (~200ms), heavy runtime, complex build |
 | **Racket** | `#lang` extensibility, contract system, exceptional docs | 200MB runtime, poor embedding story, non-standard |
-| **Chibi-Scheme** | Minimal R7RS-small, <1MB, designed for embedding | Limited ecosystem, no JIT, slow numerics |
-| **Steel** | Rust integration patterns (what worked), `register_fn` API shape | Shadowing bugs, void crashes, no error signaling, unmaintained deps |
+| **Chibi-Scheme** | Minimal R7RS-small, <1MB, designed for embedding, exception system architecture | Limited ecosystem, no JIT, slow numerics |
 | **Chez Scheme** | Compilation strategy, `engine` for preemption | Complex bootstrap, not designed for embedding |
 
 #### Implementation Phases
 
-- [ ] **Phase 13a**: Reader/parser (S-expressions, datum labels, `#;` comments)
-- [ ] **Phase 13b**: Bytecode compiler + VM (stack-based, tail-call elimination)
-- [ ] **Phase 13c**: R7RS-small base library (lists, strings, vectors, I/O, control)
-- [ ] **Phase 13d**: `(mae buffer)` + `(mae editor)` — port existing 144 primitives
-- [ ] **Phase 13e**: `(mae async)` — delimited continuations, fibers, blocking `sleep`/`wait`
-- [ ] **Phase 13f**: `(mae test)` — proper error signaling, structured test results
-- [ ] **Phase 13g**: Migration tooling — `init.scm` compatibility layer, deprecation warnings
-- [ ] **Phase 13h**: GC implementation (Immix or stop-the-world mark-sweep for v1)
-- [ ] **Phase 13i**: Remove `steel-core` dependency
+- [x] **Phase 13a**: Reader/parser (S-expressions, datum labels, `#;` comments)
+- [x] **Phase 13b**: Bytecode compiler + VM (stack-based, tail-call elimination)
+- [x] **Phase 13c**: R7RS-small base library (261 functions, 13 libraries)
+- [x] **Phase 13d**: Hygienic macros + module system (`define-library`, `import`)
+- [x] **Phase 13e**: FFI layer — port all 177 editor registrations to mae-scheme VM
+- [x] **Phase 13f**: Async/yield — `sleep-ms`/`wait-for-file` yield to event loop, auto-flush wrappers, Docker E2E re-enabled
+- [x] **Phase 13g**: LSP + DAP for mae-scheme — in-process Swank-style (first Scheme DAP ever)
+  - LSP: completion (live globals), hover (docstrings), diagnostics (check-syntax), symbols, signature help
+  - Source maps: compiler-tracked locations, `read_all_located()` + `compile_top_level_located()`
+  - DAP: yield-based breakpoints (Guile VM trap model), step modes, frame inspection
+  - Bridge: `scheme_lsp_bridge.rs` + `scheme_dap_bridge.rs` intercept intents in-process
+- [x] **Phase 13h**: Introspection + observability — `introspect.rs`, docstring extraction, `gc-stats`, KB auto-seeding
+- [x] **Phase 13i**: Migration — Steel fully removed (13e), test files clean R7RS, no workarounds remain
+- [x] **Phase 13j**: Documentation — ADR-009, EXTENSION_GUIDE updated with libraries/async/debug/introspection
 
 #### Success Criteria
 
-- All existing `init.scm` configs load with at most deprecation warnings
-- All 487 Scheme tests pass (142 CRDT + 85 collab-local + 260 editor)
-- `wait-for-file` and `wait-until` actually block/yield (Docker E2E re-enabled)
-- `register_fn` can return `Result` (errors propagate as Scheme exceptions)
-- No `bincode` or other unmaintained transitive dependencies
-- Startup time ≤ Steel's current performance (~50ms for init.scm)
-- Module system prevents namespace collisions
+- [x] All 177 editor registrations ported from previous runtime
+- [x] `register_fn` returns `Result` (errors propagate as Scheme exceptions)
+- [x] `define_global` properly updates existing bindings (no shadowing)
+- [x] No unmaintained transitive dependencies (`steel-core` removed)
+- [x] Module system prevents namespace collisions
+- [x] 1,800+ mae-scheme tests passing (5,494 workspace total)
+- [x] `wait-for-file` and `wait-until` actually block/yield (Docker E2E re-enabled)
+- [x] In-process LSP + DAP for Scheme files
+- [x] Introspection: `procedure-arity`, `procedure-documentation`, `gc-stats`, KB auto-seeding
+- [x] ADR-009 documenting the architecture decision
+- [x] All existing `init.scm` configs load with at most deprecation warnings
+
+### Future: Scheme Introspection Enhancements (from prior art research)
+- [ ] **Execution history ring buffer** — MIT Scheme's debugger records expressions in a ring buffer, providing history for tail-called expressions that no longer appear on the stack. Valuable for debugging tail-recursive code in mae-scheme. Ref: [[RoamNotes: Scheme Debugger Architectures]]
+- [ ] **Cross-reference analysis** — SLIME/Swank provides `who-calls`, `who-binds`, `who-sets`, `who-references` via compiler metadata. mae-scheme could build a call graph during compilation for `:who-calls` / `:who-references` commands.
+- [ ] **Type-ranked completion** — scheme-langserver (Chez) ranks completion candidates by type compatibility. Could enhance mae-scheme LSP completion with arity/type hints from call context.
+- [ ] **Buffer-source mapping** — SBCL/Swank records source locations referencing editor buffers (not just files), enabling compile-in-place from REPL. mae-scheme could map `eval`-ed code back to the `*scheme-repl*` buffer.
+- [ ] **Live recompilation in debugger** — Swank's SLDB allows fixing a function while paused at a breakpoint, then resuming. mae-scheme's `define_global` already supports hot reload; wiring it to the DAP resume flow would complete the picture.
 
 ### Near-term: Other
 - [ ] **Version compatibility policy**: Semver enforcement on upgrade — protocol version negotiation in state-server (`initialize` params), config schema migration on major bumps, `make install-upgrade` blocking on incompatible major versions (currently warns only). Prerequisite for v1.0.

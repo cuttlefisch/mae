@@ -196,6 +196,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                         });
                     } else {
                         info!(?kind, "deferred AI tool — awaiting LSP response");
+                        crate::scheme_lsp_bridge::drain_scheme_lsp_intents(editor, ctx.scheme);
                         crate::lsp_bridge::drain_lsp_intents(editor, ctx.lsp_command_tx);
                         *ctx.deferred_ai_reply =
                             Some((kind, call.id.clone(), reply, tokio::time::Instant::now()));
@@ -755,6 +756,7 @@ pub fn handle_mcp_request(
     permission_policy: &mae_ai::PermissionPolicy,
     lsp_command_tx: &tokio::sync::mpsc::Sender<LspCommand>,
     deferred_mcp_reply: &mut DeferredMcpReply,
+    scheme: &mut mae_scheme::SchemeRuntime,
 ) -> bool {
     debug!(tool = %mcp_req.tool_name, "MCP tool call");
     let fake_call = mae_ai::ToolCall {
@@ -763,8 +765,15 @@ pub fn handle_mcp_request(
         arguments: mcp_req.arguments,
     };
     let exec_result = execute_tool(editor, &fake_call, all_tools, permission_policy);
+    // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
+    let scheme_output = drain_pending_scheme_evals(editor, scheme);
     match exec_result {
-        ExecuteResult::Immediate(result) => {
+        ExecuteResult::Immediate(mut result) => {
+            // If the tool queued a Scheme eval, replace the output with the result.
+            if let Some(output) = scheme_output {
+                result.output = output;
+                result.success = true;
+            }
             let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
                 success: result.success,
                 output: result.output,
@@ -1192,7 +1201,12 @@ pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut 
 
 /// Drain any pending Scheme evaluations queued by AI tools (e.g. `eval_scheme`).
 /// Returns `Some(output)` if any expressions were evaluated, `None` otherwise.
-fn drain_pending_scheme_evals(
+///
+/// Uses `eval_yielding` to handle yield primitives inline:
+/// - `yield-tick`: drains hooks and side effects, then resumes
+/// - `await-hook`: drains hooks each tick until the target fires or timeout
+/// - `flush!`: same as tick (apply + inject)
+pub fn drain_pending_scheme_evals(
     editor: &mut Editor,
     scheme: &mut mae_scheme::SchemeRuntime,
 ) -> Option<String> {
@@ -1202,9 +1216,85 @@ fn drain_pending_scheme_evals(
     let exprs: Vec<String> = editor.pending_scheme_eval.drain(..).collect();
     let mut results = Vec::new();
     for code in &exprs {
-        let output = scheme.eval_for_repl(code, editor);
-        editor.append_to_scheme_repl(&output);
-        results.push(output);
+        scheme.inject_editor_state(editor);
+        let output = eval_with_yield_handling(editor, scheme, code);
+        let formatted = format!("> {}\n{}\n", code.trim(), output);
+        editor.append_to_scheme_repl(&formatted);
+        results.push(formatted);
     }
     Some(results.join("\n"))
+}
+
+/// Evaluate scheme code with inline yield handling for synchronous contexts
+/// (MCP, AI tools). Handles yield-tick and await-hook by draining hooks
+/// and side effects without returning to the event loop.
+fn eval_with_yield_handling(
+    editor: &mut Editor,
+    scheme: &mut mae_scheme::SchemeRuntime,
+    code: &str,
+) -> String {
+    use mae_scheme::vm::YieldRequest;
+    use mae_scheme::SchemeEvalResult;
+
+    let mut eval_result = match scheme.eval_yielding(code) {
+        Ok(r) => r,
+        Err(e) => return format!("; error: {}", e.message),
+    };
+
+    loop {
+        match eval_result {
+            SchemeEvalResult::Done(s) => {
+                scheme.apply_to_editor(editor);
+                return if s.is_empty() {
+                    "; => (void)".to_string()
+                } else {
+                    format!("; => {}", s)
+                };
+            }
+            SchemeEvalResult::Yield(ref req) => {
+                match req {
+                    YieldRequest::Tick | YieldRequest::Flush => {
+                        scheme.apply_to_editor(editor);
+                        crate::key_handling::drain_hook_evals(editor, scheme);
+                        scheme.inject_editor_state(editor);
+                    }
+                    YieldRequest::AwaitHook(hook_name, _timeout) => {
+                        // In synchronous context (MCP), check if the hook
+                        // is already pending. If not, it won't fire without
+                        // external events, so resume immediately with #f.
+                        let hook_name = hook_name.clone();
+                        scheme.apply_to_editor(editor);
+                        let fired = editor
+                            .pending_hook_evals
+                            .iter()
+                            .any(|(h, _)| h == &hook_name);
+                        crate::key_handling::drain_hook_evals(editor, scheme);
+                        scheme.inject_editor_state(editor);
+                        eval_result =
+                            match scheme.resume_yield(mae_scheme::value::Value::Bool(fired)) {
+                                Ok(r) => r,
+                                Err(e) => return format!("; error: {}", e.message),
+                            };
+                        continue;
+                    }
+                    YieldRequest::Sleep(d) => {
+                        std::thread::sleep(*d);
+                    }
+                    YieldRequest::WaitForFile(path, timeout) => {
+                        let deadline = std::time::Instant::now() + *timeout;
+                        while !path.exists() && std::time::Instant::now() < deadline {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                    }
+                    YieldRequest::Breakpoint(_) => {
+                        // Can't pause in MCP context — skip.
+                    }
+                }
+                eval_result = match scheme.resume_yield(mae_scheme::value::Value::Bool(true)) {
+                    Ok(r) => r,
+                    Err(e) => return format!("; error: {}", e.message),
+                };
+            }
+        }
+    }
 }

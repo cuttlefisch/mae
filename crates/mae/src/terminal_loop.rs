@@ -219,7 +219,7 @@ pub(crate) async fn run_terminal_loop(
         }
 
         // Debounced document highlight: request after 300ms cursor idle.
-        if editor.highlight_ranges.is_empty()
+        if editor.lsp.highlight_ranges.is_empty()
             && editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(300)
         {
             editor.lsp_request_document_highlight();
@@ -327,7 +327,9 @@ pub(crate) async fn run_terminal_loop(
         }
 
         trace!("drain_intents_and_lifecycle enter");
+        crate::scheme_lsp_bridge::drain_scheme_lsp_intents(editor, scheme);
         drain_lsp_intents(editor, lsp_command_tx);
+        crate::scheme_dap_bridge::drain_scheme_dap_intents(editor, scheme);
         drain_dap_intents(editor, dap_command_tx);
         crate::collab_bridge::drain_collab_intents(editor, collab_command_tx);
         crate::collab_bridge::queue_awareness_update(editor);
@@ -625,12 +627,14 @@ pub(crate) async fn run_terminal_loop(
                 last_mcp_activity = Some(tokio::time::Instant::now());
                 let immediate = ai_event_handler::handle_mcp_request(
                     editor, mcp_req, all_tools, permission_policy,
-                    lsp_command_tx, &mut deferred_mcp_reply,
+                    lsp_command_tx, &mut deferred_mcp_reply, scheme,
                 );
                 if immediate && deferred_mcp_reply.is_empty() {
                     editor.ai.input_lock = mae_core::InputLock::None;
                     last_mcp_activity = None;
                 }
+                // Drain hooks queued by MCP-driven commands (e.g. mode-change).
+                crate::key_handling::drain_hook_evals(editor, scheme);
                 // Drain sync updates immediately after MCP-driven edits.
                 crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster, Some(collab_command_tx));
             }

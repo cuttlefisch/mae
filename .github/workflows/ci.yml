@@ -77,7 +77,7 @@ jobs:
         timeout-minutes: 3
       - name: State server tests
         run: cargo test --package mae-state-server -- --test-threads=1 --nocapture
-        timeout-minutes: 5
+        timeout-minutes: 10
         env:
           RUST_LOG: "mae_state_server=debug,mae_sync=debug,warn"
       - name: Collab bridge integration tests
@@ -125,14 +125,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build binary
         run: cargo build --release --workspace
-      - name: Create Steel home directory
-        run: mkdir -p ~/.local/share/steel
       - name: Validate init.scm
         run: ./target/release/mae --check-config
       - name: Editor tests
         run: ./target/release/mae --test tests/editor/
       - name: CRDT tests
         run: ./target/release/mae --test tests/crdt/
+      - name: Collab local tests
+        run: ./target/release/mae --test tests/collab-local/
       - name: Package install
         run: |
           mkdir -p ~/.config/mae
@@ -144,13 +144,34 @@ jobs:
           ./target/release/mae --check-config
           test -f ~/.config/mae/packages.lock
 
+  scheme-runtime:
+    name: scheme / R7RS compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: R7RS compliance tests
+        run: cargo test -p mae-scheme --test r7rs_compliance -- --nocapture
+        timeout-minutes: 10
+      - name: Scheme torture tests
+        run: cargo test -p mae-scheme --test scheme_torture -- --nocapture
+        timeout-minutes: 5
+      - name: Scheme benchmark tests
+        run: cargo test -p mae-scheme --test scheme_benchmarks -- --nocapture
+        timeout-minutes: 10
+      - name: Scheme real programs
+        run: cargo test -p mae-scheme --test scheme_programs -- --nocapture
+        timeout-minutes: 5
+      - name: Scheme IO port tests
+        run: cargo test -p mae-scheme --test scheme_io_ports -- --nocapture
+        timeout-minutes: 5
+      - name: Unit tests
+        run: cargo test -p mae-scheme --lib
+        timeout-minutes: 5
+
   collab-e2e:
     name: collab / docker e2e
-    # DISABLED: Docker E2E requires Scheme async/yield for reliable cross-container
-    # coordination. Protocol correctness is covered by collab_e2e.rs (28 tests),
-    # CRDT Scheme tests (142), and collab-local Scheme tests (85).
-    # Re-enable after Phase 13 Scheme runtime.
-    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

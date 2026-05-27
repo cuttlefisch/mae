@@ -35,7 +35,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-core` | Buffer management (rope), event loop, core primitives | `ropey`, `crossbeam` |
 | `mae-renderer` | Display/rendering — `Renderer` trait + terminal backend | `ratatui`, `crossterm` |
 | `mae-gui` | GUI rendering backend — winit window + Skia 2D + native SVG | `winit`, `skia-safe` (features: `svg`) |
-| `mae-scheme` | Embedded Scheme runtime for configuration and packages | `steel` (or purpose-built) |
+| `mae-scheme` | Embedded Scheme runtime for configuration and packages | purpose-built R7RS-small |
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
@@ -104,7 +104,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Single-file editing with save/load
 
 ### Phase 2: Scheme Runtime — COMPLETE
-- Steel embedded as the extension language
+- mae-scheme R7RS-small runtime as the extension language
 - Buffer operations exposed to Scheme
 - Config file loading (`init.scm`)
 - Command binding from Scheme (`(define-key ...)`)
@@ -302,6 +302,7 @@ make test-scheme-all                # All local tests
 
 ### Design Principles
 - **Real editor, not mocks.** Tests boot headless with full event loop. Same API for tests and users.
+- **Real event loops for event-loop behavior.** When behavior depends on the event loop (hooks firing, async yields, mode transitions with side effects), tests MUST exercise the actual event loop — not synthetic flushes or manual drain calls. A test that manually calls `drain_hook_evals` is testing the drain function, not the hook system. If behavior is tied to the event loop, spawn a real editor instance (PTY or MCP) and test through it. Never create synthetic event triggers to avoid using the event loop.
 - **One pending op per test step.** Each `it-test` is one eval→apply cycle. `buffer-insert` + `goto-char` in the same step may execute in unexpected order. Split into separate steps.
 - **SharedState pattern for cross-test reads.** Functions like `buffer-string`, `buffer-sync-enabled?`, `current-mode`, and `get-buffer-by-name` read from `Arc<Mutex<SharedState>>` (not closure-captured snapshots) so they see fresh state after `sync_scheme_state`.
 - **Assertions signal errors.** `should`/`should-equal`/`should-contain` signal Scheme errors caught by the runner. Use `should-mode` for mode checks.
@@ -309,9 +310,8 @@ make test-scheme-all                # All local tests
 - **Rust-side iteration preferred.** Don't add `(run-tests)` at end of test files. The runner calls `run-nth-test` with `apply_to_editor` + `sync_scheme_state` between each step.
 
 ### Adding New Test Primitives
-- **Read-only state**: Add to `SharedState`, register `test-*` Rust function in `new()`, add Scheme forwarding in `install_mutable_buffer_accessors`, update in `sync_scheme_state`.
+- **Read-only state**: Add to `SharedState`, register Rust function in `new()` that reads from SharedState, update SharedState in `inject_editor_state`.
 - **Mutations**: Add pending field to `SharedState`, register Scheme function that sets it, process in `apply_to_editor`.
-- **Never call `inject_editor_state` between test registration and execution** — it shadows captured bindings (Steel `register_value` creates new cells).
 
 ## Developing MAE Inside MAE (MCP Tools)
 
@@ -501,7 +501,7 @@ Auth roadmap: PSK → SSH key exchange → OAuth/OIDC (via `initialize` params e
 These APIs are intended to remain stable through v1.0:
 
 - **Scheme API:** ~50 functions + ~25 variables (see `:help concept:scheme-api`)
-- **Hooks:** 18 hook points (see `:help concept:hooks`)
+- **Hooks:** 25 hook points (see `:help concept:hooks`)
 - **MCP tools:** 130+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
 - **Config options:** 91+ registered, persistable via `:set-save`
 
@@ -510,7 +510,6 @@ These APIs are intended to remain stable through v1.0:
 - **Full architecture spec:** `README.md`
 - **Emacs source for reference:** the Emacs source tree (clone of emacs-mirror/emacs, `emacs-30` branch)
 - **Declarative project config:** `.project` in repo root (for declarative-project-mode in Emacs)
-- **Steel Scheme:** https://github.com/mattwparas/steel — primary candidate for embedded Scheme runtime
 - **ropey:** https://github.com/cessen/ropey — rope data structure for buffer management
 - **ratatui:** https://github.com/ratatui/ratatui — terminal UI framework
 - **tree-sitter-org:** org-mode grammar for tree-sitter

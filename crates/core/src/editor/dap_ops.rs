@@ -88,7 +88,7 @@ impl Editor {
         }
         let spawn = default_spawn_for_adapter(adapter).ok_or_else(|| {
             format!(
-                "Unknown adapter: {} (known: lldb, debugpy, codelldb)",
+                "Unknown adapter: {} (known: lldb, debugpy, codelldb, scheme)",
                 adapter
             )
         })?;
@@ -126,7 +126,7 @@ impl Editor {
         }
         let spawn = default_spawn_for_adapter(adapter).ok_or_else(|| {
             format!(
-                "Unknown adapter: {} (known: lldb, debugpy, codelldb)",
+                "Unknown adapter: {} (known: lldb, debugpy, codelldb, scheme)",
                 adapter
             )
         })?;
@@ -811,6 +811,11 @@ fn default_spawn_for_adapter(adapter: &str) -> Option<DapSpawnConfig> {
             command: env_or("MAE_DAP_DEBUGPY", "python"),
             args: vec!["-m".into(), "debugpy.adapter".into()],
             adapter_id: "debugpy".into(),
+        }),
+        "scheme" | "mae-scheme" => Some(DapSpawnConfig {
+            command: "mae-scheme".into(), // In-process — no subprocess spawned
+            args: vec![],
+            adapter_id: "mae-scheme".into(),
         }),
         _ => None,
     }

@@ -52,7 +52,8 @@ fn execute_lsp_rename(editor: &mut Editor, args: &serde_json::Value) -> Result<S
         .unwrap_or(target_col as u32);
 
     editor
-        .pending_lsp_requests
+        .lsp
+        .pending_requests
         .push(mae_core::LspIntent::Rename {
             uri,
             language_id,
@@ -79,7 +80,8 @@ fn execute_lsp_format(editor: &mut Editor, args: &serde_json::Value) -> Result<S
 
     if let (Some(sl), Some(el)) = (start_line, end_line) {
         editor
-            .pending_lsp_requests
+            .lsp
+            .pending_requests
             .push(mae_core::LspIntent::RangeFormat {
                 uri,
                 language_id,
@@ -91,7 +93,8 @@ fn execute_lsp_format(editor: &mut Editor, args: &serde_json::Value) -> Result<S
         Ok(format!("LSP range format queued: lines {}-{}", sl, el))
     } else {
         editor
-            .pending_lsp_requests
+            .lsp
+            .pending_requests
             .push(mae_core::LspIntent::Format { uri, language_id });
         Ok("LSP format queued".to_string())
     }
@@ -130,7 +133,8 @@ fn execute_lsp_code_action(
 
     // Queue code action request
     editor
-        .pending_lsp_requests
+        .lsp
+        .pending_requests
         .push(mae_core::LspIntent::CodeAction {
             uri,
             language_id,
@@ -139,7 +143,7 @@ fn execute_lsp_code_action(
         });
 
     // Return existing code actions if any
-    if let Some(ref menu) = editor.code_action_menu {
+    if let Some(ref menu) = editor.lsp.code_action_menu {
         let actions: Vec<String> = menu
             .items
             .iter()

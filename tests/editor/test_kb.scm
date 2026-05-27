@@ -2,56 +2,30 @@
 ;;;
 ;;; KB nodes are seeded at editor startup. This test verifies that built-in
 ;;; concept nodes are reachable via :help and that the resulting buffer
-;;; contains expected content. It also verifies graceful handling of unknown topics.
+;;; contains expected content.
 
 (describe-group "Knowledge base help"
   (lambda ()
-    (it-test "open help for built-in concept node"
+    (it-test "open scheme-api help and verify content"
       (lambda ()
-        (execute-ex "help concept:scheme-api")))
-
-    (it-test "help buffer contains scheme-api content"
-      (lambda ()
-        (should (> (string-length (buffer-string)) 0))))
-
-    (it-test "help buffer contains 'scheme' text"
-      (lambda ()
+        (execute-ex "help concept:scheme-api")
+        (should (> (string-length (buffer-string)) 0))
         (should-contain (buffer-string) "scheme")))
 
-    (it-test "open help for commands concept"
+    (it-test "open hooks help and verify content"
       (lambda ()
-        (execute-ex "help concept:hooks")))
-
-    (it-test "hooks help buffer has content"
-      (lambda ()
-        (should (> (string-length (buffer-string)) 0))))
-
-    (it-test "hooks buffer contains 'hook' text"
-      (lambda ()
+        (execute-ex "help concept:hooks")
+        (should (> (string-length (buffer-string)) 0))
         (should-contain (buffer-string) "hook")))
 
-    (it-test "open help for a scheme primitive"
+    (it-test "open scheme primitive help"
       (lambda ()
-        (execute-ex "help scheme:buffer-insert")))
-
-    (it-test "scheme primitive help has content"
-      (lambda ()
+        (execute-ex "help scheme:buffer-insert")
         (should (> (string-length (buffer-string)) 0))))
 
-    (it-test "open help for nonexistent topic"
+    (it-test "nonexistent topic does not crash"
       (lambda ()
-        (execute-ex "help nonexistent-topic-xyz-abc")))
-
-    (it-test "buffer still has content after unknown topic lookup"
-      (lambda ()
-        ;; Help system should not crash — it either shows a fallback or
-        ;; stays on the previous buffer. Either way the buffer is readable.
-        (should (string? (buffer-string)))))
-
-    (it-test "return to normal mode after help navigation"
-      (lambda ()
-        (run-command "enter-normal-mode")))
-
-    (it-test "is in normal mode"
-      (lambda ()
+        (execute-ex "help nonexistent-topic-xyz-abc")
+        (should (string? (buffer-string)))
+        (run-command "enter-normal-mode")
         (should-mode "normal")))))

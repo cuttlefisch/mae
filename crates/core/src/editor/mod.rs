@@ -22,6 +22,7 @@ mod keymaps;
 mod lsp_actions;
 mod lsp_completion;
 mod lsp_ops;
+pub mod lsp_state;
 mod lsp_symbols;
 mod macros;
 mod markdown_ops;
@@ -50,6 +51,7 @@ pub use help_ops::is_builtin_node;
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
 pub use kb_ops::KbWatcherStats;
 pub use kb_state::KbContext;
+pub use lsp_state::LspContext;
 pub use vi_state::ViState;
 
 /// Default TCP address for the collaborative state server.
@@ -194,6 +196,10 @@ pub struct CollabState {
     /// Pending save_committed to send on next drain tick.
     /// Format: (doc_id, save_epoch, content_hash, saved_by).
     pub pending_save_committed: Option<(String, u64, String, String)>,
+    /// Doc IDs confirmed by the server (via BufferShared/BufferJoined events).
+    /// Unlike `synced_buffers` which is optimistically updated on intent drain,
+    /// this set is only populated after the server acknowledges the share/join.
+    pub confirmed_shares: HashSet<String>,
     /// Remote user awareness state (cursors, selections, presence).
     pub remote_users: mae_sync::awareness::AwarenessMap,
     /// Pending awareness update to send (throttled at 50ms).
@@ -208,6 +214,7 @@ impl CollabState {
             status: CollabStatus::Off,
             synced_docs: 0,
             synced_buffers: HashSet::new(),
+            confirmed_shares: HashSet::new(),
             pending_intent: None,
             server_address: DEFAULT_COLLAB_ADDRESS.to_string(),
             auto_connect: false,
@@ -282,7 +289,6 @@ use crate::file_picker::FilePicker;
 use crate::hooks::HookRegistry;
 use crate::kb_seed::seed_kb;
 use crate::keymap::{KeyPress, Keymap, WhichKeyEntry};
-use crate::lsp_intent::LspIntent;
 use crate::messages::MessageLog;
 use crate::options::OptionRegistry;
 use crate::search::SearchState;
@@ -524,6 +530,24 @@ pub enum InputLock {
     McpBusy,
 }
 
+/// Cached Scheme runtime statistics for MCP introspection.
+/// Updated by the binary crate after each scheme eval cycle.
+#[derive(Clone, Debug, Default)]
+pub struct SchemeStats {
+    /// Number of eval calls processed by the VM.
+    pub eval_count: u64,
+    /// Number of gc-collect! calls.
+    pub collections_count: u64,
+    /// Number of registered global bindings.
+    pub globals_count: usize,
+    /// Total registered functions (foreign + closure + macro).
+    pub function_count: usize,
+    /// Stack high-water mark.
+    pub stack_hwm: usize,
+    /// Number of recent errors in error history.
+    pub error_count: usize,
+}
+
 /// Snapshot of editor state for save/restore (push/pop state stack).
 /// Captures the buffer list, window layout, focus, and mode so tools
 /// Pending async git diff: spawned on a background thread, polled on idle ticks.
@@ -629,16 +653,8 @@ pub struct Editor {
     pub command_palette: Option<CommandPalette>,
     /// Mini-dialog state for interactive commands (edit-link, rename, etc.).
     pub mini_dialog: Option<crate::command_palette::MiniDialogState>,
-    /// Queue of pending LSP requests for the binary to drain each event-loop tick.
-    /// The core cannot call async LSP code directly; instead, commands push
-    /// intents here and `main.rs` forwards them to `run_lsp_task`.
-    pub pending_lsp_requests: Vec<LspIntent>,
-    /// LSP trigger characters per language (populated from server capabilities).
-    pub lsp_trigger_characters: std::collections::HashMap<String, Vec<String>>,
-    /// Signal for the binary to send `workspace/didChangeWorkspaceFolders`
-    /// when a project root is first detected after LSP has already started
-    /// (e.g. launched from app launcher with `cwd = $HOME`).
-    pub pending_lsp_root_change: Option<String>,
+    /// LSP state: intent queues, completion, hover, peek, symbols, diagnostics.
+    pub lsp: LspContext,
     /// Shell/terminal intent queue and cached state.
     pub shell: ShellIntents,
     /// Buffer indices removed this tick, for the binary to rekey its own
@@ -651,11 +667,6 @@ pub struct Editor {
     /// `(hook_name, scheme_fn_name)`. Core pushes here; the binary drains
     /// and calls the Scheme runtime (same pattern as `pending_scheme_eval`).
     pub pending_hook_evals: Vec<(String, String)>,
-    /// LSP diagnostics keyed by file URI. Replaced wholesale on each
-    /// `publishDiagnostics` notification (the LSP contract).
-    pub diagnostics: DiagnosticStore,
-    /// LSP server info (status + discovery metadata), keyed by language_id.
-    pub lsp_servers: HashMap<String, LspServerInfo>,
     /// Per-buffer tree-sitter state (parsed trees + cached highlight spans).
     /// Buffers without a detected language simply have no entry.
     pub syntax: crate::syntax::SyntaxMap,
@@ -665,10 +676,6 @@ pub struct Editor {
     pub syntax_reparse_pending: std::collections::HashSet<usize>,
     /// Timestamp of the last buffer edit. Used for debouncing syntax reparses.
     pub last_edit_time: std::time::Instant,
-    /// LSP completion popup state. Empty = no popup visible.
-    pub completion_items: Vec<CompletionItem>,
-    /// Index of the currently selected completion item.
-    pub completion_selected: usize,
     /// Knowledge base state: backing store, federation, watchers, and config.
     pub kb: KbContext,
 
@@ -722,6 +729,8 @@ pub struct Editor {
     /// `eval-line` / `eval-buffer` push the captured text here; the
     /// event loop drains it after dispatch (same pattern as LSP intents).
     pub pending_scheme_eval: Vec<String>,
+    /// Cached Scheme runtime statistics for introspection.
+    pub scheme_stats: SchemeStats,
     /// AI session state (provider config, tokens, streaming, conversation pair, etc.).
     pub ai: AiState,
     /// Visual bell: when set, the renderer inverts the status bar background
@@ -839,18 +848,6 @@ pub struct Editor {
     pub render_markup: bool,
     /// Show hover info in a floating popup (true) or status bar (false). Default true.
     pub lsp_hover_popup: bool,
-    /// Active hover popup (shown via K when lsp_hover_popup=true).
-    pub hover_popup: Option<HoverPopup>,
-    /// Active signature help popup (triggered on `(` and `,` in insert mode).
-    pub signature_help: Option<SignatureHelpState>,
-    /// Peek definition preview (shown via SPC l p).
-    pub peek_state: Option<PeekState>,
-    /// When true, the next GotoDefinition result goes to peek_state instead of jumping.
-    pub peek_definition_pending: bool,
-    /// Peek references state (SPC l r) — cycle through reference locations in a preview.
-    pub peek_references: Option<PeekReferencesState>,
-    /// When true, the next FindReferences result populates peek_references.
-    pub peek_references_pending: bool,
     /// Git blame overlay for current buffer.
     pub blame_overlay: Option<BlameOverlay>,
     /// Show inline diagnostic underlines on error/warning ranges. Default true.
@@ -861,27 +858,8 @@ pub struct Editor {
     pub lsp_completion: bool,
     /// Auto-trigger completion on trigger characters (e.g. `.`, `::`). Default true.
     pub auto_complete: bool,
-    /// Symbol outline popup state (SPC c o).
-    pub symbol_outline: Option<SymbolOutlineState>,
-    /// Whether a document symbol request is pending for the outline popup.
-    pub symbol_outline_pending: bool,
     /// Show breadcrumb bar (file > symbol ancestry). Default false.
     pub show_breadcrumbs: bool,
-    /// Current breadcrumb path (file > module > fn).
-    pub breadcrumbs: Option<Vec<String>>,
-    /// Cached document symbols for breadcrumb computation (from last symbol request).
-    pub cached_doc_symbols: Vec<SymbolOutlineEntry>,
-    /// Buffer index the cached symbols belong to.
-    pub cached_doc_symbols_buf: Option<usize>,
-    /// Whether a document symbol request is pending for breadcrumbs (not outline popup).
-    pub breadcrumb_symbols_pending: bool,
-    /// Active code action menu (shown via SPC c a).
-    pub code_action_menu: Option<CodeActionMenu>,
-    /// Symbol occurrence highlights from `textDocument/documentHighlight`.
-    /// Cleared on every cursor move; repopulated after idle timeout.
-    pub highlight_ranges: Vec<DocumentHighlightRange>,
-    /// Generation counter — incremented on cursor move to invalidate stale highlights.
-    pub highlight_generation: u64,
     /// Last cursor position when a documentHighlight request was sent.
     /// Used to avoid duplicate requests when the cursor hasn't moved.
     pub highlight_last_pos: Option<(usize, usize)>,
@@ -1026,20 +1004,14 @@ impl Editor {
             file_browser: None,
             command_palette: None,
             mini_dialog: None,
-            pending_lsp_requests: Vec::new(),
-            lsp_trigger_characters: std::collections::HashMap::new(),
-            pending_lsp_root_change: None,
+            lsp: LspContext::new(),
             shell: ShellIntents::default(),
             pending_buffer_removals: Vec::new(),
             hooks,
             pending_hook_evals: Vec::new(),
-            diagnostics: DiagnosticStore::default(),
-            lsp_servers: HashMap::new(),
             syntax: crate::syntax::SyntaxMap::new(),
             syntax_reparse_pending: std::collections::HashSet::new(),
             last_edit_time: std::time::Instant::now(),
-            completion_items: Vec::new(),
-            completion_selected: 0,
             last_kb_state: None,
             splash_art: Some("bat".to_string()),
             custom_splash_arts: Vec::new(),
@@ -1047,6 +1019,7 @@ impl Editor {
             splash_image_height: 20,
             splash_show_logo: true,
             pending_scheme_eval: Vec::new(),
+            scheme_stats: SchemeStats::default(),
             kb: KbContext::new(kb),
             config_dir_override: None,
             data_dir_override: None,
@@ -1117,27 +1090,12 @@ impl Editor {
             link_descriptive: true,
             render_markup: true,
             lsp_hover_popup: true,
-            hover_popup: None,
-            signature_help: None,
-            peek_state: None,
-            peek_definition_pending: false,
-            peek_references: None,
-            peek_references_pending: false,
             blame_overlay: None,
             lsp_diagnostics_inline: true,
             lsp_diagnostics_virtual_text: true,
             lsp_completion: true,
             auto_complete: true,
-            symbol_outline: None,
-            symbol_outline_pending: false,
             show_breadcrumbs: false,
-            breadcrumbs: None,
-            cached_doc_symbols: Vec::new(),
-            cached_doc_symbols_buf: None,
-            breadcrumb_symbols_pending: false,
-            code_action_menu: None,
-            highlight_ranges: Vec::new(),
-            highlight_generation: 0,
             highlight_last_pos: None,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -1896,7 +1854,8 @@ impl Editor {
     }
 
     /// Set the editor mode and fire the `mode-change` hook.
-    pub fn set_mode(&mut self, mode: Mode) {
+    /// Returns `true` if the mode was changed, `false` if blocked or already in that mode.
+    pub fn set_mode(&mut self, mode: Mode) -> bool {
         // Block non-Normal modes for buffers that only allow Normal mode
         // (e.g. Dashboard, Modules).
         if mode != Mode::Normal
@@ -1908,12 +1867,21 @@ impl Editor {
         {
             use crate::BufferMode;
             if self.active_buffer().kind.normal_mode_only() {
-                return;
+                tracing::debug!(
+                    requested = ?mode,
+                    buffer = %self.active_buffer().name,
+                    kind = ?self.active_buffer().kind,
+                    "set_mode blocked: buffer is normal_mode_only"
+                );
+                return false;
             }
         }
         if self.mode != mode {
             self.mode = mode;
             self.fire_hook("mode-change");
+            true
+        } else {
+            false
         }
     }
 

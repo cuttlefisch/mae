@@ -1162,6 +1162,27 @@ pub fn load_modules(
         editor.kb.primary.insert(node);
     }
 
+    // Auto-seed scheme:* KB nodes from live VM function registry (Phase 13h)
+    // This supplements the static scheme_api.rs nodes with dynamic data
+    // from all registered functions (stdlib + mae + user modules).
+    {
+        let fn_nodes = scheme.kb_function_nodes();
+        let mut seeded = 0;
+        for (id, title, body, tags) in fn_nodes {
+            // Only insert if the node doesn't already exist (static nodes take priority)
+            if editor.kb.primary.get(&id).is_none() {
+                let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
+                let node = mae_core::KbNode::new(id, title, mae_core::KbNodeKind::Concept, body)
+                    .with_tags(tag_refs);
+                editor.kb.primary.insert(node);
+                seeded += 1;
+            }
+        }
+        if seeded > 0 {
+            debug!(count = seeded, "scheme KB nodes auto-seeded from VM");
+        }
+    }
+
     let loaded_count = resolved
         .iter()
         .filter(|m| registry.is_loaded(&m.name))
@@ -1459,21 +1480,9 @@ pub fn dirs_candidate(rel: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    fn try_new_scheme() -> Option<SchemeRuntime> {
-        std::panic::catch_unwind(SchemeRuntime::new)
-            .ok()
-            .and_then(|r| r.ok())
-    }
-
     macro_rules! require_scheme {
         () => {
-            match try_new_scheme() {
-                Some(s) => s,
-                None => {
-                    eprintln!("SKIPPED: Steel runtime unavailable (concurrent test race)");
-                    return;
-                }
-            }
+            SchemeRuntime::new().expect("SchemeRuntime::new() should not fail")
         };
     }
 

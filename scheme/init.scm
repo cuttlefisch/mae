@@ -165,7 +165,7 @@
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ;; Insert a timestamp at the cursor.
-;; NOTE: Static date — Steel has no date/time library.
+;; NOTE: Static date — mae-scheme has no date/time library yet.
 ;; Workaround: use shell-read-output to get the real date, e.g.
 ;;   (buffer-insert (shell-read-output 0))  after sending "date +%Y-%m-%d"
 (define (insert-timestamp)

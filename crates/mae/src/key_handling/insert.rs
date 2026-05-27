@@ -30,7 +30,7 @@ pub(super) fn handle_insert_mode(
     // If the completion popup is visible, Tab/Ctrl-n/Ctrl-p navigate it.
     // When the popup is not visible, Tab falls through to keymap (which will
     // find no binding and do nothing, which is acceptable for now).
-    let popup_open = !editor.completion_items.is_empty();
+    let popup_open = !editor.lsp.completion_items.is_empty();
 
     // Ctrl-R: arm the register-prompt state. Handled before the char
     // dispatch below because `Ctrl-R` without popup would otherwise hit

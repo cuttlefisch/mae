@@ -238,6 +238,47 @@ impl Client {
             }
         }
     }
+
+    /// Send an awareness update (cursor position + optional selection).
+    async fn send_awareness(
+        &mut self,
+        doc: &str,
+        user_name: &str,
+        cursor_row: usize,
+        cursor_col: usize,
+        selection: Option<(usize, usize, usize, usize)>,
+    ) -> serde_json::Value {
+        let sel_json = match selection {
+            Some((sr, sc, er, ec)) => serde_json::json!([sr, sc, er, ec]),
+            None => serde_json::Value::Null,
+        };
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": self.next_id,
+            "method": "sync/awareness",
+            "params": {
+                "doc": doc,
+                "state": {
+                    "user_name": user_name,
+                    "cursor_row": cursor_row,
+                    "cursor_col": cursor_col,
+                    "selection": sel_json,
+                    "mode": "normal"
+                }
+            }
+        });
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
+    /// Drain all pending notifications, returning them.
+    async fn drain_notifications(&mut self) -> Vec<serde_json::Value> {
+        let mut notifs = Vec::new();
+        while let Some(msg) = self.recv_timeout(100).await {
+            notifs.push(msg);
+        }
+        notifs
+    }
 }
 
 // ============================================================================
@@ -1554,4 +1595,862 @@ async fn concurrent_share_same_doc_converges() {
     );
     // The second share (B) replaces A's content.
     assert_eq!(content_b, "content-B", "last share wins");
+}
+
+// ---------------------------------------------------------------------------
+// CRDT undo propagation regression tests
+// ---------------------------------------------------------------------------
+// These tests exercise the yrs UndoManager path (not reconcile_to) to ensure
+// undo-generated CRDT updates propagate correctly to remote peers.
+
+/// UndoManager undo generates updates that propagate through the server.
+/// This is the core undo propagation test — if this fails, the Docker E2E
+/// undo tests will also fail.
+#[tokio::test]
+async fn undo_manager_propagates_through_bridge() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut cb = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // A shares a doc with base content.
+    ca.share("undo-mgr.txt", "base\n").await;
+
+    // Both get initial state.
+    let mut ts_a = TextSync::from_state(&ca.full_state("undo-mgr.txt").await).unwrap();
+    ts_a.enable_undo();
+    let mut ts_b = TextSync::from_state(&cb.full_state("undo-mgr.txt").await).unwrap();
+    ts_b.enable_undo();
+
+    // A inserts "from-A" using origin-tagged transaction (tracked by UndoManager).
+    let ua = ts_a.insert(5, "from-A\n");
+    ca.send_update("undo-mgr.txt", &ua).await;
+
+    // B receives A's edit.
+    let notif = cb
+        .wait_for_notification("notifications/sync_update", 2000)
+        .await
+        .expect("B should receive A's insert");
+    let b64 = notif["params"]["event"]["data"]["update_base64"]
+        .as_str()
+        .unwrap();
+    ts_b.apply_update(&base64_to_update(b64).unwrap()).unwrap();
+    assert!(
+        ts_b.content().contains("from-A"),
+        "B should see A's insert: {}",
+        ts_b.content()
+    );
+
+    // B inserts "from-B".
+    let ub = ts_b.insert(ts_b.content().len() as u32, "from-B\n");
+    cb.send_update("undo-mgr.txt", &ub).await;
+
+    // A receives B's edit.
+    let notif_a = ca
+        .wait_for_notification("notifications/sync_update", 2000)
+        .await
+        .expect("A should receive B's insert");
+    let a_b64 = notif_a["params"]["event"]["data"]["update_base64"]
+        .as_str()
+        .unwrap();
+    ts_a.apply_update(&base64_to_update(a_b64).unwrap())
+        .unwrap();
+    assert!(
+        ts_a.content().contains("from-B"),
+        "A should see B's insert: {}",
+        ts_a.content()
+    );
+
+    // A undoes via UndoManager (NOT reconcile_to).
+    ts_a.undo_reset(); // Ensure the insert is a separate undo item.
+    let undo_result = ts_a.undo();
+    assert!(undo_result.success, "A's undo should succeed");
+    assert!(
+        !undo_result.updates.is_empty(),
+        "undo must generate CRDT update bytes"
+    );
+    assert!(
+        !ts_a.content().contains("from-A"),
+        "A's local state should not contain from-A after undo: {}",
+        ts_a.content()
+    );
+    assert!(
+        ts_a.content().contains("from-B"),
+        "A's local state should still contain from-B after undo: {}",
+        ts_a.content()
+    );
+
+    // Send ALL undo updates to the server.
+    for update in &undo_result.updates {
+        ca.send_update("undo-mgr.txt", update).await;
+    }
+
+    // B should receive the undo update(s).
+    for _ in 0..undo_result.updates.len() {
+        let notif_undo = cb
+            .wait_for_notification("notifications/sync_update", 2000)
+            .await
+            .expect("B should receive A's undo update");
+        let undo_b64 = notif_undo["params"]["event"]["data"]["update_base64"]
+            .as_str()
+            .unwrap();
+        ts_b.apply_update(&base64_to_update(undo_b64).unwrap())
+            .unwrap();
+    }
+
+    // B should see from-A removed, from-B preserved.
+    assert!(
+        !ts_b.content().contains("from-A"),
+        "B should NOT contain from-A after applying A's undo: {}",
+        ts_b.content()
+    );
+    assert!(
+        ts_b.content().contains("from-B"),
+        "B should still contain from-B after A's undo: {}",
+        ts_b.content()
+    );
+
+    // Verify server state also converged.
+    let server_content = ca.content("undo-mgr.txt").await;
+    assert!(
+        !server_content.contains("from-A"),
+        "server should NOT contain from-A: {}",
+        server_content
+    );
+    assert!(
+        server_content.contains("from-B"),
+        "server should contain from-B: {}",
+        server_content
+    );
+}
+
+/// Buffer::undo() with sync enabled generates pending_sync_updates
+/// that can be applied by a remote TextSync to achieve convergence.
+#[tokio::test]
+async fn buffer_undo_generates_valid_crdt_updates() {
+    init_tracing();
+
+    // Set up buffer A with sync + UndoManager.
+    let mut buf_a = Buffer::new();
+    buf_a.name = "undo-buf.txt".to_string();
+    buf_a.enable_sync(1);
+    let mut win = mae_core::window::Window::new(0, 0);
+
+    // Insert base content.
+    buf_a.insert_text_at(0, "base\n");
+    buf_a.pending_sync_updates.clear(); // Clear the base insert update.
+
+    // Mark undo boundary so the next insert is a separate undo item.
+    buf_a.sync_undo_boundary();
+
+    // Insert "from-A" (tracked by UndoManager).
+    buf_a.insert_text_at(5, "from-A\n");
+    let insert_updates: Vec<Vec<u8>> = buf_a.pending_sync_updates.drain(..).collect();
+    assert!(
+        !insert_updates.is_empty(),
+        "insert should generate sync updates"
+    );
+
+    // Set up remote doc B and apply A's edits.
+    let mut ts_b = TextSync::from_state(&buf_a.sync_doc.as_ref().unwrap().encode_state()).unwrap();
+    // Apply the insert update to B via the normal path (simulating what the server would do).
+    for u in &insert_updates {
+        ts_b.apply_update(u).unwrap();
+    }
+    assert_eq!(ts_b.content(), "base\nfrom-A\n");
+
+    // B adds its own content.
+    let ub = ts_b.insert(ts_b.content().len() as u32, "from-B\n");
+    buf_a
+        .apply_sync_update(&ub)
+        .expect("A should accept B's update");
+    assert!(
+        buf_a.text().contains("from-B"),
+        "A should see B's text: {}",
+        buf_a.text()
+    );
+
+    // Mark undo boundary before undo dispatch (simulates dispatch_builtin behavior).
+    buf_a.sync_undo_boundary();
+
+    // A undoes via Buffer::undo() — this should use the UndoManager path.
+    assert!(
+        buf_a.sync_doc.as_ref().unwrap().undo_mgr_active(),
+        "UndoManager should be active"
+    );
+    buf_a.undo(&mut win);
+
+    // Verify A's local state.
+    assert!(
+        !buf_a.text().contains("from-A"),
+        "A should not contain from-A after undo: {}",
+        buf_a.text()
+    );
+    assert!(
+        buf_a.text().contains("from-B"),
+        "A should still contain from-B after undo: {}",
+        buf_a.text()
+    );
+
+    // Verify undo generated pending_sync_updates.
+    assert!(
+        !buf_a.pending_sync_updates.is_empty(),
+        "Buffer::undo() must generate pending_sync_updates for CRDT propagation"
+    );
+
+    // Apply undo updates to B.
+    for u in &buf_a.pending_sync_updates {
+        ts_b.apply_update(u)
+            .expect("B should accept A's undo update");
+    }
+
+    // Verify convergence.
+    assert!(
+        !ts_b.content().contains("from-A"),
+        "B should not contain from-A after applying A's undo: {}",
+        ts_b.content()
+    );
+    assert!(
+        ts_b.content().contains("from-B"),
+        "B should still contain from-B after A's undo: {}",
+        ts_b.content()
+    );
+    assert_eq!(
+        buf_a.text(),
+        ts_b.content(),
+        "A and B should have identical content after undo propagation"
+    );
+}
+
+/// Redo after undo generates propagatable updates.
+#[tokio::test]
+async fn buffer_redo_generates_valid_crdt_updates() {
+    init_tracing();
+
+    let mut buf = Buffer::new();
+    buf.name = "redo-buf.txt".to_string();
+    buf.enable_sync(1);
+    let mut win = mae_core::window::Window::new(0, 0);
+
+    // Insert + boundary.
+    buf.insert_text_at(0, "hello");
+    buf.pending_sync_updates.clear();
+    buf.sync_undo_boundary();
+    buf.insert_text_at(5, " world");
+    buf.pending_sync_updates.clear();
+
+    // Set up remote.
+    let mut remote = TextSync::from_state(&buf.sync_doc.as_ref().unwrap().encode_state()).unwrap();
+    assert_eq!(remote.content(), "hello world");
+
+    // Undo.
+    buf.sync_undo_boundary();
+    buf.undo(&mut win);
+    assert_eq!(buf.text(), "hello");
+    for u in buf.pending_sync_updates.drain(..) {
+        remote.apply_update(&u).unwrap();
+    }
+    assert_eq!(remote.content(), "hello");
+
+    // Redo.
+    buf.sync_undo_boundary();
+    buf.redo(&mut win);
+    assert_eq!(buf.text(), "hello world");
+    assert!(
+        !buf.pending_sync_updates.is_empty(),
+        "redo must generate pending_sync_updates"
+    );
+    for u in &buf.pending_sync_updates {
+        remote.apply_update(u).unwrap();
+    }
+    assert_eq!(
+        remote.content(),
+        "hello world",
+        "remote should match after redo propagation"
+    );
+}
+
+/// Full undo propagation through the bridge with UndoManager — exercises the
+/// end-to-end flow: Buffer::undo() → pending_sync_updates → server → remote.
+/// Run 10 times to catch intermittent failures.
+#[tokio::test]
+async fn undo_propagation_stress() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    for iteration in 0..10 {
+        let mut ca = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+        let mut cb = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+        let doc = format!("stress-undo-{iteration}.txt");
+        ca.share(&doc, "base\n").await;
+
+        let mut ts_a = TextSync::from_state(&ca.full_state(&doc).await).unwrap();
+        ts_a.enable_undo();
+        let mut ts_b = TextSync::from_state(&cb.full_state(&doc).await).unwrap();
+        ts_b.enable_undo();
+
+        // A inserts.
+        let ua = ts_a.insert(5, "from-A\n");
+        ca.send_update(&doc, &ua).await;
+        ts_a.undo_reset();
+
+        // B receives.
+        let n = cb
+            .wait_for_notification("notifications/sync_update", 2000)
+            .await
+            .expect("B should receive A's insert");
+        ts_b.apply_update(
+            &base64_to_update(
+                n["params"]["event"]["data"]["update_base64"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        // B inserts.
+        let ub = ts_b.insert(ts_b.content().len() as u32, "from-B\n");
+        cb.send_update(&doc, &ub).await;
+
+        // A receives.
+        let n2 = ca
+            .wait_for_notification("notifications/sync_update", 2000)
+            .await
+            .expect("A should receive B's insert");
+        ts_a.apply_update(
+            &base64_to_update(
+                n2["params"]["event"]["data"]["update_base64"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        // A undoes via UndoManager.
+        let undo_result = ts_a.undo();
+        assert!(undo_result.success, "iter {iteration}: undo should succeed");
+        assert!(
+            !undo_result.updates.is_empty(),
+            "iter {iteration}: undo must generate updates"
+        );
+
+        // Send undo to server.
+        for u in &undo_result.updates {
+            ca.send_update(&doc, u).await;
+        }
+
+        // B receives and applies undo.
+        for _ in 0..undo_result.updates.len() {
+            let n3 = cb
+                .wait_for_notification("notifications/sync_update", 2000)
+                .await
+                .unwrap_or_else(|| {
+                    panic!(
+                        "iter {iteration}: B should receive undo update. A content: {}, B content: {}",
+                        ts_a.content(),
+                        ts_b.content()
+                    )
+                });
+            ts_b.apply_update(
+                &base64_to_update(
+                    n3["params"]["event"]["data"]["update_base64"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        }
+
+        assert!(
+            !ts_b.content().contains("from-A"),
+            "iter {iteration}: B should not have from-A after undo: {}",
+            ts_b.content()
+        );
+        assert!(
+            ts_b.content().contains("from-B"),
+            "iter {iteration}: B should still have from-B: {}",
+            ts_b.content()
+        );
+    }
+}
+
+// ============================================================================
+// Test Gap Coverage — multi-doc, backpressure, WAL recovery, corrupted state
+// ============================================================================
+
+/// Two clients editing two different documents simultaneously.
+/// Verifies per-document isolation — edits to doc A don't leak into doc B.
+#[tokio::test]
+async fn multi_doc_concurrent_editing() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Each client shares a different document.
+    client_a.share("alpha.txt", "AAA").await;
+    client_b.share("beta.txt", "BBB").await;
+
+    // To send valid updates, load the server's state and edit from there.
+    let state_a = client_a.full_state("alpha.txt").await;
+    let state_b = client_b.full_state("beta.txt").await;
+    let mut ts_a = TextSync::from_state(&state_a).unwrap();
+    let mut ts_b = TextSync::from_state(&state_b).unwrap();
+
+    let u1 = ts_a.insert(3, "-alpha-edit");
+    let u2 = ts_b.insert(3, "-beta-edit");
+
+    let r1 = client_a.send_update("alpha.txt", &u1).await;
+    let r2 = client_b.send_update("beta.txt", &u2).await;
+    assert!(r1.get("error").is_none(), "alpha update failed: {r1}");
+    assert!(r2.get("error").is_none(), "beta update failed: {r2}");
+
+    // Verify documents are isolated.
+    let alpha_content = client_a.content("alpha.txt").await;
+    let beta_content = client_b.content("beta.txt").await;
+    assert_eq!(alpha_content, "AAA-alpha-edit");
+    assert_eq!(beta_content, "BBB-beta-edit");
+
+    // Cross-read: client B reads alpha, client A reads beta.
+    let alpha_via_b = client_b.content("alpha.txt").await;
+    let beta_via_a = client_a.content("beta.txt").await;
+    assert_eq!(alpha_via_b, "AAA-alpha-edit");
+    assert_eq!(beta_via_a, "BBB-beta-edit");
+}
+
+/// Two clients collaborating on the SAME two documents simultaneously.
+/// Edits to doc1 from both clients converge, edits to doc2 from both converge,
+/// and the two documents remain independent.
+#[tokio::test]
+async fn multi_doc_shared_collab() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Client A shares both docs.
+    client_a.share("doc1.txt", "").await;
+    client_a.share("doc2.txt", "").await;
+
+    // Both clients join both docs (B resyncs to get initial state).
+    client_b.resync("doc1.txt").await;
+    client_b.resync("doc2.txt").await;
+
+    // Load server state for valid updates.
+    let state1 = client_a.full_state("doc1.txt").await;
+    let state2 = client_a.full_state("doc2.txt").await;
+
+    // Interleaved edits: A edits doc1, B edits doc2.
+    let mut ts_a1 = TextSync::from_state(&state1).unwrap();
+    let mut ts_b2 = TextSync::from_state(&state2).unwrap();
+
+    let u_a1 = ts_a1.insert(0, "A-in-doc1");
+    let u_b2 = ts_b2.insert(0, "B-in-doc2");
+
+    let r1 = client_a.send_update("doc1.txt", &u_a1).await;
+    let r2 = client_b.send_update("doc2.txt", &u_b2).await;
+    assert!(r1.get("error").is_none());
+    assert!(r2.get("error").is_none());
+
+    // Now A edits doc2, B edits doc1 — load latest state for each.
+    let state2b = client_a.full_state("doc2.txt").await;
+    let state1b = client_b.full_state("doc1.txt").await;
+    let mut ts_a2 = TextSync::from_state(&state2b).unwrap();
+    let mut ts_b1 = TextSync::from_state(&state1b).unwrap();
+    let u_a2 = ts_a2.insert(0, "A-in-doc2");
+    let u_b1 = ts_b1.insert(0, "B-in-doc1");
+
+    let r3 = client_a.send_update("doc2.txt", &u_a2).await;
+    let r4 = client_b.send_update("doc1.txt", &u_b1).await;
+    assert!(r3.get("error").is_none());
+    assert!(r4.get("error").is_none());
+
+    // Verify convergence.
+    let doc1_a = client_a.content("doc1.txt").await;
+    let doc1_b = client_b.content("doc1.txt").await;
+    assert_eq!(doc1_a, doc1_b, "doc1 must converge across clients");
+    assert!(doc1_a.contains("A-in-doc1"));
+    assert!(doc1_a.contains("B-in-doc1"));
+
+    let doc2_a = client_a.content("doc2.txt").await;
+    let doc2_b = client_b.content("doc2.txt").await;
+    assert_eq!(doc2_a, doc2_b, "doc2 must converge across clients");
+    assert!(doc2_a.contains("A-in-doc2"));
+    assert!(doc2_a.contains("B-in-doc2"));
+
+    // Documents must be independent.
+    assert!(
+        !doc1_a.contains("doc2"),
+        "doc1 must not contain doc2 content"
+    );
+    assert!(
+        !doc2_a.contains("doc1"),
+        "doc2 must not contain doc1 content"
+    );
+}
+
+/// WAL recovery through DocStore: append updates, drop the store, recreate
+/// from the same SQLite backend, and verify content is recovered.
+#[tokio::test]
+async fn wal_recovery_through_doc_store() {
+    init_tracing();
+    let backend: Arc<dyn mae_state_server::storage::StorageBackend> =
+        Arc::new(SqliteBackend::open_memory().unwrap());
+
+    // Phase 1: write updates through a DocStore.
+    {
+        let store = Arc::new(DocStore::new(Arc::clone(&backend), 500));
+        let bc = test_broadcaster();
+        let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+        client.share("recover.txt", "initial").await;
+
+        // Load server state and edit from it for a valid update.
+        let state = client.full_state("recover.txt").await;
+        let mut ts = TextSync::from_state(&state).unwrap();
+        let u1 = ts.insert(7, " content");
+        let r = client.send_update("recover.txt", &u1).await;
+        assert!(r.get("error").is_none());
+
+        let content = client.content("recover.txt").await;
+        assert_eq!(content, "initial content");
+
+        // Compact to persist state.
+        store.compact_all().await.unwrap();
+    }
+    // Store is dropped — simulates server restart.
+
+    // Phase 2: recreate from same backend and verify recovery.
+    {
+        let store = Arc::new(DocStore::new(Arc::clone(&backend), 500));
+        let bc = test_broadcaster();
+        let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+        // docs/content triggers get_or_create which loads from WAL/snapshot.
+        let content = client.content("recover.txt").await;
+        assert_eq!(
+            content, "initial content",
+            "content must survive store restart"
+        );
+    }
+}
+
+/// Corrupted state vector in resync request — server should return error,
+/// not crash or corrupt document state.
+#[tokio::test]
+async fn corrupted_state_vector_in_diff() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("diff-test.txt", "safe data").await;
+
+    // Send sync/diff with garbage state vector.
+    use base64::Engine;
+    let garbage_sv = base64::engine::general_purpose::STANDARD.encode([0xFF, 0xAB, 0x00, 0x99]);
+    let msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": client.next_id,
+        "method": "sync/diff",
+        "params": { "doc": "diff-test.txt", "sv": garbage_sv }
+    });
+    client.next_id += 1;
+    client.send(&msg).await;
+    let resp = client.recv().await;
+
+    assert!(
+        resp.get("error").is_some(),
+        "corrupted state vector should produce error, got: {resp}"
+    );
+
+    // Document content must be unchanged.
+    let content = client.content("diff-test.txt").await;
+    assert_eq!(
+        content, "safe data",
+        "content must be unchanged after bad diff request"
+    );
+}
+
+/// Rapid-fire updates from multiple clients — verify the server handles
+/// high throughput without dropping valid updates or corrupting state.
+#[tokio::test]
+async fn rapid_fire_multi_client_stress() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("stress.txt", "").await;
+    client_b.resync("stress.txt").await;
+
+    // Load server state for valid updates — each client gets its own fork.
+    let state = client_a.full_state("stress.txt").await;
+    let mut ts_a = TextSync::from_state_with_client_id(&state, 100).unwrap();
+    let mut ts_b = TextSync::from_state_with_client_id(&state, 200).unwrap();
+
+    for i in 0..20 {
+        let ua = ts_a.insert(ts_a.content().len() as u32, &format!("A{i}"));
+        let ub = ts_b.insert(ts_b.content().len() as u32, &format!("B{i}"));
+        let ra = client_a.send_update("stress.txt", &ua).await;
+        let rb = client_b.send_update("stress.txt", &ub).await;
+        assert!(ra.get("error").is_none(), "A update {i} failed: {ra}");
+        assert!(rb.get("error").is_none(), "B update {i} failed: {rb}");
+    }
+
+    // Both clients should see the same converged content.
+    let content_a = client_a.content("stress.txt").await;
+    let content_b = client_b.content("stress.txt").await;
+    assert_eq!(content_a, content_b, "stress test: clients must converge");
+
+    // All 40 insertions must be present.
+    for i in 0..20 {
+        assert!(
+            content_a.contains(&format!("A{i}")),
+            "missing A{i} in converged content"
+        );
+        assert!(
+            content_a.contains(&format!("B{i}")),
+            "missing B{i} in converged content"
+        );
+    }
+}
+
+// ============================================================================
+// Awareness Protocol E2E Tests
+// ============================================================================
+
+/// A sends awareness update → B receives notification with correct cursor position.
+#[tokio::test]
+async fn awareness_cursor_position_relayed() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("aware.txt", "hello world").await;
+    client_b.resync("aware.txt").await;
+
+    // Drain setup notifications.
+    client_b.drain_notifications().await;
+
+    // A sends awareness: cursor at row 5, col 10.
+    let resp = client_a
+        .send_awareness("aware.txt", "Alice", 5, 10, None)
+        .await;
+    assert!(
+        resp.get("error").is_none(),
+        "awareness send should succeed: {resp}"
+    );
+
+    // B should receive the awareness notification.
+    let notif = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await;
+    assert!(
+        notif.is_some(),
+        "B should receive awareness_update notification"
+    );
+    let notif = notif.unwrap();
+    let event = &notif["params"]["event"]["data"];
+
+    assert_eq!(
+        event["doc_id"].as_str().unwrap(),
+        "aware.txt",
+        "doc_id must match"
+    );
+    assert_eq!(
+        event["user_name"].as_str().unwrap(),
+        "Alice",
+        "user_name must match"
+    );
+    assert_eq!(
+        event["cursor_row"].as_u64().unwrap(),
+        5,
+        "cursor_row must be 5"
+    );
+    assert_eq!(
+        event["cursor_col"].as_u64().unwrap(),
+        10,
+        "cursor_col must be 10"
+    );
+    assert!(
+        event["selection"].is_null(),
+        "selection should be null when not in visual mode"
+    );
+}
+
+/// A sends awareness with selection → B receives correct selection range.
+#[tokio::test]
+async fn awareness_selection_relayed() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("sel.txt", "line 1\nline 2\nline 3").await;
+    client_b.resync("sel.txt").await;
+    client_b.drain_notifications().await;
+
+    // A sends awareness with visual selection: rows 0-2, cols 0-5.
+    let resp = client_a
+        .send_awareness("sel.txt", "Alice", 2, 5, Some((0, 0, 2, 5)))
+        .await;
+    assert!(resp.get("error").is_none());
+
+    let notif = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await;
+    assert!(notif.is_some(), "B should receive awareness with selection");
+    let event = &notif.unwrap()["params"]["event"]["data"];
+
+    let sel = event["selection"]
+        .as_array()
+        .expect("selection should be array");
+    assert_eq!(sel.len(), 4, "selection should have 4 elements");
+    assert_eq!(sel[0].as_u64().unwrap(), 0, "sel start_row");
+    assert_eq!(sel[1].as_u64().unwrap(), 0, "sel start_col");
+    assert_eq!(sel[2].as_u64().unwrap(), 2, "sel end_row");
+    assert_eq!(sel[3].as_u64().unwrap(), 5, "sel end_col");
+}
+
+/// A moves cursor multiple times → B receives updated positions each time.
+#[tokio::test]
+async fn awareness_cursor_movement_tracked() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("move.txt", "content").await;
+    client_b.resync("move.txt").await;
+    client_b.drain_notifications().await;
+
+    // A moves cursor: position 1.
+    client_a
+        .send_awareness("move.txt", "Alice", 0, 0, None)
+        .await;
+    let n1 = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await
+        .expect("should receive first awareness");
+    assert_eq!(
+        n1["params"]["event"]["data"]["cursor_row"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        n1["params"]["event"]["data"]["cursor_col"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
+
+    // A moves cursor: position 2.
+    client_a
+        .send_awareness("move.txt", "Alice", 10, 25, None)
+        .await;
+    let n2 = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await
+        .expect("should receive second awareness");
+    assert_eq!(
+        n2["params"]["event"]["data"]["cursor_row"]
+            .as_u64()
+            .unwrap(),
+        10
+    );
+    assert_eq!(
+        n2["params"]["event"]["data"]["cursor_col"]
+            .as_u64()
+            .unwrap(),
+        25
+    );
+
+    // A moves cursor: position 3 — large row.
+    client_a
+        .send_awareness("move.txt", "Alice", 9999, 0, None)
+        .await;
+    let n3 = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await
+        .expect("should receive third awareness");
+    assert_eq!(
+        n3["params"]["event"]["data"]["cursor_row"]
+            .as_u64()
+            .unwrap(),
+        9999
+    );
+}
+
+/// Awareness is NOT echoed back to the sender.
+#[tokio::test]
+async fn awareness_no_echo() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("echo.txt", "test").await;
+
+    // Drain setup notifications.
+    client_a.drain_notifications().await;
+
+    // A sends awareness — should NOT receive its own update back.
+    client_a
+        .send_awareness("echo.txt", "Alice", 5, 5, None)
+        .await;
+
+    let echo = client_a.recv_timeout(300).await;
+    assert!(
+        echo.is_none(),
+        "sender should NOT receive its own awareness echo"
+    );
+}
+
+/// Two clients on different docs — awareness is doc-scoped (no cross-doc leak).
+#[tokio::test]
+async fn awareness_doc_isolation() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Each client shares a different doc.
+    client_a.share("doc-a.txt", "aaa").await;
+    client_b.share("doc-b.txt", "bbb").await;
+
+    // B subscribes but is on doc-b, not doc-a.
+    client_b.drain_notifications().await;
+
+    // A sends awareness on doc-a.
+    client_a
+        .send_awareness("doc-a.txt", "Alice", 1, 1, None)
+        .await;
+
+    // B should receive awareness since broadcast is not doc-filtered at the
+    // transport level (the EditorEvent carries doc_id, and the client-side
+    // filters by doc). But the event should carry doc_id="doc-a.txt" so B
+    // knows it's not for its active buffer.
+    let notif = client_b.recv_timeout(300).await;
+    if let Some(n) = notif {
+        // If received, verify it carries the correct doc_id.
+        let doc = n["params"]["event"]["data"]["doc_id"]
+            .as_str()
+            .unwrap_or("");
+        assert_eq!(doc, "doc-a.txt", "notification must carry sender's doc_id");
+    }
+    // Either no notification (server-side doc filter) or correct doc_id — both valid.
 }

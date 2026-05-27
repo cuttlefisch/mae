@@ -313,7 +313,7 @@ MAE's **SPC leader** gives fast access to every subsystem.\n\n\
 
 const TUTORIAL_MAE_EXTENDING: &str = "\
 # Extending MAE\n\n\
-MAE is extensible via **R7RS Scheme** (the Steel runtime).\n\n\
+MAE is extensible via **R7RS Scheme** (the mae-scheme runtime).\n\n\
 ## The REPL\n\
 - `:eval (+ 1 2)` — evaluate an expression (result shown in status bar)\n\
 - `SPC e e` — evaluate current line\n\

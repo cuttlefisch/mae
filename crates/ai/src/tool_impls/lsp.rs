@@ -43,7 +43,7 @@ pub fn execute_lsp_diagnostics(editor: &Editor, args: &Value) -> Result<String, 
 
     let mut files_json: Vec<Value> = Vec::new();
     let mut entries: Vec<(&String, &Vec<mae_core::Diagnostic>)> =
-        editor.diagnostics.iter().collect();
+        editor.lsp.diagnostics.iter().collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
 
     for (uri, diags) in entries {
@@ -86,7 +86,7 @@ pub fn execute_lsp_diagnostics(editor: &Editor, args: &Value) -> Result<String, 
 
     // Global severity counts are always across the whole store, matching
     // `:diagnostics`. The file list above is already scope-filtered.
-    let (e, w, i, h) = editor.diagnostics.severity_counts();
+    let (e, w, i, h) = editor.lsp.diagnostics.severity_counts();
     let counts = json!({
         "error": e,
         "warning": w,
@@ -154,7 +154,7 @@ fn resolve_lsp_context(
 /// Queue a `textDocument/definition` request for the AI.
 pub fn execute_lsp_definition(editor: &mut Editor, args: &Value) -> Result<(), String> {
     let (uri, language_id, line, character) = resolve_lsp_context(editor, args)?;
-    editor.pending_lsp_requests.push(LspIntent::GotoDefinition {
+    editor.lsp.pending_requests.push(LspIntent::GotoDefinition {
         uri,
         language_id,
         line,
@@ -166,7 +166,7 @@ pub fn execute_lsp_definition(editor: &mut Editor, args: &Value) -> Result<(), S
 /// Queue a `textDocument/references` request for the AI.
 pub fn execute_lsp_references(editor: &mut Editor, args: &Value) -> Result<(), String> {
     let (uri, language_id, line, character) = resolve_lsp_context(editor, args)?;
-    editor.pending_lsp_requests.push(LspIntent::FindReferences {
+    editor.lsp.pending_requests.push(LspIntent::FindReferences {
         uri,
         language_id,
         line,
@@ -179,7 +179,7 @@ pub fn execute_lsp_references(editor: &mut Editor, args: &Value) -> Result<(), S
 /// Queue a `textDocument/hover` request for the AI.
 pub fn execute_lsp_hover(editor: &mut Editor, args: &Value) -> Result<(), String> {
     let (uri, language_id, line, character) = resolve_lsp_context(editor, args)?;
-    editor.pending_lsp_requests.push(LspIntent::Hover {
+    editor.lsp.pending_requests.push(LspIntent::Hover {
         uri,
         language_id,
         line,
@@ -199,7 +199,8 @@ pub fn execute_lsp_workspace_symbol(editor: &mut Editor, args: &Value) -> Result
         .and_then(|v| v.as_str())
         .ok_or("Missing 'language_id' argument")?;
     editor
-        .pending_lsp_requests
+        .lsp
+        .pending_requests
         .push(LspIntent::WorkspaceSymbol {
             language_id: language_id.to_string(),
             query: query.to_string(),
@@ -218,7 +219,8 @@ pub fn execute_lsp_document_symbols(editor: &mut Editor, args: &Value) -> Result
         language_id_from_path(path).ok_or("No language server configured for this file type")?;
     let uri = path_to_uri(path);
     editor
-        .pending_lsp_requests
+        .lsp
+        .pending_requests
         .push(LspIntent::DocumentSymbols { uri, language_id });
     Ok(())
 }
@@ -269,11 +271,11 @@ mod tests {
     #[test]
     fn diagnostics_buffer_scope_filters_to_active() {
         let mut ed = ed_with_file("/tmp/a.rs");
-        ed.diagnostics.set(
+        ed.lsp.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![diag(0, 0, DiagnosticSeverity::Error, "bad")],
         );
-        ed.diagnostics.set(
+        ed.lsp.diagnostics.set(
             "file:///tmp/other.rs".into(),
             vec![diag(1, 2, DiagnosticSeverity::Warning, "meh")],
         );
@@ -292,11 +294,11 @@ mod tests {
     #[test]
     fn diagnostics_all_scope_includes_every_file() {
         let mut ed = ed_with_file("/tmp/a.rs");
-        ed.diagnostics.set(
+        ed.lsp.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![diag(0, 0, DiagnosticSeverity::Error, "bad")],
         );
-        ed.diagnostics.set(
+        ed.lsp.diagnostics.set(
             "file:///tmp/other.rs".into(),
             vec![diag(1, 2, DiagnosticSeverity::Hint, "nit")],
         );
@@ -309,7 +311,7 @@ mod tests {
     #[test]
     fn diagnostics_positions_are_one_indexed() {
         let mut ed = ed_with_file("/tmp/a.rs");
-        ed.diagnostics.set(
+        ed.lsp.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![diag(5, 7, DiagnosticSeverity::Error, "x")],
         );
@@ -323,7 +325,7 @@ mod tests {
     #[test]
     fn diagnostics_buffer_without_file_returns_none_scope() {
         let mut ed = Editor::new();
-        ed.diagnostics.set(
+        ed.lsp.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![diag(0, 0, DiagnosticSeverity::Error, "bad")],
         );
@@ -337,7 +339,7 @@ mod tests {
     #[test]
     fn diagnostics_preserves_source_and_code() {
         let mut ed = ed_with_file("/tmp/a.rs");
-        ed.diagnostics.set(
+        ed.lsp.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![Diagnostic {
                 line: 0,
@@ -364,9 +366,9 @@ mod tests {
     fn lsp_definition_queues_intent() {
         let mut ed = ed_with_file("/tmp/a.rs");
         execute_lsp_definition(&mut ed, &json!({})).unwrap();
-        assert_eq!(ed.pending_lsp_requests.len(), 1);
+        assert_eq!(ed.lsp.pending_requests.len(), 1);
         assert!(matches!(
-            ed.pending_lsp_requests[0],
+            ed.lsp.pending_requests[0],
             LspIntent::GotoDefinition { .. }
         ));
     }
@@ -375,7 +377,7 @@ mod tests {
     fn lsp_definition_with_position_override() {
         let mut ed = ed_with_file("/tmp/a.rs");
         execute_lsp_definition(&mut ed, &json!({"line": 5, "character": 10})).unwrap();
-        match &ed.pending_lsp_requests[0] {
+        match &ed.lsp.pending_requests[0] {
             LspIntent::GotoDefinition {
                 line, character, ..
             } => {
@@ -406,9 +408,9 @@ mod tests {
     fn lsp_references_queues_intent() {
         let mut ed = ed_with_file("/tmp/a.rs");
         execute_lsp_references(&mut ed, &json!({})).unwrap();
-        assert_eq!(ed.pending_lsp_requests.len(), 1);
+        assert_eq!(ed.lsp.pending_requests.len(), 1);
         assert!(matches!(
-            ed.pending_lsp_requests[0],
+            ed.lsp.pending_requests[0],
             LspIntent::FindReferences { .. }
         ));
     }
@@ -417,9 +419,9 @@ mod tests {
     fn lsp_hover_queues_intent() {
         let mut ed = ed_with_file("/tmp/a.rs");
         execute_lsp_hover(&mut ed, &json!({})).unwrap();
-        assert_eq!(ed.pending_lsp_requests.len(), 1);
+        assert_eq!(ed.lsp.pending_requests.len(), 1);
         assert!(matches!(
-            ed.pending_lsp_requests[0],
+            ed.lsp.pending_requests[0],
             LspIntent::Hover { .. }
         ));
     }
@@ -434,7 +436,7 @@ mod tests {
         ed.buffers.push(b);
 
         execute_lsp_definition(&mut ed, &json!({"buffer_name": "other"})).unwrap();
-        match &ed.pending_lsp_requests[0] {
+        match &ed.lsp.pending_requests[0] {
             LspIntent::GotoDefinition { language_id, .. } => {
                 assert_eq!(language_id, "python");
             }
@@ -452,8 +454,8 @@ mod tests {
             &json!({"query": "MyStruct", "language_id": "rust"}),
         )
         .unwrap();
-        assert_eq!(ed.pending_lsp_requests.len(), 1);
-        match &ed.pending_lsp_requests[0] {
+        assert_eq!(ed.lsp.pending_requests.len(), 1);
+        match &ed.lsp.pending_requests[0] {
             LspIntent::WorkspaceSymbol { query, language_id } => {
                 assert_eq!(query, "MyStruct");
                 assert_eq!(language_id, "rust");
@@ -482,8 +484,8 @@ mod tests {
     fn document_symbols_queues_intent() {
         let mut ed = ed_with_file("/tmp/a.rs");
         execute_lsp_document_symbols(&mut ed, &json!({})).unwrap();
-        assert_eq!(ed.pending_lsp_requests.len(), 1);
-        match &ed.pending_lsp_requests[0] {
+        assert_eq!(ed.lsp.pending_requests.len(), 1);
+        match &ed.lsp.pending_requests[0] {
             LspIntent::DocumentSymbols { uri, language_id } => {
                 assert!(uri.contains("/tmp/a.rs"));
                 assert_eq!(language_id, "rust");

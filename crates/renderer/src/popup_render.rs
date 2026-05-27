@@ -26,7 +26,7 @@ fn centered_popup_rect(area: Rect, editor: &Editor) -> Rect {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn render_completion_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
-    let items = &editor.completion_items;
+    let items = &editor.lsp.completion_items;
     if items.is_empty() {
         return;
     }
@@ -87,7 +87,7 @@ pub(crate) fn render_completion_popup(frame: &mut Frame, editor_area: Rect, edit
         .take(max_items)
         .enumerate()
         .map(|(i, item)| {
-            let style = if i == editor.completion_selected {
+            let style = if i == editor.lsp.completion_selected {
                 selected_style
             } else {
                 normal_style
@@ -462,7 +462,7 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
 // ---------------------------------------------------------------------------
 
 pub(crate) fn render_hover_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
-    let popup = match &editor.hover_popup {
+    let popup = match &editor.lsp.hover_popup {
         Some(p) => p,
         None => return,
     };
@@ -536,7 +536,7 @@ pub(crate) fn render_hover_popup(frame: &mut Frame, editor_area: Rect, editor: &
 // ---------------------------------------------------------------------------
 
 pub(crate) fn render_code_action_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
-    let menu = match &editor.code_action_menu {
+    let menu = match &editor.lsp.code_action_menu {
         Some(m) => m,
         None => return,
     };
@@ -682,7 +682,7 @@ fn render_mini_dialog(
 
 /// Render signature help popup (TUI).
 pub(crate) fn render_signature_help_popup(frame: &mut Frame, area: Rect, editor: &Editor) {
-    let state = match &editor.signature_help {
+    let state = match &editor.lsp.signature_help {
         Some(s) => s,
         None => return,
     };
@@ -733,7 +733,7 @@ pub(crate) fn render_signature_help_popup(frame: &mut Frame, area: Rect, editor:
 
 /// Render peek definition popup (TUI).
 pub(crate) fn render_peek_definition_popup(frame: &mut Frame, area: Rect, editor: &Editor) {
-    let state = match &editor.peek_state {
+    let state = match &editor.lsp.peek_state {
         Some(s) => s,
         None => return,
     };
@@ -800,7 +800,7 @@ pub(crate) fn render_peek_definition_popup(frame: &mut Frame, area: Rect, editor
 // ---------------------------------------------------------------------------
 
 pub(crate) fn render_symbol_outline_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
-    let state = match &editor.symbol_outline {
+    let state = match &editor.lsp.symbol_outline {
         Some(s) => s,
         None => return,
     };

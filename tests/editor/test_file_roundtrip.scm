@@ -8,55 +8,25 @@
 
 (describe-group "File roundtrip"
   (lambda ()
-    (it-test "setup source buffer"
-      (lambda ()
-        (create-buffer "*test-rt-source*")))
-
-    (it-test "insert multi-line content"
-      (lambda ()
-        (buffer-insert "line one\nline two\nline three\n")))
-
-    (it-test "verify source content"
-      (lambda ()
-        (should-equal (buffer-string) *rt-content*)))
-
     (it-test "write buffer to disk"
       (lambda ()
+        (create-buffer "*test-rt-source*")
+        (buffer-insert "line one\nline two\nline three\n")
+        (should-equal (buffer-string) *rt-content*)
         (write-file *rt-path* (buffer-string))))
 
-    (it-test "file exists on disk"
+    (it-test "verify file was written"
       (lambda ()
         (should (file-exists? *rt-path*))))
 
-    (it-test "open file in editor"
+    (it-test "open file and verify content"
       (lambda ()
-        (execute-ex (string-append "e " *rt-path*))))
-
-    (it-test "verify file content in new buffer"
-      (lambda ()
-        (should-equal (buffer-string) *rt-content*)))
-
-    (it-test "content has three lines"
-      (lambda ()
-        (should-contain (buffer-string) "line one"))  )
-
-    (it-test "content contains second line"
-      (lambda ()
-        (should-contain (buffer-string) "line two")))
-
-    (it-test "content contains third line"
-      (lambda ()
-        (should-contain (buffer-string) "line three")))
-
-    (it-test "go to beginning of buffer"
-      (lambda ()
-        (goto-char 0)))
-
-    (it-test "first char is 'l'"
-      (lambda ()
-        (should-equal (substring (buffer-string) 0 1) "l")))
-
-    (it-test "full content length matches"
-      (lambda ()
+        (execute-ex (string-append "e " *rt-path*))
+        (should-equal (buffer-string) *rt-content*)
+        (should-contain (buffer-string) "line one")
+        (should-contain (buffer-string) "line two")
+        (should-contain (buffer-string) "line three")
+        (goto-char 0)
+        (should-equal (substring (buffer-string) 0 1) "l")
         (should-equal (string-length (buffer-string))
                       (string-length *rt-content*))))))

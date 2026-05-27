@@ -329,22 +329,22 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         if editor.mode != mae_core::Mode::ShellInsert {
             cursor::set_cursor(frame, editor, chunks[0], chunks[2]);
         }
-        if !editor.completion_items.is_empty() {
+        if !editor.lsp.completion_items.is_empty() {
             popup_render::render_completion_popup(frame, chunks[0], editor);
         }
-        if editor.hover_popup.is_some() {
+        if editor.lsp.hover_popup.is_some() {
             popup_render::render_hover_popup(frame, chunks[0], editor);
         }
-        if editor.code_action_menu.is_some() {
+        if editor.lsp.code_action_menu.is_some() {
             popup_render::render_code_action_popup(frame, chunks[0], editor);
         }
-        if editor.signature_help.is_some() {
+        if editor.lsp.signature_help.is_some() {
             popup_render::render_signature_help_popup(frame, chunks[0], editor);
         }
-        if editor.peek_state.is_some() {
+        if editor.lsp.peek_state.is_some() {
             popup_render::render_peek_definition_popup(frame, chunks[0], editor);
         }
-        if editor.symbol_outline.is_some() {
+        if editor.lsp.symbol_outline.is_some() {
             popup_render::render_symbol_outline_popup(frame, chunks[0], editor);
         }
     }
@@ -487,7 +487,7 @@ fn render_window_area(
     }
 
     // Breadcrumb bar: overlay on top of the focused window.
-    if editor.show_breadcrumbs && editor.breadcrumbs.is_some() {
+    if editor.show_breadcrumbs && editor.lsp.breadcrumbs.is_some() {
         if let Some(focused_rect) = rects
             .iter()
             .find(|(id, _)| *id == focused_id)
@@ -500,7 +500,7 @@ fn render_window_area(
 }
 
 fn render_breadcrumb_bar(frame: &mut Frame, area: Rect, editor: &Editor) {
-    let crumbs = match &editor.breadcrumbs {
+    let crumbs = match &editor.lsp.breadcrumbs {
         Some(c) if !c.is_empty() => c,
         _ => return,
     };

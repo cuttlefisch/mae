@@ -93,7 +93,7 @@ fn dispatch_lsp_next_diagnostic_moves_cursor() {
     buf.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
     buf.insert_text_at(0, "line0\nline1\nline2\n");
     let mut editor = Editor::with_buffer(buf);
-    editor.diagnostics.set(
+    editor.lsp.diagnostics.set(
         "file:///tmp/test.rs".into(),
         vec![crate::editor::Diagnostic {
             line: 2,
@@ -132,9 +132,9 @@ fn dispatch_lsp_goto_definition_queues_intent() {
     buf.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
     let mut editor = Editor::with_buffer(buf);
     editor.dispatch_builtin("lsp-goto-definition");
-    assert_eq!(editor.pending_lsp_requests.len(), 1);
+    assert_eq!(editor.lsp.pending_requests.len(), 1);
     assert!(matches!(
-        editor.pending_lsp_requests[0],
+        editor.lsp.pending_requests[0],
         LspIntent::GotoDefinition { .. }
     ));
 }
@@ -147,7 +147,7 @@ fn dispatch_lsp_hover_queues_intent() {
     let mut editor = Editor::with_buffer(buf);
     editor.dispatch_builtin("lsp-hover");
     assert!(matches!(
-        editor.pending_lsp_requests[0],
+        editor.lsp.pending_requests[0],
         LspIntent::Hover { .. }
     ));
 }
@@ -160,7 +160,7 @@ fn dispatch_lsp_find_references_queues_intent() {
     let mut editor = Editor::with_buffer(buf);
     editor.dispatch_builtin("lsp-find-references");
     assert!(matches!(
-        editor.pending_lsp_requests[0],
+        editor.lsp.pending_requests[0],
         LspIntent::FindReferences { .. }
     ));
 }
@@ -355,7 +355,7 @@ fn open_file_in_project_sets_pending_lsp_root_change_when_no_project() {
 
     let mut editor = Editor::new();
     assert!(editor.project.is_none());
-    assert!(editor.pending_lsp_root_change.is_none());
+    assert!(editor.lsp.pending_root_change.is_none());
 
     editor.open_file(src.to_str().unwrap());
 
@@ -363,7 +363,8 @@ fn open_file_in_project_sets_pending_lsp_root_change_when_no_project() {
     assert!(editor.project.is_some());
     // pending_lsp_root_change should be set.
     let root_uri = editor
-        .pending_lsp_root_change
+        .lsp
+        .pending_root_change
         .as_ref()
         .expect("should be set");
     assert!(
@@ -405,15 +406,16 @@ fn switching_project_sets_pending_lsp_root_change() {
 
     let mut editor = Editor::new();
     editor.open_file(src_a.to_str().unwrap());
-    assert!(editor.pending_lsp_root_change.is_some());
+    assert!(editor.lsp.pending_root_change.is_some());
     // Consume the pending change from project A.
-    editor.pending_lsp_root_change = None;
+    editor.lsp.pending_root_change = None;
 
     // Implicit file open no longer switches global project (Part 1 of
     // project-context-preservation). Use explicit add_project() instead.
     editor.add_project(dir_b.path().to_str().unwrap());
     let root_uri = editor
-        .pending_lsp_root_change
+        .lsp
+        .pending_root_change
         .as_ref()
         .expect("should signal LSP root change on explicit project switch");
     assert!(
@@ -446,14 +448,14 @@ fn open_second_file_same_project_does_not_set_pending_lsp_root_change() {
     let mut editor = Editor::new();
     editor.open_file(src1.to_str().unwrap());
     // Consume the pending change.
-    assert!(editor.pending_lsp_root_change.is_some());
-    editor.pending_lsp_root_change = None;
+    assert!(editor.lsp.pending_root_change.is_some());
+    editor.lsp.pending_root_change = None;
 
     // Open a second file in the same project.
     editor.open_file(src2.to_str().unwrap());
     // Should NOT set pending_lsp_root_change again (project already set).
     assert!(
-        editor.pending_lsp_root_change.is_none(),
+        editor.lsp.pending_root_change.is_none(),
         "should not re-signal LSP root for same project"
     );
 }

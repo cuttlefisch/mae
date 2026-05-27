@@ -332,8 +332,8 @@ pub fn render_buffer_content(
                 }
 
                 // Layer 3b: LSP document highlights (background-only, behind selection).
-                if !editor.highlight_ranges.is_empty() {
-                    for hr in &editor.highlight_ranges {
+                if !editor.lsp.highlight_ranges.is_empty() {
+                    for hr in &editor.lsp.highlight_ranges {
                         if line_idx < hr.start_line || line_idx > hr.end_line {
                             continue;
                         }
@@ -638,7 +638,7 @@ pub fn render_buffer_content(
                 .map(|ll| ll.buf_row + 1)
                 .unwrap_or(0);
             let diag_spans = mae_core::render_common::diagnostics::compute_diagnostic_spans(
-                &editor.diagnostics,
+                &editor.lsp.diagnostics,
                 &uri,
                 start_line,
                 end_line,

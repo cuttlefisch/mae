@@ -18,28 +18,29 @@ impl Editor {
             return;
         };
         let uri = path_to_uri(path);
-        self.pending_lsp_requests
+        self.lsp
+            .pending_requests
             .push(crate::LspIntent::DocumentSymbols {
                 uri,
                 language_id: lang_id,
             });
-        self.symbol_outline_pending = true;
+        self.lsp.symbol_outline_pending = true;
         self.set_status("[LSP] loading symbol outline\u{2026}");
     }
 
     /// Apply document symbol results to populate the symbol outline popup.
     pub fn apply_symbol_outline_result(&mut self, symbols: &[crate::editor::SymbolOutlineEntry]) {
-        self.symbol_outline_pending = false;
+        self.lsp.symbol_outline_pending = false;
         // Cache symbols for breadcrumbs.
-        self.cached_doc_symbols = symbols.to_vec();
-        self.cached_doc_symbols_buf = Some(self.active_buffer_idx());
+        self.lsp.cached_doc_symbols = symbols.to_vec();
+        self.lsp.cached_doc_symbols_buf = Some(self.active_buffer_idx());
         if symbols.is_empty() {
             self.set_status("[LSP] no symbols in document");
             return;
         }
         let len = symbols.len();
         let all_indices: Vec<usize> = (0..len).collect();
-        self.symbol_outline = Some(super::SymbolOutlineState {
+        self.lsp.symbol_outline = Some(super::SymbolOutlineState {
             entries: symbols.to_vec(),
             selected: 0,
             filter: String::new(),
@@ -53,15 +54,15 @@ impl Editor {
 
     /// Apply document symbol results only for breadcrumbs (no popup).
     pub fn apply_breadcrumb_symbols(&mut self, symbols: &[crate::editor::SymbolOutlineEntry]) {
-        self.breadcrumb_symbols_pending = false;
-        self.cached_doc_symbols = symbols.to_vec();
-        self.cached_doc_symbols_buf = Some(self.active_buffer_idx());
+        self.lsp.breadcrumb_symbols_pending = false;
+        self.lsp.cached_doc_symbols = symbols.to_vec();
+        self.lsp.cached_doc_symbols_buf = Some(self.active_buffer_idx());
         self.update_breadcrumbs();
     }
 
     /// Navigate the symbol outline popup down.
     pub fn symbol_outline_next(&mut self) {
-        if let Some(ref mut state) = self.symbol_outline {
+        if let Some(ref mut state) = self.lsp.symbol_outline {
             if !state.filtered_indices.is_empty() {
                 state.selected = (state.selected + 1) % state.filtered_indices.len();
             }
@@ -70,7 +71,7 @@ impl Editor {
 
     /// Navigate the symbol outline popup up.
     pub fn symbol_outline_prev(&mut self) {
-        if let Some(ref mut state) = self.symbol_outline {
+        if let Some(ref mut state) = self.lsp.symbol_outline {
             if !state.filtered_indices.is_empty() {
                 state.selected = state
                     .selected
@@ -83,7 +84,7 @@ impl Editor {
     /// Select the current symbol outline entry — jump to its line and dismiss.
     pub fn symbol_outline_select(&mut self) {
         let line = {
-            let state = match self.symbol_outline.as_ref() {
+            let state = match self.lsp.symbol_outline.as_ref() {
                 Some(s) => s,
                 None => return,
             };
@@ -93,7 +94,7 @@ impl Editor {
             };
             state.entries[idx].line
         };
-        self.symbol_outline = None;
+        self.lsp.symbol_outline = None;
         let buf_idx = self.active_buffer_idx();
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = line;
@@ -105,12 +106,12 @@ impl Editor {
 
     /// Dismiss the symbol outline popup.
     pub fn symbol_outline_dismiss(&mut self) {
-        self.symbol_outline = None;
+        self.lsp.symbol_outline = None;
     }
 
     /// Update the filter on the symbol outline popup.
     pub fn symbol_outline_filter_char(&mut self, ch: char) {
-        if let Some(ref mut state) = self.symbol_outline {
+        if let Some(ref mut state) = self.lsp.symbol_outline {
             state.filter.push(ch);
             let filter_lower = state.filter.to_lowercase();
             state.filtered_indices = state
@@ -126,7 +127,7 @@ impl Editor {
 
     /// Delete last char from symbol outline filter.
     pub fn symbol_outline_filter_backspace(&mut self) {
-        if let Some(ref mut state) = self.symbol_outline {
+        if let Some(ref mut state) = self.lsp.symbol_outline {
             state.filter.pop();
             if state.filter.is_empty() {
                 state.filtered_indices = (0..state.entries.len()).collect();
@@ -146,13 +147,13 @@ impl Editor {
 
     /// Request references for the symbol at cursor, for peek display.
     pub fn lsp_request_peek_references(&mut self) {
-        self.peek_references_pending = true;
+        self.lsp.peek_references_pending = true;
         self.lsp_request_references();
     }
 
     /// Navigate peek references forward.
     pub fn peek_references_next(&mut self) {
-        if let Some(ref mut state) = self.peek_references {
+        if let Some(ref mut state) = self.lsp.peek_references {
             if !state.locations.is_empty() {
                 state.current = (state.current + 1) % state.locations.len();
                 self.update_peek_references_preview();
@@ -162,7 +163,7 @@ impl Editor {
 
     /// Navigate peek references backward.
     pub fn peek_references_prev(&mut self) {
-        if let Some(ref mut state) = self.peek_references {
+        if let Some(ref mut state) = self.lsp.peek_references {
             if !state.locations.is_empty() {
                 state.current = state
                     .current
@@ -176,7 +177,7 @@ impl Editor {
     /// Update the peek state to show the current reference location.
     pub fn update_peek_references_preview(&mut self) {
         let (path, line, col, ctx, current, total) = {
-            let state = match self.peek_references.as_ref() {
+            let state = match self.lsp.peek_references.as_ref() {
                 Some(s) => s,
                 None => return,
             };
@@ -190,7 +191,7 @@ impl Editor {
                 state.locations.len(),
             )
         };
-        self.peek_state = Some(super::PeekState {
+        self.lsp.peek_state = Some(super::PeekState {
             file_path: path.clone(),
             line,
             col,
@@ -209,12 +210,12 @@ impl Editor {
 
     /// Request document symbols for breadcrumb computation (idle trigger).
     pub fn request_breadcrumb_symbols(&mut self) {
-        if !self.show_breadcrumbs || self.breadcrumb_symbols_pending {
+        if !self.show_breadcrumbs || self.lsp.breadcrumb_symbols_pending {
             return;
         }
         let idx = self.active_buffer_idx();
         // If we already have cached symbols for this buffer, just update breadcrumbs.
-        if self.cached_doc_symbols_buf == Some(idx) && !self.cached_doc_symbols.is_empty() {
+        if self.lsp.cached_doc_symbols_buf == Some(idx) && !self.lsp.cached_doc_symbols.is_empty() {
             self.update_breadcrumbs();
             return;
         }
@@ -224,18 +225,19 @@ impl Editor {
             return;
         };
         let uri = path_to_uri(path);
-        self.pending_lsp_requests
+        self.lsp
+            .pending_requests
             .push(crate::LspIntent::DocumentSymbols {
                 uri,
                 language_id: lang_id,
             });
-        self.breadcrumb_symbols_pending = true;
+        self.lsp.breadcrumb_symbols_pending = true;
     }
 
     /// Compute breadcrumb path from cached document symbols and cursor position.
     pub fn update_breadcrumbs(&mut self) {
         if !self.show_breadcrumbs {
-            self.breadcrumbs = None;
+            self.lsp.breadcrumbs = None;
             return;
         }
         let idx = self.active_buffer_idx();
@@ -246,8 +248,8 @@ impl Editor {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "[buffer]".to_string());
 
-        if self.cached_doc_symbols_buf != Some(idx) || self.cached_doc_symbols.is_empty() {
-            self.breadcrumbs = Some(vec![filename]);
+        if self.lsp.cached_doc_symbols_buf != Some(idx) || self.lsp.cached_doc_symbols.is_empty() {
+            self.lsp.breadcrumbs = Some(vec![filename]);
             return;
         }
 
@@ -256,7 +258,7 @@ impl Editor {
         // Walk symbols to find ancestry path. Symbols are ordered by line with depth.
         // Build a stack of (depth, name) tracking the current nesting.
         let mut stack: Vec<(usize, String)> = Vec::new();
-        for sym in &self.cached_doc_symbols {
+        for sym in &self.lsp.cached_doc_symbols {
             if sym.line > cursor_line {
                 break;
             }
@@ -269,6 +271,6 @@ impl Editor {
 
         let mut crumbs = vec![filename];
         crumbs.extend(stack.into_iter().map(|(_, name)| name));
-        self.breadcrumbs = Some(crumbs);
+        self.lsp.breadcrumbs = Some(crumbs);
     }
 }

@@ -761,6 +761,54 @@
         {
           "name": "runtime",
           "kind": "mod"
+        },
+        {
+          "name": "compiler",
+          "kind": "mod"
+        },
+        {
+          "name": "env",
+          "kind": "mod"
+        },
+        {
+          "name": "ffi",
+          "kind": "mod"
+        },
+        {
+          "name": "introspect",
+          "kind": "mod"
+        },
+        {
+          "name": "library",
+          "kind": "mod"
+        },
+        {
+          "name": "lisp_error",
+          "kind": "mod"
+        },
+        {
+          "name": "lsp",
+          "kind": "mod"
+        },
+        {
+          "name": "macros",
+          "kind": "mod"
+        },
+        {
+          "name": "reader",
+          "kind": "mod"
+        },
+        {
+          "name": "stdlib",
+          "kind": "mod"
+        },
+        {
+          "name": "value",
+          "kind": "mod"
+        },
+        {
+          "name": "vm",
+          "kind": "mod"
         }
       ]
     },
@@ -883,6 +931,10 @@
     }
   },
   "scheme_primitives": [
+    {
+      "name": "gc-stats",
+      "source": "crates/scheme/src/runtime.rs"
+    },
     {
       "name": "define-key",
       "source": "crates/scheme/src/runtime.rs"
@@ -1204,22 +1256,6 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
-      "name": "sleep-ms",
-      "source": "crates/scheme/src/runtime.rs"
-    },
-    {
-      "name": "file-exists?",
-      "source": "crates/scheme/src/runtime.rs"
-    },
-    {
-      "name": "wait-for-file",
-      "source": "crates/scheme/src/runtime.rs"
-    },
-    {
-      "name": "current-milliseconds",
-      "source": "crates/scheme/src/runtime.rs"
-    },
-    {
       "name": "goto-char",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -1429,6 +1465,10 @@
     },
     {
       "name": "collab-synced-buffers",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "collab-confirmed-shares",
       "source": "crates/scheme/src/runtime.rs"
     },
     {

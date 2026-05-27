@@ -162,6 +162,5 @@ See `ROADMAP.md` for granular milestone tracking.
 
 ## Related Resources
 
-- **Steel Scheme:** https://github.com/mattwparas/steel
 - **ropey:** https://github.com/cessen/ropey
 - **ratatui:** https://github.com/ratatui/ratatui

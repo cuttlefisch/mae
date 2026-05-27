@@ -76,6 +76,9 @@ pub fn execute_introspect(editor: &Editor, args: &serde_json::Value) -> Result<S
     if section == "all" || section == "collaboration" {
         result.insert("collaboration".into(), build_collaboration_section(editor));
     }
+    if section == "all" || section == "scheme" {
+        result.insert("scheme".into(), build_scheme_section(editor));
+    }
     if section == "frame" {
         result.insert("frame".into(), build_frame_section(editor));
     }
@@ -180,7 +183,7 @@ fn build_buffers_section(editor: &Editor) -> serde_json::Value {
 
         buffers.push(b_info);
     }
-    let hover_info = editor.hover_popup.as_ref().map(|p| {
+    let hover_info = editor.lsp.hover_popup.as_ref().map(|p| {
         json!({
             "buffer_idx": p.buffer_idx,
             "anchor_row": p.anchor_row,
@@ -196,8 +199,8 @@ fn build_buffers_section(editor: &Editor) -> serde_json::Value {
         "shell_buffers": shell_count,
         "buffer_details": buffers,
         "hover_popup": hover_info,
-        "code_action_menu": editor.code_action_menu.is_some(),
-        "completion_items": editor.completion_items.len(),
+        "code_action_menu": editor.lsp.code_action_menu.is_some(),
+        "completion_items": editor.lsp.completion_items.len(),
     })
 }
 
@@ -306,7 +309,8 @@ fn build_kb_section(editor: &Editor) -> serde_json::Value {
 
 fn build_lsp_section(editor: &Editor) -> serde_json::Value {
     let servers: Vec<serde_json::Value> = editor
-        .lsp_servers
+        .lsp
+        .servers
         .iter()
         .map(|(lang, info)| {
             json!({
@@ -318,15 +322,17 @@ fn build_lsp_section(editor: &Editor) -> serde_json::Value {
         })
         .collect();
     let any_connected = editor
-        .lsp_servers
+        .lsp
+        .servers
         .values()
         .any(|i| matches!(i.status, mae_core::editor::LspServerStatus::Connected));
     let any_starting = editor
-        .lsp_servers
+        .lsp
+        .servers
         .values()
         .any(|i| matches!(i.status, mae_core::editor::LspServerStatus::Starting));
     json!({
-        "server_count": editor.lsp_servers.len(),
+        "server_count": editor.lsp.servers.len(),
         "servers": servers,
         "any_connected": any_connected,
         "any_starting": any_starting,
@@ -368,6 +374,18 @@ fn build_ai_section(editor: &Editor) -> serde_json::Value {
     })
 }
 
+fn build_scheme_section(editor: &Editor) -> serde_json::Value {
+    let s = &editor.scheme_stats;
+    json!({
+        "eval_count": s.eval_count,
+        "gc_collections": s.collections_count,
+        "globals_count": s.globals_count,
+        "function_count": s.function_count,
+        "stack_hwm": s.stack_hwm,
+        "error_count": s.error_count,
+    })
+}
+
 fn build_collaboration_section(editor: &Editor) -> serde_json::Value {
     let collab_status = editor.collab.status.as_str();
     let collab_server = editor.collab.server_address.clone();
@@ -400,7 +418,7 @@ mod tests {
     #[test]
     fn introspect_lsp_section_with_servers() {
         let mut editor = Editor::new();
-        editor.lsp_servers.insert(
+        editor.lsp.servers.insert(
             "rust".to_string(),
             LspServerInfo {
                 status: LspServerStatus::Connected,
@@ -408,7 +426,7 @@ mod tests {
                 binary_found: true,
             },
         );
-        editor.lsp_servers.insert(
+        editor.lsp.servers.insert(
             "python".to_string(),
             LspServerInfo {
                 status: LspServerStatus::Starting,

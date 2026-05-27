@@ -338,7 +338,7 @@ fn line_visual_rows_single_source_of_truth() {
 #[test]
 fn mouse_click_dismisses_hover_popup() {
     let mut editor = Editor::new();
-    editor.hover_popup = Some(crate::editor::HoverPopup {
+    editor.lsp.hover_popup = Some(crate::editor::HoverPopup {
         contents: "test hover".into(),
         buffer_idx: 0,
         anchor_row: 0,
@@ -347,7 +347,7 @@ fn mouse_click_dismisses_hover_popup() {
     });
     editor.handle_mouse_click(0, 0, crate::input::MouseButton::Left);
     assert!(
-        editor.hover_popup.is_none(),
+        editor.lsp.hover_popup.is_none(),
         "hover popup should be dismissed on click"
     );
 }
@@ -355,13 +355,13 @@ fn mouse_click_dismisses_hover_popup() {
 #[test]
 fn mouse_click_dismisses_code_action_menu() {
     let mut editor = Editor::new();
-    editor.code_action_menu = Some(crate::editor::CodeActionMenu {
+    editor.lsp.code_action_menu = Some(crate::editor::CodeActionMenu {
         items: vec![],
         selected: 0,
     });
     editor.handle_mouse_click(0, 0, crate::input::MouseButton::Left);
     assert!(
-        editor.code_action_menu.is_none(),
+        editor.lsp.code_action_menu.is_none(),
         "code action menu should be dismissed on click"
     );
 }

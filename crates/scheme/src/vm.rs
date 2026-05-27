@@ -1,0 +1,2972 @@
+//! mae-scheme virtual machine: bytecode interpreter.
+//!
+//! Executes compiled bytecode with:
+//! - Proper tail calls (TAIL_CALL reuses the current frame)
+//! - call/cc support (CAPTURE_CC snapshots the stack)
+//! - Yield support (YIELD returns control to Rust)
+//!
+//! @stability: unstable (Phase 13)
+//! @since: 0.12.0
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
+
+use std::collections::{HashMap, HashSet};
+
+use crate::compiler::{CodeObject, Compiler, MacroDef, Op, UpvalueDesc};
+use crate::env::Env;
+use crate::library::{self, LibraryRegistry};
+use crate::lisp_error::{Arity, LispError};
+use crate::reader;
+use crate::value::{CallFrame, Closure, Continuation, ForeignFn, Value, Winder};
+
+/// Result of evaluation — either done or yielding.
+///
+/// When `Yield` is returned, the VM retains its state internally.
+/// Call `Vm::resume(value)` to continue execution after handling
+/// the yield request. The resume value is pushed onto the stack
+/// as the result of the yielding expression.
+#[derive(Debug)]
+pub enum EvalResult {
+    Done(Value),
+    Yield(YieldRequest),
+}
+
+/// What the VM wants from the host when it yields.
+#[derive(Clone, Debug)]
+pub enum YieldRequest {
+    /// Sleep for the given duration.
+    Sleep(Duration),
+    /// Wait for a file to appear (path, timeout).
+    WaitForFile(std::path::PathBuf, Duration),
+    /// Flush pending ops and refresh editor state mid-eval.
+    Flush,
+    /// Breakpoint hit — VM pauses for debugger inspection.
+    Breakpoint(BreakpointInfo),
+    /// Yield for one event loop iteration — lets hooks/side effects drain.
+    Tick,
+    /// Suspend until a named hook fires (or timeout).
+    AwaitHook(String, Duration),
+}
+
+/// Information about a breakpoint hit, sent to the debugger.
+#[derive(Clone, Debug)]
+pub struct BreakpointInfo {
+    /// Source file where the breakpoint was hit.
+    pub file: String,
+    /// Line number (1-indexed).
+    pub line: u32,
+    /// Stack frames at the breakpoint.
+    pub frames: Vec<DebugFrame>,
+}
+
+/// A stack frame for debugger display.
+#[derive(Clone, Debug)]
+pub struct DebugFrame {
+    /// Function name.
+    pub name: String,
+    /// Source file.
+    pub file: String,
+    /// Line number (1-indexed).
+    pub line: u32,
+    /// Local variable names and values.
+    pub locals: Vec<(String, String)>,
+}
+
+/// Step mode for the debugger.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StepMode {
+    /// Normal execution — only stop at breakpoints.
+    Run,
+    /// Break on next source line (any depth).
+    StepIn,
+    /// Break at same or shallower frame depth (skip calls).
+    StepOver(usize),
+    /// Break when current frame returns.
+    StepOut(usize),
+}
+
+/// A call frame on the VM stack.
+#[derive(Clone, Debug)]
+pub struct Frame {
+    /// Index into the code pool.
+    pub code_id: usize,
+    /// Instruction pointer.
+    pub ip: usize,
+    /// Base pointer (start of locals on the value stack).
+    pub bp: usize,
+    /// Captured upvalues for this closure invocation.
+    pub upvalues: Vec<Rc<RefCell<Value>>>,
+    /// Function name for stack traces.
+    pub name: Option<String>,
+    /// Cells for locals that have been captured as upvalues.
+    /// Maps local index → shared cell. Ensures multiple closures
+    /// capturing the same local share the same mutable cell.
+    pub local_cells: HashMap<usize, Rc<RefCell<Value>>>,
+    /// Module environment from the closure that created this frame.
+    /// Used by `LoadGlobal` for library-scoped variable resolution.
+    pub module_env: Option<Rc<RefCell<Env>>>,
+}
+
+/// An exception handler entry on the unified handler stack.
+///
+/// R7RS has two exception mechanisms that share one stack:
+/// - `guard`: unwinds to a handler offset (Guard variant)
+/// - `with-exception-handler`: calls a closure without unwinding (Closure variant)
+///
+/// Both `raise` and `raise-continuable` pop the top handler. The difference
+/// is in how they handle closure handlers: `raise-continuable` returns the
+/// handler's result, while `raise` errors if the handler returns.
+#[derive(Clone, Debug)]
+enum ExceptionHandler {
+    /// Guard-based handler: unwinds stack/frames and jumps to handler code.
+    Guard {
+        handler_ip: usize,
+        code_id: usize,
+        stack_depth: usize,
+        frame_depth: usize,
+    },
+    /// Closure-based handler: calls the handler function with the exception.
+    /// Does NOT unwind — the handler runs in the current dynamic context
+    /// (with this handler popped, so re-raises reach outer handlers).
+    Closure(Value),
+}
+
+/// The virtual machine.
+pub struct Vm {
+    /// Value stack.
+    stack: Vec<Value>,
+    /// Call frame stack.
+    frames: Vec<Frame>,
+    /// Global environment.
+    pub globals: Env,
+    /// Compiled code objects.
+    pub code_pool: Vec<CodeObject>,
+    /// Maximum stack depth (prevent infinite recursion crashes).
+    max_frames: usize,
+    /// Macro definitions persisted across eval calls.
+    macros: HashMap<String, MacroDef>,
+    /// Library registry for the module system.
+    pub libraries: LibraryRegistry,
+    /// Exception handler stack.
+    handlers: Vec<ExceptionHandler>,
+    /// Search paths for `include` and `load`.
+    pub load_paths: Vec<std::path::PathBuf>,
+    /// Dynamic-wind stack — tracks active before/after thunk pairs.
+    /// Captured by call/cc and used to compute which thunks to run
+    /// when a continuation crosses dynamic-wind boundaries.
+    pub winders: Vec<Winder>,
+    /// GC statistics for observability.
+    pub gc_stats: GcStats,
+    /// Active breakpoints: file → set of line numbers.
+    pub breakpoints: HashMap<String, HashSet<u32>>,
+    /// Current step mode for the debugger.
+    pub step_mode: StepMode,
+    /// Last breakpoint source line (to avoid re-breaking on same line).
+    last_break_line: Option<(String, u32)>,
+    /// When true, compiler emits `Op::BreakpointCheck` at source line boundaries.
+    pub debug_mode: bool,
+    /// Library environment for closures created during `define-library` body
+    /// evaluation. Shared between the VM and all closures created during
+    /// library body evaluation. `DefineGlobal` writes to both `self.globals`
+    /// AND this env. `MakeClosure` attaches it to the closure's `module_env`.
+    /// `LoadGlobal` checks `module_env` before `self.globals`.
+    ///
+    /// Uses `Rc<RefCell<Env>>` so defines during body evaluation are visible
+    /// to closures that already captured a reference to this env.
+    library_env: Option<Rc<RefCell<Env>>>,
+}
+
+/// GC observability metrics (Stage 1: Rc-based, monitors for cycle leaks).
+#[derive(Clone, Debug, Default)]
+pub struct GcStats {
+    /// Number of eval calls processed.
+    pub eval_count: u64,
+    /// Number of gc-collect! calls.
+    pub collections_count: u64,
+    /// Number of globals at last measurement.
+    pub globals_count: usize,
+    /// Stack high-water mark.
+    pub stack_hwm: usize,
+    /// Frame high-water mark.
+    pub frame_hwm: usize,
+}
+
+impl Vm {
+    pub fn new() -> Self {
+        Vm {
+            stack: Vec::with_capacity(1024),
+            frames: Vec::with_capacity(256),
+            globals: Env::new(),
+            code_pool: Vec::new(),
+            max_frames: 10_000,
+            macros: HashMap::new(),
+            libraries: LibraryRegistry::new(),
+            handlers: Vec::new(),
+            load_paths: Vec::new(),
+            winders: Vec::new(),
+            gc_stats: GcStats::default(),
+            breakpoints: HashMap::new(),
+            step_mode: StepMode::Run,
+            last_break_line: None,
+            debug_mode: false,
+            library_env: None,
+        }
+    }
+
+    /// Read-only access to macro definitions (for LSP introspection).
+    pub fn macros(&self) -> &HashMap<String, MacroDef> {
+        &self.macros
+    }
+
+    /// Read-only access to the code pool (for introspection / source maps).
+    pub fn code_pool(&self) -> &[CodeObject] {
+        &self.code_pool
+    }
+
+    /// Resolve a global variable name, checking module environment first.
+    ///
+    /// Lookup order:
+    /// 1. Current closure's `module_env` (library-scoped bindings)
+    /// 2. `self.globals` (interaction environment)
+    ///
+    /// This implements R7RS §5.6 library isolation: closures defined in
+    /// a library body resolve free variables against their module
+    /// environment, so library-internal bindings (e.g. private helpers)
+    /// survive after the interaction environment is restored.
+    fn resolve_global(&self, name: &str) -> Result<Value, LispError> {
+        // Check VM-level library_env first (active during library body eval)
+        if let Some(ref lib_env) = self.library_env {
+            if let Some(val) = lib_env.borrow().get(name) {
+                return Ok(val.clone());
+            }
+        }
+
+        // Check the current frame's module_env (for library-exported closures
+        // called after library body evaluation is complete)
+        if let Some(frame) = self.frames.last() {
+            if let Some(ref mod_env) = frame.module_env {
+                if let Some(val) = mod_env.borrow().get(name) {
+                    return Ok(val.clone());
+                }
+            }
+        }
+
+        // Fall back to interaction environment (globals)
+        self.globals
+            .get(name)
+            .cloned()
+            .ok_or_else(|| LispError::undefined(name))
+    }
+
+    /// Number of active call frames (for step-over/step-out depth tracking).
+    pub fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Clear the last breakpoint line to allow re-breaking after continue/step.
+    pub fn last_break_line_clear(&mut self) {
+        self.last_break_line = None;
+    }
+
+    /// Return GC statistics as a Scheme association list.
+    pub fn gc_stats_alist(&self) -> Value {
+        Value::list(vec![
+            Value::cons(
+                Value::symbol("eval-count"),
+                Value::Int(self.gc_stats.eval_count as i64),
+            ),
+            Value::cons(
+                Value::symbol("collections"),
+                Value::Int(self.gc_stats.collections_count as i64),
+            ),
+            Value::cons(
+                Value::symbol("globals-count"),
+                Value::Int(self.gc_stats.globals_count as i64),
+            ),
+            Value::cons(
+                Value::symbol("stack-hwm"),
+                Value::Int(self.gc_stats.stack_hwm as i64),
+            ),
+            Value::cons(
+                Value::symbol("frame-hwm"),
+                Value::Int(self.gc_stats.frame_hwm as i64),
+            ),
+            Value::cons(
+                Value::symbol("code-pool-size"),
+                Value::Int(self.code_pool.len() as i64),
+            ),
+        ])
+    }
+
+    /// Register a Rust function as a global.
+    pub fn register_fn<F>(&mut self, name: &str, doc: &str, arity: Arity, f: F)
+    where
+        F: Fn(&[Value]) -> Result<Value, LispError> + 'static,
+    {
+        let foreign = ForeignFn {
+            name: name.to_string(),
+            func: Box::new(f),
+            arity,
+            doc: doc.to_string(),
+        };
+        self.globals
+            .define(name.to_string(), Value::Foreign(Rc::new(foreign)));
+    }
+
+    /// Define a global variable (updates existing if present).
+    pub fn define_global(&mut self, name: &str, value: Value) {
+        self.globals.define(name.to_string(), value);
+    }
+
+    /// Evaluate a string of Scheme code.
+    pub fn eval(&mut self, code: &str) -> Result<Value, LispError> {
+        self.eval_with_file(code, "<eval>")
+    }
+
+    /// Evaluate a string of Scheme code with a source file name for diagnostics.
+    pub fn eval_with_file(&mut self, code: &str, file: &str) -> Result<Value, LispError> {
+        let located_datums = reader::read_all_located(code, file)?;
+        if located_datums.is_empty() {
+            return Ok(Value::Void);
+        }
+
+        // Pre-process top-level forms: handle import, define-library, and load
+        // before compilation, as they affect the global environment.
+        let mut to_compile = Vec::new();
+        for (datum, loc) in &located_datums {
+            if self.is_top_level_import(datum) {
+                self.process_import(datum)?;
+            } else if self.is_define_library(datum) {
+                self.process_define_library(datum)?;
+            } else if self.is_top_level_load(datum) {
+                self.process_load(datum)?;
+            } else {
+                to_compile.push((datum.clone(), loc.clone()));
+            }
+        }
+
+        if to_compile.is_empty() {
+            return Ok(Value::Void);
+        }
+
+        let mut compiler = Compiler::new();
+        // Seed compiler with macros, load paths, and debug mode from VM
+        compiler.macros = self.macros.clone();
+        compiler.load_paths = self.load_paths.clone();
+        compiler.debug_mode = self.debug_mode;
+
+        let code_id = compiler.compile_top_level_located(&to_compile)?;
+
+        // Persist any new macro definitions back to the VM
+        self.macros = compiler.macros;
+
+        // Merge compiled code into VM's pool
+        let base = self.code_pool.len();
+        // Adjust code_id references in the compiled code
+        for mut code_obj in compiler.code_pool {
+            // Adjust MakeClosure references
+            for op in &mut code_obj.ops {
+                if let Op::MakeClosure(ref mut idx, _) = op {
+                    *idx += base;
+                }
+            }
+            self.code_pool.push(code_obj);
+        }
+
+        let result = self.execute(base + code_id);
+
+        // Update GC stats
+        self.gc_stats.eval_count += 1;
+        if self.stack.len() > self.gc_stats.stack_hwm {
+            self.gc_stats.stack_hwm = self.stack.len();
+        }
+        self.gc_stats.globals_count = self.globals.len();
+
+        result
+    }
+
+    /// Evaluate Scheme code, returning yield requests to the caller
+    /// instead of blocking on them. Use `resume()` to continue after
+    /// handling the yield request.
+    pub fn eval_yielding(&mut self, code: &str) -> Result<EvalResult, LispError> {
+        let located_datums = reader::read_all_located(code, "<eval>")?;
+        if located_datums.is_empty() {
+            return Ok(EvalResult::Done(Value::Void));
+        }
+
+        let mut to_compile = Vec::new();
+        for (datum, loc) in &located_datums {
+            if self.is_top_level_import(datum) {
+                self.process_import(datum)?;
+            } else if self.is_define_library(datum) {
+                self.process_define_library(datum)?;
+            } else if self.is_top_level_load(datum) {
+                self.process_load(datum)?;
+            } else {
+                to_compile.push((datum.clone(), loc.clone()));
+            }
+        }
+
+        if to_compile.is_empty() {
+            return Ok(EvalResult::Done(Value::Void));
+        }
+
+        let mut compiler = Compiler::new();
+        compiler.macros = self.macros.clone();
+        compiler.load_paths = self.load_paths.clone();
+        compiler.debug_mode = self.debug_mode;
+
+        let code_id = compiler.compile_top_level_located(&to_compile)?;
+        self.macros = compiler.macros;
+
+        let base = self.code_pool.len();
+        for mut code_obj in compiler.code_pool {
+            for op in &mut code_obj.ops {
+                if let Op::MakeClosure(ref mut idx, _) = op {
+                    *idx += base;
+                }
+            }
+            self.code_pool.push(code_obj);
+        }
+
+        let result = self.execute_yielding(base + code_id);
+
+        self.gc_stats.eval_count += 1;
+        if self.stack.len() > self.gc_stats.stack_hwm {
+            self.gc_stats.stack_hwm = self.stack.len();
+        }
+        self.gc_stats.globals_count = self.globals.len();
+
+        result
+    }
+
+    /// Evaluate Scheme code with a file name for source maps, returning yield
+    /// requests instead of blocking. Combines `eval_with_file` + `eval_yielding`.
+    pub fn eval_with_file_yielding(
+        &mut self,
+        code: &str,
+        file: &str,
+    ) -> Result<EvalResult, LispError> {
+        let located_datums = reader::read_all_located(code, file)?;
+        if located_datums.is_empty() {
+            return Ok(EvalResult::Done(Value::Void));
+        }
+
+        let mut to_compile = Vec::new();
+        for (datum, loc) in &located_datums {
+            if self.is_top_level_import(datum) {
+                self.process_import(datum)?;
+            } else if self.is_define_library(datum) {
+                self.process_define_library(datum)?;
+            } else if self.is_top_level_load(datum) {
+                self.process_load(datum)?;
+            } else {
+                to_compile.push((datum.clone(), loc.clone()));
+            }
+        }
+
+        if to_compile.is_empty() {
+            return Ok(EvalResult::Done(Value::Void));
+        }
+
+        let mut compiler = Compiler::new();
+        compiler.macros = self.macros.clone();
+        compiler.load_paths = self.load_paths.clone();
+        compiler.debug_mode = self.debug_mode;
+
+        let code_id = compiler.compile_top_level_located(&to_compile)?;
+        self.macros = compiler.macros;
+
+        let base = self.code_pool.len();
+        for mut code_obj in compiler.code_pool {
+            for op in &mut code_obj.ops {
+                if let Op::MakeClosure(ref mut idx, _) = op {
+                    *idx += base;
+                }
+            }
+            self.code_pool.push(code_obj);
+        }
+
+        let result = self.execute_yielding(base + code_id);
+
+        self.gc_stats.eval_count += 1;
+        if self.stack.len() > self.gc_stats.stack_hwm {
+            self.gc_stats.stack_hwm = self.stack.len();
+        }
+        self.gc_stats.globals_count = self.globals.len();
+
+        result
+    }
+
+    /// Check if a datum is a top-level `(import ...)` form.
+    fn is_top_level_import(&self, datum: &Value) -> bool {
+        if let Ok(items) = datum.to_vec() {
+            if let Some(Value::Symbol(s)) = items.first() {
+                return s.name() == "import";
+            }
+        }
+        false
+    }
+
+    /// Check if a datum is a `(define-library ...)` form.
+    fn is_define_library(&self, datum: &Value) -> bool {
+        if let Ok(items) = datum.to_vec() {
+            if let Some(Value::Symbol(s)) = items.first() {
+                return s.name() == "define-library";
+            }
+        }
+        false
+    }
+
+    /// Check if a datum is a top-level `(load "file")` form.
+    fn is_top_level_load(&self, datum: &Value) -> bool {
+        if let Ok(items) = datum.to_vec() {
+            if let Some(Value::Symbol(s)) = items.first() {
+                return s.name() == "load" && items.len() == 2;
+            }
+        }
+        false
+    }
+
+    /// Process a top-level `(load "file")` — evaluate file in interaction environment.
+    fn process_load(&mut self, datum: &Value) -> Result<(), LispError> {
+        let items = datum
+            .to_vec()
+            .map_err(|_| LispError::syntax("load must be a list", format!("{datum}")))?;
+        let filename = items[1]
+            .as_str()
+            .map_err(|_| LispError::syntax("load: filename must be a string", ""))?;
+        let content = std::fs::read_to_string(filename)
+            .map_err(|e| LispError::user(format!("load: {e}"), vec![]))?;
+        self.eval(&content)?;
+        Ok(())
+    }
+
+    /// Process a top-level `(import <import-set> ...)` form.
+    /// Resolves each import set and binds imported names into globals.
+    fn process_import(&mut self, datum: &Value) -> Result<(), LispError> {
+        let items = datum
+            .to_vec()
+            .map_err(|_| LispError::syntax("import must be a list", format!("{datum}")))?;
+        let import_sets = library::parse_top_level_import(&items)?;
+
+        for import_set in &import_sets {
+            let lib = self.libraries.get(&import_set.library).ok_or_else(|| {
+                LispError::syntax(format!("unknown library: {}", import_set.library), "")
+            })?;
+            let resolved = library::resolve_import(import_set, lib)?;
+            for (name, value) in resolved {
+                self.globals.define(name, value);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Process a `(define-library ...)` form.
+    ///
+    /// Evaluates the library body in an isolated environment with proper
+    /// R7RS §5.6 scoping. Closures defined in the library body capture
+    /// the library's environment via `module_env`, so library-internal
+    /// bindings persist after the interaction environment is restored.
+    ///
+    /// This matches the Chibi-Scheme/Gauche pattern where closures close
+    /// over their defining module's environment.
+    fn process_define_library(&mut self, datum: &Value) -> Result<(), LispError> {
+        let items = datum
+            .to_vec()
+            .map_err(|_| LispError::syntax("define-library must be a list", format!("{datum}")))?;
+        let lib_def = library::parse_define_library(&items)?;
+
+        if self.libraries.contains(&lib_def.name) {
+            return Err(LispError::syntax(
+                format!("library already defined: {}", lib_def.name),
+                "",
+            ));
+        }
+
+        // Save interaction environment and start with a clean scope.
+        let saved_globals = self.globals.clone();
+        let saved_library_env = self.library_env.take();
+        self.globals = Env::new();
+
+        // Process imports into the clean environment — these are the
+        // ONLY bindings visible to the library body (isolation).
+        for import_set in &lib_def.imports {
+            let lib = self.libraries.get(&import_set.library).ok_or_else(|| {
+                LispError::syntax(
+                    format!(
+                        "library {} requires unknown library: {}",
+                        lib_def.name, import_set.library
+                    ),
+                    "",
+                )
+            })?;
+            let resolved = library::resolve_import(import_set, lib)?;
+            for (name, value) in resolved {
+                self.globals.define(name, value);
+            }
+        }
+
+        // Create a shared library environment. During body evaluation:
+        // - DefineGlobal populates self.globals (the isolated env)
+        // - MakeClosure captures self.library_env as module_env
+        // - LoadGlobal in library closures will check module_env first
+        //
+        // We'll set library_env AFTER body evaluation from self.globals,
+        // since defines happen during evaluation. But closures are created
+        // during evaluation too... So we need the library_env to be the
+        // same Env that DefineGlobal writes to.
+        //
+        // Solution: library_env IS self.globals during body evaluation.
+        // We wrap self.globals in an Rc and set it as library_env.
+        // But Env isn't behind Rc in self.globals...
+        //
+        // Alternative: set library_env to a snapshot AFTER body evaluation,
+        // then patch the closures. But closures are already created.
+        //
+        // Correct approach: evaluate body with self.globals as the library
+        // env. After evaluation, snapshot self.globals into Rc<Env> and
+        // retroactively set it on all exported closures. For non-exported
+        // closures referenced by exported ones (via upvalues), the module_env
+        // propagates through the upvalue chain.
+        //
+        // Actually simplest: set library_env = Rc::new(Env::new()) before
+        // evaluation, and have DefineGlobal also write to library_env.
+        // Then closures created during evaluation get this shared env.
+        // But DefineGlobal writes to self.globals, not library_env...
+        //
+        // Let's use the clean approach: we make library_env point to
+        // the same data as globals via a post-evaluation snapshot.
+        // Closures created during evaluation will have library_env=None
+        // (it's not set yet). We patch them afterward.
+
+        // Create a shared library environment BEFORE body evaluation.
+        // This Rc<RefCell<Env>> is shared between the VM (for DefineGlobal
+        // writes) and all closures created during body evaluation (via
+        // MakeClosure). When a closure later does LoadGlobal, it checks
+        // its module_env first, finding library-private bindings.
+        self.library_env = Some(Rc::new(RefCell::new(self.globals.clone())));
+
+        // Evaluate the library body in the isolated environment.
+        if !lib_def.body.is_empty() {
+            let mut compiler = Compiler::new();
+            compiler.macros = self.macros.clone();
+            compiler.load_paths = self.load_paths.clone();
+            compiler.debug_mode = self.debug_mode;
+            let code_id = compiler.compile_top_level(&lib_def.body)?;
+            self.macros = compiler.macros;
+
+            let base = self.code_pool.len();
+            for mut code_obj in compiler.code_pool {
+                for op in &mut code_obj.ops {
+                    if let Op::MakeClosure(ref mut idx, _) = op {
+                        *idx += base;
+                    }
+                }
+                self.code_pool.push(code_obj);
+            }
+
+            self.execute(base + code_id)?;
+        }
+
+        // The library_env was set before evaluation, and DefineGlobal
+        // wrote to it during evaluation. Now it contains the full
+        // library environment (imports + body definitions).
+        // Closures created during evaluation already captured it.
+        let lib_env = self.library_env.clone().unwrap();
+
+        // Collect exports. Closures already have module_env set from
+        // MakeClosure during body evaluation. Non-closure values
+        // (constants, etc.) are exported directly.
+        let mut exports = HashMap::new();
+        for (export_name, internal_name) in &lib_def.exports {
+            if let Some(value) = self.globals.get(internal_name) {
+                exports.insert(export_name.clone(), value.clone());
+            } else {
+                // Also check library_env for defines that went there
+                let found = lib_env.borrow().get(internal_name).cloned();
+                if let Some(value) = found {
+                    exports.insert(export_name.clone(), value);
+                } else {
+                    self.globals = saved_globals;
+                    self.library_env = saved_library_env;
+                    return Err(LispError::syntax(
+                        format!(
+                            "library {}: exported name '{}' not defined",
+                            lib_def.name, internal_name
+                        ),
+                        "",
+                    ));
+                }
+            }
+        }
+
+        // Restore the interaction environment.
+        self.globals = saved_globals;
+        self.library_env = saved_library_env;
+
+        self.libraries.register(library::Library {
+            name: lib_def.name,
+            exports,
+        });
+
+        Ok(())
+    }
+
+    /// Execute a code object by index.
+    fn execute(&mut self, code_id: usize) -> Result<Value, LispError> {
+        // Push initial frame
+        self.frames.push(Frame {
+            code_id,
+            ip: 0,
+            bp: self.stack.len(),
+            upvalues: Vec::new(),
+            name: self.code_pool[code_id].name.clone(),
+            local_cells: HashMap::new(),
+            module_env: None,
+        });
+
+        match self.run()? {
+            EvalResult::Done(v) => Ok(v),
+            EvalResult::Yield(req) => {
+                // Blocking fallback: handle yields synchronously.
+                // This preserves backwards compatibility for callers that
+                // use `eval()` (which calls `execute()`) and don't handle yields.
+                match req {
+                    YieldRequest::Sleep(d) => {
+                        std::thread::sleep(d);
+                    }
+                    YieldRequest::WaitForFile(ref path, timeout) => {
+                        let deadline = std::time::Instant::now() + timeout;
+                        loop {
+                            if path.exists() {
+                                break;
+                            }
+                            if std::time::Instant::now() >= deadline {
+                                return Err(LispError::user(
+                                    format!("wait-for-file timed out: {}", path.display()),
+                                    vec![],
+                                ));
+                            }
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                    }
+                    YieldRequest::Flush => {
+                        // In blocking mode, flush is a no-op — there's no
+                        // host event loop to sync with.
+                    }
+                    YieldRequest::Breakpoint(_) => {
+                        // In blocking mode, breakpoints can't pause — skip.
+                    }
+                    YieldRequest::Tick => {
+                        // In blocking mode, tick is a no-op.
+                    }
+                    YieldRequest::AwaitHook(_, _) => {
+                        // In blocking mode, await-hook can't wait — resume immediately.
+                    }
+                }
+                self.stack.push(Value::Bool(true));
+                // Continue execution after the yield
+                self.run().map(|r| match r {
+                    EvalResult::Done(v) => v,
+                    // Nested yields in blocking mode: recurse
+                    EvalResult::Yield(_) => {
+                        // This shouldn't happen in practice — yields from
+                        // foreign fns are one-shot. But handle gracefully.
+                        Value::Bool(true)
+                    }
+                })
+            }
+        }
+    }
+
+    /// Execute a code object, returning yield requests to the caller
+    /// instead of blocking on them.
+    pub fn execute_yielding(&mut self, code_id: usize) -> Result<EvalResult, LispError> {
+        self.frames.push(Frame {
+            code_id,
+            ip: 0,
+            bp: self.stack.len(),
+            upvalues: Vec::new(),
+            name: self.code_pool[code_id].name.clone(),
+            local_cells: HashMap::new(),
+            module_env: None,
+        });
+
+        self.run()
+    }
+
+    /// Resume execution after a yield, pushing `resume_value` as the result.
+    pub fn resume(&mut self, resume_value: Value) -> Result<EvalResult, LispError> {
+        self.stack.push(resume_value);
+        self.run()
+    }
+
+    /// The main interpreter loop.
+    fn run(&mut self) -> Result<EvalResult, LispError> {
+        loop {
+            if self.frames.is_empty() {
+                return Ok(EvalResult::Done(self.stack.pop().unwrap_or(Value::Void)));
+            }
+
+            let frame = self.frames.last().unwrap();
+            let code_id = frame.code_id;
+            let ip = frame.ip;
+
+            if ip >= self.code_pool[code_id].ops.len() {
+                // End of code — implicit return
+                let result = self.stack.pop().unwrap_or(Value::Void);
+                let frame = self.frames.pop().unwrap();
+                self.stack.truncate(frame.bp);
+                self.stack.push(result);
+                continue;
+            }
+
+            let op = self.code_pool[code_id].ops[ip].clone();
+            self.frames.last_mut().unwrap().ip += 1;
+
+            match op {
+                Op::Const(val) => {
+                    self.stack.push(val);
+                }
+
+                Op::LoadGlobal(name) => {
+                    // Module-aware global lookup: check the current
+                    // closure's module_env first (library-scoped bindings),
+                    // then fall back to the interaction environment (globals).
+                    let val = self.resolve_global(&name)?;
+                    self.stack.push(val);
+                }
+
+                Op::StoreGlobal(ref name) => {
+                    let val = self.stack.pop().unwrap_or(Value::Void);
+                    if !self.globals.set(name, val.clone()) {
+                        // R7RS §4.1.6: set! on undefined variable is an error.
+                        // Fall back to define for REPL convenience.
+                        self.globals.define(name.clone(), val.clone());
+                    }
+                    // Also update library_env during library body evaluation.
+                    if let Some(ref lib_env) = self.library_env {
+                        let mut env = lib_env.borrow_mut();
+                        if !env.set(name, val.clone()) {
+                            env.define(name.clone(), val);
+                        }
+                    }
+                }
+
+                Op::DefineGlobal(name) => {
+                    let val = self.stack.pop().unwrap_or(Value::Void);
+                    self.globals.define(name.clone(), val.clone());
+                    // Also write to library_env during library body evaluation,
+                    // so closures that captured this env see the binding.
+                    if let Some(ref lib_env) = self.library_env {
+                        lib_env.borrow_mut().define(name, val);
+                    }
+                }
+
+                Op::LoadLocal(idx) => {
+                    // If this local has been captured as a mutable cell,
+                    // read from the cell (so closure mutations are visible).
+                    let frame = self.frames.last().unwrap();
+                    if let Some(cell) = frame.local_cells.get(&idx) {
+                        self.stack.push(cell.borrow().clone());
+                    } else {
+                        let bp = frame.bp;
+                        let abs_idx = bp + idx;
+                        let val = if abs_idx < self.stack.len() {
+                            self.stack[abs_idx].clone()
+                        } else {
+                            Value::Undefined
+                        };
+                        self.stack.push(val);
+                    }
+                }
+
+                Op::StoreLocal(idx) => {
+                    let val = self.stack.pop().unwrap_or(Value::Void);
+                    // If this local has been captured as a mutable cell,
+                    // write to the cell (so closure reads see the update).
+                    let frame = self.frames.last_mut().unwrap();
+                    if let Some(cell) = frame.local_cells.get(&idx) {
+                        *cell.borrow_mut() = val;
+                    } else {
+                        let bp = frame.bp;
+                        let abs_idx = bp + idx;
+                        // Extend stack if needed (internal defines create new locals)
+                        while abs_idx >= self.stack.len() {
+                            self.stack.push(Value::Undefined);
+                        }
+                        self.stack[abs_idx] = val;
+                    }
+                }
+
+                Op::LoadUpvalue(idx) => {
+                    let val = self
+                        .frames
+                        .last()
+                        .unwrap()
+                        .upvalues
+                        .get(idx)
+                        .map(|cell| cell.borrow().clone())
+                        .unwrap_or(Value::Undefined);
+                    self.stack.push(val);
+                }
+
+                Op::StoreUpvalue(idx) => {
+                    let val = self.stack.pop().unwrap_or(Value::Void);
+                    if let Some(frame) = self.frames.last_mut() {
+                        if idx < frame.upvalues.len() {
+                            *frame.upvalues[idx].borrow_mut() = val;
+                        }
+                    }
+                }
+
+                Op::Call(argc) => {
+                    if let Err(e) = self.do_call(argc, false) {
+                        if e.is_yield() {
+                            return self.convert_yield(e);
+                        }
+                        self.handle_exception(e)?;
+                    }
+                }
+
+                Op::TailCall(argc) => {
+                    if let Err(e) = self.do_call(argc, true) {
+                        if e.is_yield() {
+                            return self.convert_yield(e);
+                        }
+                        self.handle_exception(e)?;
+                    }
+                }
+
+                Op::Return => {
+                    let result = self.stack.pop().unwrap_or(Value::Void);
+                    let frame = self.frames.pop().unwrap();
+                    self.stack.truncate(frame.bp);
+                    self.stack.push(result);
+                }
+
+                Op::Jump(offset) => {
+                    let frame = self.frames.last_mut().unwrap();
+                    frame.ip = (frame.ip as i32 + offset) as usize;
+                }
+
+                Op::JumpIfFalse(offset) => {
+                    let val = self.stack.pop().unwrap_or(Value::Bool(false));
+                    if !val.is_true() {
+                        let frame = self.frames.last_mut().unwrap();
+                        frame.ip = (frame.ip as i32 + offset) as usize;
+                    }
+                }
+
+                Op::Pop => {
+                    self.stack.pop();
+                }
+
+                Op::Dup => {
+                    if let Some(val) = self.stack.last() {
+                        self.stack.push(val.clone());
+                    }
+                }
+
+                Op::MakeClosure(code_id, upvalue_descs) => {
+                    let code = &self.code_pool[code_id];
+                    let arity = if code.variadic {
+                        Arity::Variadic(code.arity)
+                    } else {
+                        Arity::Fixed(code.arity)
+                    };
+
+                    // Capture upvalues as shared mutable cells.
+                    // When capturing a local, check if it's already been captured
+                    // by another closure in the same scope (local_cells map).
+                    // If so, share the same cell so set! is visible to all.
+                    let mut upvalues: Vec<Rc<RefCell<Value>>> =
+                        Vec::with_capacity(upvalue_descs.len());
+                    for desc in &upvalue_descs {
+                        let cell = match desc {
+                            UpvalueDesc::Local(idx) => {
+                                let frame = self.frames.last_mut().unwrap();
+                                if let Some(existing) = frame.local_cells.get(idx) {
+                                    // Reuse existing cell (shared mutation between
+                                    // closures in the same scope)
+                                    existing.clone()
+                                } else {
+                                    let bp = frame.bp;
+                                    let abs_idx = bp + idx;
+                                    let val = if abs_idx < self.stack.len() {
+                                        self.stack[abs_idx].clone()
+                                    } else {
+                                        Value::Undefined
+                                    };
+                                    let new_cell = Rc::new(RefCell::new(val));
+                                    frame.local_cells.insert(*idx, new_cell.clone());
+                                    new_cell
+                                }
+                            }
+                            UpvalueDesc::Upvalue(idx) => {
+                                // Share the same cell from the enclosing closure
+                                self.frames
+                                    .last()
+                                    .unwrap()
+                                    .upvalues
+                                    .get(*idx)
+                                    .cloned()
+                                    .unwrap_or_else(|| Rc::new(RefCell::new(Value::Undefined)))
+                            }
+                        };
+                        upvalues.push(cell);
+                    }
+
+                    let closure = Closure {
+                        code_id,
+                        upvalues,
+                        arity,
+                        name: code.name.clone(),
+                        doc: code.doc.clone(),
+                        module_env: self.library_env.clone(),
+                    };
+                    self.stack.push(Value::Closure(Rc::new(closure)));
+                }
+
+                Op::CaptureCc => {
+                    // CaptureCc is emitted before Call(1) by compile_call_cc.
+                    // We capture a continuation that, when invoked with a value,
+                    // restores state so the value becomes the result of the
+                    // call/cc expression (i.e., skipping the Call(1) that follows).
+                    //
+                    // The current frame IP has already advanced past CaptureCc.
+                    // The next instruction will be Call(1) or TailCall(1).
+                    // We need the continuation to skip that Call, so we advance
+                    // the captured IP by 1 more instruction.
+                    let mut captured_frames: Vec<CallFrame> = self
+                        .frames
+                        .iter()
+                        .map(|f| CallFrame {
+                            code_id: f.code_id,
+                            ip: f.ip,
+                            bp: f.bp,
+                            function_name: f.name.clone(),
+                            upvalues: f.upvalues.clone(),
+                            local_cells: f.local_cells.clone(),
+                            module_env: f.module_env.clone(),
+                        })
+                        .collect();
+
+                    // Advance the top frame's IP past the upcoming Call(1)/TailCall(1)
+                    if let Some(top) = captured_frames.last_mut() {
+                        top.ip += 1; // skip the Call(1) that follows CaptureCc
+                    }
+
+                    // Capture stack WITHOUT the function that's on top
+                    // (the fn is for Call(1) to consume, not part of the continuation)
+                    let fn_on_stack = self.stack.len(); // fn is at top
+                    let captured_stack = self.stack[..fn_on_stack - 1].to_vec();
+
+                    let cont = Continuation {
+                        stack: captured_stack,
+                        frames: captured_frames,
+                        invoked: false,
+                        winders: self.winders.clone(),
+                    };
+                    // Push continuation as argument to the function (for Call(1))
+                    self.stack.push(Value::Continuation(Rc::new(cont)));
+                }
+
+                Op::Yield => {
+                    // Yield control to the host. The duration is on the stack.
+                    let duration = self.stack.pop().unwrap_or(Value::Int(0));
+                    let ms = duration.as_int().unwrap_or(0) as u64;
+                    return Ok(EvalResult::Yield(YieldRequest::Sleep(
+                        Duration::from_millis(ms),
+                    )));
+                }
+
+                Op::Nop => {}
+
+                Op::BreakpointCheck(line) => {
+                    // Clone frame data before calling &mut self methods
+                    let current_frame = self.frames.last().cloned();
+                    if let Some(cf) = current_frame {
+                        if self.should_break(line, &cf) {
+                            let info = self.build_breakpoint_info(line, &cf);
+                            return Ok(EvalResult::Yield(YieldRequest::Breakpoint(info)));
+                        }
+                    }
+                }
+
+                Op::Apply => {
+                    // Stack: [fn, args-list]
+                    let args_list = self.stack.pop().unwrap_or(Value::Void);
+                    let func = self.stack.pop().unwrap_or(Value::Void);
+
+                    // Convert the args list to a vector
+                    let mut args = Vec::new();
+                    let mut current = args_list;
+                    loop {
+                        match current {
+                            Value::Pair(pair) => {
+                                args.push(pair.0.clone());
+                                current = pair.1.clone();
+                            }
+                            Value::Null => break,
+                            Value::Void => break,
+                            _ => {
+                                return Err(LispError::type_error(
+                                    "proper list",
+                                    current.type_name(),
+                                ));
+                            }
+                        }
+                    }
+
+                    // Push function and args onto stack, then call
+                    let argc = args.len();
+                    self.stack.push(func);
+                    for a in args {
+                        self.stack.push(a);
+                    }
+                    if let Err(e) = self.do_call(argc, false) {
+                        if e.is_yield() {
+                            return self.convert_yield(e);
+                        }
+                        self.handle_exception(e)?;
+                    }
+                }
+
+                Op::PushHandler(offset) => {
+                    let frame = self.frames.last().unwrap();
+                    let handler_ip = (frame.ip as i32 + offset) as usize;
+                    self.handlers.push(ExceptionHandler::Guard {
+                        handler_ip,
+                        code_id: frame.code_id,
+                        stack_depth: self.stack.len(),
+                        frame_depth: self.frames.len(),
+                    });
+                }
+
+                Op::PopHandler | Op::PopClosureHandler => {
+                    self.handlers.pop();
+                }
+
+                Op::PushClosureHandler => {
+                    let handler = self.stack.pop().unwrap_or(Value::Void);
+                    self.handlers.push(ExceptionHandler::Closure(handler));
+                }
+
+                Op::Raise => {
+                    let exception = self.stack.pop().unwrap_or(Value::Void);
+                    self.dispatch_raise(exception)?;
+                }
+
+                Op::Values | Op::CallWithValues => {
+                    return Err(LispError::internal(format!("unimplemented opcode: {op:?}")));
+                }
+
+                Op::PushWinder => {
+                    // Stack: [before_thunk, after_thunk] → []
+                    let after = self.stack.pop().unwrap_or(Value::Void);
+                    let before = self.stack.pop().unwrap_or(Value::Void);
+                    self.winders.push(Winder { before, after });
+                }
+
+                Op::PopWinder => {
+                    self.winders.pop();
+                }
+
+                Op::Eval => {
+                    // R7RS §6.12: evaluate a datum at runtime.
+                    // Stack has the expression (as a Value/datum).
+                    let datum = self.stack.pop().unwrap_or(Value::Void);
+                    // Convert datum to string, then parse and eval it.
+                    // This handles quoted data: (eval '(+ 1 2) ...)
+                    let code = format!("{datum}");
+                    let result = self.eval(&code)?;
+                    self.stack.push(result);
+                }
+                Op::Load => {
+                    // R7RS §6.12: load and evaluate a file.
+                    let filename_val = self.stack.pop().unwrap_or(Value::Void);
+                    let filename = filename_val
+                        .as_str()
+                        .map_err(|_| LispError::type_error("string", format!("{filename_val}")))?;
+                    let content = std::fs::read_to_string(filename)
+                        .map_err(|e| LispError::user(format!("load: {e}"), vec![]))?;
+                    let result = self.eval(&content)?;
+                    self.stack.push(result);
+                }
+            }
+        }
+    }
+
+    /// Handle a Rust-level error by dispatching to exception handlers or propagating.
+    fn handle_exception(&mut self, err: LispError) -> Result<(), LispError> {
+        // Build the exception value from the error
+        let exception = if let Some(v) = err.error_value.clone() {
+            *v
+        } else {
+            use crate::lisp_error::ErrorKind;
+            let error_type = match &err.kind {
+                ErrorKind::Read(_) => Some("read-error"),
+                ErrorKind::Io { .. } => Some("file-error"),
+                _ => None,
+            };
+            if let Some(etype) = error_type {
+                Value::Vector(Rc::new(RefCell::new(vec![
+                    Value::symbol("error-object"),
+                    Value::string(err.message()),
+                    Value::string(etype),
+                    Value::Null,
+                ])))
+            } else {
+                Value::string(err.message())
+            }
+        };
+        // Use the same dispatch mechanism as Scheme-level raise
+        self.dispatch_raise(exception)
+    }
+
+    /// Handle function calls (both regular and tail calls).
+    fn do_call(&mut self, argc: usize, tail: bool) -> Result<(), LispError> {
+        if self.stack.len() < argc + 1 {
+            return Err(LispError::internal("stack underflow in call"));
+        }
+
+        // Get the function and arguments from the stack
+        let fn_pos = self.stack.len() - argc - 1;
+        let func = self.stack[fn_pos].clone();
+
+        match func {
+            Value::Closure(closure) => {
+                // Check arity
+                match &closure.arity {
+                    Arity::Fixed(n) if argc != *n => {
+                        return Err(LispError::arity(
+                            closure.name.as_deref().unwrap_or("<lambda>"),
+                            Arity::Fixed(*n),
+                            argc,
+                        ));
+                    }
+                    Arity::Variadic(min) if argc < *min => {
+                        return Err(LispError::arity(
+                            closure.name.as_deref().unwrap_or("<lambda>"),
+                            Arity::Variadic(*min),
+                            argc,
+                        ));
+                    }
+                    _ => {}
+                }
+
+                // Collect arguments
+                let args: Vec<Value> = self.stack[fn_pos + 1..].to_vec();
+
+                if tail {
+                    // Tail call: reuse current frame
+                    let frame = self.frames.last_mut().unwrap();
+                    // Truncate stack to frame's base pointer
+                    self.stack.truncate(frame.bp);
+
+                    // Handle variadic: pack extra args into a list
+                    if let Arity::Variadic(min) = &closure.arity {
+                        let min = *min;
+                        for arg in &args[..min] {
+                            self.stack.push(arg.clone());
+                        }
+                        // Pack rest into a list
+                        let rest = Value::list(args[min..].iter().cloned());
+                        self.stack.push(rest);
+                    } else {
+                        for arg in &args {
+                            self.stack.push(arg.clone());
+                        }
+                    }
+
+                    frame.code_id = closure.code_id;
+                    frame.ip = 0;
+                    frame.bp = self.stack.len()
+                        - if let Arity::Variadic(min) = &closure.arity {
+                            min + 1
+                        } else {
+                            argc
+                        };
+                    frame.upvalues = closure.upvalues.clone();
+                    frame.name = closure.name.clone();
+                    frame.local_cells.clear(); // Reset for new invocation
+                    frame.module_env = closure.module_env.clone();
+
+                    // Fix bp: it should be the start of args on the stack
+                    frame.bp = self.stack.len()
+                        - if let Arity::Variadic(min) = &closure.arity {
+                            min + 1
+                        } else {
+                            argc
+                        };
+                } else {
+                    if self.frames.len() >= self.max_frames {
+                        return Err(LispError::internal(format!(
+                            "stack overflow: {} frames",
+                            self.max_frames
+                        )));
+                    }
+
+                    // Remove function and args from stack
+                    self.stack.truncate(fn_pos);
+
+                    let bp = self.stack.len();
+
+                    // Push args (handle variadic)
+                    if let Arity::Variadic(min) = &closure.arity {
+                        let min = *min;
+                        for arg in &args[..min] {
+                            self.stack.push(arg.clone());
+                        }
+                        let rest = Value::list(args[min..].iter().cloned());
+                        self.stack.push(rest);
+                    } else {
+                        for arg in &args {
+                            self.stack.push(arg.clone());
+                        }
+                    }
+
+                    self.frames.push(Frame {
+                        code_id: closure.code_id,
+                        ip: 0,
+                        bp,
+                        upvalues: closure.upvalues.clone(),
+                        name: closure.name.clone(),
+                        local_cells: HashMap::new(),
+                        module_env: closure.module_env.clone(),
+                    });
+                }
+            }
+
+            Value::Foreign(ff) => {
+                // Check arity before calling
+                match &ff.arity {
+                    Arity::Fixed(n) if argc != *n => {
+                        return Err(LispError::arity(&ff.name, Arity::Fixed(*n), argc));
+                    }
+                    Arity::Variadic(min) if argc < *min => {
+                        return Err(LispError::arity(&ff.name, Arity::Variadic(*min), argc));
+                    }
+                    _ => {}
+                }
+                let args: Vec<Value> = self.stack[fn_pos + 1..].to_vec();
+                self.stack.truncate(fn_pos);
+                // Foreign functions may return Err(LispError::Yield(..)).
+                // We propagate it as-is; `run()` catches it and converts
+                // to EvalResult::Yield.
+                let result = (ff.func)(&args)?;
+                self.stack.push(result);
+            }
+
+            Value::Continuation(cont) => {
+                // Invoking a continuation: restore captured state
+                if argc != 1 {
+                    return Err(LispError::arity("<continuation>", Arity::Fixed(1), argc));
+                }
+                let val = self.stack.pop().unwrap_or(Value::Void);
+                self.stack.truncate(fn_pos);
+
+                // R7RS §6.10: dynamic-wind interaction with continuations.
+                // Find the common prefix of the current and target winder stacks,
+                // run `after` for exited extents, `before` for entered extents.
+                let target_winders = &cont.winders;
+                let common = self
+                    .winders
+                    .iter()
+                    .zip(target_winders.iter())
+                    .take_while(|(a, b)| {
+                        // Identity comparison on thunks (same closure = same extent)
+                        a.before.is_eq(&b.before) && a.after.is_eq(&b.after)
+                    })
+                    .count();
+
+                // Run `after` thunks for extents we're leaving (reverse order)
+                let leaving: Vec<Winder> = self.winders[common..].iter().rev().cloned().collect();
+                for w in &leaving {
+                    self.call_thunk(&w.after)?;
+                }
+
+                // Run `before` thunks for extents we're entering (forward order)
+                let entering: Vec<Winder> = target_winders[common..].to_vec();
+                for w in &entering {
+                    self.call_thunk(&w.before)?;
+                }
+
+                // Set winders to the target state
+                self.winders = target_winders.clone();
+
+                // Restore continuation state
+                self.stack = cont.stack.clone();
+                self.frames = cont
+                    .frames
+                    .iter()
+                    .map(|cf| Frame {
+                        code_id: cf.code_id,
+                        ip: cf.ip,
+                        bp: cf.bp,
+                        upvalues: cf.upvalues.clone(),
+                        local_cells: cf.local_cells.clone(),
+                        name: cf.function_name.clone(),
+                        module_env: cf.module_env.clone(),
+                    })
+                    .collect();
+
+                // Push the value as the result
+                self.stack.push(val);
+            }
+
+            _ => {
+                return Err(LispError::type_error("procedure", func.type_name()));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Run the interpreter loop, blocking on any yields.
+    /// Used by internal thunk calls where we can't return yields to the host.
+    fn run_blocking(&mut self) -> Result<Value, LispError> {
+        loop {
+            match self.run()? {
+                EvalResult::Done(v) => return Ok(v),
+                EvalResult::Yield(req) => {
+                    match req {
+                        YieldRequest::Sleep(d) => std::thread::sleep(d),
+                        YieldRequest::WaitForFile(ref path, timeout) => {
+                            let deadline = std::time::Instant::now() + timeout;
+                            loop {
+                                if path.exists() {
+                                    break;
+                                }
+                                if std::time::Instant::now() >= deadline {
+                                    return Err(LispError::user(
+                                        format!("wait-for-file timed out: {}", path.display()),
+                                        vec![],
+                                    ));
+                                }
+                                std::thread::sleep(Duration::from_millis(50));
+                            }
+                        }
+                        YieldRequest::Flush => {
+                            // No-op in blocking mode.
+                        }
+                        YieldRequest::Breakpoint(_) => {
+                            // In blocking mode, breakpoints can't pause — skip.
+                        }
+                        YieldRequest::Tick | YieldRequest::AwaitHook(_, _) => {
+                            // In blocking mode, no event loop — resume immediately.
+                        }
+                    }
+                    self.stack.push(Value::Bool(true));
+                }
+            }
+        }
+    }
+
+    /// Convert a `LispError::Yield` into `Ok(EvalResult::Yield)`.
+    /// Check if we should break at the given line.
+    fn should_break(&mut self, line: u32, frame: &Frame) -> bool {
+        let file = self
+            .code_pool
+            .get(frame.code_id)
+            .and_then(|c| {
+                c.source_map
+                    .iter()
+                    .find_map(|l| l.as_ref().map(|loc| loc.file.clone()))
+            })
+            .unwrap_or_default();
+
+        // Avoid re-breaking on the same line
+        if self.last_break_line.as_ref() == Some(&(file.clone(), line)) {
+            return false;
+        }
+
+        let should = match &self.step_mode {
+            StepMode::Run => {
+                // Only break at explicitly set breakpoints
+                self.breakpoints
+                    .get(&file)
+                    .map(|lines| lines.contains(&line))
+                    .unwrap_or(false)
+            }
+            StepMode::StepIn => true,
+            StepMode::StepOver(depth) => self.frames.len() <= *depth,
+            StepMode::StepOut(depth) => self.frames.len() < *depth,
+        };
+
+        if should {
+            self.last_break_line = Some((file, line));
+            // Reset step mode after breaking (ephemeral, like Guile's traps)
+            if self.step_mode != StepMode::Run {
+                self.step_mode = StepMode::Run;
+            }
+        }
+
+        should
+    }
+
+    /// Build debugger frame info at a breakpoint.
+    fn build_breakpoint_info(&self, line: u32, current_frame: &Frame) -> BreakpointInfo {
+        let file = self
+            .code_pool
+            .get(current_frame.code_id)
+            .and_then(|c| {
+                c.source_map
+                    .iter()
+                    .find_map(|l| l.as_ref().map(|loc| loc.file.clone()))
+            })
+            .unwrap_or_else(|| "<unknown>".into());
+
+        let mut frames = Vec::new();
+
+        // Current frame
+        frames.push(self.frame_to_debug(current_frame, line));
+
+        // Parent frames from the stack
+        for f in self.frames.iter().rev() {
+            let f_line = self
+                .code_pool
+                .get(f.code_id)
+                .and_then(|c| c.source_map.get(f.ip.saturating_sub(1)))
+                .and_then(|l| l.as_ref())
+                .map(|l| l.line)
+                .unwrap_or(0);
+            frames.push(self.frame_to_debug(f, f_line));
+        }
+
+        BreakpointInfo { file, line, frames }
+    }
+
+    /// Convert a VM frame to a debug frame for display.
+    fn frame_to_debug(&self, frame: &Frame, line: u32) -> DebugFrame {
+        let file = self
+            .code_pool
+            .get(frame.code_id)
+            .and_then(|c| {
+                c.source_map
+                    .iter()
+                    .find_map(|l| l.as_ref().map(|loc| loc.file.clone()))
+            })
+            .unwrap_or_else(|| "<unknown>".into());
+
+        let name = frame.name.clone().unwrap_or_else(|| "<lambda>".into());
+
+        // Collect local variable values
+        let mut locals = Vec::new();
+        let stack_len = self.stack.len();
+        let bp = frame.bp;
+        for i in 0..8 {
+            // Show up to 8 locals
+            let idx = bp + i;
+            if idx >= stack_len {
+                break;
+            }
+            locals.push((format!("local{}", i), format!("{}", self.stack[idx])));
+        }
+
+        DebugFrame {
+            name,
+            file,
+            line,
+            locals,
+        }
+    }
+
+    fn convert_yield(&self, err: LispError) -> Result<EvalResult, LispError> {
+        use crate::lisp_error::{ErrorKind, YieldReason};
+        match err.kind {
+            ErrorKind::Yield(YieldReason::Sleep(d)) => {
+                Ok(EvalResult::Yield(YieldRequest::Sleep(d)))
+            }
+            ErrorKind::Yield(YieldReason::WaitForFile(p, t)) => {
+                Ok(EvalResult::Yield(YieldRequest::WaitForFile(p, t)))
+            }
+            ErrorKind::Yield(YieldReason::Flush) => Ok(EvalResult::Yield(YieldRequest::Flush)),
+            ErrorKind::Yield(YieldReason::Tick) => Ok(EvalResult::Yield(YieldRequest::Tick)),
+            ErrorKind::Yield(YieldReason::AwaitHook(name, timeout)) => {
+                Ok(EvalResult::Yield(YieldRequest::AwaitHook(name, timeout)))
+            }
+            _ => Err(err),
+        }
+    }
+
+    /// Call a zero-argument thunk (used by dynamic-wind traversal).
+    /// Saves and restores the VM state around the call so it doesn't
+    /// interfere with continuation restoration in progress.
+    fn call_thunk(&mut self, thunk: &Value) -> Result<Value, LispError> {
+        self.call_thunk_with_args(thunk, &[])
+    }
+
+    /// Call a function with given arguments in a saved VM context.
+    fn call_thunk_with_args(&mut self, func: &Value, args: &[Value]) -> Result<Value, LispError> {
+        // Save VM state
+        let saved_stack = std::mem::take(&mut self.stack);
+        let saved_frames = std::mem::take(&mut self.frames);
+        let saved_handlers = std::mem::take(&mut self.handlers);
+        let saved_winders = self.winders.clone();
+
+        // Set up for the call: push function then args
+        self.stack.push(func.clone());
+        for arg in args {
+            self.stack.push(arg.clone());
+        }
+        let result = self.do_call(args.len(), false);
+
+        // If the call set up frames (closure), run them
+        let thunk_result = if result.is_ok() && !self.frames.is_empty() {
+            self.run_blocking()
+        } else {
+            result.map(|_| self.stack.pop().unwrap_or(Value::Void))
+        };
+
+        // Restore VM state
+        self.stack = saved_stack;
+        self.frames = saved_frames;
+        self.handlers = saved_handlers;
+        self.winders = saved_winders;
+
+        thunk_result
+    }
+
+    /// Dispatch a raise or raise-continuable exception to handlers.
+    ///
+    /// R7RS §6.11: The handler is called with the remaining handler stack
+    /// (the closure handler was popped), so re-raises from the handler reach
+    /// outer handlers.
+    ///
+    /// For closure handlers, we call the handler in-line (via do_call) so that
+    /// re-raises and call/cc escapes work naturally. For non-continuable raise,
+    /// we wrap the handler call so that if the handler returns, a secondary
+    /// `&non-continuable` error is raised.
+    /// Dispatch an exception to the handler stack.
+    ///
+    /// Pops the top handler and dispatches:
+    /// - Guard: unwinds stack/frames and jumps to handler code
+    /// - Closure: calls the handler function with the exception value.
+    ///   The handler runs with this handler popped (so re-raises reach
+    ///   outer handlers). The handler's return value is pushed on the stack.
+    ///
+    /// For `raise` (non-continuable), the caller checks whether the exception
+    /// was tagged as continuable. `with-exception-handler` installs a wrapper
+    /// that calls `(error "exception handler returned")` if a non-continuable
+    /// handler returns. This follows the Chibi-Scheme pattern.
+    fn dispatch_raise(&mut self, exception: Value) -> Result<(), LispError> {
+        if let Some(handler) = self.handlers.pop() {
+            match handler {
+                ExceptionHandler::Guard {
+                    handler_ip,
+                    code_id,
+                    stack_depth,
+                    frame_depth,
+                } => {
+                    self.stack.truncate(stack_depth);
+                    self.frames.truncate(frame_depth);
+                    self.stack.push(exception);
+                    if let Some(frame) = self.frames.last_mut() {
+                        frame.ip = handler_ip;
+                        frame.code_id = code_id;
+                    }
+                    Ok(())
+                }
+                ExceptionHandler::Closure(func) => {
+                    // Call handler in-line. The handler runs with the current
+                    // handler stack (this closure handler already popped), so
+                    // re-raises from the handler reach outer handlers.
+                    //
+                    // We use call_thunk_with_args which saves/restores stack
+                    // and frames (isolation) but shares the handler stack.
+                    let saved_stack = std::mem::take(&mut self.stack);
+                    let saved_frames = std::mem::take(&mut self.frames);
+                    let saved_winders = self.winders.clone();
+
+                    self.stack.push(func);
+                    self.stack.push(exception);
+                    let call_result = self.do_call(1, false);
+
+                    let thunk_result = if call_result.is_ok() && !self.frames.is_empty() {
+                        self.run_blocking()
+                    } else {
+                        call_result.map(|_| self.stack.pop().unwrap_or(Value::Void))
+                    };
+
+                    self.stack = saved_stack;
+                    self.frames = saved_frames;
+                    self.winders = saved_winders;
+
+                    match thunk_result {
+                        Ok(result) => {
+                            self.stack.push(result);
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+            }
+        } else {
+            let msg = match &exception {
+                Value::String(s) => s.to_string(),
+                other => format!("{other}"),
+            };
+            Err(LispError::internal(format!("unhandled exception: {msg}")))
+        }
+    }
+
+    /// Get current stack trace for debugging.
+    pub fn stack_trace(&self) -> Vec<(Option<String>, Option<SourceLocation>)> {
+        self.frames
+            .iter()
+            .rev()
+            .map(|f| {
+                let loc = self.code_pool.get(f.code_id).and_then(|code| {
+                    if f.ip > 0 {
+                        code.source_map.get(f.ip - 1).cloned().flatten()
+                    } else {
+                        None
+                    }
+                });
+                (f.name.clone(), loc)
+            })
+            .collect()
+    }
+}
+
+impl Default for Vm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+use crate::lisp_error::SourceLocation;
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn eval(code: &str) -> Value {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(code).unwrap()
+    }
+
+    fn eval_err(code: &str) -> String {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(code).unwrap_err().message()
+    }
+
+    /// Register minimal builtins for testing.
+    fn register_builtins(vm: &mut Vm) {
+        vm.register_fn("+", "Add numbers", Arity::Variadic(0), |args| {
+            let mut sum = 0i64;
+            let mut is_float = false;
+            let mut fsum = 0.0f64;
+            for arg in args {
+                match arg {
+                    Value::Int(n) => {
+                        if is_float {
+                            fsum += *n as f64;
+                        } else {
+                            sum += n;
+                        }
+                    }
+                    Value::Float(n) => {
+                        if !is_float {
+                            fsum = sum as f64;
+                            is_float = true;
+                        }
+                        fsum += n;
+                    }
+                    _ => return Err(LispError::type_error("number", arg.type_name())),
+                }
+            }
+            if is_float {
+                Ok(Value::Float(fsum))
+            } else {
+                Ok(Value::Int(sum))
+            }
+        });
+
+        vm.register_fn("-", "Subtract numbers", Arity::Variadic(1), |args| {
+            if args.len() == 1 {
+                return match &args[0] {
+                    Value::Int(n) => Ok(Value::Int(-n)),
+                    Value::Float(n) => Ok(Value::Float(-n)),
+                    _ => Err(LispError::type_error("number", args[0].type_name())),
+                };
+            }
+            let first = args[0].as_float()?;
+            let mut result = first;
+            for arg in &args[1..] {
+                result -= arg.as_float()?;
+            }
+            if args.iter().all(|a| matches!(a, Value::Int(_))) {
+                Ok(Value::Int(result as i64))
+            } else {
+                Ok(Value::Float(result))
+            }
+        });
+
+        vm.register_fn("*", "Multiply numbers", Arity::Variadic(0), |args| {
+            let mut product = 1i64;
+            let mut is_float = false;
+            let mut fproduct = 1.0f64;
+            for arg in args {
+                match arg {
+                    Value::Int(n) => {
+                        if is_float {
+                            fproduct *= *n as f64;
+                        } else {
+                            product *= n;
+                        }
+                    }
+                    Value::Float(n) => {
+                        if !is_float {
+                            fproduct = product as f64;
+                            is_float = true;
+                        }
+                        fproduct *= n;
+                    }
+                    _ => return Err(LispError::type_error("number", arg.type_name())),
+                }
+            }
+            if is_float {
+                Ok(Value::Float(fproduct))
+            } else {
+                Ok(Value::Int(product))
+            }
+        });
+
+        vm.register_fn("=", "Numeric equality", Arity::Variadic(2), |args| {
+            let first = args[0].as_float()?;
+            for arg in &args[1..] {
+                if arg.as_float()? != first {
+                    return Ok(Value::Bool(false));
+                }
+            }
+            Ok(Value::Bool(true))
+        });
+
+        vm.register_fn("<", "Less than", Arity::Variadic(2), |args| {
+            for w in args.windows(2) {
+                if w[0].as_float()? >= w[1].as_float()? {
+                    return Ok(Value::Bool(false));
+                }
+            }
+            Ok(Value::Bool(true))
+        });
+
+        vm.register_fn(">", "Greater than", Arity::Variadic(2), |args| {
+            for w in args.windows(2) {
+                if w[0].as_float()? <= w[1].as_float()? {
+                    return Ok(Value::Bool(false));
+                }
+            }
+            Ok(Value::Bool(true))
+        });
+
+        vm.register_fn("<=", "Less or equal", Arity::Variadic(2), |args| {
+            for w in args.windows(2) {
+                if w[0].as_float()? > w[1].as_float()? {
+                    return Ok(Value::Bool(false));
+                }
+            }
+            Ok(Value::Bool(true))
+        });
+
+        vm.register_fn(">=", "Greater or equal", Arity::Variadic(2), |args| {
+            for w in args.windows(2) {
+                if w[0].as_float()? < w[1].as_float()? {
+                    return Ok(Value::Bool(false));
+                }
+            }
+            Ok(Value::Bool(true))
+        });
+
+        vm.register_fn("not", "Boolean not", Arity::Fixed(1), |args| {
+            Ok(Value::Bool(!args[0].is_true()))
+        });
+
+        vm.register_fn("cons", "Construct pair", Arity::Fixed(2), |args| {
+            Ok(Value::cons(args[0].clone(), args[1].clone()))
+        });
+
+        vm.register_fn("car", "First of pair", Arity::Fixed(1), |args| {
+            args[0].car()
+        });
+
+        vm.register_fn("cdr", "Rest of pair", Arity::Fixed(1), |args| args[0].cdr());
+
+        vm.register_fn("null?", "Is null?", Arity::Fixed(1), |args| {
+            Ok(Value::Bool(args[0].is_null()))
+        });
+
+        vm.register_fn("pair?", "Is pair?", Arity::Fixed(1), |args| {
+            Ok(Value::Bool(args[0].is_pair()))
+        });
+
+        vm.register_fn("list", "Construct list", Arity::Variadic(0), |args| {
+            Ok(Value::list(args.iter().cloned()))
+        });
+
+        vm.register_fn("display", "Display value", Arity::Fixed(1), |args| {
+            print!("{}", crate::value::display_value(&args[0]));
+            Ok(Value::Void)
+        });
+
+        vm.register_fn("newline", "Print newline", Arity::Fixed(0), |_| {
+            println!();
+            Ok(Value::Void)
+        });
+
+        vm.register_fn("eq?", "Identity equality", Arity::Fixed(2), |args| {
+            Ok(Value::Bool(args[0] == args[1]))
+        });
+
+        vm.register_fn("number?", "Is number?", Arity::Fixed(1), |args| {
+            Ok(Value::Bool(args[0].is_number()))
+        });
+
+        vm.register_fn("string?", "Is string?", Arity::Fixed(1), |args| {
+            Ok(Value::Bool(args[0].is_string()))
+        });
+
+        vm.register_fn("symbol?", "Is symbol?", Arity::Fixed(1), |args| {
+            Ok(Value::Bool(args[0].is_symbol()))
+        });
+
+        vm.register_fn("procedure?", "Is procedure?", Arity::Fixed(1), |args| {
+            Ok(Value::Bool(args[0].is_procedure()))
+        });
+
+        vm.register_fn("boolean?", "Is boolean?", Arity::Fixed(1), |args| {
+            Ok(Value::Bool(matches!(args[0], Value::Bool(_))))
+        });
+
+        vm.register_fn(
+            "apply",
+            "Apply function to args",
+            Arity::Variadic(2),
+            |_args| {
+                // (apply f arg1 ... args-list)
+                // Not fully implementable as a foreign fn since it needs the VM.
+                // This is a stub — real apply is handled in the VM loop.
+                Err(LispError::internal(
+                    "apply must be called from Scheme, not as a foreign function",
+                ))
+            },
+        );
+
+        vm.register_fn("error", "Raise an error", Arity::Variadic(1), |args| {
+            let msg = if args[0].is_string() {
+                args[0].as_str().unwrap().to_string()
+            } else {
+                format!("{}", args[0])
+            };
+            let irritants: Vec<String> = args[1..].iter().map(|a| format!("{a}")).collect();
+            Err(LispError::user(msg, irritants))
+        });
+    }
+
+    // --- Basic expressions ---
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(eval("42"), Value::Int(42));
+        assert_eq!(eval("#t"), Value::Bool(true));
+        assert_eq!(eval("\"hello\""), Value::string("hello"));
+    }
+
+    #[test]
+    fn test_arithmetic() {
+        assert_eq!(eval("(+ 1 2 3)"), Value::Int(6));
+        assert_eq!(eval("(* 2 3)"), Value::Int(6));
+        assert_eq!(eval("(- 10 3)"), Value::Int(7));
+        assert_eq!(eval("(- 5)"), Value::Int(-5));
+    }
+
+    #[test]
+    fn test_comparison() {
+        assert_eq!(eval("(< 1 2)"), Value::Bool(true));
+        assert_eq!(eval("(> 1 2)"), Value::Bool(false));
+        assert_eq!(eval("(= 1 1)"), Value::Bool(true));
+        assert_eq!(eval("(<= 1 1)"), Value::Bool(true));
+    }
+
+    #[test]
+    fn test_if() {
+        assert_eq!(eval("(if #t 1 2)"), Value::Int(1));
+        assert_eq!(eval("(if #f 1 2)"), Value::Int(2));
+        assert_eq!(eval("(if #t 42)"), Value::Int(42));
+    }
+
+    #[test]
+    fn test_quote() {
+        assert_eq!(eval("'foo").as_symbol().unwrap().name(), "foo");
+        let list = eval("'(1 2 3)");
+        assert_eq!(list.to_vec().unwrap().len(), 3);
+    }
+
+    // --- Variables ---
+
+    #[test]
+    fn test_define_and_ref() {
+        assert_eq!(eval("(define x 42) x"), Value::Int(42));
+    }
+
+    #[test]
+    fn test_set() {
+        assert_eq!(eval("(define x 1) (set! x 2) x"), Value::Int(2));
+    }
+
+    #[test]
+    fn test_undefined_variable() {
+        let err = eval_err("nonexistent");
+        assert!(err.contains("undefined"));
+    }
+
+    // --- Functions ---
+
+    #[test]
+    fn test_lambda_call() {
+        assert_eq!(eval("((lambda (x) (+ x 1)) 5)"), Value::Int(6));
+    }
+
+    #[test]
+    fn test_define_function() {
+        assert_eq!(eval("(define (add1 x) (+ x 1)) (add1 10)"), Value::Int(11));
+    }
+
+    #[test]
+    fn test_higher_order() {
+        assert_eq!(
+            eval("(define (apply-twice f x) (f (f x))) (apply-twice (lambda (x) (+ x 1)) 0)"),
+            Value::Int(2)
+        );
+    }
+
+    #[test]
+    fn test_closure() {
+        assert_eq!(
+            eval("(define (make-adder n) (lambda (x) (+ x n))) ((make-adder 10) 5)"),
+            Value::Int(15)
+        );
+    }
+
+    #[test]
+    fn test_variadic() {
+        let result = eval("(define (f x . rest) rest) (f 1 2 3)");
+        let vec = result.to_vec().unwrap();
+        assert_eq!(vec.len(), 2);
+        assert_eq!(vec[0], Value::Int(2));
+        assert_eq!(vec[1], Value::Int(3));
+    }
+
+    // --- Tail calls ---
+
+    #[test]
+    fn test_tco_simple() {
+        // This should complete without stack overflow
+        let result = eval(
+            "(define (count n)
+               (if (= n 0) 'done (count (- n 1))))
+             (count 100000)",
+        );
+        assert_eq!(result.as_symbol().unwrap().name(), "done");
+    }
+
+    #[test]
+    fn test_tco_mutual() {
+        let result = eval(
+            "(define (even? n)
+               (if (= n 0) #t (odd? (- n 1))))
+             (define (odd? n)
+               (if (= n 0) #f (even? (- n 1))))
+             (even? 100000)",
+        );
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    // --- Let forms ---
+
+    #[test]
+    fn test_let() {
+        assert_eq!(eval("(let ((x 1) (y 2)) (+ x y))"), Value::Int(3));
+    }
+
+    #[test]
+    fn test_let_star() {
+        assert_eq!(eval("(let* ((x 1) (y (+ x 1))) y)"), Value::Int(2));
+    }
+
+    #[test]
+    fn test_letrec() {
+        assert_eq!(
+            eval("(letrec ((f (lambda (n) (if (= n 0) 1 (* n (f (- n 1))))))) (f 5))"),
+            Value::Int(120)
+        );
+    }
+
+    #[test]
+    fn test_named_let() {
+        assert_eq!(
+            eval(
+                "(let loop ((n 10) (acc 0))
+                    (if (= n 0) acc (loop (- n 1) (+ acc n))))"
+            ),
+            Value::Int(55)
+        );
+    }
+
+    // --- Control flow ---
+
+    #[test]
+    fn test_and() {
+        assert_eq!(eval("(and)"), Value::Bool(true));
+        assert_eq!(eval("(and 1 2 3)"), Value::Int(3));
+        assert_eq!(eval("(and 1 #f 3)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn test_or() {
+        assert_eq!(eval("(or)"), Value::Bool(false));
+        assert_eq!(eval("(or #f #f 3)"), Value::Int(3));
+        assert_eq!(eval("(or 1 2)"), Value::Int(1));
+    }
+
+    #[test]
+    fn test_cond() {
+        assert_eq!(eval("(cond (#f 1) (#t 2) (else 3))"), Value::Int(2));
+        assert_eq!(eval("(cond (#f 1) (else 42))"), Value::Int(42));
+    }
+
+    #[test]
+    fn test_when() {
+        assert_eq!(eval("(when #t 42)"), Value::Int(42));
+        assert_eq!(eval("(when #f 42)"), Value::Void);
+    }
+
+    #[test]
+    fn test_unless() {
+        assert_eq!(eval("(unless #f 42)"), Value::Int(42));
+        assert_eq!(eval("(unless #t 42)"), Value::Void);
+    }
+
+    // --- Begin ---
+
+    #[test]
+    fn test_begin() {
+        assert_eq!(eval("(begin 1 2 3)"), Value::Int(3));
+    }
+
+    // --- List operations ---
+
+    #[test]
+    fn test_cons_car_cdr() {
+        assert_eq!(eval("(car (cons 1 2))"), Value::Int(1));
+        assert_eq!(eval("(cdr (cons 1 2))"), Value::Int(2));
+    }
+
+    #[test]
+    fn test_list_builtin() {
+        let result = eval("(list 1 2 3)");
+        assert_eq!(result.to_vec().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_null_check() {
+        assert_eq!(eval("(null? '())"), Value::Bool(true));
+        assert_eq!(eval("(null? 1)"), Value::Bool(false));
+    }
+
+    // --- Predicates ---
+
+    #[test]
+    fn test_predicates() {
+        assert_eq!(eval("(number? 42)"), Value::Bool(true));
+        assert_eq!(eval("(string? \"hi\")"), Value::Bool(true));
+        assert_eq!(eval("(symbol? 'foo)"), Value::Bool(true));
+        assert_eq!(eval("(boolean? #t)"), Value::Bool(true));
+        assert_eq!(eval("(procedure? +)"), Value::Bool(true));
+    }
+
+    // --- Error handling ---
+
+    #[test]
+    fn test_arity_error() {
+        // Fixed arity function called with wrong number of args
+        let err = eval_err("((lambda (x) x) 1 2)");
+        assert!(err.contains("expected 1") || err.contains("arity"));
+    }
+
+    #[test]
+    fn test_type_error() {
+        let err = eval_err("(+ 1 \"hello\")");
+        assert!(err.contains("number") || err.contains("type"));
+    }
+
+    #[test]
+    fn test_user_error() {
+        let err = eval_err("(error \"bad\" 42)");
+        assert!(err.contains("bad"));
+    }
+
+    // --- Void in tail position ---
+
+    #[test]
+    fn test_void_in_tail() {
+        let result = eval("(define (f) (if #t (begin 42))) (f)");
+        assert_eq!(result, Value::Int(42));
+    }
+
+    // --- Multiple expressions ---
+
+    #[test]
+    fn test_multiple_top_level() {
+        assert_eq!(eval("1 2 3"), Value::Int(3));
+    }
+
+    // --- Fibonacci benchmark ---
+
+    #[test]
+    fn test_fibonacci() {
+        let result = eval(
+            "(define (fib n)
+               (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+             (fib 20)",
+        );
+        assert_eq!(result, Value::Int(6765));
+    }
+
+    // --- Complex programs ---
+
+    #[test]
+    fn test_map() {
+        let result = eval(
+            "(define (map f lst)
+               (if (null? lst)
+                   '()
+                   (cons (f (car lst)) (map f (cdr lst)))))
+             (map (lambda (x) (* x x)) '(1 2 3 4 5))",
+        );
+        let vec = result.to_vec().unwrap();
+        assert_eq!(vec.len(), 5);
+        assert_eq!(vec[0], Value::Int(1));
+        assert_eq!(vec[4], Value::Int(25));
+    }
+
+    #[test]
+    fn test_filter() {
+        let result = eval(
+            "(define (filter pred lst)
+               (cond ((null? lst) '())
+                     ((pred (car lst)) (cons (car lst) (filter pred (cdr lst))))
+                     (else (filter pred (cdr lst)))))
+             (filter (lambda (x) (> x 2)) '(1 2 3 4 5))",
+        );
+        let vec = result.to_vec().unwrap();
+        assert_eq!(vec.len(), 3);
+        assert_eq!(vec[0], Value::Int(3));
+    }
+
+    #[test]
+    fn test_fold() {
+        let result = eval(
+            "(define (fold f init lst)
+               (if (null? lst) init
+                   (fold f (f init (car lst)) (cdr lst))))
+             (fold + 0 '(1 2 3 4 5))",
+        );
+        assert_eq!(result, Value::Int(15));
+    }
+
+    // --- Module system ---
+
+    #[test]
+    fn test_define_library_and_import() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (test math)
+               (export square cube)
+               (begin
+                 (define (square x) (* x x))
+                 (define (cube x) (* x x x))))",
+        )
+        .unwrap();
+        vm.eval("(import (test math))").unwrap();
+        assert_eq!(vm.eval("(square 5)").unwrap(), Value::Int(25));
+        assert_eq!(vm.eval("(cube 3)").unwrap(), Value::Int(27));
+    }
+
+    #[test]
+    fn test_import_only() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (test stuff)
+               (export a b c)
+               (begin
+                 (define a 1) (define b 2) (define c 3)))",
+        )
+        .unwrap();
+        vm.eval("(import (only (test stuff) a c))").unwrap();
+        assert_eq!(vm.eval("a").unwrap(), Value::Int(1));
+        assert_eq!(vm.eval("c").unwrap(), Value::Int(3));
+        // b should not be imported
+        assert!(vm.eval("b").is_err());
+    }
+
+    #[test]
+    fn test_import_rename() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (test stuff)
+               (export a)
+               (begin (define a 42)))",
+        )
+        .unwrap();
+        vm.eval("(import (rename (test stuff) (a my-a)))").unwrap();
+        assert_eq!(vm.eval("my-a").unwrap(), Value::Int(42));
+    }
+
+    #[test]
+    fn test_import_prefix() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (test stuff)
+               (export x)
+               (begin (define x 99)))",
+        )
+        .unwrap();
+        vm.eval("(import (prefix (test stuff) t:))").unwrap();
+        assert_eq!(vm.eval("t:x").unwrap(), Value::Int(99));
+    }
+
+    #[test]
+    fn test_library_export_rename() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (test rename)
+               (export (rename internal-fn public-fn))
+               (begin (define (internal-fn x) (+ x 1))))",
+        )
+        .unwrap();
+        vm.eval("(import (test rename))").unwrap();
+        assert_eq!(vm.eval("(public-fn 10)").unwrap(), Value::Int(11));
+    }
+
+    #[test]
+    fn test_library_depends_on_library() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (base-lib)
+               (export add1)
+               (begin (define (add1 x) (+ x 1))))",
+        )
+        .unwrap();
+        vm.eval(
+            "(define-library (higher-lib)
+               (export add2)
+               (import (base-lib))
+               (begin (define (add2 x) (add1 (add1 x)))))",
+        )
+        .unwrap();
+        vm.eval("(import (higher-lib))").unwrap();
+        assert_eq!(vm.eval("(add2 10)").unwrap(), Value::Int(12));
+    }
+
+    #[test]
+    fn test_unknown_library_error() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        let err = vm.eval("(import (nonexistent lib))").unwrap_err();
+        assert!(err.message().contains("unknown library"));
+    }
+
+    #[test]
+    fn test_duplicate_library_error() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval(
+            "(define-library (dup)
+               (export a)
+               (begin (define a 1)))",
+        )
+        .unwrap();
+        let err = vm
+            .eval(
+                "(define-library (dup)
+               (export b)
+               (begin (define b 2)))",
+            )
+            .unwrap_err();
+        assert!(err.message().contains("already defined"));
+    }
+
+    // --- Yield/Resume tests ---
+
+    #[test]
+    fn yield_sleep_from_foreign_fn() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+            let ms = args[0].as_int().unwrap_or(0) as u64;
+            Err(LispError::yield_sleep(Duration::from_millis(ms)))
+        });
+        // eval() handles yields synchronously (blocking fallback)
+        let result = vm.eval("(test-sleep 1)").unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn yield_eval_yielding_returns_yield() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+            let ms = args[0].as_int().unwrap_or(0) as u64;
+            Err(LispError::yield_sleep(Duration::from_millis(ms)))
+        });
+        let result = vm.eval_yielding("(test-sleep 10)").unwrap();
+        match result {
+            EvalResult::Yield(YieldRequest::Sleep(d)) => {
+                assert_eq!(d.as_millis(), 10);
+            }
+            _ => panic!("expected Yield(Sleep), got Done"),
+        }
+    }
+
+    #[test]
+    fn yield_resume_continues_execution() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+            let ms = args[0].as_int().unwrap_or(0) as u64;
+            Err(LispError::yield_sleep(Duration::from_millis(ms)))
+        });
+        // Define a function that sleeps then returns 42
+        vm.eval("(define (work) (test-sleep 1) 42)").unwrap();
+        let result = vm.eval_yielding("(work)").unwrap();
+        match result {
+            EvalResult::Yield(YieldRequest::Sleep(_)) => {}
+            _ => panic!("expected yield"),
+        }
+        // Resume — the VM should continue and return 42
+        let result = vm.resume(Value::Bool(true)).unwrap();
+        match result {
+            EvalResult::Done(v) => assert_eq!(v, Value::Int(42)),
+            EvalResult::Yield(_) => panic!("unexpected second yield"),
+        }
+    }
+
+    #[test]
+    fn yield_multiple_yields_in_sequence() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+            let ms = args[0].as_int().unwrap_or(0) as u64;
+            Err(LispError::yield_sleep(Duration::from_millis(ms)))
+        });
+        // Two sleeps in sequence
+        vm.eval("(define (work2) (test-sleep 1) (test-sleep 2) 99)")
+            .unwrap();
+        let r = vm.eval_yielding("(work2)").unwrap();
+        assert!(matches!(r, EvalResult::Yield(YieldRequest::Sleep(d)) if d.as_millis() == 1));
+
+        let r = vm.resume(Value::Bool(true)).unwrap();
+        assert!(matches!(r, EvalResult::Yield(YieldRequest::Sleep(d)) if d.as_millis() == 2));
+
+        let r = vm.resume(Value::Bool(true)).unwrap();
+        assert!(matches!(r, EvalResult::Done(Value::Int(99))));
+    }
+
+    #[test]
+    fn yield_in_loop() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+            let ms = args[0].as_int().unwrap_or(0) as u64;
+            Err(LispError::yield_sleep(Duration::from_millis(ms)))
+        });
+        // Loop that yields 3 times
+        vm.eval(
+            "(define (loop-sleep n)
+               (if (= n 0)
+                   'done
+                   (begin (test-sleep n) (loop-sleep (- n 1)))))",
+        )
+        .unwrap();
+
+        let mut r = vm.eval_yielding("(loop-sleep 3)").unwrap();
+        let mut yield_count = 0;
+        loop {
+            match r {
+                EvalResult::Done(v) => {
+                    assert_eq!(v, Value::symbol("done"));
+                    break;
+                }
+                EvalResult::Yield(YieldRequest::Sleep(_)) => {
+                    yield_count += 1;
+                    r = vm.resume(Value::Bool(true)).unwrap();
+                }
+                _ => panic!("unexpected yield type"),
+            }
+        }
+        assert_eq!(yield_count, 3);
+    }
+
+    #[test]
+    fn yield_resume_value_visible_to_scheme() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+            Err(LispError::yield_sleep(Duration::from_millis(1)))
+        });
+        // The resume value is the result of the yielding call
+        vm.eval("(define (get-sleep-result) (test-sleep 1))")
+            .unwrap();
+
+        let r = vm.eval_yielding("(get-sleep-result)").unwrap();
+        assert!(matches!(r, EvalResult::Yield(_)));
+
+        // Resume with a custom value
+        let r = vm.resume(Value::Int(42)).unwrap();
+        match r {
+            EvalResult::Done(v) => assert_eq!(v, Value::Int(42)),
+            _ => panic!("expected done"),
+        }
+    }
+
+    #[test]
+    fn yield_wait_for_file() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-wait-file", "test", Arity::Fixed(2), |args| {
+            let path = args[0]
+                .as_str()
+                .map_err(|_| LispError::type_error("string", ""))?;
+            let ms = args[1].as_int().unwrap_or(1000) as u64;
+            Err(LispError::yield_wait_for_file(
+                std::path::PathBuf::from(path),
+                Duration::from_millis(ms),
+            ))
+        });
+        let r = vm
+            .eval_yielding(r#"(test-wait-file "/tmp/test.txt" 5000)"#)
+            .unwrap();
+        match r {
+            EvalResult::Yield(YieldRequest::WaitForFile(p, t)) => {
+                assert_eq!(p.to_str().unwrap(), "/tmp/test.txt");
+                assert_eq!(t.as_millis(), 5000);
+            }
+            _ => panic!("expected WaitForFile yield"),
+        }
+    }
+
+    #[test]
+    fn yield_no_yield_returns_done() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        // eval_yielding with no yields returns Done
+        let r = vm.eval_yielding("(+ 1 2)").unwrap();
+        match r {
+            EvalResult::Done(v) => assert_eq!(v, Value::Int(3)),
+            _ => panic!("expected done"),
+        }
+    }
+
+    #[test]
+    fn yield_empty_code_returns_done_void() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        let r = vm.eval_yielding("").unwrap();
+        match r {
+            EvalResult::Done(Value::Void) => {}
+            _ => panic!("expected Done(Void)"),
+        }
+    }
+
+    #[test]
+    fn yield_error_from_foreign_fn_propagates() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-err", "test", Arity::Fixed(0), |_| {
+            Err(LispError::user("test error", vec![]))
+        });
+        let r = vm.eval_yielding("(test-err)");
+        assert!(r.is_err());
+        assert!(r.unwrap_err().message().contains("test error"));
+    }
+
+    #[test]
+    fn yield_guard_does_not_catch_yields() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+            Err(LispError::yield_sleep(Duration::from_millis(1)))
+        });
+        // Guard should NOT catch yield errors — they must pass through
+        let r = vm
+            .eval_yielding(
+                "(guard (exn (#t 'caught))
+               (test-sleep 1)
+               42)",
+            )
+            .unwrap();
+        // Should yield, not return 'caught
+        assert!(matches!(r, EvalResult::Yield(YieldRequest::Sleep(_))));
+        let r = vm.resume(Value::Bool(true)).unwrap();
+        assert!(matches!(r, EvalResult::Done(Value::Int(42))));
+    }
+
+    #[test]
+    fn yield_blocking_eval_handles_sleep() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+            Err(LispError::yield_sleep(Duration::from_millis(1)))
+        });
+        // Regular eval() blocks on yields
+        let start = std::time::Instant::now();
+        let result = vm.eval("(test-sleep 1)").unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(result, Value::Bool(true));
+        assert!(elapsed.as_millis() >= 1);
+    }
+
+    #[test]
+    fn yield_is_yield_predicate() {
+        let yield_err = LispError::yield_sleep(Duration::from_millis(100));
+        assert!(yield_err.is_yield());
+
+        let normal_err = LispError::user("not a yield", vec![]);
+        assert!(!normal_err.is_yield());
+    }
+
+    #[test]
+    fn yield_lisp_error_message() {
+        let err = LispError::yield_sleep(Duration::from_millis(500));
+        assert_eq!(err.message(), "yield: sleep 500ms");
+
+        let err = LispError::yield_wait_for_file(
+            std::path::PathBuf::from("/tmp/foo"),
+            Duration::from_millis(3000),
+        );
+        assert_eq!(err.message(), "yield: wait-for-file /tmp/foo (3000ms)");
+    }
+
+    #[test]
+    fn source_map_populated_after_eval() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval_with_file("(define x 42)\n(define y (+ x 1))", "test.scm")
+            .unwrap();
+        // The last code object should have source map entries
+        let code = vm.code_pool.last().unwrap();
+        // At least some entries should be non-None
+        let non_none = code.source_map.iter().filter(|l| l.is_some()).count();
+        assert!(
+            non_none > 0,
+            "source map should have non-None entries, got {} total entries",
+            code.source_map.len()
+        );
+        // Verify file name is correct
+        let first_loc = code.source_map.iter().find_map(|l| l.as_ref()).unwrap();
+        assert_eq!(first_loc.file, "test.scm");
+        // First define is on line 1
+        assert_eq!(first_loc.line, 1);
+    }
+
+    #[test]
+    fn source_map_tracks_lines() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.eval_with_file("(define a 1)\n(define b 2)\n(define c 3)", "multi.scm")
+            .unwrap();
+        let code = vm.code_pool.last().unwrap();
+        // Collect unique lines from source map
+        let lines: std::collections::HashSet<u32> = code
+            .source_map
+            .iter()
+            .filter_map(|l| l.as_ref().map(|loc| loc.line))
+            .collect();
+        // Should have entries for lines 1, 2, and 3
+        assert!(lines.contains(&1), "should have line 1");
+        assert!(lines.contains(&2), "should have line 2");
+        assert!(lines.contains(&3), "should have line 3");
+    }
+
+    // --- DAP / Breakpoint tests ---
+
+    #[test]
+    fn breakpoint_yields_at_set_line() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+        vm.breakpoints
+            .entry("test.scm".into())
+            .or_default()
+            .insert(2);
+
+        let r = vm
+            .eval_with_file_yielding("(define a 1)\n(define b 2)\n(define c 3)", "test.scm")
+            .unwrap();
+        match r {
+            EvalResult::Yield(YieldRequest::Breakpoint(info)) => {
+                assert_eq!(info.line, 2);
+                assert_eq!(info.file, "test.scm");
+                assert!(!info.frames.is_empty());
+            }
+            other => panic!("expected Breakpoint yield, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn breakpoint_resume_continues_execution() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+        vm.breakpoints
+            .entry("test.scm".into())
+            .or_default()
+            .insert(2);
+
+        let r = vm
+            .eval_with_file_yielding("(define a 1)\n(define b 2)\n(define c 3)", "test.scm")
+            .unwrap();
+        assert!(matches!(r, EvalResult::Yield(YieldRequest::Breakpoint(_))));
+
+        // Resume — should complete
+        let r2 = vm.resume(Value::Bool(true)).unwrap();
+        match r2 {
+            EvalResult::Done(v) => {
+                // c should be defined after resuming
+                assert_eq!(vm.globals.get("c"), Some(&Value::Int(3)));
+                assert_eq!(v, Value::Void);
+            }
+            other => panic!("expected Done after resume, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_breakpoint_runs_normally() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+        // No breakpoints set — should run to completion
+
+        let r = vm
+            .eval_with_file_yielding("(define a 1)\n(define b 2)", "test.scm")
+            .unwrap();
+        assert!(matches!(r, EvalResult::Done(_)));
+        assert_eq!(vm.globals.get("a"), Some(&Value::Int(1)));
+        assert_eq!(vm.globals.get("b"), Some(&Value::Int(2)));
+    }
+
+    #[test]
+    fn step_in_breaks_on_next_line() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+        // Set breakpoint on line 1 to get initial stop
+        vm.breakpoints
+            .entry("step.scm".into())
+            .or_default()
+            .insert(1);
+
+        let r = vm
+            .eval_with_file_yielding("(define a 1)\n(define b 2)\n(define c 3)", "step.scm")
+            .unwrap();
+        assert!(
+            matches!(r, EvalResult::Yield(YieldRequest::Breakpoint(ref info)) if info.line == 1)
+        );
+
+        // Set step-in mode and resume
+        vm.step_mode = StepMode::StepIn;
+        let r2 = vm.resume(Value::Bool(true)).unwrap();
+        // Should break on line 2
+        assert!(
+            matches!(r2, EvalResult::Yield(YieldRequest::Breakpoint(ref info)) if info.line == 2)
+        );
+
+        // Step again — should break on line 3
+        vm.step_mode = StepMode::StepIn;
+        let r3 = vm.resume(Value::Bool(true)).unwrap();
+        assert!(
+            matches!(r3, EvalResult::Yield(YieldRequest::Breakpoint(ref info)) if info.line == 3)
+        );
+
+        // Resume normally — should complete
+        let r4 = vm.resume(Value::Bool(true)).unwrap();
+        assert!(matches!(r4, EvalResult::Done(_)));
+    }
+
+    #[test]
+    fn breakpoint_info_has_locals() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+
+        // Define a function and break inside it
+        vm.eval_with_file("(define (foo x) (+ x 1))", "locals.scm")
+            .unwrap();
+
+        vm.breakpoints
+            .entry("locals.scm".into())
+            .or_default()
+            .insert(1);
+
+        let r = vm
+            .eval_with_file_yielding("(foo 42)", "locals.scm")
+            .unwrap();
+        match r {
+            EvalResult::Yield(YieldRequest::Breakpoint(info)) => {
+                // Should have at least one frame
+                assert!(!info.frames.is_empty());
+            }
+            other => panic!("expected Breakpoint yield, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn debug_mode_off_no_breakpoint_checks() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        // debug_mode is false by default
+        vm.breakpoints
+            .entry("test.scm".into())
+            .or_default()
+            .insert(1);
+
+        // Even with breakpoints set, no BreakpointCheck opcodes are emitted
+        let r = vm
+            .eval_with_file_yielding("(define a 1)\n(define b 2)", "test.scm")
+            .unwrap();
+        assert!(matches!(r, EvalResult::Done(_)));
+    }
+
+    // --- DAP performance tests ---
+
+    #[test]
+    fn perf_breakpoint_yield_resume() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+
+        let iterations = 100u32;
+        let start = std::time::Instant::now();
+
+        for _ in 0..iterations {
+            vm.breakpoints
+                .entry("perf.scm".into())
+                .or_default()
+                .insert(1);
+
+            let r = vm
+                .eval_with_file_yielding("(define a 1)\n(define b 2)", "perf.scm")
+                .unwrap();
+            assert!(matches!(r, EvalResult::Yield(YieldRequest::Breakpoint(_))));
+
+            let r2 = vm.resume(Value::Bool(true)).unwrap();
+            assert!(matches!(r2, EvalResult::Done(_)));
+
+            vm.last_break_line_clear();
+        }
+
+        let per_op = start.elapsed() / iterations;
+        assert!(
+            per_op.as_millis() < 5,
+            "breakpoint yield/resume too slow: {:?}/op (want <5ms)",
+            per_op
+        );
+    }
+
+    #[test]
+    fn perf_stepping_through_10_lines() {
+        let mut vm = Vm::new();
+        register_builtins(&mut vm);
+        vm.debug_mode = true;
+
+        // Build 10-line program
+        let lines: Vec<String> = (0..10).map(|i| format!("(define v{} {})", i, i)).collect();
+        let code = lines.join("\n");
+
+        let iterations = 20u32;
+        let start = std::time::Instant::now();
+
+        for _ in 0..iterations {
+            // Break on line 1
+            vm.breakpoints
+                .entry("step-perf.scm".into())
+                .or_default()
+                .insert(1);
+
+            let mut r = vm.eval_with_file_yielding(&code, "step-perf.scm").unwrap();
+
+            // Step through all remaining lines
+            let mut steps = 0;
+            while matches!(r, EvalResult::Yield(YieldRequest::Breakpoint(_))) {
+                vm.step_mode = StepMode::StepIn;
+                r = vm.resume(Value::Bool(true)).unwrap();
+                steps += 1;
+            }
+            assert!(steps >= 9, "should step through at least 9 lines");
+            vm.last_break_line_clear();
+        }
+
+        let per_op = start.elapsed() / iterations;
+        assert!(
+            per_op.as_millis() < 20,
+            "stepping through 10 lines too slow: {:?}/op (want <20ms)",
+            per_op
+        );
+    }
+
+    #[test]
+    fn perf_debug_mode_overhead() {
+        let mut vm_normal = Vm::new();
+        register_builtins(&mut vm_normal);
+
+        let mut vm_debug = Vm::new();
+        register_builtins(&mut vm_debug);
+        vm_debug.debug_mode = true;
+        // No breakpoints — measures pure instrumentation overhead
+
+        let code = "(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(fib 15)";
+        let iterations = 10u32;
+
+        // Normal mode
+        let start_normal = std::time::Instant::now();
+        for _ in 0..iterations {
+            vm_normal.eval_with_file(code, "normal.scm").unwrap();
+        }
+        let normal_time = start_normal.elapsed();
+
+        // Debug mode (no breakpoints)
+        let start_debug = std::time::Instant::now();
+        for _ in 0..iterations {
+            vm_debug.eval_with_file(code, "debug.scm").unwrap();
+        }
+        let debug_time = start_debug.elapsed();
+
+        // Debug mode overhead should be <3x (BreakpointCheck opcode at top level only)
+        let ratio = debug_time.as_micros() as f64 / normal_time.as_micros().max(1) as f64;
+        assert!(
+            ratio < 3.0,
+            "debug mode overhead too high: {:.1}x (want <3x)",
+            ratio
+        );
+    }
+}

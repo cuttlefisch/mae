@@ -2,26 +2,11 @@
 
 (describe-group "Mode transitions"
   (lambda ()
-    (it-test "setup fresh buffer"
+    (it-test "normal → insert → normal cycle"
       (lambda ()
-        (create-buffer "*test-modes*")))
-
-    (it-test "starts in normal mode"
-      (lambda ()
-        (should-mode "normal")))
-
-    (it-test "enter insert mode"
-      (lambda ()
-        (run-command "enter-insert-mode")))
-
-    (it-test "is in insert mode"
-      (lambda ()
-        (should-mode "insert")))
-
-    (it-test "back to normal"
-      (lambda ()
-        (run-command "enter-normal-mode")))
-
-    (it-test "is normal again"
-      (lambda ()
+        (create-buffer "*test-modes*")
+        (should-mode "normal")
+        (run-command "enter-insert-mode")
+        (should-mode "insert")
+        (run-command "enter-normal-mode")
         (should-mode "normal")))))

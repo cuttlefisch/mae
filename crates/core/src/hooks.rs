@@ -52,6 +52,11 @@ pub const WELL_KNOWN_HOOKS: &[&str] = &[
     "module-loaded",
     "module-unloaded",
     "after-kb-change",
+    "after-insert",
+    "after-delete",
+    "buffer-switch",
+    "sync-update",
+    "idle",
 ];
 
 /// A registry of named hooks, each with an ordered list of Scheme function names.

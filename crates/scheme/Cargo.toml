@@ -8,6 +8,6 @@ license.workspace = true
 [dependencies]
 mae-core = { path = "../core" }
 mae-sync = { path = "../sync" }
-steel-core = "0.8"
 base64 = "0.22"
 tracing = { workspace = true }
+libc = "0.2"

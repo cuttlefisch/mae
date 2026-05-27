@@ -30,7 +30,8 @@ impl Editor {
         };
         let suffix = self.lsp_starting_suffix(&lang_id);
         let win = self.window_mgr.focused_window();
-        self.pending_lsp_requests
+        self.lsp
+            .pending_requests
             .push(crate::LspIntent::CodeAction {
                 uri,
                 language_id: lang_id,
@@ -50,7 +51,7 @@ impl Editor {
             return;
         }
         let count = items.len();
-        self.code_action_menu = Some(super::CodeActionMenu { items, selected: 0 });
+        self.lsp.code_action_menu = Some(super::CodeActionMenu { items, selected: 0 });
         self.set_status(format!(
             "[LSP] {} code action(s) — j/k navigate, Enter apply, Esc dismiss",
             count
@@ -59,7 +60,7 @@ impl Editor {
 
     /// Navigate code action menu down.
     pub fn code_action_next(&mut self) {
-        if let Some(ref mut menu) = self.code_action_menu {
+        if let Some(ref mut menu) = self.lsp.code_action_menu {
             let len = menu.items.len();
             menu.selected = (menu.selected + 1) % len;
         }
@@ -67,7 +68,7 @@ impl Editor {
 
     /// Navigate code action menu up.
     pub fn code_action_prev(&mut self) {
-        if let Some(ref mut menu) = self.code_action_menu {
+        if let Some(ref mut menu) = self.lsp.code_action_menu {
             let len = menu.items.len();
             menu.selected = menu.selected.checked_sub(1).unwrap_or(len - 1);
         }
@@ -75,12 +76,12 @@ impl Editor {
 
     /// Dismiss the code action menu without applying.
     pub fn code_action_dismiss(&mut self) {
-        self.code_action_menu = None;
+        self.lsp.code_action_menu = None;
     }
 
     /// Apply the selected code action's workspace edit.
     pub fn code_action_select(&mut self) {
-        let menu = match self.code_action_menu.take() {
+        let menu = match self.lsp.code_action_menu.take() {
             Some(m) => m,
             None => return,
         };
@@ -141,7 +142,7 @@ impl Editor {
             return;
         };
         let uri = crate::lsp_intent::path_to_uri(path);
-        self.pending_lsp_requests.push(crate::LspIntent::Format {
+        self.lsp.pending_requests.push(crate::LspIntent::Format {
             uri,
             language_id: lang_id,
         });
@@ -177,7 +178,8 @@ impl Editor {
             } else {
                 self.vi.visual_anchor_col
             };
-            self.pending_lsp_requests
+            self.lsp
+                .pending_requests
                 .push(crate::LspIntent::RangeFormat {
                     uri,
                     language_id: lang_id,
@@ -189,7 +191,7 @@ impl Editor {
             self.set_status("LSP range format: awaiting server response");
         } else {
             // Fall back to full-file format
-            self.pending_lsp_requests.push(crate::LspIntent::Format {
+            self.lsp.pending_requests.push(crate::LspIntent::Format {
                 uri,
                 language_id: lang_id,
             });
@@ -376,25 +378,25 @@ mod tests {
                 edit_json: None,
             },
         ]);
-        assert!(editor.code_action_menu.is_some());
-        let menu = editor.code_action_menu.as_ref().unwrap();
+        assert!(editor.lsp.code_action_menu.is_some());
+        let menu = editor.lsp.code_action_menu.as_ref().unwrap();
         assert_eq!(menu.selected, 0);
         assert_eq!(menu.items.len(), 3);
 
         editor.code_action_next();
-        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 1);
+        assert_eq!(editor.lsp.code_action_menu.as_ref().unwrap().selected, 1);
 
         editor.code_action_next();
-        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 2);
+        assert_eq!(editor.lsp.code_action_menu.as_ref().unwrap().selected, 2);
 
         editor.code_action_next(); // wraps
-        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 0);
+        assert_eq!(editor.lsp.code_action_menu.as_ref().unwrap().selected, 0);
 
         editor.code_action_prev(); // wraps back
-        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 2);
+        assert_eq!(editor.lsp.code_action_menu.as_ref().unwrap().selected, 2);
 
         editor.code_action_dismiss();
-        assert!(editor.code_action_menu.is_none());
+        assert!(editor.lsp.code_action_menu.is_none());
     }
 
     #[test]
@@ -420,7 +422,7 @@ mod tests {
         editor.code_action_select();
         let text = editor.active_buffer().text();
         assert!(text.starts_with("goodbye world"));
-        assert!(editor.code_action_menu.is_none());
+        assert!(editor.lsp.code_action_menu.is_none());
     }
 
     #[test]
@@ -432,9 +434,9 @@ mod tests {
             kind: None,
             edit_json: None,
         }]);
-        assert!(editor.code_action_menu.is_some());
+        assert!(editor.lsp.code_action_menu.is_some());
         editor.dispatch_builtin("move-down");
-        assert!(editor.code_action_menu.is_none());
+        assert!(editor.lsp.code_action_menu.is_none());
     }
 
     #[test]
@@ -454,11 +456,11 @@ mod tests {
             },
         ]);
         editor.dispatch_builtin("lsp-code-action-next");
-        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 1);
+        assert_eq!(editor.lsp.code_action_menu.as_ref().unwrap().selected, 1);
         editor.dispatch_builtin("lsp-code-action-prev");
-        assert_eq!(editor.code_action_menu.as_ref().unwrap().selected, 0);
+        assert_eq!(editor.lsp.code_action_menu.as_ref().unwrap().selected, 0);
         editor.dispatch_builtin("lsp-code-action-dismiss");
-        assert!(editor.code_action_menu.is_none());
+        assert!(editor.lsp.code_action_menu.is_none());
     }
 
     #[test]

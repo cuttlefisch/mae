@@ -15,7 +15,7 @@ equivalent elsewhere. Read this before diving into the code.
 | Viewport/pane | **Window** | window | window | editor pane |
 | OS window | *(terminal, one)* | tab/frame | frame | window |
 | Split layout | **WindowManager** | tabpage + splits | frame + window tree | editor group |
-| Extension language | **Scheme** (Steel) | Vimscript / Lua | Emacs Lisp | TypeScript |
+| Extension language | **Scheme** (mae-scheme) | Vimscript / Lua | Emacs Lisp | TypeScript |
 | AI conversation | **Conversation buffer** | *(none)* | *(none)* | Chat panel |
 | Mode transitions | **Mode** enum | modes | major/minor modes | *(none)* |
 
@@ -247,8 +247,8 @@ pattern is used for DAP (`DapIntent` → `DapCommand`).
 
 ### Scheme runtime
 
-MAE embeds [Steel](https://github.com/mattwparas/steel), an R7RS-small Scheme
-implementation. The runtime serves the same role as Emacs Lisp in Emacs:
+MAE embeds mae-scheme, a purpose-built R7RS-small Scheme runtime. It serves
+the same role as Emacs Lisp in Emacs:
 configuration, key binding, custom commands, packages.
 
 Key points:

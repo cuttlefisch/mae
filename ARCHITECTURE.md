@@ -10,7 +10,7 @@ For user-facing docs, see README.md. For build instructions, see CLAUDE.md.
 | `mae-core` | Buffer (rope), event loop, editor state, commands, modes |
 | `mae-renderer` | TUI rendering via ratatui/crossterm (`Renderer` trait) |
 | `mae-gui` | GUI rendering via winit + Skia 2D |
-| `mae-scheme` | Embedded Steel Scheme runtime |
+| `mae-scheme` | Embedded R7RS-small Scheme runtime |
 | `mae-lsp` | LSP client (tower-lsp, diagnostics, completion) |
 | `mae-dap` | DAP client (breakpoints, step, inspect) |
 | `mae-ai` | AI agent transport (Claude/OpenAI/Gemini/DeepSeek) |

@@ -9,7 +9,7 @@ impl Editor {
     /// Silently ignored if the buffer has no known language.
     pub fn lsp_request_completion(&mut self) {
         if let Some((uri, language_id, line, character)) = self.lsp_context_at_cursor() {
-            self.pending_lsp_requests.push(LspIntent::Completion {
+            self.lsp.pending_requests.push(LspIntent::Completion {
                 uri,
                 language_id,
                 line,
@@ -21,25 +21,25 @@ impl Editor {
     /// Store a completion result from the LSP server, making the popup visible.
     pub fn apply_completion_result(&mut self, items: Vec<CompletionItem>) {
         if items.is_empty() {
-            self.completion_items.clear();
-            self.completion_selected = 0;
+            self.lsp.completion_items.clear();
+            self.lsp.completion_selected = 0;
             return;
         }
-        self.completion_items = items;
-        self.completion_selected = 0;
+        self.lsp.completion_items = items;
+        self.lsp.completion_selected = 0;
     }
 
     /// Accept the currently selected completion item — inserts its text at
     /// the cursor, replacing the word prefix that was used to trigger
     /// completion.
     pub fn lsp_accept_completion(&mut self) {
-        if self.completion_items.is_empty() {
+        if self.lsp.completion_items.is_empty() {
             return;
         }
-        let item = self.completion_items[self.completion_selected].clone();
+        let item = self.lsp.completion_items[self.lsp.completion_selected].clone();
         // Clear the popup first so downstream state is clean.
-        self.completion_items.clear();
-        self.completion_selected = 0;
+        self.lsp.completion_items.clear();
+        self.lsp.completion_selected = 0;
 
         // Erase the word-prefix already typed, then insert the full item text.
         let idx = self.active_buffer_idx();
@@ -83,26 +83,30 @@ impl Editor {
 
     /// Dismiss the completion popup without inserting anything.
     pub fn lsp_dismiss_completion(&mut self) {
-        self.completion_items.clear();
-        self.completion_selected = 0;
+        self.lsp.completion_items.clear();
+        self.lsp.completion_selected = 0;
     }
 
     /// Select the next completion item.
     pub fn lsp_complete_next(&mut self) {
-        if self.completion_items.is_empty() {
+        if self.lsp.completion_items.is_empty() {
             return;
         }
-        let len = self.completion_items.len();
-        self.completion_selected = (self.completion_selected + 1) % len;
+        let len = self.lsp.completion_items.len();
+        self.lsp.completion_selected = (self.lsp.completion_selected + 1) % len;
     }
 
     /// Select the previous completion item.
     pub fn lsp_complete_prev(&mut self) {
-        if self.completion_items.is_empty() {
+        if self.lsp.completion_items.is_empty() {
             return;
         }
-        let len = self.completion_items.len();
-        self.completion_selected = self.completion_selected.checked_sub(1).unwrap_or(len - 1);
+        let len = self.lsp.completion_items.len();
+        self.lsp.completion_selected = self
+            .lsp
+            .completion_selected
+            .checked_sub(1)
+            .unwrap_or(len - 1);
     }
 }
 
@@ -136,8 +140,8 @@ mod tests {
     fn apply_completion_result_stores_items() {
         let mut editor = Editor::new();
         editor.apply_completion_result(vec![make_item("foo", "foo"), make_item("bar", "bar")]);
-        assert_eq!(editor.completion_items.len(), 2);
-        assert_eq!(editor.completion_selected, 0);
+        assert_eq!(editor.lsp.completion_items.len(), 2);
+        assert_eq!(editor.lsp.completion_selected, 0);
     }
 
     #[test]
@@ -145,17 +149,17 @@ mod tests {
         let mut editor = Editor::new();
         editor.apply_completion_result(vec![make_item("foo", "foo")]);
         editor.apply_completion_result(vec![]);
-        assert!(editor.completion_items.is_empty());
+        assert!(editor.lsp.completion_items.is_empty());
     }
 
     #[test]
     fn lsp_dismiss_completion_clears_state() {
         let mut editor = Editor::new();
         editor.apply_completion_result(vec![make_item("foo", "foo")]);
-        editor.completion_selected = 0;
+        editor.lsp.completion_selected = 0;
         editor.lsp_dismiss_completion();
-        assert!(editor.completion_items.is_empty());
-        assert_eq!(editor.completion_selected, 0);
+        assert!(editor.lsp.completion_items.is_empty());
+        assert_eq!(editor.lsp.completion_selected, 0);
     }
 
     #[test]
@@ -167,11 +171,11 @@ mod tests {
             make_item("c", "c"),
         ]);
         editor.lsp_complete_next();
-        assert_eq!(editor.completion_selected, 1);
+        assert_eq!(editor.lsp.completion_selected, 1);
         editor.lsp_complete_next();
-        assert_eq!(editor.completion_selected, 2);
+        assert_eq!(editor.lsp.completion_selected, 2);
         editor.lsp_complete_next(); // wraps to 0
-        assert_eq!(editor.completion_selected, 0);
+        assert_eq!(editor.lsp.completion_selected, 0);
     }
 
     #[test]
@@ -183,16 +187,16 @@ mod tests {
             make_item("c", "c"),
         ]);
         editor.lsp_complete_prev(); // wraps to 2
-        assert_eq!(editor.completion_selected, 2);
+        assert_eq!(editor.lsp.completion_selected, 2);
     }
 
     #[test]
     fn lsp_request_completion_queues_intent() {
         let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
         editor.lsp_request_completion();
-        assert_eq!(editor.pending_lsp_requests.len(), 1);
+        assert_eq!(editor.lsp.pending_requests.len(), 1);
         assert!(matches!(
-            editor.pending_lsp_requests[0],
+            editor.lsp.pending_requests[0],
             LspIntent::Completion { .. }
         ));
     }
@@ -201,7 +205,7 @@ mod tests {
     fn lsp_request_completion_skipped_for_buffer_without_file() {
         let mut editor = Editor::new();
         editor.lsp_request_completion();
-        assert!(editor.pending_lsp_requests.is_empty());
+        assert!(editor.lsp.pending_requests.is_empty());
     }
 
     #[test]
@@ -216,7 +220,7 @@ mod tests {
         editor.apply_completion_result(vec![make_item("main", "main")]);
         editor.lsp_accept_completion();
         assert_eq!(editor.active_buffer().line_text(0), "fn main\n");
-        assert!(editor.completion_items.is_empty());
+        assert!(editor.lsp.completion_items.is_empty());
     }
 
     #[test]

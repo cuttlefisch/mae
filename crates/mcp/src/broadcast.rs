@@ -9,7 +9,7 @@
 //! blocking the server.
 
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -88,6 +88,19 @@ pub enum EditorEvent {
 }
 
 impl EditorEvent {
+    /// The document ID associated with this event, if any.
+    /// Used for doc-scoped filtering — events with a doc_id should only be
+    /// delivered to sessions that have interacted with that document.
+    pub fn doc_id(&self) -> Option<&str> {
+        match self {
+            EditorEvent::SyncUpdate { buffer_name, .. } => Some(buffer_name),
+            EditorEvent::SharerLeft { doc, .. } => Some(doc),
+            EditorEvent::SaveCommitted { doc, .. } => Some(doc),
+            EditorEvent::AwarenessUpdate { doc_id, .. } => Some(doc_id),
+            _ => None,
+        }
+    }
+
     /// The subscription category for this event type.
     pub fn event_type(&self) -> &'static str {
         match self {
@@ -110,10 +123,33 @@ impl EditorEvent {
 /// Default per-client event queue capacity.
 const DEFAULT_QUEUE_CAPACITY: usize = 100;
 
-/// Manages per-client event channels.
+/// Per-client subscription state.
+struct ClientEntry {
+    /// Event type subscriptions (e.g., "sync_update", "awareness_update", "*").
+    event_subs: Vec<String>,
+    /// Document IDs this client is interested in. Events with a `doc_id()`
+    /// are only delivered if the client has subscribed to that document.
+    /// Events without a `doc_id()` (global events) are always delivered.
+    doc_subs: HashSet<String>,
+    /// Bounded channel for event delivery.
+    tx: mpsc::Sender<EditorEvent>,
+}
+
+/// Manages per-client event channels with doc-scoped filtering.
+///
+/// The broadcaster enforces two levels of filtering at enqueue time:
+/// 1. **Event type**: clients only receive event types they subscribed to.
+/// 2. **Document scope**: events with a `doc_id()` are only delivered to
+///    clients that have subscribed to that document via `subscribe_doc()`.
+///    Events without a doc_id (global events like `peer_joined`) bypass
+///    doc filtering entirely.
+///
+/// This ensures zero cross-document leakage — a client editing `foo.rs`
+/// never receives awareness updates, sync updates, or save notifications
+/// for `bar.rs`.
 pub struct EventBroadcaster {
-    /// Map of session_id → (subscriptions, sender).
-    clients: HashMap<u64, (Vec<String>, mpsc::Sender<EditorEvent>)>,
+    /// Map of session_id → client entry.
+    clients: HashMap<u64, ClientEntry>,
     /// Monotonically increasing sequence number for event ordering.
     next_seq: AtomicU64,
 }
@@ -134,7 +170,14 @@ impl EventBroadcaster {
         subscriptions: Vec<String>,
     ) -> mpsc::Receiver<EditorEvent> {
         let (tx, rx) = mpsc::channel(DEFAULT_QUEUE_CAPACITY);
-        self.clients.insert(session_id, (subscriptions, tx));
+        self.clients.insert(
+            session_id,
+            ClientEntry {
+                event_subs: subscriptions,
+                doc_subs: HashSet::new(),
+                tx,
+            },
+        );
         rx
     }
 
@@ -143,10 +186,67 @@ impl EventBroadcaster {
         self.clients.remove(&session_id);
     }
 
-    /// Update a client's subscription list.
+    /// Update a client's event type subscription list.
     pub fn update_subscriptions(&mut self, session_id: u64, subscriptions: Vec<String>) {
-        if let Some((subs, _)) = self.clients.get_mut(&session_id) {
-            *subs = subscriptions;
+        if let Some(entry) = self.clients.get_mut(&session_id) {
+            entry.event_subs = subscriptions;
+        }
+    }
+
+    /// Subscribe a client to a specific document's events.
+    /// Called when a client shares, joins, or sends updates to a document.
+    pub fn subscribe_doc(&mut self, session_id: u64, doc_id: &str) {
+        if let Some(entry) = self.clients.get_mut(&session_id) {
+            entry.doc_subs.insert(doc_id.to_string());
+        }
+    }
+
+    /// Unsubscribe a client from a specific document's events.
+    pub fn unsubscribe_doc(&mut self, session_id: u64, doc_id: &str) {
+        if let Some(entry) = self.clients.get_mut(&session_id) {
+            entry.doc_subs.remove(doc_id);
+        }
+    }
+
+    /// Check if a client should receive an event based on event type and doc scope.
+    fn should_deliver(entry: &ClientEntry, event: &EditorEvent) -> bool {
+        let event_type = event.event_type();
+        // Check event type subscription.
+        if !entry.event_subs.iter().any(|s| s == event_type || s == "*") {
+            return false;
+        }
+        // Check doc scope: if the client has opted into doc-scoped filtering
+        // (i.e., has at least one doc subscription), events with a doc_id are
+        // only delivered to subscribed documents. If the client has NOT opted in
+        // (empty doc_subs), all events pass through — backward compatible with
+        // the editor's MCP server which doesn't use doc subscriptions.
+        if !entry.doc_subs.is_empty() {
+            if let Some(doc) = event.doc_id() {
+                if !entry.doc_subs.contains(doc) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Try to send an event to a client, handling backpressure and dead channels.
+    /// Returns true if the channel is closed (should be cleaned up).
+    fn try_deliver(session_id: u64, entry: &ClientEntry, event: &EditorEvent) -> bool {
+        match entry.tx.try_send(event.clone()) {
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                warn!(
+                    session_id = session_id,
+                    event_type = event.event_type(),
+                    "client event queue full; dropping event"
+                );
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                debug!(session_id = session_id, "removing closed client channel");
+                true
+            }
+            Ok(()) => false,
         }
     }
 
@@ -154,27 +254,20 @@ impl EventBroadcaster {
     /// Uses `try_send` — if a client's queue is full, the event is dropped
     /// for that client (backpressure). Dead channels (closed receivers) are
     /// automatically cleaned up.
+    ///
+    /// Doc-scoped events (those with a `doc_id()`) are only delivered to
+    /// clients that have called `subscribe_doc()` for that document.
     pub fn broadcast(&mut self, event: &EditorEvent) {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
-        let event_type = event.event_type();
-        debug!(seq = seq, event_type = event_type, "broadcasting event");
+        debug!(
+            seq = seq,
+            event_type = event.event_type(),
+            "broadcasting event"
+        );
         let mut closed: Vec<u64> = Vec::new();
-        for (session_id, (subs, tx)) in &self.clients {
-            if subs.iter().any(|s| s == event_type || s == "*") {
-                match tx.try_send(event.clone()) {
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        warn!(
-                            session_id = session_id,
-                            event_type = event_type,
-                            "client event queue full; dropping event"
-                        );
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        debug!(session_id = session_id, "removing closed client channel");
-                        closed.push(*session_id);
-                    }
-                    Ok(()) => {}
-                }
+        for (session_id, entry) in &self.clients {
+            if Self::should_deliver(entry, event) && Self::try_deliver(*session_id, entry, event) {
+                closed.push(*session_id);
             }
         }
         for id in closed {
@@ -187,33 +280,19 @@ impl EventBroadcaster {
     /// its own update back from the server.
     pub fn broadcast_except(&mut self, event: &EditorEvent, exclude_session: u64) {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
-        let event_type = event.event_type();
         debug!(
             seq = seq,
-            event_type = event_type,
+            event_type = event.event_type(),
             exclude = exclude_session,
             "broadcasting event (with exclusion)"
         );
         let mut closed: Vec<u64> = Vec::new();
-        for (session_id, (subs, tx)) in &self.clients {
+        for (session_id, entry) in &self.clients {
             if *session_id == exclude_session {
                 continue;
             }
-            if subs.iter().any(|s| s == event_type || s == "*") {
-                match tx.try_send(event.clone()) {
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        warn!(
-                            session_id = session_id,
-                            event_type = event_type,
-                            "client event queue full; dropping event"
-                        );
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        debug!(session_id = session_id, "removing closed client channel");
-                        closed.push(*session_id);
-                    }
-                    Ok(()) => {}
-                }
+            if Self::should_deliver(entry, event) && Self::try_deliver(*session_id, entry, event) {
+                closed.push(*session_id);
             }
         }
         for id in closed {
@@ -344,6 +423,7 @@ mod tests {
     async fn sync_update_event_delivered() {
         let mut bc = EventBroadcaster::new();
         let mut rx = bc.subscribe(1, vec!["sync_update".to_string()]);
+        bc.subscribe_doc(1, "test.rs");
 
         let event = EditorEvent::SyncUpdate {
             buffer_name: "test.rs".to_string(),
@@ -371,6 +451,8 @@ mod tests {
         let mut bc = EventBroadcaster::new();
         let mut rx1 = bc.subscribe(1, vec!["sync_update".to_string()]);
         let mut rx2 = bc.subscribe(2, vec!["sync_update".to_string()]);
+        bc.subscribe_doc(1, "test.rs");
+        bc.subscribe_doc(2, "test.rs");
 
         let event = EditorEvent::SyncUpdate {
             buffer_name: "test.rs".to_string(),
@@ -392,6 +474,7 @@ mod tests {
         let mut rx_filtered = bc.subscribe(1, vec!["buffer_edit".to_string()]);
         // Subscribe to wildcard — should receive sync_update.
         let mut rx_wildcard = bc.subscribe(2, vec!["*".to_string()]);
+        bc.subscribe_doc(2, "foo.rs");
 
         let event = EditorEvent::SyncUpdate {
             buffer_name: "foo.rs".to_string(),
@@ -404,5 +487,119 @@ mod tests {
         assert!(rx_filtered.try_recv().is_err());
         // Wildcard client should receive it.
         assert!(rx_wildcard.recv().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn doc_scoped_filtering_isolates_documents() {
+        let mut bc = EventBroadcaster::new();
+        let mut rx_a = bc.subscribe(1, vec!["*".to_string()]);
+        let mut rx_b = bc.subscribe(2, vec!["*".to_string()]);
+
+        // Client A subscribes to doc "alpha.rs", client B to "beta.rs".
+        bc.subscribe_doc(1, "alpha.rs");
+        bc.subscribe_doc(2, "beta.rs");
+
+        // SyncUpdate for alpha.rs — only A should get it.
+        let event_alpha = EditorEvent::SyncUpdate {
+            buffer_name: "alpha.rs".to_string(),
+            update_base64: "YWxwaGE=".to_string(),
+            wal_seq: 1,
+        };
+        bc.broadcast(&event_alpha);
+        assert!(rx_a.recv().await.is_some(), "A should receive alpha event");
+        assert!(rx_b.try_recv().is_err(), "B should NOT receive alpha event");
+
+        // AwarenessUpdate for beta.rs — only B should get it.
+        let event_beta = EditorEvent::AwarenessUpdate {
+            doc_id: "beta.rs".to_string(),
+            client_id: 99,
+            user_name: "bob".to_string(),
+            cursor_row: 0,
+            cursor_col: 0,
+            selection: None,
+        };
+        bc.broadcast(&event_beta);
+        assert!(
+            rx_a.try_recv().is_err(),
+            "A should NOT receive beta awareness"
+        );
+        assert!(
+            rx_b.recv().await.is_some(),
+            "B should receive beta awareness"
+        );
+
+        // Global event (no doc_id) — both should get it.
+        let global = EditorEvent::PeerJoined {
+            session_id: 3,
+            peer_count: 3,
+        };
+        bc.broadcast(&global);
+        assert!(rx_a.recv().await.is_some(), "A should receive global event");
+        assert!(rx_b.recv().await.is_some(), "B should receive global event");
+    }
+
+    #[tokio::test]
+    async fn subscribe_doc_allows_multiple_docs() {
+        let mut bc = EventBroadcaster::new();
+        let mut rx = bc.subscribe(1, vec!["sync_update".to_string()]);
+        bc.subscribe_doc(1, "a.rs");
+        bc.subscribe_doc(1, "b.rs");
+
+        let event_a = EditorEvent::SyncUpdate {
+            buffer_name: "a.rs".to_string(),
+            update_base64: "YQ==".to_string(),
+            wal_seq: 1,
+        };
+        let event_b = EditorEvent::SyncUpdate {
+            buffer_name: "b.rs".to_string(),
+            update_base64: "Yg==".to_string(),
+            wal_seq: 2,
+        };
+        let event_c = EditorEvent::SyncUpdate {
+            buffer_name: "c.rs".to_string(),
+            update_base64: "Yw==".to_string(),
+            wal_seq: 3,
+        };
+
+        bc.broadcast(&event_a);
+        bc.broadcast(&event_b);
+        bc.broadcast(&event_c);
+
+        assert!(rx.recv().await.is_some(), "should receive a.rs");
+        assert!(rx.recv().await.is_some(), "should receive b.rs");
+        assert!(rx.try_recv().is_err(), "should NOT receive c.rs");
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_doc_stops_delivery() {
+        let mut bc = EventBroadcaster::new();
+        let mut rx = bc.subscribe(1, vec!["sync_update".to_string()]);
+        // Subscribe to two docs so doc filtering remains active after removing one.
+        bc.subscribe_doc(1, "doc.rs");
+        bc.subscribe_doc(1, "other.rs");
+
+        let event = EditorEvent::SyncUpdate {
+            buffer_name: "doc.rs".to_string(),
+            update_base64: "ZA==".to_string(),
+            wal_seq: 1,
+        };
+        bc.broadcast(&event);
+        assert!(rx.recv().await.is_some(), "should receive before unsub");
+
+        bc.unsubscribe_doc(1, "doc.rs");
+        bc.broadcast(&event);
+        assert!(
+            rx.try_recv().is_err(),
+            "should NOT receive doc.rs after unsub"
+        );
+
+        // But other.rs should still deliver.
+        let event_other = EditorEvent::SyncUpdate {
+            buffer_name: "other.rs".to_string(),
+            update_base64: "bw==".to_string(),
+            wal_seq: 2,
+        };
+        bc.broadcast(&event_other);
+        assert!(rx.recv().await.is_some(), "should still receive other.rs");
     }
 }

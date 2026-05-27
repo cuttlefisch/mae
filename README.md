@@ -26,7 +26,7 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
 - **Org-mode babel** — Execute code blocks in 12 languages, noweb expansion,
   `:tangle` directive, `:var` cross-references, safety policies. Export to
   HTML and Markdown with TOC, syntax highlighting, tag filtering.
-- **Runtime redefinability** — Embedded R7RS Scheme (Steel). Redefine any
+- **Runtime redefinability** — Embedded R7RS Scheme (mae-scheme). Redefine any
   function while running. 45+ primitives, 18 hook points, `init.scm` is a
   real program.
 - **Full vi modal editing** — Motions, operators, text objects, count prefix,
@@ -93,7 +93,7 @@ mae (binary)
  ├── mae-core        Buffer (rope), editor state, commands, keymap, syntax
  ├── mae-renderer    Terminal rendering (ratatui), status bar, popups, shell viewport
  ├── mae-gui         GUI rendering (winit + Skia 2D), mouse input, font config, inline images
- ├── mae-scheme      Steel Scheme runtime, init.scm loading, hook dispatch
+ ├── mae-scheme      R7RS-small Scheme runtime, init.scm loading, hook dispatch
  ├── mae-ai          Claude + OpenAI + Gemini + DeepSeek providers, tool execution, conversation
  ├── mae-lsp         LSP client — connection, navigation, diagnostics, completion, formatting
  ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping, watches
@@ -323,7 +323,7 @@ Full vi modal editing with 450+ commands:
 | Layer | Technology | Why |
 |-------|-----------|-----|
 | Core | Rust | Eliminates GC problem, ownership model for concurrency |
-| Extensions | Scheme R7RS-small (Steel) | Runtime redefinability, hygienic macros, tail calls |
+| Extensions | Scheme R7RS-small (mae-scheme) | Runtime redefinability, hygienic macros, tail calls |
 | Terminal UI | ratatui + crossterm | Platform-specific code in the library, not us |
 | GUI | winit + skia-safe | Hardware-accelerated 2D, mouse, fonts, inline images |
 | Terminal emulator | alacritty_terminal | Full VT100/VT500, same engine as Alacritty |
@@ -340,7 +340,7 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | Phase | Status | Summary |
 |-------|--------|---------|
 | 1. Core + Renderer | ✅ Complete | Buffer (rope), event loop, terminal renderer, modal editing |
-| 2. Scheme Runtime | ✅ Complete | Steel R7RS-small, config loading, `define-key`, REPL |
+| 2. Scheme Runtime | ✅ Complete | R7RS-small (mae-scheme), config loading, `define-key`, REPL |
 | 3. AI Integration | ✅ Complete | Multi-provider tool-calling, conversation, permissions |
 | 4. LSP + DAP + Syntax | ✅ Complete | Full LSP client, DAP client, 13-language tree-sitter |
 | 5. Knowledge Base | ✅ Complete | SQLite graph, org parser, FTS5, manual, federation |

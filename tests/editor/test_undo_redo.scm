@@ -2,30 +2,12 @@
 
 (describe-group "Undo/Redo"
   (lambda ()
-    (it-test "setup clean buffer"
+    (it-test "insert, undo, redo cycle"
       (lambda ()
-        (create-buffer "*test-undo*")))
-
-    (it-test "insert text"
-      (lambda ()
-        (buffer-insert "hello")))
-
-    (it-test "verify insert"
-      (lambda ()
-        (should-equal (buffer-string) "hello")))
-
-    (it-test "undo reverts insert"
-      (lambda ()
-        (buffer-undo)))
-
-    (it-test "buffer is empty after undo"
-      (lambda ()
-        (should-equal (buffer-string) "")))
-
-    (it-test "redo restores text"
-      (lambda ()
-        (buffer-redo)))
-
-    (it-test "buffer has text after redo"
-      (lambda ()
+        (create-buffer "*test-undo*")
+        (buffer-insert "hello")
+        (should-equal (buffer-string) "hello")
+        (buffer-undo)
+        (should-equal (buffer-string) "")
+        (buffer-redo)
         (should-equal (buffer-string) "hello")))))

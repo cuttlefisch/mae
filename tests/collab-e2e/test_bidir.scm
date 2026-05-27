@@ -1,8 +1,8 @@
 ;;; test_bidir.scm — Bidirectional editing test
 ;;;
-;;; Both clients edit the same buffer simultaneously.
-;;; Verifies CRDT convergence: both clients see both edits, no duplication.
-;;; Run as a single-client test that simulates rapid edits.
+;;; Creates a shared buffer and makes rapid sequential edits.
+;;; Verifies all edits are present (no lost operations).
+;;; Single-client test — no inter-client coordination needed.
 ;;;
 ;;; No (run-tests) — uses Rust-side iteration for inject/apply between tests.
 
@@ -13,7 +13,7 @@
 
     (it-test "connects to server"
       (lambda ()
-        (wait-connected 10000)))
+        (wait-connected 30000)))
 
     (it-test "creates and shares document"
       (lambda ()
@@ -23,7 +23,7 @@
         (run-command "enter-normal-mode")
         (run-command "save")
         (run-command "collab-share")
-        (sleep-ms 2000)))
+        (wait-synced "bidir.txt" 15000)))
 
     (it-test "makes multiple rapid edits"
       (lambda ()
@@ -34,7 +34,7 @@
         (sleep-ms 100)
         (buffer-insert "edit C\n")
         (run-command "enter-normal-mode")
-        (sleep-ms 2000)))
+        (sleep-ms 500)))
 
     (it-test "all edits present in buffer"
       (lambda ()

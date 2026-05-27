@@ -310,8 +310,8 @@ pub(crate) fn render_buffer(
             }
 
             // LSP document highlights (background-only, behind selection).
-            if !editor.highlight_ranges.is_empty() {
-                for hr in &editor.highlight_ranges {
+            if !editor.lsp.highlight_ranges.is_empty() {
+                for hr in &editor.lsp.highlight_ranges {
                     if line_idx < hr.start_line || line_idx > hr.end_line {
                         continue;
                     }
@@ -387,7 +387,7 @@ pub(crate) fn render_buffer(
                 if let Some(path) = buf.file_path() {
                     let uri = mae_core::path_to_uri(path);
                     let diag_spans = mae_core::render_common::diagnostics::compute_diagnostic_spans(
-                        &editor.diagnostics,
+                        &editor.lsp.diagnostics,
                         &uri,
                         line_idx,
                         line_idx + 1,

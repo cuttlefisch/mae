@@ -3,18 +3,21 @@
 ;;; Scenario: B joins A's shared buffer, makes its own edit, then verifies
 ;;; that A's undo does NOT undo B's edit (per-user undo isolation).
 ;;;
-;;; Coordination: A starts first and signals via /sync/a-edit-done.
-;;; B waits long enough for A to share + edit + signal, then joins.
-;;; sleep-ms is processed by the test runner which drains collab events.
+;;; SYNC STRATEGY: Content-based barriers via wait-for-content / wait-content-absent.
+;;; All CRDT-dependent assertions are preceded by content polls that drain
+;;; collab events until the expected state is reached. No fixed sleep-ms
+;;; for convergence.
 ;;;
 ;;; No (run-tests) — uses Rust-side iteration.
+
+(load "/tests/lib/test-helpers.scm")
 
 (describe-group "CRDT undo — joiner (Client B)"
   (lambda ()
 
     (it-test "connects to state server"
       (lambda ()
-        (sleep-ms 5000)))
+        (wait-connected 30000)))
 
     (it-test "verifies connection"
       (lambda ()
@@ -22,25 +25,16 @@
           (should (pair? status)))))
 
     ;; --- Wait for A to share and edit ---
-    ;; A needs: 5s connect + ~3s setup + 3s share + 2s insert + signal = ~13s
-    ;; Sharer also cleans signal files first, adding ~1s.
-    ;; Use 20s static sleep to be safe.
     (it-test "waits for A to share and edit"
       (lambda ()
-        (sleep-ms 20000)))
-
-    (it-test "verifies A's signal file exists"
-      (lambda ()
-        (should (file-exists? "/sync/a-edit-done"))
-        (should (string-contains?
-                  (read-file "/sync/a-edit-done")
-                  "ready"))))
+        (wait-for-file "/sync/a-edit-done" 60000)))
 
     ;; --- Join the shared document ---
     (it-test "joins the shared document"
       (lambda ()
         (execute-ex "collab-join undo-test.txt")
-        (sleep-ms 5000)))
+        ;; Wait until the buffer actually appears.
+        (wait-buffer-exists "undo-test.txt" 30000)))
 
     (it-test "verifies join succeeded"
       (lambda ()
@@ -49,6 +43,11 @@
     (it-test "switches to joined buffer"
       (lambda ()
         (switch-to-buffer (get-buffer-by-name "undo-test.txt"))))
+
+    ;; --- Content barrier: wait for A's content to arrive via CRDT ---
+    (it-test "waits for A's content via CRDT"
+      (lambda ()
+        (wait-for-content "undo-test.txt" "from-A" 30000)))
 
     (it-test "has A's content"
       (lambda ()
@@ -63,7 +62,8 @@
         (run-command "enter-insert-mode")
         (buffer-insert "from-B\n")
         (run-command "enter-normal-mode")
-        (sleep-ms 3000)))
+        ;; Brief settle for CRDT transaction generation.
+        (sleep-ms 500)))
 
     (it-test "verifies B's edit is in buffer"
       (lambda ()
@@ -73,23 +73,15 @@
       (lambda ()
         (write-file "/sync/b-edit-done" "done")))
 
-    ;; --- Wait for A's undo to propagate ---
-    ;; A: sees B's signal after ~30s wait, verifies, undoes (+3s), signals.
-    ;; B signals at ~35s, A's 30s wait started at ~15s, so A sees it at ~35s.
-    ;; A then undoes + signals by ~38s.  We're at ~35s now.
-    ;; Use 20s sleep to wait for the undo propagation.
-    (it-test "waits for A's undo"
+    ;; --- Wait for A's undo to propagate via CRDT ---
+    (it-test "waits for A's undo signal"
       (lambda ()
-        (sleep-ms 20000)))
+        (wait-for-file "/sync/a-undo-done" 60000)))
 
-    (it-test "verifies A's undo signal"
+    ;; Content barrier: wait until "from-A" is actually removed by CRDT.
+    (it-test "waits for A's undo to propagate via CRDT"
       (lambda ()
-        (should (file-exists? "/sync/a-undo-done"))))
-
-    ;; Allow time for the undo CRDT update to apply locally.
-    (it-test "allows CRDT propagation"
-      (lambda ()
-        (sleep-ms 3000)))
+        (wait-content-absent "undo-test.txt" "from-A" 30000)))
 
     (it-test "verifies A's undo removed only A's text"
       (lambda ()
@@ -102,26 +94,30 @@
     (it-test "B undoes its own edit"
       (lambda ()
         (run-command "undo")
-        (sleep-ms 2000)))
+        ;; Content barrier: wait until "from-B" is gone.
+        (wait-content-absent "undo-test.txt" "from-B" 30000)))
 
     (it-test "verifies B's undo removed only B's text"
       (lambda ()
         (let ((text (buffer-string)))
           (should (string-contains? text "base"))
           (should-not (string-contains? text "from-B"))
-          ;; A's text was already undone by A
           (should-not (string-contains? text "from-A")))))
+
+    ;; Signal B's undo is done so A can proceed with redo.
+    (it-test "signals B undo done"
+      (lambda ()
+        (write-file "/sync/b-undo-done" "done")))
 
     (it-test "saves B's final state"
       (lambda ()
         (execute-ex "saveas /workspace/undo-test.txt")
-        (sleep-ms 500)))
+        (sleep-ms 200)))
 
-    ;; Wait for A's redo + final save + signal before exiting.
-    ;; A needs ~18s after this point (15s wait + 3s redo + signal).
+    ;; Wait for A to finish (redo + save + signal).
     (it-test "waits for A to finish"
       (lambda ()
-        (sleep-ms 25000)))
+        (wait-for-file "/sync/a-all-done" 60000)))
 
     (it-test "verifies A finished"
       (lambda ()

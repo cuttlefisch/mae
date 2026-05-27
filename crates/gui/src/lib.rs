@@ -650,7 +650,7 @@ impl Renderer for GuiRenderer {
             );
             // Breadcrumb bar: overlay on focused window top row.
             if editor.show_breadcrumbs {
-                if let Some(crumbs) = &editor.breadcrumbs {
+                if let Some(crumbs) = &editor.lsp.breadcrumbs {
                     if !crumbs.is_empty() {
                         let win_area = mae_core::WinRect {
                             x: 0,
@@ -724,7 +724,7 @@ impl Renderer for GuiRenderer {
             };
 
             // Completion popup.
-            if !editor.completion_items.is_empty() {
+            if !editor.lsp.completion_items.is_empty() {
                 popup_render::render_completion_popup(
                     canvas,
                     editor,
@@ -740,7 +740,7 @@ impl Renderer for GuiRenderer {
             }
 
             // Hover popup.
-            if editor.hover_popup.is_some() {
+            if editor.lsp.hover_popup.is_some() {
                 popup_render::render_hover_popup(
                     canvas,
                     editor,
@@ -756,7 +756,7 @@ impl Renderer for GuiRenderer {
             }
 
             // Code action popup.
-            if editor.code_action_menu.is_some() {
+            if editor.lsp.code_action_menu.is_some() {
                 popup_render::render_code_action_popup(
                     canvas,
                     editor,
@@ -772,7 +772,7 @@ impl Renderer for GuiRenderer {
             }
 
             // Signature help popup.
-            if editor.signature_help.is_some() {
+            if editor.lsp.signature_help.is_some() {
                 popup_render::render_signature_help_popup(
                     canvas,
                     editor,
@@ -786,7 +786,7 @@ impl Renderer for GuiRenderer {
             }
 
             // Peek definition popup.
-            if editor.peek_state.is_some() {
+            if editor.lsp.peek_state.is_some() {
                 popup_render::render_peek_definition_popup(
                     canvas,
                     editor,
@@ -800,7 +800,7 @@ impl Renderer for GuiRenderer {
             }
 
             // Symbol outline popup.
-            if editor.symbol_outline.is_some() {
+            if editor.lsp.symbol_outline.is_some() {
                 popup_render::render_symbol_outline_popup(canvas, editor, cols, window_height);
             }
 

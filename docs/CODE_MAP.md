@@ -315,6 +315,18 @@ Source: `crates/scheme/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `runtime` | mod |
+| `compiler` | mod |
+| `env` | mod |
+| `ffi` | mod |
+| `introspect` | mod |
+| `library` | mod |
+| `lisp_error` | mod |
+| `lsp` | mod |
+| `macros` | mod |
+| `reader` | mod |
+| `stdlib` | mod |
+| `value` | mod |
+| `vm` | mod |
 
 ## mae-shell
 
@@ -378,6 +390,7 @@ Source: `crates/sync/src/lib.rs`
 
 | Function | Source |
 |----------|--------|
+| `gc-stats` | `crates/scheme/src/runtime.rs` |
 | `define-key` | `crates/scheme/src/runtime.rs` |
 | `define-keymap` | `crates/scheme/src/runtime.rs` |
 | `define-command` | `crates/scheme/src/runtime.rs` |
@@ -458,10 +471,6 @@ Source: `crates/sync/src/lib.rs`
 | `check-deprecated` | `crates/scheme/src/runtime.rs` |
 | `exit` | `crates/scheme/src/runtime.rs` |
 | `write-file` | `crates/scheme/src/runtime.rs` |
-| `sleep-ms` | `crates/scheme/src/runtime.rs` |
-| `file-exists?` | `crates/scheme/src/runtime.rs` |
-| `wait-for-file` | `crates/scheme/src/runtime.rs` |
-| `current-milliseconds` | `crates/scheme/src/runtime.rs` |
 | `goto-char` | `crates/scheme/src/runtime.rs` |
 | `current-mode` | `crates/scheme/src/runtime.rs` |
 | `test-buffer-string` | `crates/scheme/src/runtime.rs` |
@@ -515,6 +524,7 @@ Source: `crates/sync/src/lib.rs`
 | `buffer-text` | `crates/scheme/src/runtime.rs` |
 | `collab-status` | `crates/scheme/src/runtime.rs` |
 | `collab-synced-buffers` | `crates/scheme/src/runtime.rs` |
+| `collab-confirmed-shares` | `crates/scheme/src/runtime.rs` |
 | `buffer-sync-enabled?` | `crates/scheme/src/runtime.rs` |
 | `buffer-pending-updates` | `crates/scheme/src/runtime.rs` |
 | `buffer-sync-content` | `crates/scheme/src/runtime.rs` |

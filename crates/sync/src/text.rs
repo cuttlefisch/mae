@@ -3,14 +3,57 @@
 use ropey::Rope;
 use std::sync::{Arc, Mutex};
 use yrs::{
-    undo::UndoManager, updates::decoder::Decode, updates::encoder::Encode, Doc, GetString, ReadTxn,
-    Subscription, Text, Transact,
+    doc::OffsetKind, undo::UndoManager, updates::decoder::Decode, updates::encoder::Encode, Doc,
+    GetString, ReadTxn, Subscription, Text, Transact,
 };
 
 use crate::SyncError;
 
 /// The yrs text field name used in all documents.
 const TEXT_NAME: &str = "content";
+
+/// Create a yrs Doc configured with UTF-16 offset kind (the Yjs standard).
+///
+/// All Doc instances MUST use this to ensure offset consistency. Using the
+/// default `OffsetKind::Bytes` causes char↔yrs offset mismatches for non-ASCII text.
+fn new_doc() -> Doc {
+    Doc::with_options(yrs::Options {
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    })
+}
+
+/// Create a yrs Doc with a specific client ID and UTF-16 offset kind.
+fn new_doc_with_client_id(client_id: u64) -> Doc {
+    Doc::with_options(yrs::Options {
+        client_id,
+        offset_kind: OffsetKind::Utf16,
+        ..Default::default()
+    })
+}
+
+/// Maximum number of undo stack items before old items are evicted.
+/// Matches Emacs's `undo-limit` philosophy — generous but bounded.
+const DEFAULT_UNDO_LIMIT: usize = 1000;
+
+/// Cursor position metadata stored on each undo StackItem.
+/// Captures the cursor offset at the time the undo group was created,
+/// so undo/redo can restore precise cursor position.
+#[derive(Debug, Clone, Default)]
+pub struct CursorMeta {
+    /// Character offset of the cursor when this undo item was created.
+    pub cursor_offset: u32,
+}
+
+/// Result from an undo or redo operation.
+pub struct UndoResult {
+    /// Whether the operation succeeded (had something to undo/redo).
+    pub success: bool,
+    /// CRDT update bytes for broadcast to peers.
+    pub updates: Vec<Vec<u8>>,
+    /// Cursor offset to restore (from the undo stack item's metadata).
+    pub cursor_offset: Option<u32>,
+}
 
 /// Collaborative text document backed by yrs with a ropey rendering mirror.
 ///
@@ -19,20 +62,28 @@ const TEXT_NAME: &str = "content";
 pub struct TextSync {
     doc: Doc,
     rope: Rope,
-    /// Per-user undo manager. When active, local edits create CRDT-native
-    /// undo operations instead of relying on EditAction stacks + reconcile_to().
-    undo_mgr: Option<UndoManager<()>>,
+    /// Per-user undo manager with cursor metadata on each stack item.
+    undo_mgr: Option<UndoManager<CursorMeta>>,
     /// Updates generated during undo/redo operations, captured via observe_update_v1.
     /// Drained after each undo/redo call to produce broadcast bytes.
     captured_updates: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Current cursor offset, shared with observe_item_added callback.
+    /// Updated by the buffer layer before each edit via `set_cursor_offset()`.
+    cursor_offset: Arc<Mutex<u32>>,
+    /// Cursor offset restored by observe_item_popped callback during undo/redo.
+    restored_cursor: Arc<Mutex<Option<u32>>>,
     /// Subscription for update capture. Kept alive as long as undo is active.
     _update_sub: Option<Subscription>,
+    /// Subscriptions for undo item observers. Kept alive as long as undo is active.
+    _undo_subs: Vec<Subscription>,
+    /// Maximum undo stack depth. Old items are silently dropped when exceeded.
+    undo_limit: usize,
 }
 
 impl TextSync {
     /// Create a new sync document with initial content.
     pub fn new(content: &str) -> Self {
-        let doc = Doc::new();
+        let doc = new_doc();
         {
             let text = doc.get_or_insert_text(TEXT_NAME);
             let mut txn = doc.transact_mut();
@@ -44,13 +95,17 @@ impl TextSync {
             rope,
             undo_mgr: None,
             captured_updates: Arc::new(Mutex::new(Vec::new())),
+            cursor_offset: Arc::new(Mutex::new(0)),
+            restored_cursor: Arc::new(Mutex::new(None)),
             _update_sub: None,
+            _undo_subs: Vec::new(),
+            undo_limit: DEFAULT_UNDO_LIMIT,
         }
     }
 
     /// Create with a specific client ID (for testing deterministic merges).
     pub fn with_client_id(content: &str, client_id: u64) -> Self {
-        let doc = Doc::with_client_id(client_id);
+        let doc = new_doc_with_client_id(client_id);
         {
             let text = doc.get_or_insert_text(TEXT_NAME);
             let mut txn = doc.transact_mut();
@@ -62,7 +117,11 @@ impl TextSync {
             rope,
             undo_mgr: None,
             captured_updates: Arc::new(Mutex::new(Vec::new())),
+            cursor_offset: Arc::new(Mutex::new(0)),
+            restored_cursor: Arc::new(Mutex::new(None)),
             _update_sub: None,
+            _undo_subs: Vec::new(),
+            undo_limit: DEFAULT_UNDO_LIMIT,
         }
     }
 
@@ -70,7 +129,7 @@ impl TextSync {
     /// with an empty state vector. Used by the state server, which only relays
     /// updates from clients and should not contribute its own operations.
     pub fn empty_relay() -> Self {
-        let doc = Doc::new();
+        let doc = new_doc();
         // Do NOT insert anything — the server is a passive relay.
         // The first client to share will provide the initial content.
         let rope = Rope::from_str("");
@@ -79,7 +138,11 @@ impl TextSync {
             rope,
             undo_mgr: None,
             captured_updates: Arc::new(Mutex::new(Vec::new())),
+            cursor_offset: Arc::new(Mutex::new(0)),
+            restored_cursor: Arc::new(Mutex::new(None)),
             _update_sub: None,
+            _undo_subs: Vec::new(),
+            undo_limit: DEFAULT_UNDO_LIMIT,
         }
     }
 
@@ -96,7 +159,11 @@ impl TextSync {
             rope,
             undo_mgr: None,
             captured_updates: Arc::new(Mutex::new(Vec::new())),
+            cursor_offset: Arc::new(Mutex::new(0)),
+            restored_cursor: Arc::new(Mutex::new(None)),
             _update_sub: None,
+            _undo_subs: Vec::new(),
+            undo_limit: DEFAULT_UNDO_LIMIT,
         }
     }
 
@@ -104,36 +171,46 @@ impl TextSync {
     ///
     /// When undo is active, uses origin-tagged transactions so the UndoManager
     /// tracks this edit for per-user undo.
+    ///
+    /// Note: yrs is configured with `OffsetKind::Utf16` (the Yjs standard),
+    /// so we convert char offsets to UTF-16 code unit offsets via ropey's
+    /// O(log n) `char_to_utf16_cu()` before calling yrs.
     pub fn insert(&mut self, offset: u32, text: &str) -> Vec<u8> {
+        let utf16_offset = self.char_to_utf16_offset(offset);
         let ytext = self.doc.get_or_insert_text(TEXT_NAME);
         let update = if self.undo_mgr.is_some() {
             let origin = self.doc.client_id();
             let mut txn = self.doc.transact_mut_with(origin);
-            ytext.insert(&mut txn, offset, text);
+            ytext.insert(&mut txn, utf16_offset, text);
             txn.encode_update_v1()
         } else {
             let mut txn = self.doc.transact_mut();
-            ytext.insert(&mut txn, offset, text);
+            ytext.insert(&mut txn, utf16_offset, text);
             txn.encode_update_v1()
         };
         self.rebuild_rope();
         update
     }
 
-    /// Apply a local delete (char offset + length). Returns encoded update for broadcast.
+    /// Apply a local delete (char offset + char length). Returns encoded update for broadcast.
     ///
     /// When undo is active, uses origin-tagged transactions so the UndoManager
     /// tracks this edit for per-user undo.
+    ///
+    /// Note: yrs is configured with `OffsetKind::Utf16` (the Yjs standard),
+    /// so we convert char offset/length to UTF-16 code unit offset/length.
     pub fn delete(&mut self, offset: u32, len: u32) -> Vec<u8> {
+        let utf16_offset = self.char_to_utf16_offset(offset);
+        let utf16_len = self.char_len_to_utf16_len(offset, len);
         let ytext = self.doc.get_or_insert_text(TEXT_NAME);
         let update = if self.undo_mgr.is_some() {
             let origin = self.doc.client_id();
             let mut txn = self.doc.transact_mut_with(origin);
-            ytext.remove_range(&mut txn, offset, len);
+            ytext.remove_range(&mut txn, utf16_offset, utf16_len);
             txn.encode_update_v1()
         } else {
             let mut txn = self.doc.transact_mut();
-            ytext.remove_range(&mut txn, offset, len);
+            ytext.remove_range(&mut txn, utf16_offset, utf16_len);
             txn.encode_update_v1()
         };
         self.rebuild_rope();
@@ -176,7 +253,7 @@ impl TextSync {
 
     /// Load from encoded full state.
     pub fn from_state(state: &[u8]) -> Result<Self, SyncError> {
-        let doc = Doc::new();
+        let doc = new_doc();
         let update =
             yrs::Update::decode_v1(state).map_err(|e| SyncError::Encoding(e.to_string()))?;
         {
@@ -195,7 +272,11 @@ impl TextSync {
             rope,
             undo_mgr: None,
             captured_updates: Arc::new(Mutex::new(Vec::new())),
+            cursor_offset: Arc::new(Mutex::new(0)),
+            restored_cursor: Arc::new(Mutex::new(None)),
             _update_sub: None,
+            _undo_subs: Vec::new(),
+            undo_limit: DEFAULT_UNDO_LIMIT,
         })
     }
 
@@ -203,11 +284,7 @@ impl TextSync {
     /// Use this instead of `from_state()` when the caller needs a deterministic
     /// client ID (e.g., editor clients that generate local edits).
     pub fn from_state_with_client_id(state: &[u8], client_id: u64) -> Result<Self, SyncError> {
-        let options = yrs::Options {
-            client_id,
-            ..Default::default()
-        };
-        let doc = Doc::with_options(options);
+        let doc = new_doc_with_client_id(client_id);
         let update =
             yrs::Update::decode_v1(state).map_err(|e| SyncError::Encoding(e.to_string()))?;
         {
@@ -226,7 +303,11 @@ impl TextSync {
             rope,
             undo_mgr: None,
             captured_updates: Arc::new(Mutex::new(Vec::new())),
+            cursor_offset: Arc::new(Mutex::new(0)),
+            restored_cursor: Arc::new(Mutex::new(None)),
             _update_sub: None,
+            _undo_subs: Vec::new(),
+            undo_limit: DEFAULT_UNDO_LIMIT,
         })
     }
 
@@ -252,6 +333,9 @@ impl TextSync {
     /// Computes a character-level diff between the current content and `target`,
     /// then applies insert/delete operations through yrs transactions. Returns
     /// the encoded update bytes for broadcast (empty if no change).
+    ///
+    /// Note: yrs uses byte offsets (`OffsetKind::Bytes`), so we track byte
+    /// offsets alongside char offsets throughout the diff application.
     pub fn reconcile_to(&mut self, target: &str) -> Vec<u8> {
         use similar::{ChangeTag, TextDiff};
 
@@ -266,22 +350,21 @@ impl TextSync {
 
         let update = {
             let mut txn = self.doc.transact_mut();
-            let mut offset: u32 = 0;
+            let mut utf16_offset: u32 = 0;
 
             for change in diff.iter_all_changes() {
+                let utf16_len: u32 = change.value().chars().map(|c| c.len_utf16() as u32).sum();
                 match change.tag() {
                     ChangeTag::Equal => {
-                        offset += change.value().chars().count() as u32;
+                        utf16_offset += utf16_len;
                     }
                     ChangeTag::Delete => {
-                        let len = change.value().chars().count() as u32;
-                        ytext.remove_range(&mut txn, offset, len);
-                        // offset stays the same after delete
+                        ytext.remove_range(&mut txn, utf16_offset, utf16_len);
                     }
                     ChangeTag::Insert => {
                         let text = change.value();
-                        ytext.insert(&mut txn, offset, text);
-                        offset += text.chars().count() as u32;
+                        ytext.insert(&mut txn, utf16_offset, text);
+                        utf16_offset += utf16_len;
                     }
                 }
             }
@@ -291,6 +374,26 @@ impl TextSync {
 
         self.rebuild_rope();
         update
+    }
+
+    /// Convert a char offset (Unicode scalar values) to UTF-16 code unit offset.
+    ///
+    /// yrs is configured with `OffsetKind::Utf16` (the Yjs standard), so we must
+    /// convert Rust char offsets to UTF-16 code unit counts. Uses ropey's native
+    /// `char_to_utf16_cu()` which is O(log n) via B-tree metadata — same
+    /// performance as byte offset conversion.
+    fn char_to_utf16_offset(&self, char_offset: u32) -> u32 {
+        let clamped = (char_offset as usize).min(self.rope.len_chars());
+        self.rope.char_to_utf16_cu(clamped) as u32
+    }
+
+    /// Convert a char-length span starting at `char_offset` to UTF-16 code unit length.
+    fn char_len_to_utf16_len(&self, char_offset: u32, char_len: u32) -> u32 {
+        let start = (char_offset as usize).min(self.rope.len_chars());
+        let end = (start + char_len as usize).min(self.rope.len_chars());
+        let utf16_start = self.rope.char_to_utf16_cu(start);
+        let utf16_end = self.rope.char_to_utf16_cu(end);
+        (utf16_end - utf16_start) as u32
     }
 
     /// Rebuild rope from YText (called after remote updates).
@@ -303,12 +406,20 @@ impl TextSync {
 
     // --- Per-user CRDT undo (yrs UndoManager) ---
 
+    /// Set the current cursor offset. Called by the buffer layer before edits
+    /// so the UndoManager can capture cursor position on each undo stack item.
+    pub fn set_cursor_offset(&self, offset: u32) {
+        if let Ok(mut cur) = self.cursor_offset.lock() {
+            *cur = offset;
+        }
+    }
+
     /// Enable per-user undo tracking. Creates a yrs UndoManager scoped to the
     /// text field, tracking only edits from this client's origin.
     ///
-    /// `capture_timeout_millis: 0` means every transaction is a separate undo
-    /// item (matches vim operator semantics). The buffer layer calls `undo_reset()`
-    /// for explicit group boundaries.
+    /// Uses `capture_timeout_millis: u64::MAX` so all edits within a vim undo
+    /// group merge into one UndoManager item. Explicit `undo_reset()` calls at
+    /// group boundaries (end_undo_group, each normal-mode dispatch) separate items.
     pub fn enable_undo(&mut self) {
         use yrs::undo::Options;
 
@@ -326,7 +437,8 @@ impl TextSync {
             ..Default::default()
         };
 
-        let mgr = UndoManager::with_scope_and_options(&self.doc, &text, options);
+        let mgr: UndoManager<CursorMeta> =
+            UndoManager::with_scope_and_options(&self.doc, &text, options);
 
         // Subscribe to updates so we can capture undo/redo-generated deltas.
         let captured = self.captured_updates.clone();
@@ -339,8 +451,25 @@ impl TextSync {
             })
             .expect("observe_update_v1 should not fail on owned doc");
 
+        // Save cursor offset into undo stack item metadata when a new item is created.
+        let cursor_for_add = self.cursor_offset.clone();
+        let add_sub = mgr.observe_item_added(move |_txn, event| {
+            if let Ok(cur) = cursor_for_add.lock() {
+                event.meta_mut().cursor_offset = *cur;
+            }
+        });
+
+        // Restore cursor offset from stack item metadata when an item is popped (undo/redo).
+        let restored = self.restored_cursor.clone();
+        let pop_sub = mgr.observe_item_popped(move |_txn, event| {
+            if let Ok(mut r) = restored.lock() {
+                *r = Some(event.meta().cursor_offset);
+            }
+        });
+
         self.undo_mgr = Some(mgr);
         self._update_sub = Some(sub);
+        self._undo_subs = vec![add_sub, pop_sub];
     }
 
     /// The client ID of the underlying yrs document.
@@ -363,17 +492,22 @@ impl TextSync {
         self.undo_mgr.as_ref().is_some_and(|m| m.can_redo())
     }
 
-    /// Undo the last local operation. Returns `(success, update_bytes)`.
-    ///
-    /// `update_bytes` contains the CRDT updates generated by the undo,
-    /// ready for broadcast to peers. The rope is rebuilt from YText.
-    pub fn undo(&mut self) -> (bool, Vec<Vec<u8>>) {
+    /// Undo the last local operation. Returns an `UndoResult` with success flag,
+    /// update bytes for broadcast, and the cursor offset to restore.
+    pub fn undo(&mut self) -> UndoResult {
         let Some(mgr) = &mut self.undo_mgr else {
-            return (false, Vec::new());
+            return UndoResult {
+                success: false,
+                updates: Vec::new(),
+                cursor_offset: None,
+            };
         };
-        // Clear captured updates before undo so we only collect undo's deltas.
+        // Clear state before undo.
         if let Ok(mut buf) = self.captured_updates.lock() {
             buf.clear();
+        }
+        if let Ok(mut r) = self.restored_cursor.lock() {
+            *r = None;
         }
         let ok = mgr.undo_blocking();
         self.rebuild_rope();
@@ -382,16 +516,29 @@ impl TextSync {
         } else {
             Vec::new()
         };
-        (ok, updates)
+        let cursor_offset = self.restored_cursor.lock().ok().and_then(|r| *r);
+        UndoResult {
+            success: ok,
+            updates,
+            cursor_offset,
+        }
     }
 
-    /// Redo the last undone operation. Returns `(success, update_bytes)`.
-    pub fn redo(&mut self) -> (bool, Vec<Vec<u8>>) {
+    /// Redo the last undone operation. Returns an `UndoResult` with success flag,
+    /// update bytes for broadcast, and the cursor offset to restore.
+    pub fn redo(&mut self) -> UndoResult {
         let Some(mgr) = &mut self.undo_mgr else {
-            return (false, Vec::new());
+            return UndoResult {
+                success: false,
+                updates: Vec::new(),
+                cursor_offset: None,
+            };
         };
         if let Ok(mut buf) = self.captured_updates.lock() {
             buf.clear();
+        }
+        if let Ok(mut r) = self.restored_cursor.lock() {
+            *r = None;
         }
         let ok = mgr.redo_blocking();
         self.rebuild_rope();
@@ -400,7 +547,12 @@ impl TextSync {
         } else {
             Vec::new()
         };
-        (ok, updates)
+        let cursor_offset = self.restored_cursor.lock().ok().and_then(|r| *r);
+        UndoResult {
+            success: ok,
+            updates,
+            cursor_offset,
+        }
     }
 
     /// Insert an explicit undo group boundary. The next edit starts a new
@@ -416,6 +568,21 @@ impl TextSync {
         if let Some(mgr) = &mut self.undo_mgr {
             mgr.clear();
         }
+    }
+
+    /// Set the maximum undo stack depth. Default is 1000.
+    ///
+    /// Note: yrs's UndoManager does not expose stack trimming via its public API,
+    /// so this limit is currently advisory. It is stored for future enforcement
+    /// when yrs adds support. In practice, StackItems are lightweight (IdSet pairs)
+    /// so 1000 items is well within memory budget.
+    pub fn set_undo_limit(&mut self, limit: usize) {
+        self.undo_limit = limit;
+    }
+
+    /// Get the current undo stack depth limit.
+    pub fn undo_limit(&self) -> usize {
+        self.undo_limit
     }
 }
 
@@ -675,10 +842,13 @@ mod tests {
         ts.enable_undo();
         ts.insert(5, " world");
         assert_eq!(ts.content(), "hello world");
-        let (ok, updates) = ts.undo();
-        assert!(ok);
+        let result = ts.undo();
+        assert!(result.success);
         assert_eq!(ts.content(), "hello");
-        assert!(!updates.is_empty(), "undo should produce broadcast updates");
+        assert!(
+            !result.updates.is_empty(),
+            "undo should produce broadcast updates"
+        );
     }
 
     #[test]
@@ -689,10 +859,10 @@ mod tests {
         assert_eq!(ts.content(), "hello world");
         ts.undo();
         assert_eq!(ts.content(), "hello");
-        let (ok, updates) = ts.redo();
-        assert!(ok);
+        let result = ts.redo();
+        assert!(result.success);
         assert_eq!(ts.content(), "hello world");
-        assert!(!updates.is_empty());
+        assert!(!result.updates.is_empty());
     }
 
     #[test]
@@ -700,10 +870,10 @@ mod tests {
         let mut ts = TextSync::with_client_id("", 1);
         ts.enable_undo();
         ts.insert(0, "abc");
-        let (_, updates) = ts.undo();
+        let result = ts.undo();
         // Updates should be non-empty and decodable.
-        assert!(!updates.is_empty());
-        for u in &updates {
+        assert!(!result.updates.is_empty());
+        for u in &result.updates {
             yrs::Update::decode_v1(u).expect("update bytes should be valid");
         }
     }
@@ -725,8 +895,8 @@ mod tests {
         assert_eq!(doc_a.content(), "hello world");
 
         // A's undo should NOT undo B's edit (no local ops to undo).
-        let (ok, _) = doc_a.undo();
-        assert!(!ok, "nothing to undo — remote edits excluded");
+        let result = doc_a.undo();
+        assert!(!result.success, "nothing to undo — remote edits excluded");
         assert_eq!(doc_a.content(), "hello world");
     }
 
@@ -754,8 +924,8 @@ mod tests {
         assert!(doc_a.content().contains("from-B"));
 
         // A undoes its own edit
-        let (ok, _) = doc_a.undo();
-        assert!(ok, "A should be able to undo its insert");
+        let result = doc_a.undo();
+        assert!(result.success, "A should be able to undo its insert");
         assert!(
             !doc_a.content().contains("from-A"),
             "from-A should be gone after undo"
@@ -766,9 +936,9 @@ mod tests {
         );
 
         // B undoes its own edit and sends the update to A (simulates remote undo)
-        let (b_ok, b_updates) = doc_b.undo();
-        assert!(b_ok);
-        for u in &b_updates {
+        let b_result = doc_b.undo();
+        assert!(b_result.success);
+        for u in &b_result.updates {
             doc_a.apply_update(u).unwrap();
         }
         assert!(
@@ -777,8 +947,11 @@ mod tests {
         );
 
         // A redoes its own edit — this should work even after receiving B's remote undo
-        let (redo_ok, _) = doc_a.redo();
-        assert!(redo_ok, "A should be able to redo after remote update");
+        let redo_result = doc_a.redo();
+        assert!(
+            redo_result.success,
+            "A should be able to redo after remote update"
+        );
         assert!(
             doc_a.content().contains("from-A"),
             "from-A should be restored by redo"
@@ -831,8 +1004,8 @@ mod tests {
         assert!(converged.contains("-B"));
 
         // A undoes only A's insert.
-        let (ok_a, updates_a) = doc_a.undo();
-        assert!(ok_a);
+        let result = doc_a.undo();
+        assert!(result.success);
         assert!(
             doc_a.content().contains("-B"),
             "B's edit preserved after A's undo"
@@ -840,7 +1013,7 @@ mod tests {
         assert!(!doc_a.content().contains("-A"), "A's edit reversed");
 
         // Apply A's undo to B so they converge again.
-        for u in &updates_a {
+        for u in &result.updates {
             doc_b.apply_update(u).unwrap();
         }
         assert_eq!(doc_a.content(), doc_b.content());
@@ -872,8 +1045,8 @@ mod tests {
         ts.enable_undo();
         ts.delete(5, 6); // remove " world"
         assert_eq!(ts.content(), "hello");
-        let (ok, _) = ts.undo();
-        assert!(ok);
+        let result = ts.undo();
+        assert!(result.success);
         assert_eq!(ts.content(), "hello world");
     }
 
@@ -949,6 +1122,88 @@ mod tests {
         assert_eq!(ts.content(), "aXc");
     }
 
+    // --- UTF-16 offset correctness ---
+    // yrs uses OffsetKind::Utf16. These tests verify that char offsets
+    // (Rust Unicode scalar values) are correctly mapped to UTF-16 code units.
+
+    #[test]
+    fn utf16_insert_after_multibyte_bmp() {
+        // BMP chars: é (U+00E9) is 1 UTF-16 unit but 2 UTF-8 bytes.
+        let mut ts = TextSync::with_client_id("café latte", 1);
+        // Char offset 5 = space after é. Insert should go between 'é' and ' '.
+        ts.insert(4, "!");
+        assert_eq!(ts.content(), "café! latte");
+    }
+
+    #[test]
+    fn utf16_insert_after_supplementary_emoji() {
+        // Supplementary plane: 🔥 (U+1F525) is 2 UTF-16 units but 1 Rust char.
+        let mut ts = TextSync::with_client_id("a🔥b", 1);
+        // Char offset 2 = 'b'. Insert between 🔥 and b.
+        ts.insert(2, "X");
+        assert_eq!(ts.content(), "a🔥Xb");
+    }
+
+    #[test]
+    fn utf16_delete_multibyte_char() {
+        let mut ts = TextSync::with_client_id("café", 1);
+        // Delete é (char offset 3, length 1)
+        ts.delete(3, 1);
+        assert_eq!(ts.content(), "caf");
+    }
+
+    #[test]
+    fn utf16_delete_emoji() {
+        let mut ts = TextSync::with_client_id("a🔥🎉b", 1);
+        // Delete 🔥 (char offset 1, length 1)
+        ts.delete(1, 1);
+        assert_eq!(ts.content(), "a🎉b");
+    }
+
+    #[test]
+    fn utf16_insert_convergence_with_emoji() {
+        // Two clients: A inserts after emoji, B receives update.
+        let mut ts_a = TextSync::with_client_id("hello🔥world", 1);
+        let state = ts_a.encode_state();
+        let mut ts_b = TextSync::from_state_with_client_id(&state, 2).unwrap();
+
+        // A inserts at char offset 6 (after 🔥, before 'w')
+        let update = ts_a.insert(6, "!!!");
+        ts_b.apply_update(&update).unwrap();
+
+        assert_eq!(ts_a.content(), "hello🔥!!!world");
+        assert_eq!(ts_b.content(), "hello🔥!!!world");
+    }
+
+    #[test]
+    fn utf16_reconcile_with_emoji() {
+        let mut ts = TextSync::with_client_id("café 🔥 naïve", 1);
+        let state = ts.encode_state();
+        let mut ts_b = TextSync::from_state_with_client_id(&state, 2).unwrap();
+
+        // Reconcile to a new string with emoji changes
+        let update = ts.reconcile_to("café 🎉 naïve");
+        ts_b.apply_update(&update).unwrap();
+
+        assert_eq!(ts.content(), "café 🎉 naïve");
+        assert_eq!(ts_b.content(), "café 🎉 naïve");
+    }
+
+    #[test]
+    fn utf16_zwj_family_emoji() {
+        // ZWJ sequence: 👨‍👩‍👧‍👦 = 7 Rust chars (4 emoji + 3 ZWJ), 11 UTF-16 units
+        let mut ts_a = TextSync::with_client_id("a👨\u{200d}👩\u{200d}👧\u{200d}👦b", 1);
+        let state = ts_a.encode_state();
+        let mut ts_b = TextSync::from_state_with_client_id(&state, 2).unwrap();
+
+        // Insert after the full ZWJ sequence (char 8 = 'b')
+        let update = ts_a.insert(8, "X");
+        ts_b.apply_update(&update).unwrap();
+
+        assert_eq!(ts_a.content(), ts_b.content());
+        assert!(ts_a.content().ends_with("Xb"));
+    }
+
     // --- Undo/redo multi-cycle ---
 
     #[test]
@@ -999,8 +1254,8 @@ mod tests {
         assert_eq!(ts.content(), "base one NEW");
 
         // Redo should fail (stack cleared by new edit)
-        let (ok, _) = ts.redo();
-        assert!(!ok, "redo should fail after new edit");
+        let result = ts.redo();
+        assert!(!result.success, "redo should fail after new edit");
     }
 
     #[test]
@@ -1077,5 +1332,81 @@ mod tests {
         let content = doc_a.content();
         assert!(content.contains("-A"));
         assert!(content.contains("-B"));
+    }
+
+    // --- Cursor metadata tests ---
+
+    #[test]
+    fn undo_restores_cursor_offset() {
+        let mut ts = TextSync::with_client_id("hello", 1);
+        ts.enable_undo();
+
+        // Set cursor at offset 5 before edit
+        ts.set_cursor_offset(5);
+        ts.insert(5, " world");
+        assert_eq!(ts.content(), "hello world");
+
+        // Undo should return the saved cursor offset
+        let result = ts.undo();
+        assert!(result.success);
+        assert_eq!(ts.content(), "hello");
+        assert_eq!(result.cursor_offset, Some(5));
+    }
+
+    #[test]
+    fn undo_cursor_with_groups() {
+        let mut ts = TextSync::with_client_id("", 1);
+        ts.enable_undo();
+
+        // First group: insert "aaa" with cursor at 0
+        ts.set_cursor_offset(0);
+        ts.insert(0, "aaa");
+        ts.undo_reset();
+
+        // Second group: insert "bbb" with cursor at 3
+        ts.set_cursor_offset(3);
+        ts.insert(3, "bbb");
+        assert_eq!(ts.content(), "aaabbb");
+
+        // Undo second group → cursor should restore to 3
+        let r1 = ts.undo();
+        assert!(r1.success);
+        assert_eq!(ts.content(), "aaa");
+        assert_eq!(r1.cursor_offset, Some(3));
+
+        // Undo first group → cursor should restore to 0
+        let r2 = ts.undo();
+        assert!(r2.success);
+        assert_eq!(ts.content(), "");
+        assert_eq!(r2.cursor_offset, Some(0));
+    }
+
+    #[test]
+    fn redo_restores_cursor_offset() {
+        let mut ts = TextSync::with_client_id("hello", 1);
+        ts.enable_undo();
+
+        ts.set_cursor_offset(5);
+        ts.insert(5, " world");
+        ts.undo();
+
+        let result = ts.redo();
+        assert!(result.success);
+        assert_eq!(ts.content(), "hello world");
+        // Redo pops from redo stack — cursor offset comes from the popped item
+        assert!(result.cursor_offset.is_some());
+    }
+
+    #[test]
+    fn undo_limit_default() {
+        let ts = TextSync::with_client_id("", 1);
+        assert_eq!(ts.undo_limit(), DEFAULT_UNDO_LIMIT);
+    }
+
+    #[test]
+    fn set_undo_limit() {
+        let mut ts = TextSync::with_client_id("", 1);
+        ts.set_undo_limit(50);
+        assert_eq!(ts.undo_limit(), 50);
     }
 }

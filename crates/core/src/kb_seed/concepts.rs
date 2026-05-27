@@ -777,17 +777,51 @@ See also: [[concept:mode]], [[concept:ai-as-peer]], [[index]]\n";
 pub(super) const CONCEPT_HOOKS: &str =
     "**Hooks** are MAE's primary extensibility mechanism — they let Scheme code react to \
 editor events without the core knowing anything about Scheme.\n\n\
-## Available hooks\n\
+## Available hooks (25)\n\n\
+### Buffer lifecycle\n\
 | Hook name | Fires when |\n\
 |-----------|------------|\n\
 | `before-save` | Just before a buffer is written to disk |\n\
 | `after-save` | After a successful save |\n\
 | `buffer-open` | After a file is opened into a buffer |\n\
 | `buffer-close` | Before a buffer is killed |\n\
-| `mode-change` | When the editing mode changes |\n\
-| `command-pre` | Before a command is dispatched (planned) |\n\
-| `command-post` | After a command completes (planned) |\n\
+| `buffer-switch` | When active buffer changes |\n\
+| `before-revert` | Before reverting a buffer to disk contents |\n\
+| `after-revert` | After a successful revert |\n\
 | `file-changed-on-disk` | When a buffer's backing file changes externally |\n\n\
+### Editing\n\
+| Hook name | Fires when |\n\
+|-----------|------------|\n\
+| `after-insert` | After text is inserted via Scheme |\n\
+| `after-delete` | After text is deleted via Scheme |\n\
+| `mode-change` | When the editing mode changes |\n\n\
+### Commands\n\
+| Hook name | Fires when |\n\
+|-----------|------------|\n\
+| `command-pre` | Before a command is dispatched |\n\
+| `command-post` | After a command completes |\n\n\
+### Window & Focus\n\
+| Hook name | Fires when |\n\
+|-----------|------------|\n\
+| `window-split` | After a window split |\n\
+| `window-close` | After a window is closed |\n\
+| `focus-in` | When editor gains focus |\n\
+| `focus-out` | When editor loses focus |\n\n\
+### Application lifecycle\n\
+| Hook name | Fires when |\n\
+|-----------|------------|\n\
+| `app-start` | During editor startup |\n\
+| `app-exit` | During editor shutdown |\n\
+| `after-load` | After a Scheme file is loaded (parameterized: `after-load:filename`) |\n\
+| `module-loaded` | After a module loads (parameterized: `module-loaded:name`) |\n\
+| `module-unloaded` | After a module unloads (reserved — no unload mechanism yet) |\n\n\
+### Configuration & state\n\
+| Hook name | Fires when |\n\
+|-----------|------------|\n\
+| `option-change` | After an option is set (parameterized: `option-change:name`) |\n\
+| `after-kb-change` | After knowledge base content changes |\n\
+| `sync-update` | After a remote CRDT sync update is applied |\n\
+| `idle` | After a period of user inactivity (reserved — needs timer infrastructure) |\n\n\
 ## Usage from Scheme\n\
 ```scheme\n\
 ;; Register a function to run on save:\n\
@@ -799,12 +833,25 @@ editor events without the core knowing anything about Scheme.\n\n\
 \n\
 ;; Remove a hook:\n\
 (remove-hook! \"after-save\" \"my-after-save\")\n\
+\n\
+;; Parameterized hooks — react to specific events:\n\
+(add-hook! \"option-change:theme\" \"on-theme-change\")\n\
+(add-hook! \"module-loaded:keymap-doom\" \"after-doom-loaded\")\n\
+(add-hook! \"after-load:init.scm\" \"post-init-setup\")\n\
+```\n\n\
+## Event-driven primitives\n\
+For Scheme code that needs to wait for hooks (e.g. in tests or async workflows):\n\
+```scheme\n\
+(import (mae async))\n\
+(yield-tick)                    ; drain one event loop iteration\n\
+(await-hook \"after-save\" 5000) ; suspend until hook fires (5s timeout)\n\
+(await-condition pred 3000)     ; wait for predicate to become true\n\
 ```\n\n\
 ## Design\n\
 Core fires hooks by pushing `(hook-name, fn-name)` entries into \
 `Editor::pending_hook_evals`. The binary drains them and calls the Scheme runtime — \
 the same intent pattern used for LSP and DAP. This keeps the core crate free of \
-Scheme dependencies.\n\n\
+Scheme dependencies. The hook namespace is open — modules can register any hook name.\n\n\
 See also: [[concept:command]], [[concept:options]], [[index]]\n";
 
 pub(super) const CONCEPT_OPTIONS: &str =
@@ -1564,11 +1611,11 @@ execution from the Rust side. It is the canonical path for all tests.\n\n\
 5. Between each test: `apply_to_editor()` + `sync_scheme_state()`\n\
 6. Print TAP v14 output, exit 0 (pass) or 1 (fail)\n\n\
 ## SharedState Pattern\n\
-Steel's `register_value` creates new binding cells on each call, breaking \
-closures captured in earlier evals. The solution: store mutable state in \
-`Arc<Mutex<SharedState>>` and register Rust functions that read from it. \
-Scheme forwarding functions (`buffer-string`, `buffer-sync-enabled?`, \
-`current-mode`, `get-buffer-by-name`) call these Rust functions.\n\n\
+Mutable editor state is stored in `Arc<Mutex<SharedState>>` and registered \
+Rust functions read from it. Functions like `buffer-string`, \
+`buffer-sync-enabled?`, `current-mode`, and `get-buffer-by-name` always \
+return fresh data from SharedState. `inject_editor_state()` updates both \
+the VM globals and SharedState in a single call.\n\n\
 ## Adding New Test Primitives\n\
 - **Read-only**: Add to SharedState → register `test-*` Rust fn → add \
   Scheme forwarding in `install_mutable_buffer_accessors` → update in \

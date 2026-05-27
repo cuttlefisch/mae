@@ -162,7 +162,7 @@ impl Editor {
         let buf = self.active_buffer();
         let path = buf.file_path()?;
         let uri = path_to_uri(path);
-        self.diagnostics.get(&uri)
+        self.lsp.diagnostics.get(&uri)
     }
 
     /// Jump the cursor to the next diagnostic in the active buffer,
@@ -244,8 +244,8 @@ impl Editor {
     /// This is a snapshot; the user re-runs `:diagnostics` (or presses the
     /// bound key) to refresh.
     pub fn show_diagnostics_buffer(&mut self) {
-        let total = self.diagnostics.total();
-        let (e, w, i, h) = self.diagnostics.severity_counts();
+        let total = self.lsp.diagnostics.total();
+        let (e, w, i, h) = self.lsp.diagnostics.severity_counts();
         let mut body = String::new();
         body.push_str(&format!(
             "*Diagnostics*  {} total  ({}E {}W {}I {}H)\n\n",
@@ -256,7 +256,8 @@ impl Editor {
             body.push_str("No diagnostics.\n");
         } else {
             // Sort files for stable display.
-            let mut entries: Vec<(&String, &Vec<Diagnostic>)> = self.diagnostics.iter().collect();
+            let mut entries: Vec<(&String, &Vec<Diagnostic>)> =
+                self.lsp.diagnostics.iter().collect();
             entries.sort_by(|a, b| a.0.cmp(b.0));
             for (uri, diags) in entries {
                 // Strip file:// prefix for readability; show URI otherwise.
@@ -411,7 +412,7 @@ mod tests {
     #[test]
     fn active_buffer_diagnostics_finds_match() {
         let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        editor.diagnostics.set(
+        editor.lsp.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![diag(0, 0, DiagnosticSeverity::Error, "bad")],
         );
@@ -434,7 +435,7 @@ mod tests {
     #[test]
     fn jump_next_moves_forward() {
         let mut editor = editor_with_file("/tmp/a.rs", "line0\nline1\nline2\nline3\n");
-        editor.diagnostics.set(
+        editor.lsp.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![
                 diag(1, 0, DiagnosticSeverity::Error, "d1"),
@@ -455,7 +456,7 @@ mod tests {
     #[test]
     fn jump_prev_moves_backward() {
         let mut editor = editor_with_file("/tmp/a.rs", "line0\nline1\nline2\nline3\n");
-        editor.diagnostics.set(
+        editor.lsp.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![
                 diag(1, 0, DiagnosticSeverity::Error, "d1"),
@@ -492,14 +493,14 @@ mod tests {
     #[test]
     fn show_diagnostics_buffer_lists_entries() {
         let mut editor = editor_with_file("/tmp/a.rs", "fn main() {}\n");
-        editor.diagnostics.set(
+        editor.lsp.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![
                 diag(0, 0, DiagnosticSeverity::Error, "bad"),
                 diag(2, 3, DiagnosticSeverity::Warning, "meh"),
             ],
         );
-        editor.diagnostics.set(
+        editor.lsp.diagnostics.set(
             "file:///tmp/b.rs".into(),
             vec![diag(5, 0, DiagnosticSeverity::Hint, "consider")],
         );
@@ -523,7 +524,7 @@ mod tests {
         editor.show_diagnostics_buffer();
         let first_len = editor.buffers.len();
         // Populate and refresh — must reuse the same buffer.
-        editor.diagnostics.set(
+        editor.lsp.diagnostics.set(
             "file:///tmp/a.rs".into(),
             vec![diag(0, 0, DiagnosticSeverity::Error, "bad")],
         );

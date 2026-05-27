@@ -30,58 +30,82 @@ multiple editor instances connected via the state server.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Sync Strategy: Content-Based Barriers
+
+**The #1 design principle: never use `sleep-ms` to wait for CRDT convergence.**
+
+Instead, all CRDT-dependent assertions use **content-based barriers**:
+
+| Barrier | Purpose |
+|---------|---------|
+| `(wait-for-content BUF SUBSTR TIMEOUT)` | Poll until buffer contains expected text |
+| `(wait-content-absent BUF SUBSTR TIMEOUT)` | Poll until buffer does NOT contain text |
+| `(wait-synced BUF TIMEOUT)` | Poll until buffer is in synced-buffers list |
+| `(wait-connected TIMEOUT)` | Poll until collab status is connected/synced |
+| `(wait-buffer-exists BUF TIMEOUT)` | Poll until buffer exists (after join) |
+| `(wait-for-file PATH TIMEOUT)` | Poll until a coordination file appears |
+
+All barriers use `wait-until`, which calls `sleep-ms 50` between polls. The
+test runner's `eval_with_yields` drains collab events during every `sleep-ms`
+yield — so CRDT updates are applied between each poll. This creates a tight
+observe→drain→check loop that returns as soon as the expected state is reached.
+
+**File signals** (`/sync/a-shared`, `/sync/b-edit-done`, etc.) coordinate
+*sequencing* between containers — they say "my step is done, proceed." But they
+do NOT guarantee CRDT convergence. The receiving client always follows a file
+signal with a content barrier before asserting on buffer contents.
+
+### Why this works
+
+```
+Client A: buffer-insert "from-A" → CRDT tx generated → sync/update sent to server
+Client B: wait-for-content "from-A" →
+  poll 1: buffer-text → "base\n"          → sleep-ms 50 (drains collab events)
+  poll 2: buffer-text → "base\n"          → sleep-ms 50 (CRDT update arrives, applied)
+  poll 3: buffer-text → "base\nfrom-A\n"  → ✓ return
+```
+
+The key insight: `sleep-ms` yields to the event loop, which calls
+`drain_collab_events()` → `handle_collab_event()` → CRDT update applied to
+buffer. So each poll cycle both checks content AND processes pending network
+events.
+
 ## Test Scenarios
 
 ### Scenario 1: Share + Join (client-a / client-b)
 
 **Goal**: Validate bidirectional CRDT sync between a sharer and joiner.
 
-| Step | Container | Action | Validation |
-|------|-----------|--------|------------|
-| 1 | client-a | Connect to state server | `(collab-status)` returns pair |
-| 2 | client-a | Create + open `/workspace/test.txt` | File exists on disk |
-| 3 | client-a | Insert "Hello from Client A\n", save | Buffer contains text |
-| 4 | client-a | `:collab-share` | Sync enabled on buffer |
-| 5 | client-a | Write `/sync/a-shared` signal | — |
-| 6 | client-b | Wait 15s, then `:collab-join test.txt` | Buffer created with A's content |
-| 7 | client-b | Insert "Hello from Client B\n" | Edit syncs to A via CRDT |
-| 8 | client-a | After 30s sleep, verify B's text arrived | `string-contains? "Hello from Client B"` |
-| 9 | client-a | Verify no content duplication | No doubled "Hello from Client A" |
-| 10 | both | `:save` / `:saveas` to local + shared volumes | Files on disk |
-
-**Verifier checks** (verify.sh):
-- `/workspace-a/test.txt` contains both A and B content
-- `/workspace-b/test.txt` contains both A and B content
-- `/shared-workspace/test.txt` contains both A and B content
+| Step | Container | Action | Barrier |
+|------|-----------|--------|---------|
+| 1 | client-a | Connect | `wait-connected 30000` |
+| 2 | client-a | Create + save test.txt | — |
+| 3 | client-a | `collab-share` | `wait-synced "test.txt" 15000` |
+| 4 | client-a | Signal `/sync/a-shared` | — |
+| 5 | client-b | Wait for A's signal | `wait-for-file` |
+| 6 | client-b | `collab-join test.txt` | `wait-buffer-exists "test.txt" 30000` |
+| 7 | client-b | Verify A's content | `wait-for-content "test.txt" "Hello from Client A" 30000` |
+| 8 | client-b | Insert "Hello from Client B" | — |
+| 9 | client-a | Verify B's content | `wait-for-content "test.txt" "Hello from Client B" 60000` |
+| 10 | both | Save to local + shared volumes | — |
 
 ### Scenario 2: Per-User CRDT Undo (undo-sharer / undo-joiner)
 
-**Goal**: Validate that undo/redo are per-user (yrs UndoManager) — A's undo
-doesn't affect B's edits, and vice versa.
+**Goal**: Validate per-user undo isolation (yrs UndoManager).
 
-| Step | Container | Action | Validation |
-|------|-----------|--------|------------|
-| 1 | undo-sharer | Create + share `/workspace/undo-test.txt` with "base\n" | Sync active |
-| 2 | undo-sharer | Insert "from-A\n", signal `/sync/a-edit-done` | — |
-| 3 | undo-joiner | Wait for signal, join, verify A's content | Has "base" + "from-A" |
-| 4 | undo-joiner | Insert "from-B\n", signal `/sync/b-edit-done` | — |
-| 5 | undo-sharer | After 30s, verify B's edit arrived | Has "from-B" |
-| 6 | undo-sharer | `:undo` — undoes only A's "from-A" | Has "base" + "from-B", NOT "from-A" |
-| 7 | undo-sharer | Signal `/sync/a-undo-done` | — |
-| 8 | undo-joiner | After 20s, verify A's undo propagated | Has "base" + "from-B", NOT "from-A" |
-| 9 | undo-joiner | `:undo` — undoes only B's "from-B" | Has "base" only |
-| 10 | undo-joiner | Save via `:saveas /workspace/undo-test.txt` | — |
-| 11 | undo-sharer | After 15s, `:redo` — restores A's "from-A" | Has "base" + "from-A", NOT "from-B" |
-| 12 | undo-sharer | Save, signal `/sync/a-all-done` | — |
+| Step | Container | Action | Barrier |
+|------|-----------|--------|---------|
+| 1 | undo-sharer | Share + insert "from-A" | `wait-synced` |
+| 2 | undo-joiner | Join + verify A's content | `wait-for-content "from-A"` |
+| 3 | undo-joiner | Insert "from-B" | — |
+| 4 | undo-sharer | Verify B's content | `wait-for-content "from-B"` |
+| 5 | undo-sharer | Undo (removes from-A only) | `wait-content-absent "from-A"` |
+| 6 | undo-joiner | Verify A's undo propagated | `wait-content-absent "from-A"` |
+| 7 | undo-joiner | Undo (removes from-B only) | `wait-content-absent "from-B"` |
+| 8 | undo-sharer | Redo (restores from-A) | `wait-for-content "from-A"` |
+| 9 | undo-sharer | Verify B's undo propagated | `wait-content-absent "from-B"` |
 
-**Verifier checks** (verify.sh):
-- `/workspace-undo-a/undo-test.txt` contains "base" + "from-A"
-- `/workspace-undo-b/undo-test.txt` contains "base"
-
-## Coordination Mechanism
-
-Tests use **file-based signaling** via a shared `/sync` volume. Each signal
-file acts as a gate:
+## Coordination Signals
 
 | Signal File | Writer | Reader(s) | Purpose |
 |-------------|--------|-----------|---------|
@@ -90,64 +114,42 @@ file acts as a gate:
 | `/sync/a-edit-done` | undo-sharer | undo-joiner | A finished its initial edit |
 | `/sync/b-edit-done` | undo-joiner | undo-sharer | B finished its edit |
 | `/sync/a-undo-done` | undo-sharer | undo-joiner | A undid its edit |
-| `/sync/a-all-done` | undo-sharer | undo-joiner, client-a, client-b | All undo tests complete |
+| `/sync/b-undo-done` | undo-joiner | undo-sharer | B undid its edit |
+| `/sync/a-all-done` | undo-sharer | undo-joiner | All undo tests complete |
 | `/sync/client-a-done` | client-a | — | client-a exited cleanly |
 | `/sync/client-b-done` | client-b | — | client-b exited cleanly |
 
-**Important**: `sleep-ms` is the primary coordination mechanism, NOT
-`wait-for-file`. The Scheme test runner processes `sleep-ms` between test
-steps and drains collab events during the sleep. `wait-for-file` uses
-`wait-until` which polls inside a single eval — it does NOT drain collab
-events between polls.
+**Critical**: File signals coordinate *sequencing* only. They do NOT replace
+content barriers. Every client must `wait-for-content` or `wait-content-absent`
+before asserting on buffer contents after a CRDT-dependent step.
 
 ## Container Lifecycle
 
+All timing is dominated by content barriers, not fixed sleeps:
+
 ```
-Timeline:
+Timeline (approximate — barriers make exact timing variable):
   0s   state-server starts, healthcheck passes
-  5s   all 4 clients connect
-  ~10s client-a shares test.txt
-  ~15s undo-sharer shares undo-test.txt, inserts from-A
-  ~20s client-b joins test.txt, undo-joiner joins undo-test.txt
-  ~25s client-b edits, undo-joiner edits
-  ~30s client-a verifies B's edit
-  ~35s undo-sharer verifies B's edit, undoes
-  ~40s undo-joiner verifies undo, undoes its own
-  ~45s undo-sharer redoes, saves, signals a-all-done
-  ~55s undo-joiner sees signal, exits
-  ~55s client-a/b see signal, exit
-  ~60s verifier starts (depends_on: service_completed_successfully)
-  ~61s verifier checks all volumes, exits
-  ~62s docker compose down --volumes
+  ~3s  all 4 clients connect (wait-connected)
+  ~5s  client-a shares test.txt (wait-synced)
+  ~5s  undo-sharer shares undo-test.txt (wait-synced)
+  ~8s  client-b joins test.txt (wait-buffer-exists + wait-for-content)
+  ~8s  undo-joiner joins undo-test.txt (wait-buffer-exists + wait-for-content)
+  ~10s client-b edits, undo-joiner edits
+  ~12s client-a sees B's edit (wait-for-content), saves
+  ~12s undo-sharer sees B's edit (wait-for-content), undoes
+  ~15s undo-joiner sees undo (wait-content-absent), undoes its own
+  ~18s undo-sharer redoes, waits for B's undo (wait-content-absent), saves
+  ~20s all clients exit
+  ~21s verifier checks all volumes
+  ~22s docker compose down
 ```
 
-## Orchestration
+## Running
 
-The Makefile target `docker-collab-test` uses `docker compose wait` (Compose v2.21+):
-
-```makefile
-docker compose up --build -d            # start all services detached
-docker compose wait verifier            # block until verifier exits
-docker compose logs --no-log-prefix     # dump all logs
-docker compose down --volumes           # tear down
+```bash
+make docker-collab-test     # full Docker E2E suite
 ```
-
-We avoid `--abort-on-container-exit` because it kills slow containers
-before the verifier (which `depends_on: service_completed_successfully`)
-can start. Instead, each test container exits naturally when done, and
-the verifier starts only after all 4 test containers exit with code 0.
-
-## Flakiness Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| Timing: B joins before A shares | B uses 15s static sleep; A shares at ~10s |
-| Timing: A checks before B's edit arrives | A uses 30s sleep while draining collab events |
-| Cross-client crosstalk | Client-side `shared_docs` filter (bridge ignores unsubscribed doc updates) |
-| ForceSync destroys undo | Bridge uses `apply_sync_update` (merge) for existing synced buffers |
-| Buffer focus stolen | `BufferJoined` only switches focus for new buffers, not resync |
-| Container exits prematurely | Undo-joiner waits 25s for sharer; client-a/b signal done immediately |
-| WAL seq gap false positives | Server `broadcast_except` + client-side gap detection coexist safely |
 
 ## Debugging
 
@@ -175,15 +177,17 @@ On test failure, the runner dumps:
 
 | Symptom | Likely Cause |
 |---------|-------------|
-| "from-B" not found in sharer | Crosstalk: sharer received unsubscribed doc update, switched buffer |
-| Redo produces empty result | ForceSync replaced TextSync, wiping UndoManager |
-| Test hangs indefinitely | Signal file not written; previous container crashed |
-| Verifier never starts | A container exited non-zero; check `docker compose logs <container>` |
+| wait-for-content timeout | CRDT update not propagating — check state-server logs |
+| wait-content-absent timeout | Undo not generating CRDT update — check UndoManager setup |
+| wait-synced timeout | Share intent not reaching bridge — check drain_collab_intents |
+| Buffer not found after join | Join intent lost — check collab_bridge join handler |
+| Verifier file check fails | Buffer content correct but save didn't flush — check write-file |
 
 ## Files
 
 | File | Purpose |
 |------|---------|
+| `lib/test-helpers.scm` | Content-barrier helpers (wait-for-content, wait-synced, etc.) |
 | `test_share.scm` | Client A: create, share, verify B's edits, save |
 | `test_join.scm` | Client B: join, edit, verify convergence, save |
 | `test_undo_sharer.scm` | Client A: share, edit, undo, redo, verify isolation |

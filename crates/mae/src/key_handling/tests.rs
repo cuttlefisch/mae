@@ -6,27 +6,15 @@ use crate::ai_event_handler::PendingInteractiveEvent;
 
 use super::{handle_key, is_splash_visible};
 
-/// Create a SchemeRuntime, returning None if Steel can't initialize.
-/// Steel's `Engine::new()` has a race condition when multiple test binaries
-/// run concurrently: it panics inside `expect("loading ALL_MODULES failed")`
-/// due to filesystem contention on `~/.steel/cached-modules/`. This is a
-/// Steel bug (not ours) — in production only one process initializes Steel.
-fn try_new_scheme() -> Option<SchemeRuntime> {
-    std::panic::catch_unwind(SchemeRuntime::new)
-        .ok()
-        .and_then(|r| r.ok())
+/// Create a SchemeRuntime for tests.
+fn new_scheme() -> SchemeRuntime {
+    SchemeRuntime::new().expect("SchemeRuntime::new() should not fail")
 }
 
-/// Macro to skip a test when Steel can't initialize due to concurrent test races.
+/// Macro to create a SchemeRuntime for test use.
 macro_rules! require_scheme {
     () => {
-        match try_new_scheme() {
-            Some(s) => s,
-            None => {
-                eprintln!("SKIPPED: Steel runtime unavailable (concurrent test race)");
-                return;
-            }
-        }
+        new_scheme()
     };
 }
 
