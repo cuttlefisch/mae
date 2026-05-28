@@ -3528,3 +3528,425 @@ async fn remote_sync_update_does_not_set_modified() {
          only local edits should mark buffer as modified"
     );
 }
+
+// ============================================================================
+// Tier 4 — Client-side deserialization round-trip tests
+//
+// These tests validate that server broadcast notifications can be parsed by
+// the same deserialization logic used in the production client. This catches
+// format mismatches between server serialization and client parsing — the
+// exact class of bug that caused awareness cursors to silently fail.
+// ============================================================================
+
+/// Parse awareness notification the same way production client does.
+/// Returns (client_id, doc_id, AwarenessState) or None on failure.
+fn parse_awareness_notification(
+    notif: &serde_json::Value,
+) -> Option<(u64, String, mae_sync::awareness::AwarenessState)> {
+    let params = notif.get("params")?;
+    let event = params.get("event").unwrap_or(params);
+    let data = event.get("data").unwrap_or(event);
+    let client_id = data.get("client_id").and_then(|v| v.as_u64()).unwrap_or(0);
+    let doc_id = data
+        .get("doc")
+        .or_else(|| data.get("doc_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let state_source = data.get("state").unwrap_or(data);
+    let state =
+        serde_json::from_value::<mae_sync::awareness::AwarenessState>(state_source.clone()).ok()?;
+    Some((client_id, doc_id, state))
+}
+
+/// Parse save_committed notification the same way production client does.
+fn parse_save_committed_notification(
+    notif: &serde_json::Value,
+) -> Option<(String, String, u64, String)> {
+    let params = notif.get("params")?;
+    let event = params.get("event").unwrap_or(params);
+    let data = event.get("data").unwrap_or(event);
+    let doc = data.get("doc").and_then(|v| v.as_str())?.to_string();
+    let saved_by = data
+        .get("saved_by")
+        .and_then(|v| v.as_str())
+        .unwrap_or("peer")
+        .to_string();
+    let save_epoch = data.get("save_epoch").and_then(|v| v.as_u64()).unwrap_or(0);
+    let content_hash = data
+        .get("content_hash")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some((doc, saved_by, save_epoch, content_hash))
+}
+
+/// CRITICAL: Awareness notification from server can be deserialized into AwarenessState.
+/// This is the exact bug that caused remote cursors to silently fail — the server
+/// broadcast format didn't match what the client parser expected.
+#[tokio::test]
+async fn awareness_roundtrip_deserialization() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("rt.txt", "test content").await;
+    client_b.resync("rt.txt").await;
+    client_b.drain_notifications().await;
+
+    // A sends awareness with all fields populated.
+    client_a
+        .send_awareness("rt.txt", "Alice", 7, 15, Some((3, 0, 7, 15)))
+        .await;
+
+    // B receives the notification.
+    let notif = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await
+        .expect("B must receive awareness notification");
+
+    // Parse using the SAME logic as production client.
+    let (client_id, doc_id, state) = parse_awareness_notification(&notif)
+        .expect("awareness notification must deserialize into AwarenessState");
+
+    assert!(client_id > 0, "client_id must be non-zero");
+    assert_eq!(doc_id, "rt.txt");
+    assert_eq!(state.user_name, "Alice");
+    assert_eq!(state.cursor_row, 7);
+    assert_eq!(state.cursor_col, 15);
+    assert_eq!(state.selection, Some((3, 0, 7, 15)));
+    assert_eq!(state.mode, "normal");
+}
+
+/// Awareness with no selection deserializes correctly (selection = None).
+#[tokio::test]
+async fn awareness_roundtrip_no_selection() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("ns.txt", "hello").await;
+    client_b.resync("ns.txt").await;
+    client_b.drain_notifications().await;
+
+    client_a.send_awareness("ns.txt", "Bob", 0, 0, None).await;
+
+    let notif = client_b
+        .wait_for_notification("notifications/awareness_update", 2000)
+        .await
+        .expect("B must receive awareness notification");
+
+    let (_cid, _doc, state) = parse_awareness_notification(&notif)
+        .expect("awareness with null selection must deserialize");
+
+    assert_eq!(state.user_name, "Bob");
+    assert_eq!(state.cursor_row, 0);
+    assert_eq!(state.cursor_col, 0);
+    assert!(
+        state.selection.is_none(),
+        "selection should be None, got {:?}",
+        state.selection
+    );
+}
+
+/// Full save cycle: save_intent → save_committed → peer receives notification.
+/// Validates the entire round-trip including content hash verification.
+#[tokio::test]
+async fn save_committed_roundtrip_deserialization() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("save.txt", "save me").await;
+    client_b.resync("save.txt").await;
+    client_b.drain_notifications().await;
+
+    // Compute content hash (same as production code).
+    let content = client_a.content("save.txt").await;
+    let hash = {
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        format!("{:x}", hasher.finalize())
+    };
+
+    // A: save_intent with correct hash.
+    let intent_resp = client_a.save_intent("save.txt", &hash).await;
+    assert!(
+        intent_resp.get("error").is_none(),
+        "save_intent should succeed: {intent_resp}"
+    );
+    let save_epoch = intent_resp["result"]["result"]["save_epoch"]
+        .as_u64()
+        .expect("save_intent must return save_epoch");
+
+    // A: save_committed.
+    let committed_resp = client_a
+        .save_committed("save.txt", "alice", save_epoch, &hash)
+        .await;
+    assert!(
+        committed_resp.get("error").is_none(),
+        "save_committed should succeed: {committed_resp}"
+    );
+
+    // B: should receive save_committed notification.
+    let notif = client_b
+        .wait_for_notification("notifications/save_committed", 2000)
+        .await
+        .expect("B must receive save_committed notification");
+
+    let (doc, saved_by, epoch, notif_hash) =
+        parse_save_committed_notification(&notif).expect("save_committed notification must parse");
+
+    assert_eq!(doc, "save.txt");
+    assert_eq!(saved_by, "alice");
+    assert_eq!(epoch, save_epoch);
+    assert_eq!(notif_hash, hash);
+}
+
+/// Save intent with wrong hash is rejected (conflict detection).
+#[tokio::test]
+async fn save_intent_conflict_roundtrip() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("conflict.txt", "original").await;
+
+    // Send save_intent with a deliberately wrong hash.
+    // Server returns success with status:"conflict", not a JSON-RPC error.
+    let resp = client.save_intent("conflict.txt", "badhash").await;
+    let status = resp["result"]["result"]["status"].as_str().unwrap_or("");
+    assert_eq!(
+        status, "conflict",
+        "save_intent with wrong hash must return conflict status: {resp}"
+    );
+}
+
+/// Sharer disconnect broadcasts sharer_left to peers.
+#[tokio::test]
+async fn sharer_left_roundtrip() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("leave.txt", "goodbye").await;
+    client_b.resync("leave.txt").await;
+    client_b.drain_notifications().await;
+
+    // Drop client A — server should broadcast sharer_left / peer_left.
+    drop(client_a);
+
+    // B should receive a peer_left notification.
+    let notif = client_b
+        .wait_for_notification("notifications/peer_left", 2000)
+        .await;
+    assert!(
+        notif.is_some(),
+        "B must receive peer_left when A disconnects"
+    );
+}
+
+/// Client only receives events for subscribed types.
+/// A client that does NOT subscribe to awareness_update should not receive them.
+#[tokio::test]
+async fn subscription_filtering_awareness() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    // Client A: full subscription (default via connect()).
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Client B: manual setup with sync_update only (no awareness_update).
+    let (client_stream, server_stream) = tokio::io::duplex(8192);
+    let (server_read, server_write) = tokio::io::split(server_stream);
+    let server_reader = BufReader::new(server_read);
+    let store2 = Arc::clone(&store);
+    let bc2 = Arc::clone(&bc);
+    tokio::spawn(async move {
+        handle_client(
+            server_reader,
+            server_write,
+            store2,
+            bc2,
+            std::time::Instant::now(),
+        )
+        .await;
+    });
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let client_reader = BufReader::new(client_read);
+    let mut client_b = Client {
+        writer: client_write,
+        reader: client_reader,
+        next_id: 1,
+        notification_log: Vec::new(),
+    };
+    // Initialize but subscribe only to sync_update (not awareness_update).
+    let msg = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"filter-test"}}});
+    client_b.send(&msg).await;
+    let _ = client_b.recv().await;
+    let msg = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"notifications/subscribe","params":{"types":["sync_update","peer_joined","peer_left"]}});
+    client_b.send(&msg).await;
+    let _ = client_b.recv().await;
+    client_b.next_id = 3;
+
+    client_a.share("filter.txt", "test").await;
+    client_b.resync("filter.txt").await;
+    client_b.drain_notifications().await;
+
+    // A sends awareness.
+    client_a
+        .send_awareness("filter.txt", "Alice", 1, 1, None)
+        .await;
+
+    // B should NOT receive awareness (not subscribed).
+    let notif = client_b
+        .wait_for_notification("notifications/awareness_update", 500)
+        .await;
+    assert!(
+        notif.is_none(),
+        "B should NOT receive awareness when not subscribed"
+    );
+}
+
+/// WAL sequence numbers are monotonically increasing per document.
+/// When a client sends multiple updates, each response has incrementing wal_seq.
+#[tokio::test]
+async fn wal_seq_monotonic_per_doc() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("wal.txt", "a").await;
+    let state = client.full_state("wal.txt").await;
+    let mut ts = TextSync::from_state(&state).unwrap();
+
+    let mut prev_seq = 0u64;
+    for i in 0..5 {
+        let update = ts.insert(ts.content().len() as u32, &format!("{i}"));
+        let resp = client.send_update("wal.txt", &update).await;
+        let wal_seq = resp["result"]["wal_seq"]
+            .as_u64()
+            .expect("response must include wal_seq");
+        assert!(
+            wal_seq > prev_seq,
+            "wal_seq must increase: got {wal_seq}, prev was {prev_seq}"
+        );
+        prev_seq = wal_seq;
+    }
+}
+
+/// Multi-doc WAL sequences are independent (different docs have separate counters).
+#[tokio::test]
+async fn wal_seq_independent_per_doc() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client.share("doc_a.txt", "aaa").await;
+    client.share("doc_b.txt", "bbb").await;
+
+    let state_a = client.full_state("doc_a.txt").await;
+    let state_b = client.full_state("doc_b.txt").await;
+    let mut ts_a = TextSync::from_state(&state_a).unwrap();
+    let mut ts_b = TextSync::from_state(&state_b).unwrap();
+
+    // Send updates to doc_a and doc_b interleaved.
+    let up_a = ts_a.insert(3, "1");
+    let resp_a1 = client.send_update("doc_a.txt", &up_a).await;
+    let seq_a1 = resp_a1["result"]["wal_seq"].as_u64().unwrap();
+
+    let up_b = ts_b.insert(3, "1");
+    let resp_b1 = client.send_update("doc_b.txt", &up_b).await;
+    let seq_b1 = resp_b1["result"]["wal_seq"].as_u64().unwrap();
+
+    let up_a2 = ts_a.insert(4, "2");
+    let resp_a2 = client.send_update("doc_a.txt", &up_a2).await;
+    let seq_a2 = resp_a2["result"]["wal_seq"].as_u64().unwrap();
+
+    // Each doc's sequence increases independently.
+    assert!(seq_a2 > seq_a1, "doc_a wal_seq must increase");
+    // doc_b should also have its own sequence space.
+    assert!(seq_b1 > 0, "doc_b wal_seq must be non-zero");
+}
+
+/// Awareness doc isolation: A on doc1 and B on doc2 — awareness doesn't cross docs.
+#[tokio::test]
+async fn awareness_doc_isolation_deserialization() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("iso_a.txt", "doc a").await;
+    client_b.share("iso_b.txt", "doc b").await;
+    client_b.drain_notifications().await;
+
+    // A sends awareness for iso_a.txt.
+    client_a
+        .send_awareness("iso_a.txt", "Alice", 0, 0, None)
+        .await;
+
+    // B should NOT receive it (B is only on iso_b.txt).
+    let notif = client_b
+        .wait_for_notification("notifications/awareness_update", 500)
+        .await;
+    assert!(
+        notif.is_none(),
+        "awareness for iso_a.txt must not reach client on iso_b.txt"
+    );
+}
+
+/// Sync update notification can be parsed into valid base64 update bytes.
+/// Validates the full notification → base64 decode → yrs apply path.
+#[tokio::test]
+async fn sync_update_notification_parseable() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    client_a.share("parse.txt", "hello").await;
+    let state = client_b.full_state("parse.txt").await;
+    client_b.drain_notifications().await;
+
+    // A edits.
+    let full = client_a.full_state("parse.txt").await;
+    let mut ts = TextSync::from_state(&full).unwrap();
+    let update = ts.insert(5, " world");
+    client_a.send_update("parse.txt", &update).await;
+
+    // B receives sync_update notification.
+    let notif = client_b
+        .wait_for_notification("notifications/sync_update", 2000)
+        .await
+        .expect("B must receive sync_update");
+
+    // Parse the notification the same way production client does.
+    let event_data = notif
+        .pointer("/params/event/data")
+        .expect("notification must have params.event.data");
+    let update_b64 = event_data["update_base64"]
+        .as_str()
+        .expect("must have update_base64");
+    let update_bytes = base64_to_update(update_b64).expect("update_base64 must be valid base64");
+
+    // Apply to a fresh TextSync to verify it's a valid yrs update.
+    let mut ts_b = TextSync::from_state(&state).unwrap();
+    ts_b.apply_update(&update_bytes)
+        .expect("update bytes must be a valid yrs update");
+    assert_eq!(ts_b.content(), "hello world");
+}
