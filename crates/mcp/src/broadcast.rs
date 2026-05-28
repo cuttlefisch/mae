@@ -84,6 +84,7 @@ pub enum EditorEvent {
         cursor_row: usize,
         cursor_col: usize,
         selection: Option<(usize, usize, usize, usize)>,
+        mode: String,
     },
 }
 
@@ -517,6 +518,7 @@ mod tests {
             cursor_row: 0,
             cursor_col: 0,
             selection: None,
+            mode: "normal".to_string(),
         };
         bc.broadcast(&event_beta);
         assert!(

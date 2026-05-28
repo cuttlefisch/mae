@@ -366,6 +366,11 @@ async fn handle_doc_notification(
                                 None
                             }
                         }),
+                        mode: state
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("normal")
+                            .to_string(),
                     },
                     session_id,
                 );
@@ -541,6 +546,11 @@ async fn handle_doc_request(
                                 None
                             }
                         }),
+                        mode: state
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("normal")
+                            .to_string(),
                     },
                     session_id,
                 );

@@ -1895,17 +1895,20 @@ pub(crate) fn handle_incoming_message(
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let state_json = data
-                        .get("state")
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null);
-                    if let Ok(state) =
-                        serde_json::from_value::<mae_sync::awareness::AwarenessState>(state_json)
-                    {
+                    // The server broadcasts EditorEvent::AwarenessUpdate which
+                    // flattens state fields into `data`. Try nested "state" first
+                    // (direct sync/awareness format), then fall back to `data` itself
+                    // (broadcast notification format).
+                    let state_source = data.get("state").unwrap_or(data);
+                    if let Ok(state) = serde_json::from_value::<mae_sync::awareness::AwarenessState>(
+                        state_source.clone(),
+                    ) {
                         debug!(
                             client_id,
                             doc = %doc_id,
                             user = %state.user_name,
+                            row = state.cursor_row,
+                            col = state.cursor_col,
                             "received awareness update"
                         );
                         try_send_evt(
@@ -1915,6 +1918,13 @@ pub(crate) fn handle_incoming_message(
                                 doc_id,
                                 state,
                             },
+                        );
+                    } else {
+                        debug!(
+                            client_id,
+                            doc = %doc_id,
+                            "awareness parse failed — data keys: {:?}",
+                            data.as_object().map(|o| o.keys().collect::<Vec<_>>())
                         );
                     }
                 }
@@ -2179,7 +2189,7 @@ async fn send_subscribe<W: tokio::io::AsyncWrite + Unpin>(
         "id": req_id,
         "method": "notifications/subscribe",
         "params": {
-            "types": ["sync_update", "peer_joined", "peer_left", "save_committed"]
+            "types": ["sync_update", "peer_joined", "peer_left", "save_committed", "awareness_update", "sharer_left"]
         }
     });
     let body = serde_json::to_vec(&req).unwrap();
