@@ -75,11 +75,67 @@ fn bench_crdt_reconcile(c: &mut Criterion) {
     });
 }
 
+fn bench_crdt_apply_update_10k_history(c: &mut Criterion) {
+    c.bench_function("apply_update_10k_history", |b| {
+        // Build a doc with 10,000 prior edits.
+        let mut base = TextSync::with_client_id("", 1);
+        for i in 0..10_000 {
+            base.insert(i as u32, "x");
+        }
+        let state = base.encode_state();
+
+        // Create a remote edit.
+        let mut remote = TextSync::with_client_id("", 2);
+        remote.apply_update(&state).unwrap();
+        let update = remote.insert(5000, "hello");
+
+        b.iter_batched(
+            || TextSync::from_state(black_box(&state)).unwrap(),
+            |mut local| {
+                let _ = local.apply_update(black_box(&update));
+                black_box(&local);
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
+fn bench_crdt_merge_diverged(c: &mut Criterion) {
+    c.bench_function("merge_diverged_1k_edits", |b| {
+        b.iter_batched(
+            || {
+                let mut doc_a = TextSync::with_client_id("base", 1);
+                let mut doc_b = TextSync::with_client_id("base", 2);
+                // Sync initial state.
+                let state = doc_a.encode_state();
+                doc_b.apply_update(&state).unwrap();
+                // Each makes 1000 independent edits.
+                for i in 0..1000 {
+                    doc_a.insert(i as u32, "A");
+                    doc_b.insert(i as u32, "B");
+                }
+                let state_a = doc_a.encode_state();
+                let state_b = doc_b.encode_state();
+                (doc_a, state_b, doc_b, state_a)
+            },
+            |(mut doc_a, state_b, mut doc_b, state_a)| {
+                doc_a.apply_update(black_box(&state_b)).unwrap();
+                doc_b.apply_update(black_box(&state_a)).unwrap();
+                assert_eq!(doc_a.content(), doc_b.content());
+                black_box(&doc_a);
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
 criterion_group!(
     benches,
     bench_crdt_creation,
     bench_crdt_encode,
     bench_crdt_apply_update,
-    bench_crdt_reconcile
+    bench_crdt_reconcile,
+    bench_crdt_apply_update_10k_history,
+    bench_crdt_merge_diverged
 );
 criterion_main!(benches);

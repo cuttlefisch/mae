@@ -948,6 +948,12 @@ impl Buffer {
         let content = self.rope.to_string();
         let mut sync = mae_sync::text::TextSync::with_client_id(&content, client_id);
         sync.enable_undo();
+        tracing::info!(
+            client_id,
+            content_len = content.len(),
+            state_bytes = sync.encode_state().len(),
+            "enable_sync: created sync doc"
+        );
         self.sync_doc = Some(sync);
         self.saved_content_hash = None; // fresh sync, not yet saved
     }

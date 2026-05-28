@@ -168,6 +168,13 @@ impl Drop for McpServer {
 /// Uses `tokio::select!` to simultaneously read requests AND push events
 /// from the broadcaster. Clients must subscribe (via `notifications/subscribe`)
 /// to receive push notifications.
+///
+/// CANCEL-SAFETY: `read_message` uses multi-step I/O (peek → read headers →
+/// read body). If `tokio::select!` cancels it mid-parse, the BufReader's
+/// internal cursor is left past partially-consumed data. We spawn a dedicated
+/// reader task that feeds complete messages into an mpsc channel, so
+/// `read_message` always runs to completion and `select!` only receives from
+/// the channel (which is cancel-safe).
 async fn handle_client(
     stream: tokio::net::UnixStream,
     tool_tx: mpsc::Sender<McpToolRequest>,
@@ -176,9 +183,33 @@ async fn handle_client(
     broadcaster: broadcast::SharedBroadcaster,
 ) {
     let (reader, writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
+    let reader = BufReader::new(reader);
     let mut writer = writer;
     let write_timeout = std::time::Duration::from_secs(5);
+
+    // Spawn a dedicated reader task so read_message always runs to completion
+    // (never cancelled by select!). Messages arrive via an mpsc channel.
+    let (msg_tx, mut msg_rx) = mpsc::channel::<Result<String, String>>(32);
+    tokio::spawn(async move {
+        let mut reader = reader;
+        loop {
+            match read_message(&mut reader).await {
+                Ok(Some(msg)) => {
+                    if msg_tx.send(Ok(msg)).await.is_err() {
+                        break; // handler dropped
+                    }
+                }
+                Ok(None) => {
+                    let _ = msg_tx.send(Err("EOF".to_string())).await;
+                    break;
+                }
+                Err(e) => {
+                    let _ = msg_tx.send(Err(e.to_string())).await;
+                    break;
+                }
+            }
+        }
+    });
 
     // Subscribe with empty subs — receives nothing until client opts in.
     let mut event_rx = {
@@ -192,15 +223,19 @@ async fn handle_client(
         tokio::select! {
             biased;
 
-            msg = read_message(&mut reader) => {
+            msg = msg_rx.recv() => {
                 let msg = match msg {
-                    Ok(Some(msg)) => msg,
-                    Ok(None) => {
+                    Some(Ok(msg)) => msg,
+                    Some(Err(e)) if e == "EOF" => {
                         debug!(session = session.id, "MCP client disconnected (EOF)");
                         break;
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         error!(session = session.id, error = %e, "MCP read error");
+                        break;
+                    }
+                    None => {
+                        debug!(session = session.id, "MCP reader task exited");
                         break;
                     }
                 };

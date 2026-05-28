@@ -219,14 +219,77 @@ impl TextSync {
 
     /// Apply a remote update from another client.
     pub fn apply_update(&mut self, update: &[u8]) -> Result<(), SyncError> {
-        let update =
+        let update_decoded =
             yrs::Update::decode_v1(update).map_err(|e| SyncError::Encoding(e.to_string()))?;
+
+        // Diagnostic: log update contents and state vector before apply.
+        let update_sv = update_decoded.state_vector();
+        for (&client_id, &clock) in update_sv.iter() {
+            tracing::info!(client_id, clock, "  update contains ops from");
+        }
+        let sv_before = {
+            let txn = self.doc.transact();
+            txn.state_vector()
+        };
+        let content_before = self.content();
+
+        // Check for overlap: update's client_ids already in our state vector.
+        for (&client_id, &update_clock) in update_sv.iter() {
+            let local_clock = sv_before.get(&client_id);
+            if local_clock > 0 {
+                tracing::warn!(
+                    client_id,
+                    update_clock,
+                    local_clock,
+                    "OVERLAP: update client already in local state vector"
+                );
+            }
+        }
+
         {
             let mut txn = self.doc.transact_mut();
-            txn.apply_update(update)
+            txn.apply_update(update_decoded)
                 .map_err(|e| SyncError::Encoding(e.to_string()))?;
         }
+
+        // Diagnostic: log state vector after apply.
+        let sv_after = {
+            let txn = self.doc.transact();
+            txn.state_vector()
+        };
+
         self.rebuild_rope();
+        let content_after = self.content();
+        let content_changed = content_before != content_after;
+        // Heuristic: if SV didn't advance and content didn't change,
+        // likely the update items are stuck in yrs pending queue.
+        let sv_unchanged = sv_before == sv_after;
+
+        if content_changed {
+            tracing::info!(
+                local_client_id = self.doc.client_id(),
+                update_len = update.len(),
+                content_len_before = content_before.len(),
+                content_len_after = content_after.len(),
+                "TextSync::apply_update — content CHANGED"
+            );
+        } else {
+            tracing::warn!(
+                local_client_id = self.doc.client_id(),
+                update_len = update.len(),
+                sv_unchanged,
+                sv_before_entries = sv_before.len(),
+                sv_after_entries = sv_after.len(),
+                "TextSync::apply_update — content UNCHANGED (no-op)"
+            );
+            for (&client_id, &clock) in sv_before.iter() {
+                tracing::warn!(client_id, clock, "  sv_before entry");
+            }
+            for (&client_id, &clock) in sv_after.iter() {
+                tracing::warn!(client_id, clock, "  sv_after entry");
+            }
+        }
+
         Ok(())
     }
 
@@ -590,6 +653,35 @@ impl TextSync {
 mod tests {
     use super::*;
 
+    /// Generate a realistic 32-bit client_id from (pid, buffer_index),
+    /// mirroring `compute_client_id` in collab_bridge.rs.
+    /// Uses FNV-1a to stay within the yrs v1 wire format's safe range.
+    fn test_client_id(pid: u32, buf_idx: u32) -> u64 {
+        let mut h: u32 = 0x811c_9dc5;
+        for b in pid.to_le_bytes() {
+            h ^= b as u32;
+            h = h.wrapping_mul(0x0100_0193);
+        }
+        for b in buf_idx.to_le_bytes() {
+            h ^= b as u32;
+            h = h.wrapping_mul(0x0100_0193);
+        }
+        if h == 0 {
+            1
+        } else {
+            h as u64
+        }
+    }
+
+    // Realistic client_ids for a two-editor collab scenario.
+    // PID 4_089_813 buf 2 = sharer, PID 4_089_541 buf 2 = joiner.
+    fn sharer_id() -> u64 {
+        test_client_id(4_089_813, 2)
+    }
+    fn joiner_id() -> u64 {
+        test_client_id(4_089_541, 2)
+    }
+
     #[test]
     fn new_creates_empty_doc() {
         let ts = TextSync::new("");
@@ -622,8 +714,8 @@ mod tests {
 
     #[test]
     fn apply_remote_update() {
-        let mut doc_a = TextSync::with_client_id("hello", 1);
-        let mut doc_b = TextSync::with_client_id("", 2);
+        let mut doc_a = TextSync::with_client_id("hello", sharer_id());
+        let mut doc_b = TextSync::with_client_id("", joiner_id());
 
         // Sync initial state from A to B
         let state = doc_a.encode_state();
@@ -638,8 +730,8 @@ mod tests {
 
     #[test]
     fn two_clients_converge() {
-        let mut doc_a = TextSync::with_client_id("hello", 1);
-        let mut doc_b = TextSync::with_client_id("", 2);
+        let mut doc_a = TextSync::with_client_id("hello", sharer_id());
+        let mut doc_b = TextSync::with_client_id("", joiner_id());
 
         // Sync initial state from A to B
         let state_a = doc_a.encode_state();
@@ -664,8 +756,8 @@ mod tests {
 
     #[test]
     fn concurrent_inserts_same_position() {
-        let mut doc_a = TextSync::with_client_id("", 1);
-        let mut doc_b = TextSync::with_client_id("", 2);
+        let mut doc_a = TextSync::with_client_id("", sharer_id());
+        let mut doc_b = TextSync::with_client_id("", joiner_id());
 
         // Both insert at position 0
         let update_a = doc_a.insert(0, "AAA");
@@ -698,8 +790,8 @@ mod tests {
 
     #[test]
     fn state_vector_diff() {
-        let mut doc_a = TextSync::with_client_id("hello", 1);
-        let mut doc_b = TextSync::with_client_id("", 2);
+        let mut doc_a = TextSync::with_client_id("hello", sharer_id());
+        let mut doc_b = TextSync::with_client_id("", joiner_id());
 
         // B starts with A's initial state
         let state = doc_a.encode_state();
@@ -881,10 +973,10 @@ mod tests {
     #[test]
     fn undo_remote_excluded() {
         // Remote edits (no origin) should NOT be undone by local undo.
-        let mut doc_a = TextSync::with_client_id("hello", 1);
+        let mut doc_a = TextSync::with_client_id("hello", sharer_id());
         doc_a.enable_undo();
 
-        let mut doc_b = TextSync::with_client_id("", 2);
+        let mut doc_b = TextSync::with_client_id("", joiner_id());
         // Sync initial state from A to B.
         let state = doc_a.encode_state();
         doc_b.apply_update(&state).unwrap();
@@ -904,10 +996,10 @@ mod tests {
     fn redo_survives_remote_update() {
         // Verify that applying a remote update between undo and redo
         // does NOT clear the redo stack.
-        let mut doc_a = TextSync::with_client_id("base\n", 1);
+        let mut doc_a = TextSync::with_client_id("base\n", sharer_id());
         doc_a.enable_undo();
 
-        let mut doc_b = TextSync::with_client_id("", 2);
+        let mut doc_b = TextSync::with_client_id("", joiner_id());
         let state = doc_a.encode_state();
         doc_b.apply_update(&state).unwrap();
         doc_b.enable_undo();
@@ -978,10 +1070,10 @@ mod tests {
 
     #[test]
     fn two_clients_independent_undo() {
-        let mut doc_a = TextSync::with_client_id("base", 1);
+        let mut doc_a = TextSync::with_client_id("base", sharer_id());
         doc_a.enable_undo();
 
-        let mut doc_b = TextSync::with_client_id("", 2);
+        let mut doc_b = TextSync::with_client_id("", joiner_id());
         doc_b.enable_undo();
 
         // Sync initial state.
@@ -1163,9 +1255,9 @@ mod tests {
     #[test]
     fn utf16_insert_convergence_with_emoji() {
         // Two clients: A inserts after emoji, B receives update.
-        let mut ts_a = TextSync::with_client_id("hello🔥world", 1);
+        let mut ts_a = TextSync::with_client_id("hello🔥world", sharer_id());
         let state = ts_a.encode_state();
-        let mut ts_b = TextSync::from_state_with_client_id(&state, 2).unwrap();
+        let mut ts_b = TextSync::from_state_with_client_id(&state, joiner_id()).unwrap();
 
         // A inserts at char offset 6 (after 🔥, before 'w')
         let update = ts_a.insert(6, "!!!");
@@ -1177,9 +1269,9 @@ mod tests {
 
     #[test]
     fn utf16_reconcile_with_emoji() {
-        let mut ts = TextSync::with_client_id("café 🔥 naïve", 1);
+        let mut ts = TextSync::with_client_id("café 🔥 naïve", sharer_id());
         let state = ts.encode_state();
-        let mut ts_b = TextSync::from_state_with_client_id(&state, 2).unwrap();
+        let mut ts_b = TextSync::from_state_with_client_id(&state, joiner_id()).unwrap();
 
         // Reconcile to a new string with emoji changes
         let update = ts.reconcile_to("café 🎉 naïve");
@@ -1192,9 +1284,9 @@ mod tests {
     #[test]
     fn utf16_zwj_family_emoji() {
         // ZWJ sequence: 👨‍👩‍👧‍👦 = 7 Rust chars (4 emoji + 3 ZWJ), 11 UTF-16 units
-        let mut ts_a = TextSync::with_client_id("a👨\u{200d}👩\u{200d}👧\u{200d}👦b", 1);
+        let mut ts_a = TextSync::with_client_id("a👨\u{200d}👩\u{200d}👧\u{200d}👦b", sharer_id());
         let state = ts_a.encode_state();
-        let mut ts_b = TextSync::from_state_with_client_id(&state, 2).unwrap();
+        let mut ts_b = TextSync::from_state_with_client_id(&state, joiner_id()).unwrap();
 
         // Insert after the full ZWJ sequence (char 8 = 'b')
         let update = ts_a.insert(8, "X");
@@ -1281,8 +1373,8 @@ mod tests {
 
     #[test]
     fn state_vector_diff_roundtrip() {
-        let mut doc_a = TextSync::with_client_id("initial", 1);
-        let mut doc_b = TextSync::with_client_id("", 2);
+        let mut doc_a = TextSync::with_client_id("initial", sharer_id());
+        let mut doc_b = TextSync::with_client_id("", joiner_id());
 
         // Sync initial state
         let state = doc_a.encode_state();
@@ -1305,8 +1397,8 @@ mod tests {
 
     #[test]
     fn state_vector_diff_with_concurrent_edits() {
-        let mut doc_a = TextSync::with_client_id("base", 1);
-        let mut doc_b = TextSync::with_client_id("", 2);
+        let mut doc_a = TextSync::with_client_id("base", sharer_id());
+        let mut doc_b = TextSync::with_client_id("", joiner_id());
 
         let state = doc_a.encode_state();
         doc_b.apply_update(&state).unwrap();
@@ -1408,5 +1500,421 @@ mod tests {
         let mut ts = TextSync::with_client_id("", 1);
         ts.set_undo_limit(50);
         assert_eq!(ts.undo_limit(), 50);
+    }
+
+    // --- Error path coverage ---
+
+    #[test]
+    fn apply_update_truncated_bytes() {
+        let mut ts = TextSync::new("hello");
+        let result = ts.apply_update(&[1, 2, 3]);
+        assert!(result.is_err());
+        // Content unchanged after failed apply.
+        assert_eq!(ts.content(), "hello");
+    }
+
+    #[test]
+    fn apply_update_empty_bytes() {
+        let mut ts = TextSync::new("hello");
+        let result = ts.apply_update(&[]);
+        assert!(result.is_err());
+        assert_eq!(ts.content(), "hello");
+    }
+
+    #[test]
+    fn from_state_corrupted_bytes() {
+        let result = TextSync::from_state(&[0xFF, 0xFE, 0xAB]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_state_empty_bytes() {
+        let result = TextSync::from_state(&[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_state_with_client_id_corrupted() {
+        let result = TextSync::from_state_with_client_id(&[0xDE, 0xAD], 42);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn large_client_id_corrupted_by_v1_encoding() {
+        // yrs v0.22 v1 encoding uses variable-length integers that silently
+        // corrupt client_ids exceeding ~32 bits. This test documents the bug
+        // that caused collab sync to fail when using (PID << 16 | buf_idx).
+        let client_id: u64 = 268029984770; // (4089813 << 16) | 2
+        let ts = TextSync::with_client_id("hello world", client_id);
+        assert_eq!(
+            ts.client_id(),
+            client_id,
+            "doc client_id should be correct in memory"
+        );
+
+        let state = ts.encode_state();
+        let update = yrs::Update::decode_v1(&state).unwrap();
+        let sv = update.state_vector();
+
+        // The encoded state has a DIFFERENT client_id due to v1 encoding corruption.
+        for (&cid, &_clock) in sv.iter() {
+            assert_ne!(
+                cid, client_id,
+                "v1 encoding should corrupt large client_ids"
+            );
+        }
+    }
+
+    #[test]
+    fn small_client_id_survives_encode_decode() {
+        // Client IDs that fit in 32 bits survive the v1 encoding roundtrip.
+        let client_id: u64 = 42_000_000;
+        let ts = TextSync::with_client_id("hello", client_id);
+        assert_eq!(ts.client_id(), client_id);
+
+        let state = ts.encode_state();
+        let update = yrs::Update::decode_v1(&state).unwrap();
+        let sv = update.state_vector();
+
+        for (&cid, &_clock) in sv.iter() {
+            assert_eq!(cid, client_id, "small client_id should survive v1 encoding");
+        }
+    }
+
+    // --- Reconcile edge cases ---
+
+    #[test]
+    fn reconcile_whitespace_only() {
+        let mut ts = TextSync::new("   ");
+        let update = ts.reconcile_to("\t\n ");
+        assert!(!update.is_empty());
+        assert_eq!(ts.content(), "\t\n ");
+    }
+
+    #[test]
+    fn reconcile_very_long_single_line() {
+        let long = "x".repeat(100_000);
+        let mut ts = TextSync::new(&long);
+        let changed = format!("{}y", &long[..99_999]);
+        let update = ts.reconcile_to(&changed);
+        assert!(!update.is_empty());
+        assert_eq!(ts.content(), changed);
+    }
+
+    #[test]
+    fn reconcile_mixed_line_endings() {
+        let mut ts = TextSync::new("line1\nline2\r\nline3\r");
+        let target = "line1\r\nline2\nline3\n";
+        let update = ts.reconcile_to(target);
+        assert!(!update.is_empty());
+        assert_eq!(ts.content(), target);
+    }
+
+    // --- Undo/redo edge branches ---
+
+    #[test]
+    fn undo_on_empty_stack() {
+        let mut ts = TextSync::with_client_id("hello", 1);
+        ts.enable_undo();
+        // No edits made — undo should be no-op.
+        let result = ts.undo();
+        assert!(!result.success);
+        assert!(result.updates.is_empty());
+        assert_eq!(ts.content(), "hello");
+    }
+
+    #[test]
+    fn redo_on_empty_stack() {
+        let mut ts = TextSync::with_client_id("hello", 1);
+        ts.enable_undo();
+        let result = ts.redo();
+        assert!(!result.success);
+        assert!(result.updates.is_empty());
+    }
+
+    #[test]
+    fn undo_after_remote_edit_no_crash() {
+        let mut doc_a = TextSync::with_client_id("base", 1);
+        doc_a.enable_undo();
+        let mut doc_b = TextSync::with_client_id("", 2);
+        let state = doc_a.encode_state();
+        doc_b.apply_update(&state).unwrap();
+
+        // A edits, then B edits remotely.
+        doc_a.insert(4, "A");
+        let remote = doc_b.insert(4, "B");
+        doc_a.apply_update(&remote).unwrap();
+
+        // A's undo should only undo A's edit.
+        let result = doc_a.undo();
+        assert!(result.success);
+        assert!(doc_a.content().contains('B'));
+        assert!(!doc_a.content().contains('A'));
+    }
+
+    #[test]
+    fn undo_reset_then_undo() {
+        let mut ts = TextSync::with_client_id("", 1);
+        ts.enable_undo();
+        ts.insert(0, "abc");
+        ts.undo_reset();
+        // Undo resets to group boundary — should undo the "abc" group.
+        let result = ts.undo();
+        assert!(result.success);
+        assert_eq!(ts.content(), "");
+    }
+
+    #[test]
+    fn undo_without_enable() {
+        let mut ts = TextSync::with_client_id("hello", 1);
+        // No enable_undo() — undo should return not-success without panic.
+        let result = ts.undo();
+        assert!(!result.success);
+    }
+
+    // --- content() and encode_diff edge cases ---
+
+    #[test]
+    fn content_of_empty_doc() {
+        let ts = TextSync::new("");
+        assert_eq!(ts.content(), "");
+    }
+
+    #[test]
+    fn encode_diff_identical_state_vectors() {
+        let doc_a = TextSync::with_client_id("hello", 1);
+        let sv = doc_a.state_vector();
+        let diff = doc_a.encode_diff(&sv);
+        // Diff for identical SVs should be a minimal (possibly empty) yrs update.
+        // Apply it to another doc — should produce same content.
+        let mut doc_b = TextSync::with_client_id("", 2);
+        let state = doc_a.encode_state();
+        doc_b.apply_update(&state).unwrap();
+        let sv_b = doc_b.state_vector();
+        let diff_b = doc_a.encode_diff(&sv_b);
+        // Both should be very small since SVs are aligned.
+        assert!(diff.len() < 100, "diff should be small for aligned SVs");
+        assert!(diff_b.len() < 100);
+    }
+
+    #[test]
+    fn encode_diff_corrupted_sv() {
+        let doc = TextSync::with_client_id("hello", 1);
+        // Corrupted SV falls back to default (sends full state).
+        let diff = doc.encode_diff(&[0xFF, 0x00, 0xAB]);
+        assert!(!diff.is_empty());
+        // Should be decodable.
+        let mut doc_b = TextSync::with_client_id("", 2);
+        doc_b.apply_update(&diff).unwrap();
+        assert_eq!(doc_b.content(), "hello");
+    }
+
+    // --- Multi-group undo with cursor ---
+
+    #[test]
+    fn undo_multi_group_cursor_insert_delete() {
+        let mut ts = TextSync::with_client_id("hello world", 1);
+        ts.enable_undo();
+
+        // Group 1: insert at end.
+        ts.set_cursor_offset(11);
+        ts.insert(11, "!!!");
+        ts.undo_reset();
+
+        // Group 2: delete "world".
+        ts.set_cursor_offset(5);
+        ts.delete(6, 5); // "hello !!!"
+        assert_eq!(ts.content(), "hello !!!");
+
+        // Undo group 2 (delete) — restores "world".
+        let r1 = ts.undo();
+        assert!(r1.success);
+        assert_eq!(ts.content(), "hello world!!!");
+        assert_eq!(r1.cursor_offset, Some(5));
+
+        // Undo group 1 (insert "!!!").
+        let r2 = ts.undo();
+        assert!(r2.success);
+        assert_eq!(ts.content(), "hello world");
+        assert_eq!(r2.cursor_offset, Some(11));
+    }
+
+    /// Reproduce the exact share→join→joiner-edits→apply-to-sharer flow
+    /// that fails in real smoke tests (joiner's updates are no-ops on sharer).
+    #[test]
+    fn share_join_roundtrip_bidirectional() {
+        // 1. Sharer creates Doc with content, encodes full state.
+        let mut sharer = TextSync::with_client_id("hello world\n", sharer_id());
+        let share_state = sharer.encode_state();
+
+        // 2. Server receives share — create a server Doc from the state.
+        let mut server = TextSync::from_state(&share_state).unwrap();
+        assert_eq!(server.content(), "hello world\n");
+
+        // 3. Joiner requests resync — server sends full state.
+        let server_state = server.encode_state();
+
+        // 4. Joiner creates Doc from server state with different client_id.
+        let mut joiner = TextSync::from_state_with_client_id(&server_state, joiner_id()).unwrap();
+        assert_eq!(joiner.content(), "hello world\n");
+
+        // 5. Joiner types — generates update.
+        let joiner_update = joiner.insert(12, "from joiner\n");
+        assert_eq!(joiner.content(), "hello world\nfrom joiner\n");
+
+        // 6. Server applies joiner's update.
+        server.apply_update(&joiner_update).unwrap();
+        assert_eq!(server.content(), "hello world\nfrom joiner\n");
+
+        // 7. Server broadcasts joiner's update bytes to sharer.
+        //    (Server sends the EXACT same bytes — see doc_store.rs line 238)
+        let before = sharer.content();
+        sharer.apply_update(&joiner_update).unwrap();
+        let after = sharer.content();
+
+        // THIS IS THE CRITICAL ASSERTION: sharer must see joiner's edit.
+        assert_ne!(
+            before, after,
+            "sharer content must change after joiner's update"
+        );
+        assert_eq!(
+            sharer.content(),
+            "hello world\nfrom joiner\n",
+            "sharer must converge with joiner"
+        );
+
+        // 8. Sharer types — generates update.
+        let sharer_update = sharer.insert(24, "from sharer\n");
+        assert_eq!(sharer.content(), "hello world\nfrom joiner\nfrom sharer\n");
+
+        // 9. Server applies, broadcasts to joiner.
+        server.apply_update(&sharer_update).unwrap();
+        joiner.apply_update(&sharer_update).unwrap();
+        assert_eq!(joiner.content(), "hello world\nfrom joiner\nfrom sharer\n");
+        assert_eq!(server.content(), joiner.content());
+        assert_eq!(server.content(), sharer.content());
+    }
+
+    /// Reproduce the actual server flow: sharer shares full state,
+    /// server creates Doc, joiner gets server state, both edit.
+    /// Uses base64 encoding to match the real transport.
+    #[test]
+    fn share_join_via_server_doc_roundtrip() {
+        use crate::encoding::{base64_to_update, update_to_base64};
+
+        // 1. Sharer: enable_sync equivalent.
+        let mut sharer = TextSync::with_client_id("hello world\n", sharer_id());
+        sharer.enable_undo();
+
+        // 2. Sharer types before sharing (common in real use).
+        let _ = sharer.insert(12, "typed before share\n");
+        assert_eq!(sharer.content(), "hello world\ntyped before share\n");
+
+        // 3. Share: encode full state, base64, send to server.
+        let share_state = sharer.encode_state();
+        let share_b64 = update_to_base64(&share_state);
+        let share_decoded = base64_to_update(&share_b64).unwrap();
+
+        // 4. Server: create Doc from share state (share_doc path).
+        let mut server = TextSync::from_state(&share_decoded).unwrap();
+        assert_eq!(server.content(), "hello world\ntyped before share\n");
+
+        // 5. Sharer types AFTER sharing — sends incremental updates.
+        let update1 = sharer.insert(31, "after share\n");
+        let u1_b64 = update_to_base64(&update1);
+        let u1_decoded = base64_to_update(&u1_b64).unwrap();
+        server.apply_update(&u1_decoded).unwrap();
+        assert_eq!(
+            server.content(),
+            "hello world\ntyped before share\nafter share\n"
+        );
+
+        // 6. Joiner: sync/resync — gets server full state.
+        let server_state = server.encode_state();
+        let server_b64 = update_to_base64(&server_state);
+        let server_decoded = base64_to_update(&server_b64).unwrap();
+
+        let mut joiner = TextSync::from_state_with_client_id(&server_decoded, joiner_id()).unwrap();
+        joiner.enable_undo();
+        assert_eq!(
+            joiner.content(),
+            "hello world\ntyped before share\nafter share\n"
+        );
+
+        // 7. Joiner types — sends incremental update via server.
+        let joiner_update = joiner.insert(43, "joiner here\n");
+        let ju_b64 = update_to_base64(&joiner_update);
+        let ju_decoded = base64_to_update(&ju_b64).unwrap();
+
+        // 8. Server applies and broadcasts same bytes.
+        server.apply_update(&ju_decoded).unwrap();
+
+        // 9. Sharer receives same bytes.
+        let before = sharer.content();
+        sharer.apply_update(&ju_decoded).unwrap();
+        let after = sharer.content();
+
+        assert_ne!(before, after, "sharer must see joiner's edit");
+        assert!(
+            after.contains("joiner here"),
+            "sharer must have joiner's text"
+        );
+        assert_eq!(
+            sharer.content(),
+            server.content(),
+            "sharer must match server"
+        );
+        assert_eq!(sharer.content(), joiner.content(), "all must converge");
+    }
+
+    /// Same as above but sharer edits BEFORE the joiner joins,
+    /// simulating the real scenario where sharer types, shares, then joiner joins.
+    #[test]
+    fn share_with_pre_edits_then_join_roundtrip() {
+        // 1. Sharer creates Doc, types some content, then shares.
+        let mut sharer = TextSync::with_client_id("initial\n", sharer_id());
+        let _edit1 = sharer.insert(8, "sharer typed this\n");
+        assert_eq!(sharer.content(), "initial\nsharer typed this\n");
+        let share_state = sharer.encode_state();
+
+        // 2. Server gets full state.
+        let mut server = TextSync::from_state(&share_state).unwrap();
+
+        // 3. Sharer types MORE after sharing (these updates go to server).
+        let sharer_update2 = sharer.insert(26, "more sharer text\n");
+        server.apply_update(&sharer_update2).unwrap();
+        assert_eq!(
+            server.content(),
+            "initial\nsharer typed this\nmore sharer text\n"
+        );
+
+        // 4. Joiner joins — gets server's full state (includes all sharer edits).
+        let server_state = server.encode_state();
+        let mut joiner = TextSync::from_state_with_client_id(&server_state, joiner_id()).unwrap();
+        assert_eq!(
+            joiner.content(),
+            "initial\nsharer typed this\nmore sharer text\n"
+        );
+
+        // 5. Joiner types.
+        let joiner_update = joiner.insert(43, "joiner reply\n");
+
+        // 6. Server applies, broadcasts to sharer.
+        server.apply_update(&joiner_update).unwrap();
+        let before = sharer.content();
+        sharer.apply_update(&joiner_update).unwrap();
+        let after = sharer.content();
+
+        assert_ne!(
+            before, after,
+            "sharer must see joiner's edit even after pre-share edits"
+        );
+        assert!(
+            after.contains("joiner reply"),
+            "sharer must contain joiner's text"
+        );
+        // All three must converge.
+        assert_eq!(sharer.content(), server.content());
+        assert_eq!(sharer.content(), joiner.content());
     }
 }

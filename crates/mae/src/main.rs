@@ -51,6 +51,15 @@ fn main() -> io::Result<()> {
     // Create the in-editor message log first, then wire it into both
     // the tracing subscriber (for structured JSON logs to stderr + in-editor capture)
     // and the Editor (for the :messages command).
+    // Pre-check --debug before init_logging so the env filter sees MAE_LOG=debug.
+    // The flag is also processed later (line ~576) for editor.debug_mode/show_fps.
+    if std::env::args().any(|a| a == "--debug")
+        && std::env::var("MAE_LOG").is_err()
+        && std::env::var("RUST_LOG").is_err()
+    {
+        std::env::set_var("MAE_LOG", "debug");
+    }
+
     let message_log = mae_core::MessageLog::new(1000);
     let log_handle = message_log.handle();
     init_logging(log_handle);
@@ -576,9 +585,7 @@ fn main() -> io::Result<()> {
     if args.iter().any(|a| a == "--debug") {
         editor.debug_mode = true;
         editor.show_fps = true;
-        if std::env::var("MAE_LOG").is_err() && std::env::var("RUST_LOG").is_err() {
-            std::env::set_var("MAE_LOG", "debug");
-        }
+        // MAE_LOG is already set before init_logging() (see main() top)
         info!("debug mode enabled via --debug flag");
     }
 
