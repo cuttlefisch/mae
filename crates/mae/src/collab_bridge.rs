@@ -551,29 +551,59 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     })
                     .collect();
 
-                let len_before = editor.buffers[idx].text().len();
+                // Snapshot old rope for cursor adjustment after update.
+                let old_rope = editor.buffers[idx].rope().clone();
+                let old_len = old_rope.len_chars();
                 match editor.buffers[idx].apply_sync_update(&update_bytes) {
                     Ok(()) => {
-                        let len_after = editor.buffers[idx].text().len();
-                        let text_preview: String =
-                            editor.buffers[idx].text().chars().take(200).collect();
+                        let new_rope = editor.buffers[idx].rope();
+                        let new_len = new_rope.len_chars();
+                        let char_delta = new_len as isize - old_len as isize;
+                        let text_preview: String = new_rope.chars().take(200).collect();
+
+                        // Find first char position where old and new ropes diverge.
+                        // This is the edit point for cursor adjustment.
+                        let edit_pos = if char_delta != 0 {
+                            old_rope
+                                .chars()
+                                .zip(new_rope.chars())
+                                .position(|(a, b)| a != b)
+                                .unwrap_or(old_len.min(new_len))
+                        } else {
+                            // Same length — could be a replace or no-op.
+                            // No adjustment needed if content is identical.
+                            old_len
+                        };
+
                         info!(
                             doc = %doc_id,
                             wal_seq,
                             update_len = update_bytes.len(),
                             buf_idx = idx,
                             buf_name = %editor.buffers[idx].name,
-                            len_before,
-                            len_after,
-                            text_changed = (len_before != len_after),
+                            old_len,
+                            new_len,
+                            char_delta,
+                            edit_pos,
                             text_preview = %text_preview,
                             "applied remote sync update"
                         );
-                        // Restore cursor positions: clamp to new rope length.
-                        for (win_id, char_offset) in &window_cursors {
+
+                        // Adjust cursor positions based on where the edit occurred.
+                        // Cursors before the edit stay put; cursors after shift by delta.
+                        for (win_id, old_offset) in &window_cursors {
                             if let Some(win) = editor.window_mgr.window_mut(*win_id) {
-                                let (row, col) =
-                                    editor.buffers[idx].row_col_from_offset(*char_offset);
+                                let adjusted = if *old_offset <= edit_pos {
+                                    *old_offset
+                                } else {
+                                    // Shift by delta, but never before edit_pos
+                                    // (handles cursor inside a deleted range).
+                                    let shifted =
+                                        (*old_offset as isize + char_delta).max(0) as usize;
+                                    shifted.max(edit_pos)
+                                };
+                                let clamped = adjusted.min(new_len.saturating_sub(1));
+                                let (row, col) = editor.buffers[idx].row_col_from_offset(clamped);
                                 win.cursor_row = row;
                                 win.cursor_col = col;
                                 win.clamp_cursor(&editor.buffers[idx]);

@@ -28,6 +28,7 @@
 
 - [ ] **AI output buffer cursor invisible in GUI**: After AI responds, the cursor in the `*ai*` conversation output buffer is not visible. Root cause: buffer type / layout metadata mismatch — the conversation buffer doesn't provide the same state that the cursor renderer expects. Low priority (output buffer is read-only, navigation still works).
 - [ ] **Theme load failure is silent in headless mode**: If config.toml requests a nonexistent theme, `set_theme_by_name()` shows a status bar message but keeps the current theme. In CI/headless mode the user gets zero feedback. Should log to stderr or return non-zero exit from `--check-config`.
+- [ ] **Status bar `[ReadOnly]` confusing during collab**: The `[ReadOnly]` badge is the AI permission tier (`status.rs:271`), not a buffer property. During collab sessions users mistake it for a collab-imposed restriction. Consider: rename to `[AI:RO]` or `[Tier:RO]`, or hide when no AI session is active.
 
 ### Collaborative Editing (v0.11.0)
 
