@@ -10,10 +10,52 @@ use mae_core::{CollabIntent, CollabStatus, Editor};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
+/// Compute a deterministic client_id for a buffer's yrs Doc.
+///
+/// yrs v0.22 uses variable-length integer encoding in the v1 wire format.
+/// Client IDs that exceed ~32 bits get silently corrupted during
+/// encode/decode roundtrips, causing remote updates to reference unknown
+/// client IDs and become no-ops (stuck in yrs pending queue).
+///
+/// We use FNV-1a hash of (PID, buffer_index) to produce a 32-bit value,
+/// which is safe for the wire format and still deterministic per-process.
+fn compute_client_id(buffer_idx: usize) -> u64 {
+    let pid = std::process::id();
+    // FNV-1a 32-bit
+    let mut h: u32 = 0x811c_9dc5;
+    for b in pid.to_le_bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    for b in (buffer_idx as u32).to_le_bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    // Ensure non-zero (yrs uses 0 as sentinel in some paths).
+    if h == 0 {
+        1
+    } else {
+        h as u64
+    }
+}
+
 /// Capacity for the command channel (main thread -> collab background task).
 const COLLAB_CMD_CHANNEL_CAP: usize = 256;
 /// Capacity for the event channel (collab background task -> main thread).
-const COLLAB_EVT_CHANNEL_CAP: usize = 64;
+/// Must be large enough to absorb bursts during main-thread stalls (e.g. scheme
+/// init, heavy rendering). If the channel fills, events are dropped and gap
+/// detection triggers a resync — no data loss, just latency.
+const COLLAB_EVT_CHANNEL_CAP: usize = 512;
+
+/// Non-blocking send on the event channel. The bg task must NEVER block on
+/// `send().await` — doing so freezes the select loop, prevents reading server
+/// messages and commands, and causes cascading backpressure all the way to the
+/// server (which then can't write to us, blocking its handler for our session).
+fn try_send_evt(tx: &mpsc::Sender<CollabEvent>, event: CollabEvent) {
+    if let Err(e) = tx.try_send(event) {
+        warn!("collab evt channel full/closed — event dropped: {}", e);
+    }
+}
 
 // --- Command / Event types ---
 
@@ -210,8 +252,7 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
                     buf.doc_address = compute_doc_address(buf, project_root.as_deref());
                 }
                 if buf.sync_doc.is_none() {
-                    // Use PID + buffer index as a deterministic client ID.
-                    let client_id = (std::process::id() as u64) << 16 | (idx as u64);
+                    let client_id = compute_client_id(idx);
                     buf.enable_sync(client_id);
                     // Clear pending updates from enable_sync's initial insert —
                     // the full state is sent via ShareBuffer, not incremental updates.
@@ -510,27 +551,59 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     })
                     .collect();
 
-                let text_before: String = editor.buffers[idx].text().chars().take(200).collect();
+                // Snapshot old rope for cursor adjustment after update.
+                let old_rope = editor.buffers[idx].rope().clone();
+                let old_len = old_rope.len_chars();
                 match editor.buffers[idx].apply_sync_update(&update_bytes) {
                     Ok(()) => {
-                        let text_after: String =
-                            editor.buffers[idx].text().chars().take(200).collect();
+                        let new_rope = editor.buffers[idx].rope();
+                        let new_len = new_rope.len_chars();
+                        let char_delta = new_len as isize - old_len as isize;
+                        let text_preview: String = new_rope.chars().take(200).collect();
+
+                        // Find first char position where old and new ropes diverge.
+                        // This is the edit point for cursor adjustment.
+                        let edit_pos = if char_delta != 0 {
+                            old_rope
+                                .chars()
+                                .zip(new_rope.chars())
+                                .position(|(a, b)| a != b)
+                                .unwrap_or(old_len.min(new_len))
+                        } else {
+                            // Same length — could be a replace or no-op.
+                            // No adjustment needed if content is identical.
+                            old_len
+                        };
+
                         info!(
                             doc = %doc_id,
                             wal_seq,
                             update_len = update_bytes.len(),
                             buf_idx = idx,
                             buf_name = %editor.buffers[idx].name,
-                            text_before = %text_before,
-                            text_after = %text_after,
-                            text_changed = (text_before != text_after),
+                            old_len,
+                            new_len,
+                            char_delta,
+                            edit_pos,
+                            text_preview = %text_preview,
                             "applied remote sync update"
                         );
-                        // Restore cursor positions: clamp to new rope length.
-                        for (win_id, char_offset) in &window_cursors {
+
+                        // Adjust cursor positions based on where the edit occurred.
+                        // Cursors before the edit stay put; cursors after shift by delta.
+                        for (win_id, old_offset) in &window_cursors {
                             if let Some(win) = editor.window_mgr.window_mut(*win_id) {
-                                let (row, col) =
-                                    editor.buffers[idx].row_col_from_offset(*char_offset);
+                                let adjusted = if *old_offset <= edit_pos {
+                                    *old_offset
+                                } else {
+                                    // Shift by delta, but never before edit_pos
+                                    // (handles cursor inside a deleted range).
+                                    let shifted =
+                                        (*old_offset as isize + char_delta).max(0) as usize;
+                                    shifted.max(edit_pos)
+                                };
+                                let clamped = adjusted.min(new_len.saturating_sub(1));
+                                let (row, col) = editor.buffers[idx].row_col_from_offset(clamped);
                                 win.cursor_row = row;
                                 win.cursor_col = col;
                                 win.clamp_cursor(&editor.buffers[idx]);
@@ -681,18 +754,29 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 Some(mae_sync::DocAddress::KbNode { node_id }) => node_id.clone(),
                 None => doc_id.clone(),
             };
-            // Find or create buffer, load sync state directly (no merge).
-            let already_existed = editor.find_buffer_by_name(&buf_name).is_some();
-            let idx = editor.find_or_create_buffer(&buf_name, || {
-                let mut buf = mae_core::Buffer::new();
-                buf.name = buf_name.clone();
-                buf.kind = mae_core::BufferKind::Text;
-                buf
-            });
+            // Check if a buffer with this collab_doc_id already exists (e.g.,
+            // the user shared a buffer and then also joined it, or a ForceSync
+            // response arrived). Using the doc_id match prevents creating a
+            // duplicate buffer with a different name but the same CRDT doc,
+            // which causes remote updates to be applied to the wrong sync_doc.
+            let existing_by_doc_id = editor.find_buffer_by_collab_doc_id(&doc_id);
+            let already_existed =
+                existing_by_doc_id.is_some() || editor.find_buffer_by_name(&buf_name).is_some();
+            let idx = if let Some(i) = existing_by_doc_id {
+                info!(doc = %doc_id, buf_idx = i, buf_name = %editor.buffers[i].name,
+                    "join: reusing existing buffer with same collab_doc_id");
+                i
+            } else {
+                editor.find_or_create_buffer(&buf_name, || {
+                    let mut buf = mae_core::Buffer::new();
+                    buf.name = buf_name.clone();
+                    buf.kind = mae_core::BufferKind::Text;
+                    buf
+                })
+            };
             // Snapshot project root before mutable borrow of buffer.
             let project_root = editor.active_project_root().map(|p| p.to_path_buf());
-            // Deterministic client ID: PID << 16 | buffer index.
-            let client_id = (std::process::id() as u64) << 16 | (idx as u64);
+            let client_id = compute_client_id(idx);
             let load_ok = {
                 let buf = &mut editor.buffers[idx];
                 if already_existed && buf.sync_doc.is_some() {
@@ -999,6 +1083,49 @@ pub(crate) enum PendingResponseKind {
     Ping {
         sent_at: std::time::Instant,
     },
+    /// Doctor ping — response forwarded to a oneshot channel.
+    DoctorPing {
+        sent_at: std::time::Instant,
+        reply: tokio::sync::oneshot::Sender<Option<u64>>,
+    },
+    /// Doctor debug — response forwarded to a oneshot channel.
+    DoctorDebug {
+        reply: tokio::sync::oneshot::Sender<Option<serde_json::Value>>,
+    },
+}
+
+/// Spawn a dedicated reader task that feeds complete messages into an mpsc channel.
+///
+/// CANCEL-SAFETY: `read_message()` uses multi-step I/O (peek → read headers → read body).
+/// If `tokio::select!` cancels it mid-parse, the BufReader's internal cursor is left past
+/// partially-consumed data, corrupting all subsequent reads. By running `read_message` in
+/// a dedicated task that is never cancelled, we ensure it always runs to completion.
+/// The `select!` loop receives from the channel, which is always cancel-safe.
+fn spawn_reader_task(
+    reader: tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>,
+) -> mpsc::Receiver<Result<String, String>> {
+    let (msg_tx, msg_rx) = mpsc::channel::<Result<String, String>>(32);
+    tokio::spawn(async move {
+        let mut reader = reader;
+        loop {
+            match mae_mcp::read_message(&mut reader).await {
+                Ok(Some(msg)) => {
+                    if msg_tx.send(Ok(msg)).await.is_err() {
+                        break; // main task dropped the receiver
+                    }
+                }
+                Ok(None) => {
+                    let _ = msg_tx.send(Err("EOF".to_string())).await;
+                    break;
+                }
+                Err(e) => {
+                    let _ = msg_tx.send(Err(e.to_string())).await;
+                    break;
+                }
+            }
+        }
+    });
+    msg_rx
 }
 
 /// Background task that owns the TCP connection to the state server.
@@ -1014,13 +1141,13 @@ async fn run_collab_task(
     max_reconnect_attempts: u64,
     heartbeat_secs: u64,
 ) {
-    use mae_mcp::{read_message, write_framed};
+    use mae_mcp::write_framed;
     use std::collections::HashMap;
     use tokio::io::BufReader;
-    use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+    use tokio::net::tcp::OwnedWriteHalf;
     use tokio::net::TcpStream;
 
-    let mut reader: Option<BufReader<OwnedReadHalf>> = None;
+    let mut msg_rx: Option<mpsc::Receiver<Result<String, String>>> = None;
     let mut writer: Option<OwnedWriteHalf> = None;
     let mut target_address: Option<String> = None;
     let mut shared_docs: Vec<String> = Vec::new();
@@ -1048,16 +1175,20 @@ async fn run_collab_task(
     let mut ping_pending = false;
 
     /// Helper: tear down connection.
-    fn tear_down(rd: &mut Option<BufReader<OwnedReadHalf>>, wr: &mut Option<OwnedWriteHalf>) {
-        *rd = None;
+    /// Dropping msg_rx causes the reader task to terminate on its next send.
+    fn tear_down(
+        rx: &mut Option<mpsc::Receiver<Result<String, String>>>,
+        wr: &mut Option<OwnedWriteHalf>,
+    ) {
+        *rx = None;
         *wr = None;
     }
 
     loop {
-        let connected = reader.is_some();
+        let connected = msg_rx.is_some();
 
         if connected {
-            let buf_reader = reader.as_mut().unwrap();
+            let rx = msg_rx.as_mut().unwrap();
 
             tokio::select! {
                 Some(cmd) = cmd_rx.recv() => {
@@ -1065,13 +1196,13 @@ async fn run_collab_task(
                         "bridge: received command");
                     match cmd {
                         CollabCommand::Disconnect => {
-                            tear_down(&mut reader, &mut writer);
+                            tear_down(&mut msg_rx, &mut writer);
                             reconnect_enabled = false;
                             shared_docs.clear();
                             pending_responses.clear();
-                            let _ = evt_tx.send(CollabEvent::Disconnected {
+                            try_send_evt(&evt_tx, CollabEvent::Disconnected {
                                 reason: "user requested".to_string(),
-                            }).await;
+                            });
                             continue;
                         }
                         CollabCommand::ShowStatus => {
@@ -1080,30 +1211,73 @@ async fn run_collab_task(
                                 true,
                                 &shared_docs,
                             );
-                            let _ = evt_tx.send(CollabEvent::StatusReport { lines }).await;
+                            try_send_evt(&evt_tx, CollabEvent::StatusReport { lines });
                         }
                         CollabCommand::Doctor { synced_info } => {
                             let addr = target_address.as_deref().unwrap_or("?").to_string();
-                            let mut ctx = DoctorContext {
-                                address: addr,
-                                connected: true,
-                                server_debug: None,
-                                ping_latency_ms: None,
-                                synced_info,
-                            };
-                            // Gather $/ping latency + $/debug from server.
+                            // Route doctor queries through the normal request/response
+                            // mechanism using oneshot channels, so we don't need direct
+                            // reader access (which is now in the reader task).
+                            let (ping_tx, ping_rx) = tokio::sync::oneshot::channel();
+                            let (debug_tx, debug_rx) = tokio::sync::oneshot::channel();
                             if let Some(ref mut w) = writer {
-                                gather_doctor_context(
-                                    w,
-                                    reader.as_mut().unwrap(),
-                                    &mut next_request_id,
-                                    write_timeout,
-                                    &mut ctx,
-                                )
-                                .await;
+                                // Send $/ping
+                                let ping_id = next_request_id;
+                                next_request_id += 1;
+                                let ping_req = serde_json::json!({
+                                    "jsonrpc": "2.0", "id": ping_id, "method": "$/ping",
+                                });
+                                let body = serde_json::to_vec(&ping_req).unwrap_or_default();
+                                if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    pending_responses.insert(ping_id, PendingResponseKind::DoctorPing {
+                                        sent_at: std::time::Instant::now(),
+                                        reply: ping_tx,
+                                    });
+                                } else {
+                                    let _ = ping_tx.send(None);
+                                }
+                                // Send $/debug
+                                let debug_id = next_request_id;
+                                next_request_id += 1;
+                                let debug_req = serde_json::json!({
+                                    "jsonrpc": "2.0", "id": debug_id, "method": "$/debug",
+                                });
+                                let body = serde_json::to_vec(&debug_req).unwrap_or_default();
+                                if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    pending_responses.insert(debug_id, PendingResponseKind::DoctorDebug {
+                                        reply: debug_tx,
+                                    });
+                                } else {
+                                    let _ = debug_tx.send(None);
+                                }
+                            } else {
+                                let _ = ping_tx.send(None);
+                                let _ = debug_tx.send(None);
                             }
-                            let lines = build_doctor_lines(&ctx);
-                            let _ = evt_tx.send(CollabEvent::DoctorReport { lines }).await;
+                            // Spawn a task to await responses and build the doctor report.
+                            let evt_tx_clone = evt_tx.clone();
+                            tokio::spawn(async move {
+                                let gather_timeout = std::time::Duration::from_secs(2);
+                                let ping_latency_ms = tokio::time::timeout(gather_timeout, ping_rx)
+                                    .await
+                                    .ok()
+                                    .and_then(|r| r.ok())
+                                    .flatten();
+                                let server_debug = tokio::time::timeout(gather_timeout, debug_rx)
+                                    .await
+                                    .ok()
+                                    .and_then(|r| r.ok())
+                                    .flatten();
+                                let ctx = DoctorContext {
+                                    address: addr,
+                                    connected: true,
+                                    server_debug,
+                                    ping_latency_ms,
+                                    synced_info,
+                                };
+                                let lines = build_doctor_lines(&ctx);
+                                try_send_evt(&evt_tx_clone, CollabEvent::DoctorReport { lines });
+                            });
                         }
                         CollabCommand::ShareBuffer { doc_id, state_bytes } => {
                             if let Some(ref mut w) = writer {
@@ -1134,9 +1308,9 @@ async fn run_collab_task(
                                     Err(e) => {
                                         error!(doc = %doc_id, error = %e,
                                             "share: write_framed failed");
-                                        let _ = evt_tx.send(CollabEvent::Error {
+                                        try_send_evt(&evt_tx, CollabEvent::Error {
                                             message: format!("Failed to share {}", doc_id),
-                                        }).await;
+                                        });
                                     }
                                 }
                             }
@@ -1167,13 +1341,18 @@ async fn run_collab_task(
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
                                     pending_responses.insert(req_id, PendingResponseKind::ForceSync { doc_id });
                                 } else {
-                                    let _ = evt_tx.send(CollabEvent::Error {
+                                    try_send_evt(&evt_tx, CollabEvent::Error {
                                         message: format!("Failed to sync {}", doc_id),
-                                    }).await;
+                                    });
                                 }
                             }
                         }
                         CollabCommand::SendUpdate { doc_id, update_base64 } => {
+                            info!(
+                                doc = %doc_id,
+                                update_b64_len = update_base64.len(),
+                                "collab_bridge: SendUpdate → server"
+                            );
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
                                 next_request_id += 1;
@@ -1235,9 +1414,9 @@ async fn run_collab_task(
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
                                     pending_responses.insert(req_id, PendingResponseKind::ListDocs { for_join });
                                 } else {
-                                    let _ = evt_tx.send(CollabEvent::Error {
+                                    try_send_evt(&evt_tx, CollabEvent::Error {
                                         message: "Failed to list documents".to_string(),
-                                    }).await;
+                                    });
                                 }
                             }
                         }
@@ -1262,9 +1441,9 @@ async fn run_collab_task(
                                         shared_docs.push(doc_id);
                                     }
                                 } else {
-                                    let _ = evt_tx.send(CollabEvent::Error {
+                                    try_send_evt(&evt_tx, CollabEvent::Error {
                                         message: format!("Failed to join {}", doc_id),
-                                    }).await;
+                                    });
                                 }
                             }
                         }
@@ -1291,9 +1470,9 @@ async fn run_collab_task(
                                         expected_hash,
                                     });
                                 } else {
-                                    let _ = evt_tx.send(CollabEvent::Error {
+                                    try_send_evt(&evt_tx, CollabEvent::Error {
                                         message: "Failed to send save intent".to_string(),
-                                    }).await;
+                                    });
                                 }
                             }
                         }
@@ -1323,21 +1502,21 @@ async fn run_collab_task(
                             }
                         }
                         CollabCommand::Connect { address } => {
-                            tear_down(&mut reader, &mut writer);
+                            tear_down(&mut msg_rx, &mut writer);
                             pending_responses.clear();
                             target_address = Some(address);
                             continue;
                         }
                         CollabCommand::StartServer => {
-                            let _ = evt_tx.send(CollabEvent::Error {
+                            try_send_evt(&evt_tx, CollabEvent::Error {
                                 message: "Already connected to a state server".to_string(),
-                            }).await;
+                            });
                         }
                     }
                 }
-                msg = read_message(buf_reader) => {
+                msg = rx.recv() => {
                     match msg {
-                        Ok(Some(text)) => {
+                        Some(Ok(text)) => {
                             messages_received += 1;
                             debug!(msg_len = text.len(),
                                 preview = &text[..text.len().min(120)],
@@ -1348,19 +1527,34 @@ async fn run_collab_task(
                                 &mut pending_responses,
                                 &mut shared_docs,
                                 &mut seq_tracker,
-                            ).await;
+                            );
                             // Any valid message resets the ping_pending flag.
                             ping_pending = false;
                         }
-                        Ok(None) | Err(_) => {
-                            tear_down(&mut reader, &mut writer);
+                        Some(Err(e)) => {
+                            debug!(error = %e, "bridge: reader task reported error");
+                            tear_down(&mut msg_rx, &mut writer);
                             shared_docs.clear();
                             pending_responses.clear();
                             seq_tracker.clear();
                             ping_pending = false;
-                            let _ = evt_tx.send(CollabEvent::Disconnected {
+                            try_send_evt(&evt_tx, CollabEvent::Disconnected {
+                                reason: format!("connection lost: {}", e),
+                            });
+                            if reconnect_enabled {
+                                continue;
+                            }
+                        }
+                        None => {
+                            // Reader task exited (channel closed).
+                            tear_down(&mut msg_rx, &mut writer);
+                            shared_docs.clear();
+                            pending_responses.clear();
+                            seq_tracker.clear();
+                            ping_pending = false;
+                            try_send_evt(&evt_tx, CollabEvent::Disconnected {
                                 reason: "connection lost".to_string(),
-                            }).await;
+                            });
                             if reconnect_enabled {
                                 continue;
                             }
@@ -1375,14 +1569,14 @@ async fn run_collab_task(
                     if ping_pending {
                         // Previous ping got no response — connection dead.
                         warn!("heartbeat: no response to previous ping — disconnecting");
-                        tear_down(&mut reader, &mut writer);
+                        tear_down(&mut msg_rx, &mut writer);
                         shared_docs.clear();
                         pending_responses.clear();
                         seq_tracker.clear();
                         ping_pending = false;
-                        let _ = evt_tx.send(CollabEvent::Disconnected {
+                        try_send_evt(&evt_tx, CollabEvent::Disconnected {
                             reason: "heartbeat timeout".to_string(),
-                        }).await;
+                        });
                         if reconnect_enabled {
                             continue;
                         }
@@ -1409,14 +1603,14 @@ async fn run_collab_task(
                             ping_pending = true;
                         } else {
                             // Write failed — connection is broken.
-                            tear_down(&mut reader, &mut writer);
+                            tear_down(&mut msg_rx, &mut writer);
                             shared_docs.clear();
                             pending_responses.clear();
                             seq_tracker.clear();
                             ping_pending = false;
-                            let _ = evt_tx.send(CollabEvent::Disconnected {
+                            try_send_evt(&evt_tx, CollabEvent::Disconnected {
                                 reason: "heartbeat write failed".to_string(),
-                            }).await;
+                            });
                         }
                     }
                 }
@@ -1429,7 +1623,7 @@ async fn run_collab_task(
                     tokio::select! {
                         Some(cmd) = cmd_rx.recv() => {
                             handle_disconnected_cmd(
-                                cmd, &evt_tx, &mut reader, &mut writer,
+                                cmd, &evt_tx, &mut msg_rx, &mut writer,
                                 &mut target_address, &mut reconnect_enabled,
                                 &mut shared_docs, &mut next_request_id,
                                 &mut pending_responses, write_timeout,
@@ -1445,9 +1639,9 @@ async fn run_collab_task(
                                 warn!(attempts = reconnect_attempt, max = max_reconnect_attempts,
                                     "max reconnect attempts exhausted");
                                 reconnect_enabled = false;
-                                let _ = evt_tx.send(CollabEvent::Disconnected {
+                                try_send_evt(&evt_tx, CollabEvent::Disconnected {
                                     reason: format!("max reconnect attempts ({}) exhausted", max_reconnect_attempts),
-                                }).await;
+                                });
                                 continue;
                             }
                             reconnect_attempt += 1;
@@ -1455,17 +1649,18 @@ async fn run_collab_task(
                                 let (r, mut w) = stream.into_split();
                                 let mut buf_reader = BufReader::new(r);
                                 if let Some(peer_count) = send_initialize(&mut w, &mut buf_reader, write_timeout).await {
-                                    reader = Some(buf_reader);
+                                    // Spawn dedicated reader task (cancel-safety fix).
+                                    msg_rx = Some(spawn_reader_task(buf_reader));
                                     writer = Some(w);
                                     reconnect_attempt = 0; // Reset on success.
                                     // Subscribe to sync_update events (B4 fix).
                                     if let Some(ref mut w) = writer {
                                         send_subscribe(w, &mut next_request_id, &mut pending_responses, write_timeout).await;
                                     }
-                                    let _ = evt_tx.send(CollabEvent::Connected {
+                                    try_send_evt(&evt_tx, CollabEvent::Connected {
                                         address: addr_clone,
                                         peer_count,
-                                    }).await;
+                                    });
                                 }
                             } else {
                                 debug!(addr = %addr_clone, attempt = reconnect_attempt,
@@ -1483,7 +1678,7 @@ async fn run_collab_task(
                 handle_disconnected_cmd(
                     cmd,
                     &evt_tx,
-                    &mut reader,
+                    &mut msg_rx,
                     &mut writer,
                     &mut target_address,
                     &mut reconnect_enabled,
@@ -1499,7 +1694,7 @@ async fn run_collab_task(
 }
 
 /// Check WAL sequence continuity for a doc. If a gap is detected, emit GapDetected.
-async fn check_seq_gap(
+fn check_seq_gap(
     doc_id: &str,
     wal_seq: u64,
     seq_tracker: &mut std::collections::HashMap<String, u64>,
@@ -1511,13 +1706,14 @@ async fn check_seq_gap(
         .unwrap_or(wal_seq); // first time: no gap
     if wal_seq > expected {
         warn!(doc = %doc_id, expected, got = wal_seq, "WAL sequence gap detected");
-        let _ = evt_tx
-            .send(CollabEvent::GapDetected {
+        try_send_evt(
+            evt_tx,
+            CollabEvent::GapDetected {
                 doc_id: doc_id.to_string(),
                 expected,
                 got: wal_seq,
-            })
-            .await;
+            },
+        );
     }
     // Always update tracker to the latest seen seq.
     seq_tracker.insert(doc_id.to_string(), wal_seq);
@@ -1532,7 +1728,8 @@ fn compute_backoff(base_secs: u64, factor: u64, attempt: u32) -> u64 {
 
 /// Handle an incoming JSON-RPC message from the server.
 /// Dispatches to response handler or notification handler based on content.
-pub(crate) async fn handle_incoming_message(
+/// Non-blocking: uses try_send to avoid backpressure deadlock.
+pub(crate) fn handle_incoming_message(
     text: &str,
     evt_tx: &mpsc::Sender<CollabEvent>,
     pending_responses: &mut std::collections::HashMap<u64, PendingResponseKind>,
@@ -1550,7 +1747,7 @@ pub(crate) async fn handle_incoming_message(
                 let has_error = val.get("error").is_some();
                 debug!(id, has_error, kind = ?std::mem::discriminant(&kind),
                     "bridge: matched response to pending request");
-                handle_response(&val, kind, evt_tx, shared_docs, seq_tracker).await;
+                handle_response(&val, kind, evt_tx, shared_docs, seq_tracker);
             } else {
                 debug!(id, "bridge: response for unknown/expired request id");
             }
@@ -1598,21 +1795,22 @@ pub(crate) async fn handle_incoming_message(
                         // Only process updates for docs this client has shared/joined.
                         // The server broadcasts to ALL clients; we filter client-side.
                         if !shared_docs.contains(&buffer_name) {
-                            debug!(doc = %buffer_name, "ignoring sync_update for unsubscribed doc");
+                            info!(doc = %buffer_name, "ignoring sync_update for unsubscribed doc");
                         } else {
-                            debug!(doc = %buffer_name, wal_seq, update_bytes = update_b64.len(), "received sync_update");
+                            info!(doc = %buffer_name, wal_seq, update_b64_len = update_b64.len(), "received sync_update notification");
                             // Gap detection: check wal_seq continuity per doc.
                             if wal_seq > 0 {
-                                check_seq_gap(&buffer_name, wal_seq, seq_tracker, evt_tx).await;
+                                check_seq_gap(&buffer_name, wal_seq, seq_tracker, evt_tx);
                             }
                             if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
-                                let _ = evt_tx
-                                    .send(CollabEvent::RemoteUpdate {
+                                try_send_evt(
+                                    evt_tx,
+                                    CollabEvent::RemoteUpdate {
                                         doc_id: buffer_name,
                                         update_bytes: bytes,
                                         wal_seq,
-                                    })
-                                    .await;
+                                    },
+                                );
                             }
                         }
                     }
@@ -1638,16 +1836,17 @@ pub(crate) async fn handle_incoming_message(
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
                         if wal_seq > 0 {
-                            check_seq_gap(&doc_id, wal_seq, seq_tracker, evt_tx).await;
+                            check_seq_gap(&doc_id, wal_seq, seq_tracker, evt_tx);
                         }
                         if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
-                            let _ = evt_tx
-                                .send(CollabEvent::RemoteUpdate {
+                            try_send_evt(
+                                evt_tx,
+                                CollabEvent::RemoteUpdate {
                                     doc_id,
                                     update_bytes: bytes,
                                     wal_seq,
-                                })
-                                .await;
+                                },
+                            );
                         }
                     }
                 }
@@ -1659,9 +1858,7 @@ pub(crate) async fn handle_incoming_message(
                     let peer_count =
                         data.get("peer_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                     debug!(peer_count, "received peer_joined notification");
-                    let _ = evt_tx
-                        .send(CollabEvent::PeerCountChanged { peer_count })
-                        .await;
+                    try_send_evt(evt_tx, CollabEvent::PeerCountChanged { peer_count });
                 }
             }
             "notifications/peer_left" => {
@@ -1671,9 +1868,7 @@ pub(crate) async fn handle_incoming_message(
                     let peer_count =
                         data.get("peer_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                     debug!(peer_count, "received peer_left notification");
-                    let _ = evt_tx
-                        .send(CollabEvent::PeerCountChanged { peer_count })
-                        .await;
+                    try_send_evt(evt_tx, CollabEvent::PeerCountChanged { peer_count });
                 }
             }
             "notifications/sharer_left" => {
@@ -1686,7 +1881,7 @@ pub(crate) async fn handle_incoming_message(
                         .unwrap_or("")
                         .to_string();
                     debug!(doc = %doc_id, "received sharer_left notification");
-                    let _ = evt_tx.send(CollabEvent::SharerLeft { doc_id }).await;
+                    try_send_evt(evt_tx, CollabEvent::SharerLeft { doc_id });
                 }
             }
             "notifications/awareness_update" | "sync/awareness" => {
@@ -1700,26 +1895,37 @@ pub(crate) async fn handle_incoming_message(
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let state_json = data
-                        .get("state")
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null);
-                    if let Ok(state) =
-                        serde_json::from_value::<mae_sync::awareness::AwarenessState>(state_json)
-                    {
+                    // The server broadcasts EditorEvent::AwarenessUpdate which
+                    // flattens state fields into `data`. Try nested "state" first
+                    // (direct sync/awareness format), then fall back to `data` itself
+                    // (broadcast notification format).
+                    let state_source = data.get("state").unwrap_or(data);
+                    if let Ok(state) = serde_json::from_value::<mae_sync::awareness::AwarenessState>(
+                        state_source.clone(),
+                    ) {
                         debug!(
                             client_id,
                             doc = %doc_id,
                             user = %state.user_name,
+                            row = state.cursor_row,
+                            col = state.cursor_col,
                             "received awareness update"
                         );
-                        let _ = evt_tx
-                            .send(CollabEvent::AwarenessUpdate {
+                        try_send_evt(
+                            evt_tx,
+                            CollabEvent::AwarenessUpdate {
                                 client_id,
                                 doc_id,
                                 state,
-                            })
-                            .await;
+                            },
+                        );
+                    } else {
+                        debug!(
+                            client_id,
+                            doc = %doc_id,
+                            "awareness parse failed — data keys: {:?}",
+                            data.as_object().map(|o| o.keys().collect::<Vec<_>>())
+                        );
                     }
                 }
             }
@@ -1738,7 +1944,7 @@ pub(crate) async fn handle_incoming_message(
                         .unwrap_or("peer")
                         .to_string();
                     debug!(doc = %doc, saved_by = %saved_by, "received save_committed notification");
-                    let _ = evt_tx.send(CollabEvent::PeerSaved { doc, saved_by }).await;
+                    try_send_evt(evt_tx, CollabEvent::PeerSaved { doc, saved_by });
                 }
             }
             _ => {
@@ -1749,7 +1955,8 @@ pub(crate) async fn handle_incoming_message(
 }
 
 /// Handle a correlated JSON-RPC response based on the pending request kind.
-async fn handle_response(
+/// Non-blocking: uses try_send to avoid backpressure deadlock.
+fn handle_response(
     val: &serde_json::Value,
     kind: PendingResponseKind,
     evt_tx: &mpsc::Sender<CollabEvent>,
@@ -1768,12 +1975,13 @@ async fn handle_response(
                     .unwrap_or("unknown error")
                     .to_string();
                 error!(doc = %doc_id, error = %err_msg, "share: server rejected");
-                let _ = evt_tx
-                    .send(CollabEvent::ShareFailed {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::ShareFailed {
                         doc_id,
                         message: err_msg,
-                    })
-                    .await;
+                    },
+                );
             } else {
                 info!(doc = %doc_id, "share: server accepted sync/share");
                 // WU2: Seed seq_tracker from share response wal_seq.
@@ -1788,7 +1996,7 @@ async fn handle_response(
                 if !shared_docs.contains(&doc_id) {
                     shared_docs.push(doc_id.clone());
                 }
-                let _ = evt_tx.send(CollabEvent::BufferShared { doc_id }).await;
+                try_send_evt(evt_tx, CollabEvent::BufferShared { doc_id });
             }
         }
         PendingResponseKind::ListDocs { for_join } => {
@@ -1802,12 +2010,13 @@ async fn handle_response(
                 })
                 .unwrap_or_default();
             info!(count = documents.len(), for_join, docs = ?documents, "docs/list response");
-            let _ = evt_tx
-                .send(CollabEvent::DocList {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::DocList {
                     documents,
                     for_join,
-                })
-                .await;
+                },
+            );
         }
         PendingResponseKind::JoinDoc { doc_id } => {
             // sync/resync response: {"result": {"doc": "...", "state": "<base64>", "sv": "<base64>"}}
@@ -1843,20 +2052,22 @@ async fn handle_response(
             match mae_sync::encoding::base64_to_update(state_b64) {
                 Ok(state_bytes) => {
                     info!(doc = %resolved_doc_id, state_len = state_bytes.len(), "join: decoded state, sending BufferJoined");
-                    let _ = evt_tx
-                        .send(CollabEvent::BufferJoined {
+                    try_send_evt(
+                        evt_tx,
+                        CollabEvent::BufferJoined {
                             doc_id: resolved_doc_id,
                             state_bytes,
-                        })
-                        .await;
+                        },
+                    );
                 }
                 Err(e) => {
                     error!(doc = %doc_id, error = %e, b64_preview = &state_b64[..state_b64.len().min(100)], "join: failed to decode state");
-                    let _ = evt_tx
-                        .send(CollabEvent::Error {
+                    try_send_evt(
+                        evt_tx,
+                        CollabEvent::Error {
                             message: format!("Failed to decode state for {}: {}", doc_id, e),
-                        })
-                        .await;
+                        },
+                    );
                 }
             }
         }
@@ -1871,19 +2082,21 @@ async fn handle_response(
             if !state_b64.is_empty() {
                 match mae_sync::encoding::base64_to_update(state_b64) {
                     Ok(state_bytes) => {
-                        let _ = evt_tx
-                            .send(CollabEvent::BufferJoined {
+                        try_send_evt(
+                            evt_tx,
+                            CollabEvent::BufferJoined {
                                 doc_id,
                                 state_bytes,
-                            })
-                            .await;
+                            },
+                        );
                     }
                     Err(e) => {
-                        let _ = evt_tx
-                            .send(CollabEvent::Error {
+                        try_send_evt(
+                            evt_tx,
+                            CollabEvent::Error {
                                 message: format!("Failed to decode resync for {}: {}", doc_id, e),
-                            })
-                            .await;
+                            },
+                        );
                     }
                 }
             }
@@ -1903,12 +2116,13 @@ async fn handle_response(
                     .and_then(|m| m.as_str())
                     .unwrap_or("save intent failed")
                     .to_string();
-                let _ = evt_tx
-                    .send(CollabEvent::SaveIntentConflict {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::SaveIntentConflict {
                         doc_id,
                         message: msg,
-                    })
-                    .await;
+                    },
+                );
             } else if let Some(r) = result {
                 let save_result = r.get("result").unwrap_or(r);
                 let status = save_result
@@ -1916,24 +2130,26 @@ async fn handle_response(
                     .and_then(|s| s.as_str())
                     .unwrap_or("");
                 if status == "conflict" {
-                    let _ = evt_tx
-                        .send(CollabEvent::SaveIntentConflict {
+                    try_send_evt(
+                        evt_tx,
+                        CollabEvent::SaveIntentConflict {
                             doc_id,
                             message: "Content hash mismatch — sync first".to_string(),
-                        })
-                        .await;
+                        },
+                    );
                 } else {
                     let save_epoch = save_result
                         .get("save_epoch")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0);
-                    let _ = evt_tx
-                        .send(CollabEvent::SaveIntentOk {
+                    try_send_evt(
+                        evt_tx,
+                        CollabEvent::SaveIntentOk {
                             doc_id,
                             save_epoch,
                             content_hash: expected_hash,
-                        })
-                        .await;
+                        },
+                    );
                 }
             }
         }
@@ -1945,6 +2161,14 @@ async fn handle_response(
             debug!(latency_ms, "heartbeat pong received");
             // Latency is logged — could be exposed to doctor in the future.
             let _ = latency_ms; // suppress unused warning
+        }
+        PendingResponseKind::DoctorPing { sent_at, reply } => {
+            let latency_ms = sent_at.elapsed().as_millis() as u64;
+            let _ = reply.send(Some(latency_ms));
+        }
+        PendingResponseKind::DoctorDebug { reply } => {
+            let debug_data = val.get("result").cloned();
+            let _ = reply.send(debug_data);
         }
     }
 }
@@ -1965,7 +2189,7 @@ async fn send_subscribe<W: tokio::io::AsyncWrite + Unpin>(
         "id": req_id,
         "method": "notifications/subscribe",
         "params": {
-            "types": ["sync_update", "peer_joined", "peer_left", "save_committed"]
+            "types": ["sync_update", "peer_joined", "peer_left", "save_committed", "awareness_update", "sharer_left"]
         }
     });
     let body = serde_json::to_vec(&req).unwrap();
@@ -1978,7 +2202,7 @@ async fn send_subscribe<W: tokio::io::AsyncWrite + Unpin>(
 async fn handle_disconnected_cmd(
     cmd: CollabCommand,
     evt_tx: &mpsc::Sender<CollabEvent>,
-    reader: &mut Option<tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>>,
+    msg_rx: &mut Option<mpsc::Receiver<Result<String, String>>>,
     writer: &mut Option<tokio::net::tcp::OwnedWriteHalf>,
     target_address: &mut Option<String>,
     reconnect_enabled: &mut bool,
@@ -1999,7 +2223,8 @@ async fn handle_disconnected_cmd(
                     if let Some(peer_count) =
                         send_initialize(&mut w, &mut buf_reader, write_timeout).await
                     {
-                        *reader = Some(buf_reader);
+                        // Spawn dedicated reader task (cancel-safety fix).
+                        *msg_rx = Some(spawn_reader_task(buf_reader));
                         *writer = Some(w);
                         *reconnect_enabled = true;
                         // Subscribe to sync_update events (B4 fix).
@@ -2007,28 +2232,31 @@ async fn handle_disconnected_cmd(
                             send_subscribe(w, next_request_id, pending_responses, write_timeout)
                                 .await;
                         }
-                        let _ = evt_tx
-                            .send(CollabEvent::Connected {
+                        try_send_evt(
+                            evt_tx,
+                            CollabEvent::Connected {
                                 address,
                                 peer_count,
-                            })
-                            .await;
+                            },
+                        );
                     } else {
                         *reconnect_enabled = true;
-                        let _ = evt_tx
-                            .send(CollabEvent::Error {
+                        try_send_evt(
+                            evt_tx,
+                            CollabEvent::Error {
                                 message: format!("Handshake failed with {}", address),
-                            })
-                            .await;
+                            },
+                        );
                     }
                 }
                 Err(e) => {
                     *reconnect_enabled = true;
-                    let _ = evt_tx
-                        .send(CollabEvent::Error {
+                    try_send_evt(
+                        evt_tx,
+                        CollabEvent::Error {
                             message: format!("Cannot connect to {}: {}", address, e),
-                        })
-                        .await;
+                        },
+                    );
                 }
             }
         }
@@ -2041,7 +2269,7 @@ async fn handle_disconnected_cmd(
             {
                 Ok(child) => {
                     let pid = child.id().unwrap_or(0);
-                    if let Err(e) = evt_tx.send(CollabEvent::ServerStarted { pid }).await {
+                    if let Err(e) = evt_tx.try_send(CollabEvent::ServerStarted { pid }) {
                         warn!("failed to send ServerStarted event: {}", e);
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -2057,7 +2285,8 @@ async fn handle_disconnected_cmd(
                             if let Some(peer_count) =
                                 send_initialize(&mut w, &mut buf_reader, write_timeout).await
                             {
-                                *reader = Some(buf_reader);
+                                // Spawn dedicated reader task (cancel-safety fix).
+                                *msg_rx = Some(spawn_reader_task(buf_reader));
                                 *writer = Some(w);
                                 *reconnect_enabled = true;
                                 // Subscribe after server start too.
@@ -2082,20 +2311,22 @@ async fn handle_disconnected_cmd(
                             }
                         }
                         Err(e) => {
-                            let _ = evt_tx
-                                .send(CollabEvent::Error {
+                            try_send_evt(
+                                evt_tx,
+                                CollabEvent::Error {
                                     message: format!("Server started but connect failed: {}", e),
-                                })
-                                .await;
+                                },
+                            );
                         }
                     }
                 }
                 Err(e) => {
-                    let _ = evt_tx
-                        .send(CollabEvent::ServerFailed {
+                    try_send_evt(
+                        evt_tx,
+                        CollabEvent::ServerFailed {
                             error: format!("Failed to spawn mae-state-server: {}", e),
-                        })
-                        .await;
+                        },
+                    );
                 }
             }
         }
@@ -2105,7 +2336,7 @@ async fn handle_disconnected_cmd(
                 false,
                 shared_docs,
             );
-            let _ = evt_tx.send(CollabEvent::StatusReport { lines }).await;
+            try_send_evt(evt_tx, CollabEvent::StatusReport { lines });
         }
         CollabCommand::Doctor { synced_info } => {
             let ctx = DoctorContext {
@@ -2119,49 +2350,54 @@ async fn handle_disconnected_cmd(
                 synced_info,
             };
             let lines = build_doctor_lines(&ctx);
-            let _ = evt_tx.send(CollabEvent::DoctorReport { lines }).await;
+            try_send_evt(evt_tx, CollabEvent::DoctorReport { lines });
         }
         CollabCommand::Disconnect => {
             *reconnect_enabled = false;
             shared_docs.clear();
         }
         CollabCommand::ShareBuffer { doc_id, .. } => {
-            let _ = evt_tx
-                .send(CollabEvent::Error {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
                     message: format!("Not connected \u{2014} cannot share '{}'", doc_id),
-                })
-                .await;
+                },
+            );
         }
         CollabCommand::ForceSync { doc_id } => {
-            let _ = evt_tx
-                .send(CollabEvent::Error {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
                     message: format!("Not connected \u{2014} cannot sync '{}'", doc_id),
-                })
-                .await;
+                },
+            );
         }
         CollabCommand::SendUpdate { .. } => {
             // Silently drop — not connected.
         }
         CollabCommand::ListDocs { .. } => {
-            let _ = evt_tx
-                .send(CollabEvent::Error {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
                     message: "Not connected \u{2014} cannot list documents".to_string(),
-                })
-                .await;
+                },
+            );
         }
         CollabCommand::JoinDoc { doc_id } => {
-            let _ = evt_tx
-                .send(CollabEvent::Error {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
                     message: format!("Not connected \u{2014} cannot join '{}'", doc_id),
-                })
-                .await;
+                },
+            );
         }
         CollabCommand::SendSaveIntent { doc_id, .. } => {
-            let _ = evt_tx
-                .send(CollabEvent::Error {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
                     message: format!("Not connected \u{2014} cannot save '{}'", doc_id),
-                })
-                .await;
+                },
+            );
         }
         CollabCommand::SendAwareness { .. } => {
             // Silently drop — not connected.
@@ -2246,59 +2482,6 @@ fn build_status_lines(address: &str, connected: bool, shared_docs: &[String]) ->
     lines.push(String::new());
     lines.push(format!("Server: {}", address));
     lines
-}
-
-/// Gather live server data for the doctor report ($/ping + $/debug).
-/// Populates `ctx.ping_latency_ms` and `ctx.server_debug` in-place.
-/// Each query has a 2s timeout — fields left as `None` on timeout/error.
-async fn gather_doctor_context<R, W>(
-    writer: &mut W,
-    reader: &mut R,
-    next_id: &mut u64,
-    write_timeout: std::time::Duration,
-    ctx: &mut DoctorContext,
-) where
-    R: tokio::io::AsyncBufRead + Unpin,
-    W: tokio::io::AsyncWrite + Unpin,
-{
-    use mae_mcp::{read_message, write_framed};
-    let gather_timeout = std::time::Duration::from_secs(2);
-
-    // $/ping — measure round-trip latency.
-    let ping_id = *next_id;
-    *next_id += 1;
-    let ping_req = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": ping_id,
-        "method": "$/ping",
-    });
-    let body = serde_json::to_vec(&ping_req).unwrap();
-    let ping_start = std::time::Instant::now();
-    if write_framed(writer, &body, write_timeout).await.is_ok() {
-        if let Ok(Ok(Some(_text))) =
-            tokio::time::timeout(gather_timeout, read_message(reader)).await
-        {
-            ctx.ping_latency_ms = Some(ping_start.elapsed().as_millis() as u64);
-        }
-    }
-
-    // $/debug — fetch per-doc server stats.
-    let debug_id = *next_id;
-    *next_id += 1;
-    let debug_req = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": debug_id,
-        "method": "$/debug",
-    });
-    let body = serde_json::to_vec(&debug_req).unwrap();
-    if write_framed(writer, &body, write_timeout).await.is_ok() {
-        if let Ok(Ok(Some(text))) = tokio::time::timeout(gather_timeout, read_message(reader)).await
-        {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
-                ctx.server_debug = val.get("result").cloned();
-            }
-        }
-    }
 }
 
 /// Context gathered for the doctor report — pre-fetched data from server queries.
@@ -2728,8 +2911,7 @@ mod tests {
             &mut pending,
             &mut shared,
             &mut std::collections::HashMap::new(),
-        )
-        .await;
+        );
         let event = rx.try_recv().unwrap();
         match event {
             CollabEvent::RemoteUpdate { doc_id, .. } => {
@@ -2766,8 +2948,7 @@ mod tests {
             &mut pending,
             &mut shared,
             &mut std::collections::HashMap::new(),
-        )
-        .await;
+        );
         let event = rx.try_recv().unwrap();
         match event {
             CollabEvent::RemoteUpdate { doc_id, .. } => {
@@ -2795,8 +2976,7 @@ mod tests {
             &tx,
             &mut shared,
             &mut std::collections::HashMap::new(),
-        )
-        .await;
+        );
         let event = rx.try_recv().unwrap();
         match event {
             CollabEvent::DocList {
@@ -2829,8 +3009,7 @@ mod tests {
             &tx,
             &mut shared,
             &mut seq,
-        )
-        .await;
+        );
         assert!(shared.contains(&"test.rs".to_string()));
         // WU2: seq_tracker should be seeded from share response wal_seq.
         assert_eq!(seq.get("test.rs"), Some(&1));
@@ -2861,8 +3040,7 @@ mod tests {
             &tx,
             &mut shared,
             &mut seq,
-        )
-        .await;
+        );
 
         // WU2: seq_tracker should be seeded from join response wal_seq.
         assert_eq!(seq.get("joined.rs"), Some(&7));
@@ -2879,7 +3057,7 @@ mod tests {
         let mut seq = std::collections::HashMap::new();
 
         let msg = r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#;
-        handle_incoming_message(msg, &tx, &mut pending, &mut shared, &mut seq).await;
+        handle_incoming_message(msg, &tx, &mut pending, &mut shared, &mut seq);
 
         // Should not emit any event (the warning is logged by tracing).
         assert!(rx.try_recv().is_err());
@@ -2929,6 +3107,64 @@ mod tests {
 
         // Buffer content should match the shared org content.
         assert!(editor.buffers[idx].text().contains("bullet one"));
+    }
+
+    #[test]
+    fn buffer_joined_reuses_existing_buffer_by_collab_doc_id() {
+        // Regression test: if a buffer was shared (collab_doc_id set) and the
+        // user also joins the same doc, BufferJoined must reuse the existing
+        // buffer instead of creating a duplicate. Creating a duplicate causes
+        // remote updates to be applied to the wrong sync_doc (the one without
+        // the locally-typed operations), making all updates no-ops.
+        let mut editor = Editor::new();
+
+        // Simulate: buffer "2026-05-27.org" was shared, enable_sync + collab_doc_id set.
+        let mut buf = mae_core::Buffer::new();
+        buf.name = "2026-05-27.org".to_string();
+        buf.insert_text_at(0, "shared content");
+        buf.enable_sync(1000);
+        buf.collab_doc_id = Some("file:abc123/daily/2026-05-27.org".to_string());
+        editor.buffers.push(buf);
+        editor
+            .collab
+            .synced_buffers
+            .insert("file:abc123/daily/2026-05-27.org".to_string());
+        let original_idx = editor.buffers.len() - 1;
+
+        // Simulate: user also joins the same doc. The join resolves to
+        // buf_name="daily/2026-05-27.org" (different from "2026-05-27.org").
+        let sync = mae_sync::text::TextSync::with_client_id("shared content", 2000);
+        let state_bytes = sync.encode_state();
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::BufferJoined {
+                doc_id: "file:abc123/daily/2026-05-27.org".to_string(),
+                state_bytes,
+            },
+        );
+
+        // Should NOT have created a new buffer — should reuse the existing one.
+        assert!(
+            editor.find_buffer_by_name("daily/2026-05-27.org").is_none(),
+            "should not create duplicate buffer with different name"
+        );
+        // The original buffer should still be the one with the collab_doc_id.
+        assert_eq!(
+            editor.buffers[original_idx].collab_doc_id.as_deref(),
+            Some("file:abc123/daily/2026-05-27.org"),
+        );
+        // Only one buffer should have this collab_doc_id.
+        let matching: Vec<_> = editor
+            .buffers
+            .iter()
+            .filter(|b| b.collab_doc_id.as_deref() == Some("file:abc123/daily/2026-05-27.org"))
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "exactly one buffer should have this collab_doc_id"
+        );
     }
 
     #[test]
@@ -3050,8 +3286,7 @@ mod tests {
             &tx,
             &mut shared,
             &mut std::collections::HashMap::new(),
-        )
-        .await;
+        );
 
         let event = rx.try_recv().unwrap();
         match event {
@@ -3198,8 +3433,7 @@ mod tests {
                 &mut pending,
                 &mut shared,
                 &mut std::collections::HashMap::new(),
-            )
-            .await;
+            );
         }
 
         // All 5 should have produced RemoteUpdate events.
@@ -3244,8 +3478,7 @@ mod tests {
             &mut pending,
             &mut shared,
             &mut std::collections::HashMap::new(),
-        )
-        .await;
+        );
         // No event should be emitted for the unsubscribed doc.
         assert!(
             rx.try_recv().is_err(),
@@ -3438,8 +3671,7 @@ mod tests {
             &tx,
             &mut shared,
             &mut std::collections::HashMap::new(),
-        )
-        .await;
+        );
         let event = rx.try_recv().unwrap();
         match event {
             CollabEvent::SaveIntentOk {
@@ -3477,8 +3709,7 @@ mod tests {
             &tx,
             &mut shared,
             &mut std::collections::HashMap::new(),
-        )
-        .await;
+        );
         let event = rx.try_recv().unwrap();
         assert!(
             matches!(event, CollabEvent::SaveIntentConflict { .. }),
@@ -3536,12 +3767,12 @@ mod tests {
         let mut seq_tracker = std::collections::HashMap::new();
 
         // Seq 1, 2 — no gap.
-        check_seq_gap("doc1", 1, &mut seq_tracker, &tx).await;
-        check_seq_gap("doc1", 2, &mut seq_tracker, &tx).await;
+        check_seq_gap("doc1", 1, &mut seq_tracker, &tx);
+        check_seq_gap("doc1", 2, &mut seq_tracker, &tx);
         assert!(rx.try_recv().is_err(), "no gap for sequential seqs");
 
         // Seq 4 — gap (expected 3).
-        check_seq_gap("doc1", 4, &mut seq_tracker, &tx).await;
+        check_seq_gap("doc1", 4, &mut seq_tracker, &tx);
         let event = rx.try_recv().unwrap();
         match event {
             CollabEvent::GapDetected {
@@ -3563,7 +3794,7 @@ mod tests {
         let mut seq_tracker = std::collections::HashMap::new();
 
         for i in 1..=5 {
-            check_seq_gap("doc1", i, &mut seq_tracker, &tx).await;
+            check_seq_gap("doc1", i, &mut seq_tracker, &tx);
         }
         assert!(rx.try_recv().is_err(), "no gap for sequential 1..5");
     }
@@ -3573,18 +3804,18 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(16);
         let mut seq_tracker = std::collections::HashMap::new();
 
-        check_seq_gap("doc-a", 1, &mut seq_tracker, &tx).await;
-        check_seq_gap("doc-b", 1, &mut seq_tracker, &tx).await;
+        check_seq_gap("doc-a", 1, &mut seq_tracker, &tx);
+        check_seq_gap("doc-b", 1, &mut seq_tracker, &tx);
         // Both start at 1, no gap.
         assert!(rx.try_recv().is_err());
 
         // doc-a jumps to 5 — gap.
-        check_seq_gap("doc-a", 5, &mut seq_tracker, &tx).await;
+        check_seq_gap("doc-a", 5, &mut seq_tracker, &tx);
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, CollabEvent::GapDetected { doc_id, .. } if doc_id == "doc-a"));
 
         // doc-b at 2 — no gap.
-        check_seq_gap("doc-b", 2, &mut seq_tracker, &tx).await;
+        check_seq_gap("doc-b", 2, &mut seq_tracker, &tx);
         assert!(rx.try_recv().is_err());
     }
 
@@ -3836,7 +4067,7 @@ mod tests {
                 }
             }
         }"#;
-        handle_incoming_message(msg, &tx, &mut pending, &mut shared, &mut seq).await;
+        handle_incoming_message(msg, &tx, &mut pending, &mut shared, &mut seq);
         let event = rx.try_recv().unwrap();
         match event {
             CollabEvent::SharerLeft { doc_id } => {

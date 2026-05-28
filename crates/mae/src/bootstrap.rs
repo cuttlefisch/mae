@@ -98,13 +98,14 @@ fn open_log_file() -> Option<(PathBuf, Mutex<std::fs::File>)> {
         let mut tm: libc::tm = unsafe { std::mem::zeroed() };
         unsafe { libc::gmtime_r(&secs, &mut tm) };
         format!(
-            "mae_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}.log",
+            "mae_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}_{}.log",
             tm.tm_year + 1900,
             tm.tm_mon + 1,
             tm.tm_mday,
             tm.tm_hour,
             tm.tm_min,
             tm.tm_sec,
+            std::process::id(),
         )
     };
     let path = dir.join(&filename);

@@ -512,4 +512,168 @@ mod tests {
         let expected = fnv1a_hash(b"test-proj");
         assert_eq!(identity, expected);
     }
+
+    // --- Branch coverage: compare_state_vectors ---
+
+    #[test]
+    fn compare_state_vectors_both_empty() {
+        use yrs::{updates::encoder::Encode, ReadTxn, Transact};
+        let doc = yrs::Doc::with_client_id(1);
+        let sv = doc.transact().state_vector().encode_v1();
+        let diag = compare_state_vectors(&sv, &sv).unwrap();
+        assert_eq!(diag.status, SyncOverallStatus::Aligned);
+        assert!(diag.clocks.is_empty());
+    }
+
+    #[test]
+    fn compare_state_vectors_one_empty() {
+        use yrs::{updates::encoder::Encode, ReadTxn, Text, Transact};
+        let doc = yrs::Doc::with_client_id(1);
+        let text = doc.get_or_insert_text("t");
+        {
+            let mut txn = doc.transact_mut();
+            text.insert(&mut txn, 0, "data");
+        }
+        let full_sv = doc.transact().state_vector().encode_v1();
+        let empty_doc = yrs::Doc::with_client_id(2);
+        let empty_sv = empty_doc.transact().state_vector().encode_v1();
+
+        // Full vs empty.
+        let diag = compare_state_vectors(&full_sv, &empty_sv).unwrap();
+        assert_eq!(diag.status, SyncOverallStatus::Diverged);
+        assert!(diag
+            .clocks
+            .iter()
+            .any(|(_, s)| *s == ClockStatus::LocalOnly));
+
+        // Empty vs full.
+        let diag2 = compare_state_vectors(&empty_sv, &full_sv).unwrap();
+        assert_eq!(diag2.status, SyncOverallStatus::Diverged);
+        assert!(diag2
+            .clocks
+            .iter()
+            .any(|(_, s)| *s == ClockStatus::RemoteOnly));
+    }
+
+    #[test]
+    fn compare_state_vectors_same_clients_different_versions() {
+        use yrs::{updates::encoder::Encode, ReadTxn, Text, Transact};
+        let doc_a = yrs::Doc::with_client_id(1);
+        let doc_b = yrs::Doc::with_client_id(1);
+        let text_a = doc_a.get_or_insert_text("t");
+        let text_b = doc_b.get_or_insert_text("t");
+        {
+            let mut txn = doc_a.transact_mut();
+            text_a.insert(&mut txn, 0, "more text");
+        }
+        {
+            let mut txn = doc_b.transact_mut();
+            text_b.insert(&mut txn, 0, "x");
+        }
+        let sv_a = doc_a.transact().state_vector().encode_v1();
+        let sv_b = doc_b.transact().state_vector().encode_v1();
+        let diag = compare_state_vectors(&sv_a, &sv_b).unwrap();
+        assert_eq!(diag.status, SyncOverallStatus::Diverged);
+        // Client 1 should be Ahead on A's side (more text inserted).
+        assert!(diag
+            .clocks
+            .iter()
+            .any(|(_, s)| matches!(s, ClockStatus::Ahead(_))));
+    }
+
+    // --- Branch coverage: DocAddress::parse ---
+
+    #[test]
+    fn doc_address_parse_multi_slash_path() {
+        let addr = DocAddress::parse("file:hash123/src/nested/file.rs").unwrap();
+        assert_eq!(
+            addr,
+            DocAddress::File {
+                project_hash: "hash123".to_string(),
+                rel_path: "src/nested/file.rs".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn doc_address_parse_colon_in_kb_id() {
+        let addr = DocAddress::parse("kb:concept:buffer").unwrap();
+        assert_eq!(
+            addr,
+            DocAddress::KbNode {
+                node_id: "concept:buffer".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn doc_address_parse_very_long_string() {
+        let long_path = "x".repeat(10_000);
+        let input = format!("file:hash/{}", long_path);
+        let addr = DocAddress::parse(&input).unwrap();
+        match addr {
+            DocAddress::File { rel_path, .. } => assert_eq!(rel_path.len(), 10_000),
+            _ => panic!("expected File"),
+        }
+    }
+
+    // --- Branch coverage: dotproject_name ---
+
+    #[test]
+    fn dotproject_name_malformed_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".project"),
+            "garbage content\nno name field\n",
+        )
+        .unwrap();
+        assert_eq!(dotproject_name(dir.path()), None);
+    }
+
+    #[test]
+    fn dotproject_name_empty_value() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".project"), "name = \"\"\n").unwrap();
+        assert_eq!(dotproject_name(dir.path()), None);
+    }
+
+    // --- Branch coverage: normalize_git_url ---
+
+    #[test]
+    fn normalize_git_url_no_dot_git() {
+        assert_eq!(
+            normalize_git_url("https://github.com/user/repo"),
+            "github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn normalize_git_url_bare_host() {
+        assert_eq!(normalize_git_url("GITHUB.COM"), "github.com");
+    }
+
+    // --- SavePolicy coverage ---
+
+    #[test]
+    fn save_policy_from_doc_address() {
+        assert_eq!(
+            DocAddress::File {
+                project_hash: "x".into(),
+                rel_path: "y".into(),
+            }
+            .save_policy(),
+            SavePolicy::LocalFirst
+        );
+        assert_eq!(
+            DocAddress::KbNode {
+                node_id: "x".into(),
+            }
+            .save_policy(),
+            SavePolicy::ServerAuthoritative
+        );
+        assert_eq!(
+            DocAddress::Shared { name: "x".into() }.save_policy(),
+            SavePolicy::Ephemeral
+        );
+    }
 }

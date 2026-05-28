@@ -335,6 +335,7 @@ impl StorageBackend for SqliteBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn wal_append_and_load() {
@@ -483,5 +484,150 @@ mod tests {
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         assert_eq!(ids, sorted, "WAL entries must be in id order");
+    }
+
+    // --- WU-D: branch-level coverage tests ---
+
+    #[tokio::test]
+    async fn wal_replay_with_corrupted_entry_stops_gracefully() {
+        let backend = SqliteBackend::open_memory().unwrap();
+
+        // Append valid + corrupted + valid entries.
+        backend
+            .wal_append("doc1", b"valid1", Some(1))
+            .await
+            .unwrap();
+        backend
+            .wal_append("doc1", b"\xff\xfe\x00\x01corrupted", None)
+            .await
+            .unwrap();
+        backend
+            .wal_append("doc1", b"valid3", Some(3))
+            .await
+            .unwrap();
+
+        // load_document should return all entries (storage layer doesn't validate).
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+        assert_eq!(state.wal_tail.len(), 3, "all entries returned by storage");
+        assert_eq!(state.wal_tail[0].update, b"valid1");
+        assert_eq!(state.wal_tail[2].update, b"valid3");
+        // The corrupted entry is stored as-is (CRDT layer validates on apply).
+        assert!(
+            state.wal_tail[1].update.starts_with(b"\xff\xfe"),
+            "corrupted bytes preserved as-is"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_wal_writes_different_docs() {
+        // SQLite WAL mode allows concurrent reads, serializes writes.
+        // This test verifies no lock contention for different docs.
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+
+        let mut handles = Vec::new();
+        for i in 0u64..10 {
+            let backend = Arc::clone(&backend);
+            let doc_name = format!("doc{i}");
+            handles.push(tokio::spawn(async move {
+                for j in 0u8..5 {
+                    backend.wal_append(&doc_name, &[j], Some(i)).await.unwrap();
+                }
+            }));
+        }
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            for h in handles {
+                h.await.unwrap();
+            }
+        })
+        .await;
+        assert!(result.is_ok(), "concurrent writes must not deadlock");
+
+        // Verify all 10 docs exist with 5 entries each.
+        let docs = backend.list_documents().await.unwrap();
+        assert_eq!(docs.len(), 10);
+        for i in 0..10 {
+            let state = backend
+                .load_document(&format!("doc{i}"))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(state.wal_tail.len(), 5, "doc{i} should have 5 WAL entries");
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_document_removes_wal_and_snapshot() {
+        let backend = SqliteBackend::open_memory().unwrap();
+
+        let id = backend.wal_append("doc1", b"u1", None).await.unwrap();
+        backend.compact("doc1", b"snapshot", id).await.unwrap();
+        // Add one more after compaction.
+        backend.wal_append("doc1", b"u2", None).await.unwrap();
+
+        // Delete.
+        backend.delete_document("doc1").await.unwrap();
+
+        // Load should return None.
+        assert!(backend.load_document("doc1").await.unwrap().is_none());
+        assert!(backend.list_documents().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn wal_entries_since_filters_correctly() {
+        let backend = SqliteBackend::open_memory().unwrap();
+
+        let id1 = backend.wal_append("doc1", b"u1", None).await.unwrap();
+        let id2 = backend.wal_append("doc1", b"u2", None).await.unwrap();
+        let _id3 = backend.wal_append("doc1", b"u3", None).await.unwrap();
+
+        // Entries since id1 should return u2 and u3.
+        let entries = backend.wal_entries_since("doc1", id1).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, id2);
+        assert_eq!(entries[0].1, b"u2");
+    }
+
+    #[tokio::test]
+    async fn wal_append_with_and_without_client_id() {
+        let backend = SqliteBackend::open_memory().unwrap();
+
+        backend
+            .wal_append("doc1", b"with-client", Some(42))
+            .await
+            .unwrap();
+        backend
+            .wal_append("doc1", b"no-client", None)
+            .await
+            .unwrap();
+
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+        assert_eq!(state.wal_tail[0].client_id, Some(42));
+        assert_eq!(state.wal_tail[1].client_id, None);
+    }
+
+    #[tokio::test]
+    async fn compact_with_zero_wal_id() {
+        let backend = SqliteBackend::open_memory().unwrap();
+
+        // Compact with wal_id=0 when no WAL exists (snapshot-only creation).
+        backend
+            .compact("doc1", b"initial-snapshot", 0)
+            .await
+            .unwrap();
+
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+        assert_eq!(
+            state.snapshot.as_deref(),
+            Some(b"initial-snapshot".as_slice())
+        );
+        assert!(state.wal_tail.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_document_is_noop() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        // Should not error.
+        backend.delete_document("does-not-exist").await.unwrap();
     }
 }

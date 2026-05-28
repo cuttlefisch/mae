@@ -1109,4 +1109,178 @@ mod tests {
         store.clear_sharer("doc1").await;
         assert!(!store.is_sharer("doc1", 42).await);
     }
+
+    // --- WU-D: branch-level coverage tests ---
+
+    #[tokio::test]
+    async fn concurrent_tokio_spawn_access_same_doc() {
+        let store = Arc::new(test_store());
+
+        // Create initial doc.
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "base");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+
+        // Spawn 10 concurrent tasks that all write to the same doc.
+        let mut handles = Vec::new();
+        for i in 0u64..10 {
+            let store = Arc::clone(&store);
+            handles.push(tokio::spawn(async move {
+                let mut ts = TextSync::with_client_id("", 100 + i);
+                // Read state first to get correct base.
+                let sv = store.state_vector("doc1").await.unwrap();
+                let _ = sv; // just ensure no deadlock
+                let update = ts.insert(0, &format!("{i}"));
+                store
+                    .apply_update("doc1", &update, Some(100 + i))
+                    .await
+                    .unwrap();
+            }));
+        }
+
+        // 5 second timeout — if this deadlocks, the test fails.
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            for h in handles {
+                h.await.unwrap();
+            }
+        })
+        .await;
+        assert!(result.is_ok(), "concurrent access must not deadlock");
+
+        // All 10 spawned tasks + initial should have contributed.
+        let content = store.content("doc1").await.unwrap();
+        assert!(
+            content.len() >= 14,
+            "content should contain all contributions, got: {content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_during_active_edits() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = Arc::new(DocStore::new(backend.clone(), 3)); // compact every 3
+
+        // Make 10 edits in a tight loop — compaction will trigger at 3, 6, 9.
+        let mut ts = TextSync::with_client_id("", 1);
+        for i in 0u32..10 {
+            let update = ts.insert(i, "x");
+            store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        }
+
+        // Content must be intact despite multiple compactions.
+        let content = store.content("doc1").await.unwrap();
+        assert_eq!(content.len(), 10, "all 10 chars must survive compaction");
+
+        // Snapshot must exist.
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+        assert!(state.snapshot.is_some());
+
+        // Now reload from storage in a fresh store and verify.
+        let store2 = DocStore::new(backend.clone(), 500);
+        let content2 = store2.content("doc1").await.unwrap();
+        assert_eq!(content, content2, "reloaded content must match");
+    }
+
+    #[tokio::test]
+    async fn idle_eviction_with_short_timeout() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = DocStore::new(backend.clone(), 500);
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "evict after timeout");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+
+        // With idle threshold 0, eviction is immediate.
+        let evicted = store.evict_idle(0).await;
+        assert_eq!(evicted, vec!["doc1"]);
+        assert_eq!(store.document_count().await, 0);
+
+        // Reload from storage (doc should be gone since eviction deletes).
+        let docs = backend.list_documents().await.unwrap();
+        assert!(docs.is_empty(), "eviction should remove from storage too");
+    }
+
+    #[tokio::test]
+    async fn save_intent_and_committed() {
+        let store = test_store();
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "saveme");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+
+        // Save intent with correct hash.
+        let content = store.content("doc1").await.unwrap();
+        let hash = {
+            let mut h = Sha256::new();
+            h.update(content.as_bytes());
+            format!("{:x}", h.finalize())
+        };
+
+        let result = store.check_save_intent("doc1", &hash).await.unwrap();
+        match result {
+            SaveIntentResult::Ok { save_epoch, .. } => {
+                assert!(save_epoch > 0);
+            }
+            SaveIntentResult::Conflict { .. } => {
+                panic!("expected Ok, got Conflict");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn save_intent_conflict_on_wrong_hash() {
+        let store = test_store();
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let update = ts.insert(0, "content");
+        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+
+        let result = store.check_save_intent("doc1", "wrong-hash").await.unwrap();
+        match result {
+            SaveIntentResult::Conflict { server_hash } => {
+                assert!(!server_hash.is_empty());
+            }
+            SaveIntentResult::Ok { .. } => {
+                panic!("expected Conflict, got Ok");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn content_of_nonexistent_doc() {
+        let store = test_store();
+        let content = store.content("nonexistent").await.unwrap();
+        assert_eq!(content, "", "nonexistent doc should return empty string");
+    }
+
+    #[tokio::test]
+    async fn multiple_share_doc_replaces() {
+        let store = test_store();
+
+        for i in 0..5 {
+            let ts = TextSync::new(&format!("version {i}"));
+            let state = ts.encode_state();
+            store.share_doc("doc1", &state).await.unwrap();
+        }
+
+        let content = store.content("doc1").await.unwrap();
+        assert_eq!(content, "version 4", "last share_doc wins");
+    }
+
+    #[tokio::test]
+    async fn wal_seq_monotonic_across_updates() {
+        let store = test_store();
+
+        let mut ts = TextSync::with_client_id("", 1);
+        let mut last_seq = 0u64;
+        for i in 0u32..10 {
+            let update = ts.insert(i, "x");
+            let result = store.apply_update("doc1", &update, Some(1)).await.unwrap();
+            assert!(
+                result.wal_seq > last_seq,
+                "wal_seq must increase monotonically"
+            );
+            last_seq = result.wal_seq;
+        }
+    }
 }

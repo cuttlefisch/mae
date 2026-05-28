@@ -111,7 +111,10 @@ pub async fn handle_client<R, W>(
 
     loop {
         tokio::select! {
-            biased;
+            // NOTE: do NOT use `biased;` here — it causes starvation of the
+            // event_rx arm when the client sends requests rapidly. This means
+            // broadcast events (sync_update from other peers) never get delivered
+            // to a client that is itself actively sending updates.
 
             msg = msg_rx.recv() => {
                 let msg = match msg {
@@ -363,6 +366,11 @@ async fn handle_doc_notification(
                                 None
                             }
                         }),
+                        mode: state
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("normal")
+                            .to_string(),
                     },
                     session_id,
                 );
@@ -480,7 +488,7 @@ async fn handle_doc_request(
                             session_id,
                         );
                     }
-                    debug!(session = session_id, doc = %doc_name, wal_seq = result.wal_seq, update_len = result.update.len(), "sync/update: applied");
+                    info!(session = session_id, doc = %doc_name, wal_seq = result.wal_seq, update_len = result.update.len(), "sync/update: applied and broadcast");
                     JsonRpcResponse::success(
                         id,
                         serde_json::json!({
@@ -538,6 +546,11 @@ async fn handle_doc_request(
                                 None
                             }
                         }),
+                        mode: state
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("normal")
+                            .to_string(),
                     },
                     session_id,
                 );

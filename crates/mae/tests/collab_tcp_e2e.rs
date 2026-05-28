@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use mae_sync::encoding::{base64_to_update, update_to_base64};
 use mae_sync::text::TextSync;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::BufReader;
 use tokio::net::TcpStream;
 use tokio::process::Command;
 
@@ -38,9 +38,10 @@ impl TcpClient {
     }
 
     async fn send(&mut self, msg: &serde_json::Value) {
-        let payload = format!("{}\n", serde_json::to_string(msg).unwrap());
-        self.writer.write_all(payload.as_bytes()).await.unwrap();
-        self.writer.flush().await.unwrap();
+        let body = serde_json::to_vec(msg).unwrap();
+        mae_mcp::write_framed(&mut self.writer, &body, std::time::Duration::from_secs(5))
+            .await
+            .unwrap();
     }
 
     async fn recv(&mut self) -> serde_json::Value {
@@ -403,6 +404,57 @@ async fn tcp_offline_edit_reconnect_resync() {
         "v1-updated",
         "CRDT state must survive server restart"
     );
+}
+
+/// Three clients concurrently edit the same doc — 100 edits each.
+/// Verify identical final content on all 3.
+#[tokio::test]
+#[ignore]
+async fn tcp_concurrent_three_editors() {
+    if !should_run() {
+        return;
+    }
+    let (_server, addr) = spawn_server().await;
+
+    let mut ca = TcpClient::connect(&addr).await;
+    let mut cb = TcpClient::connect(&addr).await;
+    let mut cc = TcpClient::connect(&addr).await;
+
+    ca.share("3way.txt", "").await;
+    let state_a = ca.full_state("3way.txt").await;
+    let state_b = cb.full_state("3way.txt").await;
+    let state_c = cc.full_state("3way.txt").await;
+    let mut ts_a = TextSync::from_state(&state_a).unwrap();
+    let mut ts_b = TextSync::from_state(&state_b).unwrap();
+    let mut ts_c = TextSync::from_state(&state_c).unwrap();
+
+    // Each client inserts its letter 100 times.
+    for _ in 0..100 {
+        let pos_a = ts_a.content().len() as u32;
+        let ua = ts_a.insert(pos_a, "A");
+        ca.send_update("3way.txt", &ua).await;
+
+        let ub = ts_b.insert(0, "B");
+        cb.send_update("3way.txt", &ub).await;
+
+        let pos_c = ts_c.content().len() as u32;
+        let uc = ts_c.insert(pos_c.min(1), "C");
+        cc.send_update("3way.txt", &uc).await;
+    }
+
+    // Wait for propagation.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    let content_a = ca.content("3way.txt").await;
+    let content_b = cb.content("3way.txt").await;
+    let content_c = cc.content("3way.txt").await;
+
+    assert_eq!(content_a, content_b, "A and B must converge");
+    assert_eq!(content_b, content_c, "B and C must converge");
+    assert_eq!(content_a.len(), 300, "all 300 chars must be present");
+    assert_eq!(content_a.matches('A').count(), 100);
+    assert_eq!(content_a.matches('B').count(), 100);
+    assert_eq!(content_a.matches('C').count(), 100);
 }
 
 /// WU6: Peer join/leave notifications over TCP.

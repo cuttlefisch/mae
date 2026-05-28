@@ -3,7 +3,7 @@
 
 use mae_core::Editor;
 use mae_mcp::broadcast::{EditorEvent, SharedBroadcaster};
-use tracing::{info, trace, warn};
+use tracing::{info, warn};
 
 /// Drain all pending yrs sync updates from editor buffers and broadcast
 /// them to subscribed MCP clients. If `collab_tx` is provided and the
@@ -46,7 +46,7 @@ pub fn drain_and_broadcast(
         }
 
         let updates: Vec<Vec<u8>> = buf.pending_sync_updates.drain(..).collect();
-        trace!(buffer = %buffer_name, update_count = updates.len(), "draining sync updates");
+        info!(buffer = %buffer_name, doc = %doc_id, update_count = updates.len(), is_collab_synced, "draining sync updates");
 
         let mut bc = broadcaster.lock().unwrap();
         for update in updates {

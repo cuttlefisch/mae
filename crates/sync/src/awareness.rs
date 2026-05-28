@@ -192,4 +192,82 @@ mod tests {
         assert_eq!(removed, 0);
         assert_eq!(map.len(), 1);
     }
+
+    // --- Branch coverage ---
+
+    #[test]
+    fn update_overwrites_same_client_id() {
+        let mut map = AwarenessMap::new();
+        let state1 = AwarenessState {
+            user_name: "Alice".to_string(),
+            cursor_row: 1,
+            cursor_col: 1,
+            selection: None,
+            mode: "normal".to_string(),
+        };
+        map.update(1, "doc1".into(), state1, 0);
+        assert_eq!(map.users_for_doc("doc1")[0].cursor_row, 1);
+
+        let state2 = AwarenessState {
+            user_name: "Alice (renamed)".to_string(),
+            cursor_row: 42,
+            cursor_col: 10,
+            selection: Some((1, 0, 3, 15)),
+            mode: "visual".to_string(),
+        };
+        map.update(1, "doc1".into(), state2, 0);
+        assert_eq!(map.len(), 1, "should overwrite, not add");
+        let user = &map.users_for_doc("doc1")[0];
+        assert_eq!(user.cursor_row, 42);
+        assert_eq!(user.user_name, "Alice (renamed)");
+        assert_eq!(user.selection, Some((1, 0, 3, 15)));
+        assert_eq!(user.mode, "visual");
+    }
+
+    #[test]
+    fn cleanup_stale_mixed_fresh_and_stale() {
+        let mut map = AwarenessMap::new();
+        map.update(1, "doc1".into(), sample_state("Alice"), 0);
+        map.update(2, "doc1".into(), sample_state("Bob"), 1);
+        map.update(3, "doc1".into(), sample_state("Carol"), 2);
+
+        // Make Alice and Carol stale.
+        if let Some(user) = map.users.get_mut(&1) {
+            user.last_seen = Instant::now() - std::time::Duration::from_secs(60);
+        }
+        if let Some(user) = map.users.get_mut(&3) {
+            user.last_seen = Instant::now() - std::time::Duration::from_secs(60);
+        }
+
+        let removed = map.cleanup_stale();
+        assert_eq!(removed, 2);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.users_for_doc("doc1")[0].user_name, "Bob");
+    }
+
+    #[test]
+    fn users_for_doc_empty_map() {
+        let map = AwarenessMap::new();
+        assert!(map.users_for_doc("any-doc").is_empty());
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn remove_nonexistent_client() {
+        let mut map = AwarenessMap::new();
+        assert!(map.remove(999).is_none());
+    }
+
+    #[test]
+    fn update_changes_doc_id() {
+        let mut map = AwarenessMap::new();
+        map.update(1, "doc1".into(), sample_state("Alice"), 0);
+        assert_eq!(map.users_for_doc("doc1").len(), 1);
+        assert_eq!(map.users_for_doc("doc2").len(), 0);
+
+        // Same client moves to different doc.
+        map.update(1, "doc2".into(), sample_state("Alice"), 0);
+        assert_eq!(map.users_for_doc("doc1").len(), 0);
+        assert_eq!(map.users_for_doc("doc2").len(), 1);
+    }
 }
