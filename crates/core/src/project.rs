@@ -123,6 +123,17 @@ fn is_home_dir(path: &Path) -> bool {
         .is_some_and(|home| path == home)
 }
 
+/// Returns `true` if `path` is inside the system temp directory.
+///
+/// Uses `std::env::temp_dir()` to respect `$TMPDIR`. Only applies when the
+/// user hasn't explicitly added the path via `:add-project` — the guard is
+/// in `detect_project_root` and `ProjectList::touch`, not in the explicit
+/// add-project command path.
+fn is_temp_dir(path: &Path) -> bool {
+    let tmp = std::env::temp_dir();
+    path.starts_with(&tmp)
+}
+
 /// Bounded list of recently used project roots.
 #[derive(Debug, Clone)]
 pub struct RecentProjects {
@@ -145,7 +156,12 @@ impl RecentProjects {
     }
 
     /// Push a project root, deduplicating and enforcing capacity.
+    ///
+    /// Silently rejects paths under the system temp directory.
     pub fn push(&mut self, root: PathBuf) {
+        if is_temp_dir(&root) {
+            return;
+        }
         self.roots.retain(|r| r != &root);
         self.roots.push_front(root);
         while self.roots.len() > self.cap {
@@ -262,7 +278,31 @@ impl ProjectList {
     }
 
     /// Upsert: add or update timestamp.  Returns `true` if this is a new entry.
+    ///
+    /// Rejects paths under `/tmp` or `/var/tmp` — these are transient and
+    /// should not pollute the project list.
     pub fn touch(&mut self, root: PathBuf, name: String) -> bool {
+        if is_temp_dir(&root) {
+            return false;
+        }
+        let now = now_iso8601();
+        if let Some(entry) = self.projects.iter_mut().find(|e| e.root == root) {
+            entry.last_opened = now;
+            entry.name = name;
+            false
+        } else {
+            self.projects.push(ProjectEntry {
+                root,
+                name,
+                last_opened: now,
+            });
+            true
+        }
+    }
+
+    /// Unconditional upsert — bypasses the temp dir check.
+    /// Used internally and in tests where temp paths are intentional.
+    pub fn touch_unchecked(&mut self, root: PathBuf, name: String) -> bool {
         let now = now_iso8601();
         if let Some(entry) = self.projects.iter_mut().find(|e| e.root == root) {
             entry.last_opened = now;
@@ -303,6 +343,23 @@ impl ProjectList {
     /// Remove entries whose root directory no longer exists on disk.
     pub fn prune_missing(&mut self) {
         self.projects.retain(|e| e.root.is_dir());
+    }
+
+    /// Prune entries that no longer exist on disk or live under temp dirs.
+    /// Returns names of removed entries (for user notification).
+    pub fn prune_stale(&mut self) -> Vec<String> {
+        let before: Vec<(PathBuf, String)> = self
+            .projects
+            .iter()
+            .map(|e| (e.root.clone(), e.name.clone()))
+            .collect();
+        self.projects
+            .retain(|e| !is_temp_dir(&e.root) && e.root.is_dir());
+        before
+            .into_iter()
+            .filter(|(root, _)| !self.projects.iter().any(|e| e.root == *root))
+            .map(|(_, name)| name)
+            .collect()
     }
 
     /// Sorted by `last_opened` descending (most recent first).
@@ -578,9 +635,9 @@ link = "FOO.org"
         fs::create_dir_all(&subcrate).unwrap();
 
         let mut pl = ProjectList::default();
-        pl.touch(workspace.clone(), "WS".into());
-        pl.touch(subcrate.clone(), "Core".into());
-        pl.touch(PathBuf::from("/other"), "Other".into());
+        pl.touch_unchecked(workspace.clone(), "WS".into());
+        pl.touch_unchecked(subcrate.clone(), "Core".into());
+        pl.touch_unchecked(PathBuf::from("/other"), "Other".into());
 
         pl.prune_subprojects();
         assert_eq!(pl.projects.len(), 2);
@@ -594,8 +651,8 @@ link = "FOO.org"
     fn project_list_prune_missing() {
         let tmp = tempfile::tempdir().unwrap();
         let mut pl = ProjectList::default();
-        pl.touch(tmp.path().to_path_buf(), "Exists".into());
-        pl.touch(PathBuf::from("/nonexistent_mae_test_xyz_42"), "Gone".into());
+        pl.touch_unchecked(tmp.path().to_path_buf(), "Exists".into());
+        pl.touch_unchecked(PathBuf::from("/nonexistent_mae_test_xyz_42"), "Gone".into());
 
         pl.prune_missing();
         assert_eq!(pl.projects.len(), 1);
@@ -642,9 +699,9 @@ link = "FOO.org"
         let sub = root.join("crates/core");
 
         let mut pl = ProjectList::default();
-        pl.touch(root.clone(), "Workspace".into());
-        pl.touch(sub.clone(), "Core".into());
-        pl.touch(PathBuf::from("/other/project"), "Other".into());
+        pl.touch_unchecked(root.clone(), "Workspace".into());
+        pl.touch_unchecked(sub.clone(), "Core".into());
+        pl.touch_unchecked(PathBuf::from("/other/project"), "Other".into());
 
         pl.prune_subprojects();
         // Sub should be pruned (parent has >2 components + .git on disk)
@@ -652,6 +709,34 @@ link = "FOO.org"
         assert!(roots.contains(&root.as_path()));
         assert!(roots.contains(&Path::new("/other/project")));
         assert!(!roots.contains(&sub.as_path()));
+    }
+
+    #[test]
+    fn project_list_touch_rejects_tmp() {
+        let mut pl = ProjectList::default();
+        let is_new = pl.touch(std::env::temp_dir().join("mae-test-1234"), "Test".into());
+        assert!(!is_new);
+        assert!(pl.projects.is_empty());
+    }
+
+    #[test]
+    fn prune_stale_removes_missing_and_temp() {
+        // Use a real non-temp dir that exists (CWD or home).
+        let real_dir = std::env::current_dir().unwrap();
+
+        let mut pl = ProjectList::default();
+        // Add a real dir, a missing dir, and a temp dir
+        pl.touch_unchecked(real_dir.clone(), "Real".into());
+        pl.touch_unchecked(PathBuf::from("/nonexistent/project"), "Missing".into());
+        pl.touch_unchecked(std::env::temp_dir().join("mae-tmp-1234"), "Temp".into());
+        assert_eq!(pl.projects.len(), 3);
+
+        let pruned = pl.prune_stale();
+        assert_eq!(pl.projects.len(), 1);
+        assert_eq!(pl.projects[0].root, real_dir);
+        assert_eq!(pruned.len(), 2);
+        assert!(pruned.contains(&"Missing".to_string()));
+        assert!(pruned.contains(&"Temp".to_string()));
     }
 
     #[test]

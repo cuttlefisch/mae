@@ -561,6 +561,18 @@
           "kind": "mod"
         },
         {
+          "name": "backup",
+          "kind": "mod"
+        },
+        {
+          "name": "data_dir",
+          "kind": "mod"
+        },
+        {
+          "name": "export",
+          "kind": "mod"
+        },
+        {
           "name": "federation",
           "kind": "mod"
         },
@@ -583,6 +595,14 @@
         {
           "name": "NodeKind",
           "kind": "enum"
+        },
+        {
+          "name": "SubgraphSpec",
+          "kind": "struct"
+        },
+        {
+          "name": "SubgraphResult",
+          "kind": "struct"
         },
         {
           "name": "NodeSource",
@@ -861,6 +881,10 @@
         "mae-sync"
       ],
       "public_items": [
+        {
+          "name": "auth",
+          "kind": "mod"
+        },
         {
           "name": "doc_store",
           "kind": "mod"

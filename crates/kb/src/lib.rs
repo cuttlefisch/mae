@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub mod activity;
+pub mod backup;
+pub mod data_dir;
+pub mod export;
 pub mod federation;
 pub mod fuzzy;
 pub mod org;
@@ -52,6 +55,28 @@ pub enum NodeKind {
     Note,
     /// Project node — represents a detected project from a `.project` file.
     Project,
+}
+
+/// Specification for subgraph extraction.
+#[derive(Debug, Clone)]
+pub struct SubgraphSpec {
+    /// Starting node IDs for BFS walk.
+    pub starter_nodes: Vec<String>,
+    /// Maximum link depth (0 = starters only).
+    pub max_depth: usize,
+    /// Include backlinks in the walk (not just outgoing links).
+    pub include_backlinks: bool,
+}
+
+/// Result of subgraph extraction.
+#[derive(Debug, Clone)]
+pub struct SubgraphResult {
+    /// Nodes included in the subgraph.
+    pub nodes: Vec<Node>,
+    /// Internal links (both endpoints in the subgraph).
+    pub links: Vec<(String, String)>,
+    /// Boundary links (source in subgraph, target outside).
+    pub boundary_links: Vec<(String, String)>,
 }
 
 /// Provenance of a node — how it was created.
@@ -502,6 +527,175 @@ impl KnowledgeBase {
             }
         }
         Some(prev)
+    }
+
+    // --- CRDT-aware mutation methods ---
+
+    /// Upsert a node with CRDT backing. Creates or updates the `KbNodeDoc` and
+    /// stores the encoded CRDT bytes on the node. Returns the update bytes
+    /// for broadcasting to peers (if any content changed).
+    ///
+    /// If the node doesn't have CRDT bytes yet (lazy migration), creates a fresh
+    /// `KbNodeDoc` from the text fields.
+    pub fn upsert_with_crdt(&mut self, node: Node, client_id: u64) -> Option<Vec<u8>> {
+        let id = node.id.clone();
+
+        // Create or update CRDT doc
+        let crdt_doc = if let Some(ref bytes) = node.crdt_doc {
+            match mae_sync::kb::KbNodeDoc::from_bytes_with_client_id(bytes, client_id) {
+                Ok(doc) => doc,
+                Err(_) => mae_sync::kb::KbNodeDoc::new_with_client_id(
+                    &node.id,
+                    &node.title,
+                    &node.body,
+                    &node.tags,
+                    client_id,
+                ),
+            }
+        } else {
+            mae_sync::kb::KbNodeDoc::new_with_client_id(
+                &node.id,
+                &node.title,
+                &node.body,
+                &node.tags,
+                client_id,
+            )
+        };
+
+        let update_bytes = crdt_doc.encode_state();
+        let mut node = node;
+        node.crdt_doc = Some(update_bytes.clone());
+        self.insert(node);
+
+        // Return the state bytes for sharing
+        if self.nodes.contains_key(&id) {
+            Some(update_bytes)
+        } else {
+            None
+        }
+    }
+
+    /// Apply a remote CRDT update to a node. Returns true if content changed.
+    ///
+    /// If the node doesn't exist yet, creates it from the update bytes.
+    /// If it exists without CRDT bytes (lazy migration), creates a fresh
+    /// `KbNodeDoc` first, then applies the update.
+    pub fn apply_remote_update(
+        &mut self,
+        node_id: &str,
+        update: &[u8],
+    ) -> Result<bool, mae_sync::SyncError> {
+        if let Some(node) = self.nodes.get_mut(node_id) {
+            // Existing node — get or create CRDT doc
+            let mut crdt_doc = node.to_crdt_doc()?;
+            let changed = crdt_doc.apply_update(update)?;
+            if changed {
+                node.apply_crdt_doc(&crdt_doc);
+                // Rebuild reverse index for this node
+                let id = node.id.clone();
+                let links = node.links();
+                // Clean old reverse edges
+                for (_, sources) in self.links_in.iter_mut() {
+                    sources.retain(|s| s != &id);
+                }
+                self.links_in.retain(|_, v| !v.is_empty());
+                // Install new reverse edges
+                for target in links {
+                    let entry = self.links_in.entry(target).or_default();
+                    if !entry.contains(&id) {
+                        entry.push(id.clone());
+                    }
+                }
+            }
+            Ok(changed)
+        } else {
+            // New node from remote — create from CRDT bytes
+            let crdt_doc = mae_sync::kb::KbNodeDoc::from_bytes(update)?;
+            let mat = crdt_doc.materialize();
+            let mut node = Node::new(mat.id, mat.title, NodeKind::Note, mat.body);
+            node.tags = mat.tags;
+            node.source = Some(NodeSource::Federation);
+            node.crdt_doc = Some(crdt_doc.encode());
+            self.insert(node);
+            Ok(true)
+        }
+    }
+
+    /// Get the state vector for a node's CRDT document.
+    pub fn node_state_vector(&self, node_id: &str) -> Option<Vec<u8>> {
+        let node = self.nodes.get(node_id)?;
+        let doc = node.to_crdt_doc().ok()?;
+        Some(doc.state_vector())
+    }
+
+    // --- Subgraph extraction ---
+
+    /// Extract a subgraph starting from seed nodes, walking links up to `max_depth`.
+    ///
+    /// Returns the set of included nodes and any boundary links (links from
+    /// included nodes to excluded nodes).
+    pub fn extract_subgraph(&self, spec: &SubgraphSpec) -> SubgraphResult {
+        let mut included: HashSet<String> = HashSet::new();
+        let mut frontier: Vec<String> = spec.starter_nodes.clone();
+        let mut depth = 0;
+
+        // BFS walk
+        while depth <= spec.max_depth && !frontier.is_empty() {
+            let mut next_frontier = Vec::new();
+            for node_id in &frontier {
+                if included.insert(node_id.clone()) && depth < spec.max_depth {
+                    // Add outgoing links to frontier
+                    if let Some(node) = self.nodes.get(node_id) {
+                        for link in node.links() {
+                            if !included.contains(&link) {
+                                next_frontier.push(link);
+                            }
+                        }
+                    }
+                    // Add backlinks if requested
+                    if spec.include_backlinks {
+                        if let Some(sources) = self.links_in.get(node_id) {
+                            for src in sources {
+                                if !included.contains(src) {
+                                    next_frontier.push(src.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            frontier = next_frontier;
+            depth += 1;
+        }
+
+        // Collect nodes and categorize links
+        let mut nodes = Vec::new();
+        let mut internal_links = Vec::new();
+        let mut boundary_links = Vec::new();
+
+        for id in &included {
+            if let Some(node) = self.nodes.get(id) {
+                nodes.push(node.clone());
+                for target in node.links() {
+                    if included.contains(&target) {
+                        internal_links.push((id.clone(), target));
+                    } else {
+                        boundary_links.push((id.clone(), target));
+                    }
+                }
+            }
+        }
+
+        SubgraphResult {
+            nodes,
+            links: internal_links,
+            boundary_links,
+        }
+    }
+
+    /// Remove multiple nodes at once. Returns the removed nodes.
+    pub fn remove_nodes(&mut self, node_ids: &[String]) -> Vec<Node> {
+        node_ids.iter().filter_map(|id| self.remove(id)).collect()
     }
 
     /// All node ids, sorted. If `prefix` is provided, only ids starting

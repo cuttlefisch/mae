@@ -173,10 +173,12 @@ impl Editor {
         };
         let _ = std::fs::create_dir_all(&data_dir);
 
-        let uuid = self
-            .kb
-            .registry
-            .register(name.to_string(), org_dir.to_path_buf(), &data_dir);
+        let uuid = self.kb.registry.register(
+            name.to_string(),
+            org_dir.to_path_buf(),
+            &data_dir,
+            self.kb.data_dir.as_ref(),
+        );
 
         // Import org files recursively
         let (kb, report, health) = mae_kb::federation::import_org_dir(org_dir);

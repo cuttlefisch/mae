@@ -408,6 +408,8 @@ pub(crate) fn queue_awareness_update(editor: &mut Editor) {
         cursor_col: win.cursor_col,
         selection,
         mode: format!("{:?}", editor.mode).to_lowercase(),
+        kb_node_id: None,
+        kb_id: None,
     };
 
     match serde_json::to_string(&state) {
@@ -752,6 +754,9 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 Some(mae_sync::DocAddress::File { rel_path, .. }) => rel_path.clone(),
                 Some(mae_sync::DocAddress::Shared { name }) => name.clone(),
                 Some(mae_sync::DocAddress::KbNode { node_id }) => node_id.clone(),
+                Some(mae_sync::DocAddress::KbCollection { kb_id }) => {
+                    format!("[kbc:{kb_id}]")
+                }
                 None => doc_id.clone(),
             };
             // Check if a buffer with this collab_doc_id already exists (e.g.,

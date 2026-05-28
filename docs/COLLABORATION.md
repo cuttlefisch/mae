@@ -372,6 +372,71 @@ integrators building non-MAE clients:
 
 ---
 
+## 6a. Awareness (Cursor/Selection/Presence)
+
+MAE broadcasts cursor position, selection ranges, and user presence to connected
+peers in real-time. Awareness is ephemeral — not persisted to WAL or SQLite.
+
+### How It Works
+
+1. Local cursor moves → `sync/awareness` JSON-RPC with `AwarenessState`
+2. Server relays to all peers on the same document (echo-filtered)
+3. Remote cursors rendered as colored markers (8-color theme palette)
+4. Stale users removed after 30s with no update
+
+### AwarenessState Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_name` | string | Display name (config > git > $USER > hostname) |
+| `cursor_row` | integer | Zero-indexed cursor line |
+| `cursor_col` | integer | Zero-indexed cursor column |
+| `selection` | `[sr, sc, er, ec]` or null | Visual mode selection range |
+| `mode` | string | "normal", "insert", "visual", etc. |
+
+### Cursor Drift Prevention
+
+Remote edits can shift local cursor positions. MAE captures all window cursor
+offsets before applying `apply_sync_update`, then restores them after the rope
+is rebuilt. This prevents the cursor from "jumping" when a peer edits above the
+current line.
+
+### Throttling
+
+Awareness updates are sent at most 20 Hz (50ms minimum interval) to avoid
+flooding the server. The server relays without persistence overhead.
+
+---
+
+## 6b. Offline Recovery
+
+MAE preserves sync state during disconnection and reconciles on reconnect.
+
+### Disconnect Behavior
+
+- `sync_doc` (yrs Doc) is preserved on the buffer — local edits continue generating
+  CRDT transactions
+- `collab_doc_id` and `collab_synced_buffers` are cleared (edits not forwarded)
+- Buffer status shows "offline" indicator
+
+### Reconnection
+
+1. Client detects connection loss → `CollabStatus::Reconnecting`
+2. Exponential backoff: `collab_reconnect_interval` base × `collab_reconnect_backoff_factor`
+3. On reconnect: re-`initialize`, re-`subscribe`
+4. For each previously synced buffer: re-`sync/share` with local CRDT state
+5. Server merges local edits with any remote changes → convergence guaranteed by yrs/YATA
+6. Gap detection: client tracks `wal_seq` per doc, triggers `ForceSync` if sequence gap detected
+
+### Config Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `collab_reconnect_interval` | `5` | Base reconnect interval (seconds) |
+| `collab_reconnect_backoff_factor` | `1.5` | Exponential backoff multiplier |
+
+---
+
 ## 7. Debugging and Troubleshooting
 
 ### Quick Checks
@@ -538,7 +603,8 @@ When the last client disconnects (`peer_count` reaches 0):
   full-buffer replacement. However, undoing deletion of N lines means N lines of
   insert ops in a single update, which can be heavy for large undos. Full fix
   requires yrs `UndoManager` integration (Phase F) for CRDT-native inverse
-  operations.
+  operations. Fixed in v0.10.4: yrs `UndoManager` with per-user undo stacks
+  and cursor position restoration via `CursorMeta`.
 
 ---
 

@@ -16,7 +16,7 @@ const TEXT_NAME: &str = "content";
 ///
 /// All Doc instances MUST use this to ensure offset consistency. Using the
 /// default `OffsetKind::Bytes` causes char↔yrs offset mismatches for non-ASCII text.
-fn new_doc() -> Doc {
+pub(crate) fn new_doc() -> Doc {
     Doc::with_options(yrs::Options {
         offset_kind: OffsetKind::Utf16,
         ..Default::default()
@@ -24,7 +24,7 @@ fn new_doc() -> Doc {
 }
 
 /// Create a yrs Doc with a specific client ID and UTF-16 offset kind.
-fn new_doc_with_client_id(client_id: u64) -> Doc {
+pub(crate) fn new_doc_with_client_id(client_id: u64) -> Doc {
     Doc::with_options(yrs::Options {
         client_id,
         offset_kind: OffsetKind::Utf16,

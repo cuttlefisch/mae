@@ -12,6 +12,8 @@ use super::CaptureState;
 pub struct KbContext {
     /// Primary knowledge base instance (manual + user notes + AI-facing kb_* tools).
     pub primary: mae_kb::KnowledgeBase,
+    /// Standardized KB data directory layout (XDG-compliant).
+    pub data_dir: Option<mae_kb::data_dir::KbDataDir>,
     /// KB federation: registry of external KB instances (org-roam dirs etc.).
     pub registry: mae_kb::federation::KbRegistry,
     /// KB federation: loaded KB instances keyed by registry UUID.
@@ -60,6 +62,7 @@ impl KbContext {
     pub fn new(primary: mae_kb::KnowledgeBase) -> Self {
         Self {
             primary,
+            data_dir: None,
             registry: mae_kb::federation::KbRegistry::default(),
             instances: HashMap::new(),
             watchers: HashMap::new(),

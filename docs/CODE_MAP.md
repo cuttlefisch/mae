@@ -233,12 +233,17 @@ Source: `crates/kb/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `activity` | mod |
+| `backup` | mod |
+| `data_dir` | mod |
+| `export` | mod |
 | `federation` | mod |
 | `fuzzy` | mod |
 | `org` | mod |
 | `persist` | mod |
 | `watch` | mod |
 | `NodeKind` | enum |
+| `SubgraphSpec` | struct |
+| `SubgraphResult` | struct |
 | `NodeSource` | enum |
 | `Node` | struct |
 | `parse_links` | fn |
@@ -361,6 +366,7 @@ Source: `crates/state-server/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `auth` | mod |
 | `doc_store` | mod |
 | `handler` | mod |
 | `storage` | mod |

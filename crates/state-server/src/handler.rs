@@ -18,6 +18,7 @@ use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::auth::AuthProvider;
 use crate::doc_store::DocStore;
 
 /// Write timeout for event notifications to clients (seconds).
@@ -26,6 +27,38 @@ const WRITE_TIMEOUT_SECS: u64 = 5;
 const MAX_CONSECUTIVE_WRITE_FAILURES: u32 = 3;
 /// Maximum allowed size for a single sync update payload (bytes).
 const MAX_UPDATE_SIZE: usize = 1_048_576; // 1 MB
+
+/// Run the client handler with an authentication handshake before the main loop.
+///
+/// The auth handshake runs on the raw stream before JSON-RPC `initialize`.
+/// If auth fails, the connection is dropped without entering the main loop.
+pub async fn handle_client_with_auth<R, W, A>(
+    mut reader: R,
+    mut writer: W,
+    auth: &A,
+    doc_store: Arc<DocStore>,
+    broadcaster: SharedBroadcaster,
+    start_time: std::time::Instant,
+) where
+    R: AsyncBufRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send,
+    A: AuthProvider,
+{
+    match auth.server_handshake(&mut reader, &mut writer).await {
+        Ok(result) => {
+            info!(
+                auth = auth.name(),
+                client = %result.client_label,
+                "auth handshake succeeded"
+            );
+        }
+        Err(e) => {
+            warn!(auth = auth.name(), error = %e, "auth handshake failed, dropping connection");
+            return;
+        }
+    }
+    handle_client(reader, writer, doc_store, broadcaster, start_time).await;
+}
 
 /// Run the client handler loop for a single connection.
 ///
@@ -858,6 +891,68 @@ async fn handle_doc_request(
                     "uptime_secs": uptime_secs,
                     "connection_count": connection_count,
                 }),
+            )
+        }
+
+        // --- KB protocol methods ---
+        "kb/register" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            let name = params["name"].as_str().unwrap_or("").to_string();
+            let node_count = params["node_count"].as_u64().unwrap_or(0);
+            info!(session = session_id, kb_id = %kb_id, name = %name, node_count, "kb/register");
+
+            // Store KB metadata in a collection doc address.
+            let doc_name = format!("kbc:{kb_id}");
+            session_docs.insert(doc_name.clone());
+            broadcaster
+                .lock()
+                .unwrap()
+                .subscribe_doc(session_id, &doc_name);
+
+            // Store metadata as a simple JSON doc (not a full CRDT — lightweight registry).
+            let meta = serde_json::json!({
+                "kb_id": kb_id,
+                "name": name,
+                "node_count": node_count,
+                "registered_by": session_id,
+            });
+            doc_store.set_kb_meta(&kb_id, meta.clone()).await;
+            JsonRpcResponse::success(
+                id,
+                serde_json::json!({ "kb_id": kb_id, "registered": true }),
+            )
+        }
+
+        "kb/list" => {
+            let kbs = doc_store.list_kb_metas().await;
+            JsonRpcResponse::success(id, serde_json::json!({ "kbs": kbs }))
+        }
+
+        "kb/unregister" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            info!(session = session_id, kb_id = %kb_id, "kb/unregister");
+            doc_store.remove_kb_meta(&kb_id).await;
+            let doc_name = format!("kbc:{kb_id}");
+            session_docs.remove(&doc_name);
+            JsonRpcResponse::success(
+                id,
+                serde_json::json!({ "kb_id": kb_id, "unregistered": true }),
             )
         }
 

@@ -21,6 +21,19 @@ pub struct KbInstance {
     pub primary: bool,
     pub enabled: bool,
     pub last_import: Option<String>,
+    /// Collaborative KB identity (FNV-1a hash of name + creator).
+    /// Present only for shared KBs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collab_id: Option<String>,
+    /// Whether this KB is shared with peers.
+    #[serde(default)]
+    pub shared: bool,
+    /// Connected peers for this KB.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_peers: Vec<String>,
+    /// Last sync timestamp (ISO 8601).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_sync: Option<String>,
 }
 
 /// Registry of all known KB instances. Persisted as TOML.
@@ -53,7 +66,17 @@ impl KbRegistry {
     }
 
     /// Register a new org-roam directory.
-    pub fn register(&mut self, name: String, org_dir: PathBuf, data_dir: &Path) -> String {
+    ///
+    /// If a `KbDataDir` is provided, the SQLite database is placed in the
+    /// standardized `kb/local/{slug}/kb.sqlite` layout. Otherwise falls back
+    /// to the legacy `{data_dir}/{uuid}.db` flat layout.
+    pub fn register(
+        &mut self,
+        name: String,
+        org_dir: PathBuf,
+        data_dir: &Path,
+        kb_data_dir: Option<&crate::data_dir::KbDataDir>,
+    ) -> String {
         // Check for existing registration with same path
         if let Some(existing) = self.instances.iter().find(|i| i.org_dir == org_dir) {
             return existing.uuid.clone();
@@ -62,7 +85,27 @@ impl KbRegistry {
         // Check for sentinel file with existing UUID
         let uuid = read_sentinel_uuid(&org_dir).unwrap_or_else(generate_uuid);
 
-        let db_path = data_dir.join(format!("{}.db", uuid));
+        let slug = crate::data_dir::slugify(&name);
+        let db_path = if let Some(kdd) = kb_data_dir {
+            // Standardized layout: kb/local/{slug}/kb.sqlite
+            let meta = crate::data_dir::LocalKbMeta {
+                name: name.clone(),
+                uuid: uuid.clone(),
+                created_at: crate::data_dir::chrono_now_iso(),
+                node_count: 0,
+                org_dir: Some(org_dir.clone()),
+            };
+            match kdd.init_local_kb(&slug, &meta) {
+                Ok(path) => path,
+                Err(e) => {
+                    tracing::warn!(error = %e, slug, "failed to init local KB dir, using legacy path");
+                    data_dir.join(format!("{}.db", uuid))
+                }
+            }
+        } else {
+            // Legacy flat layout
+            data_dir.join(format!("{}.db", uuid))
+        };
 
         // Write sentinel file (idempotent)
         let _ = write_sentinel(&org_dir, &uuid, &name);
@@ -75,6 +118,10 @@ impl KbRegistry {
             primary: self.instances.is_empty(),
             enabled: true,
             last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
         };
         self.instances.push(instance);
         uuid
@@ -373,13 +420,13 @@ mod tests {
         let data = std::env::temp_dir().join("mae-test-fed-data");
         let _ = std::fs::create_dir_all(&data);
 
-        let uuid = reg.register("Test".to_string(), tmp.clone(), &data);
+        let uuid = reg.register("Test".to_string(), tmp.clone(), &data, None);
         assert!(!uuid.is_empty());
         assert!(reg.find("Test").is_some());
         assert!(reg.find(&uuid).is_some());
 
         // Idempotent
-        let uuid2 = reg.register("Test2".to_string(), tmp.clone(), &data);
+        let uuid2 = reg.register("Test2".to_string(), tmp.clone(), &data, None);
         assert_eq!(uuid, uuid2);
         assert_eq!(reg.instances.len(), 1);
 
@@ -396,7 +443,7 @@ mod tests {
         let data = std::env::temp_dir().join("mae-test-fed-data-2");
         let _ = std::fs::create_dir_all(&data);
 
-        reg.register("Test".to_string(), tmp.clone(), &data);
+        reg.register("Test".to_string(), tmp.clone(), &data, None);
         assert_eq!(reg.instances.len(), 1);
         reg.unregister("Test");
         assert_eq!(reg.instances.len(), 0);
