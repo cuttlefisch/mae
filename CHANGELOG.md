@@ -6,6 +6,23 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(collab)* FNV-1a client_id hash + comprehensive test gap closure ([5d9b7f9](https://github.com/cuttlefisch/mae/commit/5d9b7f921ffc03c09bd4ed1fa4be54ee19c405a3))
+- *(collab)* Cursor drift on remote edits — adjust offset by edit position ([01f11fc](https://github.com/cuttlefisch/mae/commit/01f11fc9a692c6ca665b047f002bb22876391850))
+- *(collab)* Awareness not rendering — JSON format mismatch + missing subscription ([a42130d](https://github.com/cuttlefisch/mae/commit/a42130dc9e3e80712bd33d194dda2bf984fa5053))
+
+### CI
+
+- Add 20m timeout to cargo test step (prevents nightly hangs) ([dfddb57](https://github.com/cuttlefisch/mae/commit/dfddb57950f8eed130b1d129656f608cb03dfde9))
+- Remove e2e dependency on full check matrix (runs in parallel now) ([5987b4e](https://github.com/cuttlefisch/mae/commit/5987b4ebb1b527fc7d65ea86d3aca0dd4c49c057))
+
+### Testing
+
+- *(collab)* Add 12 round-trip deserialization tests for protocol features ([a225146](https://github.com/cuttlefisch/mae/commit/a2251462884cbb7b0195948f9951e34be209f970))
+
+## [0.10.5] - 2026-05-27
+
+### Bug Fixes
+
 - *(scheme)* Let/let* stack corruption + Phase 13d derived expressions ([0207360](https://github.com/cuttlefisch/mae/commit/0207360bd6b4dca4203936b24ee47ad6a4297a01))
 - *(scheme)* TCO for and/or + 24 stress tests (287 total R7RS tests) ([fd16796](https://github.com/cuttlefisch/mae/commit/fd1679602a3e9ab67fb0cafe1eec683b6f6e37e0))
 - *(scheme)* 3 critical compiler bugs + 128 torture/benchmark tests ([f7e48db](https://github.com/cuttlefisch/mae/commit/f7e48dbe3c9843fb6822f10eafe160c453be9794))
@@ -65,6 +82,10 @@ All notable changes to this project will be documented in this file.
 - *(hooks)* Wire all 25 well-known hooks + event-driven test primitives ([c551562](https://github.com/cuttlefisch/mae/commit/c5515627f5f82ac555965fa96275f411ff12f061))
 - *(collab)* Doc-scoped event broadcasting + E2E test hardening ([b3fe991](https://github.com/cuttlefisch/mae/commit/b3fe991ef0e61909a08bd3fad49153d33e8eb009))
 - *(scheme)* Phase 13i — R7RS library system + proper §5.6 isolation ([002432d](https://github.com/cuttlefisch/mae/commit/002432d10da10312efd608b67ada232ff56d2485))
+
+### Miscellaneous
+
+- Bump version to 0.10.5 ([c57d52d](https://github.com/cuttlefisch/mae/commit/c57d52d91e6258a6ea3ac861310297b19165081e))
 
 ### Refactor
 
