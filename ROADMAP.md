@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.10.4-dev · **Tests:** 5,494+ passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete, Phase 13 (Scheme runtime) complete.
+**Current version:** v0.10.6 · **Tests:** 5,696 passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete + PSK auth + KB protocol, Phase 13 (Scheme runtime) complete.
 
 ---
 
@@ -51,10 +51,10 @@
 - [x] **Offline edit recovery**: Preserve `sync_doc` during disconnect, reconcile on rejoin instead of full-state overwrite. *(b8d4b6a)*
 - [x] **Client-side gap detection**: Track `wal_seq` from notifications, trigger auto-resync on gaps. *(b8d4b6a)*
 - [x] **Save protocol wiring**: Call `docs/save_intent` + `docs/save_committed` from editor's `:w` for synced buffers.
-- [ ] **Cursor positioning after CRDT undo**: Track cursor pos in `StackItem.meta` via `observe_item_added` — currently uses `clamp_cursor()` (safe but imprecise after multi-line undo).
+- [x] **Cursor positioning after CRDT undo**: yrs `StackItem<CursorMeta>` via `observe_item_added/popped` — exact cursor restore after CRDT undo/redo. *(fb5120b)*
 - [x] **Undo capture timeout tuning**: Fixed in 12f8ce4 — `capture_timeout_millis: u64::MAX` with explicit `undo_reset()` at dispatch boundaries. Vim insert-mode groups all chars into one undo item.
-- [ ] **Cursor drift on remote edits**: `apply_sync_update` rebuilds rope but doesn't adjust cursor. If remote peer inserts before cursor, local cursor points to wrong logical position. Fix requires architecture change (Buffer doesn't own Window) — adjust at call site in `collab_bridge.rs` or add cursor-offset return from `apply_sync_update`.
-- [ ] **Modified flag incorrect with CRDT undo**: CRDT undo path sets `modified = true` unconditionally. No `saved_undo_depth` tracking for CRDT path, so buffer can never report "unmodified" after undo returns to saved state.
+- [x] **Cursor drift on remote edits**: Snapshot old rope before `apply_sync_update`, find first divergence point, shift cursors by character delta. *(01f11fc, 92a20b8)*
+- [x] **Modified flag with CRDT undo**: SHA-256 content hash comparison instead of monotonic state vectors. `saved_content_hash` captured after save, compared in undo/redo paths. *(92a20b8)*
 - [x] **Docker E2E test re-enabled**: Phase 13f async/yield wiring complete. `sleep-ms` and `wait-for-file` now yield to the event loop. Docker E2E re-enabled in CI (66 assertions + 9 verifier checks). New event-driven primitives: `yield-tick` (drain one event loop iteration), `await-hook` (suspend until named hook fires), `await-condition` (predicate wait without polling). *(39caf8e)*
 - [x] **Undo stack size limit for CRDT**: `set_undo_limit()` on TextSync with `DEFAULT_UNDO_LIMIT` (1000). *(fb5120b)*
 - [x] **Awareness protocol**: Cursor/selection sharing via `sync/awareness` JSON-RPC relay. 8-color WCAG AA palette, 50ms throttle, 30s timeout, echo filtering. GUI (2px bar + labels + off-screen ▲/▼) and TUI (underline + initial + ▲/▼) rendering. Status bar presence. Auto-derived user identity (git → $USER → hostname). 12 tests.
@@ -62,8 +62,8 @@
 
 ### Org-Mode Rendering
 
-- [ ] **Org rendering broken in editing buffers**: Checklists, `#+TITLE`, properties drawer dimming, and other structural org elements don't render correctly in dailies editing buffers. May be a tree-sitter parse issue or a span computation bug in `compute_org_spans()` vs `compute_org_style_spans()` fallback.
-- [ ] **KB node edit mode lacks rich formatting**: When editing a KB node, headers are not scaled/colored — rendering falls back to plain text instead of applying org-mode visual treatment.
+- [x] **Org rendering in editing buffers**: Full structural spans via `compute_org_spans()` — TODO/DONE, checkboxes, priorities, drawers, timestamps, directives, links, tables. 46 regression tests. *(12abab8)*
+- [x] **KB node edit mode rich formatting**: KB view uses `compute_org_spans()` for full org structural rendering (replaced heading-only spans). *(12abab8)*
 - [x] **Word-wrap indentation for list items**: `content_indent_len()` now detects list markers (`- `, `+ `, `* `, `1. `) and indents wrap continuations past the marker. Both GUI and TUI.
 - [x] **`fill-paragraph` / `M-q`**: Hard-wrap at `fill_column` (default 80), respects list-item hanging indent. `fill-region` for visual selection is TODO.
 
@@ -104,7 +104,7 @@
   - `docs/metadata` endpoint added to state server ✅
   - `WalEntry::client_id` stored but never read for audit/attribution (deferred — needs Phase F auth)
   - `StorageError::Io` variant reserved but unused (pluggable backends — by design)
-- [ ] **State server v2** (Phase F): Auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Completed: awareness protocol ✅, per-user undo ✅ (yrs `UndoManager`), git-based identity ✅, heartbeat/keepalive ✅, buffer status indicators ✅, Bugs 2-4 ✅ *(8de53b8)*. Priority next-round item: auth tiers.
+- [ ] **State server v2** (Phase F): Auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Completed: awareness protocol ✅, per-user undo ✅ (yrs `UndoManager`), git-based identity ✅, heartbeat/keepalive ✅, buffer status indicators ✅, Bugs 2-4 ✅ *(8de53b8)*, PSK mutual auth ✅ *(fffa39f)*, KB protocol handlers ✅ *(fffa39f)*. Next: SSH key exchange, msgpack wire format.
 - [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
   - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
   - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
