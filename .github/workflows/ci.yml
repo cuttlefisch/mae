@@ -41,6 +41,7 @@ jobs:
         run: cargo check --workspace --all-targets
       - name: cargo test
         if: matrix.step == 'test'
+        timeout-minutes: 20
         run: |
           cargo test --workspace
           cargo test --doc --workspace
