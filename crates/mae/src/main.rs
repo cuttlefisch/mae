@@ -9,7 +9,6 @@ mod doctor;
 mod gui_event;
 mod key_handling;
 mod lsp_bridge;
-#[allow(dead_code)] // Phase 6: wired when collab-start/collab-discover commands land.
 mod mdns_discovery;
 pub mod pkg;
 mod scheme_dap_bridge;
@@ -500,6 +499,15 @@ fn main() -> io::Result<()> {
     }
     if let Some(secs) = app_config.collaboration.heartbeat_interval_secs {
         let _ = editor.set_option("collab_heartbeat_interval", &secs.to_string());
+    }
+    if let Some(ref cmd) = app_config.collaboration.psk_command {
+        let _ = editor.set_option("collab_psk_command", cmd);
+    }
+    if let Some(ref key) = app_config.collaboration.psk {
+        let _ = editor.set_option("collab_psk", key);
+    }
+    if let Some(ref mode) = app_config.collaboration.kb_sync_mode {
+        let _ = editor.set_option("collab_kb_sync_mode", mode);
     }
 
     // Auto-derive collab user name if not set via config.

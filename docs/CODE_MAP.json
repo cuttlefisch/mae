@@ -13,8 +13,8 @@
         "mae-renderer",
         "mae-scheme",
         "mae-shell",
-        "mae-sync",
-        "mae-state-server"
+        "mae-state-server",
+        "mae-sync"
       ],
       "public_items": [
         {
@@ -183,6 +183,28 @@
         {
           "name": "find_block_at_line",
           "kind": "fn"
+        }
+      ]
+    },
+    "mae-canvas": {
+      "path": "crates/canvas/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "interaction",
+          "kind": "mod"
+        },
+        {
+          "name": "kb_graph",
+          "kind": "mod"
+        },
+        {
+          "name": "layout",
+          "kind": "mod"
+        },
+        {
+          "name": "scene",
+          "kind": "mod"
         }
       ]
     },
@@ -3521,6 +3543,10 @@
     {
       "name": "collab-join",
       "doc": "Join a shared document (SPC C j)"
+    },
+    {
+      "name": "collab-discover",
+      "doc": "Discover MAE peers on the local network via mDNS"
     },
     {
       "name": "move-down",

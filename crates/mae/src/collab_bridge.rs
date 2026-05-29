@@ -428,6 +428,52 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             node_id,
             update,
         },
+        CollabIntent::DiscoverPeers => {
+            // mDNS discovery: browse for _mae-sync._tcp.local services.
+            match crate::mdns_discovery::MdnsManager::new() {
+                Ok(mgr) => {
+                    if let Err(e) = mgr.start_browse() {
+                        editor.set_status(format!("mDNS browse failed: {}", e));
+                    } else {
+                        // Give mDNS a moment to discover peers.
+                        std::thread::sleep(std::time::Duration::from_millis(1500));
+                        let peers = mgr.discovered_peers();
+                        if peers.is_empty() {
+                            editor.set_status("No MAE peers found on local network.");
+                        } else {
+                            let mut lines = vec![
+                                "Discovered MAE Peers".to_string(),
+                                "====================".to_string(),
+                                String::new(),
+                            ];
+                            for p in &peers {
+                                lines.push(format!(
+                                    "  {} — {} (v{}, {} KBs)",
+                                    p.user_name, p.address, p.version, p.kb_count
+                                ));
+                            }
+                            lines.push(String::new());
+                            lines.push(
+                                "Use :collab-connect <address> to connect to a peer.".to_string(),
+                            );
+                            let content = lines.join("\n");
+                            let idx = editor.find_or_create_buffer("*Collab Discover*", || {
+                                let mut buf = mae_core::buffer::Buffer::new();
+                                buf.name = "*Collab Discover*".to_string();
+                                buf
+                            });
+                            editor.buffers[idx].replace_contents(&content);
+                            editor.switch_to_buffer(idx);
+                            editor.set_status(format!("Found {} peer(s)", peers.len()));
+                        }
+                    }
+                }
+                Err(e) => {
+                    editor.set_status(format!("mDNS init failed: {}", e));
+                }
+            }
+            return;
+        }
     };
 
     let kind = collab_command_name(&cmd);
@@ -786,6 +832,36 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
         }
         CollabEvent::ServerStarted { pid } => {
             info!(pid = pid, "state server started");
+            // Register mDNS service for peer discovery.
+            let port = editor
+                .collab
+                .server_address
+                .rsplit(':')
+                .next()
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(9473);
+            let user = if editor.collab.user_name.is_empty() {
+                "mae-user"
+            } else {
+                &editor.collab.user_name
+            };
+            match crate::mdns_discovery::MdnsManager::new() {
+                Ok(mut mgr) => {
+                    let kb_count = editor.collab.shared_kbs.len() as u32;
+                    if let Err(e) = mgr.register(user, port, kb_count) {
+                        warn!(error = %e, "mDNS registration failed");
+                    } else {
+                        info!(port, user, "mDNS service registered");
+                    }
+                    // Keep manager alive — store is not needed since it auto-unregisters on drop.
+                    // For now, leak it to keep the service registered.
+                    // TODO: store in a persistent location (e.g., CollabState or static).
+                    std::mem::forget(mgr);
+                }
+                Err(e) => {
+                    debug!(error = %e, "mDNS unavailable — peer discovery disabled");
+                }
+            }
             editor.set_status(format!("State server started (PID {})", pid));
             editor.mark_full_redraw();
         }
@@ -1230,6 +1306,8 @@ pub(crate) struct CollabSpawn {
     backoff_factor: u64,
     max_reconnect_attempts: u64,
     heartbeat_secs: u64,
+    /// PSK for mutual authentication (empty = no auth).
+    psk: String,
 }
 
 /// Create collab channels and read config. Does NOT require a tokio runtime.
@@ -1259,6 +1337,19 @@ pub(crate) fn setup_collab_channels(
     let max_reconnect_attempts = editor.collab.max_reconnect_attempts;
     let heartbeat_secs = editor.collab.heartbeat_interval;
 
+    // PSK: prefer psk_command output, fall back to psk string.
+    // Actual async resolution happens in run_collab_task; here we just pass config.
+    let psk_raw = editor.collab.psk.clone();
+    let psk_cmd = editor.collab.psk_command.clone();
+    // If psk_command is set, we pass it as a sentinel; run_collab_task resolves it async.
+    // If only psk is set, use it directly.
+    let psk = if !psk_cmd.is_empty() {
+        // Sentinel: resolve async in the task. Store the command prefixed.
+        format!("cmd:{}", psk_cmd)
+    } else {
+        psk_raw
+    };
+
     let spawn = CollabSpawn {
         cmd_rx,
         evt_tx,
@@ -1269,6 +1360,7 @@ pub(crate) fn setup_collab_channels(
         backoff_factor,
         max_reconnect_attempts,
         heartbeat_secs,
+        psk,
     };
 
     (evt_rx, cmd_tx, spawn)
@@ -1285,6 +1377,7 @@ pub(crate) fn spawn_collab_task(spawn: CollabSpawn) {
         spawn.backoff_factor,
         spawn.max_reconnect_attempts,
         spawn.heartbeat_secs,
+        spawn.psk,
     ));
 
     // Auto-connect if configured
@@ -1379,6 +1472,7 @@ fn spawn_reader_task(
 ///
 /// Receives commands from the main thread, manages the connection lifecycle,
 /// and forwards events back.
+#[allow(clippy::too_many_arguments)]
 async fn run_collab_task(
     mut cmd_rx: mpsc::Receiver<CollabCommand>,
     evt_tx: mpsc::Sender<CollabEvent>,
@@ -1387,12 +1481,28 @@ async fn run_collab_task(
     backoff_factor: u64,
     max_reconnect_attempts: u64,
     heartbeat_secs: u64,
+    psk_config: String,
 ) {
     use mae_mcp::write_framed;
     use std::collections::HashMap;
     use tokio::io::BufReader;
     use tokio::net::tcp::OwnedWriteHalf;
     use tokio::net::TcpStream;
+
+    // Resolve PSK: if prefixed with "cmd:", run the command to get the key.
+    let resolved_psk = if let Some(cmd) = psk_config.strip_prefix("cmd:") {
+        mae_state_server::auth::load_psk(Some(cmd), None)
+            .await
+            .unwrap_or_default()
+    } else {
+        psk_config
+    };
+    if !resolved_psk.is_empty() {
+        info!(
+            auth = "psk",
+            "PSK authentication enabled for collab connections"
+        );
+    }
 
     let mut msg_rx: Option<mpsc::Receiver<Result<String, String>>> = None;
     let mut writer: Option<OwnedWriteHalf> = None;
@@ -1961,6 +2071,7 @@ async fn run_collab_task(
                                 &mut target_address, &mut reconnect_enabled,
                                 &mut shared_docs, &mut next_request_id,
                                 &mut pending_responses, write_timeout,
+                                &resolved_psk,
                             ).await;
                         }
                         _ = tokio::time::sleep(std::time::Duration::from_secs(
@@ -1982,6 +2093,11 @@ async fn run_collab_task(
                             if let Ok(stream) = TcpStream::connect(&addr_clone).await {
                                 let (r, mut w) = stream.into_split();
                                 let mut buf_reader = BufReader::new(r);
+                                // PSK auth before JSON-RPC initialize.
+                                if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, &resolved_psk).await {
+                                    debug!(error = %e, "PSK auth failed on reconnect, will retry");
+                                    continue;
+                                }
                                 if let Some(peer_count) = send_initialize(&mut w, &mut buf_reader, write_timeout).await {
                                     // Spawn dedicated reader task (cancel-safety fix).
                                     msg_rx = Some(spawn_reader_task(buf_reader));
@@ -2020,6 +2136,7 @@ async fn run_collab_task(
                     &mut next_request_id,
                     &mut pending_responses,
                     write_timeout,
+                    &resolved_psk,
                 )
                 .await;
             }
@@ -2622,6 +2739,7 @@ async fn handle_disconnected_cmd(
     next_request_id: &mut u64,
     pending_responses: &mut std::collections::HashMap<u64, PendingResponseKind>,
     write_timeout: std::time::Duration,
+    psk: &str,
 ) {
     use tokio::io::BufReader;
 
@@ -2632,6 +2750,17 @@ async fn handle_disconnected_cmd(
                 Ok(stream) => {
                     let (r, mut w) = stream.into_split();
                     let mut buf_reader = BufReader::new(r);
+                    // PSK auth before JSON-RPC initialize.
+                    if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, psk).await {
+                        *reconnect_enabled = true;
+                        try_send_evt(
+                            evt_tx,
+                            CollabEvent::Error {
+                                message: format!("{} ({})", e, address),
+                            },
+                        );
+                        return;
+                    }
                     if let Some(peer_count) =
                         send_initialize(&mut w, &mut buf_reader, write_timeout).await
                     {
@@ -2694,6 +2823,16 @@ async fn handle_disconnected_cmd(
                         Ok(stream) => {
                             let (r, mut w) = stream.into_split();
                             let mut buf_reader = BufReader::new(r);
+                            // PSK auth before JSON-RPC initialize.
+                            if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, psk).await {
+                                try_send_evt(
+                                    evt_tx,
+                                    CollabEvent::Error {
+                                        message: format!("{} ({})", e, addr),
+                                    },
+                                );
+                                return;
+                            }
                             if let Some(peer_count) =
                                 send_initialize(&mut w, &mut buf_reader, write_timeout).await
                             {
@@ -2845,6 +2984,26 @@ async fn handle_disconnected_cmd(
             // Silently drop — not connected.
         }
     }
+}
+
+/// Perform PSK mutual authentication handshake before JSON-RPC initialize.
+/// Returns `Ok(())` on success or if no PSK is configured (no-auth mode).
+/// Returns `Err(message)` if auth fails.
+async fn perform_psk_auth<R, W>(reader: &mut R, writer: &mut W, psk: &str) -> Result<(), String>
+where
+    R: tokio::io::AsyncBufRead + Unpin + Send,
+    W: tokio::io::AsyncWrite + Unpin + Send,
+{
+    use mae_state_server::auth::{AuthProvider, PskAuth};
+
+    if psk.is_empty() {
+        return Ok(());
+    }
+
+    let auth = PskAuth::new(psk);
+    auth.client_handshake(reader, writer)
+        .await
+        .map_err(|e| format!("PSK auth failed: {e}"))
 }
 
 /// Send JSON-RPC `initialize` handshake to the state server.
@@ -4881,5 +5040,167 @@ mod tests {
         }
         assert!(rx.try_recv().is_err(), "no extra commands should be sent");
         assert!(editor.collab.pending_kb_updates.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // PSK wiring tests — CI-runnable (no network required)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn perform_psk_auth_correct_key_succeeds() {
+        // Test perform_psk_auth against a real PskAuth server handshake
+        // using tokio duplex streams (no TCP needed).
+        use mae_state_server::auth::{AuthProvider, PskAuth};
+        use tokio::io::{duplex, BufReader, BufWriter};
+
+        let psk = "test-secret-for-collab-bridge";
+        let (client_stream, server_stream) = duplex(4096);
+        let (cr, cw) = tokio::io::split(client_stream);
+        let (sr, sw) = tokio::io::split(server_stream);
+
+        let server_auth = PskAuth::new(psk);
+        let server_handle = tokio::spawn(async move {
+            let mut sr = BufReader::new(sr);
+            let mut sw = BufWriter::new(sw);
+            server_auth.server_handshake(&mut sr, &mut sw).await
+        });
+
+        let client_handle = tokio::spawn(async move {
+            let mut cr = BufReader::new(cr);
+            let mut cw = BufWriter::new(cw);
+            perform_psk_auth(&mut cr, &mut cw, psk).await
+        });
+
+        let (server_result, client_result) = tokio::join!(server_handle, client_handle);
+        assert!(
+            server_result.unwrap().is_ok(),
+            "server handshake should succeed with correct PSK"
+        );
+        assert!(
+            client_result.unwrap().is_ok(),
+            "perform_psk_auth should succeed with correct PSK"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_psk_auth_wrong_key_fails() {
+        use mae_state_server::auth::{AuthProvider, PskAuth};
+        use tokio::io::{duplex, BufReader, BufWriter};
+
+        let (client_stream, server_stream) = duplex(4096);
+        let (cr, cw) = tokio::io::split(client_stream);
+        let (sr, sw) = tokio::io::split(server_stream);
+
+        let server_auth = PskAuth::new("server-key");
+        let server_handle = tokio::spawn(async move {
+            let mut sr = BufReader::new(sr);
+            let mut sw = BufWriter::new(sw);
+            server_auth.server_handshake(&mut sr, &mut sw).await
+        });
+
+        let client_handle = tokio::spawn(async move {
+            let mut cr = BufReader::new(cr);
+            let mut cw = BufWriter::new(cw);
+            perform_psk_auth(&mut cr, &mut cw, "wrong-key").await
+        });
+
+        let (server_result, client_result) = tokio::join!(server_handle, client_handle);
+        let server_ok = server_result.is_ok_and(|r| r.is_ok());
+        let client_ok = client_result.is_ok_and(|r| r.is_ok());
+        assert!(
+            !server_ok || !client_ok,
+            "mismatched PSK should cause at least one side to fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_psk_auth_empty_key_skips_auth() {
+        // Empty PSK should skip auth entirely (no reads/writes on the stream).
+        use tokio::io::{duplex, BufReader, BufWriter};
+
+        let (client_stream, _server_stream) = duplex(4096);
+        let (cr, cw) = tokio::io::split(client_stream);
+        let mut cr = BufReader::new(cr);
+        let mut cw = BufWriter::new(cw);
+
+        let result = perform_psk_auth(&mut cr, &mut cw, "").await;
+        assert!(result.is_ok(), "empty PSK should skip auth and return Ok");
+    }
+
+    #[test]
+    fn setup_collab_channels_propagates_psk_direct() {
+        // When collab.psk is set (no psk_command), it should flow through to CollabSpawn.psk.
+        let mut editor = Editor::new();
+        let _ = editor.set_option("collab_psk", "my-secret-key");
+
+        let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
+        assert_eq!(
+            spawn.psk, "my-secret-key",
+            "CollabSpawn.psk should contain the direct PSK value"
+        );
+    }
+
+    #[test]
+    fn setup_collab_channels_propagates_psk_command() {
+        // When collab.psk_command is set, it should be prefixed with "cmd:" sentinel.
+        let mut editor = Editor::new();
+        let _ = editor.set_option("collab_psk_command", "cat /tmp/test-psk.txt");
+
+        let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
+        assert_eq!(
+            spawn.psk, "cmd:cat /tmp/test-psk.txt",
+            "CollabSpawn.psk should contain cmd: prefix for deferred resolution"
+        );
+    }
+
+    #[test]
+    fn setup_collab_channels_psk_command_takes_precedence() {
+        // When both psk and psk_command are set, psk_command wins.
+        let mut editor = Editor::new();
+        let _ = editor.set_option("collab_psk", "plaintext-key");
+        let _ = editor.set_option("collab_psk_command", "pass show mae/psk");
+
+        let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
+        assert!(
+            spawn.psk.starts_with("cmd:"),
+            "psk_command should take precedence over psk: got '{}'",
+            spawn.psk
+        );
+        assert_eq!(spawn.psk, "cmd:pass show mae/psk");
+    }
+
+    #[test]
+    fn setup_collab_channels_empty_psk_is_empty() {
+        // When neither psk nor psk_command is set, psk should be empty.
+        let editor = Editor::new();
+        let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
+        assert!(
+            spawn.psk.is_empty(),
+            "default PSK should be empty string, got '{}'",
+            spawn.psk
+        );
+    }
+
+    #[test]
+    fn drain_discover_peers_does_not_send_command() {
+        // DiscoverPeers is handled locally (mDNS browse + buffer creation).
+        // It should NOT send any CollabCommand to the network channel.
+        // NOTE: MdnsManager::new() may fail on CI (no multicast), but that's
+        // fine — the intent is still consumed (returns early with status msg).
+        let mut editor = Editor::new();
+        editor.collab.pending_intent = Some(CollabIntent::DiscoverPeers);
+        let (tx, mut rx) = mpsc::channel(8);
+        drain_collab_intents(&mut editor, &tx);
+
+        // Intent must be consumed regardless of mDNS availability.
+        assert!(
+            editor.collab.pending_intent.is_none(),
+            "DiscoverPeers intent should be consumed"
+        );
+        // No command should be sent to the collab task.
+        assert!(
+            rx.try_recv().is_err(),
+            "DiscoverPeers should not send any CollabCommand"
+        );
     }
 }

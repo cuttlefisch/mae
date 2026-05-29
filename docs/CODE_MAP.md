@@ -16,11 +16,12 @@ graph TD
     mae --> mae_renderer
     mae --> mae_scheme
     mae --> mae_shell
-    mae --> mae_sync
     mae --> mae_state_server
+    mae --> mae_sync
     mae_ai --> mae_core
     mae_ai --> mae_sync
     mae_babel[mae-babel]
+    mae_canvas[mae-canvas]
     mae_core --> mae_babel
     mae_core --> mae_export
     mae_core --> mae_format
@@ -111,6 +112,17 @@ Source: `crates/babel/src/lib.rs`
 | `merge_header_args` | fn |
 | `expand_tilde` | fn |
 | `find_block_at_line` | fn |
+
+## mae-canvas
+
+Source: `crates/canvas/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `interaction` | mod |
+| `kb_graph` | mod |
+| `layout` | mod |
+| `scene` | mod |
 
 ## mae-core
 
@@ -539,7 +551,7 @@ Source: `crates/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (504 built-in)
+## Commands (505 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1042,6 +1054,7 @@ Source: `crates/sync/src/lib.rs`
 | `collab-doctor` | Run collaborative editing diagnostics |
 | `collab-list` | List shared documents on the state server (SPC C l) |
 | `collab-join` | Join a shared document (SPC C j) |
+| `collab-discover` | Discover MAE peers on the local network via mDNS |
 | `move-down` | Move cursor down |
 | `move-down` | Move down |
 | `zzz` | Last |

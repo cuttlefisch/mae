@@ -425,6 +425,12 @@ impl OptionRegistry {
                 opt!("collab_kb_sync_mode", &["collab-kb-sync-mode"],
                     "KB sync mode: \"manual\" (explicit :kb-sync) or \"on_save\" (auto on node edit)",
                     OptionKind::String, "on_save", Some("collaboration.kb_sync_mode"), &[]),
+                opt!("collab_psk", &["collab-psk"],
+                    "Pre-shared key for mutual authentication with the state server (plaintext fallback)",
+                    OptionKind::String, "", Some("collaboration.psk"), &[]),
+                opt!("collab_psk_command", &["collab-psk-command"],
+                    "Shell command to retrieve the PSK (preferred over collab_psk for security)",
+                    OptionKind::String, "", Some("collaboration.psk_command"), &[]),
             ],
         }
     }

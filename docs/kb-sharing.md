@@ -58,10 +58,10 @@ mae
 |---------|-----------|-------------|
 | `:collab-start` | `SPC C s` | Start embedded state server |
 | `:collab-connect <addr>` | `SPC C c` | Connect to state server |
-| `:kb-share [name]` | — | Share KB (default: primary) |
-| `:kb-join <kb-id>` | — | Join a shared KB |
-| `:kb-leave <kb-id>` | — | Stop syncing (keeps local copy) |
-| `:collab-discover` | — | Browse LAN for MAE peers (mDNS) |
+| `:kb-share [name]` | `SPC C K s` | Share KB (default: primary) |
+| `:kb-join <kb-id>` | `SPC C K j` | Join a shared KB |
+| `:kb-leave <kb-id>` | `SPC C K l` | Stop syncing (keeps local copy) |
+| `:collab-discover` | `SPC C P` | Browse LAN for MAE peers (mDNS) |
 | `:collab-status` | `SPC C i` | Show connection + KB sync status |
 
 ## Sync Modes
@@ -143,15 +143,228 @@ kb/
       meta.toml     # Name, collab_id, creator, peers, last_sync
 ```
 
+## Authentication (PSK)
+
+MAE supports mutual authentication using a pre-shared key (HMAC-SHA256).
+Both the server and all clients must share the same key.
+
+### Setup
+
+1. **Generate a key** (any method):
+   ```bash
+   # Option A: random key
+   openssl rand -hex 32 > ~/.config/mae/collab-psk.txt
+
+   # Option B: password manager (recommended)
+   pass insert mae/collab-psk
+   ```
+
+2. **Configure the server** (`~/.config/mae/state-server.toml`):
+   ```toml
+   [auth]
+   mode = "psk"
+   psk_command = "cat ~/.config/mae/collab-psk.txt"
+   # Or plaintext fallback (not recommended):
+   # psk = "your-secret-key"
+   ```
+
+3. **Configure each client** (`~/.config/mae/config.toml`):
+   ```toml
+   [collaboration]
+   server_address = "192.168.1.10:9473"
+   psk_command = "cat ~/.config/mae/collab-psk.txt"
+   # Or plaintext fallback:
+   # psk = "your-secret-key"
+   ```
+
+### How It Works
+
+```
+Client → Server: hello + nonce
+Server → Client: challenge + HMAC(psk, client_nonce || server_nonce)
+Client → Server: response + HMAC(psk, server_nonce || client_nonce)
+Server → Client: ok | fail
+```
+
+Both sides prove knowledge of the PSK without transmitting it.
+Nonces prevent replay attacks. If keys don't match, the connection is rejected
+before any data exchange.
+
+### No PSK (Default)
+
+If no PSK is configured, connections proceed without authentication.
+This is suitable for trusted local networks only.
+
+## Network Configuration
+
+### Ports and Protocols
+
+| Service | Protocol | Port | Direction |
+|---------|----------|------|-----------|
+| State server | TCP | 9473 (default) | Inbound to server |
+| mDNS discovery | UDP | 5353 (multicast) | Bidirectional |
+
+### Linux Firewall (firewalld)
+
+```bash
+# Allow state server port (on the machine running mae-state-server):
+sudo firewall-cmd --add-port=9473/tcp --permanent
+
+# Allow mDNS for peer discovery (both machines):
+sudo firewall-cmd --add-service=mdns --permanent
+
+# Apply:
+sudo firewall-cmd --reload
+```
+
+### Linux Firewall (iptables/nftables)
+
+```bash
+# State server:
+sudo iptables -A INPUT -p tcp --dport 9473 -j ACCEPT
+
+# mDNS:
+sudo iptables -A INPUT -p udp --dport 5353 -d 224.0.0.251 -j ACCEPT
+```
+
+### macOS Firewall
+
+macOS allows mDNS by default (Bonjour). For the state server port:
+
+1. **System Settings → Network → Firewall** → allow incoming connections for `mae-state-server`
+2. Or via command line:
+   ```bash
+   # macOS firewall is typically permissive for user apps.
+   # If blocked, add an explicit exception:
+   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/local/bin/mae-state-server
+   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp /usr/local/bin/mae-state-server
+   ```
+
+### Router / WLAN Requirements
+
+- **TCP port 9473** must be reachable between peers (usually automatic on same LAN)
+- **Multicast** must be enabled on the WiFi network for mDNS discovery
+  - Most home/office routers allow multicast by default
+  - Enterprise networks may block multicast — use manual `:collab-connect <ip>:9473` instead
+  - If mDNS doesn't work, peers can still connect by IP address
+
+### Verifying Connectivity
+
+```bash
+# From client machine, test TCP connectivity to server:
+nc -zv 192.168.1.10 9473
+
+# Test mDNS (Linux):
+avahi-browse -t _mae-sync._tcp
+
+# Test mDNS (macOS):
+dns-sd -B _mae-sync._tcp local.
+```
+
+## Cross-Platform Setup (Linux ↔ macOS)
+
+### Step-by-Step: Two Machines on Same WLAN
+
+**On Machine A (Linux, hosting the server):**
+```bash
+# 1. Install/build MAE
+cargo install --path crates/mae
+cargo install --path crates/state-server
+
+# 2. Create PSK
+mkdir -p ~/.config/mae
+openssl rand -hex 32 > ~/.config/mae/collab-psk.txt
+
+# 3. Configure server
+cat > ~/.config/mae/state-server.toml << 'EOF'
+bind = "0.0.0.0:9473"
+[auth]
+mode = "psk"
+psk_command = "cat ~/.config/mae/collab-psk.txt"
+EOF
+
+# 4. Start server
+mae-state-server
+
+# 5. Get your IP
+ip addr show | grep "inet " | grep -v 127.0.0.1
+# → e.g., 192.168.1.10
+
+# 6. Share the PSK with Machine B (secure channel!)
+# Copy ~/.config/mae/collab-psk.txt to Machine B
+```
+
+**On Machine B (macOS, joining):**
+```bash
+# 1. Install/build MAE
+cargo install --path crates/mae
+
+# 2. Place the same PSK file
+mkdir -p ~/.config/mae
+# (paste the PSK from Machine A)
+echo "the-same-key" > ~/.config/mae/collab-psk.txt
+
+# 3. Configure client
+cat >> ~/.config/mae/config.toml << 'EOF'
+[collaboration]
+server_address = "192.168.1.10:9473"
+psk_command = "cat ~/.config/mae/collab-psk.txt"
+user_name = "machine-b"
+EOF
+
+# 4. Launch MAE and connect
+mae ~/my-notes/
+# In editor:
+:collab-connect 192.168.1.10:9473
+:kb-share default
+```
+
+**On Machine A (in MAE):**
+```
+:collab-connect 127.0.0.1:9473
+:kb-join default
+```
+
+### P2P Mode (No Dedicated Server)
+
+```bash
+# Machine A starts embedded server + shares:
+mae ~/my-notes/
+:collab-start
+:kb-share default
+
+# Machine B discovers via mDNS (same WLAN):
+mae
+:collab-discover
+# Select Machine A from the list → auto-connects
+:kb-join default
+```
+
 ## Troubleshooting
 
 Run `:collab-doctor` (`SPC C D`) for diagnostics.
 
 Common issues:
 - **"Not connected"**: Run `:collab-connect <addr>` first
+- **"PSK auth failed"**: Ensure both sides use the same key; check `psk_command` output
 - **"KB not found"**: Ensure the KB name matches (use "default" for primary)
 - **No updates received**: Check that both peers are connected to the same server
-- **mDNS not finding peers**: Ensure multicast is enabled on your network
+- **mDNS not finding peers**: Ensure multicast is enabled on your network; try manual IP
+- **Connection refused**: Check firewall rules (port 9473/tcp)
+- **Timeout on connect**: Verify the server IP is reachable (`ping`, `nc -zv`)
+
+### Debug Logging
+
+```bash
+# Full KB sharing lifecycle:
+RUST_LOG="mae::collab_bridge=debug,mae_state_server::handler=debug,mae_kb=debug" mae
+
+# Server-side:
+RUST_LOG="mae_state_server=debug" mae-state-server
+
+# mDNS discovery:
+RUST_LOG="mae::mdns_discovery=debug" mae
+```
 
 ## Architecture
 
@@ -161,5 +374,7 @@ KB sharing uses yrs (Yjs Rust port) CRDTs for conflict-free merging:
 - `KbCollectionDoc`: manifest listing all nodes in a shared KB
 - Transport: JSON-RPC 2.0 over TCP with Content-Length framing
 - Protocol methods: `kb/share`, `kb/join`, `kb/node_update`, `kb/leave`
+- Authentication: mutual HMAC-SHA256 PSK handshake (optional, before JSON-RPC)
+- Discovery: mDNS `_mae-sync._tcp.local` service type
 
 See [ADR-005](adr/adr-005-kb-crdt.md) and [ADR-006](adr/adr-006-collaborative-state-engine.md) for design rationale.

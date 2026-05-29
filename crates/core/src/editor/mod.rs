@@ -135,6 +135,8 @@ pub enum CollabIntent {
         node_id: String,
         update: Vec<u8>,
     },
+    /// Discover peers on the local network via mDNS.
+    DiscoverPeers,
 }
 
 /// Shell/terminal intent queue and cached state, extracted from Editor.
@@ -228,6 +230,10 @@ pub struct CollabState {
     pub kb_sync_mode: String,
     /// Pending KB node updates to send (accumulated between ticks).
     pub pending_kb_updates: Vec<(String, String, Vec<u8>)>, // (kb_id, node_id, update_bytes)
+    /// Pre-shared key for mutual authentication (plaintext fallback).
+    pub psk: String,
+    /// Shell command to retrieve the PSK (preferred over psk for security).
+    pub psk_command: String,
 }
 
 impl CollabState {
@@ -259,6 +265,8 @@ impl CollabState {
             shared_kbs: HashMap::new(),
             kb_sync_mode: "on_save".to_string(),
             pending_kb_updates: Vec::new(),
+            psk: String::new(),
+            psk_command: String::new(),
         }
     }
 }

@@ -237,7 +237,7 @@ impl TcpClient {
 /// Uses `MAE_STATE_SERVER_BIN` env var if set (pre-built binary), otherwise
 /// falls back to `cargo run` (works in CI but deadlocks when `cargo test` holds
 /// the workspace lock).
-async fn spawn_server() -> (tokio::process::Child, String) {
+async fn spawn_server() -> (tokio::process::Child, String, tempfile::TempDir) {
     // Find a free port.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -245,9 +245,14 @@ async fn spawn_server() -> (tokio::process::Child, String) {
 
     let addr = format!("127.0.0.1:{}", port);
 
+    // Use a temp data dir to avoid recovering stale documents from previous runs,
+    // which can cause >5s startup times and flaky test failures.
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_str().unwrap().to_string();
+
     let child = if let Ok(bin) = std::env::var("MAE_STATE_SERVER_BIN") {
         Command::new(bin)
-            .args(["--bind", &addr])
+            .args(["--bind", &addr, "--data-dir", &data_dir])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -259,7 +264,7 @@ async fn spawn_server() -> (tokio::process::Child, String) {
             .join("../../target/debug/mae-state-server");
         if target_bin.exists() {
             Command::new(&target_bin)
-                .args(["--bind", &addr])
+                .args(["--bind", &addr, "--data-dir", &data_dir])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true)
@@ -267,7 +272,16 @@ async fn spawn_server() -> (tokio::process::Child, String) {
                 .expect("failed to spawn mae-state-server from target/debug")
         } else {
             Command::new("cargo")
-                .args(["run", "-p", "mae-state-server", "--", "--bind", &addr])
+                .args([
+                    "run",
+                    "-p",
+                    "mae-state-server",
+                    "--",
+                    "--bind",
+                    &addr,
+                    "--data-dir",
+                    &data_dir,
+                ])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true)
@@ -280,7 +294,7 @@ async fn spawn_server() -> (tokio::process::Child, String) {
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         if TcpStream::connect(&addr).await.is_ok() {
-            return (child, addr);
+            return (child, addr, tmp);
         }
     }
     panic!("mae-state-server did not start within 5s on {}", addr);
@@ -300,7 +314,7 @@ async fn tcp_full_roundtrip() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut client = TcpClient::connect(&addr).await;
     client.share("tcp-test.txt", "hello").await;
@@ -319,7 +333,7 @@ async fn tcp_two_editors_convergence() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut ca = TcpClient::connect(&addr).await;
     let mut cb = TcpClient::connect(&addr).await;
@@ -357,7 +371,7 @@ async fn tcp_large_document_sync() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut client = TcpClient::connect(&addr).await;
 
@@ -379,7 +393,7 @@ async fn tcp_rapid_edit_burst() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut client = TcpClient::connect(&addr).await;
     client.share("tcp-burst.txt", "").await;
@@ -416,7 +430,7 @@ async fn tcp_reconnect_after_server_restart() {
     if !should_run() {
         return;
     }
-    let (mut server, addr) = spawn_server().await;
+    let (mut server, addr, _tmp) = spawn_server().await;
 
     let mut client = TcpClient::connect(&addr).await;
     client.share("tcp-reconnect.txt", "before restart").await;
@@ -457,7 +471,7 @@ async fn tcp_offline_edit_reconnect_resync() {
     if !should_run() {
         return;
     }
-    let (mut server, addr) = spawn_server().await;
+    let (mut server, addr, _tmp) = spawn_server().await;
 
     // Client A shares "offline.txt" = "v1".
     let mut client_a = TcpClient::connect(&addr).await;
@@ -526,7 +540,7 @@ async fn tcp_concurrent_three_editors() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut ca = TcpClient::connect(&addr).await;
     let mut cb = TcpClient::connect(&addr).await;
@@ -609,7 +623,7 @@ async fn tcp_kb_share_and_join_roundtrip() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut client_a = TcpClient::connect(&addr).await;
     let mut client_b = TcpClient::connect(&addr).await;
@@ -714,7 +728,7 @@ async fn tcp_kb_node_update_broadcasts() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut client_a = TcpClient::connect(&addr).await;
     let mut client_b = TcpClient::connect(&addr).await;
@@ -791,7 +805,7 @@ async fn tcp_kb_leave_and_rejoin() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut client_a = TcpClient::connect(&addr).await;
     let mut client_b = TcpClient::connect(&addr).await;
@@ -850,7 +864,7 @@ async fn tcp_kb_join_after_update_sees_latest() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut client_a = TcpClient::connect(&addr).await;
     let mut client_b = TcpClient::connect(&addr).await;
@@ -904,7 +918,7 @@ async fn tcp_kb_realistic_org_content_roundtrip() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut client_a = TcpClient::connect(&addr).await;
     let mut client_b = TcpClient::connect(&addr).await;
@@ -958,7 +972,7 @@ async fn tcp_kb_multi_node_stress() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut client_a = TcpClient::connect(&addr).await;
     let mut client_b = TcpClient::connect(&addr).await;
@@ -1025,7 +1039,7 @@ async fn tcp_kb_sequential_node_updates() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut client_a = TcpClient::connect(&addr).await;
 
@@ -1077,7 +1091,7 @@ async fn tcp_kb_isolation_between_kbs() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     let mut client_a = TcpClient::connect(&addr).await;
     let mut client_b = TcpClient::connect(&addr).await;
@@ -1140,7 +1154,7 @@ async fn tcp_peer_join_leave_notifications() {
     if !should_run() {
         return;
     }
-    let (_server, addr) = spawn_server().await;
+    let (_server, addr, _tmp) = spawn_server().await;
 
     // Client A shares a doc.
     let mut client_a = TcpClient::connect(&addr).await;
@@ -1180,4 +1194,185 @@ async fn tcp_peer_join_leave_notifications() {
         left.is_some(),
         "client A should receive peer_left notification"
     );
+}
+
+// ============================================================================
+// PSK Authentication Tests
+// ============================================================================
+
+/// Spawn a PSK-enabled server: writes a temp config with auth.mode = "psk".
+async fn spawn_psk_server(psk: &str) -> (tokio::process::Child, String, tempfile::TempDir) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let addr = format!("127.0.0.1:{}", port);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let config_path = tmp.path().join("state-server.toml");
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"bind = "{addr}"
+[auth]
+mode = "psk"
+psk = "{psk}"
+[storage]
+data_dir = "{}"
+"#,
+            data_dir.display()
+        ),
+    )
+    .unwrap();
+
+    let target_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/debug/mae-state-server");
+
+    let child = if target_bin.exists() {
+        Command::new(&target_bin)
+            .args(["--bind", &addr, "--config", config_path.to_str().unwrap()])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("failed to spawn mae-state-server with PSK config")
+    } else {
+        Command::new("cargo")
+            .args([
+                "run",
+                "-p",
+                "mae-state-server",
+                "--",
+                "--bind",
+                &addr,
+                "--config",
+                config_path.to_str().unwrap(),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("failed to spawn mae-state-server via cargo run")
+    };
+
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if TcpStream::connect(&addr).await.is_ok() {
+            return (child, addr, tmp);
+        }
+    }
+    panic!("PSK mae-state-server did not start within 5s on {}", addr);
+}
+
+/// TcpClient with PSK auth: performs client_handshake before initialize.
+impl TcpClient {
+    async fn connect_with_psk(addr: &str, psk: &str) -> Self {
+        let stream = TcpStream::connect(addr).await.expect("failed to connect");
+        let (read, write) = stream.into_split();
+        let mut client = TcpClient {
+            reader: BufReader::new(read),
+            writer: write,
+            next_id: 1,
+        };
+
+        // Perform PSK handshake before initialize.
+        use mae_state_server::auth::{AuthProvider, PskAuth};
+        let auth = PskAuth::new(psk);
+        auth.client_handshake(&mut client.reader, &mut client.writer)
+            .await
+            .expect("PSK client handshake failed");
+
+        client.initialize().await;
+        client.subscribe().await;
+        client
+    }
+}
+
+/// PSK auth: correct key connects and can share/read documents.
+#[tokio::test]
+#[ignore]
+async fn tcp_psk_correct_key_connects() {
+    if !should_run() {
+        return;
+    }
+    let (_server, addr, _tmp) = spawn_psk_server("e2e-test-secret").await;
+
+    let mut client = TcpClient::connect_with_psk(&addr, "e2e-test-secret").await;
+    client.share("psk-test.txt", "hello from PSK").await;
+    assert_eq!(client.content("psk-test.txt").await, "hello from PSK");
+}
+
+/// PSK auth: wrong key is rejected — connection fails.
+#[tokio::test]
+#[ignore]
+async fn tcp_psk_wrong_key_rejected() {
+    if !should_run() {
+        return;
+    }
+    let (_server, addr, _tmp) = spawn_psk_server("correct-key").await;
+
+    let stream = TcpStream::connect(&addr).await.expect("TCP connect");
+    let (read, write) = stream.into_split();
+    let mut reader = BufReader::new(read);
+    let mut writer = write;
+
+    use mae_state_server::auth::{AuthProvider, PskAuth};
+    let wrong_auth = PskAuth::new("wrong-key");
+    let result = wrong_auth.client_handshake(&mut reader, &mut writer).await;
+
+    assert!(result.is_err(), "wrong PSK should be rejected");
+}
+
+/// PSK auth: no-auth client to PSK server is rejected (server expects hello, gets JSON-RPC).
+#[tokio::test]
+#[ignore]
+async fn tcp_psk_no_auth_client_rejected() {
+    if !should_run() {
+        return;
+    }
+    let (_server, addr, _tmp) = spawn_psk_server("server-key").await;
+
+    // Try connecting without PSK handshake — send initialize directly.
+    let stream = TcpStream::connect(&addr).await.expect("TCP connect");
+    let (read, write) = stream.into_split();
+    let mut reader = BufReader::new(read);
+    let mut writer = write;
+
+    // send_initialize sends JSON-RPC — server expecting PSK hello will fail/hang.
+    let result = tokio::time::timeout(Duration::from_secs(3), async {
+        let init = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}});
+        let body = serde_json::to_vec(&init).unwrap();
+        if mae_mcp::write_framed(&mut writer, &body, Duration::from_secs(2))
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        // Try to read response — server should either close connection or send auth error.
+        match tokio::time::timeout(Duration::from_secs(2), mae_mcp::read_message(&mut reader)).await
+        {
+            Ok(Ok(Some(text))) => {
+                // If server responds, it shouldn't be a valid initialize response.
+                let val: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                val.get("result")
+                    .and_then(|r| r.get("serverInfo"))
+                    .is_some()
+            }
+            _ => false,
+        }
+    })
+    .await;
+
+    match result {
+        Ok(got_valid_init) => {
+            assert!(
+                !got_valid_init,
+                "no-auth client should NOT get valid initialize from PSK server"
+            );
+        }
+        Err(_) => {
+            // Timeout is expected — server dropped the connection or is waiting for auth hello.
+        }
+    }
 }

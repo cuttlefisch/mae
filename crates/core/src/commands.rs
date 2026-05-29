@@ -1311,6 +1311,10 @@ impl CommandRegistry {
             "List shared documents on the state server (SPC C l)",
         );
         reg.register_builtin("collab-join", "Join a shared document (SPC C j)");
+        reg.register_builtin(
+            "collab-discover",
+            "Discover MAE peers on the local network via mDNS",
+        );
 
         reg
     }

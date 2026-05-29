@@ -117,6 +117,12 @@ impl Editor {
                 self.set_status("Listing remote KBs...");
                 Some(true)
             }
+            "collab-discover" => {
+                self.collab.pending_intent = Some(CollabIntent::DiscoverPeers);
+                self.set_status("Discovering peers on local network...");
+                self.mark_full_redraw();
+                Some(true)
+            }
             _ => None,
         }
     }
@@ -160,6 +166,21 @@ mod tests {
         let result = editor.dispatch_collab("unknown-command");
         assert_eq!(result, None);
         assert!(editor.collab.pending_intent.is_none());
+    }
+
+    #[test]
+    fn dispatch_collab_discover_sets_intent() {
+        let mut editor = Editor::new();
+        let result = editor.dispatch_collab("collab-discover");
+        assert_eq!(result, Some(true));
+        assert!(
+            matches!(
+                editor.collab.pending_intent,
+                Some(CollabIntent::DiscoverPeers)
+            ),
+            "expected DiscoverPeers, got: {:?}",
+            editor.collab.pending_intent
+        );
     }
 
     #[test]

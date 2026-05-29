@@ -182,6 +182,7 @@ impl MdnsManager {
     }
 
     /// Check if we have a registered service.
+    #[cfg(test)]
     pub fn is_registered(&self) -> bool {
         self.registered_name.is_some()
     }
