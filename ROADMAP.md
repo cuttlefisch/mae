@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.10.6 · **Tests:** 5,696 passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete + PSK auth + KB protocol, Phase 13 (Scheme runtime) complete.
+**Current version:** v0.10.6 · **Tests:** 5,764 passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete + PSK auth + KB sharing E2E, Phase 13 (Scheme runtime) complete.
 
 ---
 
@@ -60,6 +60,19 @@
 - [x] **Awareness protocol**: Cursor/selection sharing via `sync/awareness` JSON-RPC relay. 8-color WCAG AA palette, 50ms throttle, 30s timeout, echo filtering. GUI (2px bar + labels + off-screen ▲/▼) and TUI (underline + initial + ▲/▼) rendering. Status bar presence. Auto-derived user identity (git → $USER → hostname). 12 tests.
 - [x] **Heartbeat/keepalive**: Detect silent client death, clean up stale `connected_clients`. *(b8d4b6a)*
 
+### KB Format Canonicalization
+
+- [ ] **Org-mode as canonical KB format**: Enforce org-mode (with properties drawer, filetags, org-roam structure) as the single KB storage format. Convert markdown KBs to org on import. Benefits: properties drawers for metadata, filetags for classification, structured `[[id:...]]` links, babel code blocks, export pipeline. Markdown KBs imported via existing `markdown_to_org` conversion. Track `format: org` in KB instance metadata for forward compatibility.
+
+### Release Artifact Packaging
+
+- [x] **Linux TUI**: `.tar.gz` archive containing `mae` + `mae-state-server` static musl binaries.
+- [x] **Linux GUI**: AppImage (`.AppImage`) — portable, no install required. Uses existing `mae.desktop` + `mae.svg`.
+- [x] **macOS GUI**: `.app` bundle in `.zip` — Finder-compatible, with `Info.plist`, icon, launcher script.
+- [x] **macOS TUI**: `.tar.gz` archive containing `mae` binary.
+- [ ] **macOS code signing**: Ad-hoc or Apple Developer signing for Gatekeeper. Currently unsigned (requires `xattr -c` to run).
+- [ ] **Linux Flatpak/Snap**: Alternative packaging formats for distro app stores.
+
 ### Org-Mode Rendering
 
 - [x] **Org rendering in editing buffers**: Full structural spans via `compute_org_spans()` — TODO/DONE, checkboxes, priorities, drawers, timestamps, directives, links, tables. 46 regression tests. *(12abab8)*
@@ -104,7 +117,15 @@
   - `docs/metadata` endpoint added to state server ✅
   - `WalEntry::client_id` stored but never read for audit/attribution (deferred — needs Phase F auth)
   - `StorageError::Io` variant reserved but unused (pluggable backends — by design)
-- [ ] **State server v2** (Phase F): Auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Completed: awareness protocol ✅, per-user undo ✅ (yrs `UndoManager`), git-based identity ✅, heartbeat/keepalive ✅, buffer status indicators ✅, Bugs 2-4 ✅ *(8de53b8)*, PSK mutual auth ✅ *(fffa39f)*, KB protocol handlers ✅ *(fffa39f)*. Next: SSH key exchange, msgpack wire format.
+- [ ] **State server v2** (Phase F): Auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Completed: awareness protocol ✅, per-user undo ✅ (yrs `UndoManager`), git-based identity ✅, heartbeat/keepalive ✅, buffer status indicators ✅, Bugs 2-4 ✅ *(8de53b8)*, PSK mutual auth ✅ *(fffa39f)*, KB protocol handlers ✅ *(fffa39f)*, **KB sharing E2E** ✅ (bridge + continuous sync + offline + mDNS). Next: SSH key exchange, msgpack wire format.
+  - **SSH Key Exchange Authentication** (deferred from v0.11.0):
+    - Ed25519 keypair generation + TOFU trust store (`~/.config/mae/trusted_keys.toml`)
+    - `SshAuth` provider implementing existing `AuthProvider` trait (`crates/sync/src/auth.rs`)
+    - Client-side auth in `collab_bridge.rs` (currently sends `initialize` with no auth or PSK)
+    - Crates: `ed25519-dalek` v2, `ssh-key` v0.6
+    - Prior art: SSH RFC 4252 challenge-response, Syncthing device IDs, WireGuard Noise_IKpsk2
+    - See `research:ssh-key-exchange-patterns` KB node for full analysis
+    - Open questions: reuse `~/.ssh/id_ed25519` vs generate separate key, UI for TOFU accept/reject, key revocation model
 - [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
   - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
   - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
@@ -374,12 +395,24 @@ Items E1–E8 track open design questions and planned improvements for the colla
 - [ ] **E5. File-change notification for collab** *(Future)*
   When Bob saves locally, notify Alice via `file-changed-on-disk` hook + inotify.
 
-- [ ] **E6. Peer-to-Peer collaborative editing** *(Future)*
-  - P2P-LAN: mDNS discovery + symmetric TCP. Transport layer already generic (`AsyncWrite`/`AsyncBufRead`)
-  - P2P-KB: KB node replication, link graph merge
+- [x] **E6a. KB sharing end-to-end** *(v0.11.0)*
+  - KB↔CRDT bridge: `node_to_crdt`/`crdt_to_node` in mae-kb ✅
+  - Intent wiring: `drain_collab_intents` handles ShareKb/JoinKb/LeaveKb/KbNodeUpdate ✅
+  - Event wiring: `handle_collab_event` handles KbShared/KbJoined/KbLeft/KbNodeUpdate ✅
+  - Continuous sync: shared_kbs tracking, on_save mode, CRDT update generation ✅
+  - Server handler fixes: scoped join (collection manifest), scoped leave ✅
+  - Offline queue: pending_kb_updates accumulate while disconnected, drain on reconnect ✅
+  - Status line: `[KB:N|synced/offline/pending]` indicator ✅
+  - mDNS discovery: `_mae-sync._tcp.local` register/browse via mdns-sd ✅
+  - 8 E2E TCP tests, 8 continuous sync tests, 3 offline tests, 5 status tests ✅
+  - `collab_kb_sync_mode` option: "manual" | "on_save" ✅
+
+- [ ] **E6b. Peer-to-Peer collaborative editing** *(Future)*
+  - P2P-LAN: mDNS discovery + symmetric TCP. Transport layer already generic (`AsyncWrite`/`AsyncBufRead`). mDNS module implemented ✅
+  - P2P-KB: KB node replication ✅, link graph merge (future)
   - P2P-Internet: WebRTC/QUIC NAT traversal
   - P2P-E2E: End-to-end encryption (Noise protocol)
-  - Blockers: collab_bridge is client-only, no mDNS, no peer auth
+  - Remaining: wire mDNS into collab-start/collab-discover commands, WebRTC, E2E encryption
 
 - [ ] **E7. Operation-based version control** *(Future)*
   Inspired by Zed DeltaDB ($32M Series B) — every keystroke tracked, character-level permalinks. yrs already stores operations; annotate with timestamp/user_id/commit message. Timeline scrubber UI showing who changed what.
