@@ -199,6 +199,12 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         segments.push(Segment::new(collab_str, 4));
     }
 
+    // Priority 4b: KB sharing status (only if KBs are shared).
+    let kb_str = format_kb_sharing_status(editor);
+    if !kb_str.is_empty() {
+        segments.push(Segment::new(kb_str, 4));
+    }
+
     // Priority 5: visual selection count (only in visual mode).
     if matches!(editor.mode, Mode::Visual(_)) {
         let (lines, chars) = editor.visual_selection_size();
@@ -558,9 +564,50 @@ pub fn format_collab_status(editor: &Editor) -> String {
             };
             format!(" [C:{}|{}]", peer_count, role)
         }
-        CollabStatus::Reconnecting => " [C:\u{27f3}]".to_string(),
-        CollabStatus::Disconnected => " [C:\u{2717}]".to_string(),
+        CollabStatus::Reconnecting => {
+            let kb_pending = editor.collab.pending_kb_updates.len();
+            if kb_pending > 0 {
+                format!(" [C:\u{27f3}|KB:{} pending]", kb_pending)
+            } else {
+                " [C:\u{27f3}]".to_string()
+            }
+        }
+        CollabStatus::Disconnected => {
+            let kb_pending = editor.collab.pending_kb_updates.len();
+            if kb_pending > 0 {
+                format!(" [C:\u{2717}|KB:{} pending]", kb_pending)
+            } else {
+                " [C:\u{2717}]".to_string()
+            }
+        }
     }
+}
+
+/// Format KB sharing status for the status line (shown alongside collab status).
+pub fn format_kb_sharing_status(editor: &Editor) -> String {
+    let shared_count = editor.collab.shared_kbs.len();
+    if shared_count == 0 {
+        return String::new();
+    }
+    let pending = editor.collab.pending_kb_updates.len();
+    let state = match &editor.collab.status {
+        CollabStatus::Connected { .. } => {
+            if pending > 0 {
+                format!("{}pending", pending)
+            } else {
+                "synced".to_string()
+            }
+        }
+        CollabStatus::Disconnected | CollabStatus::Reconnecting => {
+            if pending > 0 {
+                format!("offline|{}pending", pending)
+            } else {
+                "offline".to_string()
+            }
+        }
+        _ => return String::new(),
+    };
+    format!(" [KB:{}|{}]", shared_count, state)
 }
 
 pub fn format_tokens(n: u64) -> String {
@@ -880,5 +927,72 @@ mod tests {
         buf.pending_sync_updates = vec![vec![1]; 5];
         let s = format_collab_status(&editor);
         assert_eq!(s, " [C:OFFLINE|pending:5]");
+    }
+
+    #[test]
+    fn kb_sharing_status_empty_when_no_shared_kbs() {
+        let editor = Editor::new();
+        assert_eq!(format_kb_sharing_status(&editor), "");
+    }
+
+    #[test]
+    fn kb_sharing_status_shows_synced_when_connected() {
+        let mut editor = Editor::new();
+        editor.collab.status = crate::editor::CollabStatus::Connected { peer_count: 2 };
+        editor.collab.shared_kbs.insert(
+            "my-kb".to_string(),
+            std::collections::HashSet::from(["n1".to_string()]),
+        );
+        let s = format_kb_sharing_status(&editor);
+        assert_eq!(s, " [KB:1|synced]");
+    }
+
+    #[test]
+    fn kb_sharing_status_shows_pending_when_updates_queued() {
+        let mut editor = Editor::new();
+        editor.collab.status = crate::editor::CollabStatus::Connected { peer_count: 1 };
+        editor.collab.shared_kbs.insert(
+            "my-kb".to_string(),
+            std::collections::HashSet::from(["n1".to_string()]),
+        );
+        editor.collab.pending_kb_updates.push((
+            "my-kb".to_string(),
+            "n1".to_string(),
+            vec![1, 2, 3],
+        ));
+        let s = format_kb_sharing_status(&editor);
+        assert_eq!(s, " [KB:1|1pending]");
+    }
+
+    #[test]
+    fn kb_sharing_status_shows_offline_when_disconnected() {
+        let mut editor = Editor::new();
+        editor.collab.status = crate::editor::CollabStatus::Disconnected;
+        editor.collab.shared_kbs.insert(
+            "kb-1".to_string(),
+            std::collections::HashSet::from(["n1".to_string()]),
+        );
+        editor.collab.shared_kbs.insert(
+            "kb-2".to_string(),
+            std::collections::HashSet::from(["n2".to_string()]),
+        );
+        editor
+            .collab
+            .pending_kb_updates
+            .push(("kb-1".to_string(), "n1".to_string(), vec![1]));
+        let s = format_kb_sharing_status(&editor);
+        assert_eq!(s, " [KB:2|offline|1pending]");
+    }
+
+    #[test]
+    fn collab_status_disconnected_shows_kb_pending() {
+        let mut editor = Editor::new();
+        editor.collab.status = crate::editor::CollabStatus::Disconnected;
+        editor
+            .collab
+            .pending_kb_updates
+            .push(("kb".to_string(), "n".to_string(), vec![1]));
+        let s = format_collab_status(&editor);
+        assert_eq!(s, " [C:\u{2717}|KB:1 pending]");
     }
 }
