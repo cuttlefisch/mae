@@ -120,6 +120,21 @@ pub enum CollabIntent {
         doc_id: String,
         content_hash: String,
     },
+    /// Share a KB instance for collaborative editing.
+    ShareKb {
+        kb_name: String,
+        node_ids: Vec<String>,
+    },
+    /// Join a shared KB from the server.
+    JoinKb { kb_id: String },
+    /// Leave (unsubscribe from) a shared KB.
+    LeaveKb { kb_id: String },
+    /// Send a CRDT update for a KB node to the server.
+    KbNodeUpdate {
+        kb_id: String,
+        node_id: String,
+        update: Vec<u8>,
+    },
 }
 
 /// Shell/terminal intent queue and cached state, extracted from Editor.
@@ -206,6 +221,13 @@ pub struct CollabState {
     pub pending_awareness: Option<(String, String)>, // (doc_id, state_json)
     /// Timestamp of last awareness send (for throttling).
     pub last_awareness_sent: std::time::Instant,
+    /// Shared KB tracking: kb_id → set of node_ids being synced.
+    /// Populated on KbShared (host) and KbJoined (guest) events.
+    pub shared_kbs: HashMap<String, HashSet<String>>,
+    /// KB sync mode: "manual" (explicit :kb-sync), "on_save" (auto on node edit).
+    pub kb_sync_mode: String,
+    /// Pending KB node updates to send (accumulated between ticks).
+    pub pending_kb_updates: Vec<(String, String, Vec<u8>)>, // (kb_id, node_id, update_bytes)
 }
 
 impl CollabState {
@@ -234,6 +256,9 @@ impl CollabState {
             remote_users: mae_sync::awareness::AwarenessMap::new(),
             pending_awareness: None,
             last_awareness_sent: std::time::Instant::now(),
+            shared_kbs: HashMap::new(),
+            kb_sync_mode: "on_save".to_string(),
+            pending_kb_updates: Vec::new(),
         }
     }
 }

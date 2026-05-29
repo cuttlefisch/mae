@@ -422,6 +422,9 @@ impl OptionRegistry {
                 opt!("collab_heartbeat_interval", &["collab-heartbeat-interval"],
                     "Seconds between heartbeat pings to the state server (0 = disabled)",
                     OptionKind::Int, "30", Some("collaboration.heartbeat_interval_secs"), &[]),
+                opt!("collab_kb_sync_mode", &["collab-kb-sync-mode"],
+                    "KB sync mode: \"manual\" (explicit :kb-sync) or \"on_save\" (auto on node edit)",
+                    OptionKind::String, "on_save", Some("collaboration.kb_sync_mode"), &[]),
             ],
         }
     }

@@ -379,7 +379,30 @@ impl Editor {
         if let Some(t) = tags {
             updated.tags = t;
         }
-        self.kb.primary.insert(updated);
+
+        // Check if this node belongs to a shared KB and sync mode is "on_save".
+        let shared_kb_id = if self.collab.kb_sync_mode == "on_save" {
+            self.collab
+                .shared_kbs
+                .iter()
+                .find(|(_, nodes)| nodes.contains(id))
+                .map(|(kb_id, _)| kb_id.clone())
+        } else {
+            None
+        };
+
+        if let Some(kb_id) = shared_kb_id {
+            // Use CRDT-aware upsert to generate update bytes for broadcasting.
+            // client_id 1 is used for local edits (distinct from remote).
+            if let Some(update_bytes) = self.kb.primary.upsert_with_crdt(updated, 1) {
+                self.collab
+                    .pending_kb_updates
+                    .push((kb_id, id.to_string(), update_bytes));
+            }
+        } else {
+            self.kb.primary.insert(updated);
+        }
+
         self.set_status(format!("KB node updated: {}", id));
         Ok(())
     }
