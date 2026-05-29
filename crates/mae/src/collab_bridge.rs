@@ -110,6 +110,29 @@ pub enum CollabCommand {
         content_hash: String,
         saved_by: String,
     },
+    /// Share a KB for collaborative editing (collection + node states).
+    ShareKb {
+        kb_id: String,
+        name: String,
+        creator: String,
+        collection_state: Vec<u8>,
+        node_states: Vec<(String, Vec<u8>)>,
+    },
+    /// Join a shared KB from the server.
+    JoinKb {
+        kb_id: String,
+    },
+    /// Leave a shared KB.
+    LeaveKb {
+        kb_id: String,
+    },
+    /// Send a KB node update to the server (Phase 4: continuous sync).
+    #[allow(dead_code)] // Phase 4 — constructed when local KB edits trigger CRDT updates
+    KbNodeUpdate {
+        kb_id: String,
+        node_id: String,
+        update: Vec<u8>,
+    },
 }
 
 /// Events sent from the collab background task back to the main thread.
@@ -200,6 +223,27 @@ pub enum CollabEvent {
         client_id: u64,
         doc_id: String,
         state: mae_sync::awareness::AwarenessState,
+    },
+    /// KB successfully shared with the server.
+    KbShared {
+        kb_id: String,
+        node_count: usize,
+    },
+    /// Joined a shared KB — carries collection + node states.
+    KbJoined {
+        kb_id: String,
+        collection_state: Vec<u8>,
+        node_states: Vec<(String, Vec<u8>)>,
+    },
+    /// Left a shared KB.
+    KbLeft {
+        kb_id: String,
+    },
+    /// Remote KB node update received.
+    KbNodeUpdate {
+        kb_id: String,
+        node_id: String,
+        update_bytes: Vec<u8>,
     },
 }
 
@@ -314,6 +358,51 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         CollabIntent::ListDocs => CollabCommand::ListDocs { for_join: false },
         CollabIntent::ListDocsForJoin => CollabCommand::ListDocs { for_join: true },
         CollabIntent::JoinDoc { doc_id } => CollabCommand::JoinDoc { doc_id },
+        CollabIntent::ShareKb { kb_name, node_ids } => {
+            // Look up the KB instance: "default"/"primary" → editor.kb.primary,
+            // otherwise check editor.kb.instances.
+            let kb = if kb_name == "default" || kb_name == "primary" {
+                Some(&editor.kb.primary)
+            } else {
+                editor.kb.instances.get(&kb_name)
+            };
+            let kb = match kb {
+                Some(k) => k,
+                None => {
+                    editor.set_status(format!("KB '{}' not found", kb_name));
+                    return;
+                }
+            };
+            let creator = editor.collab.user_name.clone();
+            let kb_id = kb_name.clone();
+
+            match kb.to_collection(&kb_name, &creator, &node_ids) {
+                Ok((coll, node_states)) => {
+                    let collection_state = coll.encode_state();
+                    let node_count = node_states.len();
+                    info!(
+                        kb = %kb_id,
+                        node_count,
+                        collection_bytes = collection_state.len(),
+                        "sharing KB: encoded collection + nodes"
+                    );
+                    CollabCommand::ShareKb {
+                        kb_id,
+                        name: kb_name,
+                        creator,
+                        collection_state,
+                        node_states,
+                    }
+                }
+                Err(e) => {
+                    error!(kb = %kb_name, error = %e, "failed to encode KB for sharing");
+                    editor.set_status(format!("Failed to share KB: {}", e));
+                    return;
+                }
+            }
+        }
+        CollabIntent::JoinKb { kb_id } => CollabCommand::JoinKb { kb_id },
+        CollabIntent::LeaveKb { kb_id } => CollabCommand::LeaveKb { kb_id },
     };
 
     let kind = collab_command_name(&cmd);
@@ -448,6 +537,10 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::SendSaveCommitted { .. } => "send-save-committed",
         CollabCommand::ListDocs { .. } => "list-docs",
         CollabCommand::JoinDoc { .. } => "join-doc",
+        CollabCommand::ShareKb { .. } => "share-kb",
+        CollabCommand::JoinKb { .. } => "join-kb",
+        CollabCommand::LeaveKb { .. } => "leave-kb",
+        CollabCommand::KbNodeUpdate { .. } => "kb-node-update",
     }
 }
 
@@ -980,6 +1073,102 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 .update(client_id, doc_id, state, color_index);
             editor.mark_full_redraw();
         }
+        CollabEvent::KbShared { kb_id, node_count } => {
+            info!(kb = %kb_id, node_count, "KB shared successfully");
+            editor.set_status(format!("KB '{}' shared ({} nodes)", kb_id, node_count));
+        }
+        CollabEvent::KbJoined {
+            kb_id,
+            collection_state,
+            node_states,
+        } => {
+            let node_count = node_states.len();
+            info!(kb = %kb_id, node_count, collection_bytes = collection_state.len(), "KB joined — applying to local store");
+
+            // Initialize shared KB directory if data_dir is available.
+            if let Some(ref data_dir) = editor.kb.data_dir {
+                let slug = mae_kb::data_dir::slugify(&kb_id);
+                let meta = mae_kb::data_dir::SharedKbMeta {
+                    name: kb_id.clone(),
+                    collab_id: kb_id.clone(),
+                    creator: String::new(), // extracted from collection if available
+                    created_at: mae_kb::data_dir::chrono_now_iso(),
+                    peers: vec![],
+                    last_sync: Some(mae_kb::data_dir::chrono_now_iso()),
+                    sync_mode: "on_save".to_string(),
+                };
+                if let Err(e) = data_dir.init_shared_kb(&slug, &meta) {
+                    warn!(kb = %kb_id, error = %e, "failed to init shared KB directory");
+                }
+            }
+
+            // Apply each node to the primary KB (or create a federated instance).
+            let mut inserted = 0;
+            let mut errors = 0;
+            for (node_id, state_bytes) in &node_states {
+                match mae_sync::kb::KbNodeDoc::from_bytes(state_bytes) {
+                    Ok(crdt_doc) => {
+                        let node = mae_kb::Node::from_crdt_doc(
+                            &crdt_doc,
+                            mae_kb::NodeKind::Note,
+                            mae_kb::NodeSource::Federation,
+                        );
+                        debug!(kb = %kb_id, node_id = %node_id, title = %node.title, "inserting joined KB node");
+                        editor.kb.primary.insert(node);
+                        inserted += 1;
+                    }
+                    Err(e) => {
+                        warn!(kb = %kb_id, node_id = %node_id, error = %e, "failed to decode KB node — skipping");
+                        errors += 1;
+                    }
+                }
+            }
+
+            info!(kb = %kb_id, inserted, errors, "KB join complete");
+            if errors > 0 {
+                editor.set_status(format!(
+                    "Joined KB '{}' ({} nodes, {} errors)",
+                    kb_id, inserted, errors
+                ));
+            } else {
+                editor.set_status(format!("Joined KB '{}' ({} nodes)", kb_id, inserted));
+            }
+            editor.mark_full_redraw();
+        }
+        CollabEvent::KbLeft { kb_id } => {
+            info!(kb = %kb_id, "left shared KB — local copy preserved");
+            // Local KB nodes persist after leaving (local-first principle).
+            // Only stop receiving further updates.
+            editor.set_status(format!("Left KB '{}' (local copy preserved)", kb_id));
+            editor.mark_full_redraw();
+        }
+        CollabEvent::KbNodeUpdate {
+            kb_id,
+            node_id,
+            update_bytes,
+        } => {
+            debug!(
+                kb = %kb_id,
+                node = %node_id,
+                update_len = update_bytes.len(),
+                "remote KB node update — applying"
+            );
+            match editor
+                .kb
+                .primary
+                .apply_remote_update(&node_id, &update_bytes)
+            {
+                Ok(changed) => {
+                    if changed {
+                        debug!(kb = %kb_id, node = %node_id, "KB node content changed by remote update");
+                        editor.mark_full_redraw();
+                    }
+                }
+                Err(e) => {
+                    warn!(kb = %kb_id, node = %node_id, error = %e, "failed to apply remote KB node update");
+                }
+            }
+        }
     }
 }
 
@@ -1096,6 +1285,15 @@ pub(crate) enum PendingResponseKind {
     /// Doctor debug — response forwarded to a oneshot channel.
     DoctorDebug {
         reply: tokio::sync::oneshot::Sender<Option<serde_json::Value>>,
+    },
+    KbShare {
+        kb_id: String,
+    },
+    KbJoin {
+        kb_id: String,
+    },
+    KbLeave {
+        kb_id: String,
     },
 }
 
@@ -1506,6 +1704,93 @@ async fn run_collab_task(
                                 }
                             }
                         }
+                        CollabCommand::ShareKb { kb_id, name, creator, collection_state, node_states } => {
+                            info!(kb = %kb_id, nodes = node_states.len(), "sharing KB");
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let nodes_json: Vec<serde_json::Value> = node_states.iter().map(|(id, state)| {
+                                    serde_json::json!({ "id": id, "state": mae_sync::encoding::update_to_base64(state) })
+                                }).collect();
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req_id,
+                                    "method": "kb/share",
+                                    "params": {
+                                        "kb_id": kb_id,
+                                        "name": name,
+                                        "creator": creator,
+                                        "collection_state": mae_sync::encoding::update_to_base64(&collection_state),
+                                        "nodes": nodes_json,
+                                    }
+                                });
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("kb share serialize error: {e}"); continue; }
+                                };
+                                if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    pending_responses.insert(req_id, PendingResponseKind::KbShare { kb_id });
+                                }
+                            }
+                        }
+                        CollabCommand::JoinKb { kb_id } => {
+                            info!(kb = %kb_id, "joining KB");
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req_id,
+                                    "method": "kb/join",
+                                    "params": { "kb_id": kb_id }
+                                });
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("kb join serialize error: {e}"); continue; }
+                                };
+                                if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    pending_responses.insert(req_id, PendingResponseKind::KbJoin { kb_id });
+                                }
+                            }
+                        }
+                        CollabCommand::LeaveKb { kb_id } => {
+                            info!(kb = %kb_id, "leaving KB");
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req_id,
+                                    "method": "kb/leave",
+                                    "params": { "kb_id": kb_id }
+                                });
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("kb leave serialize error: {e}"); continue; }
+                                };
+                                if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    pending_responses.insert(req_id, PendingResponseKind::KbLeave { kb_id });
+                                }
+                            }
+                        }
+                        CollabCommand::KbNodeUpdate { kb_id, node_id, update } => {
+                            if let Some(ref mut w) = writer {
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "method": "kb/node_update",
+                                    "params": {
+                                        "kb_id": kb_id,
+                                        "node_id": node_id,
+                                        "update": mae_sync::encoding::update_to_base64(&update),
+                                    }
+                                });
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => { error!("kb node update serialize error: {e}"); continue; }
+                                };
+                                let _ = write_framed(w, &body, write_timeout).await;
+                            }
+                        }
                         CollabCommand::Connect { address } => {
                             tear_down(&mut msg_rx, &mut writer);
                             pending_responses.clear();
@@ -1808,14 +2093,27 @@ pub(crate) fn handle_incoming_message(
                                 check_seq_gap(&buffer_name, wal_seq, seq_tracker, evt_tx);
                             }
                             if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
-                                try_send_evt(
-                                    evt_tx,
-                                    CollabEvent::RemoteUpdate {
-                                        doc_id: buffer_name,
-                                        update_bytes: bytes,
-                                        wal_seq,
-                                    },
-                                );
+                                // Route KB node updates to KbNodeUpdate event.
+                                if let Some(node_id) = buffer_name.strip_prefix("kb:") {
+                                    debug!(node = %node_id, wal_seq, "routing sync_update as KB node update");
+                                    try_send_evt(
+                                        evt_tx,
+                                        CollabEvent::KbNodeUpdate {
+                                            kb_id: String::new(), // not available in notification
+                                            node_id: node_id.to_string(),
+                                            update_bytes: bytes,
+                                        },
+                                    );
+                                } else {
+                                    try_send_evt(
+                                        evt_tx,
+                                        CollabEvent::RemoteUpdate {
+                                            doc_id: buffer_name,
+                                            update_bytes: bytes,
+                                            wal_seq,
+                                        },
+                                    );
+                                }
                             }
                         }
                     }
@@ -1844,14 +2142,26 @@ pub(crate) fn handle_incoming_message(
                             check_seq_gap(&doc_id, wal_seq, seq_tracker, evt_tx);
                         }
                         if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
-                            try_send_evt(
-                                evt_tx,
-                                CollabEvent::RemoteUpdate {
-                                    doc_id,
-                                    update_bytes: bytes,
-                                    wal_seq,
-                                },
-                            );
+                            // Route KB node updates to KbNodeUpdate event.
+                            if let Some(node_id) = doc_id.strip_prefix("kb:") {
+                                try_send_evt(
+                                    evt_tx,
+                                    CollabEvent::KbNodeUpdate {
+                                        kb_id: String::new(),
+                                        node_id: node_id.to_string(),
+                                        update_bytes: bytes,
+                                    },
+                                );
+                            } else {
+                                try_send_evt(
+                                    evt_tx,
+                                    CollabEvent::RemoteUpdate {
+                                        doc_id,
+                                        update_bytes: bytes,
+                                        wal_seq,
+                                    },
+                                );
+                            }
                         }
                     }
                 }
@@ -2175,6 +2485,59 @@ fn handle_response(
             let debug_data = val.get("result").cloned();
             let _ = reply.send(debug_data);
         }
+        PendingResponseKind::KbShare { kb_id } => {
+            if result
+                .and_then(|r| r.get("shared"))
+                .and_then(|v| v.as_bool())
+                == Some(true)
+            {
+                let node_count = result
+                    .and_then(|r| r.get("node_count"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                try_send_evt(evt_tx, CollabEvent::KbShared { kb_id, node_count });
+            } else {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("Failed to share KB: {}", val),
+                    },
+                );
+            }
+        }
+        PendingResponseKind::KbJoin { kb_id } => {
+            let collection_state = result
+                .and_then(|r| r.get("collection_state"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())
+                .unwrap_or_default();
+            let node_states: Vec<(String, Vec<u8>)> = result
+                .and_then(|r| r.get("nodes"))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|n| {
+                            let id = n.get("id")?.as_str()?.to_string();
+                            let state =
+                                mae_sync::encoding::base64_to_update(n.get("state")?.as_str()?)
+                                    .ok()?;
+                            Some((id, state))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            try_send_evt(
+                evt_tx,
+                CollabEvent::KbJoined {
+                    kb_id,
+                    collection_state,
+                    node_states,
+                },
+            );
+        }
+        PendingResponseKind::KbLeave { kb_id } => {
+            try_send_evt(evt_tx, CollabEvent::KbLeft { kb_id });
+        }
     }
 }
 
@@ -2408,6 +2771,33 @@ async fn handle_disconnected_cmd(
             // Silently drop — not connected.
         }
         CollabCommand::SendSaveCommitted { .. } => {
+            // Silently drop — not connected.
+        }
+        CollabCommand::ShareKb { kb_id, .. } => {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
+                    message: format!("Not connected \u{2014} cannot share KB '{}'", kb_id),
+                },
+            );
+        }
+        CollabCommand::JoinKb { kb_id } => {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
+                    message: format!("Not connected \u{2014} cannot join KB '{}'", kb_id),
+                },
+            );
+        }
+        CollabCommand::LeaveKb { kb_id } => {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
+                    message: format!("Not connected \u{2014} cannot leave KB '{}'", kb_id),
+                },
+            );
+        }
+        CollabCommand::KbNodeUpdate { .. } => {
             // Silently drop — not connected.
         }
     }

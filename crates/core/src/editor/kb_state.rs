@@ -59,6 +59,14 @@ pub struct KbContext {
 }
 
 impl KbContext {
+    /// Name of the currently active KB instance for collab operations.
+    ///
+    /// Returns the first registered instance name, or None (caller should
+    /// default to "default" which maps to `self.primary`).
+    pub fn active_instance_name(&self) -> Option<String> {
+        self.registry.instances.first().map(|e| e.name.clone())
+    }
+
     pub fn new(primary: mae_kb::KnowledgeBase) -> Self {
         Self {
             primary,

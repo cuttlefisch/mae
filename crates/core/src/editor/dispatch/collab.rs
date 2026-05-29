@@ -69,6 +69,54 @@ impl Editor {
                 self.set_status("Fetching document list...");
                 Some(true)
             }
+            "kb-share" => {
+                // Share the active KB (default = primary). The ex-command parser
+                // can pass a name via :kb-share <name>, but SPC-key dispatch
+                // uses "default" which maps to editor.kb.primary.
+                let kb_name = self
+                    .kb
+                    .active_instance_name()
+                    .unwrap_or_else(|| "default".to_string());
+                self.collab.pending_intent = Some(CollabIntent::ShareKb {
+                    kb_name: kb_name.clone(),
+                    node_ids: vec![],
+                });
+                self.set_status(format!("Sharing KB '{}'...", kb_name));
+                self.mark_full_redraw();
+                Some(true)
+            }
+            "kb-join" => {
+                // Join a KB — SPC-key dispatch uses active name or "default".
+                // :kb-join <id> is handled in command.rs before reaching here.
+                let kb_id = self
+                    .kb
+                    .active_instance_name()
+                    .unwrap_or_else(|| "default".to_string());
+                self.collab.pending_intent = Some(CollabIntent::JoinKb {
+                    kb_id: kb_id.clone(),
+                });
+                self.set_status(format!("Joining KB '{}'...", kb_id));
+                self.mark_full_redraw();
+                Some(true)
+            }
+            "kb-leave" => {
+                let kb_id = self
+                    .kb
+                    .active_instance_name()
+                    .unwrap_or_else(|| "default".to_string());
+                self.collab.pending_intent = Some(CollabIntent::LeaveKb {
+                    kb_id: kb_id.clone(),
+                });
+                self.set_status(format!("Leaving KB '{}'...", kb_id));
+                self.mark_full_redraw();
+                Some(true)
+            }
+            "kb-list-remote" => {
+                // Reuse existing ListDocs mechanism to show KB list
+                self.collab.pending_intent = Some(CollabIntent::ListDocs);
+                self.set_status("Listing remote KBs...");
+                Some(true)
+            }
             _ => None,
         }
     }

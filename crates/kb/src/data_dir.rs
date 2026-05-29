@@ -306,7 +306,7 @@ pub fn migrate_legacy_layout(data_home: &Path) -> std::io::Result<usize> {
     Ok(migrated)
 }
 
-pub(crate) fn chrono_now_iso() -> String {
+pub fn chrono_now_iso() -> String {
     // Simple ISO 8601 without chrono dependency
     use std::time::SystemTime;
     let duration = SystemTime::now()
