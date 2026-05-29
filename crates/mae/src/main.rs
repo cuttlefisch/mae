@@ -9,6 +9,8 @@ mod doctor;
 mod gui_event;
 mod key_handling;
 mod lsp_bridge;
+#[allow(dead_code)] // Phase 6: wired when collab-start/collab-discover commands land.
+mod mdns_discovery;
 pub mod pkg;
 mod scheme_dap_bridge;
 mod scheme_lsp_bridge;
