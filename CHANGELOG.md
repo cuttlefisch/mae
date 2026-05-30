@@ -6,6 +6,33 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- Nightly clippy for_kv_map lint, CI TCP E2E timeout ([3791180](https://github.com/cuttlefisch/mae/commit/3791180e4508d0af6ca339230d14f9c5af7ad134))
+- Nightly clippy useless_format lint in mae-ai self_test ([2fcb812](https://github.com/cuttlefisch/mae/commit/2fcb8124173f5f4809b8e8aed07674dd9b79b6e9))
+- Include mae-state-server in macOS release artifact ([2a33b8a](https://github.com/cuttlefisch/mae/commit/2a33b8a1f359d1f06dc79875b9eca64762fb4ac5))
+
+### CI
+
+- Drop redundant check matrix + reuse binary artifact for e2e ([c00d1fd](https://github.com/cuttlefisch/mae/commit/c00d1fd00a6ce72895b2ba4bad22ca725df442ba))
+
+### Documentation
+
+- Mark 5 fixed bugs in ROADMAP, update version + test count ([0824ec0](https://github.com/cuttlefisch/mae/commit/0824ec06777c2f68ddc1b496fdf4fb46e85a268b))
+- Phase 7 — KB sharing user guide + ROADMAP update ([90077a3](https://github.com/cuttlefisch/mae/commit/90077a31500761e9885c147821b213441b86606a))
+
+### Features
+
+- PSK auth, KB data dir standardization, project pruning ([fffa39f](https://github.com/cuttlefisch/mae/commit/fffa39ff33852aeae4643ff35dfcac6b3a37e31a))
+- KB sharing E2E — bridge, intent wiring, scoped join/leave, 8 TCP tests ([710d223](https://github.com/cuttlefisch/mae/commit/710d2235b9262f9af9ace0106be99640f5849b68))
+- Phase 4 — continuous KB sync (local edits → CRDT updates) ([09731d3](https://github.com/cuttlefisch/mae/commit/09731d359c30c1b0bde1eedeca26f303f556b28e))
+- Phase 8 — offline KB sync queue + status line indicators ([4ae5de4](https://github.com/cuttlefisch/mae/commit/4ae5de42e30b15aa909e55c64899d28acb9986c8))
+- Phase 6 — mDNS discovery for P2P KB sharing ([39256ec](https://github.com/cuttlefisch/mae/commit/39256ecc2f4c026846b7e972c9eb44deb4fb9175))
+- Client PSK auth, mDNS wiring, collab-discover command, network docs ([893ab07](https://github.com/cuttlefisch/mae/commit/893ab07afd5d698eb4bacd8b362b1265c740d3f4))
+- Mae-canvas crate scaffold (KB graph visualization) ([8ab7438](https://github.com/cuttlefisch/mae/commit/8ab743860b931260e6d4890b28a958480eaa812a))
+
+## [0.10.6] - 2026-05-28
+
+### Bug Fixes
+
 - *(collab)* FNV-1a client_id hash + comprehensive test gap closure ([5d9b7f9](https://github.com/cuttlefisch/mae/commit/5d9b7f921ffc03c09bd4ed1fa4be54ee19c405a3))
 - *(collab)* Cursor drift on remote edits — adjust offset by edit position ([01f11fc](https://github.com/cuttlefisch/mae/commit/01f11fc9a692c6ca665b047f002bb22876391850))
 - *(collab)* Awareness not rendering — JSON format mismatch + missing subscription ([a42130d](https://github.com/cuttlefisch/mae/commit/a42130dc9e3e80712bd33d194dda2bf984fa5053))
@@ -14,6 +41,10 @@ All notable changes to this project will be documented in this file.
 
 - Add 20m timeout to cargo test step (prevents nightly hangs) ([dfddb57](https://github.com/cuttlefisch/mae/commit/dfddb57950f8eed130b1d129656f608cb03dfde9))
 - Remove e2e dependency on full check matrix (runs in parallel now) ([5987b4e](https://github.com/cuttlefisch/mae/commit/5987b4ebb1b527fc7d65ea86d3aca0dd4c49c057))
+
+### Miscellaneous
+
+- Bump version to 0.10.6 ([d3c5ec4](https://github.com/cuttlefisch/mae/commit/d3c5ec41520b62b1d81a8823f8de0f1c70f1f4e1))
 
 ### Testing
 
