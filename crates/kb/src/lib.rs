@@ -614,7 +614,7 @@ impl KnowledgeBase {
                 let id = node.id.clone();
                 let links = node.links();
                 // Clean old reverse edges
-                for (_, sources) in self.links_in.iter_mut() {
+                for sources in self.links_in.values_mut() {
                     sources.retain(|s| s != &id);
                 }
                 self.links_in.retain(|_, v| !v.is_empty());

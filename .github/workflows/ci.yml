@@ -95,9 +95,13 @@ jobs:
         timeout-minutes: 5
         env:
           RUST_LOG: "mae_state_server=debug,mae_sync=debug,warn"
-      - name: TCP E2E tests (PSK auth + protocol)
-        run: cargo test --package mae --test collab_tcp_e2e -- --ignored --test-threads=1 --nocapture
-        timeout-minutes: 10
+      - name: TCP E2E tests (PSK auth + KB protocol)
+        run: |
+          cargo test --package mae --test collab_tcp_e2e -- tcp_psk --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e -- tcp_kb --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e -- tcp_full_roundtrip --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e -- tcp_two_editors --ignored --test-threads=1 --nocapture
+        timeout-minutes: 5
         env:
           MAE_TCP_E2E: "1"
           RUST_LOG: "mae_state_server=debug,warn"
