@@ -203,7 +203,7 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
             "conditional": false,
             "setup": [
                 "Before starting: clean up any leftovers from a previous run.",
-                format!("Call close_buffer with name='mae-self-test-editing.txt' and force=true (ignore errors if buffer doesn't exist)."),
+                "Call close_buffer with name='mae-self-test-editing.txt' and force=true (ignore errors if buffer doesn't exist).".to_string(),
                 format!("Call shell_exec with command='rm -f {test_file}' to remove any stale test file.")
             ],
             "tests": [
