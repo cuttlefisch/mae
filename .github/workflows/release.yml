@@ -106,9 +106,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build TUI binary
+      - name: Build TUI binary + state server
         run: |
-          cargo build --release --package mae
+          cargo build --release --package mae --package mae-state-server
           cp target/release/mae target/release/mae-tui
 
       - name: Build GUI binary
@@ -191,10 +191,11 @@ jobs:
           </plist>
           PLIST
 
-          # Also produce a TUI-only tarball
+          # Also produce a TUI-only tarball (includes state server for collab)
           cp target/release/mae-tui dist/mae
-          chmod +x dist/mae
-          tar czf dist/mae-macos-aarch64-tui.tar.gz -C dist mae
+          cp target/release/mae-state-server dist/mae-state-server
+          chmod +x dist/mae dist/mae-state-server
+          tar czf dist/mae-macos-aarch64-tui.tar.gz -C dist mae mae-state-server
 
           # Zip the .app bundle
           cd dist && zip -r mae-macos-aarch64.zip MAE.app
