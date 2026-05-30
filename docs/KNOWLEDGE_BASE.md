@@ -175,6 +175,83 @@ The AI agent uses the same tools as the manual and KB:
 - `((block-ref))` maps lossy to heading-level `:ID:` nodes.
 - Register: `:kb-register RoamExport ~/roam-export`
 
+## Collaborative Knowledge Bases
+
+MAE knowledge bases can be shared between peers using the same CRDT infrastructure as collaborative text editing. Each KB node and collection is a yrs document, enabling concurrent edits with automatic conflict resolution.
+
+### CRDT-Backed Nodes
+
+Each shared node is a `KbNodeDoc` backed by a yrs `YMap`:
+
+| Field | yrs Type | Notes |
+|-------|----------|-------|
+| `title` | `YText` | Concurrent character-level edits |
+| `body` | `YText` | Full CRDT text (org-mode content) |
+| `tags` | `YArray` | Set-like semantics (add/remove) |
+| `links` | `YArray` | Bidirectional link targets |
+| `meta` | `YMap` | Arbitrary key-value metadata |
+
+All yrs documents use UTF-16 offset encoding (`OffsetKind::Utf16`) per the Yjs standard. Change detection uses SHA-256 content hashing rather than state vector comparison (yrs state vectors are monotonically increasing even after undo).
+
+### KB Collections
+
+A `KbCollectionDoc` is a CRDT manifest representing a shared knowledge base. It tracks:
+
+- **Members** — peer identities with read/write roles.
+- **Node manifest** — the set of node IDs belonging to this collection.
+- **Convergent state** — collection-level metadata (name, description, sync mode).
+
+Collections are addressed as `kbc:{kb_id}` in the sync protocol and route through the same state-server infrastructure as collaborative buffers.
+
+### Data Directory Layout
+
+KB data follows XDG conventions under `$XDG_DATA_HOME/mae/kb/` (default `~/.local/share/mae/kb/`):
+
+```
+kb/
+├── local/          # Local-only KB instances (SQLite + org cache)
+├── shared/         # CRDT-synced KB instances (yrs docs + SQLite)
+├── backups/        # Periodic SQLite snapshots
+└── meta.toml       # Per-KB metadata (UUID, name, sync config)
+```
+
+See `crates/kb/src/data_dir.rs` for path resolution and directory initialization.
+
+### Backup & Restore
+
+- **Periodic snapshots** — SQLite database snapshots taken at configurable intervals.
+- **Configurable retention** — old backups pruned by age or count.
+- **Pre-sync backup** — automatic snapshot before first sync with a remote peer.
+
+See `crates/kb/src/backup.rs` for implementation details.
+
+### Sharing Protocol (Preview)
+
+Sharing a KB follows the same lifecycle as collaborative buffers:
+
+1. **Share** — host publishes the collection doc to the state-server, which creates per-node CRDT documents.
+2. **Join** — peer requests the collection manifest, then syncs individual node documents on demand.
+3. **Leave** — peer unsubscribes from updates; local state is retained for offline use.
+
+Offline reconciliation uses yrs state vector exchange on reconnect. Two sync modes are supported: **continuous** (real-time push/pull) and **manual** (explicit `:collab-sync`).
+
+### Export
+
+`export_kb()` supports Org and Markdown output formats:
+
+- Link syntax is converted between formats (`[[id|text]]` to `[text](id)` for Markdown).
+- Subset export by node IDs (e.g., export a single topic cluster).
+- Full KB export produces one file per node with a manifest index.
+
+See `crates/kb/src/export.rs`.
+
+### Authentication
+
+- **PSK mutual auth** — HMAC-SHA256 challenge-response before `initialize`. Both peers must share a pre-configured key.
+- **SSH key auth** — planned for v0.12.0, replacing PSK for multi-user deployments.
+
+Until authentication is enabled, collaborative KB access is trusted-LAN only (same security model as the state-server).
+
 ## Philosophy
 
 1. **Plain text is the only immortal format.** SQLite is derived. Cloud sync is a dependency. Org files survive every tool transition.

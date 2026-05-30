@@ -1282,6 +1282,8 @@ fn awareness_state_schema_valid() {
         cursor_col: 10,
         selection: Some((1, 0, 5, 20)),
         mode: "visual".to_string(),
+        kb_node_id: None,
+        kb_id: None,
     };
     let json = serde_json::to_string(&state).unwrap();
     assert!(json.contains("\"user_name\":\"Test User\""));

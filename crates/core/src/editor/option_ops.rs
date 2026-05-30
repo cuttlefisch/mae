@@ -160,6 +160,15 @@ impl super::Editor {
             "collab_default_save_dir" => self.collab.default_save_dir.clone(),
             "collab_save_on_remote_update" => self.collab.save_on_remote_update.to_string(),
             "collab_heartbeat_interval" => self.collab.heartbeat_interval.to_string(),
+            "collab_kb_sync_mode" => self.collab.kb_sync_mode.clone(),
+            "collab_psk" => {
+                if self.collab.psk.is_empty() {
+                    String::new()
+                } else {
+                    "********".to_string()
+                }
+            }
+            "collab_psk_command" => self.collab.psk_command.clone(),
             "fill_column" => self.fill_column.to_string(),
             _ => return None,
         };
@@ -630,6 +639,21 @@ impl super::Editor {
             }
             "collab_heartbeat_interval" => {
                 self.collab.heartbeat_interval = parse_option_int(value)? as u64;
+            }
+            "collab_kb_sync_mode" => match value {
+                "manual" | "on_save" => self.collab.kb_sync_mode = value.to_string(),
+                _ => {
+                    return Err(format!(
+                        "Invalid kb_sync_mode: '{}' (expected 'manual' or 'on_save')",
+                        value
+                    ))
+                }
+            },
+            "collab_psk" => {
+                self.collab.psk = value.to_string();
+            }
+            "collab_psk_command" => {
+                self.collab.psk_command = value.to_string();
             }
             "fill_column" => {
                 let v: usize = value

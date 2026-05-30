@@ -23,6 +23,12 @@ pub struct AwarenessState {
     pub selection: Option<(usize, usize, usize, usize)>,
     /// Current editor mode: "normal", "insert", "visual", etc.
     pub mode: String,
+    /// Currently viewed KB node ID (when browsing a shared KB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kb_node_id: Option<String>,
+    /// Which shared KB the user is connected to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kb_id: Option<String>,
 }
 
 /// A tracked remote user with awareness state and timing.
@@ -132,6 +138,8 @@ mod tests {
             cursor_col: 5,
             selection: None,
             mode: "normal".to_string(),
+            kb_node_id: None,
+            kb_id: None,
         }
     }
 
@@ -143,6 +151,8 @@ mod tests {
             cursor_col: 10,
             selection: Some((1, 0, 3, 15)),
             mode: "visual".to_string(),
+            kb_node_id: None,
+            kb_id: None,
         };
         let json = serde_json::to_string(&state).unwrap();
         let parsed: AwarenessState = serde_json::from_str(&json).unwrap();
@@ -204,6 +214,8 @@ mod tests {
             cursor_col: 1,
             selection: None,
             mode: "normal".to_string(),
+            kb_node_id: None,
+            kb_id: None,
         };
         map.update(1, "doc1".into(), state1, 0);
         assert_eq!(map.users_for_doc("doc1")[0].cursor_row, 1);
@@ -214,6 +226,8 @@ mod tests {
             cursor_col: 10,
             selection: Some((1, 0, 3, 15)),
             mode: "visual".to_string(),
+            kb_node_id: None,
+            kb_id: None,
         };
         map.update(1, "doc1".into(), state2, 0);
         assert_eq!(map.len(), 1, "should overwrite, not add");

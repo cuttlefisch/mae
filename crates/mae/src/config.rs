@@ -173,6 +173,12 @@ pub struct CollaborationSection {
     pub user_name: Option<String>,
     /// Seconds between heartbeat pings to the state server (0 = disabled, default: 30).
     pub heartbeat_interval_secs: Option<u64>,
+    /// Shell command to retrieve the PSK (preferred over `psk` for security).
+    pub psk_command: Option<String>,
+    /// Pre-shared key for mutual authentication (plaintext fallback).
+    pub psk: Option<String>,
+    /// KB sync mode: "on_save" (default) or "manual".
+    pub kb_sync_mode: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -1268,5 +1274,83 @@ mod tests {
         let s = toml::to_string(&cfg).unwrap();
         let back: Config = toml::from_str(&s).unwrap();
         assert_eq!(back.lsp.servers["zig"].command, "zls");
+    }
+
+    // --- PSK config deserialization tests ---
+
+    #[test]
+    fn collab_psk_command_parses_from_toml() {
+        let s = r#"
+            [collaboration]
+            psk_command = "cat ~/.config/mae/collab-psk.txt"
+        "#;
+        let cfg: Config = toml::from_str(s).unwrap();
+        assert_eq!(
+            cfg.collaboration.psk_command.as_deref(),
+            Some("cat ~/.config/mae/collab-psk.txt")
+        );
+        assert!(cfg.collaboration.psk.is_none());
+    }
+
+    #[test]
+    fn collab_psk_plaintext_parses_from_toml() {
+        let s = r#"
+            [collaboration]
+            psk = "my-secret-key"
+        "#;
+        let cfg: Config = toml::from_str(s).unwrap();
+        assert_eq!(cfg.collaboration.psk.as_deref(), Some("my-secret-key"));
+        assert!(cfg.collaboration.psk_command.is_none());
+    }
+
+    #[test]
+    fn collab_psk_both_fields_parse_from_toml() {
+        let s = r#"
+            [collaboration]
+            server_address = "192.168.1.10:9473"
+            psk_command = "pass show mae/psk"
+            psk = "fallback-key"
+        "#;
+        let cfg: Config = toml::from_str(s).unwrap();
+        assert_eq!(
+            cfg.collaboration.psk_command.as_deref(),
+            Some("pass show mae/psk")
+        );
+        assert_eq!(cfg.collaboration.psk.as_deref(), Some("fallback-key"));
+        assert_eq!(
+            cfg.collaboration.server_address.as_deref(),
+            Some("192.168.1.10:9473")
+        );
+    }
+
+    #[test]
+    fn collab_kb_sync_mode_parses_from_toml() {
+        let s = r#"
+            [collaboration]
+            kb_sync_mode = "manual"
+        "#;
+        let cfg: Config = toml::from_str(s).unwrap();
+        assert_eq!(cfg.collaboration.kb_sync_mode.as_deref(), Some("manual"));
+    }
+
+    #[test]
+    fn collab_section_round_trips() {
+        let cfg = Config {
+            collaboration: CollaborationSection {
+                psk_command: Some("pass show mae/psk".into()),
+                psk: Some("fallback".into()),
+                kb_sync_mode: Some("on_save".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let s = toml::to_string(&cfg).unwrap();
+        let back: Config = toml::from_str(&s).unwrap();
+        assert_eq!(
+            back.collaboration.psk_command.as_deref(),
+            Some("pass show mae/psk")
+        );
+        assert_eq!(back.collaboration.psk.as_deref(), Some("fallback"));
+        assert_eq!(back.collaboration.kb_sync_mode.as_deref(), Some("on_save"));
     }
 }

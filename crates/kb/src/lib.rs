@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub mod activity;
+pub mod backup;
+pub mod data_dir;
+pub mod export;
 pub mod federation;
 pub mod fuzzy;
 pub mod org;
@@ -52,6 +55,28 @@ pub enum NodeKind {
     Note,
     /// Project node — represents a detected project from a `.project` file.
     Project,
+}
+
+/// Specification for subgraph extraction.
+#[derive(Debug, Clone)]
+pub struct SubgraphSpec {
+    /// Starting node IDs for BFS walk.
+    pub starter_nodes: Vec<String>,
+    /// Maximum link depth (0 = starters only).
+    pub max_depth: usize,
+    /// Include backlinks in the walk (not just outgoing links).
+    pub include_backlinks: bool,
+}
+
+/// Result of subgraph extraction.
+#[derive(Debug, Clone)]
+pub struct SubgraphResult {
+    /// Nodes included in the subgraph.
+    pub nodes: Vec<Node>,
+    /// Internal links (both endpoints in the subgraph).
+    pub links: Vec<(String, String)>,
+    /// Boundary links (source in subgraph, target outside).
+    pub boundary_links: Vec<(String, String)>,
 }
 
 /// Provenance of a node — how it was created.
@@ -196,6 +221,25 @@ impl Node {
         self.body = doc.body();
         self.tags = doc.tags();
         self.crdt_doc = Some(doc.encode());
+    }
+
+    /// Create a new Node from a `KbNodeDoc` (CRDT → Node materialization).
+    ///
+    /// Used when joining a shared KB: the CRDT doc is the source of truth,
+    /// and we create a local Node from it for FTS5 indexing and display.
+    pub fn from_crdt_doc(
+        doc: &mae_sync::kb::KbNodeDoc,
+        kind: NodeKind,
+        source: NodeSource,
+    ) -> Self {
+        let mat = doc.materialize();
+        let mut node = Node::new(mat.id, mat.title, kind, mat.body);
+        node.tags = mat.tags;
+        node.source = Some(source);
+        node.crdt_doc = Some(doc.encode());
+        // Populate links from materialized links array.
+        // (links are also parseable from body, but CRDT links array is authoritative)
+        node
     }
 
     /// Extract all `[[link]]` and `[[link|display]]` targets from the body.
@@ -502,6 +546,207 @@ impl KnowledgeBase {
             }
         }
         Some(prev)
+    }
+
+    // --- CRDT-aware mutation methods ---
+
+    /// Upsert a node with CRDT backing. Creates or updates the `KbNodeDoc` and
+    /// stores the encoded CRDT bytes on the node. Returns the update bytes
+    /// for broadcasting to peers (if any content changed).
+    ///
+    /// If the node doesn't have CRDT bytes yet (lazy migration), creates a fresh
+    /// `KbNodeDoc` from the text fields.
+    pub fn upsert_with_crdt(&mut self, node: Node, client_id: u64) -> Option<Vec<u8>> {
+        let id = node.id.clone();
+
+        // Create or update CRDT doc
+        let crdt_doc = if let Some(ref bytes) = node.crdt_doc {
+            match mae_sync::kb::KbNodeDoc::from_bytes_with_client_id(bytes, client_id) {
+                Ok(doc) => doc,
+                Err(_) => mae_sync::kb::KbNodeDoc::new_with_client_id(
+                    &node.id,
+                    &node.title,
+                    &node.body,
+                    &node.tags,
+                    client_id,
+                ),
+            }
+        } else {
+            mae_sync::kb::KbNodeDoc::new_with_client_id(
+                &node.id,
+                &node.title,
+                &node.body,
+                &node.tags,
+                client_id,
+            )
+        };
+
+        let update_bytes = crdt_doc.encode_state();
+        let mut node = node;
+        node.crdt_doc = Some(update_bytes.clone());
+        self.insert(node);
+
+        // Return the state bytes for sharing
+        if self.nodes.contains_key(&id) {
+            Some(update_bytes)
+        } else {
+            None
+        }
+    }
+
+    /// Apply a remote CRDT update to a node. Returns true if content changed.
+    ///
+    /// If the node doesn't exist yet, creates it from the update bytes.
+    /// If it exists without CRDT bytes (lazy migration), creates a fresh
+    /// `KbNodeDoc` first, then applies the update.
+    pub fn apply_remote_update(
+        &mut self,
+        node_id: &str,
+        update: &[u8],
+    ) -> Result<bool, mae_sync::SyncError> {
+        if let Some(node) = self.nodes.get_mut(node_id) {
+            // Existing node — get or create CRDT doc
+            let mut crdt_doc = node.to_crdt_doc()?;
+            let changed = crdt_doc.apply_update(update)?;
+            if changed {
+                node.apply_crdt_doc(&crdt_doc);
+                // Rebuild reverse index for this node
+                let id = node.id.clone();
+                let links = node.links();
+                // Clean old reverse edges
+                for sources in self.links_in.values_mut() {
+                    sources.retain(|s| s != &id);
+                }
+                self.links_in.retain(|_, v| !v.is_empty());
+                // Install new reverse edges
+                for target in links {
+                    let entry = self.links_in.entry(target).or_default();
+                    if !entry.contains(&id) {
+                        entry.push(id.clone());
+                    }
+                }
+            }
+            Ok(changed)
+        } else {
+            // New node from remote — create from CRDT bytes
+            let crdt_doc = mae_sync::kb::KbNodeDoc::from_bytes(update)?;
+            let mat = crdt_doc.materialize();
+            let mut node = Node::new(mat.id, mat.title, NodeKind::Note, mat.body);
+            node.tags = mat.tags;
+            node.source = Some(NodeSource::Federation);
+            node.crdt_doc = Some(crdt_doc.encode());
+            self.insert(node);
+            Ok(true)
+        }
+    }
+
+    /// Get the state vector for a node's CRDT document.
+    pub fn node_state_vector(&self, node_id: &str) -> Option<Vec<u8>> {
+        let node = self.nodes.get(node_id)?;
+        let doc = node.to_crdt_doc().ok()?;
+        Some(doc.state_vector())
+    }
+
+    /// Create a `KbCollectionDoc` manifest from this KB's nodes.
+    ///
+    /// If `node_ids` is empty, includes all nodes. Otherwise includes only
+    /// the specified subset. Returns the collection doc and a list of
+    /// `(node_id, encoded_state)` pairs for sharing.
+    #[allow(clippy::type_complexity)]
+    pub fn to_collection(
+        &self,
+        name: &str,
+        creator: &str,
+        node_ids: &[String],
+    ) -> Result<(mae_sync::kb::KbCollectionDoc, Vec<(String, Vec<u8>)>), mae_sync::SyncError> {
+        let mut coll = mae_sync::kb::KbCollectionDoc::new(name, creator);
+        let mut node_states = Vec::new();
+
+        let ids_to_include: Vec<&String> = if node_ids.is_empty() {
+            self.nodes.keys().collect()
+        } else {
+            node_ids.iter().collect()
+        };
+
+        for id in ids_to_include {
+            if let Some(node) = self.nodes.get(id) {
+                let crdt_doc = node.to_crdt_doc()?;
+                coll.add_node(&node.id, &node.title);
+                node_states.push((node.id.clone(), crdt_doc.encode()));
+            }
+        }
+
+        Ok((coll, node_states))
+    }
+
+    // --- Subgraph extraction ---
+
+    /// Extract a subgraph starting from seed nodes, walking links up to `max_depth`.
+    ///
+    /// Returns the set of included nodes and any boundary links (links from
+    /// included nodes to excluded nodes).
+    pub fn extract_subgraph(&self, spec: &SubgraphSpec) -> SubgraphResult {
+        let mut included: HashSet<String> = HashSet::new();
+        let mut frontier: Vec<String> = spec.starter_nodes.clone();
+        let mut depth = 0;
+
+        // BFS walk
+        while depth <= spec.max_depth && !frontier.is_empty() {
+            let mut next_frontier = Vec::new();
+            for node_id in &frontier {
+                if included.insert(node_id.clone()) && depth < spec.max_depth {
+                    // Add outgoing links to frontier
+                    if let Some(node) = self.nodes.get(node_id) {
+                        for link in node.links() {
+                            if !included.contains(&link) {
+                                next_frontier.push(link);
+                            }
+                        }
+                    }
+                    // Add backlinks if requested
+                    if spec.include_backlinks {
+                        if let Some(sources) = self.links_in.get(node_id) {
+                            for src in sources {
+                                if !included.contains(src) {
+                                    next_frontier.push(src.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            frontier = next_frontier;
+            depth += 1;
+        }
+
+        // Collect nodes and categorize links
+        let mut nodes = Vec::new();
+        let mut internal_links = Vec::new();
+        let mut boundary_links = Vec::new();
+
+        for id in &included {
+            if let Some(node) = self.nodes.get(id) {
+                nodes.push(node.clone());
+                for target in node.links() {
+                    if included.contains(&target) {
+                        internal_links.push((id.clone(), target));
+                    } else {
+                        boundary_links.push((id.clone(), target));
+                    }
+                }
+            }
+        }
+
+        SubgraphResult {
+            nodes,
+            links: internal_links,
+            boundary_links,
+        }
+    }
+
+    /// Remove multiple nodes at once. Returns the removed nodes.
+    pub fn remove_nodes(&mut self, node_ids: &[String]) -> Vec<Node> {
+        node_ids.iter().filter_map(|id| self.remove(id)).collect()
     }
 
     /// All node ids, sorted. If `prefix` is provided, only ids starting
@@ -1556,6 +1801,222 @@ mod tests {
             to_remove.is_empty(),
             "seed nodes should be preserved: {:?}",
             to_remove
+        );
+    }
+
+    // --- Phase 1: KB↔CRDT bridge tests ---
+
+    /// Realistic org content with properties drawer, links, code blocks, Unicode.
+    fn realistic_org_body() -> &'static str {
+        ":PROPERTIES:\n:ID: test-node-001\n:ROAM_REFS: https://example.com\n:END:\n\
+         #+TITLE: Test Node — CRDT Round-Trip\n#+FILETAGS: :research:crdt:\n\n\
+         * Overview\n\
+         This node tests the full round-trip.\n\n\
+         ** Sub-heading with [[id:other-node|internal link]]\n\
+         Content with Unicode: café, naïve, 日本語\n\n\
+         #+begin_src rust\nfn main() { println!(\"hello\"); }\n#+end_src\n"
+    }
+
+    #[test]
+    fn crdt_bridge_roundtrip_preserves_all_fields() {
+        let body = realistic_org_body();
+        let node = Node::new("concept:test", "Test Node — CRDT", NodeKind::Concept, body)
+            .with_tags(vec!["research", "crdt"]);
+
+        let crdt_doc = node.to_crdt_doc().expect("to_crdt_doc should succeed");
+        let restored = Node::from_crdt_doc(&crdt_doc, NodeKind::Concept, NodeSource::Federation);
+
+        assert_eq!(restored.id, "concept:test", "id should round-trip");
+        assert_eq!(
+            restored.title, "Test Node — CRDT",
+            "title should round-trip"
+        );
+        assert_eq!(restored.body, body, "body should round-trip byte-for-byte");
+        assert_eq!(
+            restored.tags,
+            vec!["research", "crdt"],
+            "tags should round-trip"
+        );
+        assert_eq!(restored.source, Some(NodeSource::Federation));
+        assert!(restored.crdt_doc.is_some(), "CRDT bytes should be stored");
+    }
+
+    #[test]
+    fn crdt_bridge_roundtrip_via_encode_decode() {
+        let body = realistic_org_body();
+        let node = Node::new("concept:encoded", "Encoded Test", NodeKind::Note, body)
+            .with_tags(vec!["test"]);
+
+        // node → crdt → encode → base64 → decode → crdt → node
+        let crdt_doc = node.to_crdt_doc().unwrap();
+        let encoded = crdt_doc.encode();
+        let b64 = mae_sync::encoding::update_to_base64(&encoded);
+        let decoded = mae_sync::encoding::base64_to_update(&b64).unwrap();
+        let restored_crdt = mae_sync::kb::KbNodeDoc::from_bytes(&decoded).unwrap();
+        let restored = Node::from_crdt_doc(&restored_crdt, NodeKind::Note, NodeSource::Federation);
+
+        assert_eq!(restored.title, "Encoded Test");
+        assert_eq!(
+            restored.body, body,
+            "body should survive encode→base64→decode round-trip byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn crdt_bridge_empty_node_roundtrips() {
+        let node = Node::new("concept:empty", "Empty", NodeKind::Note, "");
+        let crdt_doc = node.to_crdt_doc().unwrap();
+        let restored = Node::from_crdt_doc(&crdt_doc, NodeKind::Note, NodeSource::Federation);
+
+        assert_eq!(restored.id, "concept:empty");
+        assert_eq!(restored.title, "Empty");
+        assert_eq!(restored.body, "");
+        assert!(restored.tags.is_empty());
+    }
+
+    #[test]
+    fn crdt_bridge_node_with_metadata_roundtrips() {
+        let mut crdt_doc = mae_sync::kb::KbNodeDoc::new(
+            "concept:meta",
+            "Meta Node",
+            "body",
+            &["tag1".to_string()],
+        );
+        crdt_doc.set_meta("author", "alice");
+        crdt_doc.set_meta("version", "3");
+        crdt_doc.add_link("concept:other");
+
+        let node = Node::from_crdt_doc(&crdt_doc, NodeKind::Concept, NodeSource::Federation);
+        assert_eq!(node.id, "concept:meta");
+        assert_eq!(node.title, "Meta Node");
+        assert_eq!(node.tags, vec!["tag1"]);
+        // Metadata and links are stored in CRDT but not directly on Node fields
+        // (they're accessible via the CRDT doc bytes)
+        assert!(node.crdt_doc.is_some());
+    }
+
+    #[test]
+    fn crdt_bridge_corrupted_bytes_returns_error() {
+        let result = mae_sync::kb::KbNodeDoc::from_bytes(&[0xFF, 0xFE, 0xFD]);
+        assert!(result.is_err(), "corrupted bytes should return error");
+    }
+
+    #[test]
+    fn crdt_bridge_idempotent_encode() {
+        let node = Node::new("n1", "Title", NodeKind::Note, "body text").with_tags(vec!["a", "b"]);
+        let doc1 = node.to_crdt_doc().unwrap();
+        let doc2 = node.to_crdt_doc().unwrap();
+
+        // Two independent encodes should produce valid docs that merge cleanly
+        let state1 = doc1.encode();
+        let state2 = doc2.encode();
+
+        let mut merged = mae_sync::kb::KbNodeDoc::from_bytes(&state1).unwrap();
+        merged.apply_update(&state2).unwrap();
+        assert_eq!(
+            merged.title(),
+            "Title",
+            "merged doc should have correct title"
+        );
+        assert_eq!(
+            merged.body(),
+            "body text",
+            "merged doc should have correct body"
+        );
+    }
+
+    #[test]
+    fn collection_from_kb_all_nodes() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new("n1", "Node 1", NodeKind::Note, "body 1").with_tags(vec!["a"]));
+        kb.insert(Node::new("n2", "Node 2", NodeKind::Note, "body 2").with_tags(vec!["b"]));
+        kb.insert(Node::new("n3", "Node 3", NodeKind::Concept, "body 3"));
+
+        let (coll, node_states) = kb.to_collection("Test KB", "alice", &[]).unwrap();
+        assert_eq!(coll.name(), "Test KB");
+        assert_eq!(coll.creator(), "alice");
+        assert_eq!(coll.node_count(), 3, "should include all 3 nodes");
+        assert_eq!(node_states.len(), 3, "should have states for all 3 nodes");
+
+        // Verify each state decodes to a valid KbNodeDoc.
+        for (id, state) in &node_states {
+            let doc = mae_sync::kb::KbNodeDoc::from_bytes(state)
+                .unwrap_or_else(|e| panic!("node '{}' state should decode: {}", id, e));
+            assert!(!doc.title().is_empty(), "node '{}' should have a title", id);
+        }
+    }
+
+    #[test]
+    fn collection_from_kb_subset() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new("n1", "Node 1", NodeKind::Note, "body 1"));
+        kb.insert(Node::new("n2", "Node 2", NodeKind::Note, "body 2"));
+        kb.insert(Node::new("n3", "Node 3", NodeKind::Note, "body 3"));
+
+        let subset = vec!["n1".to_string(), "n3".to_string()];
+        let (coll, node_states) = kb.to_collection("Subset KB", "bob", &subset).unwrap();
+        assert_eq!(coll.node_count(), 2, "should include only 2 nodes");
+        assert_eq!(node_states.len(), 2);
+
+        let ids: Vec<&str> = node_states.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(ids.contains(&"n1"));
+        assert!(ids.contains(&"n3"));
+        assert!(!ids.contains(&"n2"), "n2 should not be in subset");
+    }
+
+    #[test]
+    fn collection_encode_decode_preserves_nodes() {
+        let mut kb = KnowledgeBase::new();
+        for i in 0..20 {
+            kb.insert(Node::new(
+                format!("n{i}"),
+                format!("Node {i}"),
+                NodeKind::Note,
+                format!("Body for node {i}"),
+            ));
+        }
+
+        let (coll, _) = kb.to_collection("Big KB", "alice", &[]).unwrap();
+        let encoded = coll.encode_state();
+        let decoded = mae_sync::kb::KbCollectionDoc::from_bytes(&encoded).unwrap();
+        assert_eq!(
+            decoded.node_count(),
+            20,
+            "all 20 nodes should survive encode→decode"
+        );
+        assert_eq!(decoded.name(), "Big KB");
+    }
+
+    #[test]
+    fn crdt_bridge_apply_crdt_doc_updates_existing() {
+        let mut node =
+            Node::new("n1", "Old Title", NodeKind::Note, "old body").with_tags(vec!["old"]);
+
+        let mut crdt_doc =
+            mae_sync::kb::KbNodeDoc::new("n1", "New Title", "new body", &["new".to_string()]);
+        crdt_doc.add_link("concept:linked");
+
+        node.apply_crdt_doc(&crdt_doc);
+        assert_eq!(node.title, "New Title");
+        assert_eq!(node.body, "new body");
+        assert_eq!(node.tags, vec!["new"]);
+        assert!(node.crdt_doc.is_some());
+    }
+
+    #[test]
+    fn crdt_bridge_large_body_roundtrips() {
+        // 10KB org document
+        let large_body: String = (0..200).map(|i| {
+            format!("* Heading {i}\nParagraph with text about topic {i}. Unicode: café, 日本語.\n\n")
+        }).collect();
+        assert!(large_body.len() > 10_000, "body should be > 10KB");
+
+        let node = Node::new("concept:large", "Large Doc", NodeKind::Note, &large_body);
+        let crdt_doc = node.to_crdt_doc().unwrap();
+        let restored = Node::from_crdt_doc(&crdt_doc, NodeKind::Note, NodeSource::Federation);
+        assert_eq!(
+            restored.body, large_body,
+            "large body should round-trip exactly"
         );
     }
 }

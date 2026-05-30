@@ -70,6 +70,8 @@ pub struct DocStore {
     max_wal_entries: u64,
     /// Maximum document size in bytes before warning (0 = unlimited).
     max_document_size_bytes: usize,
+    /// KB metadata registry (kb_id → metadata JSON).
+    kb_metas: RwLock<HashMap<String, serde_json::Value>>,
 }
 
 /// Result of applying an update.
@@ -90,6 +92,7 @@ impl DocStore {
             max_documents: 0,
             max_wal_entries: 0,
             max_document_size_bytes: 0,
+            kb_metas: RwLock::new(HashMap::new()),
         }
     }
 
@@ -618,6 +621,23 @@ impl DocStore {
             "compact_doc: snapshot written"
         );
         Ok(())
+    }
+
+    // --- KB metadata registry ---
+
+    /// Store metadata for a shared KB (lightweight, non-CRDT).
+    pub async fn set_kb_meta(&self, kb_id: &str, meta: serde_json::Value) {
+        self.kb_metas.write().await.insert(kb_id.to_string(), meta);
+    }
+
+    /// List all registered KB metadata entries.
+    pub async fn list_kb_metas(&self) -> Vec<serde_json::Value> {
+        self.kb_metas.read().await.values().cloned().collect()
+    }
+
+    /// Remove KB metadata by ID.
+    pub async fn remove_kb_meta(&self, kb_id: &str) {
+        self.kb_metas.write().await.remove(kb_id);
     }
 }
 

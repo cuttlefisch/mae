@@ -34,11 +34,13 @@ toml = "1.1"
 dirs = "6.0.0"
 semver = { version = "1", features = ["serde"] }
 libc = "0.2"
+mdns-sd = "0.20"
+hostname = "0.4"
+mae-state-server = { path = "../state-server" }
 
 [features]
 gui = ["dep:mae-gui", "dep:winit"]
 
 [dev-dependencies]
 tempfile = "3.27.0"
-mae-state-server = { path = "../state-server" }
 sha2 = "0.10"

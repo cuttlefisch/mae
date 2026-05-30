@@ -555,3 +555,89 @@ fn mode_report_includes_language() {
         content
     );
 }
+
+// --- PSK option tests ---
+
+#[test]
+fn collab_psk_set_and_get_masks_value() {
+    let mut editor = Editor::new();
+    let result = editor.set_option("collab_psk", "my-secret-key");
+    assert!(result.is_ok(), "set collab_psk should succeed: {result:?}");
+    assert_eq!(
+        editor.collab.psk, "my-secret-key",
+        "internal field should store actual key"
+    );
+
+    // get_option should mask the value (never leak key in UI)
+    let (val, _def) = editor
+        .get_option("collab_psk")
+        .expect("option should exist");
+    assert_eq!(
+        val, "********",
+        "get_option should mask PSK value, not return plaintext"
+    );
+}
+
+#[test]
+fn collab_psk_empty_returns_empty_on_get() {
+    let editor = Editor::new();
+    let (val, _) = editor
+        .get_option("collab_psk")
+        .expect("option should exist");
+    assert_eq!(val, "", "empty PSK should return empty string, not mask");
+}
+
+#[test]
+fn collab_psk_command_set_and_get() {
+    let mut editor = Editor::new();
+    let result = editor.set_option("collab_psk_command", "pass show mae/key");
+    assert!(result.is_ok(), "set collab_psk_command should succeed");
+    assert_eq!(editor.collab.psk_command, "pass show mae/key");
+
+    let (val, _) = editor
+        .get_option("collab_psk_command")
+        .expect("option should exist");
+    assert_eq!(
+        val, "pass show mae/key",
+        "psk_command is not a secret — should return plaintext"
+    );
+}
+
+#[test]
+fn collab_psk_accessible_via_scheme_alias() {
+    let mut editor = Editor::new();
+    // Scheme API uses hyphenated names
+    let result = editor.set_option("collab-psk", "alias-test");
+    assert!(result.is_ok(), "hyphenated alias should work");
+    assert_eq!(editor.collab.psk, "alias-test");
+
+    let result = editor.set_option("collab-psk-command", "echo test");
+    assert!(
+        result.is_ok(),
+        "hyphenated alias should work for psk_command"
+    );
+    assert_eq!(editor.collab.psk_command, "echo test");
+}
+
+#[test]
+fn collab_psk_option_registered_with_config_key() {
+    let editor = Editor::new();
+    let def = editor
+        .option_registry
+        .find("collab_psk")
+        .expect("collab_psk should be registered");
+    assert_eq!(
+        def.config_key.as_deref(),
+        Some("collaboration.psk"),
+        "PSK should map to collaboration.psk in config.toml"
+    );
+    let def = editor
+        .option_registry
+        .find("collab_psk_command")
+        .expect("collab_psk_command should be registered");
+    assert_eq!(
+        def.config_key.as_deref(),
+        Some("collaboration.psk_command"),
+        "PSK command should map to collaboration.psk_command in config.toml"
+    );
+}

@@ -35,8 +35,9 @@ impl std::error::Error for SyncError {}
 /// Structured document address for cross-session stability.
 ///
 /// Documents can be identified by project-relative file path, KB node ID,
-/// or arbitrary shared name. The string form uses URI-like prefixes:
-/// `file:{project_hash}/{rel_path}`, `kb:{node_id}`, `shared:{name}`.
+/// KB collection manifest, or arbitrary shared name. The string form uses
+/// URI-like prefixes: `file:{project_hash}/{rel_path}`, `kb:{node_id}`,
+/// `kbc:{kb_id}`, `shared:{name}`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DocAddress {
     /// A file within a project, identified by project hash and relative path.
@@ -46,6 +47,8 @@ pub enum DocAddress {
     },
     /// A knowledge-base node.
     KbNode { node_id: String },
+    /// A KB collection manifest (node inventory for a shared KB).
+    KbCollection { kb_id: String },
     /// An arbitrary shared document (e.g. scratch buffers, REPL).
     Shared { name: String },
 }
@@ -59,6 +62,7 @@ impl DocAddress {
                 rel_path,
             } => format!("file:{project_hash}/{rel_path}"),
             DocAddress::KbNode { node_id } => format!("kb:{node_id}"),
+            DocAddress::KbCollection { kb_id } => format!("kbc:{kb_id}"),
             DocAddress::Shared { name } => format!("shared:{name}"),
         }
     }
@@ -75,6 +79,13 @@ impl DocAddress {
             Some(DocAddress::File {
                 project_hash,
                 rel_path,
+            })
+        } else if let Some(rest) = s.strip_prefix("kbc:") {
+            if rest.is_empty() {
+                return None;
+            }
+            Some(DocAddress::KbCollection {
+                kb_id: rest.to_string(),
             })
         } else if let Some(rest) = s.strip_prefix("kb:") {
             if rest.is_empty() {
@@ -114,7 +125,9 @@ impl DocAddress {
     pub fn save_policy(&self) -> SavePolicy {
         match self {
             DocAddress::File { .. } => SavePolicy::LocalFirst,
-            DocAddress::KbNode { .. } => SavePolicy::ServerAuthoritative,
+            DocAddress::KbNode { .. } | DocAddress::KbCollection { .. } => {
+                SavePolicy::ServerAuthoritative
+            }
             DocAddress::Shared { .. } => SavePolicy::Ephemeral,
         }
     }
@@ -378,6 +391,17 @@ mod tests {
     }
 
     #[test]
+    fn doc_address_kb_collection_roundtrip() {
+        let addr = DocAddress::KbCollection {
+            kb_id: "a7f3c2d1".to_string(),
+        };
+        let s = addr.to_doc_name();
+        assert_eq!(s, "kbc:a7f3c2d1");
+        let parsed = DocAddress::parse(&s).unwrap();
+        assert_eq!(parsed, addr);
+    }
+
+    #[test]
     fn doc_address_parse_invalid() {
         assert!(DocAddress::parse("").is_none());
         assert!(DocAddress::parse("unknown:foo").is_none());
@@ -386,6 +410,7 @@ mod tests {
         assert!(DocAddress::parse("file:/path").is_none()); // empty hash
         assert!(DocAddress::parse("file:hash/").is_none()); // empty path
         assert!(DocAddress::parse("kb:").is_none());
+        assert!(DocAddress::parse("kbc:").is_none());
         assert!(DocAddress::parse("shared:").is_none());
     }
 
@@ -669,6 +694,10 @@ mod tests {
                 node_id: "x".into(),
             }
             .save_policy(),
+            SavePolicy::ServerAuthoritative
+        );
+        assert_eq!(
+            DocAddress::KbCollection { kb_id: "x".into() }.save_policy(),
             SavePolicy::ServerAuthoritative
         );
         assert_eq!(

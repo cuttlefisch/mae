@@ -4395,12 +4395,12 @@ mod tests {
         assert_eq!(editor.recent_files.len(), 0);
         assert_eq!(editor.recent_projects.len(), 0);
 
-        // Evaluate scheme calls
+        // Evaluate scheme calls (use non-temp paths since temp dirs are rejected)
         runtime
-            .eval("(recent-files-add! \"/tmp/test.txt\")")
+            .eval("(recent-files-add! \"/home/testuser/test.txt\")")
             .unwrap();
         runtime
-            .eval("(recent-projects-add! \"/tmp/project\")")
+            .eval("(recent-projects-add! \"/home/testuser/project\")")
             .unwrap();
 
         // Apply to editor
@@ -4410,12 +4410,12 @@ mod tests {
         assert_eq!(editor.recent_files.len(), 1);
         assert_eq!(
             editor.recent_files.list()[0],
-            std::path::PathBuf::from("/tmp/test.txt")
+            std::path::PathBuf::from("/home/testuser/test.txt")
         );
         assert_eq!(editor.recent_projects.len(), 1);
         assert_eq!(
             editor.recent_projects.list()[0],
-            std::path::PathBuf::from("/tmp/project")
+            std::path::PathBuf::from("/home/testuser/project")
         );
     }
 

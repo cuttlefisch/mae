@@ -36,16 +36,15 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp target/x86_64-unknown-linux-musl/release/mae dist/mae-linux-x86_64
-          cp target/x86_64-unknown-linux-musl/release/mae-state-server dist/mae-state-server-linux-x86_64
-          chmod +x dist/mae-linux-x86_64 dist/mae-state-server-linux-x86_64
+          cp target/x86_64-unknown-linux-musl/release/mae dist/mae
+          cp target/x86_64-unknown-linux-musl/release/mae-state-server dist/mae-state-server
+          chmod +x dist/mae dist/mae-state-server
+          tar czf dist/mae-linux-x86_64.tar.gz -C dist mae mae-state-server
 
       - uses: actions/upload-artifact@v7
         with:
           name: mae-linux-x86_64
-          path: |
-            dist/mae-linux-x86_64
-            dist/mae-state-server-linux-x86_64
+          path: dist/mae-linux-x86_64.tar.gz
 
   build-linux-gui:
     name: Build linux-x86_64-gui
@@ -63,16 +62,39 @@ jobs:
       - name: Build GUI binary
         run: cargo build --release --features gui --package mae
 
-      - name: Prepare artifact
+      - name: Build AppImage
         run: |
-          mkdir -p dist
-          cp target/release/mae dist/mae-linux-x86_64-gui
-          chmod +x dist/mae-linux-x86_64-gui
+          # Set up AppDir structure
+          mkdir -p dist/MAE.AppDir/usr/bin
+          mkdir -p dist/MAE.AppDir/usr/share/applications
+          mkdir -p dist/MAE.AppDir/usr/share/icons/hicolor/scalable/apps
+          cp target/release/mae dist/MAE.AppDir/usr/bin/mae
+          chmod +x dist/MAE.AppDir/usr/bin/mae
+          cp assets/mae.desktop dist/MAE.AppDir/usr/share/applications/mae.desktop
+          cp assets/mae.desktop dist/MAE.AppDir/mae.desktop
+          cp assets/mae.svg dist/MAE.AppDir/usr/share/icons/hicolor/scalable/apps/mae.svg
+          cp assets/mae.svg dist/MAE.AppDir/mae.svg
+
+          # AppRun entry point
+          cat > dist/MAE.AppDir/AppRun << 'APPRUN'
+          #!/bin/bash
+          SELF="$(readlink -f "$0")"
+          HERE="${SELF%/*}"
+          exec "${HERE}/usr/bin/mae" --gui "$@"
+          APPRUN
+          chmod +x dist/MAE.AppDir/AppRun
+
+          # Download appimagetool
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+
+          # Build AppImage (--appimage-extract-and-run avoids FUSE requirement in CI)
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run dist/MAE.AppDir dist/mae-linux-x86_64-gui.AppImage
 
       - uses: actions/upload-artifact@v7
         with:
           name: mae-linux-x86_64-gui
-          path: dist/mae-linux-x86_64-gui
+          path: dist/mae-linux-x86_64-gui.AppImage
 
   build-macos-arm:
     name: Build macos-aarch64
@@ -84,19 +106,106 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build TUI binary
-        run: cargo build --release --package mae
+      - name: Build TUI binary + state server
+        run: |
+          cargo build --release --package mae --package mae-state-server
+          cp target/release/mae target/release/mae-tui
 
-      - name: Prepare artifact
+      - name: Build GUI binary
+        run: cargo build --release --features gui --package mae
+
+      - name: Create .app bundle
         run: |
           mkdir -p dist
-          cp target/release/mae dist/mae-macos-aarch64
-          chmod +x dist/mae-macos-aarch64
+          APP="dist/MAE.app/Contents/MacOS"
+          RES="dist/MAE.app/Contents/Resources"
+          mkdir -p "$APP" "$RES"
+
+          cp target/release/mae "$APP/mae"
+          chmod +x "$APP/mae"
+
+          # Create launcher script that passes --gui
+          cat > "$APP/MAE" << 'LAUNCHER'
+          #!/bin/bash
+          SELF="$(dirname "$0")"
+          exec "$SELF/mae" --gui "$@"
+          LAUNCHER
+          chmod +x "$APP/MAE"
+
+          # Convert SVG to ICNS (macOS icon format)
+          # Use sips + iconutil with a PNG intermediary
+          if command -v rsvg-convert &>/dev/null; then
+            rsvg-convert -w 1024 -h 1024 assets/mae.svg -o /tmp/mae_1024.png
+          else
+            # Fallback: use sips with the PNG screenshot as icon source
+            cp assets/mae-screenshot.png /tmp/mae_1024.png
+          fi
+          mkdir -p /tmp/mae.iconset
+          for size in 16 32 64 128 256 512; do
+            sips -z $size $size /tmp/mae_1024.png --out "/tmp/mae.iconset/icon_${size}x${size}.png" >/dev/null 2>&1
+            double=$((size * 2))
+            sips -z $double $double /tmp/mae_1024.png --out "/tmp/mae.iconset/icon_${size}x${size}@2x.png" >/dev/null 2>&1
+          done
+          iconutil -c icns -o "$RES/mae.icns" /tmp/mae.iconset 2>/dev/null || true
+
+          # Info.plist
+          VERSION="${GITHUB_REF_NAME#v}"
+          cat > "dist/MAE.app/Contents/Info.plist" << PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key>
+            <string>MAE</string>
+            <key>CFBundleDisplayName</key>
+            <string>Modern AI Editor</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.cuttlefisch.mae</string>
+            <key>CFBundleVersion</key>
+            <string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${VERSION}</string>
+            <key>CFBundleExecutable</key>
+            <string>MAE</string>
+            <key>CFBundleIconFile</key>
+            <string>mae</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+            <key>CFBundleDocumentTypes</key>
+            <array>
+              <dict>
+                <key>CFBundleTypeName</key>
+                <string>Text File</string>
+                <key>CFBundleTypeRole</key>
+                <string>Editor</string>
+                <key>LSItemContentTypes</key>
+                <array>
+                  <string>public.plain-text</string>
+                  <string>public.source-code</string>
+                </array>
+              </dict>
+            </array>
+          </dict>
+          </plist>
+          PLIST
+
+          # Also produce a TUI-only tarball (includes state server for collab)
+          cp target/release/mae-tui dist/mae
+          cp target/release/mae-state-server dist/mae-state-server
+          chmod +x dist/mae dist/mae-state-server
+          tar czf dist/mae-macos-aarch64-tui.tar.gz -C dist mae mae-state-server
+
+          # Zip the .app bundle
+          cd dist && zip -r mae-macos-aarch64.zip MAE.app
 
       - uses: actions/upload-artifact@v7
         with:
           name: mae-macos-aarch64
-          path: dist/mae-macos-aarch64
+          path: |
+            dist/mae-macos-aarch64.zip
+            dist/mae-macos-aarch64-tui.tar.gz
 
   release:
     name: Publish release
@@ -125,8 +234,8 @@ jobs:
         with:
           body_path: CHANGELOG-release.md
           files: |
-            dist/mae-linux-x86_64
-            dist/mae-state-server-linux-x86_64
-            dist/mae-linux-x86_64-gui
-            dist/mae-macos-aarch64
+            dist/mae-linux-x86_64.tar.gz
+            dist/mae-linux-x86_64-gui.AppImage
+            dist/mae-macos-aarch64.zip
+            dist/mae-macos-aarch64-tui.tar.gz
           fail_on_unmatched_files: true

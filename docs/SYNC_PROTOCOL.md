@@ -11,8 +11,9 @@
 | Term | Definition |
 |------|-----------|
 | **Document** | A named yrs CRDT document identified by a `doc_name` string. |
-| **DocAddress** | Structured document identifier: `file:{hash}/{path}`, `kb:{id}`, `shared:{name}`. |
-| **client_id** | yrs-level unique client identifier (u64). Deterministic: `PID << 16 \| buffer_index`. |
+| **DocAddress** | Structured document identifier: `file:{hash}/{path}`, `kb:{id}`, `kbc:{kb_id}`, `shared:{name}`. |
+| `kbc:{kb_id}` | KB collection manifest (node inventory for a shared KB). |
+| **client_id** | yrs-level unique client identifier (u64). Deterministic: FNV-1a hash (see `compute_project_identity()` in mae-sync). |
 | **State vector** | yrs `StateVector` — per-client-id clock summarizing known operations. |
 | **Update** | yrs v1-encoded binary diff (base64 over the wire). |
 | **WAL sequence** | Monotonically increasing server-side ID for each persisted update. |
@@ -194,6 +195,24 @@ Evicted ──sync/share──> Active (fresh)
 - **Params:** None.
 - **Result:** `{ documents, doc_stats, version, uptime_secs, connection_count }`
 
+### 4.15 `sync/awareness`
+
+**Purpose:** Broadcast ephemeral cursor/selection/presence state to peers.
+
+- **Params:** `{ "doc": string, "state": AwarenessState }`
+- **AwarenessState:** `{ "user_name": string, "cursor_row": int, "cursor_col": int, "selection": [sr,sc,er,ec] | null, "mode": string }`
+- **Result:** `{ "doc": string }`
+- **Side effects:** Server relays to all subscribers on the same document (echo-filtered via `broadcast_except`).
+- **Guarantees:** Not persisted. Clients throttle to 20 Hz. Stale users removed after 30s.
+
+### 4.16 `docs/metadata`
+
+**Purpose:** Get or set document metadata (e.g., kb_id, creator, node_count).
+
+- **Params:** `{ "doc": string, "metadata"?: object }`
+- **Result:** `{ "doc": string, "metadata": object }`
+- **Side effects:** If `metadata` param present, stores it. Otherwise returns existing metadata.
+
 ---
 
 ## 5. Invariants
@@ -206,6 +225,8 @@ Evicted ──sync/share──> Active (fresh)
 | INV-4 | Convergence | All clients applying the same update set reach identical content (yrs/YATA guarantee) |
 | INV-5 | connected_clients accuracy | `sync/share` atomically creates doc with `connected_clients = 1`. Disconnect decrements. |
 | INV-6 | Eviction completeness | `evict_idle` removes from HashMap AND deletes from SQLite storage |
+| INV-7 | Cursor drift prevention | `collab_bridge.rs` captures char offsets before `apply_sync_update`, restores after |
+| INV-8 | WAL sequence gap detection | Client tracks `wal_seq` per doc, triggers `ForceSync` on gap |
 
 ---
 
@@ -346,7 +367,7 @@ Completed in v0.11.0:
 5. ~~No awareness protocol~~ — `sync/awareness` JSON-RPC relay with 50ms throttle, 30s timeout, echo filtering, 8-color theme palette, GUI+TUI rendering *(v0.11.0)*
 
 Still deferred:
-6. **No P2P transport.** All sync goes through the state server. mDNS LAN discovery planned.
+6. **No P2P transport.** All sync goes through the state server. mDNS LAN discovery planned (v0.12.0+).
 7. **No E2E encryption.** Transport is plaintext TCP. TLS planned.
 
 ---

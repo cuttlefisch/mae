@@ -120,6 +120,15 @@ editor = "claude"
 # Display name for collaborative edits (shown to peers)
 # user_name = ""
 
+# Pre-shared key for mutual authentication (HMAC-SHA256).
+# Both server and all clients must use the same key.
+# Prefer psk_command over psk to avoid storing secrets in plaintext.
+# psk_command = "pass show mae/collab-psk"
+# psk = "my-secret-key"
+
+# KB sync mode: "on_save" (auto-sync on node edit) or "manual" (explicit :kb-sync)
+# kb_sync_mode = "on_save"
+
 [agents]
 # Auto-write .mcp.json to project root on first shell spawn
 auto_mcp_json = true

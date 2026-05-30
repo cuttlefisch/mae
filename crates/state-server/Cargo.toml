@@ -19,6 +19,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 async-trait = "0.1"
 sha2 = "0.10"
+hmac = "0.12"
+rand = "0.8"
 
 [lib]
 name = "mae_state_server"

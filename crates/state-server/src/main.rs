@@ -6,13 +6,14 @@
 //!
 //! ## Security
 //!
-//! v1: No authentication. TCP is open. For trusted LAN use only.
-//! See CLAUDE.md for the auth tier roadmap (PSK -> SSH -> OAuth).
+//! Supports `auth.mode = "none"` (default, backward compatible) or
+//! `auth.mode = "psk"` (mutual HMAC-SHA256 authentication).
+//! SSH key exchange planned for v0.12.0.
 
 mod cli;
 mod config;
 
-use mae_state_server::{doc_store, handler, storage};
+use mae_state_server::{auth, doc_store, handler, storage};
 
 use std::sync::Arc;
 
@@ -69,6 +70,7 @@ fn run_check_config() {
         );
         println!("  sync.max_documents: {}", config.sync.max_documents);
         println!("  data_dir: {}", config.resolve_data_dir().display());
+        println!("  auth.mode: {}", config.auth.mode);
     } else {
         eprintln!("Configuration issues:");
         for issue in &issues {
@@ -187,6 +189,25 @@ async fn run_server(start_args: cli::StartArgs) {
         }
         Err(e) => warn!(error = %e, "failed to list documents for recovery"),
     }
+
+    // Create auth provider.
+    let auth_mode = config.auth.mode.clone();
+    let use_psk = auth_mode == "psk";
+    let psk_key: Option<String> = if use_psk {
+        let key = auth::load_psk(
+            config.auth.psk_command.as_deref(),
+            config.auth.psk.as_deref(),
+        )
+        .await;
+        if key.is_none() {
+            error!("auth.mode = 'psk' but no PSK could be loaded");
+            std::process::exit(1);
+        }
+        key
+    } else {
+        None
+    };
+    info!(auth = %auth_mode, "authentication configured");
 
     // Bind TCP.
     let tcp_listener = match TcpListener::bind(&config.bind).await {
@@ -310,8 +331,18 @@ async fn run_server(start_args: cli::StartArgs) {
                         let reader = BufReader::new(reader);
                         let store = Arc::clone(&doc_store);
                         let bc = Arc::clone(&broadcaster);
+                        let psk_clone = psk_key.clone();
                         tokio::spawn(async move {
-                            handler::handle_client(reader, writer, store, bc, server_start_time).await;
+                            if let Some(ref key) = psk_clone {
+                                let psk_auth = auth::PskAuth::new(key);
+                                handler::handle_client_with_auth(
+                                    reader, writer, &psk_auth, store, bc, server_start_time,
+                                ).await;
+                            } else {
+                                handler::handle_client(
+                                    reader, writer, store, bc, server_start_time,
+                                ).await;
+                            }
                         });
                     }
                     Err(e) => error!(error = %e, "TCP accept error"),

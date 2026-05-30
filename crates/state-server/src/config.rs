@@ -17,6 +17,8 @@ pub struct ServerConfig {
     pub storage: StorageConfig,
     /// Sync engine configuration.
     pub sync: SyncConfig,
+    /// Authentication configuration.
+    pub auth: AuthConfig,
 }
 
 impl Default for ServerConfig {
@@ -26,6 +28,29 @@ impl Default for ServerConfig {
             unix_socket: None,
             storage: StorageConfig::default(),
             sync: SyncConfig::default(),
+            auth: AuthConfig::default(),
+        }
+    }
+}
+
+/// Authentication configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// Auth mode: "none" or "psk".
+    pub mode: String,
+    /// PSK command (preferred — e.g., `pass show mae/key`).
+    pub psk_command: Option<String>,
+    /// PSK fallback (plaintext — not recommended).
+    pub psk: Option<String>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        AuthConfig {
+            mode: "none".to_string(),
+            psk_command: None,
+            psk: None,
         }
     }
 }
@@ -137,6 +162,19 @@ impl ServerConfig {
                 "unknown storage backend '{}' (only 'sqlite' is supported)",
                 self.storage.backend
             ));
+        }
+
+        match self.auth.mode.as_str() {
+            "none" | "psk" => {}
+            other => {
+                issues.push(format!(
+                    "unknown auth mode '{other}' (supported: 'none', 'psk')"
+                ));
+            }
+        }
+
+        if self.auth.mode == "psk" && self.auth.psk_command.is_none() && self.auth.psk.is_none() {
+            issues.push("auth.mode = 'psk' requires auth.psk_command or auth.psk".to_string());
         }
 
         issues

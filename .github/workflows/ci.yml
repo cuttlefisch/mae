@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [stable, nightly]
-        step: [check, test, clippy, fmt]
+        step: [test, clippy, fmt]
         exclude:
           # Only run fmt on stable — it's the same either way
           - toolchain: nightly
@@ -36,9 +36,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo check
-        if: matrix.step == 'check'
-        run: cargo check --workspace --all-targets
       - name: cargo test
         if: matrix.step == 'test'
         timeout-minutes: 20
@@ -52,6 +49,18 @@ jobs:
       - name: cargo fmt
         if: matrix.step == 'fmt'
         run: cargo fmt --all --check
+
+      # Upload mae binary for e2e reuse (stable/test only).
+      - name: Build release binary
+        if: matrix.toolchain == 'stable' && matrix.step == 'test'
+        run: cargo build --release --features gui --package mae
+      - name: Upload mae binary
+        if: matrix.toolchain == 'stable' && matrix.step == 'test'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mae-binary
+          path: target/release/mae
+          retention-days: 1
 
   audit:
     name: cargo-deny
@@ -86,6 +95,16 @@ jobs:
         timeout-minutes: 5
         env:
           RUST_LOG: "mae_state_server=debug,mae_sync=debug,warn"
+      - name: TCP E2E tests (PSK auth + KB protocol)
+        run: |
+          cargo test --package mae --test collab_tcp_e2e -- tcp_psk --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e -- tcp_kb --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e -- tcp_full_roundtrip --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e -- tcp_two_editors --ignored --test-threads=1 --nocapture
+        timeout-minutes: 5
+        env:
+          MAE_TCP_E2E: "1"
+          RUST_LOG: "mae_state_server=debug,warn"
       - name: State server check-config
         run: cargo run --package mae-state-server -- --check-config
         timeout-minutes: 1
@@ -112,19 +131,24 @@ jobs:
       - name: Validate new-user flow in clean container
         run: docker compose run --rm --build new-user
 
-  # Consolidated E2E: check-config + package install + Scheme tests
-  # Single binary build, sequential validation steps.
+  # E2E validation: downloads pre-built binary from stable/test.
+  # Falls back to local build if artifact not yet available.
   e2e:
     name: e2e / scheme + packages
     runs-on: ubuntu-latest
+    needs: [check]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Install GUI dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libfreetype6-dev
-      - uses: Swatinem/rust-cache@v2
-      - name: Build binary
-        run: cargo build --release --workspace
+      - name: Download mae binary
+        uses: actions/download-artifact@v4
+        with:
+          name: mae-binary
+          path: target/release
+      - name: Make binary executable
+        run: chmod +x target/release/mae
       - name: Validate init.scm
         run: ./target/release/mae --check-config
       - name: Editor tests

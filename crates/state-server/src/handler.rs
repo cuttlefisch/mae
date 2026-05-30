@@ -14,10 +14,12 @@ use mae_mcp::protocol::{JsonRpcRequest, JsonRpcResponse, McpError, ToolInfo};
 use mae_mcp::session::ClientSession;
 use mae_mcp::{McpToolRequest, McpToolResult};
 use mae_sync::encoding::{base64_to_update, update_to_base64};
+use mae_sync::kb::KbCollectionDoc;
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::auth::AuthProvider;
 use crate::doc_store::DocStore;
 
 /// Write timeout for event notifications to clients (seconds).
@@ -26,6 +28,38 @@ const WRITE_TIMEOUT_SECS: u64 = 5;
 const MAX_CONSECUTIVE_WRITE_FAILURES: u32 = 3;
 /// Maximum allowed size for a single sync update payload (bytes).
 const MAX_UPDATE_SIZE: usize = 1_048_576; // 1 MB
+
+/// Run the client handler with an authentication handshake before the main loop.
+///
+/// The auth handshake runs on the raw stream before JSON-RPC `initialize`.
+/// If auth fails, the connection is dropped without entering the main loop.
+pub async fn handle_client_with_auth<R, W, A>(
+    mut reader: R,
+    mut writer: W,
+    auth: &A,
+    doc_store: Arc<DocStore>,
+    broadcaster: SharedBroadcaster,
+    start_time: std::time::Instant,
+) where
+    R: AsyncBufRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send,
+    A: AuthProvider,
+{
+    match auth.server_handshake(&mut reader, &mut writer).await {
+        Ok(result) => {
+            info!(
+                auth = auth.name(),
+                client = %result.client_label,
+                "auth handshake succeeded"
+            );
+        }
+        Err(e) => {
+            warn!(auth = auth.name(), error = %e, "auth handshake failed, dropping connection");
+            return;
+        }
+    }
+    handle_client(reader, writer, doc_store, broadcaster, start_time).await;
+}
 
 /// Run the client handler loop for a single connection.
 ///
@@ -288,6 +322,7 @@ fn is_doc_method(msg: &str) -> bool {
         || msg.contains("\"docs/metadata\"")
         || msg.contains("\"sync/share\"")
         || msg.contains("\"$/debug\"")
+        || msg.contains("\"kb/")
 }
 
 /// Check if a raw JSON message is a JSON-RPC notification (has `method`, no `id`).
@@ -859,6 +894,371 @@ async fn handle_doc_request(
                     "connection_count": connection_count,
                 }),
             )
+        }
+
+        // --- KB protocol methods ---
+        "kb/register" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            let name = params["name"].as_str().unwrap_or("").to_string();
+            let node_count = params["node_count"].as_u64().unwrap_or(0);
+            info!(session = session_id, kb_id = %kb_id, name = %name, node_count, "kb/register");
+
+            // Store KB metadata in a collection doc address.
+            let doc_name = format!("kbc:{kb_id}");
+            session_docs.insert(doc_name.clone());
+            broadcaster
+                .lock()
+                .unwrap()
+                .subscribe_doc(session_id, &doc_name);
+
+            // Store metadata as a simple JSON doc (not a full CRDT — lightweight registry).
+            let meta = serde_json::json!({
+                "kb_id": kb_id,
+                "name": name,
+                "node_count": node_count,
+                "registered_by": session_id,
+            });
+            doc_store.set_kb_meta(&kb_id, meta.clone()).await;
+            JsonRpcResponse::success(
+                id,
+                serde_json::json!({ "kb_id": kb_id, "registered": true }),
+            )
+        }
+
+        "kb/list" => {
+            let kbs = doc_store.list_kb_metas().await;
+            JsonRpcResponse::success(id, serde_json::json!({ "kbs": kbs }))
+        }
+
+        "kb/unregister" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            info!(session = session_id, kb_id = %kb_id, "kb/unregister");
+            doc_store.remove_kb_meta(&kb_id).await;
+            let doc_name = format!("kbc:{kb_id}");
+            session_docs.remove(&doc_name);
+            JsonRpcResponse::success(
+                id,
+                serde_json::json!({ "kb_id": kb_id, "unregistered": true }),
+            )
+        }
+
+        "kb/share" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            let name = params["name"].as_str().unwrap_or("").to_string();
+            let creator = params["creator"].as_str().unwrap_or("").to_string();
+            info!(session = session_id, kb_id = %kb_id, name = %name, creator = %creator, "kb/share");
+
+            // Decode and store the collection doc.
+            let collection_b64 = match params["collection_state"].as_str() {
+                Some(s) => s,
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'collection_state' field".to_string()),
+                    );
+                }
+            };
+            let collection_bytes = match base64_to_update(collection_b64) {
+                Ok(b) => b,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error(format!("invalid collection_state base64: {e}")),
+                    );
+                }
+            };
+            let collection_doc = format!("kbc:{kb_id}");
+            if let Err(e) = doc_store
+                .share_doc(&collection_doc, &collection_bytes)
+                .await
+            {
+                return JsonRpcResponse::error(
+                    id,
+                    McpError::internal_error(format!("failed to share collection doc: {e}")),
+                );
+            }
+            session_docs.insert(collection_doc.clone());
+            broadcaster
+                .lock()
+                .unwrap()
+                .subscribe_doc(session_id, &collection_doc);
+
+            // Store each node doc.
+            let nodes = params["nodes"].as_array();
+            let mut node_count: u64 = 0;
+            if let Some(node_arr) = nodes {
+                for node in node_arr {
+                    let node_id = match node["id"].as_str() {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    let state_b64 = match node["state"].as_str() {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    let state_bytes = match base64_to_update(state_b64) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            warn!(session = session_id, node_id, error = %e, "kb/share: skipping node with invalid base64");
+                            continue;
+                        }
+                    };
+                    let node_doc = format!("kb:{node_id}");
+                    if let Err(e) = doc_store.share_doc(&node_doc, &state_bytes).await {
+                        warn!(session = session_id, node_id, error = %e, "kb/share: failed to share node doc");
+                        continue;
+                    }
+                    session_docs.insert(node_doc.clone());
+                    broadcaster
+                        .lock()
+                        .unwrap()
+                        .subscribe_doc(session_id, &node_doc);
+                    node_count += 1;
+                }
+            }
+
+            // Store KB metadata.
+            let meta = serde_json::json!({
+                "kb_id": kb_id,
+                "name": name,
+                "creator": creator,
+                "node_count": node_count,
+                "shared_by": session_id,
+            });
+            doc_store.set_kb_meta(&kb_id, meta).await;
+
+            info!(session = session_id, kb_id = %kb_id, node_count, "kb/share: complete");
+            JsonRpcResponse::success(
+                id,
+                serde_json::json!({
+                    "kb_id": kb_id,
+                    "shared": true,
+                    "node_count": node_count,
+                }),
+            )
+        }
+
+        "kb/join" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            info!(session = session_id, kb_id = %kb_id, "kb/join");
+
+            // Read the collection doc.
+            let collection_doc = format!("kbc:{kb_id}");
+            let (collection_state, _sv) = match doc_store.encode_state_and_sv(&collection_doc).await
+            {
+                Ok(pair) => pair,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!(
+                            "kb not found or failed to read collection: {e}"
+                        )),
+                    );
+                }
+            };
+            session_docs.insert(collection_doc.clone());
+            broadcaster
+                .lock()
+                .unwrap()
+                .subscribe_doc(session_id, &collection_doc);
+
+            // Parse collection to get the list of node IDs belonging to this KB.
+            let node_ids: Vec<String> = match KbCollectionDoc::from_bytes(&collection_state) {
+                Ok(coll) => coll
+                    .list_nodes()
+                    .into_iter()
+                    .map(|(id, _title)| id)
+                    .collect(),
+                Err(e) => {
+                    warn!(session = session_id, kb_id = %kb_id, error = %e,
+                        "kb/join: failed to parse collection doc, falling back to empty node list");
+                    Vec::new()
+                }
+            };
+
+            // Fetch only the nodes listed in the collection (not all kb: docs).
+            let mut nodes = Vec::new();
+            for node_id in &node_ids {
+                let doc_name = format!("kb:{node_id}");
+                match doc_store.encode_state_and_sv(&doc_name).await {
+                    Ok((state, _sv)) => {
+                        session_docs.insert(doc_name.clone());
+                        broadcaster
+                            .lock()
+                            .unwrap()
+                            .subscribe_doc(session_id, &doc_name);
+                        nodes.push(serde_json::json!({
+                            "id": node_id,
+                            "state": update_to_base64(&state),
+                        }));
+                    }
+                    Err(e) => {
+                        warn!(session = session_id, doc = %doc_name, error = %e, "kb/join: failed to read node doc");
+                    }
+                }
+            }
+
+            info!(session = session_id, kb_id = %kb_id, node_count = nodes.len(), "kb/join: complete");
+            JsonRpcResponse::success(
+                id,
+                serde_json::json!({
+                    "kb_id": kb_id,
+                    "collection_state": update_to_base64(&collection_state),
+                    "nodes": nodes,
+                }),
+            )
+        }
+
+        "kb/node_update" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            let node_id = match params["node_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'node_id' field".to_string()),
+                    );
+                }
+            };
+            let update_b64 = match params["update"].as_str() {
+                Some(s) => s,
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'update' field".to_string()),
+                    );
+                }
+            };
+            let update_bytes = match base64_to_update(update_b64) {
+                Ok(b) => b,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error(format!("invalid base64: {e}")),
+                    );
+                }
+            };
+            if update_bytes.len() > MAX_UPDATE_SIZE {
+                return JsonRpcResponse::error(
+                    id,
+                    McpError::parse_error(format!(
+                        "update too large: {} bytes (max {})",
+                        update_bytes.len(),
+                        MAX_UPDATE_SIZE
+                    )),
+                );
+            }
+            info!(session = session_id, kb_id = %kb_id, node_id = %node_id, update_len = update_bytes.len(), "kb/node_update");
+
+            let node_doc = format!("kb:{node_id}");
+            match doc_store.apply_update(&node_doc, &update_bytes, None).await {
+                Ok(result) => {
+                    // Broadcast to other subscribers of the collection.
+                    {
+                        let mut bc = broadcaster.lock().unwrap();
+                        bc.broadcast_except(
+                            &EditorEvent::SyncUpdate {
+                                buffer_name: node_doc.clone(),
+                                update_base64: update_to_base64(&result.update),
+                                wal_seq: result.wal_seq,
+                            },
+                            session_id,
+                        );
+                    }
+                    info!(session = session_id, kb_id = %kb_id, node_id = %node_id, wal_seq = result.wal_seq, "kb/node_update: applied");
+                    JsonRpcResponse::success(id, serde_json::json!({ "applied": true }))
+                }
+                Err(e) => JsonRpcResponse::error(
+                    id,
+                    McpError::internal_error(format!("failed to apply node update: {e}")),
+                ),
+            }
+        }
+
+        "kb/leave" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            info!(session = session_id, kb_id = %kb_id, "kb/leave");
+
+            // Read the collection doc to find which nodes belong to this KB.
+            let collection_doc = format!("kbc:{kb_id}");
+            let node_ids: Vec<String> = match doc_store.encode_state_and_sv(&collection_doc).await {
+                Ok((state, _sv)) => match KbCollectionDoc::from_bytes(&state) {
+                    Ok(coll) => coll.list_nodes().into_iter().map(|(id, _)| id).collect(),
+                    Err(_) => Vec::new(),
+                },
+                Err(_) => Vec::new(),
+            };
+
+            // Unsubscribe from collection doc.
+            session_docs.remove(&collection_doc);
+            broadcaster
+                .lock()
+                .unwrap()
+                .unsubscribe_doc(session_id, &collection_doc);
+
+            // Unsubscribe only from this KB's node docs.
+            let mut removed_count: u64 = 0;
+            for node_id in &node_ids {
+                let doc_name = format!("kb:{node_id}");
+                if session_docs.remove(&doc_name) {
+                    broadcaster
+                        .lock()
+                        .unwrap()
+                        .unsubscribe_doc(session_id, &doc_name);
+                    removed_count += 1;
+                }
+            }
+
+            info!(session = session_id, kb_id = %kb_id, removed_count, "kb/leave: complete");
+            JsonRpcResponse::success(id, serde_json::json!({ "kb_id": kb_id, "left": true }))
         }
 
         other => JsonRpcResponse::error(
@@ -1586,5 +1986,570 @@ mod tests {
 
         // Should not panic or error — just log and return.
         handle_doc_notification(msg, &store, &bc, 1, &mut session_docs).await;
+    }
+
+    // --- KB protocol handler tests (Phase 0.5) ---
+
+    /// Helper: create a KbNodeDoc with realistic org content and return encoded bytes.
+    fn make_test_node(id: &str, title: &str, body: &str, tags: &[&str]) -> Vec<u8> {
+        use mae_sync::kb::KbNodeDoc;
+        let node = KbNodeDoc::new(
+            id,
+            title,
+            body,
+            &tags.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        );
+        node.encode()
+    }
+
+    /// Realistic org content for testing (properties drawer, links, code block, Unicode).
+    fn realistic_org_body() -> &'static str {
+        ":PROPERTIES:\n:ID: test-node-001\n:ROAM_REFS: https://example.com\n:END:\n\
+         #+TITLE: Test Node — CRDT Round-Trip\n#+FILETAGS: :research:crdt:\n\n\
+         * Overview\n\
+         This node tests the full round-trip: SQLite → KbNodeDoc → base64 → server → base64 → KbNodeDoc → SQLite.\n\n\
+         ** Sub-heading with [[id:other-node][internal link]]\n\
+         Content with Unicode: café, naïve, 日本語\n\n\
+         #+begin_src rust\nfn main() { println!(\"hello\"); }\n#+end_src\n"
+    }
+
+    /// Helper: share a KB with nodes via the handler.
+    async fn share_kb_with_nodes(
+        store: &Arc<DocStore>,
+        bc: &SharedBroadcaster,
+        kb_id: &str,
+        name: &str,
+        creator: &str,
+        nodes: &[(&str, Vec<u8>)],
+        session_docs: &mut HashSet<String>,
+    ) -> JsonRpcResponse {
+        use mae_sync::kb::KbCollectionDoc;
+
+        let mut coll = KbCollectionDoc::new(name, creator);
+        for (id, _) in nodes {
+            coll.add_node(id, id); // title = id for simplicity
+        }
+        let collection_b64 = update_to_base64(&coll.encode_state());
+
+        let nodes_json: Vec<serde_json::Value> = nodes
+            .iter()
+            .map(|(id, state)| serde_json::json!({ "id": id, "state": update_to_base64(state) }))
+            .collect();
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "kb/share",
+            "params": {
+                "kb_id": kb_id,
+                "name": name,
+                "creator": creator,
+                "collection_state": collection_b64,
+                "nodes": nodes_json,
+            }
+        });
+        handle_doc_request(
+            &msg.to_string(),
+            store,
+            bc,
+            std::time::Instant::now(),
+            0,
+            session_docs,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn kb_share_stores_collection_and_nodes() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut session_docs = HashSet::new();
+
+        let node1 = make_test_node(
+            "concept:test",
+            "Test Node",
+            realistic_org_body(),
+            &["research", "crdt"],
+        );
+        let node2 = make_test_node("concept:arch", "Architecture", "System overview", &["core"]);
+        let node3 = make_test_node(
+            "lesson:intro",
+            "Intro Lesson",
+            "Welcome to MAE",
+            &["tutorial"],
+        );
+
+        let resp = share_kb_with_nodes(
+            &store,
+            &bc,
+            "my-kb",
+            "Research Notes",
+            "alice",
+            &[
+                ("concept:test", node1),
+                ("concept:arch", node2),
+                ("lesson:intro", node3),
+            ],
+            &mut session_docs,
+        )
+        .await;
+
+        assert!(resp.error.is_none(), "kb/share failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["shared"], true);
+        assert_eq!(result["node_count"], 3);
+
+        // Verify collection doc is stored.
+        let (coll_state, _sv) = store.encode_state_and_sv("kbc:my-kb").await.unwrap();
+        let coll = mae_sync::kb::KbCollectionDoc::from_bytes(&coll_state)
+            .expect("collection doc should decode");
+        assert_eq!(coll.name(), "Research Notes");
+        assert_eq!(coll.node_count(), 3, "collection should list all 3 nodes");
+
+        // Verify each node doc is stored and decodable.
+        for node_id in &["concept:test", "concept:arch", "lesson:intro"] {
+            let doc_name = format!("kb:{node_id}");
+            let (state, _sv) = store
+                .encode_state_and_sv(&doc_name)
+                .await
+                .unwrap_or_else(|e| panic!("node doc '{}' should exist: {}", doc_name, e));
+            let node_doc = mae_sync::kb::KbNodeDoc::from_bytes(&state)
+                .unwrap_or_else(|e| panic!("node '{}' should decode: {}", node_id, e));
+            assert!(
+                !node_doc.title().is_empty(),
+                "node '{}' title should not be empty",
+                node_id
+            );
+        }
+
+        // Verify session_docs tracks collection doc.
+        assert!(
+            session_docs.contains("kbc:my-kb"),
+            "session should track collection doc"
+        );
+    }
+
+    #[tokio::test]
+    async fn kb_share_realistic_org_content_roundtrip() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut session_docs = HashSet::new();
+
+        let org_body = realistic_org_body();
+        let node = make_test_node("concept:org-test", "Org Round-Trip", org_body, &["test"]);
+
+        let resp = share_kb_with_nodes(
+            &store,
+            &bc,
+            "org-kb",
+            "Org KB",
+            "alice",
+            &[("concept:org-test", node)],
+            &mut session_docs,
+        )
+        .await;
+        assert!(resp.error.is_none(), "kb/share failed: {:?}", resp.error);
+
+        // Read back and verify content is byte-for-byte identical.
+        let (state, _) = store
+            .encode_state_and_sv("kb:concept:org-test")
+            .await
+            .unwrap();
+        let doc = mae_sync::kb::KbNodeDoc::from_bytes(&state).unwrap();
+        assert_eq!(
+            doc.body(),
+            org_body,
+            "org body should survive server round-trip byte-for-byte"
+        );
+        assert_eq!(doc.title(), "Org Round-Trip");
+        assert_eq!(doc.tags(), vec!["test"]);
+    }
+
+    #[tokio::test]
+    async fn kb_join_returns_collection_and_all_nodes() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut sharer_docs = HashSet::new();
+
+        // Share 3 nodes.
+        let nodes = vec![
+            ("n1", make_test_node("n1", "Node One", "body one", &["a"])),
+            (
+                "n2",
+                make_test_node("n2", "Node Two", "body two — café", &["b"]),
+            ),
+            (
+                "n3",
+                make_test_node("n3", "Node Three", "body 三 日本語", &["c"]),
+            ),
+        ];
+        share_kb_with_nodes(
+            &store,
+            &bc,
+            "join-kb",
+            "Join Test",
+            "alice",
+            &nodes,
+            &mut sharer_docs,
+        )
+        .await;
+
+        // Join from a different session.
+        let mut joiner_docs = HashSet::new();
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "kb/join",
+            "params": { "kb_id": "join-kb" }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            1,
+            &mut joiner_docs,
+        )
+        .await;
+
+        assert!(resp.error.is_none(), "kb/join failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+
+        // Verify collection state.
+        let coll_b64 = result["collection_state"].as_str().unwrap();
+        let coll_bytes = mae_sync::encoding::base64_to_update(coll_b64).unwrap();
+        let coll = mae_sync::kb::KbCollectionDoc::from_bytes(&coll_bytes).unwrap();
+        assert_eq!(coll.node_count(), 3, "collection should have 3 nodes");
+
+        // Verify all nodes returned with correct content.
+        let returned_nodes = result["nodes"].as_array().unwrap();
+        assert_eq!(returned_nodes.len(), 3, "should return all 3 nodes");
+
+        for expected in &[
+            ("n1", "Node One", "body one"),
+            ("n2", "Node Two", "body two — café"),
+            ("n3", "Node Three", "body 三 日本語"),
+        ] {
+            let node_json = returned_nodes
+                .iter()
+                .find(|n| n["id"].as_str() == Some(expected.0))
+                .unwrap_or_else(|| panic!("node '{}' should be in response", expected.0));
+            let state_bytes =
+                mae_sync::encoding::base64_to_update(node_json["state"].as_str().unwrap()).unwrap();
+            let doc = mae_sync::kb::KbNodeDoc::from_bytes(&state_bytes).unwrap();
+            assert_eq!(
+                doc.title(),
+                expected.1,
+                "node '{}' title mismatch",
+                expected.0
+            );
+            assert_eq!(
+                doc.body(),
+                expected.2,
+                "node '{}' body mismatch",
+                expected.0
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn kb_join_nonexistent_returns_empty() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "kb/join",
+            "params": { "kb_id": "nonexistent-kb" }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
+
+        // Server creates empty doc on read (get_or_create semantics), so this
+        // succeeds but returns 0 nodes — the client interprets empty collection.
+        assert!(resp.error.is_none(), "kb/join creates empty doc — no error");
+        let result = resp.result.unwrap();
+        let nodes = result["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 0, "nonexistent KB should return 0 nodes");
+    }
+
+    #[tokio::test]
+    async fn kb_node_update_applies_and_broadcasts() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut session_a = HashSet::new();
+
+        // Share a single node.
+        let node = make_test_node("n1", "Original", "original body", &[]);
+        share_kb_with_nodes(
+            &store,
+            &bc,
+            "update-kb",
+            "Update Test",
+            "alice",
+            &[("n1", node.clone())],
+            &mut session_a,
+        )
+        .await;
+
+        // Subscribe session B for notifications.
+        let session_b_id = 1u64;
+        let mut rx = {
+            let mut b = bc.lock().unwrap();
+            b.subscribe(session_b_id, vec!["sync_update".to_string()]);
+            b.subscribe_doc(session_b_id, "kb:n1");
+            b.subscribe_doc(session_b_id, "kbc:update-kb");
+            b.subscribe(session_b_id, vec!["sync_update".to_string()])
+        };
+
+        // Generate an update: change body via KbNodeDoc.
+        let mut doc = mae_sync::kb::KbNodeDoc::from_bytes(&node).unwrap();
+        let update = doc.set_body("updated body — café, 日本語");
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "kb/node_update",
+            "params": {
+                "kb_id": "update-kb",
+                "node_id": "n1",
+                "update": update_to_base64(&update),
+            }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut session_a,
+        )
+        .await;
+        assert!(
+            resp.error.is_none(),
+            "kb/node_update failed: {:?}",
+            resp.error
+        );
+        assert_eq!(resp.result.unwrap()["applied"], true);
+
+        // Verify the stored doc reflects the update.
+        let (state, _) = store.encode_state_and_sv("kb:n1").await.unwrap();
+        let stored = mae_sync::kb::KbNodeDoc::from_bytes(&state).unwrap();
+        assert_eq!(
+            stored.body(),
+            "updated body — café, 日本語",
+            "stored node body should reflect update"
+        );
+
+        // Verify broadcast was sent (best-effort check).
+        if let Ok(EditorEvent::SyncUpdate { buffer_name, .. }) = rx.try_recv() {
+            assert_eq!(
+                buffer_name, "kb:n1",
+                "broadcast should be for the updated node doc"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn kb_leave_unsubscribes_session() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut session_docs = HashSet::new();
+
+        // Share a KB.
+        let node = make_test_node("n1", "Title", "body", &[]);
+        share_kb_with_nodes(
+            &store,
+            &bc,
+            "leave-kb",
+            "Leave Test",
+            "alice",
+            &[("n1", node)],
+            &mut session_docs,
+        )
+        .await;
+
+        // Verify session tracks the collection + node docs.
+        assert!(session_docs.contains("kbc:leave-kb"));
+        assert!(session_docs.contains("kb:n1"));
+
+        // Leave.
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 3, "method": "kb/leave",
+            "params": { "kb_id": "leave-kb" }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut session_docs,
+        )
+        .await;
+        assert!(resp.error.is_none(), "kb/leave failed: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["left"], true);
+
+        // Session should no longer track collection doc.
+        assert!(
+            !session_docs.contains("kbc:leave-kb"),
+            "session should no longer track collection doc after leave"
+        );
+    }
+
+    #[tokio::test]
+    async fn kb_share_with_invalid_base64_returns_error() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "kb/share",
+            "params": {
+                "kb_id": "bad-kb",
+                "name": "Bad KB",
+                "creator": "alice",
+                "collection_state": "!!!NOT_VALID_BASE64!!!",
+                "nodes": [],
+            }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
+        assert!(
+            resp.error.is_some(),
+            "kb/share with invalid base64 should return error"
+        );
+    }
+
+    #[tokio::test]
+    async fn kb_share_missing_kb_id_returns_error() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "kb/share",
+            "params": { "name": "Test", "creator": "alice" }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
+        assert!(
+            resp.error.is_some(),
+            "kb/share without kb_id should return error"
+        );
+    }
+
+    #[tokio::test]
+    async fn kb_node_update_for_nonexistent_node() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+
+        // Try to update a node that was never shared.
+        let mut doc = mae_sync::kb::KbNodeDoc::new("ghost", "Ghost", "body", &[]);
+        let update = doc.set_body("new body");
+
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "kb/node_update",
+            "params": {
+                "kb_id": "some-kb",
+                "node_id": "ghost",
+                "update": update_to_base64(&update),
+            }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut HashSet::new(),
+        )
+        .await;
+        // The server creates the doc on first update (share_or_join semantics in DocStore),
+        // or returns an error. Either way it shouldn't panic.
+        // We just verify it doesn't crash — the exact behavior depends on DocStore.apply_update.
+        // Just verify it doesn't crash — the server might create the doc on first update.
+        let _ = resp;
+    }
+
+    #[tokio::test]
+    async fn kb_share_then_update_then_join_sees_latest() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut session_a = HashSet::new();
+
+        // Share with initial content.
+        let node = make_test_node("n1", "Initial Title", "initial body", &["v1"]);
+        share_kb_with_nodes(
+            &store,
+            &bc,
+            "evolving-kb",
+            "Evolving",
+            "alice",
+            &[("n1", node.clone())],
+            &mut session_a,
+        )
+        .await;
+
+        // Update the node's body.
+        let mut doc = mae_sync::kb::KbNodeDoc::from_bytes(&node).unwrap();
+        let update = doc.set_body("evolved body with café and 日本語");
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "kb/node_update",
+            "params": {
+                "kb_id": "evolving-kb",
+                "node_id": "n1",
+                "update": update_to_base64(&update),
+            }
+        });
+        handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut session_a,
+        )
+        .await;
+
+        // Join from a new session — should see latest content.
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 3, "method": "kb/join",
+            "params": { "kb_id": "evolving-kb" }
+        });
+        let resp = handle_doc_request(
+            &msg.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            1,
+            &mut HashSet::new(),
+        )
+        .await;
+        assert!(resp.error.is_none());
+
+        let result = resp.result.unwrap();
+        let nodes = result["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1);
+        let state_bytes =
+            mae_sync::encoding::base64_to_update(nodes[0]["state"].as_str().unwrap()).unwrap();
+        let joined_doc = mae_sync::kb::KbNodeDoc::from_bytes(&state_bytes).unwrap();
+        assert_eq!(
+            joined_doc.body(),
+            "evolved body with café and 日本語",
+            "joined client should see the updated body, not the initial one"
+        );
     }
 }

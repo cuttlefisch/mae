@@ -9,6 +9,7 @@ mod doctor;
 mod gui_event;
 mod key_handling;
 mod lsp_bridge;
+mod mdns_discovery;
 pub mod pkg;
 mod scheme_dap_bridge;
 mod scheme_lsp_bridge;
@@ -396,6 +397,20 @@ fn main() -> io::Result<()> {
     if !clean_mode {
         if let Some(data_dir) = editor.mae_data_dir() {
             editor.project_list = mae_core::ProjectList::load(&data_dir);
+
+            // Prune stale entries (nonexistent dirs, temp dirs) and notify.
+            let pruned = editor.project_list.prune_stale();
+            if !pruned.is_empty() {
+                let _ = editor.project_list.save(&data_dir);
+                let msg = format!(
+                    "Pruned {} stale project(s): {}",
+                    pruned.len(),
+                    pruned.join(", ")
+                );
+                tracing::info!("{}", msg);
+                editor.set_status(&msg);
+            }
+
             editor
                 .project_list
                 .sync_to_recent(&mut editor.recent_projects);
@@ -485,6 +500,15 @@ fn main() -> io::Result<()> {
     if let Some(secs) = app_config.collaboration.heartbeat_interval_secs {
         let _ = editor.set_option("collab_heartbeat_interval", &secs.to_string());
     }
+    if let Some(ref cmd) = app_config.collaboration.psk_command {
+        let _ = editor.set_option("collab_psk_command", cmd);
+    }
+    if let Some(ref key) = app_config.collaboration.psk {
+        let _ = editor.set_option("collab_psk", key);
+    }
+    if let Some(ref mode) = app_config.collaboration.kb_sync_mode {
+        let _ = editor.set_option("collab_kb_sync_mode", mode);
+    }
 
     // Auto-derive collab user name if not set via config.
     if editor.collab.user_name.is_empty() {
@@ -543,6 +567,26 @@ fn main() -> io::Result<()> {
         let data_dir = dirs::data_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
             .join("mae");
+
+        // Initialize standardized KB data directory layout (XDG-compliant).
+        match mae_kb::data_dir::KbDataDir::new(&data_dir) {
+            Ok(kb_data_dir) => {
+                // Migrate old scattered layout to new structure if needed.
+                match mae_kb::data_dir::migrate_legacy_layout(&data_dir) {
+                    Ok(0) => {}
+                    Ok(n) => info!(
+                        count = n,
+                        "migrated legacy KB instances to new data directory layout"
+                    ),
+                    Err(e) => warn!(error = %e, "failed to migrate legacy KB layout"),
+                }
+                editor.kb.data_dir = Some(kb_data_dir);
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to initialize KB data directory");
+            }
+        }
+
         // Migrate kb-registry.toml from config → data (v0.9.0)
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))

@@ -208,6 +208,14 @@
 (define-key "normal" "SPC C D" "collab-doctor")
 (define-key "normal" "SPC C l" "collab-list")
 (define-key "normal" "SPC C j" "collab-join")
+(define-key "normal" "SPC C P" "collab-discover")
+
+;; +kb-collaboration
+(set-group-name "normal" "SPC C K" "KB sharing")
+(define-key "normal" "SPC C K s" "kb-share")
+(define-key "normal" "SPC C K j" "kb-join")
+(define-key "normal" "SPC C K l" "kb-leave")
+(define-key "normal" "SPC C K r" "kb-list-remote")
 
 ;; Visual mode SPC bindings
 (define-key "visual" "SPC s n" "syntax-select-node")
