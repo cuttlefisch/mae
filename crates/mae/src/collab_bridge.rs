@@ -298,7 +298,6 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         }
         // Then drain SQLite-persisted pending updates (survives crashes).
         if let Some(ref store) = editor.kb.store {
-            use mae_kb::KbStore;
             if let Ok(pending) = store.drain_pending_updates() {
                 for pu in pending {
                     let cmd = CollabCommand::KbNodeUpdate {

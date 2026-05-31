@@ -124,6 +124,49 @@ pub trait KbStore: Send + Sync {
     fn load_all(&self) -> Result<Vec<Node>, KbStoreError>;
     fn save_all(&self, nodes: &[&Node]) -> Result<(), KbStoreError>;
 
+    // --- Graph queries (optional, default NotSupported) ---
+
+    /// Add a typed relationship between two nodes.
+    fn add_typed_link(
+        &self,
+        _src: &str,
+        _dst: &str,
+        _rel_type: &str,
+        _weight: f64,
+    ) -> Result<(), KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "typed links require CozoDB backend".into(),
+        ))
+    }
+
+    /// Query links by relationship type.
+    fn links_typed(&self, _id: &str, _rel_type: &str) -> Result<Vec<Link>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "typed link queries require CozoDB backend".into(),
+        ))
+    }
+
+    /// Find shortest path between two nodes (BFS).
+    fn shortest_path(&self, _from: &str, _to: &str) -> Result<Vec<String>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "shortest path requires CozoDB backend".into(),
+        ))
+    }
+
+    /// BFS neighborhood subgraph around a node up to `depth` hops.
+    fn neighborhood(&self, _id: &str, _depth: u32) -> Result<SubGraph, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "neighborhood queries require CozoDB backend".into(),
+        ))
+    }
+
+    /// Execute a raw backend query (Datalog for CozoDB, SQL for SQLite).
+    fn raw_query(&self, _script: &str) -> Result<(Vec<String>, Vec<Vec<String>>), KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "raw queries require CozoDB backend".into(),
+        ))
+    }
+
     // --- Lifecycle ---
 
     fn backend_name(&self) -> &str;

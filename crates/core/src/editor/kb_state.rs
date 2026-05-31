@@ -13,9 +13,9 @@ use super::CaptureState;
 pub struct KbContext {
     /// Primary knowledge base instance (manual + user notes + AI-facing kb_* tools).
     pub primary: mae_kb::KnowledgeBase,
-    /// Persistent backing store (SQLite). When present, all KB mutations are
-    /// written through to this store. Loaded at startup, persists across sessions.
-    pub store: Option<Arc<mae_kb::SqliteKbStore>>,
+    /// Persistent backing store (SQLite or CozoDB). When present, all KB mutations
+    /// are written through to this store. Loaded at startup, persists across sessions.
+    pub store: Option<Arc<dyn mae_kb::KbStore>>,
     /// Standardized KB data directory layout (XDG-compliant).
     pub data_dir: Option<mae_kb::data_dir::KbDataDir>,
     /// KB federation: registry of external KB instances (org-roam dirs etc.).

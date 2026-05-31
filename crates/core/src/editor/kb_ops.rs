@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 
 use mae_kb::federation::{ImportHealth, ImportReport};
-use mae_kb::KbStore;
 
 use super::Editor;
 
