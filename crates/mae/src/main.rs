@@ -580,6 +580,17 @@ fn main() -> io::Result<()> {
                     ),
                     Err(e) => warn!(error = %e, "failed to migrate legacy KB layout"),
                 }
+                // Initialize primary KB store (SQLite).
+                let primary_db = kb_data_dir.root().join("primary.db");
+                match mae_kb::SqliteKbStore::open(&primary_db) {
+                    Ok(store) => {
+                        info!(path = %primary_db.display(), "primary KB store opened");
+                        editor.kb.store = Some(std::sync::Arc::new(store));
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to open primary KB store");
+                    }
+                }
                 editor.kb.data_dir = Some(kb_data_dir);
             }
             Err(e) => {
@@ -604,16 +615,37 @@ fn main() -> io::Result<()> {
             if !inst.enabled {
                 continue;
             }
+            // SQLite-first: try loading from db_path, fall back to org import.
+            if inst.db_path.exists() {
+                info!(name = %inst.name, db = %inst.db_path.display(), "loading KB from SQLite");
+                let mut kb = mae_kb::KnowledgeBase::new();
+                match kb.load_from_sqlite(&inst.db_path) {
+                    Ok(n) => {
+                        info!(name = %inst.name, nodes = n, "KB loaded from SQLite");
+                        editor.kb.instances.insert(inst.uuid.clone(), kb);
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!(name = %inst.name, error = %e, "SQLite load failed, falling back to org import");
+                    }
+                }
+            }
             if inst.org_dir.exists() {
-                info!(name = %inst.name, dir = %inst.org_dir.display(), "loading KB instance");
+                info!(name = %inst.name, dir = %inst.org_dir.display(), "loading KB instance from org files");
                 let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
                 info!(
                     name = %inst.name,
                     nodes = report.nodes_imported,
                     skipped = report.nodes_skipped,
                     errors = report.errors.len(),
-                    "KB instance loaded"
+                    "KB instance loaded from org"
                 );
+                // Persist to SQLite for next startup (one-time migration).
+                if let Err(e) = kb.save_to_sqlite(&inst.db_path) {
+                    tracing::warn!(name = %inst.name, error = %e, "failed to persist KB to SQLite");
+                } else {
+                    info!(name = %inst.name, db = %inst.db_path.display(), "KB persisted to SQLite (first-run migration)");
+                }
                 editor.kb.instances.insert(inst.uuid.clone(), kb);
             } else {
                 info!(name = %inst.name, dir = %inst.org_dir.display(), "KB instance dir missing, skipping");

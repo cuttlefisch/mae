@@ -603,11 +603,19 @@
           "kind": "mod"
         },
         {
+          "name": "migrate",
+          "kind": "mod"
+        },
+        {
           "name": "org",
           "kind": "mod"
         },
         {
           "name": "persist",
+          "kind": "mod"
+        },
+        {
+          "name": "store",
           "kind": "mod"
         },
         {

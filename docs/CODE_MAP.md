@@ -250,8 +250,10 @@ Source: `crates/kb/src/lib.rs`
 | `export` | mod |
 | `federation` | mod |
 | `fuzzy` | mod |
+| `migrate` | mod |
 | `org` | mod |
 | `persist` | mod |
+| `store` | mod |
 | `watch` | mod |
 | `NodeKind` | enum |
 | `SubgraphSpec` | struct |

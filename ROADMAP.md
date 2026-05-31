@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.10.6 · **Tests:** 5,764 passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete + PSK auth + KB sharing E2E, Phase 13 (Scheme runtime) complete.
+**Current version:** v0.11.0 · **Tests:** 5,796+ passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete + PSK auth + KB sharing E2E, Phase 13 (Scheme runtime) complete. v0.11.1: KB storage architecture (SQLite-first + KbStore trait).
 
 ---
 
@@ -161,6 +161,23 @@
 - [ ] **KB backup/export**: `kb-export` dumps full KB + changelog to portable format (SQLite file or JSON). `kb-import` restores.
 - [ ] **Conflict detection**: When multi-client writes land on same node, detect via version counter and surface conflict to user (not silent last-write-wins).
 - [ ] **KB replication**: Read replicas for high-read-throughput scenarios (AI agents doing 600+ node fetches/sec). WAL mode enables this natively for same-host.
+
+### KB Storage Architecture (v0.11.1 — ADR-011)
+
+**Status**: Phase A IN PROGRESS. SQLite bridge period — existing persist.rs wired as source of truth.
+
+The KB had a dual source of truth problem: org files re-parsed on startup, SQLite declared but unused in hot path. Every collaborative tool at scale uses a database (Notion/Postgres, Roam/Datascript, Logseq migrating FROM files TO DB).
+
+**Decision**: CozoDB-first with SQLite bridge period. See `docs/adr/011-kb-storage.md`.
+
+- [x] **KbStore trait** (`crates/kb/src/store.rs`): Database-agnostic persistence interface — node CRUD, FTS search, link queries, CRDT ops, pending update queue. `SqliteKbStore` implementation with 11 tests.
+- [x] **SQLite-first startup**: Federated KB instances load from SQLite first, fall back to org import + one-time migration to SQLite.
+- [x] **Write-through persistence**: `kb_create_node`, `kb_update_node`, `kb_delete_node` write through to `SqliteKbStore`.
+- [x] **Durable offline queue**: Pending CRDT updates stored in SQLite `pending_updates` table (survives crashes). Drained on reconnect.
+- [x] **Primary KB store**: `KbContext.store` field holds `Arc<SqliteKbStore>` for the primary KB instance.
+- [ ] **CozoKbStore** (v0.12.0): `#[cfg(feature = "cozo")]` feature-flagged CozoDB backend — Datalog queries, HNSW vector index, graph algorithms (PageRank, community detection).
+- [ ] **SQLite → CozoDB migration** (v0.12.0): One-time data migration with typed relationship inference.
+- [ ] **GraphRAG** (v0.14.0): Hybrid vector + graph retrieval via CozoDB — single Datalog query combining HNSW entry points + graph expansion.
 
 ### Phase 13: MAE Scheme Runtime (v0.12.0)
 

@@ -1,7 +1,7 @@
 //! KB Federation — multi-KB registry and cross-instance operations.
 //!
-//! Users import org-roam directories into MAE's native format.
-//! The org directory is READ-ONLY for the KB layer. SQLite is derived.
+//! SQLite is the durable source of truth for KB data.
+//! Org directories are an import/export format, not the runtime store.
 
 use std::collections::HashMap;
 use std::io;
