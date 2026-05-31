@@ -255,6 +255,7 @@ Source: `crates/kb/src/lib.rs`
 | `persist` | mod |
 | `store` | mod |
 | `watch` | mod |
+| `cozo_store` | mod |
 | `NodeKind` | enum |
 | `SubgraphSpec` | struct |
 | `SubgraphResult` | struct |

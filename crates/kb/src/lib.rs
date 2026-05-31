@@ -37,10 +37,17 @@ pub mod org;
 pub mod persist;
 pub mod store;
 pub mod watch;
+
+#[cfg(feature = "cozo")]
+pub mod cozo_store;
+
 pub use federation::{ImportHealth, ImportReport as FederationImportReport};
 pub use org::IngestReport;
 pub use persist::PersistError;
 pub use store::{KbStore, KbStoreError, SqliteKbStore};
+
+#[cfg(feature = "cozo")]
+pub use cozo_store::CozoKbStore;
 
 /// Kind of a node. Controls how the node is surfaced to the user
 /// (e.g. command nodes show up in `describe-command`) and styled by

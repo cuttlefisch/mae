@@ -623,6 +623,10 @@
           "kind": "mod"
         },
         {
+          "name": "cozo_store",
+          "kind": "mod"
+        },
+        {
           "name": "NodeKind",
           "kind": "enum"
         },

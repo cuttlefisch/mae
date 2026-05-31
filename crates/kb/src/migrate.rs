@@ -19,6 +19,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::store::{KbStore, KbStoreError};
 use crate::{KnowledgeBase, Node, NodeKind};
 
 /// Options for controlling migration behavior.
@@ -326,6 +327,64 @@ fn sanitize_id(id: &str) -> String {
         .collect()
 }
 
+/// Result of migrating between KbStore backends.
+#[derive(Debug, Default)]
+pub struct StoreMigrationReport {
+    pub nodes_migrated: usize,
+    pub links_migrated: usize,
+    pub pending_migrated: usize,
+    pub errors: Vec<String>,
+}
+
+/// Migrate all data from one KbStore backend to another.
+///
+/// Copies all nodes (including CRDT docs), links, and pending updates.
+/// The destination store is cleared before migration.
+pub fn migrate_between_stores(
+    src: &dyn KbStore,
+    dst: &dyn KbStore,
+) -> Result<StoreMigrationReport, KbStoreError> {
+    let mut report = StoreMigrationReport::default();
+
+    // Load all nodes from source
+    let nodes = src.load_all()?;
+    let node_refs: Vec<&Node> = nodes.iter().collect();
+
+    // Save all to destination (clears first)
+    dst.save_all(&node_refs)?;
+    report.nodes_migrated = nodes.len();
+
+    // Migrate links (already handled by save_all which parses bodies,
+    // but we also need any manually-added links)
+    for node in &nodes {
+        for link in src.links_from(&node.id)? {
+            // Links are already created by save_all's body parsing,
+            // but add_link is idempotent so this catches any extras
+            if let Err(e) = dst.add_link(&link.src, &link.dst, link.display.as_deref()) {
+                report
+                    .errors
+                    .push(format!("link {}→{}: {e}", link.src, link.dst));
+            } else {
+                report.links_migrated += 1;
+            }
+        }
+    }
+
+    // Migrate pending updates
+    let pending = src.drain_pending_updates()?;
+    for pu in &pending {
+        if let Err(e) = dst.push_pending_update(&pu.kb_id, &pu.node_id, &pu.update_bytes) {
+            report
+                .errors
+                .push(format!("pending {}/{}: {e}", pu.kb_id, pu.node_id));
+        } else {
+            report.pending_migrated += 1;
+        }
+    }
+
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,5 +540,38 @@ mod tests {
         let (y, m, _d) = days_to_ymd(20604);
         assert_eq!(y, 2026);
         assert!((5..=6).contains(&m)); // May or June depending on exact calc
+    }
+
+    #[test]
+    fn migrate_between_sqlite_stores() {
+        let tmp1 = tempfile::tempdir().unwrap();
+        let tmp2 = tempfile::tempdir().unwrap();
+        let src = crate::SqliteKbStore::open(tmp1.path().join("src.db")).unwrap();
+        let dst = crate::SqliteKbStore::open(tmp2.path().join("dst.db")).unwrap();
+
+        // Populate source
+        src.insert_node(&Node::new("m:1", "Migrate One", NodeKind::Note, "body 1"))
+            .unwrap();
+        src.insert_node(&Node::new(
+            "m:2",
+            "Migrate Two",
+            NodeKind::Concept,
+            "body 2",
+        ))
+        .unwrap();
+        src.push_pending_update("kb-a", "m:1", &[10, 20]).unwrap();
+
+        let report = super::migrate_between_stores(&src, &dst).unwrap();
+        assert_eq!(report.nodes_migrated, 2);
+        assert_eq!(report.pending_migrated, 1);
+
+        // Verify destination
+        let loaded = dst.load_all().unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(dst.get_node("m:1").unwrap().unwrap().title, "Migrate One");
+
+        let pending = dst.drain_pending_updates().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].update_bytes, vec![10, 20]);
     }
 }
