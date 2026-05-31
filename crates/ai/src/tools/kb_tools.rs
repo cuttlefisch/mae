@@ -397,6 +397,58 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- KB sharing tools ---
+        ToolDefinition {
+            name: "kb_share".into(),
+            description: "Share a knowledge base for collaborative editing via the connected state server. Shares all nodes in the KB instance.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "kb_name".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Name of the KB instance to share (default: 'default' = primary KB)".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_join".into(),
+            description: "Join a shared KB from the connected state server. Downloads all nodes and enables continuous sync.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "kb_id".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "KB identifier on the server (e.g. 'default', 'work-notes')".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["kb_id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_leave".into(),
+            description: "Leave (unsubscribe from) a shared KB. Local copy is preserved but sync stops.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "kb_id".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "KB identifier to leave".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["kb_id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Org tools ---
         ToolDefinition {
             name: "org_cycle".into(),

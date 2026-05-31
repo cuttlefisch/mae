@@ -19,10 +19,10 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
 - **AI as peer actor** — 450+ editor commands exposed as AI tools. The AI calls
   the same `dispatch_builtin()` as your keybindings. No shadow API, no simulated
   keystrokes.
-- **Collaborative editing** *(protocol-complete, not yet user-ready)* — CRDT sync
-  engine (yrs/YATA) with state server, WAL persistence, per-user undo, and
-  awareness protocol. Protocol and server are tested (250+ tests); end-to-end
-  user workflow requires Scheme runtime improvements before reliable release.
+- **Collaborative editing** — CRDT sync engine (yrs/YATA) with state server,
+  WAL persistence, per-user undo, awareness protocol, PSK authentication, and
+  mDNS peer discovery. Collaborative KB sharing enables real-time knowledge base
+  sync across instances with offline edit + reconnect support.
 - **Org-mode babel** — Execute code blocks in 12 languages, noweb expansion,
   `:tangle` directive, `:var` cross-references, safety policies. Export to
   HTML and Markdown with TOC, syntax highlighting, tag filtering.
@@ -406,6 +406,13 @@ make self-test   # AI-driven end-to-end self-test (headless)
 ```
 
 See [CLAUDE.md](CLAUDE.md) for architecture principles and development guide.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, code standards,
+and where to start. For end-to-end workflow documentation, see
+[docs/USER_STORIES.md](docs/USER_STORIES.md). For feature parity goals, see
+[docs/COMPETITIVE_ANALYSIS.md](docs/COMPETITIVE_ANALYSIS.md).
 
 ## License
 

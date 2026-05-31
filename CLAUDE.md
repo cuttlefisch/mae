@@ -353,6 +353,20 @@ Shim: `mae-mcp-shim` — translates MCP JSON-RPC over stdio to the Unix socket.
 
 Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (tutorial), `scheme:*` (Scheme API), `option:*` (editor options).
 
+### Collaboration / KB Sharing
+
+| Tool | Purpose |
+|------|---------|
+| `collab_status` | Connection state, peer count, synced docs |
+| `collab_connect` | Connect to a state server |
+| `collab_share` | Share a buffer for collaborative editing |
+| `collab_doctor` | Run connectivity diagnostics |
+| `collab_list` | List shared documents on the server |
+| `collab_discover` | Discover MAE peers via mDNS |
+| `kb_share` | Share a KB for collaborative editing |
+| `kb_join` | Join a shared KB from the server |
+| `kb_leave` | Leave a shared KB (local copy preserved) |
+
 ### Buffer / Editor
 
 | Tool | Purpose |
@@ -477,7 +491,7 @@ mae-state-server doctor             # run diagnostics
 - `collab-start` (SPC C s), `collab-connect` (SPC C c), `collab-disconnect` (SPC C d)
 - `collab-status` (SPC C i), `collab-share` (SPC C S), `collab-sync` (SPC C y), `collab-doctor` (SPC C D)
 
-**AI tools:** `collab_status`, `collab_connect`, `collab_share`, `collab_doctor`
+**AI tools:** `collab_status`, `collab_connect`, `collab_share`, `collab_doctor`, `collab_list`, `collab_discover`, `kb_share`, `kb_join`, `kb_leave`
 
 **Scheme API:** `(collab-status)` → alist, `(collab-synced-buffers)` → list
 
@@ -502,7 +516,7 @@ These APIs are intended to remain stable through v1.0:
 
 - **Scheme API:** ~50 functions + ~25 variables (see `:help concept:scheme-api`)
 - **Hooks:** 25 hook points (see `:help concept:hooks`)
-- **MCP tools:** 130+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
+- **MCP tools:** 135+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
 - **Config options:** 91+ registered, persistable via `:set-save`
 
 ## Related Resources

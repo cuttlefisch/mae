@@ -898,6 +898,20 @@ fn static_nodes() -> Vec<Node> {
         .with_tags(["workflow", "sync", "collaboration"])
         .with_aliases(["collab workflows", "loopback", "multi-user"]),
         Node::new(
+            "concept:kb-sharing",
+            "Concept: KB Sharing (Collaborative KBs)",
+            NodeKind::Concept,
+            CONCEPT_KB_SHARING,
+        )
+        .with_tags(["kb", "collaboration", "sync", "sharing"])
+        .with_aliases([
+            "kb-share",
+            "kb-join",
+            "kb-leave",
+            "shared kb",
+            "collaborative kb",
+        ]),
+        Node::new(
             "concept:scheme-testing",
             "Concept: Scheme Testing Framework",
             NodeKind::Concept,
@@ -968,6 +982,7 @@ mod tests {
             "concept:adr-kb-crdt",
             "concept:collab-architecture",
             "concept:collab-workflows",
+            "concept:kb-sharing",
             "guide:extension-authoring",
             "lesson:kb-import-roam",
             "lesson:collab-setup",

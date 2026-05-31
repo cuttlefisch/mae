@@ -59,5 +59,25 @@ pub(super) fn collab_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "collab_list".into(),
+            description: "List all shared documents on the connected state server. Returns doc names, sizes, and peer counts.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "collab_discover".into(),
+            description: "Discover MAE peers on the local network via mDNS. Returns discovered peer names, addresses, and shared KB counts.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
     ]
 }

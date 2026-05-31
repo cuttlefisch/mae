@@ -31,6 +31,8 @@ pub struct MdnsManager {
     registered_name: Option<String>,
     /// Discovered peers, keyed by mDNS instance name.
     discovered: Arc<Mutex<HashMap<String, DiscoveredPeer>>>,
+    /// Handle to the browse thread (if active).
+    browse_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl MdnsManager {
@@ -41,6 +43,7 @@ impl MdnsManager {
             daemon,
             registered_name: None,
             discovered: Arc::new(Mutex::new(HashMap::new())),
+            browse_handle: None,
         })
     }
 
@@ -100,7 +103,7 @@ impl MdnsManager {
 
     /// Start browsing for `_mae-sync._tcp.local` services.
     /// Returns a handle that populates `discovered` peers in the background.
-    pub fn start_browse(&self) -> Result<(), String> {
+    pub fn start_browse(&mut self) -> Result<(), String> {
         let receiver = self
             .daemon
             .browse(SERVICE_TYPE)
@@ -109,7 +112,7 @@ impl MdnsManager {
         let discovered = Arc::clone(&self.discovered);
         let our_name = self.registered_name.clone();
 
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             while let Ok(event) = receiver.recv() {
                 match event {
                     ServiceEvent::ServiceResolved(info) => {
@@ -137,7 +140,10 @@ impl MdnsManager {
                         let host = addresses
                             .iter()
                             .find(|a| a.is_ipv4())
-                            .or_else(|| addresses.iter().next())
+                            .or_else(|| {
+                                warn!(instance = %instance, "no IPv4 address found for mDNS peer, falling back to IPv6 or localhost");
+                                addresses.iter().next()
+                            })
                             .map(|a| a.to_string())
                             .unwrap_or_else(|| "127.0.0.1".to_string());
                         let address = format!("{}:{}", host, port);
@@ -169,6 +175,7 @@ impl MdnsManager {
                 }
             }
         });
+        self.browse_handle = Some(handle);
 
         Ok(())
     }
