@@ -164,7 +164,7 @@
 
 ### KB Storage Architecture (v0.11.1 — ADR-011)
 
-**Status**: Phase A IN PROGRESS. SQLite bridge period — existing persist.rs wired as source of truth.
+**Status**: Phase A COMPLETE, Phase B COMPLETE. CozoDB backend available behind feature flag.
 
 The KB had a dual source of truth problem: org files re-parsed on startup, SQLite declared but unused in hot path. Every collaborative tool at scale uses a database (Notion/Postgres, Roam/Datascript, Logseq migrating FROM files TO DB).
 
@@ -174,9 +174,11 @@ The KB had a dual source of truth problem: org files re-parsed on startup, SQLit
 - [x] **SQLite-first startup**: Federated KB instances load from SQLite first, fall back to org import + one-time migration to SQLite.
 - [x] **Write-through persistence**: `kb_create_node`, `kb_update_node`, `kb_delete_node` write through to `SqliteKbStore`.
 - [x] **Durable offline queue**: Pending CRDT updates stored in SQLite `pending_updates` table (survives crashes). Drained on reconnect.
-- [x] **Primary KB store**: `KbContext.store` field holds `Arc<SqliteKbStore>` for the primary KB instance.
-- [ ] **CozoKbStore** (v0.12.0): `#[cfg(feature = "cozo")]` feature-flagged CozoDB backend — Datalog queries, HNSW vector index, graph algorithms (PageRank, community detection).
-- [ ] **SQLite → CozoDB migration** (v0.12.0): One-time data migration with typed relationship inference.
+- [x] **Primary KB store**: `KbContext.store` field holds `Arc<dyn KbStore>` for the primary KB instance (supports any backend).
+- [x] **CozoKbStore**: `#[cfg(feature = "cozo")]` feature-flagged CozoDB backend — Datalog queries, typed relationships, shortest path, neighborhood BFS. 12 tests.
+- [x] **SQLite → CozoDB migration**: `migrate_between_stores()` in `crates/kb/src/migrate.rs` — cross-store data migration with report.
+- [x] **Graph-native AI tools**: `kb_shortest_path`, `kb_neighborhood`, `kb_add_link`, `kb_raw_query` — delegate to KbStore, graceful NotSupported on SQLite.
+- [x] **KB lifecycle E2E**: 24 Rust tests + 3 Scheme test files covering persistence, CRDT, offline queue, import/export, performance.
 - [ ] **GraphRAG** (v0.14.0): Hybrid vector + graph retrieval via CozoDB — single Datalog query combining HNSW entry points + graph expansion.
 
 ### Phase 13: MAE Scheme Runtime (v0.12.0)
