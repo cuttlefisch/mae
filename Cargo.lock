@@ -2565,6 +2565,7 @@ version = "0.11.2"
 dependencies = [
  "cozo",
  "mae-sync",
+ "ndarray",
  "notify",
  "rusqlite",
  "serde",

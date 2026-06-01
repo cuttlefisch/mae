@@ -46,7 +46,7 @@ pub use org::IngestReport;
 pub use persist::PersistError;
 pub use store::{
     AgendaFilter, Block, HealthReport, IntegrityError, KbStore, KbStoreError, Link, MetaMember,
-    NodeVersion, SqliteKbStore, SubGraph,
+    NodeVersion, SqliteKbStore, SubGraph, VectorHit,
 };
 
 /// Kind of a node. Controls how the node is surfaced to the user

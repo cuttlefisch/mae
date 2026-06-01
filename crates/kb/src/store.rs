@@ -155,6 +155,14 @@ impl std::fmt::Display for IntegrityError {
     }
 }
 
+/// A vector search result with distance score.
+#[derive(Debug, Clone)]
+pub struct VectorHit {
+    pub id: String,
+    /// Distance from query vector (lower = more similar for cosine).
+    pub distance: f64,
+}
+
 /// Structured KB health report.
 #[derive(Debug, Clone)]
 pub struct HealthReport {
@@ -373,6 +381,31 @@ pub trait KbStore: Send + Sync {
     fn restore_version(&self, _id: &str, _version: i64) -> Result<(), KbStoreError> {
         Err(KbStoreError::NotSupported(
             "versioning requires CozoDB backend".into(),
+        ))
+    }
+
+    // --- Embeddings / Vector search (Phase G) ---
+
+    /// Store an embedding vector for a node.
+    fn store_embedding(&self, _id: &str, _model: &str, _vec: &[f32]) -> Result<(), KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "embeddings require CozoDB backend".into(),
+        ))
+    }
+
+    /// Search for nearest neighbors by vector similarity (HNSW).
+    fn vector_search(&self, _vec: &[f32], _k: usize) -> Result<Vec<VectorHit>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "vector search requires CozoDB backend".into(),
+        ))
+    }
+
+    /// GraphRAG query: vector-nearest neighbors expanded by 1 hop of graph links.
+    /// Returns node IDs with scores (vector hits get their distance score,
+    /// graph-expanded nodes get score 0.0).
+    fn graphrag_search(&self, _vec: &[f32], _k: usize) -> Result<Vec<VectorHit>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "GraphRAG requires CozoDB backend".into(),
         ))
     }
 

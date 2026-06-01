@@ -19,6 +19,7 @@ notify = "8"
 mae-sync = { path = "../sync" }
 cozo = { version = "0.7", default-features = false, features = ["storage-sled", "rayon"] }
 sha2 = "0.10"
+ndarray = "0.15"
 
 [dev-dependencies]
 tempfile = "3"

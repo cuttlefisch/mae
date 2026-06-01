@@ -14,10 +14,10 @@
 
 use crate::store::{
     AgendaFilter, Block, HealthReport, KbStore, KbStoreError, Link, MetaMember, NodeVersion,
-    PendingUpdate, SearchHit, SubGraph,
+    PendingUpdate, SearchHit, SubGraph, VectorHit,
 };
 use crate::{Node, NodeKind};
-use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability};
+use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability, Vector};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -294,12 +294,29 @@ impl CozoKbStore {
         )?;
 
         // HNSW vector embeddings (schema ready, populated in v0.13.0)
+        // vec type is <F32; 384> — 384-dim vectors for all-MiniLM-L6-v2
         self.create_if_absent(
             r#":create embeddings {
                 id: String,
                 model: String
                 =>
-                vec: [Float]
+                vec: <F32; 384>
+            }"#,
+        )?;
+
+        // HNSW index on embeddings for vector search.
+        // Uses Cosine distance, dim=384 (all-MiniLM-L6-v2 default).
+        // Index creation is idempotent — silently ignored if already exists.
+        self.create_if_absent(
+            r#"::hnsw create embeddings:semantic {
+                dim: 384,
+                m: 16,
+                dtype: F32,
+                fields: [vec],
+                distance: Cosine,
+                ef_construction: 100,
+                extend_candidates: true,
+                keep_pruned_connections: false
             }"#,
         )?;
 
@@ -1849,6 +1866,82 @@ impl CozoKbStore {
 
         Ok(())
     }
+
+    // --- Embeddings / Vector search (Phase G) ---
+
+    /// Store an embedding vector for a node+model pair.
+    pub fn store_embedding(&self, id: &str, model: &str, vec: &[f32]) -> Result<(), KbStoreError> {
+        let arr = ndarray::Array1::from(vec.to_vec());
+        self.run_mut_params(
+            "?[id, model, vec] <- [[$id, $model, $vec]] :put embeddings {id, model => vec}",
+            btree_params([
+                ("id", dv_str(id)),
+                ("model", dv_str(model)),
+                ("vec", DataValue::Vec(Vector::F32(arr))),
+            ]),
+        )
+        .map_err(cozo_err)?;
+        Ok(())
+    }
+
+    /// Search for k nearest neighbors by vector similarity (HNSW Cosine).
+    pub fn vector_search(&self, vec: &[f32], k: usize) -> Result<Vec<VectorHit>, KbStoreError> {
+        let arr = ndarray::Array1::from(vec.to_vec());
+        let result = self
+            .run_immut_params(
+                &format!(
+                    "?[id, distance] := ~embeddings:semantic{{id, model | query: $vec, k: {k}, ef: 50, bind_distance: distance}}"
+                ),
+                btree_params([("vec", DataValue::Vec(Vector::F32(arr)))]),
+            )
+            .map_err(cozo_err)?;
+        let mut hits = Vec::new();
+        for row in result.rows.iter() {
+            if let (Some(id), Some(dist)) = (row.first(), row.get(1)) {
+                if let (Some(id_s), Some(d)) = (id.get_str(), dist.get_float()) {
+                    hits.push(VectorHit {
+                        id: id_s.to_string(),
+                        distance: d,
+                    });
+                }
+            }
+        }
+        Ok(hits)
+    }
+
+    /// GraphRAG search: vector nearest neighbors expanded by 1 hop of graph links.
+    ///
+    /// Returns vector hits with their distance scores plus graph-adjacent nodes
+    /// with score 0.0 (no vector distance — included via structural proximity).
+    pub fn graphrag_search(&self, vec: &[f32], k: usize) -> Result<Vec<VectorHit>, KbStoreError> {
+        let arr = ndarray::Array1::from(vec.to_vec());
+        let query = format!(
+            r#"entry[id, score] := ~embeddings:semantic{{id | query: $vec, k: {k}, ef: 50, bind_distance: score}}
+expanded[id] := entry[id, _]
+expanded[id] := entry[mid, _], *links{{src: mid, dst: id}}
+expanded[id] := entry[mid, _], *links{{src: id, dst: mid}}
+?[id, score] := expanded[id], entry[id, score]
+?[id, score] := expanded[id], not entry[id, _], score = 0.0"#
+        );
+        let result = self
+            .run_immut_params(
+                &query,
+                btree_params([("vec", DataValue::Vec(Vector::F32(arr)))]),
+            )
+            .map_err(cozo_err)?;
+        let mut hits = Vec::new();
+        for row in result.rows.iter() {
+            if let (Some(id), Some(dist)) = (row.first(), row.get(1)) {
+                if let (Some(id_s), Some(d)) = (id.get_str(), dist.get_float()) {
+                    hits.push(VectorHit {
+                        id: id_s.to_string(),
+                        distance: d,
+                    });
+                }
+            }
+        }
+        Ok(hits)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2877,5 +2970,77 @@ mod tests {
                 v.content_hash
             );
         }
+    }
+
+    #[test]
+    fn store_and_search_embeddings() {
+        let (_tmp, store) = make_store();
+        store
+            .insert_node(&Node::new("emb:1", "First", NodeKind::Concept, ""))
+            .unwrap();
+        store
+            .insert_node(&Node::new("emb:2", "Second", NodeKind::Concept, ""))
+            .unwrap();
+
+        // Create synthetic 384-dim vectors (all-MiniLM-L6-v2 dimensionality)
+        let mut v1 = vec![0.0f32; 384];
+        v1[0] = 1.0; // point along dim 0
+        let mut v2 = vec![0.0f32; 384];
+        v2[1] = 1.0; // point along dim 1
+        let mut query = vec![0.0f32; 384];
+        query[0] = 0.9;
+        query[1] = 0.1; // close to v1
+
+        store.store_embedding("emb:1", "test-model", &v1).unwrap();
+        store.store_embedding("emb:2", "test-model", &v2).unwrap();
+
+        let hits = store.vector_search(&query, 2).unwrap();
+        assert_eq!(hits.len(), 2);
+        // emb:1 should be closer (lower cosine distance) to query
+        assert_eq!(hits[0].id, "emb:1", "nearest neighbor should be emb:1");
+        assert!(
+            hits[0].distance < hits[1].distance,
+            "emb:1 should have lower distance than emb:2"
+        );
+    }
+
+    #[test]
+    fn graphrag_expands_neighbors() {
+        let (_tmp, store) = make_store();
+        store
+            .insert_node(&Node::new(
+                "gr:1",
+                "Vector Hit",
+                NodeKind::Concept,
+                "See [[gr:2]]",
+            ))
+            .unwrap();
+        store
+            .insert_node(&Node::new("gr:2", "Linked Neighbor", NodeKind::Concept, ""))
+            .unwrap();
+        store
+            .insert_node(&Node::new("gr:3", "Unrelated", NodeKind::Concept, ""))
+            .unwrap();
+
+        // Embed only gr:1 — gr:2 should appear via graph expansion
+        let mut v1 = vec![0.0f32; 384];
+        v1[0] = 1.0;
+        store.store_embedding("gr:1", "test-model", &v1).unwrap();
+
+        // gr:3 is embedded far away
+        let mut v3 = vec![0.0f32; 384];
+        v3[383] = 1.0;
+        store.store_embedding("gr:3", "test-model", &v3).unwrap();
+
+        let mut query = vec![0.0f32; 384];
+        query[0] = 1.0;
+
+        let hits = store.graphrag_search(&query, 1).unwrap();
+        let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+        assert!(ids.contains(&"gr:1"), "vector hit should be included");
+        assert!(
+            ids.contains(&"gr:2"),
+            "graph neighbor should be included via expansion"
+        );
     }
 }
