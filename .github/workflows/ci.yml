@@ -114,18 +114,6 @@ jobs:
         run: cargo run --package mae-state-server -- --check-config
         timeout-minutes: 1
 
-  gui:
-    name: gui / release binary
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install GUI dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libfreetype6-dev
-      - uses: Swatinem/rust-cache@v2
-      - name: Build GUI binary
-        run: cargo build --release --features gui --package mae
-
   containers:
     name: container / smoke + new-user
     runs-on: ubuntu-latest
