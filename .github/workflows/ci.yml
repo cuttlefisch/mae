@@ -40,8 +40,8 @@ jobs:
         if: matrix.step == 'test'
         timeout-minutes: 20
         run: |
-          cargo test --workspace
-          cargo test --doc --workspace
+          cargo test --workspace --release --features gui
+          cargo test --doc --workspace --release --features gui
       - name: cargo clippy
         if: matrix.step == 'clippy'
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -50,10 +50,7 @@ jobs:
         if: matrix.step == 'fmt'
         run: cargo fmt --all --check
 
-      # Upload mae binary for e2e reuse (stable/test only).
-      - name: Build release binary
-        if: matrix.toolchain == 'stable' && matrix.step == 'test'
-        run: cargo build --release --features gui --package mae
+      # The release test build above already produced the GUI binary.
       - name: Upload mae binary
         if: matrix.toolchain == 'stable' && matrix.step == 'test'
         uses: actions/upload-artifact@v4
