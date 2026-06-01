@@ -36,12 +36,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Stable: release build (reused by e2e job via artifact upload).
+      # Nightly: debug build (faster, no artifact needed).
       - name: cargo test
         if: matrix.step == 'test'
         timeout-minutes: 20
         run: |
-          cargo test --workspace --release --features gui
-          cargo test --doc --workspace --release --features gui
+          if [ "${{ matrix.toolchain }}" = "stable" ]; then
+            cargo test --workspace --release --features gui
+            cargo test --doc --workspace --release --features gui
+          else
+            cargo test --workspace
+            cargo test --doc --workspace
+          fi
       - name: cargo clippy
         if: matrix.step == 'clippy'
         run: cargo clippy --workspace --all-targets -- -D warnings

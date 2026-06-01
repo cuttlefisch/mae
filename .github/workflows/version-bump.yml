@@ -22,32 +22,17 @@ jobs:
         env:
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
         run: |
-          # PR labels take precedence over commit message scanning.
-          # Use release:major, release:minor, or release:patch labels.
+          # Only bump minor/major with explicit PR labels.
+          # Default is always patch — no commit message inference.
           if echo "$PR_LABELS" | grep -q 'release:major'; then
             echo "bump=major" >> "$GITHUB_OUTPUT"
             echo "Bump type: major (from PR label)"
           elif echo "$PR_LABELS" | grep -q 'release:minor'; then
             echo "bump=minor" >> "$GITHUB_OUTPUT"
             echo "Bump type: minor (from PR label)"
-          elif echo "$PR_LABELS" | grep -q 'release:patch'; then
-            echo "bump=patch" >> "$GITHUB_OUTPUT"
-            echo "Bump type: patch (from PR label)"
           else
-            # Fall back to conventional commit analysis
-            COMMITS=$(git log --format="%s" \
-              ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.merge_commit_sha }})
-
-            if echo "$COMMITS" | grep -qiE '^(feat|feature)(\(.+\))?!:'; then
-              echo "bump=major" >> "$GITHUB_OUTPUT"
-              echo "Bump type: major (from commit: breaking change)"
-            elif echo "$COMMITS" | grep -qiE '^feat(\(.+\))?:'; then
-              echo "bump=minor" >> "$GITHUB_OUTPUT"
-              echo "Bump type: minor (from commit: feat)"
-            else
-              echo "bump=patch" >> "$GITHUB_OUTPUT"
-              echo "Bump type: patch (from commit: default)"
-            fi
+            echo "bump=patch" >> "$GITHUB_OUTPUT"
+            echo "Bump type: patch (default)"
           fi
 
       - name: Bump version
