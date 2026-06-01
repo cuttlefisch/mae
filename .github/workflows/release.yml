@@ -197,8 +197,13 @@ jobs:
           chmod +x dist/mae dist/mae-state-server
           tar czf dist/mae-macos-aarch64-tui.tar.gz -C dist mae mae-state-server
 
-          # Zip the .app bundle (ditto preserves macOS metadata/resource forks)
-          cd dist && ditto -c -k --sequesterRsrc --keepParent MAE.app MAE-macos-aarch64.zip
+          # Zip the .app bundle + state server (ditto preserves macOS metadata/resource forks)
+          # Both MAE.app and mae-state-server go in the zip so users get everything in one download
+          mkdir -p dist/mae-gui-pkg
+          cp -R dist/MAE.app dist/mae-gui-pkg/MAE.app
+          cp target/release/mae-state-server dist/mae-gui-pkg/mae-state-server
+          chmod +x dist/mae-gui-pkg/mae-state-server
+          cd dist && ditto -c -k --sequesterRsrc mae-gui-pkg MAE-macos-aarch64.zip
 
       - uses: actions/upload-artifact@v7
         with:
@@ -232,11 +237,24 @@ jobs:
 
           ---
 
+          ## Download Guide
+
+          | Platform | File | Contents |
+          |----------|------|----------|
+          | **macOS GUI** | `MAE-macos-aarch64.zip` | `MAE.app` + `mae-state-server` (collab) |
+          | **macOS TUI** | `mae-macos-aarch64-tui.tar.gz` | `mae` (terminal) + `mae-state-server` |
+          | **Linux GUI** | `mae-linux-x86_64-gui.AppImage` | GUI AppImage (standalone) |
+          | **Linux TUI** | `mae-linux-x86_64.tar.gz` | `mae` (static musl) + `mae-state-server` |
+
           ## After Installation
 
-          **macOS (.app bundle):** The app is unsigned. Before first launch:
+          **macOS (.app bundle):** The app is unsigned. Before first launch, either:
+          - **Right-click** → **Open** → click **Open** in the dialog (easiest), or:
+          - Terminal: `xattr -c /path/to/MAE.app`
+
+          **macOS state server:** Move `mae-state-server` to a directory in your `$PATH`:
           ```bash
-          xattr -c /path/to/MAE.app
+          cp mae-state-server /usr/local/bin/
           ```
 
           **First launch:** MAE runs a setup wizard — choose your AI provider, model, API key, and theme.
