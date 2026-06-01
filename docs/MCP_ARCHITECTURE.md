@@ -180,9 +180,9 @@ Event types: `buffer_edit`, `cursor_move`, `diagnostics`, `mode_change`, `buffer
 ## Security
 
 - **Unix socket permissions**: standard filesystem permissions (owner-only by default)
-- **No authentication** (v1): trusted local/LAN use only
-- **No TLS**: Unix sockets are local, TCP is plaintext
-- **Auth roadmap**: PSK → SSH key exchange → OAuth/OIDC (via `initialize` params extension)
+- **MCP socket**: no per-client auth (Unix permissions only, local use)
+- **Collab TCP**: PSK mutual auth (HMAC-SHA256) since v0.11.0; no TLS (plaintext)
+- **Auth roadmap**: ✅ PSK → SSH key exchange → OAuth/OIDC (via `initialize` params extension)
 - **Transcripts**: stored in `~/.local/share/mae/transcripts/` — contain raw tool output (no secret scrubbing)
 - **Shell blocklist**: substring-based, bypassable — defense in depth, not a sandbox
 

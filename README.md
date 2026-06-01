@@ -350,9 +350,9 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, KB federation |
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
 | 11. Module System | ✅ Complete | 19 modules (Doom model), `mae pkg` CLI, flags, live reload |
-| 12. Collaborative Editing | 🔧 Protocol complete | CRDT state server, multi-peer sync, WAL persistence, awareness, per-user undo. User-facing release blocked on Scheme runtime (Phase 13) |
-| 13. Scheme Runtime | 🔧 Planned | MAE-native R7RS-small with `mae:` namespace, async/yield, proper error signaling |
-| **Next** | 🔧 In progress | Scheme runtime replacement, PDF preview, semantic search. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) |
+| 12. Collaborative Editing | ✅ Complete | CRDT state server, multi-peer sync, WAL persistence, awareness, per-user undo, PSK auth, KB sharing E2E |
+| 13. Scheme Runtime | ✅ Complete | mae-scheme R7RS-small VM, Steel fully removed, 2,200+ Scheme tests |
+| **Next** | 🔧 In progress | KB storage (CozoDB), PDF preview, semantic search. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) |
 
 ## Design Lineage
 
@@ -367,7 +367,7 @@ decisions that led to its current maintenance burden:
 - **Fix ratio doubled** — from 15% to 32% over 35 years. Rust's type system
   structurally prevents this.
 - **Bus factor of ~4** — top 5 contributors = 50.8% of commits. MAE enforces
-  module boundaries across 18 crates.
+  module boundaries across 20 crates.
 
 ## Self-Hosting
 

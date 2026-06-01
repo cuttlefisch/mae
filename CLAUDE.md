@@ -503,8 +503,8 @@ mae-state-server doctor             # run diagnostics
 
 **P2P readiness:** Transport layer (`read_message`/`write_framed`) is generic over `AsyncWrite`/`AsyncBufRead` — P2P-ready by design. P2P collaboration via mDNS LAN discovery is planned (ROADMAP).
 
-**Security (v1):** No authentication. TCP is open. For trusted LAN use only.
-Auth roadmap: PSK → SSH key exchange → OAuth/OIDC (via `initialize` params extension).
+**Security:** PSK mutual authentication (HMAC-SHA256) since v0.11.0. Both server and clients must share the same `collab_psk`. For untrusted networks, use a VPN (Tailscale/WireGuard).
+Auth roadmap: ✅ PSK (v0.11.0+) → SSH key exchange (planned) → OAuth/OIDC (planned, via `initialize` params extension).
 
 **Systemd:** `assets/mae-state-server.service` (user unit)
 

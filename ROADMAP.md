@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.11.0 · **Tests:** 5,796+ passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete + PSK auth + KB sharing E2E, Phase 13 (Scheme runtime) complete. v0.11.1: KB storage architecture (SQLite-first + KbStore trait).
+**Current version:** v0.11.1 · **Tests:** 5,796+ passing · **Status:** Alpha — Phases 1-13 complete. v0.11.1: KB storage architecture (SQLite-first + KbStore trait + CozoDB backend).
 
 ---
 
@@ -121,7 +121,7 @@
   - **SSH Key Exchange Authentication** (deferred from v0.11.0):
     - Ed25519 keypair generation + TOFU trust store (`~/.config/mae/trusted_keys.toml`)
     - `SshAuth` provider implementing existing `AuthProvider` trait (`crates/sync/src/auth.rs`)
-    - Client-side auth in `collab_bridge.rs` (currently sends `initialize` with no auth or PSK)
+    - Client-side auth in `collab_bridge.rs` (currently sends `initialize` with PSK when configured)
     - Crates: `ed25519-dalek` v2, `ssh-key` v0.6
     - Prior art: SSH RFC 4252 challenge-response, Syncthing device IDs, WireGuard Noise_IKpsk2
     - See `research:ssh-key-exchange-patterns` KB node for full analysis

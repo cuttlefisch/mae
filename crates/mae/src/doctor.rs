@@ -340,11 +340,17 @@ pub fn run_doctor() -> i32 {
             }
         }
 
-        println!(
-            "  {} No authentication in v1 — restrict to trusted networks or use VPN",
-            YELLOW_WARN
-        );
-        warnings += 1;
+        let has_psk = doctor_cfg.collaboration.psk.is_some()
+            || doctor_cfg.collaboration.psk_command.is_some();
+        if has_psk {
+            println!("  {} PSK authentication configured", GREEN_CHECK);
+        } else {
+            println!(
+                "  {} No PSK configured — collab connections will be unauthenticated",
+                YELLOW_WARN
+            );
+            warnings += 1;
+        }
     }
 
     // --- Summary ---

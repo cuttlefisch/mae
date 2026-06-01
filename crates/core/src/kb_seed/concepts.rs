@@ -1537,8 +1537,8 @@ The server can be started with:\n\
 ```bash\n\
 mae-state-server --bind 0.0.0.0:9473\n\
 ```\n\n\
-> **Security (v1):** No authentication. Restrict access to a trusted LAN \n\
-> or VPN. Do not expose the state server port to the public internet.\n\n\
+> **Security:** PSK mutual authentication (HMAC-SHA256) is required since v0.11.0.\n\
+> Set `collab_psk` on both server and clients. For untrusted networks, use a VPN.\n\n\
 ## Commands\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
