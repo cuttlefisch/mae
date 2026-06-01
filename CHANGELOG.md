@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(ci)* Bump test timeout 20m→30m ([c5707d1](https://github.com/cuttlefisch/mae/commit/c5707d17afd6d05d43a06d58ce672ee1ab20a72f))
+
+## [0.11.2] - 2026-06-01
+
+### Bug Fixes
+
 - AI tool parity, code quality, docs — v0.11.1 stability ([b424e8a](https://github.com/cuttlefisch/mae/commit/b424e8a7b36fbd709f4e1a426c923fec73072d22))
 - CozoDB Tantivy FTS — post-query verification for sled backend ([7ae2233](https://github.com/cuttlefisch/mae/commit/7ae22337652c7348dc989b0f37a35a08082d9d63))
 - *(ci)* Cargo-deny all-features + cozo dep cleanup ([14c8377](https://github.com/cuttlefisch/mae/commit/14c83773af692c8aa5fbba50ac3afec159f73615))
@@ -36,6 +42,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Bump version to 0.12.0 ([f2c836d](https://github.com/cuttlefisch/mae/commit/f2c836dfa6303972bcd1c1345b90e71ca229e822))
+- Bump version to 0.11.2 ([91aa06a](https://github.com/cuttlefisch/mae/commit/91aa06a895d46e987c7ee35ef34d0e836a23aad4))
 
 ### Testing
 
