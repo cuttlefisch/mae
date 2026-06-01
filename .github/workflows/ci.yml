@@ -62,21 +62,6 @@ jobs:
           path: target/release/mae
           retention-days: 1
 
-  # Rollup job for branch protection — matrix jobs expand to individual names
-  # (e.g. "stable / test") but branch protection may require "stable / check".
-  check-rollup:
-    name: stable / check
-    runs-on: ubuntu-latest
-    needs: [check]
-    if: always()
-    steps:
-      - name: All matrix jobs succeeded
-        run: |
-          if [[ "${{ needs.check.result }}" != "success" ]]; then
-            echo "::error::Matrix check jobs failed or were cancelled"
-            exit 1
-          fi
-
   audit:
     name: cargo-deny
     runs-on: ubuntu-latest
