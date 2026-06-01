@@ -228,6 +228,25 @@ jobs:
         run: |
           cargo install git-cliff
           git cliff --current --output CHANGELOG-release.md
+          cat >> CHANGELOG-release.md << 'FOOTER'
+
+          ---
+
+          ## After Installation
+
+          **macOS (.app bundle):** The app is unsigned. Before first launch:
+          ```bash
+          xattr -c /path/to/MAE.app
+          ```
+
+          **First launch:** MAE runs a setup wizard — choose your AI provider, model, API key, and theme.
+
+          **Guided setup:**
+          - `:help tutorial:ai-setup` — step-by-step AI configuration (Claude/OpenAI/Gemini/DeepSeek)
+          - `:help tutorial:collab-setup` — multi-user collaborative editing
+
+          **Verify:** `:ai-ping` (AI connectivity) and `:collab-doctor` (collaboration diagnostics)
+          FOOTER
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3

@@ -512,22 +512,38 @@ For multi-machine use, bind to all interfaces:\n\
 mae-state-server --bind 0.0.0.0:9473\n\
 ```\n\n\
 Or press `SPC C s` inside MAE to start a local server automatically.\n\n\
-### Step 3 — Configure MAE to use the server\n\n\
+### Step 3 — Set a shared secret (PSK authentication)\n\n\
+MAE uses HMAC-SHA256 mutual authentication. Both the server and all \
+clients must share the same pre-shared key.\n\n\
+In `~/.config/mae/config.toml`:\n\
+```toml\n\
+[collaboration]\n\
+psk = \"your-shared-secret-here\"\n\
+```\n\n\
+For the server, add the same key to `~/.config/mae/state-server.toml`:\n\
+```toml\n\
+psk = \"your-shared-secret-here\"\n\
+```\n\n\
+For production, use a secrets manager instead of plaintext:\n\
+```toml\n\
+psk_command = \"pass show mae/collab-psk\"\n\
+```\n\n\
+### Step 4 — Configure MAE to use the server\n\n\
 In your Scheme REPL (`:eval`) or `init.scm`:\n\
 ```scheme\n\
 (set-option! \"collab-server-address\" \"127.0.0.1:9473\")\n\
 ```\n\n\
 For remote servers, replace `127.0.0.1:9473` with `host:port`.\n\n\
-### Step 4 — Connect\n\n\
+### Step 5 — Connect\n\n\
 Either enable auto-connect so MAE connects on every startup:\n\
 ```scheme\n\
 (set-option! \"collab-auto-connect\" \"true\")\n\
 ```\n\n\
 Or connect manually: `SPC C c` (`:collab-connect`).\n\n\
-### Step 5 — Share a buffer\n\n\
+### Step 6 — Share a buffer\n\n\
 Open a file you want to collaborate on, then press `SPC C S` \
 (`:collab-share`). The buffer is now visible to all connected peers.\n\n\
-### Step 5b — Discover and join shared documents\n\n\
+### Step 6b — Discover and join shared documents\n\n\
 - `SPC C l` (`:collab-list`) — list all documents shared on the server.\n\
 - `SPC C j` (`:collab-join`) — open a picker to select and join a shared document.\n\
 - `:collab-join <name>` — join a specific document by name.\n\n\
@@ -537,12 +553,12 @@ live-synced via CRDT, but you choose where (or whether) to save locally:\n\
 - `:w` on a pathless joined buffer shows guidance to use `:saveas`.\n\
 - Enable `collab_auto_resolve_paths` to get prompted when the file \
   matches a path in your local project.\n\n\
-### Step 6 — Verify the connection\n\n\
+### Step 7 — Verify the connection\n\n\
 - `SPC C i` (`:collab-status`) — shows server address, connected peers, \
   and shared document list.\n\
 - `mae doctor` (from the terminal) — checks server process health, \
   port availability, and WAL integrity.\n\n\
-### Step 7 — AI tools for collaboration\n\n\
+### Step 8 — AI tools for collaboration\n\n\
 The AI agent has direct access to collaboration state via four tools:\n\n\
 | Tool | Description |\n\
 |------|-------------|\n\
@@ -578,15 +594,16 @@ mae-state-server --bind 0.0.0.0:9473\n\
 Open the firewall port:\n\
 - Fedora: `sudo firewall-cmd --add-port=9473/tcp --permanent && sudo firewall-cmd --reload`\n\
 - Ubuntu: `sudo ufw allow 9473/tcp`\n\n\
-**Security warning:** v1 has no authentication. Never expose to the public internet. \
-Use a VPN (Tailscale/WireGuard) for untrusted networks.\n\n\
+**Security:** MAE uses PSK (HMAC-SHA256) mutual authentication. Set `collab_psk` \
+on both server and clients. For untrusted networks, use a VPN (Tailscale/WireGuard).\n\n\
 ### Troubleshooting\n\n\
 - **Connection refused** — check `mae-state-server` is running: `ss -tlnp | grep 9473`\n\
+- **Auth failed** — PSK mismatch: ensure server and all clients use the same `collab_psk`\n\
 - **No peers visible** — ensure all clients use the same `collab-server-address`\n\
 - **Stale state after restart** — run `:collab-doctor` to inspect WAL health; \
   the server recovers from WAL automatically on restart\n\
 - **Permission denied on port** — use a port above 1024 (default 9473 is fine)\n\
-- **Firewall blocking** — run `mae doctor` for firewall diagnostics\n\n\
+- **Firewall blocking** — run `:collab-doctor` for connectivity diagnostics\n\n\
 **Index:** [[tutor:index|Tutorial]]\n\n\
 See also: [[concept:collab-architecture]], [[concept:collab-workflows]], \
 [[concept:sync-engine]], [[index]]\n";

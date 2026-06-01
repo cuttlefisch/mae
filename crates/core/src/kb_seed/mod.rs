@@ -1320,6 +1320,25 @@ mod tests {
     }
 
     #[test]
+    fn tutorial_collab_setup_exists() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        assert!(
+            kb.contains("tutorial:collab-setup"),
+            "missing tutorial:collab-setup"
+        );
+        // Should link to lesson and concept nodes
+        let links = kb.links_from("tutorial:collab-setup");
+        assert!(
+            links.contains(&"lesson:collab-setup".to_string()),
+            "collab tutorial should link to lesson:collab-setup"
+        );
+        assert!(
+            links.contains(&"concept:collab-architecture".to_string()),
+            "collab tutorial should link to concept:collab-architecture"
+        );
+    }
+
+    #[test]
     fn tutorial_shared_nodes_linked_from_both_tracks() {
         let kb = seed_kb_default(&CommandRegistry::with_builtins());
         // Vim track links to mae-navigation

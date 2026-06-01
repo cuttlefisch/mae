@@ -85,6 +85,14 @@ pub(super) fn install_tutorial_nodes(kb: &mut KnowledgeBase) {
             TUTORIAL_AI_CHAT,
         )
         .with_tags(["tutorial", "ai"]),
+        // Collaboration track
+        Node::new(
+            "tutorial:collab-setup",
+            "Tutorial: Collaborative Setup",
+            NodeKind::Concept,
+            TUTORIAL_COLLAB_SETUP,
+        )
+        .with_tags(["tutorial", "collaboration", "sync"]),
     ];
 
     for node in nodes {
@@ -104,6 +112,8 @@ Choose your track:\n\n\
 → [[tutorial:what-is-modal|Start here]] — what modes are, basic movement, basic editing\n\n\
 ## Set up AI\n\
 → [[tutorial:ai-setup|AI Setup]] — API key configuration, provider selection, agent vs chat\n\n\
+## Collaborate\n\
+→ [[tutorial:collab-setup|Collaborative Setup]] — share buffers and KBs across machines\n\n\
 Each track is a linked sequence of short lessons. Follow the **Next:** links at the bottom.\n\n\
 See also: [[tutor:index|Lesson-style Tutorial]], [[index|Help Index]]\n\n\
 * Getting Help\n\
@@ -349,38 +359,98 @@ See also: [[tutorial:ai-setup|Set up AI]]\n\n\
 
 const TUTORIAL_AI_SETUP: &str = "\
 # AI Setup\n\n\
-MAE has two AI interfaces: **AI Agent** (terminal) and **AI Chat** (built-in).\n\n\
-## AI Chat — built-in conversation\n\
-The built-in AI has full access to your editor context (buffers, LSP, diagnostics).\n\n\
-### Configure provider\n\
-In `~/.config/mae/config.toml`:\n\
+MAE has two AI interfaces: **AI Chat** (built-in, `SPC a p`) and \
+**AI Agent** (terminal, `SPC a a`). This guide walks you through \
+configuring either one.\n\n\
+## 1. Prerequisites\n\n\
+You need a running MAE instance (you're reading this, so you have one) \
+and an API key from at least one provider.\n\n\
+## 2. Locate your config\n\n\
+MAE stores configuration at `~/.config/mae/config.toml` (or \
+`$XDG_CONFIG_HOME/mae/config.toml`). Edit it with `SPC f c` or \
+`:edit-config`.\n\n\
+If this is your first launch, the **setup wizard** runs automatically \
+and handles provider selection, model, and API key.\n\n\
+**Checkpoint:** `:describe-configuration` shows config file path and load status.\n\n\
+## 3. Choose a provider\n\n\
+### Claude (Anthropic)\n\
+1. Get an API key: https://console.anthropic.com/settings/keys\n\
+2. Add to `~/.config/mae/config.toml`:\n\
 ```toml\n\
 [ai]\n\
-provider = \"claude\"        # or \"openai\", \"gemini\", \"deepseek\"\n\
+provider = \"claude\"\n\
 model = \"claude-sonnet-4-20250514\"\n\
+api_key = \"sk-ant-...\"\n\
+```\n\
+3. Or use a secrets manager:\n\
+```toml\n\
+api_key_command = \"pass show anthropic/api-key\"\n\
 ```\n\n\
-### API key\n\
-Set the appropriate environment variable:\n\
-- Claude: `ANTHROPIC_API_KEY`\n\
-- OpenAI: `OPENAI_API_KEY`\n\
-- Gemini: `GEMINI_API_KEY`\n\
-- DeepSeek: `DEEPSEEK_API_KEY`\n\n\
-Or use `api_key_command` to fetch from a secrets manager:\n\
+### OpenAI\n\
+1. Get an API key: https://platform.openai.com/api-keys\n\
+2. Config:\n\
 ```toml\n\
 [ai]\n\
-api_key_command = \"pass show api/anthropic\"\n\
+provider = \"openai\"\n\
+model = \"gpt-4o\"\n\
+api_key = \"sk-...\"\n\
 ```\n\n\
-## AI Agent — terminal-based\n\
-`SPC a a` opens an external AI agent (Claude Code, gemini-cli, etc.) in a terminal.\n\
-Configure which command to run:\n\
+### Gemini (Google)\n\
+1. Get an API key: https://aistudio.google.com/apikeys\n\
+2. Config:\n\
 ```toml\n\
 [ai]\n\
-editor = \"claude\"          # command to run\n\
+provider = \"gemini\"\n\
+model = \"gemini-2.5-pro\"\n\
+api_key = \"AI...\"\n\
 ```\n\n\
-## Verify setup\n\
-Press `SPC a p` and type a message. If you see a response, AI Chat is working.\n\
-Press `SPC a a` to launch the agent terminal.\n\n\
-**Next:** [[tutorial:ai-agent|AI Agent (Terminal)]]\n\n\
+### DeepSeek\n\
+1. Get an API key: https://platform.deepseek.com/api_keys\n\
+2. Config:\n\
+```toml\n\
+[ai]\n\
+provider = \"deepseek\"\n\
+model = \"deepseek-chat\"\n\
+api_key = \"sk-...\"\n\
+```\n\n\
+### Environment variable alternative\n\
+Instead of putting keys in config, set one of:\n\
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`\n\
+- Or the universal override: `MAE_AI_API_KEY`\n\n\
+**Checkpoint:** `:ai-status` shows provider name, model, and \"configured\" status.\n\n\
+## 4. Verify connectivity\n\n\
+Run `:ai-ping` — you should see \"pong\" with a latency measurement.\n\n\
+**Checkpoint:** `:ai-ping` returns success (not \"no provider configured\" or timeout).\n\n\
+## 5. Test your agent\n\n\
+Open AI chat with `SPC a p` (or `:ai-chat`) and try:\n\
+> What file am I editing?\n\n\
+The AI should respond with your current buffer name — this proves \
+tool-calling is working end-to-end.\n\n\
+**Checkpoint:** AI responds with current buffer name.\n\n\
+## 6. Security hardening (recommended)\n\n\
+Replace plaintext `api_key = \"...\"` with a command that fetches from \
+your secrets manager:\n\
+```toml\n\
+# Linux (pass)\n\
+api_key_command = \"pass show anthropic/api-key\"\n\n\
+# macOS Keychain\n\
+api_key_command = \"security find-generic-password -s mae-ai -w\"\n\
+```\n\n\
+**Checkpoint:** `:describe-configuration` shows `api_key_source: command` \
+(not `plaintext`).\n\n\
+## 7. AI Agent (terminal-based)\n\n\
+`SPC a a` launches an external AI agent (Claude Code, gemini-cli, etc.) \
+in MAE's embedded terminal. Configure which command to run:\n\
+```toml\n\
+[ai]\n\
+editor = \"claude\"          # or \"gemini\", \"aider\", etc.\n\
+```\n\n\
+The agent gets access to MAE's editor tools via the MCP bridge.\n\n\
+## Next steps\n\n\
+- [[tutorial:ai-agent|AI Agent (Terminal)]] — deep dive on agent workflows\n\
+- [[tutorial:ai-chat|AI Chat (Built-in)]] — conversation UI, persistence, budgets\n\
+- [[tutorial:collab-setup|Collaborative Setup]] — share buffers across machines\n\
+- [[concept:ai-as-peer|AI as Peer]] — architecture: how the AI is a peer actor\n\n\
 * Getting Help\n\
 - `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
@@ -451,6 +521,89 @@ Conversations are saved per project in `.mae/conversation.json`.\n\
 - Use `Escape` during AI operation to cancel and regain input\n\
 - The token budget dashboard shows usage in the status bar\n\n\
 See also: [[concept:ai-as-peer|AI as Peer]], [[concept:ai-modes|Agent vs Chat]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the MAE manual\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
+const TUTORIAL_COLLAB_SETUP: &str = "\
+# Collaborative Setup\n\n\
+This guide walks you through multi-user collaborative editing — sharing \
+buffers and knowledge bases between MAE instances on different machines.\n\n\
+## 1. Prerequisites\n\n\
+- Two machines (or two MAE instances) on the same network\n\
+- Both running MAE v0.11.1 or later\n\
+- The `mae-state-server` binary (included in release artifacts)\n\n\
+**Checkpoint:** `:verify` shows version >= 0.11.1.\n\n\
+## 2. Start the state server\n\n\
+On the **host machine**, run:\n\
+```bash\n\
+mae-state-server --bind 0.0.0.0:9473\n\
+```\n\n\
+Note the host's IP address:\n\
+- Linux: `hostname -I`\n\
+- macOS: `ipconfig getifaddr en0`\n\n\
+**Checkpoint:** Server logs \"listening on 0.0.0.0:9473\".\n\n\
+## 3. Set a shared secret (PSK)\n\n\
+On **both machines**, add to `~/.config/mae/config.toml`:\n\
+```toml\n\
+[collaboration]\n\
+psk = \"your-shared-secret-here\"\n\
+```\n\n\
+Both machines MUST use the same PSK. For production use, prefer:\n\
+```toml\n\
+psk_command = \"pass show mae/collab-psk\"\n\
+```\n\n\
+The server also needs the PSK in its config \
+(`~/.config/mae/state-server.toml`):\n\
+```toml\n\
+psk = \"your-shared-secret-here\"\n\
+```\n\n\
+**Checkpoint:** `:describe-configuration` shows `collab_psk: set`.\n\n\
+## 4. Connect from the second machine\n\n\
+```\n\
+:collab-connect <host-ip>:9473\n\
+```\n\n\
+Or configure auto-connect in `config.toml`:\n\
+```toml\n\
+[collaboration]\n\
+server_address = \"<host-ip>:9473\"\n\
+auto_connect = true\n\
+```\n\n\
+**Checkpoint:** `:collab-status` shows `connected`, peer count >= 1.\n\n\
+## 5. Share a buffer\n\n\
+On either machine, open a file and run `:collab-share`. \
+On the other machine, `:collab-list` shows shared docs.\n\n\
+**Checkpoint:** `:collab-status` shows shared doc count >= 1; \
+edits appear on both sides.\n\n\
+## 6. Share a knowledge base\n\n\
+On the host: `:kb-share` — shares the active KB.\n\
+On the peer: `:kb-join` — joins the shared KB.\n\n\
+**Checkpoint:** `:collab-status` shows KB sync active; \
+`:kb-list` shows shared nodes.\n\n\
+## 7. Verify sync\n\n\
+Edit a shared buffer on one machine — the change should appear on the \
+other within 1 second. Create a KB node on one machine:\n\
+```\n\
+:kb-create \"test-sync\" \"Sync Test\" \"note\" \"Hello from machine A\"\n\
+```\n\n\
+**Checkpoint:** `:kb-get \"test-sync\"` on the other machine returns the node.\n\n\
+## 8. Troubleshooting\n\n\
+Run `:collab-doctor` for comprehensive diagnostics. Common issues:\n\
+- **\"connection refused\"** — firewall blocking port 9473, or server not running\n\
+- **\"auth failed\"** — PSK mismatch between machines\n\
+- **\"timeout\"** — wrong IP address, or machines not on same network\n\n\
+Open firewall if needed:\n\
+- macOS: allow in System Settings > Network > Firewall\n\
+- Linux: `sudo firewall-cmd --add-port=9473/tcp --permanent`\n\n\
+**Checkpoint:** `:collab-doctor` returns all checks green.\n\n\
+## Next steps\n\n\
+- [[lesson:collab-setup|Collaborative Editing (detailed lesson)]] — systemd, client-frame, network setup\n\
+- [[concept:collab-architecture|Architecture]] — how sync works under the hood\n\
+- [[concept:kb-sharing|KB Sharing]] — collaborative knowledge bases in depth\n\
+- [[tutorial:ai-setup|AI Setup]] — configure AI providers\n\n\
 * Getting Help\n\
 - `SPC h` opens the MAE manual\n\
 - `SPC h s` searches all help topics\n\
