@@ -197,14 +197,14 @@ jobs:
           chmod +x dist/mae dist/mae-state-server
           tar czf dist/mae-macos-aarch64-tui.tar.gz -C dist mae mae-state-server
 
-          # Zip the .app bundle
-          cd dist && zip -r mae-macos-aarch64.zip MAE.app
+          # Zip the .app bundle (ditto preserves macOS metadata/resource forks)
+          cd dist && ditto -c -k --sequesterRsrc --keepParent MAE.app MAE-macos-aarch64.zip
 
       - uses: actions/upload-artifact@v7
         with:
           name: mae-macos-aarch64
           path: |
-            dist/mae-macos-aarch64.zip
+            dist/MAE-macos-aarch64.zip
             dist/mae-macos-aarch64-tui.tar.gz
 
   release:
@@ -255,6 +255,6 @@ jobs:
           files: |
             dist/mae-linux-x86_64.tar.gz
             dist/mae-linux-x86_64-gui.AppImage
-            dist/mae-macos-aarch64.zip
+            dist/MAE-macos-aarch64.zip
             dist/mae-macos-aarch64-tui.tar.gz
           fail_on_unmatched_files: true
