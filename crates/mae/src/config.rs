@@ -42,6 +42,8 @@ pub struct Config {
     pub org: OrgSection,
     #[serde(default)]
     pub collaboration: CollaborationSection,
+    #[serde(default)]
+    pub kb: KbSection,
 }
 
 /// Current config schema version. Bump when config.toml format changes.
@@ -179,6 +181,25 @@ pub struct CollaborationSection {
     pub psk: Option<String>,
     /// KB sync mode: "on_save" (default) or "manual".
     pub kb_sync_mode: Option<String>,
+}
+
+fn default_backend() -> String {
+    "cozo".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KbSection {
+    /// Storage backend: "cozo" (graph-native, default) or "sqlite" (legacy fallback).
+    #[serde(default = "default_backend")]
+    pub backend: String,
+}
+
+impl Default for KbSection {
+    fn default() -> Self {
+        Self {
+            backend: "cozo".to_string(),
+        }
+    }
 }
 
 fn default_true() -> bool {

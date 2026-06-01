@@ -17,6 +17,10 @@ pub struct Link {
     pub dst: String,
     pub rel_type: String,
     pub display: Option<String>,
+    /// Edge weight (0.0–1.0). Default 1.0 for human-authored links.
+    pub weight: f64,
+    /// Confidence score (0.0–1.0). AI-generated links carry lower confidence.
+    pub confidence: f64,
 }
 
 /// A search hit from FTS.
@@ -40,6 +44,127 @@ pub struct PendingUpdate {
 pub struct SubGraph {
     pub nodes: Vec<(String, String)>,         // (id, title)
     pub edges: Vec<(String, String, String)>, // (src, dst, rel_type)
+}
+
+/// A member of a meta-node (ordered reference to another node).
+#[derive(Debug, Clone)]
+pub struct MetaMember {
+    pub member_id: String,
+    pub position: i32,
+    /// Role: "content" (include body), "reference" (link only), "transclusion" (inline).
+    pub role: String,
+}
+
+/// A paragraph-level block within a node.
+#[derive(Debug, Clone)]
+pub struct Block {
+    pub block_idx: usize,
+    pub content: String,
+    /// Block type: "paragraph", "heading", "code", "list".
+    pub block_type: String,
+}
+
+/// Filter for agenda queries.
+#[derive(Debug, Clone)]
+pub enum AgendaFilter {
+    /// Nodes with a specific todo state (or any todo state if None).
+    Todo(Option<String>),
+    /// Nodes with priority >= the given char.
+    Priority(char),
+    /// Nodes with a specific tag.
+    Tag(String),
+    /// Nodes not updated in N days.
+    Stale(u32),
+    /// Nodes with no incoming or outgoing links.
+    Orphan,
+    /// Nodes with no outgoing links.
+    DeadEnd,
+    /// Raw Datalog query (CozoDB only).
+    Custom(String),
+}
+
+/// A version snapshot of a node.
+///
+/// Each version carries a SHA-256 content checksum for tamper evidence.
+/// On restore, the checksum is recomputed and verified before applying.
+/// This supports SOC II audit trail requirements.
+#[derive(Debug, Clone)]
+pub struct NodeVersion {
+    pub version: i64,
+    pub title: String,
+    pub body: String,
+    pub tags_json: String,
+    pub todo_state: String,
+    pub priority: String,
+    pub change_summary: String,
+    pub author: String,
+    pub created_at: i64,
+    /// SHA-256 hex digest of `title|body|tags_json|todo_state|priority`.
+    /// Used for tamper detection on restore.
+    pub content_hash: String,
+}
+
+impl NodeVersion {
+    /// Compute a SHA-256 content hash for this version's fields.
+    ///
+    /// The canonical form is `title|body|tags_json|todo_state|priority`
+    /// hashed with SHA-256 and returned as a 64-char hex digest.
+    /// This provides SOC II–compliant tamper evidence for audit trails.
+    pub fn compute_hash(
+        title: &str,
+        body: &str,
+        tags_json: &str,
+        todo_state: &str,
+        priority: &str,
+    ) -> String {
+        use sha2::{Digest, Sha256};
+        let canonical = format!("{title}|{body}|{tags_json}|{todo_state}|{priority}");
+        let hash = Sha256::digest(canonical.as_bytes());
+        format!("{hash:x}")
+    }
+
+    /// Verify this version's content_hash matches its fields.
+    pub fn verify_integrity(&self) -> bool {
+        let expected = Self::compute_hash(
+            &self.title,
+            &self.body,
+            &self.tags_json,
+            &self.todo_state,
+            &self.priority,
+        );
+        self.content_hash == expected
+    }
+}
+
+/// Error when a version's content hash doesn't match (tamper detected).
+#[derive(Debug)]
+pub struct IntegrityError {
+    pub node_id: String,
+    pub version: i64,
+    pub expected_hash: String,
+    pub actual_hash: String,
+}
+
+impl std::fmt::Display for IntegrityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "integrity check failed for {}@v{}: expected {}, got {}",
+            self.node_id, self.version, self.expected_hash, self.actual_hash
+        )
+    }
+}
+
+/// Structured KB health report.
+#[derive(Debug, Clone)]
+pub struct HealthReport {
+    pub total_nodes: usize,
+    pub total_links: usize,
+    pub by_kind: std::collections::HashMap<String, usize>,
+    pub by_rel_type: std::collections::HashMap<String, usize>,
+    pub orphan_count: usize,
+    pub broken_link_count: usize,
+    pub hub_nodes: Vec<(String, usize)>,
 }
 
 /// Error type for KbStore operations.
@@ -164,6 +289,90 @@ pub trait KbStore: Send + Sync {
     fn raw_query(&self, _script: &str) -> Result<(Vec<String>, Vec<Vec<String>>), KbStoreError> {
         Err(KbStoreError::NotSupported(
             "raw queries require CozoDB backend".into(),
+        ))
+    }
+
+    // --- Meta-nodes (Phase D) ---
+
+    /// Get ordered members of a meta-node.
+    fn meta_members(&self, _meta_id: &str) -> Result<Vec<MetaMember>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "meta-nodes require CozoDB backend".into(),
+        ))
+    }
+
+    /// Add a member to a meta-node at the given position.
+    fn add_meta_member(
+        &self,
+        _meta_id: &str,
+        _member_id: &str,
+        _position: i32,
+        _role: &str,
+    ) -> Result<(), KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "meta-nodes require CozoDB backend".into(),
+        ))
+    }
+
+    /// Remove a member from a meta-node.
+    fn remove_meta_member(&self, _meta_id: &str, _member_id: &str) -> Result<(), KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "meta-nodes require CozoDB backend".into(),
+        ))
+    }
+
+    // --- Block addressing (Phase D) ---
+
+    /// Get all blocks for a node (paragraph-level sub-nodes).
+    fn get_blocks(&self, _parent_id: &str) -> Result<Vec<Block>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "blocks require CozoDB backend".into(),
+        ))
+    }
+
+    /// Set blocks for a node (replaces existing).
+    fn set_blocks(&self, _parent_id: &str, _blocks: &[Block]) -> Result<(), KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "blocks require CozoDB backend".into(),
+        ))
+    }
+
+    /// Get a single block by parent ID and index.
+    fn get_block(&self, _parent_id: &str, _idx: usize) -> Result<Option<Block>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "blocks require CozoDB backend".into(),
+        ))
+    }
+
+    // --- Agenda queries (Phase E) ---
+
+    /// Run an agenda query with the given filter.
+    fn agenda_query(&self, _filter: &AgendaFilter) -> Result<Vec<Node>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "agenda queries require CozoDB backend".into(),
+        ))
+    }
+
+    // --- Node versioning (Phase H) ---
+
+    /// Get version history for a node.
+    fn node_history(&self, _id: &str, _limit: usize) -> Result<Vec<NodeVersion>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "versioning requires CozoDB backend".into(),
+        ))
+    }
+
+    /// Get a node at a specific version.
+    fn node_at_version(&self, _id: &str, _version: i64) -> Result<Option<Node>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "versioning requires CozoDB backend".into(),
+        ))
+    }
+
+    /// Restore a node to a previous version.
+    fn restore_version(&self, _id: &str, _version: i64) -> Result<(), KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "versioning requires CozoDB backend".into(),
         ))
     }
 
@@ -490,6 +699,8 @@ impl KbStore for SqliteKbStore {
                 dst: row.get(1)?,
                 rel_type: "related_to".to_string(),
                 display: row.get(2)?,
+                weight: 1.0,
+                confidence: 1.0,
             })
         })?;
         let mut links = Vec::new();
@@ -509,6 +720,8 @@ impl KbStore for SqliteKbStore {
                 dst: row.get(1)?,
                 rel_type: "related_to".to_string(),
                 display: row.get(2)?,
+                weight: 1.0,
+                confidence: 1.0,
             })
         })?;
         let mut links = Vec::new();

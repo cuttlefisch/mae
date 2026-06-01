@@ -38,16 +38,16 @@ pub mod persist;
 pub mod store;
 pub mod watch;
 
-#[cfg(feature = "cozo")]
 pub mod cozo_store;
 
+pub use cozo_store::CozoKbStore;
 pub use federation::{ImportHealth, ImportReport as FederationImportReport};
 pub use org::IngestReport;
 pub use persist::PersistError;
-pub use store::{KbStore, KbStoreError, SqliteKbStore};
-
-#[cfg(feature = "cozo")]
-pub use cozo_store::CozoKbStore;
+pub use store::{
+    AgendaFilter, Block, HealthReport, IntegrityError, KbStore, KbStoreError, Link, MetaMember,
+    NodeVersion, SqliteKbStore, SubGraph,
+};
 
 /// Kind of a node. Controls how the node is surfaced to the user
 /// (e.g. command nodes show up in `describe-command`) and styled by
@@ -67,6 +67,22 @@ pub enum NodeKind {
     Note,
     /// Project node — represents a detected project from a `.project` file.
     Project,
+    /// Grouping node for organizing related concepts.
+    Category,
+    /// Tutorial lesson (numbered, prerequisite-ordered).
+    Lesson,
+    /// Multi-step tutorial track.
+    Tutorial,
+    /// Composite node whose body is cached from component nodes.
+    Meta,
+    /// Paragraph-level sub-node for fine-grained linking.
+    Block,
+    /// Scheme API documentation (functions, variables, macros).
+    SchemeApi,
+    /// Work item with todo_state, priority, assignee, due_date, sprint.
+    Task,
+    /// Configurable query+display node (kanban, backlog, sprint, timeline, agenda).
+    View,
 }
 
 /// Specification for subgraph extraction.

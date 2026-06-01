@@ -90,6 +90,14 @@ pub fn kind_to_str(k: NodeKind) -> &'static str {
         NodeKind::Key => "key",
         NodeKind::Note => "note",
         NodeKind::Project => "project",
+        NodeKind::Category => "category",
+        NodeKind::Lesson => "lesson",
+        NodeKind::Tutorial => "tutorial",
+        NodeKind::Meta => "meta",
+        NodeKind::Block => "block",
+        NodeKind::SchemeApi => "scheme_api",
+        NodeKind::Task => "task",
+        NodeKind::View => "view",
     }
 }
 
@@ -100,6 +108,14 @@ fn kind_from_str(s: &str) -> NodeKind {
         "concept" => NodeKind::Concept,
         "key" => NodeKind::Key,
         "project" => NodeKind::Project,
+        "category" => NodeKind::Category,
+        "lesson" => NodeKind::Lesson,
+        "tutorial" => NodeKind::Tutorial,
+        "meta" => NodeKind::Meta,
+        "block" => NodeKind::Block,
+        "scheme_api" => NodeKind::SchemeApi,
+        "task" => NodeKind::Task,
+        "view" => NodeKind::View,
         _ => NodeKind::Note,
     }
 }

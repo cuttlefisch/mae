@@ -39,6 +39,28 @@ use tracing::{debug, error, info, warn};
 use bootstrap::{init_logging, load_history, load_init_file, setup_ai, setup_dap, setup_lsp};
 use terminal_loop::{cleanup_stale_mcp_sockets, run_headless_self_test, run_terminal_loop};
 
+/// Migrate primary KB from SQLite to CozoDB. Returns (nodes, links) counts on success.
+fn migrate_sqlite_to_cozo(
+    sqlite_path: &std::path::Path,
+    cozo_path: &std::path::Path,
+) -> Result<(usize, usize), String> {
+    let src = mae_kb::SqliteKbStore::open(sqlite_path).map_err(|e| format!("open SQLite: {e}"))?;
+    let dst = mae_kb::CozoKbStore::open(cozo_path).map_err(|e| format!("open CozoDB: {e}"))?;
+    let report = mae_kb::migrate::migrate_between_stores(&src, &dst)
+        .map_err(|e| format!("migration: {e}"))?;
+    if !report.errors.is_empty() {
+        tracing::warn!(
+            errors = report.errors.len(),
+            "KB migration completed with {} errors",
+            report.errors.len()
+        );
+        for err in &report.errors {
+            tracing::warn!(error = %err, "migration error");
+        }
+    }
+    Ok((report.nodes_migrated, report.links_migrated))
+}
+
 /// Entry point for the MAE editor.
 ///
 /// Plain `fn main()` — the tokio runtime is constructed manually so that
@@ -580,15 +602,78 @@ fn main() -> io::Result<()> {
                     ),
                     Err(e) => warn!(error = %e, "failed to migrate legacy KB layout"),
                 }
-                // Initialize primary KB store (SQLite).
-                let primary_db = kb_data_dir.root().join("primary.db");
-                match mae_kb::SqliteKbStore::open(&primary_db) {
-                    Ok(store) => {
-                        info!(path = %primary_db.display(), "primary KB store opened");
-                        editor.kb.store = Some(std::sync::Arc::new(store));
+                // Initialize primary KB store (CozoDB default, SQLite fallback).
+                let backend = app_config.kb.backend.as_str();
+                let kb_root = kb_data_dir.root();
+                if backend == "cozo" {
+                    let cozo_path = kb_root.join("primary.cozo");
+                    let sqlite_path = kb_root.join("primary.db");
+
+                    // Auto-migrate: if SQLite exists but CozoDB doesn't, migrate data.
+                    if !cozo_path.exists() && sqlite_path.exists() {
+                        info!("migrating primary KB from SQLite to CozoDB...");
+                        match migrate_sqlite_to_cozo(&sqlite_path, &cozo_path) {
+                            Ok(stats) => {
+                                info!(
+                                    nodes = stats.0,
+                                    links = stats.1,
+                                    "KB migration complete (SQLite preserved as backup)"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "KB migration failed, falling back to SQLite");
+                                // Fall back to SQLite on migration failure.
+                                match mae_kb::SqliteKbStore::open(&sqlite_path) {
+                                    Ok(store) => {
+                                        info!(path = %sqlite_path.display(), "primary KB store opened (SQLite fallback)");
+                                        editor.kb.store = Some(std::sync::Arc::new(store));
+                                    }
+                                    Err(e2) => warn!(error = %e2, "failed to open SQLite KB store"),
+                                }
+                            }
+                        }
                     }
-                    Err(e) => {
-                        warn!(error = %e, "failed to open primary KB store");
+
+                    // Open CozoDB (may have just been migrated, or fresh).
+                    if editor.kb.store.is_none() {
+                        match mae_kb::CozoKbStore::open(&cozo_path) {
+                            Ok(store) => {
+                                if let Err(e) = store.seed_type_system() {
+                                    warn!(error = %e, "failed to seed KB type system");
+                                }
+                                match store.seed_typed_relationships() {
+                                    Ok(n) => debug!(count = n, "seeded typed KB relationships"),
+                                    Err(e) => {
+                                        warn!(error = %e, "failed to seed typed relationships")
+                                    }
+                                }
+                                info!(path = %cozo_path.display(), "primary KB store opened (CozoDB)");
+                                editor.kb.store = Some(std::sync::Arc::new(store));
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "failed to open CozoDB KB store, trying SQLite fallback");
+                                let sqlite_path = kb_root.join("primary.db");
+                                match mae_kb::SqliteKbStore::open(&sqlite_path) {
+                                    Ok(store) => {
+                                        info!(path = %sqlite_path.display(), "primary KB store opened (SQLite fallback)");
+                                        editor.kb.store = Some(std::sync::Arc::new(store));
+                                    }
+                                    Err(e2) => warn!(error = %e2, "failed to open any KB store"),
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Explicit SQLite backend.
+                    let primary_db = kb_root.join("primary.db");
+                    match mae_kb::SqliteKbStore::open(&primary_db) {
+                        Ok(store) => {
+                            info!(path = %primary_db.display(), "primary KB store opened (SQLite)");
+                            editor.kb.store = Some(std::sync::Arc::new(store));
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "failed to open primary KB store");
+                        }
                     }
                 }
                 editor.kb.data_dir = Some(kb_data_dir);

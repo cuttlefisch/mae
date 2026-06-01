@@ -200,20 +200,6 @@ jobs:
         run: make docker-collab-test
         timeout-minutes: 15
 
-  kb-cozo:
-    name: kb / CozoDB backend
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: CozoDB unit tests
-        run: cargo test -p mae-kb --features cozo -- --nocapture
-        timeout-minutes: 5
-      - name: CozoDB clippy
-        run: cargo clippy -p mae-kb --features cozo -- -D warnings
-        timeout-minutes: 3
-
   code-map:
     name: code-map freshness
     runs-on: ubuntu-latest

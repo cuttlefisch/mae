@@ -307,6 +307,10 @@ impl OptionRegistry {
                     "Execution timeout in seconds for babel source blocks",
                     OptionKind::Int, "30", Some("babel.timeout"), &[]),
                 // --- Knowledge Base ---
+                opt!("kb_backend", &["kb-backend"],
+                    "KB storage backend: cozo (graph-native, default) or sqlite (legacy fallback)",
+                    OptionKind::String, "cozo", Some("kb.backend"),
+                    &["cozo", "sqlite"]),
                 opt!("kb_watcher_enabled", &["kb-watcher-enabled"],
                     "Enable/disable file watchers for registered KB instances",
                     OptionKind::Bool, "true", Some("kb.watcher_enabled"), &[]),

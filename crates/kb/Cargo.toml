@@ -7,7 +7,6 @@ license.workspace = true
 
 [features]
 default = []
-cozo = ["dep:cozo"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -18,7 +17,8 @@ tracing = { workspace = true }
 walkdir = "2"
 notify = "8"
 mae-sync = { path = "../sync" }
-cozo = { version = "0.7", optional = true, default-features = false, features = ["storage-sled", "rayon"] }
+cozo = { version = "0.7", default-features = false, features = ["storage-sled", "rayon"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
