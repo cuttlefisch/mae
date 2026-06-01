@@ -1412,6 +1412,84 @@ impl CozoKbStore {
         Ok(())
     }
 
+    /// Seed pre-built view definitions (6 flavors).
+    /// Idempotent: uses :put so re-running overwrites with latest definitions.
+    pub fn seed_views(&self) -> Result<(), KbStoreError> {
+        let now = self.now_epoch();
+
+        let views: Vec<(&str, &str, &str, &str, &str, &str)> = vec![
+            (
+                "view:kanban",
+                "Kanban Board",
+                "kanban",
+                r#"?[id, title, todo, assignee, priority] := *nodes{id, title, kind, todo_state: todo, assignee, priority}, kind = "task""#,
+                r#"{"group_by":"todo_state","columns":["TODO","IN_PROGRESS","REVIEW","DONE"],"sort_by":"priority"}"#,
+                "Task management view grouped by todo state (TODO > IN_PROGRESS > REVIEW > DONE). Shows all task nodes with assignee and priority.",
+            ),
+            (
+                "view:backlog",
+                "Backlog",
+                "backlog",
+                r#"?[id, title, priority, created_at] := *nodes{id, title, kind, priority, sprint, created_at}, kind = "task", sprint = """#,
+                r#"{"sort_by":"priority","columns":["id","title","priority","created_at"]}"#,
+                "Unscheduled tasks (no sprint assigned). Sorted by priority, then creation date.",
+            ),
+            (
+                "view:sprint",
+                "Sprint View",
+                "sprint",
+                r#"?[id, title, todo, assignee, priority] := *nodes{id, title, kind, todo_state: todo, assignee, priority, sprint}, kind = "task", sprint != """#,
+                r#"{"group_by":"assignee","sort_by":"priority","columns":["id","title","todo_state","priority"]}"#,
+                "Tasks assigned to a sprint. Grouped by assignee, sorted by priority.",
+            ),
+            (
+                "view:timeline",
+                "Timeline",
+                "timeline",
+                r#"?[id, title, due_date, priority] := *nodes{id, title, kind, due_date, priority}, kind = "task", due_date != 0"#,
+                r#"{"sort_by":"due_date","columns":["id","title","due_date","priority"]}"#,
+                "Tasks with due dates, sorted chronologically. Colored by priority.",
+            ),
+            (
+                "view:agenda",
+                "Agenda",
+                "agenda",
+                r#"?[id, title, todo, priority, due_date] := *nodes{id, title, kind, todo_state: todo, priority, due_date}, kind = "task", todo != """#,
+                r#"{"group_by":"priority","sort_by":"due_date","columns":["id","title","todo_state","due_date"]}"#,
+                "Active tasks (with todo state) grouped by priority. Org-agenda-style daily/weekly view.",
+            ),
+            (
+                "view:orphans",
+                "Orphan Nodes",
+                "custom",
+                "all_linked[id] := *links{src: id} all_linked[id] := *links{dst: id} ?[id, title, kind] := *nodes{id, title, kind}, not all_linked[id]",
+                r#"{"sort_by":"kind","columns":["id","title","kind"]}"#,
+                "Custom Datalog view showing all nodes with no incoming or outgoing links.",
+            ),
+        ];
+
+        for (id, title, kind, query, config, body) in &views {
+            self.run_mut_params(
+                "?[id, title, kind, query, display_config_json, owner, created_at, updated_at] <- [[$id, $title, $kind, $query, $config, $owner, $now, $now]] :put views {id => title, kind, query, display_config_json, owner, created_at, updated_at}",
+                btree_params([
+                    ("id", dv_str(id)),
+                    ("title", dv_str(title)),
+                    ("kind", dv_str(kind)),
+                    ("query", dv_str(query)),
+                    ("config", dv_str(config)),
+                    ("owner", dv_str("")),
+                    ("now", DataValue::from(now)),
+                ]),
+            )
+            .map_err(cozo_err)?;
+
+            // Also insert as KB node for help/search
+            self.insert_node(&Node::new(*id, *title, NodeKind::View, *body))?;
+        }
+
+        Ok(())
+    }
+
     // --- Phase D: Meta-nodes + Block addressing ---
 
     /// Get ordered members of a meta-node.
@@ -2970,6 +3048,30 @@ mod tests {
                 v.content_hash
             );
         }
+    }
+
+    #[test]
+    fn seed_views_creates_view_nodes() {
+        let (_tmp, store) = make_store();
+        store.seed_views().unwrap();
+
+        // Views should be in the views relation
+        let result = store
+            .run_immut("?[id, title, kind] := *views{id, title, kind}")
+            .unwrap();
+        assert!(
+            result.rows.len() >= 6,
+            "should have at least 6 seeded views, got {}",
+            result.rows.len()
+        );
+
+        // View nodes should also exist as regular KB nodes
+        let kanban = store.get_node("view:kanban").unwrap();
+        assert!(kanban.is_some(), "kanban view should exist as a node");
+        assert_eq!(kanban.unwrap().title, "Kanban Board");
+
+        // Idempotent: seeding again should not error
+        store.seed_views().unwrap();
     }
 
     #[test]

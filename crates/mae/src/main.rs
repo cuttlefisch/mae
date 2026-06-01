@@ -647,6 +647,9 @@ fn main() -> io::Result<()> {
                                         warn!(error = %e, "failed to seed typed relationships")
                                     }
                                 }
+                                if let Err(e) = store.seed_views() {
+                                    warn!(error = %e, "failed to seed KB views");
+                                }
                                 info!(path = %cozo_path.display(), "primary KB store opened (CozoDB)");
                                 editor.kb.store = Some(std::sync::Arc::new(store));
                             }
