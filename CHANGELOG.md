@@ -11,6 +11,8 @@ All notable changes to this project will be documented in this file.
 - *(ci)* Cargo-deny all-features + cozo dep cleanup ([14c8377](https://github.com/cuttlefisch/mae/commit/14c83773af692c8aa5fbba50ac3afec159f73615))
 - *(ci)* Add rollup job for "stable / check" branch protection ([0435e59](https://github.com/cuttlefisch/mae/commit/0435e59a924ef43d8467cdce3d5181496e5f5323))
 - *(ci)* Remove rollup job, fix branch protection instead ([5ff8f08](https://github.com/cuttlefisch/mae/commit/5ff8f08968835f19411034f89cb69afd4e1a56e8))
+- Revert version 0.12.0→0.11.1, patch-only default for version bumps ([7a5d2fc](https://github.com/cuttlefisch/mae/commit/7a5d2fcc1942ea8d2becb7107b1aebc1a12c0ffc))
+- *(ci)* Nightly tests use debug profile to avoid 20min timeout ([d97945d](https://github.com/cuttlefisch/mae/commit/d97945d329b10e684c54a5e269cf02d7494eb4e1))
 
 ### CI
 
@@ -30,6 +32,10 @@ All notable changes to this project will be documented in this file.
 - KbStore trait + SQLite-first persistence (ADR-011) ([923cbf6](https://github.com/cuttlefisch/mae/commit/923cbf6a21651758204ae4a87824bc3ade0f19b6))
 - CozoKbStore — graph-native KB backend behind feature flag ([6f5dc2a](https://github.com/cuttlefisch/mae/commit/6f5dc2a0d7750db764fe2bd01483d13f27a8edef))
 - Graph-native AI tools + KbStore trait graph extensions ([ad17dee](https://github.com/cuttlefisch/mae/commit/ad17deeffdbcd3dbe4b15a5840fbd448c18f89dd))
+
+### Miscellaneous
+
+- Bump version to 0.12.0 ([f2c836d](https://github.com/cuttlefisch/mae/commit/f2c836dfa6303972bcd1c1345b90e71ca229e822))
 
 ### Testing
 
