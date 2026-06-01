@@ -44,6 +44,14 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O | `tokio`, `serde_json` |
 | `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers | `yrs`, `serde`, `base64` |
 | `mae-state-server` | Standalone collab state server — TCP sync, WAL persistence, per-doc locking | `mae-mcp`, `mae-sync`, `rusqlite`, `tokio` |
+| `mae-babel` | Org-mode code block execution (12 languages) | `mae-shell` |
+| `mae-export` | Org/Markdown → HTML/Markdown export | `mae-kb` |
+| `mae-canvas` | Visual buffer (diagrams, drawings) | `mae-core` |
+| `mae-snippets` | Snippet expansion engine | `mae-core` |
+| `mae-format` | Buffer formatting (external formatters) | `mae-core` |
+| `mae-make` | Build system integration (make, cargo, npm) | `mae-core` |
+| `mae-lookup` | Online lookup (dictionary, docs) | `reqwest` |
+| `mae-spell` | Spell checking integration | `mae-core` |
 | `mae` | Binary crate — CLI entry point, config loading, event loops | `clap`, `tokio` |
 
 ## Architecture Principles
