@@ -6,6 +6,39 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- AI tool parity, code quality, docs — v0.11.1 stability ([b424e8a](https://github.com/cuttlefisch/mae/commit/b424e8a7b36fbd709f4e1a426c923fec73072d22))
+- CozoDB Tantivy FTS — post-query verification for sled backend ([7ae2233](https://github.com/cuttlefisch/mae/commit/7ae22337652c7348dc989b0f37a35a08082d9d63))
+- *(ci)* Cargo-deny all-features + cozo dep cleanup ([14c8377](https://github.com/cuttlefisch/mae/commit/14c83773af692c8aa5fbba50ac3afec159f73615))
+- *(ci)* Add rollup job for "stable / check" branch protection ([0435e59](https://github.com/cuttlefisch/mae/commit/0435e59a924ef43d8467cdce3d5181496e5f5323))
+- *(ci)* Remove rollup job, fix branch protection instead ([5ff8f08](https://github.com/cuttlefisch/mae/commit/5ff8f08968835f19411034f89cb69afd4e1a56e8))
+
+### CI
+
+- Add CozoDB backend tests + KB lifecycle E2E to CI ([69b9f27](https://github.com/cuttlefisch/mae/commit/69b9f27bd3db6214126fd7d813e96904c16fa1b4))
+- Remove redundant gui job — stable/test already builds GUI binary ([d54b10f](https://github.com/cuttlefisch/mae/commit/d54b10f2431a460d8531a878bc90cfe82f19525d))
+- Run tests in release profile to eliminate redundant build ([8f855f8](https://github.com/cuttlefisch/mae/commit/8f855f828757069929785f2cc21932a02fa4c16d))
+
+### Documentation
+
+- Update ROADMAP — Phase A+B complete, CozoDB backend shipped ([c788d86](https://github.com/cuttlefisch/mae/commit/c788d863e54f434303e21b64d9ac83eb40073c2a))
+- Pre-release KB + config validation for v0.11.1 multi-user testing ([78872b6](https://github.com/cuttlefisch/mae/commit/78872b6f001fa739ccd944ebab788c964469d6ed))
+- Fix stale auth claims — PSK shipped in v0.11.0, not "no auth" ([1284ff3](https://github.com/cuttlefisch/mae/commit/1284ff3de405868d837a9b2bf1bcbd08c6731fc0))
+- *(CLAUDE.md)* Add 8 missing crates to layout table (12→20) ([71b89b4](https://github.com/cuttlefisch/mae/commit/71b89b4843c6c8d875ff2ad4768628981fbbc3f2))
+
+### Features
+
+- KbStore trait + SQLite-first persistence (ADR-011) ([923cbf6](https://github.com/cuttlefisch/mae/commit/923cbf6a21651758204ae4a87824bc3ade0f19b6))
+- CozoKbStore — graph-native KB backend behind feature flag ([6f5dc2a](https://github.com/cuttlefisch/mae/commit/6f5dc2a0d7750db764fe2bd01483d13f27a8edef))
+- Graph-native AI tools + KbStore trait graph extensions ([ad17dee](https://github.com/cuttlefisch/mae/commit/ad17deeffdbcd3dbe4b15a5840fbd448c18f89dd))
+
+### Testing
+
+- KB lifecycle E2E suite (24 Rust + 3 Scheme tests) ([b3d6edc](https://github.com/cuttlefisch/mae/commit/b3d6edc045460c6aa1c125000aca16fe0945154c))
+
+## [0.11.0] - 2026-05-30
+
+### Bug Fixes
+
 - Nightly clippy for_kv_map lint, CI TCP E2E timeout ([3791180](https://github.com/cuttlefisch/mae/commit/3791180e4508d0af6ca339230d14f9c5af7ad134))
 - Nightly clippy useless_format lint in mae-ai self_test ([2fcb812](https://github.com/cuttlefisch/mae/commit/2fcb8124173f5f4809b8e8aed07674dd9b79b6e9))
 - Include mae-state-server in macOS release artifact ([2a33b8a](https://github.com/cuttlefisch/mae/commit/2a33b8a1f359d1f06dc79875b9eca64762fb4ac5))
@@ -28,6 +61,10 @@ All notable changes to this project will be documented in this file.
 - Phase 6 — mDNS discovery for P2P KB sharing ([39256ec](https://github.com/cuttlefisch/mae/commit/39256ecc2f4c026846b7e972c9eb44deb4fb9175))
 - Client PSK auth, mDNS wiring, collab-discover command, network docs ([893ab07](https://github.com/cuttlefisch/mae/commit/893ab07afd5d698eb4bacd8b362b1265c740d3f4))
 - Mae-canvas crate scaffold (KB graph visualization) ([8ab7438](https://github.com/cuttlefisch/mae/commit/8ab743860b931260e6d4890b28a958480eaa812a))
+
+### Miscellaneous
+
+- Bump version to 0.11.0 ([57a2e9a](https://github.com/cuttlefisch/mae/commit/57a2e9a0917a695e1065b26c28478104791e93c7))
 
 ## [0.10.6] - 2026-05-28
 
