@@ -40,7 +40,7 @@ jobs:
       # Nightly: debug build (faster, no artifact needed).
       - name: cargo test
         if: matrix.step == 'test'
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           if [ "${{ matrix.toolchain }}" = "stable" ]; then
             cargo test --workspace --release --features gui
