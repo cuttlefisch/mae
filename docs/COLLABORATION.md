@@ -94,8 +94,8 @@ auto_connect = true
 user_name = "bob"
 ```
 
-> **Security note (v1):** There is no authentication. Restrict access via
-> firewall or VPN. Do not expose the state server to the public internet.
+> **Security:** PSK mutual authentication (HMAC-SHA256) is required since v0.11.0.
+> Set `collab_psk` on both server and all clients. For untrusted networks, use a VPN.
 > See [Security](#8-security) below.
 
 ---
@@ -300,8 +300,8 @@ sudo iptables -A INPUT -p tcp --dport 9473 -j ACCEPT
 
 ### Security Warnings
 
-> **v1 has no authentication.** Any client that can reach the port can read
-> and write all shared documents. Do not expose to the public internet.
+> **PSK authentication is required.** Both server and clients must share the
+> same `collab_psk` (HMAC-SHA256). Connections without a valid PSK are rejected.
 
 Recommendations:
 - **Local only**: Use the default `127.0.0.1` binding (no firewall needed).
@@ -495,17 +495,18 @@ document.
 
 ## 8. Security
 
-**v1 posture: no authentication.** The TCP port is open to any client that can
-reach it. Planned upgrade path:
+**Current posture: PSK authentication (HMAC-SHA256).** Both server and clients
+must share the same pre-shared key (`collab_psk` / `collab_psk_command`).
+Connections without a valid PSK are rejected at the TCP handshake.
 
-| Phase | Mechanism |
-|-------|-----------|
-| v1 (current) | No auth — trusted LAN / VPN only |
-| v2 | Pre-shared key (PSK) in `initialize` params |
-| v3 | SSH key exchange |
-| v4 | OAuth 2.0 / OIDC for enterprise deployments |
+| Phase | Mechanism | Status |
+|-------|-----------|--------|
+| v1 | No auth — trusted LAN / VPN only | Superseded |
+| v2 (current) | Pre-shared key (PSK) HMAC-SHA256 | ✅ Shipped (v0.11.0) |
+| v3 | SSH key exchange | Planned |
+| v4 | OAuth 2.0 / OIDC for enterprise deployments | Planned |
 
-**Recommendations for v1:**
+**Recommendations:**
 
 - Bind to `127.0.0.1` for solo/loopback use (default).
 - Use a VPN (WireGuard, Tailscale) when collaborating across machines.

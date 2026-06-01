@@ -183,6 +183,14 @@ impl Editor {
         // Import org files recursively
         let (kb, report, health) = mae_kb::federation::import_org_dir(org_dir);
 
+        // Persist to SQLite (so next startup loads from SQLite, not org parse).
+        let db_path = self.kb.registry.find(&uuid).map(|i| i.db_path.clone());
+        if let Some(ref db) = db_path {
+            if let Err(e) = kb.save_to_sqlite(db) {
+                tracing::warn!(name, error = %e, "failed to persist KB to SQLite on register");
+            }
+        }
+
         // Store the instance
         self.kb.instances.insert(uuid.clone(), kb);
 
@@ -265,6 +273,10 @@ impl Editor {
         match inst {
             Some(instance) => {
                 let (kb, report, health) = mae_kb::federation::import_org_dir(&instance.org_dir);
+                // Persist reimported KB to SQLite (keeps SQLite in sync with org).
+                if let Err(e) = kb.save_to_sqlite(&instance.db_path) {
+                    tracing::warn!(name = %instance.name, error = %e, "failed to persist reimport to SQLite");
+                }
                 self.kb.instances.insert(instance.uuid.clone(), kb);
 
                 // Update timestamp
@@ -306,6 +318,24 @@ impl Editor {
         }
     }
 
+    /// Persist a node to the backing store (if present). Best-effort — logs errors.
+    fn kb_persist_node(&self, node: &mae_kb::Node) {
+        if let Some(ref store) = self.kb.store {
+            if let Err(e) = store.update_node(node) {
+                tracing::warn!(node_id = %node.id, error = %e, "KB store write-through failed");
+            }
+        }
+    }
+
+    /// Persist a deletion to the backing store (if present). Best-effort.
+    fn kb_persist_delete(&self, id: &str) {
+        if let Some(ref store) = self.kb.store {
+            if let Err(e) = store.delete_node(id) {
+                tracing::warn!(node_id = %id, error = %e, "KB store delete failed");
+            }
+        }
+    }
+
     /// Create a new KB node in the local knowledge base.
     /// Rejects overwriting seed nodes (built-in help).
     pub fn kb_create_node(
@@ -326,6 +356,7 @@ impl Editor {
         }
         let node =
             mae_kb::Node::new(id, title, kind, body).with_source(mae_kb::NodeSource::Manual, 0);
+        self.kb_persist_node(&node);
         self.kb.primary.insert(node);
         self.set_status(format!("KB node created: {}", id));
         Ok(())
@@ -341,6 +372,7 @@ impl Editor {
                 id
             )),
             Some(_) => {
+                self.kb_persist_delete(id);
                 self.kb.primary.remove(id);
                 self.set_status(format!("KB node deleted: {}", id));
                 Ok(())
@@ -395,11 +427,20 @@ impl Editor {
             // Use CRDT-aware upsert to generate update bytes for broadcasting.
             // client_id 1 is used for local edits (distinct from remote).
             if let Some(update_bytes) = self.kb.primary.upsert_with_crdt(updated, 1) {
+                // Persist CRDT update to pending queue (durable offline queue).
+                if let Some(ref store) = self.kb.store {
+                    let _ = store.push_pending_update(&kb_id, id, &update_bytes);
+                }
                 self.collab
                     .pending_kb_updates
                     .push((kb_id, id.to_string(), update_bytes));
             }
+            // Persist the updated node to store.
+            if let Some(node) = self.kb.primary.get(id) {
+                self.kb_persist_node(node);
+            }
         } else {
+            self.kb_persist_node(&updated);
             self.kb.primary.insert(updated);
         }
 

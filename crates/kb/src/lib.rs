@@ -12,14 +12,16 @@
 //!
 //! ## Design
 //!
-//! - A **node** is a typed, named document with a markdown body.
+//! - A **node** is a typed, named document with an org-mode body.
 //! - Links are embedded in the body as `[[id]]` or `[[id|display text]]`.
 //! - The store keeps a reverse index so "what links to X?" is O(1).
-//! - No persistence layer yet — everything is in-memory. The Phase-5
-//!   SQLite-backed kb.db will replace the storage but preserve this API.
+//! - **Persistence**: `SqliteKbStore` (via `KbStore` trait) is the durable
+//!   backend. In-memory `KnowledgeBase` is the hot cache; all mutations
+//!   write through to SQLite. Org files are import/export format, not
+//!   runtime source of truth. See ADR-011.
 //!
 //! This crate depends on no MAE internals — it's a pure data library
-//! callable from `mae-core`, `mae-ai`, and eventually `mae-kb-persist`.
+//! callable from `mae-core`, `mae-ai`, and the editor binary.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -30,12 +32,22 @@ pub mod data_dir;
 pub mod export;
 pub mod federation;
 pub mod fuzzy;
+pub mod migrate;
 pub mod org;
 pub mod persist;
+pub mod store;
 pub mod watch;
+
+#[cfg(feature = "cozo")]
+pub mod cozo_store;
+
 pub use federation::{ImportHealth, ImportReport as FederationImportReport};
 pub use org::IngestReport;
 pub use persist::PersistError;
+pub use store::{KbStore, KbStoreError, SqliteKbStore};
+
+#[cfg(feature = "cozo")]
+pub use cozo_store::CozoKbStore;
 
 /// Kind of a node. Controls how the node is surfaced to the user
 /// (e.g. command nodes show up in `describe-command`) and styled by

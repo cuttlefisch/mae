@@ -59,6 +59,11 @@ pub const DEFAULT_COLLAB_ADDRESS: &str = "127.0.0.1:9473";
 /// Default TCP port for the collaborative state server.
 pub const DEFAULT_COLLAB_PORT: u16 = 9473;
 
+/// Default KB instance name (primary KB).
+pub const KB_DEFAULT_NAME: &str = "default";
+/// Default KB sync mode for collaborative editing.
+pub const KB_SYNC_MODE_DEFAULT: &str = "on_save";
+
 /// Collaborative editing connection status.
 /// Surfaced in the status bar via `format_collab_status()`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -263,7 +268,7 @@ impl CollabState {
             pending_awareness: None,
             last_awareness_sent: std::time::Instant::now(),
             shared_kbs: HashMap::new(),
-            kb_sync_mode: "on_save".to_string(),
+            kb_sync_mode: KB_SYNC_MODE_DEFAULT.to_string(),
             pending_kb_updates: Vec::new(),
             psk: String::new(),
             psk_command: String::new(),

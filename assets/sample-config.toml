@@ -1,6 +1,9 @@
 # MAE Configuration
 # Place this file at ~/.config/mae/config.toml
 # or use :edit-config to open it from within MAE.
+#
+# First-time users: the setup wizard runs automatically on first launch.
+# For guided setup: :help tutorial:ai-setup (AI) or :help tutorial:collab-setup (collab)
 
 [editor]
 # Color theme (use :theme or SPC t s to preview)
@@ -66,7 +69,7 @@ provider = "claude"
 # API key generation links:
 #   Claude:   https://console.anthropic.com/settings/keys
 #   OpenAI:   https://platform.openai.com/api-keys
-#   Gemini:   https://aistudio.google.com/apikey
+#   Gemini:   https://aistudio.google.com/apikeys
 #   DeepSeek: https://platform.deepseek.com/api_keys
 
 # AI permission tier: readonly, write, shell, privileged

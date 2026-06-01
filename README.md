@@ -19,10 +19,10 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
 - **AI as peer actor** — 450+ editor commands exposed as AI tools. The AI calls
   the same `dispatch_builtin()` as your keybindings. No shadow API, no simulated
   keystrokes.
-- **Collaborative editing** *(protocol-complete, not yet user-ready)* — CRDT sync
-  engine (yrs/YATA) with state server, WAL persistence, per-user undo, and
-  awareness protocol. Protocol and server are tested (250+ tests); end-to-end
-  user workflow requires Scheme runtime improvements before reliable release.
+- **Collaborative editing** — CRDT sync engine (yrs/YATA) with state server,
+  WAL persistence, per-user undo, awareness protocol, PSK authentication, and
+  mDNS peer discovery. Collaborative KB sharing enables real-time knowledge base
+  sync across instances with offline edit + reconnect support.
 - **Org-mode babel** — Execute code blocks in 12 languages, noweb expansion,
   `:tangle` directive, `:var` cross-references, safety policies. Export to
   HTML and Markdown with TOC, syntax highlighting, tag filtering.
@@ -350,9 +350,9 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, KB federation |
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
 | 11. Module System | ✅ Complete | 19 modules (Doom model), `mae pkg` CLI, flags, live reload |
-| 12. Collaborative Editing | 🔧 Protocol complete | CRDT state server, multi-peer sync, WAL persistence, awareness, per-user undo. User-facing release blocked on Scheme runtime (Phase 13) |
-| 13. Scheme Runtime | 🔧 Planned | MAE-native R7RS-small with `mae:` namespace, async/yield, proper error signaling |
-| **Next** | 🔧 In progress | Scheme runtime replacement, PDF preview, semantic search. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) |
+| 12. Collaborative Editing | ✅ Complete | CRDT state server, multi-peer sync, WAL persistence, awareness, per-user undo, PSK auth, KB sharing E2E |
+| 13. Scheme Runtime | ✅ Complete | mae-scheme R7RS-small VM, Steel fully removed, 2,200+ Scheme tests |
+| **Next** | 🔧 In progress | KB storage (CozoDB), PDF preview, semantic search. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) |
 
 ## Design Lineage
 
@@ -367,7 +367,7 @@ decisions that led to its current maintenance burden:
 - **Fix ratio doubled** — from 15% to 32% over 35 years. Rust's type system
   structurally prevents this.
 - **Bus factor of ~4** — top 5 contributors = 50.8% of commits. MAE enforces
-  module boundaries across 18 crates.
+  module boundaries across 20 crates.
 
 ## Self-Hosting
 
@@ -406,6 +406,13 @@ make self-test   # AI-driven end-to-end self-test (headless)
 ```
 
 See [CLAUDE.md](CLAUDE.md) for architecture principles and development guide.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, code standards,
+and where to start. For end-to-end workflow documentation, see
+[docs/USER_STORIES.md](docs/USER_STORIES.md). For feature parity goals, see
+[docs/COMPETITIVE_ANALYSIS.md](docs/COMPETITIVE_ANALYSIS.md).
 
 ## License
 

@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.10.6 · **Tests:** 5,764 passing · **Status:** Alpha — Phases 1-13 complete, Phase 12 (collab) protocol-complete + PSK auth + KB sharing E2E, Phase 13 (Scheme runtime) complete.
+**Current version:** v0.11.1 · **Tests:** 5,796+ passing · **Status:** Alpha — Phases 1-13 complete. v0.11.1: KB storage architecture (SQLite-first + KbStore trait + CozoDB backend).
 
 ---
 
@@ -121,7 +121,7 @@
   - **SSH Key Exchange Authentication** (deferred from v0.11.0):
     - Ed25519 keypair generation + TOFU trust store (`~/.config/mae/trusted_keys.toml`)
     - `SshAuth` provider implementing existing `AuthProvider` trait (`crates/sync/src/auth.rs`)
-    - Client-side auth in `collab_bridge.rs` (currently sends `initialize` with no auth or PSK)
+    - Client-side auth in `collab_bridge.rs` (currently sends `initialize` with PSK when configured)
     - Crates: `ed25519-dalek` v2, `ssh-key` v0.6
     - Prior art: SSH RFC 4252 challenge-response, Syncthing device IDs, WireGuard Noise_IKpsk2
     - See `research:ssh-key-exchange-patterns` KB node for full analysis
@@ -161,6 +161,25 @@
 - [ ] **KB backup/export**: `kb-export` dumps full KB + changelog to portable format (SQLite file or JSON). `kb-import` restores.
 - [ ] **Conflict detection**: When multi-client writes land on same node, detect via version counter and surface conflict to user (not silent last-write-wins).
 - [ ] **KB replication**: Read replicas for high-read-throughput scenarios (AI agents doing 600+ node fetches/sec). WAL mode enables this natively for same-host.
+
+### KB Storage Architecture (v0.11.1 — ADR-011)
+
+**Status**: Phase A COMPLETE, Phase B COMPLETE. CozoDB backend available behind feature flag.
+
+The KB had a dual source of truth problem: org files re-parsed on startup, SQLite declared but unused in hot path. Every collaborative tool at scale uses a database (Notion/Postgres, Roam/Datascript, Logseq migrating FROM files TO DB).
+
+**Decision**: CozoDB-first with SQLite bridge period. See `docs/adr/011-kb-storage.md`.
+
+- [x] **KbStore trait** (`crates/kb/src/store.rs`): Database-agnostic persistence interface — node CRUD, FTS search, link queries, CRDT ops, pending update queue. `SqliteKbStore` implementation with 11 tests.
+- [x] **SQLite-first startup**: Federated KB instances load from SQLite first, fall back to org import + one-time migration to SQLite.
+- [x] **Write-through persistence**: `kb_create_node`, `kb_update_node`, `kb_delete_node` write through to `SqliteKbStore`.
+- [x] **Durable offline queue**: Pending CRDT updates stored in SQLite `pending_updates` table (survives crashes). Drained on reconnect.
+- [x] **Primary KB store**: `KbContext.store` field holds `Arc<dyn KbStore>` for the primary KB instance (supports any backend).
+- [x] **CozoKbStore**: `#[cfg(feature = "cozo")]` feature-flagged CozoDB backend — Datalog queries, typed relationships, shortest path, neighborhood BFS. 12 tests.
+- [x] **SQLite → CozoDB migration**: `migrate_between_stores()` in `crates/kb/src/migrate.rs` — cross-store data migration with report.
+- [x] **Graph-native AI tools**: `kb_shortest_path`, `kb_neighborhood`, `kb_add_link`, `kb_raw_query` — delegate to KbStore, graceful NotSupported on SQLite.
+- [x] **KB lifecycle E2E**: 24 Rust tests + 3 Scheme test files covering persistence, CRDT, offline queue, import/export, performance.
+- [ ] **GraphRAG** (v0.14.0): Hybrid vector + graph retrieval via CozoDB — single Datalog query combining HNSW entry points + graph expansion.
 
 ### Phase 13: MAE Scheme Runtime (v0.12.0)
 

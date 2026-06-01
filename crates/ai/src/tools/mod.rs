@@ -157,8 +157,8 @@ mod tests {
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
         assert!(
-            tools.len() >= 109,
-            "Expected at least 109 AI tools, got {}",
+            tools.len() >= 114,
+            "Expected at least 114 AI tools, got {}",
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();

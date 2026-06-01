@@ -378,3 +378,279 @@ KB sharing uses yrs (Yjs Rust port) CRDTs for conflict-free merging:
 - Discovery: mDNS `_mae-sync._tcp.local` service type
 
 See [ADR-005](adr/adr-005-kb-crdt.md) and [ADR-006](adr/adr-006-collaborative-state-engine.md) for design rationale.
+
+---
+
+## Server Deployment (Cloud / VPS)
+
+For persistent availability across devices or over the internet, run
+`mae-state-server` on a VPS or home server.
+
+```bash
+# Bind to all interfaces on the VPS:
+mae-state-server --bind 0.0.0.0:9473
+
+# Or set in state-server.toml:
+bind = "0.0.0.0:9473"
+```
+
+**Important:** `mae-state-server` speaks raw TCP with JSON-RPC framing — it
+is NOT an HTTP service. Do not put it behind an HTTP reverse proxy (nginx,
+Caddy, etc.). A TCP load-balancer (HAProxy stream mode) is fine.
+
+### Firewall Rules
+
+**ufw (Ubuntu/Debian):**
+```bash
+sudo ufw allow 9473/tcp comment "MAE state server"
+sudo ufw reload
+```
+
+**firewalld (Fedora/RHEL):**
+```bash
+sudo firewall-cmd --add-port=9473/tcp --permanent
+sudo firewall-cmd --reload
+```
+
+**nftables (manual):**
+```bash
+sudo nft add rule inet filter input tcp dport 9473 accept
+```
+
+For internet-facing deployments, always configure a PSK (`[auth] mode = "psk"`
+in `state-server.toml`). Without PSK, anyone who can reach port 9473 can read
+and write your shared KB.
+
+---
+
+## Systemd Hardening
+
+The bundled unit file (`assets/mae-state-server.service`) runs as a user
+service. For a system-level deployment with additional hardening, create a
+drop-in override:
+
+```bash
+sudo systemctl edit mae-state-server
+```
+
+Example hardened override (`/etc/systemd/system/mae-state-server.d/hardening.conf`):
+
+```ini
+[Service]
+# Isolate /tmp so the process can't read other services' temp files
+PrivateTmp=true
+
+# Mount /usr, /boot, /etc read-only
+ProtectSystem=strict
+
+# Allow writes only to the data and config dirs
+ReadWritePaths=/var/lib/mae /etc/mae
+
+# Prevent privilege escalation
+NoNewPrivileges=true
+
+# Drop all capabilities
+CapabilityBoundingSet=
+
+# Restrict syscalls to a safe subset
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+```
+
+After editing:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart mae-state-server
+sudo systemctl status mae-state-server
+```
+
+Verify it is running and the data directory is writable before connecting clients.
+
+---
+
+## VPN / WireGuard Tunnel
+
+For internet deployments, binding `mae-state-server` to a WireGuard tunnel
+interface provides network-level encryption as defense-in-depth alongside PSK
+authentication.
+
+```toml
+# state-server.toml — bind to WireGuard interface only
+bind = "10.0.0.1:9473"   # wg0 address
+```
+
+```bash
+# Bring up wg0 first, then start the server:
+sudo wg-quick up wg0
+mae-state-server
+```
+
+Clients connect to the WireGuard peer address:
+```toml
+# config.toml on client
+[collaboration]
+server_address = "10.0.0.1:9473"
+psk_command = "pass mae/collab-psk"
+```
+
+Even without PSK, the WireGuard tunnel encrypts all traffic with
+Curve25519 + ChaCha20-Poly1305. Using both (WireGuard + PSK) provides
+defense-in-depth: a compromised WireGuard key does not leak KB data unless
+the PSK is also compromised.
+
+---
+
+## IPv6
+
+`mae-state-server` supports IPv6. To listen on all interfaces (dual-stack):
+
+```toml
+bind = "[::]:9473"
+```
+
+On systems where `IPV6_V6ONLY` is unset (Linux default), `[::]:9473` also
+accepts IPv4 connections. On systems where it is set (BSD, some hardened
+Linux configs), run two instances or use a dual-stack TCP wrapper.
+
+Clients connect using bracket notation:
+```
+:collab-connect [2001:db8::1]:9473
+```
+
+**mDNS and IPv6:** The `_mae-sync._tcp.local` mDNS record is published for
+both A (IPv4) and AAAA (IPv6) addresses when available. Peers on link-local
+IPv6 (`fe80::/10`) can discover each other without a router.
+
+---
+
+## Bandwidth and Scale
+
+KB sync uses incremental yrs CRDT updates — only the diff between document
+states is transmitted, not the full node body.
+
+| Operation | Typical wire size |
+|-----------|------------------|
+| Single character insert/delete | ~50–120 bytes |
+| Sentence edit (~50 chars) | ~150–400 bytes |
+| Full node sync on join | ~1–20 KB per node |
+| Collection manifest (100 nodes) | ~5–15 KB |
+
+**Capacity estimates** for a single `mae-state-server` instance on modest
+hardware (2 CPU cores, 1 GB RAM):
+
+| Metric | Estimate |
+|--------|---------|
+| Concurrent connected peers | ~200 |
+| Shared KB nodes | ~50,000 (SQLite limit) |
+| Update fanout latency (LAN) | <5 ms |
+| Update fanout latency (WAN) | RTT + <2 ms server processing |
+| SQLite WAL flush interval | 60s (configurable) |
+
+These are design targets, not benchmarks. See ADR-008 for CRDT performance
+targets and measurement methodology.
+
+---
+
+## collab-doctor Output Explained
+
+Running `:collab-doctor` (`SPC C D`) produces a structured diagnostic report.
+Here is an annotated example:
+
+```
+collab-doctor: OK                          ← overall health (OK / WARN / ERROR)
+
+Connection
+  server:    192.168.1.10:9473             ← configured server address
+  status:    connected                     ← TCP connection state
+  auth:      PSK (HMAC-SHA256) [verified]  ← auth method + last handshake result
+  latency:   4 ms                          ← round-trip to server ($/ping)
+  uptime:    2h 14m                        ← time since last successful connect
+
+Shared KBs
+  default    [synced]                      ← KB name + sync state
+    doc_id:  kb/default/a3f7...            ← server-side document identifier
+    nodes:   47                            ← node count in local replica
+    pending: 0                             ← edits queued but not yet sent
+    last_sync: 2026-05-31T14:22:01Z       ← timestamp of last received update
+
+Offline Queue
+  pending updates: 0                       ← edits accumulated while disconnected
+
+mDNS
+  status:    active                        ← whether discovery is broadcasting
+  service:   _mae-sync._tcp.local          ← registered service name
+  peers:     1 discovered                  ← peers seen via mDNS
+
+Issues
+  (none)                                   ← specific warnings or errors listed here
+```
+
+When `collab-doctor` reports `WARN` or `ERROR`, the **Issues** section lists
+actionable items, e.g.:
+
+```
+Issues
+  WARN: 3 pending updates not sent (disconnected 5m ago)
+  → Run :collab-connect to flush the queue
+```
+
+---
+
+## mae-state-server doctor
+
+The server binary has its own diagnostics subcommand:
+
+```bash
+mae-state-server doctor
+```
+
+Example output:
+```
+mae-state-server doctor
+  bind:          0.0.0.0:9473        [listening]
+  auth:          PSK (HMAC-SHA256)   [configured]
+  database:      /var/lib/mae/state-server.db  [ok, 3 shards]
+  wal_size:      142 KB
+  documents:     12 active, 0 evicted
+  peers:         2 connected
+  compaction:    last ran 4m ago, next in 56s
+  uptime:        3h 07m
+
+  Self-test:     PASS (ping round-trip: 1ms)
+```
+
+Flags:
+- `--check-config` — validate `state-server.toml` without binding a port
+- `doctor` — live diagnostics (requires a running instance or starts briefly)
+
+---
+
+## Embedded Server Lifecycle
+
+When you run `:collab-start` (`SPC C s`), MAE spawns an embedded
+`mae-state-server` instance as an async task within the editor process.
+
+**Start:**
+```
+:collab-start
+```
+- Binds to `0.0.0.0:9473` (or `collab_server_address` port if set)
+- Registers `_mae-sync._tcp.local` mDNS record
+- Automatically connects the local editor as the first client
+- Status line: `[collab:server] [collab:connected]`
+
+**While running:**
+- Other peers connect via `:collab-connect <your-ip>:9473`
+- All shared buffers and KBs are served from in-process memory + SQLite WAL
+- The embedded server and the editor share the same process — no IPC overhead
+
+**Stop:**
+There is no `:collab-stop` command. The embedded server exits when MAE exits.
+This is by design: the embedded server is a convenience feature for P2P
+sessions, not a long-running daemon. For persistent availability, run a
+dedicated `mae-state-server` (see [Server Deployment](#server-deployment-cloud--vps) above).
+
+When MAE closes with peers connected, those peers will see a TCP disconnect
+within the OS keepalive timeout. They can reconnect to a new session if you
+restart MAE and run `:collab-start` again. CRDT state persists in each peer's
+local replica, so no data is lost — they will resync on reconnect.

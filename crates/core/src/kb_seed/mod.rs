@@ -898,6 +898,20 @@ fn static_nodes() -> Vec<Node> {
         .with_tags(["workflow", "sync", "collaboration"])
         .with_aliases(["collab workflows", "loopback", "multi-user"]),
         Node::new(
+            "concept:kb-sharing",
+            "Concept: KB Sharing (Collaborative KBs)",
+            NodeKind::Concept,
+            CONCEPT_KB_SHARING,
+        )
+        .with_tags(["kb", "collaboration", "sync", "sharing"])
+        .with_aliases([
+            "kb-share",
+            "kb-join",
+            "kb-leave",
+            "shared kb",
+            "collaborative kb",
+        ]),
+        Node::new(
             "concept:scheme-testing",
             "Concept: Scheme Testing Framework",
             NodeKind::Concept,
@@ -968,6 +982,7 @@ mod tests {
             "concept:adr-kb-crdt",
             "concept:collab-architecture",
             "concept:collab-workflows",
+            "concept:kb-sharing",
             "guide:extension-authoring",
             "lesson:kb-import-roam",
             "lesson:collab-setup",
@@ -1302,6 +1317,25 @@ mod tests {
         for id in ["tutorial:ai-setup", "tutorial:ai-agent", "tutorial:ai-chat"] {
             assert!(kb.contains(id), "missing AI track node: {}", id);
         }
+    }
+
+    #[test]
+    fn tutorial_collab_setup_exists() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        assert!(
+            kb.contains("tutorial:collab-setup"),
+            "missing tutorial:collab-setup"
+        );
+        // Should link to lesson and concept nodes
+        let links = kb.links_from("tutorial:collab-setup");
+        assert!(
+            links.contains(&"lesson:collab-setup".to_string()),
+            "collab tutorial should link to lesson:collab-setup"
+        );
+        assert!(
+            links.contains(&"concept:collab-architecture".to_string()),
+            "collab tutorial should link to concept:collab-architecture"
+        );
     }
 
     #[test]

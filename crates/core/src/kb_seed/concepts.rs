@@ -1537,8 +1537,8 @@ The server can be started with:\n\
 ```bash\n\
 mae-state-server --bind 0.0.0.0:9473\n\
 ```\n\n\
-> **Security (v1):** No authentication. Restrict access to a trusted LAN \n\
-> or VPN. Do not expose the state server port to the public internet.\n\n\
+> **Security:** PSK mutual authentication (HMAC-SHA256) is required since v0.11.0.\n\
+> Set `collab_psk` on both server and clients. For untrusted networks, use a VPN.\n\n\
 ## Commands\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
@@ -1623,3 +1623,43 @@ the VM globals and SharedState in a single call.\n\n\
 - **Mutations**: Add pending field to SharedState → register Scheme fn → \
   process in `apply_to_editor`\n\n\
 See also: [[concept:scheme-testing]], [[concept:scheme-api]], [[index]]\n";
+
+pub(super) const CONCEPT_KB_SHARING: &str = "\
+**KB Sharing** enables collaborative editing of knowledge bases across MAE \
+instances connected via the state server.\n\n\
+## How It Works\n\
+Each KB node is a yrs CRDT document (see [[concept:adr-kb-crdt]]). When you \
+share a KB, all its nodes are registered as collaborative documents on the \
+state server. Other clients can join the shared KB and receive real-time \
+updates as nodes are edited.\n\n\
+## Commands\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `SPC C K s` | `:kb-share` | Share the primary KB (or named instance) |\n\
+| `SPC C K j` | `:kb-join` | Join a shared KB from the server |\n\
+| `SPC C K l` | `:kb-leave` | Leave a shared KB (local copy preserved) |\n\
+| `SPC C K r` | `:kb-list-remote` | List available shared KBs on the server |\n\n\
+## Sync Modes\n\
+The `collab_kb_sync_mode` option controls when local edits are pushed:\n\
+- `\"on_save\"` (default): push CRDT updates when a node is saved\n\
+- `\"manual\"`: only sync when explicitly requested via `:collab-sync`\n\n\
+## Offline Support\n\
+When disconnected, edits accumulate in a pending queue. On reconnect, \
+the queue drains automatically — CRDT merge guarantees conflict-free \
+convergence regardless of editing order.\n\n\
+## Status Line\n\
+When KB sharing is active, the status bar shows `[KB:N|status]` where \
+N is the number of shared KBs and status is `synced`, `offline`, or \
+`pending` (has unsent updates).\n\n\
+## Data Storage\n\
+- Local KBs: `$XDG_DATA_HOME/mae/kb/local/{slug}/kb.sqlite`\n\
+- Shared KBs: `$XDG_DATA_HOME/mae/kb/shared/{slug}/kb.sqlite`\n\n\
+## mDNS Discovery\n\
+On a LAN, `:collab-discover` uses mDNS (`_mae-sync._tcp.local`) to find \
+peers running `mae-state-server`. Connect to a discovered peer to browse \
+their shared KBs.\n\n\
+## PSK Authentication\n\
+Set `collab_psk` or `collab_psk_command` to enable HMAC-SHA256 mutual \
+authentication. Both client and server must share the same key.\n\n\
+See also: [[concept:knowledge-base]], [[concept:collab-architecture]], \
+[[concept:sync-engine]], [[concept:adr-kb-crdt]], [[index]]\n";

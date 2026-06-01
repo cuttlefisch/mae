@@ -86,7 +86,7 @@ pub use editor::{
     DocumentHighlightRange, EditRecord, Editor, HighlightKind, HoverPopup, InputLock, LspLocation,
     LspRange, LspServerInfo, LspServerStatus, PeekReferenceLocation, PeekReferencesState,
     PeekState, SignatureHelpInfo, SignatureHelpState, SymbolOutlineEntry, SymbolOutlineState,
-    DEFAULT_COLLAB_ADDRESS, DEFAULT_COLLAB_PORT,
+    DEFAULT_COLLAB_ADDRESS, DEFAULT_COLLAB_PORT, KB_DEFAULT_NAME, KB_SYNC_MODE_DEFAULT,
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;

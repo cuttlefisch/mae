@@ -630,6 +630,123 @@ pub fn execute_kb_search_context(
     serde_json::to_string_pretty(&items).map_err(|e| e.to_string())
 }
 
+// --- Graph-native tools (delegate to KbStore trait) ---
+
+pub fn execute_kb_shortest_path(
+    editor: &Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let from = args
+        .get("from")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: from".to_string())?;
+    let to = args
+        .get("to")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: to".to_string())?;
+    let store = editor
+        .kb
+        .store
+        .as_ref()
+        .ok_or_else(|| "No KB store configured".to_string())?;
+    match store.shortest_path(from, to) {
+        Ok(path) => serde_json::to_string_pretty(&path).map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+pub fn execute_kb_neighborhood(
+    editor: &Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: id".to_string())?;
+    let depth = args
+        .get("depth")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(2)
+        .min(5) as u32;
+    let store = editor
+        .kb
+        .store
+        .as_ref()
+        .ok_or_else(|| "No KB store configured".to_string())?;
+    match store.neighborhood(id, depth) {
+        Ok(subgraph) => {
+            let out = serde_json::json!({
+                "root": id,
+                "depth": depth,
+                "nodes": subgraph.nodes.iter().map(|(nid, title)| {
+                    serde_json::json!({"id": nid, "title": title})
+                }).collect::<Vec<_>>(),
+                "edges": subgraph.edges.iter().map(|(src, dst, rel)| {
+                    serde_json::json!({"src": src, "dst": dst, "rel_type": rel})
+                }).collect::<Vec<_>>(),
+            });
+            serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+pub fn execute_kb_add_link(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let src = args
+        .get("src")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: src".to_string())?;
+    let dst = args
+        .get("dst")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: dst".to_string())?;
+    let rel_type = args
+        .get("rel_type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: rel_type".to_string())?;
+    let weight = args.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let store = editor
+        .kb
+        .store
+        .as_ref()
+        .ok_or_else(|| "No KB store configured".to_string())?;
+    match store.add_typed_link(src, dst, rel_type, weight) {
+        Ok(()) => Ok(serde_json::json!({
+            "status": "ok",
+            "src": src,
+            "dst": dst,
+            "rel_type": rel_type,
+            "weight": weight,
+        })
+        .to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+pub fn execute_kb_raw_query(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: query".to_string())?;
+    let store = editor
+        .kb
+        .store
+        .as_ref()
+        .ok_or_else(|| "No KB store configured".to_string())?;
+    match store.raw_query(query) {
+        Ok((headers, rows)) => {
+            let out = serde_json::json!({
+                "backend": store.backend_name(),
+                "headers": headers,
+                "rows": rows,
+                "row_count": rows.len(),
+            });
+            serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -104,6 +104,13 @@ fn kind_from_str(s: &str) -> NodeKind {
     }
 }
 
+/// Initialize schema and run any pending migrations. Public entry point
+/// for `SqliteKbStore` and other consumers that manage their own connection.
+pub fn init_and_migrate(conn: &Connection) -> Result<(), PersistError> {
+    check_schema_version(conn)?;
+    init_schema(conn)
+}
+
 /// Create schema tables on a fresh connection. Idempotent — safe to run
 /// on every open.
 fn init_schema(conn: &Connection) -> Result<(), PersistError> {

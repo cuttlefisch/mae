@@ -44,6 +44,14 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O | `tokio`, `serde_json` |
 | `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers | `yrs`, `serde`, `base64` |
 | `mae-state-server` | Standalone collab state server — TCP sync, WAL persistence, per-doc locking | `mae-mcp`, `mae-sync`, `rusqlite`, `tokio` |
+| `mae-babel` | Org-mode code block execution (12 languages) | `mae-shell` |
+| `mae-export` | Org/Markdown → HTML/Markdown export | `mae-kb` |
+| `mae-canvas` | Visual buffer (diagrams, drawings) | `mae-core` |
+| `mae-snippets` | Snippet expansion engine | `mae-core` |
+| `mae-format` | Buffer formatting (external formatters) | `mae-core` |
+| `mae-make` | Build system integration (make, cargo, npm) | `mae-core` |
+| `mae-lookup` | Online lookup (dictionary, docs) | `reqwest` |
+| `mae-spell` | Spell checking integration | `mae-core` |
 | `mae` | Binary crate — CLI entry point, config loading, event loops | `clap`, `tokio` |
 
 ## Architecture Principles
@@ -353,6 +361,20 @@ Shim: `mae-mcp-shim` — translates MCP JSON-RPC over stdio to the Unix socket.
 
 Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (tutorial), `scheme:*` (Scheme API), `option:*` (editor options).
 
+### Collaboration / KB Sharing
+
+| Tool | Purpose |
+|------|---------|
+| `collab_status` | Connection state, peer count, synced docs |
+| `collab_connect` | Connect to a state server |
+| `collab_share` | Share a buffer for collaborative editing |
+| `collab_doctor` | Run connectivity diagnostics |
+| `collab_list` | List shared documents on the server |
+| `collab_discover` | Discover MAE peers via mDNS |
+| `kb_share` | Share a KB for collaborative editing |
+| `kb_join` | Join a shared KB from the server |
+| `kb_leave` | Leave a shared KB (local copy preserved) |
+
 ### Buffer / Editor
 
 | Tool | Purpose |
@@ -477,7 +499,7 @@ mae-state-server doctor             # run diagnostics
 - `collab-start` (SPC C s), `collab-connect` (SPC C c), `collab-disconnect` (SPC C d)
 - `collab-status` (SPC C i), `collab-share` (SPC C S), `collab-sync` (SPC C y), `collab-doctor` (SPC C D)
 
-**AI tools:** `collab_status`, `collab_connect`, `collab_share`, `collab_doctor`
+**AI tools:** `collab_status`, `collab_connect`, `collab_share`, `collab_doctor`, `collab_list`, `collab_discover`, `kb_share`, `kb_join`, `kb_leave`
 
 **Scheme API:** `(collab-status)` → alist, `(collab-synced-buffers)` → list
 
@@ -489,8 +511,8 @@ mae-state-server doctor             # run diagnostics
 
 **P2P readiness:** Transport layer (`read_message`/`write_framed`) is generic over `AsyncWrite`/`AsyncBufRead` — P2P-ready by design. P2P collaboration via mDNS LAN discovery is planned (ROADMAP).
 
-**Security (v1):** No authentication. TCP is open. For trusted LAN use only.
-Auth roadmap: PSK → SSH key exchange → OAuth/OIDC (via `initialize` params extension).
+**Security:** PSK mutual authentication (HMAC-SHA256) since v0.11.0. Both server and clients must share the same `collab_psk`. For untrusted networks, use a VPN (Tailscale/WireGuard).
+Auth roadmap: ✅ PSK (v0.11.0+) → SSH key exchange (planned) → OAuth/OIDC (planned, via `initialize` params extension).
 
 **Systemd:** `assets/mae-state-server.service` (user unit)
 
@@ -502,7 +524,7 @@ These APIs are intended to remain stable through v1.0:
 
 - **Scheme API:** ~50 functions + ~25 variables (see `:help concept:scheme-api`)
 - **Hooks:** 25 hook points (see `:help concept:hooks`)
-- **MCP tools:** 130+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
+- **MCP tools:** 135+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
 - **Config options:** 91+ registered, persistable via `:set-save`
 
 ## Related Resources

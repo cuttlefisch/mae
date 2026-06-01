@@ -603,6 +603,10 @@
           "kind": "mod"
         },
         {
+          "name": "migrate",
+          "kind": "mod"
+        },
+        {
           "name": "org",
           "kind": "mod"
         },
@@ -611,7 +615,15 @@
           "kind": "mod"
         },
         {
+          "name": "store",
+          "kind": "mod"
+        },
+        {
           "name": "watch",
+          "kind": "mod"
+        },
+        {
+          "name": "cozo_store",
           "kind": "mod"
         },
         {

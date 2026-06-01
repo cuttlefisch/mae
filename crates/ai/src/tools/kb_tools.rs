@@ -397,6 +397,182 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- KB graph-native tools (CozoDB backend) ---
+        ToolDefinition {
+            name: "kb_shortest_path".into(),
+            description: "Find the shortest path between two KB nodes via link graph (BFS). Returns an ordered list of node IDs from source to target. Requires CozoDB backend; returns error on SQLite.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "from".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Source node id".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "to".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Target node id".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["from".into(), "to".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_neighborhood".into(),
+            description: "Graph neighborhood around a seed node with typed edges (from the persistent store). Returns {nodes: [[id, title]], edges: [[src, dst, rel_type]]}. Requires CozoDB backend for typed edges; falls back to in-memory BFS on SQLite.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Seed node id".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "depth".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Hop radius (default 2, max 5)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["id".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_add_link".into(),
+            description: "Add a typed relationship between two KB nodes. Relationship types: implements, extends, contradicts, explains, references, supersedes, part_of, related_to. Weight defaults to 1.0. Requires CozoDB backend.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "src".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Source node id".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "dst".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Target node id".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "rel_type".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Relationship type".into(),
+                            enum_values: Some(vec![
+                                "implements".into(),
+                                "extends".into(),
+                                "contradicts".into(),
+                                "explains".into(),
+                                "references".into(),
+                                "supersedes".into(),
+                                "part_of".into(),
+                                "related_to".into(),
+                            ]),
+                        },
+                    ),
+                    (
+                        "weight".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Edge weight (default 1.0)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["src".into(), "dst".into(), "rel_type".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_raw_query".into(),
+            description: "Execute a raw query on the KB store backend. CozoDB: Datalog syntax. SQLite: SQL. Returns {headers: [...], rows: [[...]]}. Use with caution — no schema validation.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "query".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Query string (Datalog for CozoDB, SQL for SQLite)".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["query".into()],
+            },
+            permission: Some(PermissionTier::Privileged),
+        },
+        // --- KB sharing tools ---
+        ToolDefinition {
+            name: "kb_share".into(),
+            description: "Share a knowledge base for collaborative editing via the connected state server. Shares all nodes in the KB instance.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "kb_name".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Name of the KB instance to share (default: 'default' = primary KB)".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_join".into(),
+            description: "Join a shared KB from the connected state server. Downloads all nodes and enables continuous sync.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "kb_id".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "KB identifier on the server (e.g. 'default', 'work-notes')".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["kb_id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_leave".into(),
+            description: "Leave (unsubscribe from) a shared KB. Local copy is preserved but sync stops.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "kb_id".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "KB identifier to leave".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["kb_id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Org tools ---
         ToolDefinition {
             name: "org_cycle".into(),

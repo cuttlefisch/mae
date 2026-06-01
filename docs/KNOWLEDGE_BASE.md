@@ -209,10 +209,15 @@ KB data follows XDG conventions under `$XDG_DATA_HOME/mae/kb/` (default `~/.loca
 
 ```
 kb/
-├── local/          # Local-only KB instances (SQLite + org cache)
-├── shared/         # CRDT-synced KB instances (yrs docs + SQLite)
-├── backups/        # Periodic SQLite snapshots
-└── meta.toml       # Per-KB metadata (UUID, name, sync config)
+├── local/              # Local-only KB instances
+│   └── {slug}/
+│       └── kb.sqlite   # SQLite + FTS5 index
+├── shared/             # CRDT-synced KB instances
+│   └── {slug}/
+│       ├── kb.sqlite   # Local materialized copy
+│       └── meta.json   # Sync metadata (peers, last_sync, sync_mode)
+├── backups/            # Periodic SQLite snapshots
+└── meta.toml           # Per-KB metadata (UUID, name, sync config)
 ```
 
 See `crates/kb/src/data_dir.rs` for path resolution and directory initialization.
