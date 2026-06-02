@@ -15,10 +15,10 @@
 //! - A **node** is a typed, named document with an org-mode body.
 //! - Links are embedded in the body as `[[id]]` or `[[id|display text]]`.
 //! - The store keeps a reverse index so "what links to X?" is O(1).
-//! - **Persistence**: `SqliteKbStore` (via `KbStore` trait) is the durable
-//!   backend. In-memory `KnowledgeBase` is the hot cache; all mutations
-//!   write through to SQLite. Org files are import/export format, not
-//!   runtime source of truth. See ADR-011.
+//! - **Persistence**: `CozoKbStore` (via `KbStore` trait) is the durable
+//!   backend (CozoDB with SQLite storage engine). In-memory `KnowledgeBase`
+//!   is the hot cache; all mutations write through to CozoDB. Org files are
+//!   import/export format, not runtime source of truth. See ADR-011.
 //!
 //! This crate depends on no MAE internals — it's a pure data library
 //! callable from `mae-core`, `mae-ai`, and the editor binary.
@@ -34,7 +34,6 @@ pub mod federation;
 pub mod fuzzy;
 pub mod migrate;
 pub mod org;
-pub mod persist;
 pub mod store;
 pub mod watch;
 
@@ -43,10 +42,9 @@ pub mod cozo_store;
 pub use cozo_store::CozoKbStore;
 pub use federation::{ImportHealth, ImportReport as FederationImportReport};
 pub use org::IngestReport;
-pub use persist::PersistError;
 pub use store::{
     AgendaFilter, Block, HealthReport, IntegrityError, KbStore, KbStoreError, Link, MetaMember,
-    NodeVersion, SqliteKbStore, SubGraph, VectorHit,
+    NodeVersion, SubGraph, VectorHit,
 };
 
 /// Kind of a node. Controls how the node is surfaced to the user
@@ -83,6 +81,48 @@ pub enum NodeKind {
     Task,
     /// Configurable query+display node (kanban, backlog, sprint, timeline, agenda).
     View,
+}
+
+impl NodeKind {
+    /// Convert a `NodeKind` to its canonical string representation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NodeKind::Index => "index",
+            NodeKind::Command => "command",
+            NodeKind::Concept => "concept",
+            NodeKind::Key => "key",
+            NodeKind::Note => "note",
+            NodeKind::Project => "project",
+            NodeKind::Category => "category",
+            NodeKind::Lesson => "lesson",
+            NodeKind::Tutorial => "tutorial",
+            NodeKind::Meta => "meta",
+            NodeKind::Block => "block",
+            NodeKind::SchemeApi => "scheme_api",
+            NodeKind::Task => "task",
+            NodeKind::View => "view",
+        }
+    }
+
+    /// Parse a `NodeKind` from its string representation.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "index" => NodeKind::Index,
+            "command" => NodeKind::Command,
+            "concept" => NodeKind::Concept,
+            "key" => NodeKind::Key,
+            "project" => NodeKind::Project,
+            "category" => NodeKind::Category,
+            "lesson" => NodeKind::Lesson,
+            "tutorial" => NodeKind::Tutorial,
+            "meta" => NodeKind::Meta,
+            "block" => NodeKind::Block,
+            "scheme_api" => NodeKind::SchemeApi,
+            "task" => NodeKind::Task,
+            "view" => NodeKind::View,
+            _ => NodeKind::Note,
+        }
+    }
 }
 
 /// Specification for subgraph extraction.
@@ -901,8 +941,9 @@ impl KnowledgeBase {
     }
 
     /// Iterator over all nodes (value-references) — used by persistence
-    /// layers. Order is arbitrary; callers that need a stable order should
-    /// collect and sort by id.
+    /// layers (e.g. `CozoKbStore::persist_nodes`). Order is arbitrary;
+    /// callers that need a stable order should collect and sort by id.
+    #[allow(dead_code)] // Used by Phase 1 persist_nodes (build-manual-kb)
     pub(crate) fn nodes_values(&self) -> impl Iterator<Item = &Node> {
         self.nodes.values()
     }

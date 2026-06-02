@@ -543,11 +543,11 @@ mod tests {
     }
 
     #[test]
-    fn migrate_between_sqlite_stores() {
+    fn migrate_between_cozo_stores() {
         let tmp1 = tempfile::tempdir().unwrap();
         let tmp2 = tempfile::tempdir().unwrap();
-        let src = crate::SqliteKbStore::open(tmp1.path().join("src.db")).unwrap();
-        let dst = crate::SqliteKbStore::open(tmp2.path().join("dst.db")).unwrap();
+        let src = crate::CozoKbStore::open(tmp1.path().join("src.cozo")).unwrap();
+        let dst = crate::CozoKbStore::open(tmp2.path().join("dst.cozo")).unwrap();
 
         // Populate source
         src.insert_node(&Node::new("m:1", "Migrate One", NodeKind::Note, "body 1"))

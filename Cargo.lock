@@ -2568,7 +2568,6 @@ dependencies = [
  "mae-sync",
  "ndarray",
  "notify",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2",

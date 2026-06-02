@@ -183,24 +183,12 @@ pub struct CollaborationSection {
     pub kb_sync_mode: Option<String>,
 }
 
-fn default_backend() -> String {
-    "cozo".to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KbSection {
-    /// Storage backend: "cozo" (graph-native, default) or "sqlite" (legacy fallback).
-    #[serde(default = "default_backend")]
-    pub backend: String,
-}
-
-impl Default for KbSection {
-    fn default() -> Self {
-        Self {
-            backend: "cozo".to_string(),
-        }
-    }
-}
+/// KB configuration section.
+///
+/// CozoDB (with SQLite storage engine) is the sole backend since v0.12.1.
+/// This struct is retained for forward compatibility with config.toml.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KbSection {}
 
 fn default_true() -> bool {
     true

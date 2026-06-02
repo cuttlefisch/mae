@@ -6,7 +6,7 @@ use super::Editor;
 
 impl Editor {
     /// Create the default vi-like keymaps.
-    pub(crate) fn default_keymaps() -> HashMap<String, Keymap> {
+    pub fn default_keymaps() -> HashMap<String, Keymap> {
         let mut maps = HashMap::new();
 
         let mut normal = Keymap::new("normal");

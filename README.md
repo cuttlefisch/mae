@@ -158,7 +158,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full container development workfl
 > **MAE is in early Alpha.** AI features and cost guardrails are experimental.
 > Always monitor your API usage and costs directly in your provider dashboards.
 
-Set one of these environment variables:
+The simplest way to enable AI is to export an API key. MAE auto-detects the
+provider:
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...    # Claude (default) — https://console.anthropic.com/settings/keys
@@ -167,25 +168,20 @@ export GEMINI_API_KEY=...              # Gemini           — https://aistudio.g
 export DEEPSEEK_API_KEY=...            # DeepSeek         — https://platform.deepseek.com/api_keys
 ```
 
-Or configure in `~/.config/mae/config.toml`:
+For persistent settings, add to `~/.config/mae/config.toml`:
 
 ```toml
 [ai]
-provider = "claude"
-model = "claude-sonnet-4-20250514"
-
-# Optional: permission tier (readonly, write, shell, privileged)
-# Default: shell (AI can read, write, and run commands)
-permission_tier = "shell"
-
-# Optional: force prompt tier (full, compact)
-# Default: auto-detected from model
-# prompt_tier = "full"
+provider = "claude"                    # claude | openai | gemini | deepseek | ollama
+model = "claude-sonnet-4-20250514"     # any supported model name
+# api_key_command = "pass show mae/anthropic"  # password manager integration
+# auto_approve_tier = "shell"          # readonly | write | shell (default) | privileged
+# editor = "claude"                    # CLI command for SPC a a (AI agent shell)
 ```
 
-**Provider-aware prompts:** MAE auto-detects the provider from the model name
-and injects provider-specific guidance (e.g., Gemini gets explicit JSON
-examples; DeepSeek gets anti-looping guardrails).
+Most AI behavior is configured in `init.scm` (see [Configuration](#configuration)),
+not config.toml. Provider-aware prompt tuning is automatic — Gemini gets explicit
+JSON examples, DeepSeek gets anti-looping guardrails.
 
 ### First Steps
 
@@ -199,25 +195,45 @@ examples; DeepSeek gets anti-looping guardrails).
 
 ### Configuration
 
-MAE loads `~/.config/mae/init.scm` on startup. This is a real Scheme program,
-not a settings file:
+MAE has two config files — `config.toml` for static settings and `init.scm`
+for everything else:
+
+| File | Role | Format |
+|------|------|--------|
+| `~/.config/mae/config.toml` | Provider credentials, LSP server paths, performance knobs | TOML (static, declarative) |
+| `~/.config/mae/init.scm` | Modules, keybindings, options, hooks, packages, custom commands | Scheme (programmatic, live-reloadable) |
+| `.mae/init.scm` (per-project) | Project-local overrides, loaded after user config | Scheme |
+
+**`init.scm` is the primary user config.** It's a real Scheme program, not a
+settings file:
 
 ```scheme
-;; Example init.scm
+;; Module selection — declare which modules to load
+(mae!
+  :editor "keymap-doom" "surround" "search" "registers" "macros"
+  :ui     "dashboard" "file-tree")
+
+;; Third-party packages — install with `mae sync`
+(package! "splash-themes" :source "github:cuttlefisch/mae-splash-themes")
+
+;; Editor options (91+ registered, all Scheme-accessible)
 (set-option! "theme" "gruvbox-dark")
 (set-option! "relative-line-numbers" "true")
-(set-option! "word-wrap" "true")
+(set-option! "font-size" "14")
 
-;; Custom keybinding
+;; Custom keybindings
 (define-key "normal" "SPC t t" "cycle-theme")
 
-;; Hook: run on buffer save
-(add-hook! "before-save" "my-format-fn")
+;; Hooks
+(add-hook! "before-save" "lsp-format")
 ```
 
-Project-local config: `.mae/init.scm` is loaded after user config.
+**`config.toml` is for provider/credential plumbing** that doesn't belong in
+version-controlled Scheme. `mae --init-config` generates both files with a
+guided wizard.
 
 Useful commands:
+- `mae --init-config` — generate config.toml + init.scm + wizard
 - `mae --check-config` — validate config + init.scm without launching (CI-friendly)
 - `mae --clean` / `mae -q` — pristine launch, skip all config/init/history (like `emacs -q`)
 - `:edit-config` — edit `init.scm` from inside the editor
@@ -380,8 +396,8 @@ the same tools the human uses. The GUI is the primary development target.
 ## Model Compatibility
 
 MAE supports 33+ model prefixes across 8 providers. Run `:model-exam` to
-validate any model's tool-calling capabilities with a deterministic 10-test
-exam. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) for the full compatibility
+validate any model's tool-calling capabilities with a deterministic 12-test
+exam (6 categories: navigation, editing, search, tool selection, knowledge base, diagnostics). See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) for the full compatibility
 matrix and exam instructions.
 
 ## Data Directories
@@ -390,15 +406,16 @@ MAE follows the [XDG Base Directory Specification](https://specifications.freede
 
 | Path | Contents |
 |------|----------|
-| `~/.config/mae/` | `config.toml`, `init.scm`, `help/*.org` |
+| `~/.config/mae/` | `config.toml`, `init.scm`, `help/*.org`, `packages/` |
 | `~/.local/share/mae/` | `swap/`, `transcripts/`, `exam-results/` |
+| `~/.local/share/mae/kb/` | `local/{slug}/primary.cozo` (CozoDB graph stores) |
 | `~/.local/state/mae/` | `logs/`, `history.scm` |
-| `.mae/` (per-project) | `session.json`, `conversation.json`, `kb.sqlite3`, `memory/`, `plans/` |
+| `.mae/` (per-project) | `session.json`, `conversation.json`, `memory/`, `plans/` |
 
 ## Contributing
 
-Feature branches + PR workflow. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
-Report bugs at [github.com/cuttlefisch/mae/issues](https://github.com/cuttlefisch/mae/issues).
+Feature branches + PR workflow. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+full guide. Report bugs at [github.com/cuttlefisch/mae/issues](https://github.com/cuttlefisch/mae/issues).
 Check [Known Bugs](ROADMAP.md#known-bugs) before filing.
 
 ```bash
@@ -408,14 +425,9 @@ make verify      # check + test + GUI check with summary
 make self-test   # AI-driven end-to-end self-test (headless)
 ```
 
+For end-to-end workflow documentation, see [docs/USER_STORIES.md](docs/USER_STORIES.md).
+For feature parity goals, see [docs/COMPETITIVE_ANALYSIS.md](docs/COMPETITIVE_ANALYSIS.md).
 See [CLAUDE.md](CLAUDE.md) for architecture principles and development guide.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, code standards,
-and where to start. For end-to-end workflow documentation, see
-[docs/USER_STORIES.md](docs/USER_STORIES.md). For feature parity goals, see
-[docs/COMPETITIVE_ANALYSIS.md](docs/COMPETITIVE_ANALYSIS.md).
 
 ## License
 

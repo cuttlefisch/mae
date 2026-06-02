@@ -501,7 +501,7 @@ fn shortest_path_between_concepts() {
             );
         }
         Err(e) => {
-            // CozoDB sled backend may not support recursive arithmetic in Datalog
+            // CozoDB backend may not support recursive arithmetic in Datalog
             eprintln!(
                 "shortest_path not supported on this backend (expected): {}",
                 e
@@ -905,8 +905,8 @@ fn instance_uuid_stable_across_reopen() {
     let id2 = match CozoKbStore::open(&path) {
         Ok(store) => store.instance_id().unwrap(),
         Err(e) => {
-            // Sled backend may have issues with concurrent opens
-            eprintln!("Skipping reopen test (sled backend issue): {}", e);
+            // Backend may have issues with concurrent opens
+            eprintln!("Skipping reopen test (backend issue): {}", e);
             return;
         }
     };

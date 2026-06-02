@@ -523,7 +523,7 @@ See also: [[concept:knowledge-base]], [[concept:command]], [[concept:agent-boots
 pub(super) const CONCEPT_KB: &str = "\
 MAE's **knowledge base** is a typed graph database backed by CozoDB (Datalog). \
 It serves as both the built-in manual and a personal knowledge graph \
-(org-roam-equivalent). SQLite is available as a fallback via `kb_backend` option.\n\n\
+(org-roam-equivalent). CozoDB with SQLite storage engine is the sole backend.\n\n\
 ## Graph model\n\
 - **CozoDB** (Datalog) primary backend with typed nodes and relationships.\n\
 - 14 `NodeKind` variants: Index, Command, Concept, Key, Note, Project, Category, \

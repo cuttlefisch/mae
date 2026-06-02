@@ -253,7 +253,6 @@ Source: `crates/kb/src/lib.rs`
 | `fuzzy` | mod |
 | `migrate` | mod |
 | `org` | mod |
-| `persist` | mod |
 | `store` | mod |
 | `watch` | mod |
 | `cozo_store` | mod |

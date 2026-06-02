@@ -121,8 +121,8 @@ Capabilities shipped:
   `:kb-export` to write org files on demand. `:kb-ingest` remains for initial
   import.
 
-- **SQLite remains a first-class backend.** It is not deprecated. Users with
-  small KBs or minimal graph query needs can use it indefinitely.
+- **SQLite/rusqlite removed (v0.12.0).** `SqliteKbStore` and `persist.rs` deleted.
+  CozoDB with sled storage is the sole KB backend. See ADR-012.
 
 - **CozoDB learning curve.** Datalog is unfamiliar to most developers. This is
   mitigated by a thin Rust wrapper in `mae-kb` that exposes idiomatic Rust

@@ -1,12 +1,13 @@
 //! CozoKbStore — graph-native KB persistence using CozoDB (Datalog).
 //!
-//! Default KB backend since v0.12.0. Uses sled storage backend (pure Rust,
-//! no linking conflicts with rusqlite).
+//! Sole KB backend since v0.12.0. Uses sled embedded storage (CozoDB default).
+//! Will migrate to CozoDB's native SQLite storage engine once `rusqlite` is
+//! removed from the state-server (currently conflicts via `links = "sqlite3"`).
 //!
 //! CozoDB provides:
 //! - Datalog query engine with recursive queries
 //! - ACID + MVCC transactions
-//! - Multiple storage backends (sled default, RocksDB optional)
+//! - Multiple storage backends (SQLite default, RocksDB optional for high-concurrency)
 //!
 //! Graph algorithms (PageRank, community detection) require the `graph-algo`
 //! feature, currently disabled due to upstream `graph_builder` rayon compat
@@ -21,7 +22,7 @@ use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability, Vector};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// CozoDB-backed KbStore using sled embedded storage.
+/// CozoDB-backed KbStore using SQLite embedded storage.
 pub struct CozoKbStore {
     db: DbInstance,
     path: PathBuf,
@@ -36,7 +37,11 @@ impl std::fmt::Debug for CozoKbStore {
 }
 
 impl CozoKbStore {
-    /// Open (or create) a CozoDB at the given path using sled storage.
+    /// Open (or create) a CozoDB at the given path.
+    ///
+    /// Uses sled embedded storage (CozoDB default). Will migrate to CozoDB's
+    /// native SQLite engine once the `rusqlite` conflict with state-server is
+    /// resolved.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, KbStoreError> {
         let path = path.into();
         let db = DbInstance::new("sled", path.to_str().unwrap_or(""), "")
@@ -168,8 +173,8 @@ impl CozoKbStore {
         }
 
         // Tantivy FTS index on nodes (title + body combined).
-        // NOTE: sled backend has a bug where :put doesn't clean up old FTS entries.
-        // We work around this via post-query verification in fts_search().
+        // NOTE: Post-query verification in fts_search() guards against stale FTS
+        // entries (observed with sled backend; kept as defensive measure).
         self.run_mut(
             r#"::fts create nodes:fts {
                 extractor: title ++ ' ' ++ body,
@@ -542,6 +547,38 @@ impl CozoKbStore {
 
         Ok(SubGraph { nodes, edges })
     }
+
+    /// Persist all nodes from an in-memory `KnowledgeBase` into this CozoDB store.
+    ///
+    /// Used by `build-manual-kb` to create the pre-built manual KB file.
+    /// Returns the number of nodes persisted.
+    pub fn persist_nodes(&self, kb: &crate::KnowledgeBase) -> Result<usize, KbStoreError> {
+        let mut count = 0;
+        for node in kb.nodes_values() {
+            self.insert_node(node)?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Load all links from CozoDB.
+    pub fn load_all_links(&self) -> Result<Vec<Link>, KbStoreError> {
+        let result = self
+            .run_immut(
+                r#"?[src, dst, rel_type, display, weight, confidence]
+                   := *links{src, dst, rel_type, display, weight, confidence}
+                   :order src, dst"#,
+            )
+            .map_err(cozo_err)?;
+
+        let mut links = Vec::with_capacity(result.rows.len());
+        for row in &result.rows {
+            if let Some(link) = parse_link_row(row) {
+                links.push(link);
+            }
+        }
+        Ok(links)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -659,7 +696,7 @@ impl KbStore for CozoKbStore {
     }
 
     fn list_ids(&self, prefix: Option<&str>) -> Result<Vec<String>, KbStoreError> {
-        // Filter out ghost rows (title is empty string after :rm on sled)
+        // Filter out ghost rows (title is empty string after :rm — defensive)
         let result = match prefix {
             Some(p) => self
                 .run_immut_params(
@@ -700,8 +737,8 @@ impl KbStore for CozoKbStore {
         }
 
         // Use Tantivy FTS index for ranked search.
-        // Fetch extra candidates because sled backend may return stale entries
-        // (FTS index not cleaned up on :put overwrite — CozoDB sled bug).
+        // Fetch extra candidates to allow for post-query filtering
+        // (guards against stale FTS index entries).
         let fetch_k = limit * 3 + 10;
         let result = self
             .run_immut_params(
@@ -713,7 +750,7 @@ impl KbStore for CozoKbStore {
             .map_err(cozo_err)?;
 
         // Post-query verification: check each hit's actual content still matches.
-        // This filters out stale FTS entries from the sled backend bug.
+        // Defensive measure against stale FTS index entries.
         let query_lower = query.to_lowercase();
         let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
         let mut hits = Vec::new();
@@ -1096,7 +1133,7 @@ impl CozoKbStore {
             .collect())
     }
 
-    /// Rebuild the FTS index to clean up stale entries from sled backend.
+    /// Rebuild the FTS index to clean up stale entries.
     /// Call periodically or after bulk updates.
     pub fn rebuild_fts(&self) -> Result<(), KbStoreError> {
         // Drop and recreate the FTS index
@@ -2115,41 +2152,11 @@ fn dv_str(s: &str) -> DataValue {
 }
 
 fn kind_to_str(kind: NodeKind) -> &'static str {
-    match kind {
-        NodeKind::Note => "note",
-        NodeKind::Index => "index",
-        NodeKind::Command => "command",
-        NodeKind::Concept => "concept",
-        NodeKind::Key => "key",
-        NodeKind::Project => "project",
-        NodeKind::Category => "category",
-        NodeKind::Lesson => "lesson",
-        NodeKind::Tutorial => "tutorial",
-        NodeKind::Meta => "meta",
-        NodeKind::Block => "block",
-        NodeKind::SchemeApi => "scheme_api",
-        NodeKind::Task => "task",
-        NodeKind::View => "view",
-    }
+    kind.as_str()
 }
 
 fn str_to_kind(s: &str) -> NodeKind {
-    match s {
-        "index" => NodeKind::Index,
-        "command" => NodeKind::Command,
-        "concept" => NodeKind::Concept,
-        "key" => NodeKind::Key,
-        "project" => NodeKind::Project,
-        "category" => NodeKind::Category,
-        "lesson" => NodeKind::Lesson,
-        "tutorial" => NodeKind::Tutorial,
-        "meta" => NodeKind::Meta,
-        "block" => NodeKind::Block,
-        "scheme_api" => NodeKind::SchemeApi,
-        "task" => NodeKind::Task,
-        "view" => NodeKind::View,
-        _ => NodeKind::Note,
-    }
+    NodeKind::from_str_lossy(s)
 }
 
 /// Parse a CozoDB row [src, dst, rel_type, display, weight, confidence] into a Link.
@@ -2324,7 +2331,7 @@ mod tests {
 
     #[test]
     fn delete_node_removes_it() {
-        // Test with mem engine to verify rm works (sled may have ghost rows)
+        // Test with mem engine to verify rm works cleanly
         let db = DbInstance::new("mem", "", "").unwrap();
         db.run_default(":create test {k: String => v: String}")
             .unwrap();
@@ -2618,7 +2625,7 @@ mod tests {
     }
 
     #[test]
-    fn tantivy_fts_on_sled() {
+    fn tantivy_fts_on_sqlite() {
         // Test CozoDB's native Tantivy FTS index on sled backend
         let tmp = tempfile::tempdir().unwrap();
         let db =
@@ -2642,7 +2649,7 @@ mod tests {
             ScriptMutability::Mutable,
         );
         if let Err(e) = &fts_create {
-            panic!("FTS index creation failed on sled: {e}");
+            panic!("FTS index creation failed on sqlite: {e}");
         }
 
         // Insert docs
@@ -2697,7 +2704,7 @@ mod tests {
             )
             .unwrap();
         // Should no longer find "gravity" — it was in n2 which was updated
-        // If sled FTS doesn't auto-clean, this will show the stale behavior
+        // Verify FTS auto-cleans stale entries after update
         eprintln!(
             "After update, 'gravity' search returns {} results: {:?}",
             res3.rows.len(),

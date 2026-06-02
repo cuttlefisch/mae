@@ -39,7 +39,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
-| `mae-kb` | Knowledge base — CozoDB graph store, typed relationships, org parser, federation | `cozo`, `rusqlite`, `tree-sitter`, `tree-sitter-org` |
+| `mae-kb` | Knowledge base — CozoDB graph store (sole backend), typed relationships, org parser, federation | `cozo`, `tree-sitter`, `tree-sitter-org` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
 | `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O | `tokio`, `serde_json` |
 | `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers | `yrs`, `serde`, `base64` |
@@ -145,7 +145,11 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Debug panel UI complete ✅
 
 ### Phase 5: Knowledge Base — COMPLETE
-- CozoDB-primary graph store (Datalog) with SQLite fallback
+- CozoDB sole graph store (Datalog) — rusqlite/SqliteKbStore removed, sled storage backend
+- Pre-built manual KB: `build-manual-kb` binary generates versioned `.cozo` file (862 nodes)
+- Multi-DB startup: manual KB (read-only) + user KB (read-write) + imported KBs
+- SHA-256 checksum validation for shipped manual KB files
+- `Editor::with_kb()` constructor for pre-populated KB (skips `seed_kb()`)
 - 14 NodeKind variants, 20 typed relationship types with inverses
 - Org-mode parser (hand-rolled, multi-node files)
 - Bidirectional link primitives + typed link graph
@@ -411,7 +415,7 @@ Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (
 
 `self_test_suite` returns the structured JSON test plan. Execute each test by calling the listed tools and checking assertions. Categories: `introspection`, `editing`, `git`, `help`, `project`, `lsp`, `dap`, `babel`, `guidance`, `performance`, `scrolling`.
 
-`model_exam` provides a 10-test deterministic exam for validating model tool-calling capabilities. Results auto-save to `~/.local/share/mae/exam-results/`. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md).
+`model_exam` provides a 12-test deterministic exam (6 categories) for validating model tool-calling capabilities. Results auto-save to `~/.local/share/mae/exam-results/`. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md).
 
 ### When to Use
 

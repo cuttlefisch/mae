@@ -294,37 +294,8 @@ impl Editor {
                 }
                 true
             }
-            "kb-save" => {
-                self.dispatch_path_op(
-                    args,
-                    "kb-save",
-                    |editor, p| {
-                        editor
-                            .kb
-                            .primary
-                            .save_to_sqlite(p)
-                            .map(|()| editor.kb.primary.len())
-                            .map_err(|e| format!("kb save failed: {}", e))
-                    },
-                    "Saved",
-                    "to",
-                );
-                true
-            }
-            "kb-load" => {
-                self.dispatch_path_op(
-                    args,
-                    "kb-load",
-                    |editor, p| {
-                        editor
-                            .kb
-                            .primary
-                            .load_from_sqlite(p)
-                            .map_err(|e| format!("kb load failed: {}", e))
-                    },
-                    "Loaded",
-                    "from",
-                );
+            "kb-save" | "kb-load" => {
+                self.set_status("KB persistence is now automatic via CozoDB. Use :kb-register / :kb-reimport for external KBs.");
                 true
             }
             "theme" | "set-theme" => {

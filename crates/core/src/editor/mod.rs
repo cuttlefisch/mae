@@ -1010,6 +1010,15 @@ impl Editor {
         let keymaps = Self::default_keymaps();
         let hooks = HookRegistry::new();
         let kb = seed_kb(&commands, &keymaps, &hooks);
+        Self::new_inner(commands, keymaps, hooks, kb)
+    }
+
+    fn new_inner(
+        commands: CommandRegistry,
+        keymaps: HashMap<String, crate::keymap::Keymap>,
+        hooks: HookRegistry,
+        kb: mae_kb::KnowledgeBase,
+    ) -> Self {
         Editor {
             buffers: vec![Buffer::new()],
             window_mgr: WindowManager::new(0),
@@ -1171,6 +1180,21 @@ impl Editor {
             locked_files: HashSet::new(),
             collab: CollabState::new(),
         }
+    }
+
+    /// Create an editor with a pre-built knowledge base (skipping `seed_kb()`).
+    ///
+    /// Used when the manual KB is loaded from a pre-built CozoDB file rather
+    /// than generated at startup. The KB is seeded later with command/keymap
+    /// nodes via `seed_dynamic_nodes()`.
+    pub fn with_kb(kb: mae_kb::KnowledgeBase) -> Self {
+        let commands = CommandRegistry::with_builtins();
+        let keymaps = Self::default_keymaps();
+        let hooks = HookRegistry::new();
+        // Skip seed_kb() — KB already populated from persistent store.
+        // Command/keymap nodes will be added by seed_dynamic_nodes() after
+        // the editor is constructed and modules are loaded.
+        Self::new_inner(commands, keymaps, hooks, kb)
     }
 
     pub fn with_buffer(buf: Buffer) -> Self {

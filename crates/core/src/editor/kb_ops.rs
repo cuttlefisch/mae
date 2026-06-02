@@ -183,14 +183,6 @@ impl Editor {
         // Import org files recursively
         let (kb, report, health) = mae_kb::federation::import_org_dir(org_dir);
 
-        // Persist to SQLite (so next startup loads from SQLite, not org parse).
-        let db_path = self.kb.registry.find(&uuid).map(|i| i.db_path.clone());
-        if let Some(ref db) = db_path {
-            if let Err(e) = kb.save_to_sqlite(db) {
-                tracing::warn!(name, error = %e, "failed to persist KB to SQLite on register");
-            }
-        }
-
         // Store the instance
         self.kb.instances.insert(uuid.clone(), kb);
 
@@ -273,10 +265,6 @@ impl Editor {
         match inst {
             Some(instance) => {
                 let (kb, report, health) = mae_kb::federation::import_org_dir(&instance.org_dir);
-                // Persist reimported KB to SQLite (keeps SQLite in sync with org).
-                if let Err(e) = kb.save_to_sqlite(&instance.db_path) {
-                    tracing::warn!(name = %instance.name, error = %e, "failed to persist reimport to SQLite");
-                }
                 self.kb.instances.insert(instance.uuid.clone(), kb);
 
                 // Update timestamp

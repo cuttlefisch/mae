@@ -28,7 +28,7 @@ pub fn is_builtin_node(id: &str) -> bool {
 }
 
 fn node_kind_label(kind: mae_kb::NodeKind) -> &'static str {
-    mae_kb::persist::kind_to_str(kind)
+    kind.as_str()
 }
 
 /// Render a KB node into plain text and extract link byte ranges.
