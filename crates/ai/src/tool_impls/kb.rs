@@ -477,7 +477,12 @@ pub fn execute_kb_reimport(
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: name")?;
 
-    match editor.kb_reimport(name) {
+    let mode = args
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .map(mae_kb::IngestMode::from_str_lossy);
+
+    match editor.kb_reimport(name, mode) {
         Some(result) => Ok(result.to_json()),
         None => Err(editor.status_msg.clone()),
     }

@@ -49,6 +49,15 @@ impl KbImportResult {
             "Registered '{}': {} nodes, {} links",
             self.name, self.report.nodes_imported, self.report.links_created,
         );
+        if self.report.nodes_updated > 0 {
+            s.push_str(&format!(", {} updated", self.report.nodes_updated));
+        }
+        if self.report.nodes_unchanged > 0 {
+            s.push_str(&format!(", {} unchanged", self.report.nodes_unchanged));
+        }
+        if self.report.nodes_removed > 0 {
+            s.push_str(&format!(", {} removed", self.report.nodes_removed));
+        }
         s.push_str(&format!(
             " | Health: {} orphans, {} broken links",
             self.health.orphan_count, self.health.broken_link_count,
@@ -67,6 +76,9 @@ impl KbImportResult {
         }
         if !self.report.errors.is_empty() {
             s.push_str(&format!(", {} read errors", self.report.errors.len()));
+        }
+        if self.report.duration_ms > 0 {
+            s.push_str(&format!(" ({}ms)", self.report.duration_ms));
         }
         s
     }
@@ -180,8 +192,34 @@ impl Editor {
             self.kb.data_dir.as_ref(),
         );
 
-        // Import org files recursively
-        let (kb, report, health) = mae_kb::federation::import_org_dir(org_dir);
+        // Import org files — try CozoDB-direct ingestion first.
+        let inst_ref = self.kb.registry.find(&uuid).cloned();
+        let (kb, report, health) = if let Some(inst) = inst_ref {
+            match mae_kb::CozoKbStore::open(&inst.db_path) {
+                Ok(store) => {
+                    match mae_kb::federation::import_org_dir_to_store(
+                        org_dir,
+                        &store,
+                        &mae_kb::IngestMode::Full,
+                    ) {
+                        Ok((kb, report)) => {
+                            let health = mae_kb::ImportHealth::from_kb(&kb);
+                            (kb, report, health)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "CozoDB ingestion failed, falling back to in-memory import"
+                            );
+                            mae_kb::federation::import_org_dir(org_dir)
+                        }
+                    }
+                }
+                Err(_) => mae_kb::federation::import_org_dir(org_dir),
+            }
+        } else {
+            mae_kb::federation::import_org_dir(org_dir)
+        };
 
         // Store the instance
         self.kb.instances.insert(uuid.clone(), kb);
@@ -260,11 +298,45 @@ impl Editor {
     }
 
     /// Re-import an existing KB instance (refresh after org file edits).
-    pub fn kb_reimport(&mut self, name_or_uuid: &str) -> Option<KbImportResult> {
+    ///
+    /// When `mode` is `None`, defaults to `IngestMode::Full`.
+    pub fn kb_reimport(
+        &mut self,
+        name_or_uuid: &str,
+        mode: Option<mae_kb::IngestMode>,
+    ) -> Option<KbImportResult> {
         let inst = self.kb.registry.find(name_or_uuid).cloned();
         match inst {
             Some(instance) => {
-                let (kb, report, health) = mae_kb::federation::import_org_dir(&instance.org_dir);
+                let mode = mode.unwrap_or_default();
+
+                // Try CozoDB-direct ingestion for the instance's DB.
+                let (kb, report, health) = match mae_kb::CozoKbStore::open(&instance.db_path) {
+                    Ok(store) => {
+                        match mae_kb::federation::import_org_dir_to_store(
+                            &instance.org_dir,
+                            &store,
+                            &mode,
+                        ) {
+                            Ok((kb, report)) => {
+                                let health = mae_kb::ImportHealth::from_kb(&kb);
+                                (kb, report, health)
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "CozoDB ingestion failed, falling back to in-memory import"
+                                );
+                                mae_kb::federation::import_org_dir(&instance.org_dir)
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // No CozoDB store for this instance — use in-memory import.
+                        mae_kb::federation::import_org_dir(&instance.org_dir)
+                    }
+                };
+
                 self.kb.instances.insert(instance.uuid.clone(), kb);
 
                 // Update timestamp
@@ -1834,8 +1906,14 @@ mod tests {
         )
         .unwrap();
 
-        let result2 = editor.kb_reimport("TestNotes").unwrap();
-        assert_eq!(result2.report.nodes_imported, 3);
+        let result2 = editor.kb_reimport("TestNotes", None).unwrap();
+        // Total nodes = imported (new) + updated (changed/existing)
+        let total = result2.report.nodes_imported + result2.report.nodes_updated;
+        assert_eq!(
+            total, 3,
+            "expected 3 total nodes (imported={}, updated={})",
+            result2.report.nodes_imported, result2.report.nodes_updated
+        );
         assert!(editor.kb.instances[&uuid].get("test-note-3").is_some());
     }
 

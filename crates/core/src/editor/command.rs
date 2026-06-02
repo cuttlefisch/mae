@@ -242,9 +242,12 @@ impl Editor {
             }
             "kb-reimport" => {
                 match args.map(str::trim).filter(|s| !s.is_empty()) {
-                    None => self.set_status("Usage: :kb-reimport <name>"),
-                    Some(name) => {
-                        self.kb_reimport(name);
+                    None => self.set_status("Usage: :kb-reimport <name> [full|incremental]"),
+                    Some(args_str) => {
+                        let parts: Vec<&str> = args_str.splitn(2, ' ').collect();
+                        let name = parts[0];
+                        let mode = parts.get(1).map(|m| mae_kb::IngestMode::from_str_lossy(m));
+                        self.kb_reimport(name, mode);
                     }
                 }
                 true

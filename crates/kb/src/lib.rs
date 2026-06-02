@@ -40,7 +40,7 @@ pub mod watch;
 pub mod cozo_store;
 
 pub use cozo_store::CozoKbStore;
-pub use federation::{ImportHealth, ImportReport as FederationImportReport};
+pub use federation::{ImportHealth, ImportReport as FederationImportReport, IngestMode};
 pub use org::IngestReport;
 pub use store::{
     AgendaFilter, Block, HealthReport, IntegrityError, KbStore, KbStoreError, Link, MetaMember,

@@ -329,6 +329,19 @@ impl CozoKbStore {
             }"#,
         )?;
 
+        // Source file tracking for ingestion pipeline.
+        // Enables incremental reimport (only re-parse changed files).
+        self.create_if_absent(
+            r#":create source_files {
+                file_path: String
+                =>
+                content_hash: String,
+                last_mtime: Int,
+                node_ids_json: String,
+                last_import: Int
+            }"#,
+        )?;
+
         // Generate instance_id UUID if not already set
         self.ensure_instance_id()?;
 
@@ -559,6 +572,102 @@ impl CozoKbStore {
             count += 1;
         }
         Ok(count)
+    }
+
+    /// Record a source file's metadata for incremental ingestion.
+    pub fn record_source_file(
+        &self,
+        file_path: &str,
+        content_hash: &str,
+        mtime: i64,
+        node_ids: &[String],
+    ) -> Result<(), KbStoreError> {
+        let node_ids_json =
+            serde_json::to_string(node_ids).map_err(|e| KbStoreError::Storage(e.to_string()))?;
+        let now = self.now_epoch();
+        self.run_mut_params(
+            r#"?[file_path, content_hash, last_mtime, node_ids_json, last_import] <- [[
+                $file_path, $content_hash, $last_mtime, $node_ids_json, $now
+            ]]
+            :put source_files {
+                file_path => content_hash, last_mtime, node_ids_json, last_import
+            }"#,
+            btree_params([
+                ("file_path", dv_str(file_path)),
+                ("content_hash", dv_str(content_hash)),
+                ("last_mtime", DataValue::from(mtime)),
+                ("node_ids_json", dv_str(&node_ids_json)),
+                ("now", DataValue::from(now)),
+            ]),
+        )
+        .map_err(cozo_err)?;
+        Ok(())
+    }
+
+    /// Get a source file's stored content hash (for change detection).
+    pub fn get_source_file_hash(&self, file_path: &str) -> Result<Option<String>, KbStoreError> {
+        let result = self
+            .run_immut_params(
+                r#"?[content_hash] := *source_files{file_path: $fp, content_hash}"#,
+                btree_params([("fp", dv_str(file_path))]),
+            )
+            .map_err(cozo_err)?;
+        Ok(result
+            .rows
+            .first()
+            .and_then(|r| r[0].get_str())
+            .map(|s| s.to_string()))
+    }
+
+    /// Get node IDs associated with a source file (for deletion on file removal).
+    pub fn get_source_file_node_ids(&self, file_path: &str) -> Result<Vec<String>, KbStoreError> {
+        let result = self
+            .run_immut_params(
+                r#"?[node_ids_json] := *source_files{file_path: $fp, node_ids_json}"#,
+                btree_params([("fp", dv_str(file_path))]),
+            )
+            .map_err(cozo_err)?;
+        if let Some(row) = result.rows.first() {
+            if let Some(json) = row[0].get_str() {
+                let ids: Vec<String> = serde_json::from_str(json).unwrap_or_default();
+                return Ok(ids);
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    /// Remove a source file record and its associated nodes.
+    pub fn remove_source_file(&self, file_path: &str) -> Result<Vec<String>, KbStoreError> {
+        let node_ids = self.get_source_file_node_ids(file_path)?;
+        for id in &node_ids {
+            self.delete_node(id)?;
+        }
+        self.run_mut_params(
+            r#"?[file_path] <- [[$fp]]
+            :rm source_files {file_path}"#,
+            btree_params([("fp", dv_str(file_path))]),
+        )
+        .map_err(cozo_err)?;
+        Ok(node_ids)
+    }
+
+    /// List all tracked source files with their content hashes.
+    pub fn list_source_files(&self) -> Result<Vec<(String, String, i64)>, KbStoreError> {
+        let result = self
+            .run_immut(
+                r#"?[file_path, content_hash, last_mtime]
+                   := *source_files{file_path, content_hash, last_mtime}
+                   :order file_path"#,
+            )
+            .map_err(cozo_err)?;
+        let mut files = Vec::with_capacity(result.rows.len());
+        for row in &result.rows {
+            let fp = row[0].get_str().unwrap_or("").to_string();
+            let hash = row[1].get_str().unwrap_or("").to_string();
+            let mtime = row.get(2).and_then(|v| v.get_int()).unwrap_or(0);
+            files.push((fp, hash, mtime));
+        }
+        Ok(files)
     }
 
     /// Load all links from CozoDB.
