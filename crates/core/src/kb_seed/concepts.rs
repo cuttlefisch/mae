@@ -521,14 +521,16 @@ Privileged. Users control how far the agent can act autonomously.\n\n\
 See also: [[concept:knowledge-base]], [[concept:command]], [[concept:agent-bootstrap]]\n";
 
 pub(super) const CONCEPT_KB: &str = "\
-MAE's **knowledge base** is a typed graph of nodes with bidirectional \
-link markers. It serves as both the built-in manual and a personal \
-knowledge graph (org-roam-equivalent).\n\n\
+MAE's **knowledge base** is a typed graph database backed by CozoDB (Datalog). \
+It serves as both the built-in manual and a personal knowledge graph \
+(org-roam-equivalent). SQLite is available as a fallback via `kb_backend` option.\n\n\
 ## Graph model\n\
-- Typed nodes with bidirectional links (`id|display` syntax).\n\
-- Reverse index: O(1) `links_to()` — who points at this node?\n\
-- Pre-lowercased search cache + FTS5 full-text search (porter stemmer + unicode61).\n\
-- `NodeKind` enum: Index, Command, Concept, Key, Note, Project.\n\
+- **CozoDB** (Datalog) primary backend with typed nodes and relationships.\n\
+- 14 `NodeKind` variants: Index, Command, Concept, Key, Note, Project, Category, \
+Lesson, Tutorial, Meta, Block, SchemeApi, Task, View.\n\
+- 20 typed relationship types with declared inverses (`implements`/`implemented_by`, \
+`teaches`/`taught_by`, `requires`/`required_by`, etc.).\n\
+- Full-text search via CozoDB FTS (Tantivy).\n\
 - `NodeSource` provenance: Seed, UserOrg, Manual, Federation.\n\n\
 ## Node namespaces\n\
 - `index` — the entry page.\n\
@@ -536,16 +538,29 @@ knowledge graph (org-roam-equivalent).\n\n\
 - `concept:<slug>` — architectural concepts (hand-authored).\n\
 - `key:<context>` — keybinding summaries.\n\
 - `option:<name>` — editor options.\n\
-- `module:<name>` — module documentation.\n\
+- `category:<name>` — command category indices.\n\
 - `scheme:<name>` — Scheme API functions.\n\
-- `lesson:<slug>` — interactive tutorials.\n\n\
+- `lesson:<slug>` — interactive tutorials.\n\
+- `tutorial:<slug>` — getting-started tracks.\n\
+- `term:<name>` — terminology definitions.\n\
+- `view:<name>` — stored Datalog view queries.\n\n\
+## Graph features\n\
+- **Typed relationships**: 95+ seed relationships with semantic types.\n\
+- **Node versioning**: Snapshot on update, version history, point-in-time restore.\n\
+- **Meta-nodes**: Compose body from member nodes with cached refresh.\n\
+- **Block addressing**: `parent_id#N` for paragraph-level references.\n\
+- **Agenda queries**: Filter by TODO state, priority, tags, staleness, orphans.\n\
+- **HNSW vector index**: 384-dim embeddings for semantic search (GraphRAG-ready).\n\
+- **Views**: 6 pre-built flavors (kanban, backlog, sprint, timeline, agenda, custom).\n\n\
 ## Federation\n\
 The KB supports multiple instances: a local KB (seed + user help) plus N external \
 instances registered from org-roam directories. See [[concept:kb-federation]].\n\n\
 ## AI surface\n\
-The agent reaches the KB via `kb_get`, `kb_search`, `kb_list`, `kb_links_from`, \
-`kb_links_to`, `kb_graph`, and `kb_health`. Same nodes the human reads via `:help`. \
-Federation tools: `kb_register`, `kb_unregister`, `kb_reimport`, `kb_instances`.\n\n\
+Core tools: `kb_get`, `kb_search`, `kb_list`, `kb_links_from`, `kb_links_to`, \
+`kb_graph`, `kb_health`. Graph tools: `kb_agenda`, `kb_history`, `kb_restore`, \
+`kb_view_query`, `kb_vector_search`, `kb_raw_query`, `kb_shortest_path`, \
+`kb_neighborhood`, `kb_add_link`, `kb_search_context`. \
+Federation: `kb_register`, `kb_unregister`, `kb_reimport`, `kb_instances`.\n\n\
 See also: [[concept:kb-federation]], [[concept:kb-workflows]], [[concept:ai-as-peer]], [[index]]\n";
 
 pub(super) const CONCEPT_KB_FEDERATION: &str = "\

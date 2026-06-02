@@ -1536,6 +1536,200 @@ impl Editor {
             }
         }
     }
+
+    // --- Graph KB dispatch helpers (CozoDB backend) ---
+
+    /// Show text content in a read-only scratch buffer.
+    fn show_scratch_buffer(&mut self, name: &str, content: &str) {
+        let mut buf = crate::buffer::Buffer::new();
+        buf.name = name.to_string();
+        buf.replace_contents(content);
+        buf.modified = false;
+        buf.read_only = true;
+        let buf_idx = self.buffers.len();
+        self.buffers.push(buf);
+        self.display_buffer(buf_idx);
+    }
+
+    /// Dispatch `:kb-agenda` with a filter string.
+    pub fn dispatch_kb_agenda(&mut self, input: &str) {
+        use mae_kb::AgendaFilter;
+
+        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+        let filter = match parts[0] {
+            "todo" => AgendaFilter::Todo(parts.get(1).map(|s| s.trim().to_string())),
+            "priority" => {
+                let ch = parts
+                    .get(1)
+                    .and_then(|s| s.trim().chars().next())
+                    .unwrap_or('A');
+                AgendaFilter::Priority(ch)
+            }
+            "tag" => match parts.get(1) {
+                Some(t) => AgendaFilter::Tag(t.trim().to_string()),
+                None => {
+                    self.set_status("Usage: :kb-agenda tag <TAG>");
+                    return;
+                }
+            },
+            "orphan" => AgendaFilter::Orphan,
+            "dead-end" | "deadend" => AgendaFilter::DeadEnd,
+            "stale" => {
+                let days = parts
+                    .get(1)
+                    .and_then(|s| s.trim().parse().ok())
+                    .unwrap_or(30);
+                AgendaFilter::Stale(days)
+            }
+            "custom" => match parts.get(1) {
+                Some(q) => AgendaFilter::Custom(q.trim().to_string()),
+                None => {
+                    self.set_status("Usage: :kb-agenda custom <datalog-query>");
+                    return;
+                }
+            },
+            other => {
+                self.set_status(format!(
+                    "Unknown filter '{}'. Use: todo, priority, tag, orphan, dead-end, stale, custom",
+                    other
+                ));
+                return;
+            }
+        };
+
+        let store = match &self.kb.store {
+            Some(s) => s.clone(),
+            None => {
+                self.set_status("No persistent KB store (CozoDB required)");
+                return;
+            }
+        };
+
+        match store.agenda_query(&filter) {
+            Ok(nodes) => {
+                let mut lines = Vec::new();
+                lines.push(format!("KB Agenda: {} results", nodes.len()));
+                lines.push("=".repeat(40));
+                lines.push(String::new());
+                for node in &nodes {
+                    let todo = match &node.todo_state {
+                        Some(s) if !s.is_empty() => format!(" [{}]", s),
+                        _ => String::new(),
+                    };
+                    let prio = match node.priority {
+                        Some(c) => format!(" #{}", c),
+                        None => String::new(),
+                    };
+                    lines.push(format!("  {}{}{} — {}", node.id, todo, prio, node.title));
+                }
+                if nodes.is_empty() {
+                    lines.push("  (no matching nodes)".to_string());
+                }
+                self.show_scratch_buffer("*KB Agenda*", &lines.join("\n"));
+            }
+            Err(e) => {
+                self.set_status(format!("Agenda query failed: {}", e));
+            }
+        }
+    }
+
+    /// Dispatch `:kb-history <node-id>`.
+    pub fn dispatch_kb_history(&mut self, id: &str) {
+        let store = match &self.kb.store {
+            Some(s) => s.clone(),
+            None => {
+                self.set_status("No persistent KB store (CozoDB required)");
+                return;
+            }
+        };
+
+        match store.node_history(id, 50) {
+            Ok(versions) => {
+                let mut lines = Vec::new();
+                lines.push(format!(
+                    "Version History: {} ({} versions)",
+                    id,
+                    versions.len()
+                ));
+                lines.push("=".repeat(50));
+                lines.push(String::new());
+                for v in &versions {
+                    let ts = if v.created_at > 0 {
+                        format!(" @{}", v.created_at)
+                    } else {
+                        String::new()
+                    };
+                    lines.push(format!(
+                        "  v{}: {} [{}]{} — {}",
+                        v.version, v.title, v.author, ts, v.change_summary
+                    ));
+                }
+                if versions.is_empty() {
+                    lines.push("  (no version history)".to_string());
+                }
+                self.show_scratch_buffer("*KB History*", &lines.join("\n"));
+            }
+            Err(e) => {
+                self.set_status(format!("History query failed: {}", e));
+            }
+        }
+    }
+
+    /// Dispatch `:kb-restore <node-id> <version>`.
+    pub fn dispatch_kb_restore(&mut self, id: &str, version: i64) {
+        let store = match &self.kb.store {
+            Some(s) => s.clone(),
+            None => {
+                self.set_status("No persistent KB store (CozoDB required)");
+                return;
+            }
+        };
+
+        match store.restore_version(id, version) {
+            Ok(()) => {
+                self.set_status(format!("Restored '{}' to version {}", id, version));
+            }
+            Err(e) => {
+                self.set_status(format!("Restore failed: {}", e));
+            }
+        }
+    }
+
+    /// Dispatch `:kb-raw-query <datalog>`.
+    pub fn dispatch_kb_raw_query(&mut self, query: &str) {
+        let store = match &self.kb.store {
+            Some(s) => s.clone(),
+            None => {
+                self.set_status("No persistent KB store (CozoDB required)");
+                return;
+            }
+        };
+
+        match store.raw_query(query) {
+            Ok((headers, rows)) => {
+                let mut lines = Vec::new();
+                lines.push(format!("Datalog Query Results ({} rows)", rows.len()));
+                lines.push("=".repeat(50));
+                lines.push(String::new());
+
+                if !headers.is_empty() {
+                    lines.push(format!("  {}", headers.join(" | ")));
+                    lines.push(format!("  {}", "-".repeat(headers.len() * 15)));
+                }
+
+                for row in &rows {
+                    lines.push(format!("  {}", row.join(" | ")));
+                }
+                if rows.is_empty() {
+                    lines.push("  (no results)".to_string());
+                }
+                self.show_scratch_buffer("*KB Query*", &lines.join("\n"));
+            }
+            Err(e) => {
+                self.set_status(format!("Query failed: {}", e));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

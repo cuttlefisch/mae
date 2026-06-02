@@ -266,6 +266,8 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
 
         "collab_status" | "collab_connect" | "collab_share" | "collab_doctor" => Some("collab"),
 
+        "kb_agenda" | "kb_view_query" | "kb_history" | "kb_vector_search" => Some("graph_kb"),
+
         _ => None,
     }
 }

@@ -39,7 +39,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
-| `mae-kb` | Knowledge base — graph store, org parser, bidirectional links | `rusqlite`, `tree-sitter`, `tree-sitter-org` |
+| `mae-kb` | Knowledge base — CozoDB graph store, typed relationships, org parser, federation | `cozo`, `rusqlite`, `tree-sitter`, `tree-sitter-org` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
 | `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O | `tokio`, `serde_json` |
 | `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers | `yrs`, `serde`, `base64` |
@@ -145,10 +145,16 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Debug panel UI complete ✅
 
 ### Phase 5: Knowledge Base — COMPLETE
-- SQLite-backed graph store with FTS5
+- CozoDB-primary graph store (Datalog) with SQLite fallback
+- 14 NodeKind variants, 20 typed relationship types with inverses
 - Org-mode parser (hand-rolled, multi-node files)
-- Bidirectional link primitives
-- KB queries from Scheme and AI
+- Bidirectional link primitives + typed link graph
+- Node versioning (snapshot, history, point-in-time restore)
+- Meta-node composition + block-level addressing
+- Agenda queries via Datalog (Todo/Priority/Tag/Stale/Orphan/DeadEnd/Custom)
+- HNSW vector index (384-dim, Cosine — schema ready, populated v0.13.0)
+- 6 pre-built view seeds (kanban, backlog, sprint, timeline, agenda, custom)
+- KB queries from Scheme and AI (5 new tools: kb_agenda, kb_history, kb_restore, kb_view_query, kb_vector_search)
 - Help buffer with navigation, link following, neighborhood display
 
 ### Phase 6: Embedded Shell — COMPLETE (M1-M4 + MCP bridge + file auto-reload)
@@ -355,11 +361,19 @@ Shim: `mae-mcp-shim` — translates MCP JSON-RPC over stdio to the Unix socket.
 | Tool | Purpose |
 |------|---------|
 | `kb_search` | Full-text search across all KB nodes |
-| `kb_get` | Fetch a specific node by ID |
-| `kb_links_from` / `kb_links_to` | Navigate the link graph |
+| `kb_get` | Fetch a specific node by ID (supports block-level: `concept:buffer#3`) |
+| `kb_links_from` / `kb_links_to` | Navigate the typed link graph |
 | `kb_graph` | Neighborhood subgraph around a node |
+| `kb_search_context` | RAG-style ranked excerpts for architecture questions |
+| `kb_agenda` | Agenda queries: todo, priority, tag, stale, orphan, dead-end, custom Datalog |
+| `kb_health` | Structured health report (node/link counts, orphans, broken links, hubs) |
+| `kb_history` | Node version history (snapshots on each update) |
+| `kb_restore` | Restore a node to a previous version |
+| `kb_view_query` | Execute a stored Datalog view (kanban, backlog, sprint, agenda) |
+| `kb_raw_query` | Execute arbitrary CozoDB Datalog against the KB |
+| `kb_vector_search` | Vector similarity search (HNSW index, requires embeddings) |
 
-Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (tutorial), `scheme:*` (Scheme API), `option:*` (editor options).
+Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (tutorial), `scheme:*` (Scheme API), `option:*` (editor options), `category:*` (categories), `task:*` (tasks), `view:*` (views), `meta:*` (meta-nodes).
 
 ### Collaboration / KB Sharing
 

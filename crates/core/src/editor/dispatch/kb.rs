@@ -72,6 +72,26 @@ impl Editor {
                     self.set_status(format!("Removed {} orphan note(s)", count));
                 }
             }
+            "kb-agenda" => {
+                self.set_mode(Mode::Command);
+                self.vi.command_line = "kb-agenda ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
+            }
+            "kb-history" => {
+                self.set_mode(Mode::Command);
+                self.vi.command_line = "kb-history ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
+            }
+            "kb-restore" => {
+                self.set_mode(Mode::Command);
+                self.vi.command_line = "kb-restore ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
+            }
+            "kb-raw-query" => {
+                self.set_mode(Mode::Command);
+                self.vi.command_line = "kb-raw-query ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
+            }
             "capture-finalize" => {
                 if let Some(cap) = self.kb.capture_state.take() {
                     self.dispatch_builtin("save");

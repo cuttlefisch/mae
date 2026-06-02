@@ -17,6 +17,8 @@ pub enum ExecResult {
     Error(String),
     /// Scheme blocks need evaluation through the editor runtime.
     PendingSchemeEval(String),
+    /// Datalog blocks need evaluation through the KB store (CozoDB).
+    PendingDatalogQuery(String),
 }
 
 /// Babel execution engine with session management.
@@ -63,6 +65,7 @@ impl BabelExecutor {
 
         match block.language.as_str() {
             "scheme" | "elisp" => ExecResult::PendingSchemeEval(body),
+            "datalog" | "cozodb" => ExecResult::PendingDatalogQuery(body),
             lang => {
                 // Route through session if `:session` header arg is set
                 if let Some(session_name) = &block.header_args.session {

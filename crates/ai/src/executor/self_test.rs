@@ -340,6 +340,54 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
         }));
     }
 
+    if include("graph_kb") {
+        categories.push(serde_json::json!({
+            "name": "graph_kb",
+            "conditional": false,
+            "requires": ["help"],
+            "prerequisites": [],
+            "description": "Graph KB tools — agenda queries, versioning, views (CozoDB backend)",
+            "tests": [
+                {
+                    "id": "graph_kb.1",
+                    "tool": "kb_agenda",
+                    "args": {"filter": "orphan"},
+                    "assert": "Returns a list (possibly empty) of orphan nodes",
+                    "grading": {"method": "success_only"}
+                },
+                {
+                    "id": "graph_kb.2",
+                    "tool": "kb_health",
+                    "args": {},
+                    "assert": "Returns JSON with total_nodes and total_links fields",
+                    "grading": {"method": "json_field_exists", "fields": ["total_nodes", "total_links"]}
+                },
+                {
+                    "id": "graph_kb.3",
+                    "tool": "kb_view_query",
+                    "args": {"view_id": "view:agenda"},
+                    "assert": "Executes the stored agenda view query",
+                    "grading": {"method": "success_only"}
+                },
+                {
+                    "id": "graph_kb.4",
+                    "tool": "kb_history",
+                    "args": {"id": "concept:buffer"},
+                    "assert": "Returns version history (may be empty if no updates yet)",
+                    "grading": {"method": "success_only"}
+                },
+                {
+                    "id": "graph_kb.5",
+                    "tool": "kb_vector_search",
+                    "args": {"query": "buffer management"},
+                    "assert": "Returns message about embedding configuration (v0.13.0+)",
+                    "grading": {"method": "success_only"}
+                }
+            ],
+            "cleanup": []
+        }));
+    }
+
     if include("project") {
         categories.push(serde_json::json!({
             "name": "project",

@@ -1372,6 +1372,77 @@ impl SchemeRuntime {
             },
         );
 
+        // (kb-agenda FILTER [ARGS]) — dispatch graph agenda query
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-agenda",
+            "Query KB graph: (kb-agenda \"orphan\"), (kb-agenda \"todo\" \"TODO\")",
+            Arity::Variadic(1),
+            move |args: &[Value]| {
+                let filter = arg_string(args, 0, "kb-agenda")?;
+                let extra = args.get(1).map(|v| format!("{}", v)).unwrap_or_default();
+                let cmd = if extra.is_empty() {
+                    format!("kb-agenda {}", filter)
+                } else {
+                    format!("kb-agenda {} {}", filter, extra)
+                };
+                s.lock().unwrap().pending_ex_commands.push(cmd);
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-history NODE-ID) — show version history
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-history",
+            "Show version history for a KB node",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "kb-history")?;
+                s.lock()
+                    .unwrap()
+                    .pending_ex_commands
+                    .push(format!("kb-history {}", id));
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-restore NODE-ID VERSION) — restore a node to a previous version
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-restore",
+            "Restore a KB node to a previous version",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "kb-restore")?;
+                let version = match &args[1] {
+                    Value::Int(n) => *n,
+                    other => return Err(LispError::type_error("integer", format!("{}", other))),
+                };
+                s.lock()
+                    .unwrap()
+                    .pending_ex_commands
+                    .push(format!("kb-restore {} {}", id, version));
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-raw-query DATALOG) — execute raw CozoDB Datalog query
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-raw-query",
+            "Execute raw CozoDB Datalog query against the KB",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let query = arg_string(args, 0, "kb-raw-query")?;
+                s.lock()
+                    .unwrap()
+                    .pending_ex_commands
+                    .push(format!("kb-raw-query {}", query));
+                Ok(Value::Void)
+            },
+        );
+
         // (deprecate-function! OLD-NAME NEW-NAME SINCE-VERSION)
         let s = shared.clone();
         vm.register_fn(

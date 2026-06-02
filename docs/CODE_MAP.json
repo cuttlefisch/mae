@@ -1231,6 +1231,22 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "kb-agenda",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-history",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-restore",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-raw-query",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "deprecate-function!",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -3080,6 +3096,22 @@
     {
       "name": "kb-cleanup-orphans",
       "doc": "Remove orphan user notes with no links (SPC n C)"
+    },
+    {
+      "name": "kb-agenda",
+      "doc": "Query KB graph: :kb-agenda todo|priority|tag|orphan|stale|custom [args]"
+    },
+    {
+      "name": "kb-history",
+      "doc": "Show version history for a KB node: :kb-history <node-id>"
+    },
+    {
+      "name": "kb-restore",
+      "doc": "Restore a KB node to a previous version: :kb-restore <node-id> <version>"
+    },
+    {
+      "name": "kb-raw-query",
+      "doc": "Execute raw CozoDB Datalog query: :kb-raw-query <query>"
     },
     {
       "name": "describe-display-policy",

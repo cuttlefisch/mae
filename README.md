@@ -39,8 +39,10 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
   AI can set breakpoints and inspect variables.
 - **Multi-provider AI** — Claude, OpenAI, Gemini, and DeepSeek. Provider-aware
   prompt tuning. Tiered prompt system (Full/Compact) with per-model guardrails.
-- **Knowledge base** — SQLite + FTS5 graph store. 200+ help nodes, bidirectional
-  links, org-mode parser, federated instances. Same docs the AI reads.
+- **Graph knowledge base** — CozoDB (Datalog) primary backend with SQLite fallback.
+  400+ typed nodes, 20 relationship types, agenda queries, node versioning, meta-node
+  composition, block-level addressing, HNSW vector index (GraphRAG-ready). Federated
+  instances, org-mode parser. Same docs the AI reads.
 - **Tree-sitter** — 13 languages with structural parse trees. AI can query
   syntax trees for code reasoning.
 - **GUI + Terminal** — winit + Skia 2D hardware-accelerated GUI, ratatui
@@ -98,7 +100,7 @@ mae (binary)
  ├── mae-lsp         LSP client — connection, navigation, diagnostics, completion, formatting
  ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping, watches
  ├── mae-shell       Terminal emulator (alacritty_terminal), PTY management
- ├── mae-kb          Knowledge base — graph store, org-mode parser, FTS5 search, federation
+ ├── mae-kb          Knowledge base — CozoDB graph store, typed relationships, org parser, federation
  ├── mae-mcp         MCP server — Unix socket, JSON-RPC, stdio shim
  ├── mae-sync        Collaborative sync — yrs CRDT, ropey bridge, encoding helpers
  ├── mae-state-server  Standalone collab state server — TCP sync, WAL persistence
@@ -329,7 +331,7 @@ Full vi modal editing with 450+ commands:
 | Terminal emulator | alacritty_terminal | Full VT100/VT500, same engine as Alacritty |
 | AI | Claude / OpenAI / Gemini / DeepSeek | Tool-calling maps 1:1 to command API |
 | Protocols | LSP + DAP | First-class — exposed to Scheme and AI |
-| Knowledge base | SQLite + FTS5 | Graph store with full-text search, federation |
+| Knowledge base | CozoDB (Datalog) + SQLite | Graph store, typed relationships, versioning, HNSW vector index |
 | Syntax | tree-sitter | 13 languages, structural parse trees |
 | Literate programming | Org-babel | 12 execution languages, tangle, noweb, export |
 
@@ -343,7 +345,7 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 2. Scheme Runtime | ✅ Complete | R7RS-small (mae-scheme), config loading, `define-key`, REPL |
 | 3. AI Integration | ✅ Complete | Multi-provider tool-calling, conversation, permissions |
 | 4. LSP + DAP + Syntax | ✅ Complete | Full LSP client, DAP client, 13-language tree-sitter |
-| 5. Knowledge Base | ✅ Complete | SQLite graph, org parser, FTS5, manual, federation |
+| 5. Knowledge Base | ✅ Complete | CozoDB graph, org parser, typed relationships, versioning, federation |
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload |
 | 7. Documentation | ✅ Complete | Tutor (13 lessons), `:describe-configuration`, `--check-config` |
 | 8. GUI Backend | ✅ Complete | winit + Skia, inline images, variable-height, inertial scroll |
@@ -352,7 +354,8 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 11. Module System | ✅ Complete | 19 modules (Doom model), `mae pkg` CLI, flags, live reload |
 | 12. Collaborative Editing | ✅ Complete | CRDT state server, multi-peer sync, WAL persistence, awareness, per-user undo, PSK auth, KB sharing E2E |
 | 13. Scheme Runtime | ✅ Complete | mae-scheme R7RS-small VM, Steel fully removed, 2,200+ Scheme tests |
-| **Next** | 🔧 In progress | KB storage (CozoDB), PDF preview, semantic search. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) |
+| 14. Graph KB | ✅ Complete | CozoDB default, 20 typed rel types, agenda queries, versioning, HNSW index, views |
+| **Next** | 🔧 In progress | AI hygiene, task management, live GraphRAG, GUI views. See [ROADMAP.md](ROADMAP.md) |
 
 ## Design Lineage
 

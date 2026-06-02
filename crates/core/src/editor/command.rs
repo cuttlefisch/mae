@@ -249,6 +249,51 @@ impl Editor {
                 }
                 true
             }
+            "kb-agenda" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status(
+                        "Usage: :kb-agenda todo [STATE] | priority <A-C> | tag <TAG> | orphan | stale <DAYS> | dead-end | custom <DATALOG>"
+                    ),
+                    Some(input) => {
+                        self.dispatch_kb_agenda(input);
+                    }
+                }
+                true
+            }
+            "kb-history" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-history <node-id>"),
+                    Some(id) => {
+                        self.dispatch_kb_history(id);
+                    }
+                }
+                true
+            }
+            "kb-restore" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-restore <node-id> <version>"),
+                    Some(input) => {
+                        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+                        if parts.len() < 2 {
+                            self.set_status("Usage: :kb-restore <node-id> <version>");
+                        } else if let Ok(ver) = parts[1].trim().parse::<i64>() {
+                            self.dispatch_kb_restore(parts[0], ver);
+                        } else {
+                            self.set_status("Version must be a number");
+                        }
+                    }
+                }
+                true
+            }
+            "kb-raw-query" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-raw-query <datalog-query>"),
+                    Some(query) => {
+                        self.dispatch_kb_raw_query(query);
+                    }
+                }
+                true
+            }
             "kb-save" => {
                 self.dispatch_path_op(
                     args,

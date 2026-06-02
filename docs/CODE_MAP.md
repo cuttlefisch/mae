@@ -472,6 +472,10 @@ Source: `crates/sync/src/lib.rs`
 | `undefine-option!` | `crates/scheme/src/runtime.rs` |
 | `unload-feature` | `crates/scheme/src/runtime.rs` |
 | `define-kb-node!` | `crates/scheme/src/runtime.rs` |
+| `kb-agenda` | `crates/scheme/src/runtime.rs` |
+| `kb-history` | `crates/scheme/src/runtime.rs` |
+| `kb-restore` | `crates/scheme/src/runtime.rs` |
+| `kb-raw-query` | `crates/scheme/src/runtime.rs` |
 | `deprecate-function!` | `crates/scheme/src/runtime.rs` |
 | `register-ai-tool!` | `crates/scheme/src/runtime.rs` |
 | `ai-tool-param!` | `crates/scheme/src/runtime.rs` |
@@ -555,7 +559,7 @@ Source: `crates/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (505 built-in)
+## Commands (509 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -939,6 +943,10 @@ Source: `crates/sync/src/lib.rs`
 | `describe-configuration` | Show a configuration health report (AI, LSP, DAP status) |
 | `kb-health` | Show KB health report (orphans, broken links, namespace counts) |
 | `kb-cleanup-orphans` | Remove orphan user notes with no links (SPC n C) |
+| `kb-agenda` | Query KB graph: :kb-agenda todo|priority|tag|orphan|stale|custom [args] |
+| `kb-history` | Show version history for a KB node: :kb-history <node-id> |
+| `kb-restore` | Restore a KB node to a previous version: :kb-restore <node-id> <version> |
+| `kb-raw-query` | Execute raw CozoDB Datalog query: :kb-raw-query <query> |
 | `describe-display-policy` | Show the active display policy rules (how buffers are placed in windows) |
 | `describe-bindings` | Show all keybindings for the current mode |
 | `describe-module` | Show module summary or detail (:describe-module [name]) |
