@@ -573,6 +573,135 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        // --- Graph KB tools (v0.12.0) ---
+        ToolDefinition {
+            name: "kb_agenda".into(),
+            description: "Query KB nodes using agenda-style filters. Returns matching nodes as JSON array. Filters: todo (by state), priority (minimum char), tag, stale (days), orphan (no links), dead_end (no outgoing), custom (raw Datalog).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "filter".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Filter type: todo, priority, tag, stale, orphan, dead_end, custom".into(),
+                            enum_values: Some(vec![
+                                "todo".into(), "priority".into(), "tag".into(),
+                                "stale".into(), "orphan".into(), "dead_end".into(), "custom".into(),
+                            ]),
+                        },
+                    ),
+                    (
+                        "value".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Filter value: todo state (e.g. 'TODO'), priority char (e.g. 'A'), tag name, days for stale, or Datalog query for custom".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["filter".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_history".into(),
+            description: "Get version history for a KB node. Returns array of {version, title, change_summary, content_hash, created_at}. Requires CozoDB backend.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Node ID to get history for".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Max versions to return (default 10)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["id".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_restore".into(),
+            description: "Restore a KB node to a previous version. Creates a pre-restore snapshot first. Verifies SHA-256 content hash integrity before applying.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Node ID to restore".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "version".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Version number to restore to".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["id".into(), "version".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_view_query".into(),
+            description: "Execute a pre-defined KB view by ID (e.g. view:kanban, view:backlog, view:sprint, view:timeline, view:agenda, view:orphans). Runs the view's stored Datalog query and returns results.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "view_id".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "View node ID (e.g. 'view:kanban')".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["view_id".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_vector_search".into(),
+            description: "Search KB by vector similarity (HNSW). Requires embeddings to be populated (v0.13.0+). Returns nearest neighbors with cosine distance scores.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "query".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Text query (will be embedded when embedding provider is configured)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "k".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Number of results (default 5)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["query".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
         // --- Org tools ---
         ToolDefinition {
             name: "org_cycle".into(),

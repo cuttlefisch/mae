@@ -27,6 +27,7 @@
       "path": "crates/ai/src/lib.rs",
       "dependencies": [
         "mae-core",
+        "mae-kb",
         "mae-sync"
       ],
       "public_items": [

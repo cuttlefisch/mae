@@ -747,6 +747,184 @@ pub fn execute_kb_raw_query(editor: &Editor, args: &serde_json::Value) -> Result
     }
 }
 
+// --- v0.12.0 graph KB tools ---
+
+pub fn execute_kb_agenda(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let filter_type = args
+        .get("filter")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: filter".to_string())?;
+    let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("");
+
+    let filter = match filter_type {
+        "todo" => {
+            if value.is_empty() {
+                mae_kb::AgendaFilter::Todo(None)
+            } else {
+                mae_kb::AgendaFilter::Todo(Some(value.to_string()))
+            }
+        }
+        "priority" => {
+            let c = value.chars().next().unwrap_or('A');
+            mae_kb::AgendaFilter::Priority(c)
+        }
+        "tag" => mae_kb::AgendaFilter::Tag(value.to_string()),
+        "stale" => {
+            let days = value.parse::<u32>().unwrap_or(30);
+            mae_kb::AgendaFilter::Stale(days)
+        }
+        "orphan" => mae_kb::AgendaFilter::Orphan,
+        "dead_end" => mae_kb::AgendaFilter::DeadEnd,
+        "custom" => mae_kb::AgendaFilter::Custom(value.to_string()),
+        _ => return Err(format!("Unknown filter type: {filter_type}")),
+    };
+
+    let store = editor
+        .kb
+        .store
+        .as_ref()
+        .ok_or_else(|| "No KB store configured".to_string())?;
+    let nodes = store.agenda_query(&filter).map_err(|e| e.to_string())?;
+    let out: Vec<serde_json::Value> = nodes
+        .iter()
+        .map(|n| {
+            serde_json::json!({
+                "id": n.id,
+                "title": n.title,
+                "kind": format!("{:?}", n.kind),
+                "todo_state": n.todo_state,
+                "priority": n.priority.map(|c| c.to_string()),
+                "tags": n.tags,
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "filter": filter_type,
+        "count": out.len(),
+        "nodes": out,
+    }))
+    .map_err(|e| e.to_string())
+}
+
+pub fn execute_kb_history(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: id".to_string())?;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+
+    let store = editor
+        .kb
+        .store
+        .as_ref()
+        .ok_or_else(|| "No KB store configured".to_string())?;
+    let versions = store.node_history(id, limit).map_err(|e| e.to_string())?;
+    let out: Vec<serde_json::Value> = versions
+        .iter()
+        .map(|v| {
+            serde_json::json!({
+                "version": v.version,
+                "title": v.title,
+                "change_summary": v.change_summary,
+                "content_hash": v.content_hash,
+                "author": v.author,
+                "created_at": v.created_at,
+                "integrity_ok": v.verify_integrity(),
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "id": id,
+        "version_count": out.len(),
+        "versions": out,
+    }))
+    .map_err(|e| e.to_string())
+}
+
+pub fn execute_kb_restore(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: id".to_string())?;
+    let version = args
+        .get("version")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| "Missing required argument: version".to_string())?;
+
+    let store = editor
+        .kb
+        .store
+        .as_ref()
+        .ok_or_else(|| "No KB store configured".to_string())?;
+    store
+        .restore_version(id, version)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "status": "restored",
+        "id": id,
+        "restored_to_version": version,
+    })
+    .to_string())
+}
+
+pub fn execute_kb_view_query(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let view_id = args
+        .get("view_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: view_id".to_string())?;
+
+    let store = editor
+        .kb
+        .store
+        .as_ref()
+        .ok_or_else(|| "No KB store configured".to_string())?;
+
+    // Get the view definition from the views relation
+    let (_headers, rows) = store
+        .raw_query(&format!(
+            "?[title, kind, query, display_config_json] := *views{{id, title, kind, query, display_config_json}}, id = \"{view_id}\""
+        ))
+        .map_err(|e| e.to_string())?;
+
+    if rows.is_empty() {
+        return Err(format!("View not found: {view_id}"));
+    }
+
+    let title = rows[0].first().cloned().unwrap_or_default();
+    let kind = rows[0].get(1).cloned().unwrap_or_default();
+    let query = rows[0].get(2).cloned().unwrap_or_default();
+    let config = rows[0].get(3).cloned().unwrap_or_default();
+
+    // Execute the view's query
+    let (result_headers, result_rows) = store.raw_query(&query).map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "view_id": view_id,
+        "title": title,
+        "kind": kind,
+        "display_config": config,
+        "headers": result_headers,
+        "rows": result_rows,
+        "row_count": result_rows.len(),
+    })
+    .to_string())
+}
+
+pub fn execute_kb_vector_search(
+    _editor: &Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    // Embedding generation is not yet available (v0.13.0).
+    // The HNSW index and store/search APIs are ready but no embedding
+    // provider is configured yet.
+    Err(
+        "Vector search requires an embedding provider (planned for v0.13.0). \
+         The HNSW index schema is ready — use kb_raw_query to inspect the \
+         embeddings relation directly."
+            .to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

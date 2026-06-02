@@ -78,7 +78,8 @@ impl CozoKbStore {
         )
         .or_else(|e| {
             // :create fails if relation exists — that's fine
-            if e.to_string().contains("already exists") {
+            if e.to_string().contains("already exists") || e.to_string().contains("conflicts with")
+            {
                 Ok(NamedRows::default())
             } else {
                 Err(e)
@@ -102,7 +103,8 @@ impl CozoKbStore {
             "#,
         )
         .or_else(|e| {
-            if e.to_string().contains("already exists") {
+            if e.to_string().contains("already exists") || e.to_string().contains("conflicts with")
+            {
                 Ok(NamedRows::default())
             } else {
                 Err(e)
@@ -124,7 +126,8 @@ impl CozoKbStore {
             "#,
         )
         .or_else(|e| {
-            if e.to_string().contains("already exists") {
+            if e.to_string().contains("already exists") || e.to_string().contains("conflicts with")
+            {
                 Ok(NamedRows::default())
             } else {
                 Err(e)
@@ -143,7 +146,8 @@ impl CozoKbStore {
             "#,
         )
         .or_else(|e| {
-            if e.to_string().contains("already exists") {
+            if e.to_string().contains("already exists") || e.to_string().contains("conflicts with")
+            {
                 Ok(NamedRows::default())
             } else {
                 Err(e)
@@ -330,7 +334,9 @@ impl CozoKbStore {
     fn create_if_absent(&self, script: &str) -> Result<(), KbStoreError> {
         self.run_mut(script)
             .or_else(|e| {
-                if e.to_string().contains("already exists") {
+                if e.to_string().contains("already exists")
+                    || e.to_string().contains("conflicts with")
+                {
                     Ok(NamedRows::default())
                 } else {
                     Err(e)
@@ -942,6 +948,84 @@ impl KbStore for CozoKbStore {
             self.insert_node(node)?;
         }
         Ok(())
+    }
+
+    // --- Trait overrides for CozoDB-specific features ---
+
+    fn add_typed_link(
+        &self,
+        src: &str,
+        dst: &str,
+        rel_type: &str,
+        weight: f64,
+    ) -> Result<(), KbStoreError> {
+        CozoKbStore::add_typed_link(self, src, dst, rel_type, weight)
+    }
+
+    fn links_typed(&self, id: &str, rel_type: &str) -> Result<Vec<Link>, KbStoreError> {
+        CozoKbStore::links_typed(self, id, rel_type)
+    }
+
+    fn shortest_path(&self, from: &str, to: &str) -> Result<Vec<String>, KbStoreError> {
+        CozoKbStore::shortest_path(self, from, to)
+    }
+
+    fn neighborhood(&self, id: &str, depth: u32) -> Result<SubGraph, KbStoreError> {
+        CozoKbStore::neighborhood(self, id, depth)
+    }
+
+    fn raw_query(&self, script: &str) -> Result<(Vec<String>, Vec<Vec<String>>), KbStoreError> {
+        CozoKbStore::raw_query(self, script)
+    }
+
+    fn meta_members(&self, meta_id: &str) -> Result<Vec<MetaMember>, KbStoreError> {
+        CozoKbStore::meta_members(self, meta_id)
+    }
+
+    fn add_meta_member(
+        &self,
+        meta_id: &str,
+        member_id: &str,
+        position: i32,
+        role: &str,
+    ) -> Result<(), KbStoreError> {
+        CozoKbStore::add_meta_member(self, meta_id, member_id, position, role)
+    }
+
+    fn remove_meta_member(&self, meta_id: &str, member_id: &str) -> Result<(), KbStoreError> {
+        CozoKbStore::remove_meta_member(self, meta_id, member_id)
+    }
+
+    fn get_blocks(&self, parent_id: &str) -> Result<Vec<Block>, KbStoreError> {
+        CozoKbStore::get_blocks(self, parent_id)
+    }
+
+    fn get_block(&self, parent_id: &str, idx: usize) -> Result<Option<Block>, KbStoreError> {
+        CozoKbStore::get_block(self, parent_id, idx)
+    }
+
+    fn agenda_query(&self, filter: &AgendaFilter) -> Result<Vec<Node>, KbStoreError> {
+        CozoKbStore::agenda_query(self, filter)
+    }
+
+    fn node_history(&self, id: &str, limit: usize) -> Result<Vec<NodeVersion>, KbStoreError> {
+        CozoKbStore::node_history(self, id, limit)
+    }
+
+    fn restore_version(&self, id: &str, version: i64) -> Result<(), KbStoreError> {
+        CozoKbStore::restore_version(self, id, version)
+    }
+
+    fn store_embedding(&self, id: &str, model: &str, vec: &[f32]) -> Result<(), KbStoreError> {
+        CozoKbStore::store_embedding(self, id, model, vec)
+    }
+
+    fn vector_search(&self, vec: &[f32], k: usize) -> Result<Vec<VectorHit>, KbStoreError> {
+        CozoKbStore::vector_search(self, vec, k)
+    }
+
+    fn graphrag_search(&self, vec: &[f32], k: usize) -> Result<Vec<VectorHit>, KbStoreError> {
+        CozoKbStore::graphrag_search(self, vec, k)
     }
 
     fn backend_name(&self) -> &str {

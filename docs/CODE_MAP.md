@@ -19,6 +19,7 @@ graph TD
     mae --> mae_state_server
     mae --> mae_sync
     mae_ai --> mae_core
+    mae_ai --> mae_kb
     mae_ai --> mae_sync
     mae_babel[mae-babel]
     mae_canvas[mae-canvas]
