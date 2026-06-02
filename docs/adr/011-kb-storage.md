@@ -1,7 +1,7 @@
 # ADR-011: KB Storage Architecture — CozoDB-First with SQLite Bridge
 
-**Status**: Accepted
-**Date**: 2026-05-31
+**Status**: Implemented (all phases complete as of v0.12.0)
+**Date**: 2026-05-31 (accepted), 2026-06-02 (all phases complete)
 **Related**: ADR-004 (KB scaling), ADR-005 (KB CRDT)
 
 ## Context
@@ -71,22 +71,32 @@ The trait boundary allows testing both backends against the same test suite
 and lets users choose based on their needs (SQLite for simplicity, CozoDB for
 graph power).
 
-### Phase 3: v0.13.0+ — CozoDB as Default Backend
+### Phase 3: v0.12.0 — CozoDB as Default Backend (COMPLETE)
 
-CozoDB becomes the default KB backend. CozoDB is a Rust-native embeddable
-database that combines Datalog queries, FTS, HNSW vector search, and graph
-algorithms (PageRank, community detection, shortest path) in a single engine.
+CozoDB is now the default KB backend. Feature flag removed, always compiled.
+SQLite available as explicit fallback via `kb_backend = "sqlite"` option.
 
-Capabilities unlocked:
-- **Typed relationships** — edges carry types and properties, enabling queries
-  like "find all nodes that `implements` concept:buffer"
-- **Multi-hop graph queries** — Datalog recursion replaces hand-written BFS
-- **PageRank / community detection** — surface the most important nodes in a KB
-  automatically, power "related concepts" suggestions
-- **HNSW vector search** — embedding-based semantic similarity for RAG
-  pipelines (ADR-014 planned), without a separate vector database
-- **Transactional consistency** — ACID transactions replace the current
-  HashMap-then-maybe-persist pattern
+Capabilities shipped:
+- **14 NodeKind variants** — Index, Command, Concept, Key, Note, Project,
+  Category, Lesson, Tutorial, Meta, Block, SchemeApi, Task, View
+- **20 typed relationship types** with declared inverses — `implements`,
+  `teaches`, `requires`, `configures`, `documents`, etc.
+- **95+ typed seed relationships** replacing flat `related_to` links
+- **9 CozoDB relations** beyond nodes/links — node_types, rel_types, blocks,
+  meta_members, node_versions, views, hygiene_suggestions, instance_meta,
+  embeddings
+- **Meta-node composition** — cached body from component nodes, refresh on demand
+- **Block-level addressing** — `parent_id#N` for paragraph-level references
+- **Agenda queries via Datalog** — Todo, Priority, Tag, Stale, Orphan, DeadEnd,
+  Custom filters
+- **Node versioning** — snapshot on update, history, point-in-time restore
+- **HNSW vector index** — 384-dim F32 Cosine distance (schema ready, populated
+  in v0.13.0 when embedding providers are wired)
+- **6 pre-built view seeds** — kanban, backlog, sprint, timeline, agenda, custom
+- **Federation instance identity** — UUID per instance in instance_meta
+- **28-test graph validation suite** — full seed manual as structured test fixture
+- **5 new AI tools** — kb_agenda, kb_history, kb_restore, kb_view_query,
+  kb_vector_search
 
 ## Rationale
 

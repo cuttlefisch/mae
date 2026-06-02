@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.11.1 · **Tests:** 5,796+ passing · **Status:** Alpha — Phases 1-13 complete. v0.11.1: KB storage architecture (SQLite-first + KbStore trait + CozoDB backend).
+**Current version:** v0.12.0-dev · **Tests:** 5,878+ passing · **Status:** Alpha — Phases 1-13 complete. v0.12.0: CozoDB-primary graph KB with typed relationships, meta-nodes, versioning, agenda queries, HNSW embeddings.
 
 ---
 
@@ -162,24 +162,41 @@
 - [ ] **Conflict detection**: When multi-client writes land on same node, detect via version counter and surface conflict to user (not silent last-write-wins).
 - [ ] **KB replication**: Read replicas for high-read-throughput scenarios (AI agents doing 600+ node fetches/sec). WAL mode enables this natively for same-host.
 
-### KB Storage Architecture (v0.11.1 — ADR-011)
+### KB Storage Architecture (v0.12.0 — ADR-011)
 
-**Status**: Phase A COMPLETE, Phase B COMPLETE. CozoDB backend available behind feature flag.
+**Status**: ALL PHASES COMPLETE. CozoDB is the default backend. 5,878 tests passing.
 
 The KB had a dual source of truth problem: org files re-parsed on startup, SQLite declared but unused in hot path. Every collaborative tool at scale uses a database (Notion/Postgres, Roam/Datascript, Logseq migrating FROM files TO DB).
 
-**Decision**: CozoDB-first with SQLite bridge period. See `docs/adr/011-kb-storage.md`.
+**Decision**: CozoDB-primary with SQLite fallback. See `docs/adr/011-kb-storage.md`.
 
+#### Foundation (v0.11.1)
 - [x] **KbStore trait** (`crates/kb/src/store.rs`): Database-agnostic persistence interface — node CRUD, FTS search, link queries, CRDT ops, pending update queue. `SqliteKbStore` implementation with 11 tests.
 - [x] **SQLite-first startup**: Federated KB instances load from SQLite first, fall back to org import + one-time migration to SQLite.
 - [x] **Write-through persistence**: `kb_create_node`, `kb_update_node`, `kb_delete_node` write through to `SqliteKbStore`.
 - [x] **Durable offline queue**: Pending CRDT updates stored in SQLite `pending_updates` table (survives crashes). Drained on reconnect.
 - [x] **Primary KB store**: `KbContext.store` field holds `Arc<dyn KbStore>` for the primary KB instance (supports any backend).
-- [x] **CozoKbStore**: `#[cfg(feature = "cozo")]` feature-flagged CozoDB backend — Datalog queries, typed relationships, shortest path, neighborhood BFS. 12 tests.
 - [x] **SQLite → CozoDB migration**: `migrate_between_stores()` in `crates/kb/src/migrate.rs` — cross-store data migration with report.
 - [x] **Graph-native AI tools**: `kb_shortest_path`, `kb_neighborhood`, `kb_add_link`, `kb_raw_query` — delegate to KbStore, graceful NotSupported on SQLite.
 - [x] **KB lifecycle E2E**: 24 Rust tests + 3 Scheme test files covering persistence, CRDT, offline queue, import/export, performance.
-- [ ] **GraphRAG** (v0.14.0): Hybrid vector + graph retrieval via CozoDB — single Datalog query combining HNSW entry points + graph expansion.
+
+#### CozoDB Graph KB (v0.12.0)
+- [x] **Phase A**: CozoDB default backend — feature flag removed, `kb_backend` option (cozo/sqlite), auto-migration on first startup.
+- [x] **Phase B**: Enhanced schema — 14 NodeKind variants, 9 new CozoDB relations (node_types, rel_types, blocks, meta_members, node_versions, views, hygiene_suggestions, instance_meta, embeddings), instance UUID, type system seeding (14 node types, 20 rel types with inverses).
+- [x] **Phase C**: 95+ typed seed relationships (`requires`, `teaches`, `part_of`, `documents`, `explains`, `references`, `categorizes`, `contains`) replacing flat `related_to`.
+- [x] **Phase D**: Meta-node composition (add/remove members, cached body refresh), block-level addressing (`parent_id#N`).
+- [x] **Phase E**: Agenda queries via Datalog — Todo, Priority, Tag, Stale, Orphan, DeadEnd, Custom filters.
+- [x] **Phase F**: KB health report via Datalog — node/link counts by kind/type, orphans, broken links, hub nodes.
+- [x] **Phase G**: HNSW vector embeddings (384-dim F32 Cosine), GraphRAG query template, federation instance identity.
+- [x] **Phase H**: Node versioning (snapshot on update, history, point-in-time restore with SHA-256 integrity), 6 pre-built view seeds (kanban, backlog, sprint, timeline, agenda, custom).
+- [x] **Phase I**: 28-test graph validation suite using full seed manual as fixture — validates schema, queries, and tooling.
+- [x] **NodeKind migration**: ~230 seed nodes migrated to correct kinds (lesson→Lesson, tutorial→Tutorial, category→Category, scheme→SchemeApi). 12 broken `related_to` links fixed to 0.
+- [x] **AI tools**: `kb_agenda`, `kb_history`, `kb_restore`, `kb_view_query`, `kb_vector_search` wired into executor + dispatch.
+
+#### Future
+- [ ] **GraphRAG live pipeline** (v0.13.0): Embedding generation (provider trait: OpenAI, Ollama, local), background indexing, AI context injection.
+- [ ] **AI hygiene daemon** (v0.13.0): Background assessment of new/modified nodes, link type suggestions, missing metadata flags.
+- [ ] **GUI view rendering** (v0.14.0): Kanban board, sprint view, timeline — drag-drop, swimlanes.
 
 ### Phase 13: MAE Scheme Runtime (v0.12.0)
 
