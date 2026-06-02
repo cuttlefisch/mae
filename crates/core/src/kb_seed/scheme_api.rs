@@ -846,7 +846,7 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
         let id = format!("scheme:{}", name);
         let title = format!("Scheme: {}", name);
         kb.insert(
-            Node::new(id, title, NodeKind::Concept, body).with_tags(["scheme", "api", category]),
+            Node::new(id, title, NodeKind::SchemeApi, body).with_tags(["scheme", "api", category]),
         );
     }
 
@@ -862,7 +862,8 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
         let id = format!("scheme:{}", name);
         let title = format!("Scheme: {}", name);
         kb.insert(
-            Node::new(id, title, NodeKind::Concept, body).with_tags(["scheme", "api", "variable"]),
+            Node::new(id, title, NodeKind::SchemeApi, body)
+                .with_tags(["scheme", "api", "variable"]),
         );
     }
 }

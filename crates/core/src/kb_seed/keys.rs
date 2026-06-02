@@ -19,7 +19,7 @@ pub(super) const KEY_NORMAL: &str = "## Normal-mode keys (summary)\n\n\
 See [[key:leader-keys]] for the full SPC leader reference.\n\n\
 ### Windows, buffers, files\n\
 - `:e <path>` — open file\n\
-- `:ls` — list buffers ([[cmd:list-buffers]])\n\
+- `:ls` — list buffers ([[cmd:switch-buffer]])\n\
 - `C-^` — switch to alternate buffer\n\n\
 ### Help\n\
 - `:help` — open this page\n\

@@ -7,7 +7,7 @@ pub(super) fn install_tutorial_nodes(kb: &mut KnowledgeBase) {
         Node::new(
             "tutorial:getting-started",
             "Getting Started with MAE",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_GETTING_STARTED,
         )
         .with_tags(["tutorial"]),
@@ -15,14 +15,14 @@ pub(super) fn install_tutorial_nodes(kb: &mut KnowledgeBase) {
         Node::new(
             "tutorial:vim-familiar",
             "Tutorial: What Carries Over from Vim",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_VIM_FAMILIAR,
         )
         .with_tags(["tutorial", "vim"]),
         Node::new(
             "tutorial:vim-differences",
             "Tutorial: What's Different from Vim",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_VIM_DIFFERENCES,
         )
         .with_tags(["tutorial", "vim"]),
@@ -30,21 +30,21 @@ pub(super) fn install_tutorial_nodes(kb: &mut KnowledgeBase) {
         Node::new(
             "tutorial:what-is-modal",
             "Tutorial: What Is Modal Editing?",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_WHAT_IS_MODAL,
         )
         .with_tags(["tutorial", "beginner"]),
         Node::new(
             "tutorial:basic-movement",
             "Tutorial: Basic Movement",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_BASIC_MOVEMENT,
         )
         .with_tags(["tutorial", "beginner"]),
         Node::new(
             "tutorial:basic-editing",
             "Tutorial: Basic Editing",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_BASIC_EDITING,
         )
         .with_tags(["tutorial", "beginner"]),
@@ -52,14 +52,14 @@ pub(super) fn install_tutorial_nodes(kb: &mut KnowledgeBase) {
         Node::new(
             "tutorial:mae-navigation",
             "Tutorial: MAE Navigation",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_MAE_NAVIGATION,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "tutorial:mae-extending",
             "Tutorial: Extending MAE",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_MAE_EXTENDING,
         )
         .with_tags(["tutorial"]),
@@ -67,21 +67,21 @@ pub(super) fn install_tutorial_nodes(kb: &mut KnowledgeBase) {
         Node::new(
             "tutorial:ai-setup",
             "Tutorial: AI Setup",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_AI_SETUP,
         )
         .with_tags(["tutorial", "ai"]),
         Node::new(
             "tutorial:ai-agent",
             "Tutorial: AI Agent (Terminal)",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_AI_AGENT,
         )
         .with_tags(["tutorial", "ai"]),
         Node::new(
             "tutorial:ai-chat",
             "Tutorial: AI Chat (Built-in)",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_AI_CHAT,
         )
         .with_tags(["tutorial", "ai"]),
@@ -89,7 +89,7 @@ pub(super) fn install_tutorial_nodes(kb: &mut KnowledgeBase) {
         Node::new(
             "tutorial:collab-setup",
             "Tutorial: Collaborative Setup",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTORIAL_COLLAB_SETUP,
         )
         .with_tags(["tutorial", "collaboration", "sync"]),

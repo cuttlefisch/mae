@@ -90,19 +90,18 @@ fn node_kind_matches_namespace_prefix() {
     let (_tmp, store) = make_seeded_store();
     let all_ids = store.list_ids(None).unwrap();
 
-    // Current actual mappings (some are legacy — scheme:* and option:* use Concept/Command
-    // instead of SchemeApi/Option kinds. These are tracked as tech debt for v0.13.0).
     let prefix_kind_map: Vec<(&str, &str)> = vec![
         ("cmd:", "command"),
         ("concept:", "concept"),
-        ("lesson:", "concept"), // legacy: should be Lesson kind
+        ("lesson:", "lesson"),
         ("key:", "key"),
-        ("scheme:", "concept"),   // legacy: should be SchemeApi kind
-        ("option:", "concept"),   // legacy: should be Option kind
-        ("category:", "concept"), // legacy: should be Category kind
-        ("tutor:", "concept"),    // legacy: should be Tutorial kind
-        ("tutorial:", "concept"), // legacy: should be Tutorial kind
+        ("scheme:", "schemeapi"),
+        ("option:", "concept"), // options use Concept (no Option kind in enum)
+        ("category:", "category"),
+        ("tutor:", "tutorial"),
+        ("tutorial:", "tutorial"),
         ("guide:", "concept"),
+        ("term:", "concept"),
     ];
 
     let mut mismatches = Vec::new();
@@ -304,14 +303,21 @@ fn no_broken_links_in_seed_relationships() {
         }
     }
 
-    // related_to links are auto-extracted from body text — some broken ones are expected
-    // (concept bodies reference commands that may not be registered in test context)
+    // After fixing body text references, broken related_to links should be zero
     if !broken_related.is_empty() {
         eprintln!(
-            "Broken related_to links (expected, body text auto-extraction): {}",
+            "Broken related_to links (body text auto-extraction): {}",
             broken_related.len()
         );
+        for b in &broken_related {
+            eprintln!("  {}", b);
+        }
     }
+    assert!(
+        broken_related.is_empty(),
+        "{} broken related_to links found — fix body text references",
+        broken_related.len()
+    );
 
     // Typed relationships (seeded explicitly) should NEVER be broken
     if !broken_typed.is_empty() {
@@ -572,15 +578,9 @@ fn health_report_sane() {
 
     assert!(report.total_nodes >= 50, "expected at least 50 nodes");
     assert!(report.total_links >= 80, "expected at least 80 links");
-    // Some broken links are expected from auto-extracted related_to links
-    // (concept bodies reference commands that may not be registered in test context).
-    // The important thing is that the count is small relative to total links.
-    eprintln!(
-        "  Broken links: {} (from auto-extracted body refs)",
-        report.broken_link_count
-    );
+    eprintln!("  Broken links: {}", report.broken_link_count);
     assert!(
-        report.broken_link_count < 30,
+        report.broken_link_count == 0,
         "too many broken links: {} (expected < 30)",
         report.broken_link_count
     );

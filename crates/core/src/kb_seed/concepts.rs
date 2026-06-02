@@ -82,7 +82,7 @@ Disable with `:set heading_scale false`.\n\n\
 - `S-Left` / `S-Right`: Cycle TODO states (`TODO` -> `DONE` -> `None`).\n\
 - `S-Up` / `S-Down`: Cycle priorities (`[#A]` -> `[#B]` -> `[#C]`).\n\n\
 ### 8. Links\n\
-Press `Enter` on a `[[link]]` to follow it. Internal links jump to headings; \
+Press `Enter` on a link to follow it. Internal links jump to headings; \
 external links open in your browser.\n\n\
 ### 9. Rich Rendering\n\
 - `*bold*` text is rendered in bold.\n\
@@ -457,7 +457,7 @@ view the same buffer at different points — the design is deliberately Emacs-sh
 ## Display Policy\n\
 How a buffer becomes visible is governed by the [[concept:display-policy|Display Policy]], \
 which maps each BufferKind to a DisplayAction (replace, avoid conversation, reuse/split, hidden).\n\n\
-See also: [[concept:window]], [[concept:command]], [[cmd:list-buffers]], [[concept:display-policy]]\n";
+See also: [[concept:window]], [[concept:command]], [[concept:display-policy]]\n";
 
 pub(super) const CONCEPT_WINDOW: &str =
     "A **window** is a rectangular view onto a [[concept:buffer|buffer]]. \
@@ -497,7 +497,7 @@ be triggered from three peer surfaces:\n\n\
 the human sees on this page.\n\n\
 This is the *entire* reason MAE has the ergonomics it has — there is exactly one API and \
 it has three callers.\n\n\
-See also: [[concept:ai-as-peer]], [[cmd:command-list]]\n";
+See also: [[concept:ai-as-peer]], [[concept:command]]\n";
 
 pub(super) const CONCEPT_AI_AS_PEER: &str = "MAE's single-most-important design stance: **the AI agent is a peer actor, not a plugin.**\n\n\
 A keybinding and an AI tool-call both resolve to the same [[concept:command|Command]] \
@@ -505,10 +505,10 @@ via the same dispatcher. There is no separate \"AI mode\", no simulated keystrok
 shadow API. When you type `dd` to delete a line, the agent can invoke `cmd:delete-line` \
 with the same effect, and vice versa.\n\n\
 ## What the agent can see\n\
-- [[cmd:buffer-read|Buffer contents]] ([[cmd:list-buffers|across all buffers]]).\n\
-- [[cmd:cursor-info|Cursor state]] and [[cmd:editor-state|editor state]].\n\
-- [[cmd:lsp-diagnostics|LSP diagnostics]] and [[cmd:syntax-tree|tree-sitter parse trees]].\n\
-- [[cmd:debug-state|DAP debug state]] when a session is active.\n\
+- Buffer contents (`buffer_read`) across all buffers (`list_buffers`).\n\
+- Cursor state (`cursor_info`) and editor state (`editor_state`).\n\
+- LSP diagnostics (`lsp_diagnostics`) and tree-sitter parse trees (`syntax_tree`).\n\
+- DAP debug state (`debug_state`) when a session is active.\n\
 - This knowledge base (`kb_get`, `kb_search`, `kb_list`).\n\
 - [[concept:project|Project state]] via `project_info`, `project_files`, `project_search`.\n\
 - **[[concept:introspect|Introspection]]**: The agent can see thread stacks, performance counters, and lock contention.\n\n\
