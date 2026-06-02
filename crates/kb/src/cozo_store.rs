@@ -971,19 +971,22 @@ impl KbStore for CozoKbStore {
         self.run_mut_params(
             r#"
             old[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
-                aliases_json, properties_json, _, _, created_at, _]
+                aliases_json, properties_json, origin_instance, assignee, due_date, sprint, created_at]
                 := *nodes{id, title, kind, body, tags_json, todo_state, priority, source, source_version,
-                          aliases_json, properties_json, crdt_doc: _, has_crdt: _, created_at, updated_at: _},
+                          aliases_json, properties_json, origin_instance, assignee, due_date, sprint,
+                          crdt_doc: _, has_crdt: _, created_at, updated_at: _},
                 id = $id
 
             ?[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
-              aliases_json, properties_json, crdt_doc, has_crdt, created_at, updated_at]
+              aliases_json, properties_json, crdt_doc, has_crdt, origin_instance, assignee, due_date, sprint,
+              created_at, updated_at]
                 := old[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
-                       aliases_json, properties_json, _, _, created_at, _],
+                       aliases_json, properties_json, origin_instance, assignee, due_date, sprint, created_at],
                 crdt_doc = $crdt_doc, has_crdt = true, updated_at = $now
 
             :put nodes {id => title, kind, body, tags_json, todo_state, priority, source, source_version,
-                        aliases_json, properties_json, crdt_doc, has_crdt, created_at, updated_at}
+                        aliases_json, properties_json, crdt_doc, has_crdt, origin_instance, assignee,
+                        due_date, sprint, created_at, updated_at}
             "#,
             btree_params([
                 ("id", dv_str(id)),
