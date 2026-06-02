@@ -80,6 +80,23 @@ make manual-kb
   -> SHA-256 checksum written to assets/mae-manual.cozo.sha256
 ```
 
+### Phase 2: CozoDB-Direct Ingestion Pipeline
+
+1. `import_org_dir_to_store()` writes parsed nodes directly to CozoDB (no intermediate SQLite)
+2. `IngestMode` enum: `Full` (re-parse all files) vs `Incremental` (skip unchanged files via content hash)
+3. `source_files` CozoDB relation tracks file paths, content hashes, and associated node IDs
+4. Enhanced `ImportReport` with `nodes_updated`, `nodes_unchanged`, `nodes_removed`, `duration_ms`
+5. `:kb-reimport <name> [full|incremental]` command and AI tool support mode selection
+6. `kb_register()` and `kb_reimport()` route through CozoDB-direct ingestion automatically
+
+### Phase 3: Scale Validation
+
+Integration test (`cozo_scale_test.rs`) validates CozoDB at roamnotes-scale:
+- 2,500 nodes with realistic body text + tags
+- ~15,000 typed links across 8 relationship types
+- Benchmarked operations: get_node, FTS, links_from/to, neighborhood, Datalog, load_all
+- All operations complete within thresholds (debug build; release is 5-10x faster)
+
 ## Consequences
 
 ### Positive
