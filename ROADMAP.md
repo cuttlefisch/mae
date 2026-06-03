@@ -12,7 +12,7 @@
 | 2. Scheme Runtime | ✅ Complete | R7RS-small (mae-scheme), `init.scm`, `define-key`, `set-option!`, REPL |
 | 3. AI Integration | ✅ Complete | Claude/OpenAI/Gemini/DeepSeek, 450+ tool-calling, conversation UI, permissions |
 | 4. LSP + DAP + Syntax | ✅ Complete | Full LSP (rename, format, outline, breadcrumbs, peek), DAP (watches, exceptions), 13-language tree-sitter |
-| 5. Knowledge Base | ✅ Complete | SQLite + FTS5, org parser, 200+ nodes, bidirectional links, federation |
+| 5. Knowledge Base | ✅ Complete | CozoDB graph store, 862 nodes, typed relationships, pre-built manual, ingestion pipeline |
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload, send-to-shell |
 | 7. Documentation | ✅ Complete | Tutor (13 lessons), `:describe-configuration`, `--check-config`, `--init-config` |
 | 8. GUI Backend | ✅ Complete | winit + Skia 2D, inline images (PNG/JPG/SVG), variable-height, inertial scroll |
@@ -164,11 +164,11 @@
 
 ### KB Storage Architecture (v0.12.0 — ADR-011)
 
-**Status**: ALL PHASES COMPLETE. CozoDB is the default backend. 5,878 tests passing.
+**Status**: ALL PHASES COMPLETE + PERSISTENT KB. CozoDB sole backend. 5,878+ tests passing.
 
 The KB had a dual source of truth problem: org files re-parsed on startup, SQLite declared but unused in hot path. Every collaborative tool at scale uses a database (Notion/Postgres, Roam/Datascript, Logseq migrating FROM files TO DB).
 
-**Decision**: CozoDB-primary with SQLite fallback. See `docs/adr/011-kb-storage.md`.
+**Decision**: CozoDB sole backend (sled storage). rusqlite removed. See `docs/adr/011-kb-storage.md`, `docs/adr/012-persistent-graph-kb.md`.
 
 #### Foundation (v0.11.1)
 - [x] **KbStore trait** (`crates/kb/src/store.rs`): Database-agnostic persistence interface — node CRUD, FTS search, link queries, CRDT ops, pending update queue. `SqliteKbStore` implementation with 11 tests.
@@ -192,6 +192,12 @@ The KB had a dual source of truth problem: org files re-parsed on startup, SQLit
 - [x] **Phase I**: 28-test graph validation suite using full seed manual as fixture — validates schema, queries, and tooling.
 - [x] **NodeKind migration**: ~230 seed nodes migrated to correct kinds (lesson→Lesson, tutorial→Tutorial, category→Category, scheme→SchemeApi). 12 broken `related_to` links fixed to 0.
 - [x] **AI tools**: `kb_agenda`, `kb_history`, `kb_restore`, `kb_view_query`, `kb_vector_search` wired into executor + dispatch.
+
+#### Persistent Graph KB (v0.12.0 — ADR-012)
+- [x] **Phase 0**: rusqlite removed (~2,500 lines), SqliteKbStore deleted, sled engine string fixed, `kb_backend` option removed.
+- [x] **Phase 1**: Pre-built manual KB — `build-manual-kb` binary (862 nodes), `manual_kb.rs` locate+validate, SHA-256 checksums, `Editor::with_kb()`, multi-DB startup (manual → user → imported).
+- [x] **Phase 2**: CozoDB-direct ingestion — `import_org_dir_to_store()`, `IngestMode` (Full/Incremental), content hash change detection, `source_files` relation, enhanced `ImportReport`.
+- [x] **Phase 3**: Scale validation — 2,500 nodes + 15,000 links integration test (`cozo_scale_test.rs`).
 
 #### Future
 - [ ] **GraphRAG live pipeline** (v0.13.0): Embedding generation (provider trait: OpenAI, Ollama, local), background indexing, AI context injection.

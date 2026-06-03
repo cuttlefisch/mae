@@ -150,6 +150,10 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Multi-DB startup: manual KB (read-only) + user KB (read-write) + imported KBs
 - SHA-256 checksum validation for shipped manual KB files
 - `Editor::with_kb()` constructor for pre-populated KB (skips `seed_kb()`)
+- CozoDB-direct ingestion: `import_org_dir_to_store()`, `IngestMode` (Full/Incremental)
+- Content hash change detection + `source_files` CozoDB relation for incremental reimport
+- `:kb-reimport <name> [full|incremental]` command + AI tool mode parameter
+- Scale validated: 2,500 nodes + 15,000 links integration test
 - 14 NodeKind variants, 20 typed relationship types with inverses
 - Org-mode parser (hand-rolled, multi-node files)
 - Bidirectional link primitives + typed link graph
