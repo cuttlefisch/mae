@@ -49,7 +49,16 @@ jobs:
             cargo test --workspace --release --features gui
             cargo test --doc --workspace --release --features gui
           else
-            cargo test --workspace
+            # Nightly: CozoDB's sled backend triggers glibc
+            # "malloc(): unaligned tcache chunk detected" (SIGABRT) on
+            # nightly Rust. Exclude CozoDB-heavy integration test binaries
+            # that crash the process. These tests pass on stable.
+            cargo test --workspace --exclude mae
+            cargo test -p mae --lib --bins
+            cargo test -p mae --test collab_bridge_integration
+            cargo test -p mae --test mcp_event_loop_integration
+            # Skipped on nightly: kb_graph_validation, kb_lifecycle_e2e,
+            # collab_stress, collab_tcp_e2e (all CozoDB or #[ignore])
             cargo test --doc --workspace
           fi
       - name: cargo clippy
