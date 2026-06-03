@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:cursor-goto
+:KIND: scheme_api
+:END:
+#+title: Scheme: cursor-goto
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(cursor-goto ROW COL)
+#+end_src
+
+Move the cursor to absolute position (0-indexed).
+
+** Example
+#+begin_src scheme
+(cursor-goto 0 0) ; go to top-left
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

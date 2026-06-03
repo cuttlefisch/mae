@@ -172,6 +172,8 @@
 (define-key "normal" "SPC n C" "kb-cleanup-orphans")
 (define-key "normal" "SPC n I" "kb-instances")
 (define-key "normal" "SPC n h" "kb-health")
+(define-key "normal" "SPC n N" "kb-narrow")
+(define-key "normal" "SPC n W" "kb-widen")
 
 ;; +code (LSP)
 (define-key "normal" "SPC c d" "lsp-goto-definition")

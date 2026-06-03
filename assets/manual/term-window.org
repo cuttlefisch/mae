@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:window
+:KIND: concept
+:END:
+#+title: Window
+#+filetags: :terminology:
+
+A visible pane showing a buffer. Windows are arranged in a binary split tree (the layout). Multiple windows can show the same buffer.

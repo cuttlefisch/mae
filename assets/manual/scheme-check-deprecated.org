@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:check-deprecated
+:KIND: scheme_api
+:END:
+#+title: Scheme: check-deprecated
+#+filetags: :scheme:api:modules:
+
+** Signature
+#+begin_src scheme
+(check-deprecated NAME)
+#+end_src
+
+Check if NAME is deprecated. Returns the replacement name or #f.
+
+** Example
+#+begin_src scheme
+(check-deprecated "old-fn") ; => "new-fn"
+#+end_src
+
+*Category:* modules
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:option
+:KIND: concept
+:END:
+#+title: Option
+#+filetags: :terminology:
+
+A named, typed configuration value registered in the OptionRegistry. Options have a name, type (Bool/Int/String/Float/Theme), default value, and doc string. Changed via =:set= and persisted via =:set-save=.

@@ -1,0 +1,47 @@
+:PROPERTIES:
+:ID: concept:design-philosophy
+:KIND: concept
+:END:
+#+title: Design Philosophy
+#+filetags: :modules:architecture:extensibility:
+
+MAE's **design philosophy** for modules follows four principles derived from 35 years of Emacs history.
+
+** 1. Composition over inheritance
+- Register commands, not subclasses
+- Compose via hooks, not method overrides
+- Extend via keymaps with parent chains, not by patching existing maps
+- Configure via options, not by mutating global state
+
+** 2. Single source of truth
+The Scheme code is both the declaration AND the implementation. `module.toml` declares identity only (name, version, deps, flags). Everything the module provides (commands, options, keybindings) is registered exclusively in `autoloads.scm`.
+
+** 3. Stable API contract
+The module API is the set of Scheme functions, hooks, options, commands, and keymaps that modules can rely on:
+- **Additions** = minor version bump, never breaking
+- **Removals/renames** = major version bump, with deprecation cycle
+- `mae_version` constraint in `module.toml` declares minimum MAE version
+
+** 4. No framework, no SDK
+Modules import nothing — they call registered Scheme functions:
+```scheme
+(define-command "my-cmd" (lambda () (buffer-insert "hello")) "Insert hello")
+(define-key "normal" "SPC x h" "my-cmd")
+(define-option! "my_option" "string" "default" "My option doc")
+(add-hook! "after-save" "my-after-save-fn")
+(provide-feature "my-module")
+```
+
+** Kernel boundary
+The line: **if it needs `tokio`, PTY, or FFI, it's kernel. If it's commands + keybindings + hooks + options, it's a module.** LSP, DAP, Shell, and AI stay as Rust crates.
+
+** Pitfall avoidance
+| Pitfall | Source | MAE avoidance |
+|---------|--------|---------------|
+| Namespace pollution | Emacs | Convention prefix + `mae pkg doctor` warnings |
+| Load-order hell | Emacs | Topo-sorted autoloads → config.scm |
+| Silent command shadowing | Emacs | Conflict warnings on duplicate registration |
+| Metadata in comments | Emacs | Structured `module.toml` |
+| Implicit flags | Doom | Flags declared in `module.toml [flags]` |
+
+See also: [[concept:modules]], [[concept:ai-as-peer]], [[index]]

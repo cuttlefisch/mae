@@ -1,0 +1,41 @@
+:PROPERTIES:
+:ID: tutorial:getting-started
+:KIND: tutorial
+:END:
+#+title: Getting Started with MAE
+#+filetags: :tutorial:
+
+* Getting Started with MAE
+
+MAE (Modern AI Editor) is an AI-native Lisp machine editor with modal editing.
+
+Choose your track:
+
+** I know Vim
+-> [[id:tutorial:vim-familiar][Start here]] -- what carries over, what's different, MAE extensions
+
+** I'm new to modal editing
+-> [[id:tutorial:what-is-modal][Start here]] -- what modes are, basic movement, basic editing
+
+** Set up AI
+-> [[id:tutorial:ai-setup][AI Setup]] -- API key configuration, provider selection, agent vs chat
+
+** Collaborate
+-> [[id:tutorial:collab-setup][Collaborative Setup]] -- share buffers and KBs across machines
+
+Each track is a linked sequence of short lessons. Follow the *Next:* links at the bottom.
+
+** Tracks
+- [[contains:tutorial:vim-familiar][Vim-Familiar Track]] -- for experienced Vim users
+- [[contains:tutorial:what-is-modal][Modal Editing Track]] -- for newcomers to modal editing
+- [[contains:tutorial:ai-setup][AI Setup Track]] -- configure AI providers and tools
+- [[contains:tutorial:collab-setup][Collaboration Track]] -- share buffers and KBs across machines
+
+See also: [[id:tutor:index][Lesson-style Tutorial]], [[id:index][Help Index]]
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

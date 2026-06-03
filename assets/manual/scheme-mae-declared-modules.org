@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:mae-declared-modules
+:KIND: scheme_api
+:END:
+#+title: Scheme: mae-declared-modules
+#+filetags: :scheme:api:modules:
+
+** Signature
+#+begin_src scheme
+(mae-declared-modules)
+#+end_src
+
+Return a list of all modules declared via mae-declare-module!.
+
+** Example
+#+begin_src scheme
+(mae-declared-modules)
+#+end_src
+
+*Category:* modules
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:list-directory
+:KIND: scheme_api
+:END:
+#+title: Scheme: list-directory
+#+filetags: :scheme:api:file-io:
+
+** Signature
+#+begin_src scheme
+(list-directory PATH)
+#+end_src
+
+Return a list of (name is-dir?) pairs for entries in PATH.
+
+** Example
+#+begin_src scheme
+(list-directory "/tmp")
+#+end_src
+
+*Category:* file-io
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:set-theme
+:KIND: scheme_api
+:END:
+#+title: Scheme: set-theme
+#+filetags: :scheme:api:display:
+
+** Signature
+#+begin_src scheme
+(set-theme NAME)
+#+end_src
+
+Switch the editor theme.
+
+** Example
+#+begin_src scheme
+(set-theme "gruvbox")
+#+end_src
+
+*Category:* display
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

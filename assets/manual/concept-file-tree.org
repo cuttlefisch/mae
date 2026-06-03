@@ -1,0 +1,33 @@
+:PROPERTIES:
+:ID: concept:file-tree
+:KIND: concept
+:END:
+#+title: File Tree
+#+filetags: :files:navigation:gui:
+
+**File Tree** is a sidebar showing the project directory structure with file-type icons.
+
+## Keybindings
+| Key | Action |
+|---|---|
+| `SPC f t` | Toggle file tree sidebar |
+| `j` / `k` | Navigate entries |
+| `Enter` | Open file / toggle directory |
+| `o` | Toggle expand/collapse directory |
+| `R` | Refresh tree from disk |
+| `q` | Close file tree |
+
+## Project Root
+The tree roots at the detected project root (`.git`, `Cargo.toml`, etc.). Falls back to the current working directory.
+
+## Icons
+File type icons are Unicode emoji by default (no font dependency):
+- Directories: open/closed folder
+- `.rs` -> crab, `.py` -> snake, `.js` -> lightning, `.toml`/`.json` -> gear
+
+## Filtering
+Build artifacts and VCS directories (`target/`, `node_modules/`, `.git/`) are hidden automatically.
+
+[[part_of:concept:project][Part of Project]].
+
+See also: [[cmd:find-file]], [[references:concept:buffer][Buffer]], [[references:concept:project][Project]]

@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:undefine-key!
+:KIND: scheme_api
+:END:
+#+title: Scheme: undefine-key!
+#+filetags: :scheme:api:keymaps:
+
+** Signature
+#+begin_src scheme
+(undefine-key! MAP KEY)
+#+end_src
+
+Remove a key binding from a keymap.
+
+** Example
+#+begin_src scheme
+(undefine-key! "normal" "q")
+#+end_src
+
+*Category:* keymaps
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:profile
+:KIND: concept
+:END:
+#+title: Profile
+#+filetags: :terminology:
+
+An AI agent personality. Built-in profiles: pair-programmer (default), explorer, reviewer. Profiles determine the system prompt, tool preferences, and behavioral guardrails. Set via =:set ai_profile <name>=.

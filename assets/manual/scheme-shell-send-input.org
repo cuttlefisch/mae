@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:shell-send-input
+:KIND: scheme_api
+:END:
+#+title: Scheme: shell-send-input
+#+filetags: :scheme:api:shell:
+
+** Signature
+#+begin_src scheme
+(shell-send-input BUF-IDX TEXT)
+#+end_src
+
+Send TEXT to the PTY of a terminal buffer.
+
+** Example
+#+begin_src scheme
+(shell-send-input 1 "ls\n")
+#+end_src
+
+*Category:* shell
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

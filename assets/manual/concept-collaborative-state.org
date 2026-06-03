@@ -1,0 +1,26 @@
+:PROPERTIES:
+:ID: concept:collaborative-state
+:KIND: concept
+:ALIASES: collab, multiplayer, real-time
+:END:
+#+title: Collaborative State Engine
+#+filetags: :architecture:sync:vision:
+
+MAE is a **collaborative state engine** where AI and humans interact via text OR visual interfaces, backed by a federated knowledge base. The sync layer (powered by [[concept:sync-engine][yrs]]) is the universal substrate for ALL state:
+
+- **Editor buffers** — text and code (YText)
+- **Visual documents** — design components, scene graphs (YMap/YArray)
+- **Knowledge base nodes** — CRDT-synced across instances for offline editing
+
+** Requirements
+1. Real-time multi-user collaboration (text AND visual content)
+2. AI agents as collaborative peers (sequential tool calls → yrs transactions)
+3. Non-textual documents: scene graphs, component trees, design tokens
+4. KB nodes as CRDT documents — offline editing, conflict-free merge, P2P federation
+5. Sustainable maintenance for a small team (~1000 lines MAE-specific sync code)
+6. Performance: 100+ concurrent clients, 100K+ element documents
+
+** Transport
+JSON-RPC 2.0 over Unix sockets (extend existing MCP protocol). Upgrade path: msgpack wire format, then TCP for multi-machine. See [[concept:adr-text-sync]].
+
+See also: [[concept:sync-engine]], [[concept:knowledge-base]], [[concept:ai-as-peer]]

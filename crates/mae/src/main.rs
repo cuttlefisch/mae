@@ -665,7 +665,9 @@ fn main() -> io::Result<()> {
                         }
 
                         info!(path = %cozo_path.display(), "primary KB store opened (CozoDB)");
-                        editor.kb.store = Some(std::sync::Arc::new(store));
+                        let arc_store = std::sync::Arc::new(store);
+                        editor.kb.primary_cozo = Some(arc_store.clone());
+                        editor.kb.store = Some(arc_store);
                     }
                     Err(e) => {
                         warn!(error = %e, "failed to open CozoDB KB store");
@@ -677,6 +679,9 @@ fn main() -> io::Result<()> {
                 warn!(error = %e, "failed to initialize KB data directory");
             }
         }
+
+        // Build the CozoDB-first query layer (federated across primary + instances).
+        editor.kb.rebuild_query_layer();
 
         // Migrate kb-registry.toml from config → data (v0.9.0)
         let config_dir = dirs::config_dir()

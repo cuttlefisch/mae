@@ -1,0 +1,27 @@
+:PROPERTIES:
+:ID: lesson:modes
+:KIND: lesson
+:END:
+#+title: Lesson 2: Modes
+#+filetags: :tutorial:
+
+** Lesson 2: Modes
+
+MAE uses [[teaches:concept:mode][modal editing]] like Vim:
+
+Prerequisites: [[requires:lesson:navigation][Lesson 1: Navigation]].
+
+- *Normal mode* (default) — navigation and commands
+- *Insert mode* — type text freely
+- *Visual mode* — select text
+- *Command mode* — ex commands (~:~ prefix)
+
+*** Switching modes
+  ~i~ — enter Insert mode (before cursor)
+  ~a~ — enter Insert mode (after cursor)
+  ~v~ — enter Visual mode (character)
+  ~V~ — enter Visual mode (line)
+  ~:~ — enter Command mode
+  ~Escape~ — return to Normal mode
+
+*Prev:* [[lesson:navigation][Lesson 1]]  |  *Next:* [[lesson:editing][Lesson 3: Editing]]  |  *Index:* [[tutor:index][Tutorial]]

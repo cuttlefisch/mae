@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:after-each
+:KIND: scheme_api
+:END:
+#+title: Scheme: after-each
+#+filetags: :scheme:api:testing:
+
+** Signature
+#+begin_src scheme
+(after-each HOOK-FN)
+#+end_src
+
+Register a teardown function for the current describe scope. Called after each it-test.
+
+** Example
+#+begin_src scheme
+(after-each (lambda () (kill-buffer-by-name "*test*")))
+#+end_src
+
+*Category:* testing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

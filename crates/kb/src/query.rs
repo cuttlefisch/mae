@@ -1,0 +1,408 @@
+//! KbQueryLayer — CozoDB-first query abstraction for knowledge base reads.
+//!
+//! All runtime KB reads go through `KbQueryLayer`. The trait has implementations
+//! for `CozoKbStore` (direct Datalog queries), `FederatedQuery` (multi-store
+//! fan-out), and `CachedQueryLayer` (LRU cache wrapper).
+
+use crate::store::{HealthReport, KbStore, Link, SearchHit, SubGraph};
+use crate::{CozoKbStore, Node};
+use std::sync::Arc;
+
+/// Read-only query interface for knowledge base operations.
+///
+/// All runtime reads (help buffers, AI tools, search, link navigation)
+/// go through this trait instead of the in-memory `KnowledgeBase`.
+pub trait KbQueryLayer: Send + Sync {
+    /// Get a node by ID.
+    fn get(&self, id: &str) -> Option<Node>;
+
+    /// Check if a node exists.
+    fn contains(&self, id: &str) -> bool;
+
+    /// Full-text search across node titles and bodies.
+    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit>;
+
+    /// Outgoing links from a node (typed, with rel_type).
+    fn links_from(&self, id: &str) -> Vec<Link>;
+
+    /// Incoming links to a node (typed, with rel_type).
+    fn links_to(&self, id: &str) -> Vec<Link>;
+
+    /// List all node IDs, optionally filtered by prefix.
+    fn list_ids(&self, prefix: Option<&str>) -> Vec<String>;
+
+    /// Return (id, title) pairs for all nodes, optionally filtered by prefix.
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)>;
+
+    /// Compute a structured health report.
+    fn health_report(&self) -> Option<HealthReport>;
+
+    /// BFS neighborhood subgraph around a node.
+    fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph>;
+
+    /// Return all known namespace prefixes (e.g., "cmd:", "concept:").
+    fn namespace_prefixes(&self) -> Vec<String> {
+        let mut prefixes = std::collections::HashSet::new();
+        for id in self.list_ids(None) {
+            if let Some(colon) = id.find(':') {
+                prefixes.insert(format!("{}:", &id[..colon]));
+            }
+        }
+        let mut result: Vec<String> = prefixes.into_iter().collect();
+        result.sort();
+        result
+    }
+}
+
+/// `KbQueryLayer` implementation backed by a `CozoKbStore`.
+pub struct CozoQueryLayer {
+    store: Arc<CozoKbStore>,
+}
+
+impl CozoQueryLayer {
+    pub fn new(store: Arc<CozoKbStore>) -> Self {
+        Self { store }
+    }
+}
+
+impl KbQueryLayer for CozoQueryLayer {
+    fn get(&self, id: &str) -> Option<Node> {
+        match self.store.get_node(id) {
+            Ok(node) => node,
+            Err(e) => {
+                tracing::warn!(error = %e, id, "CozoQueryLayer::get failed");
+                None
+            }
+        }
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        matches!(self.store.get_node(id), Ok(Some(_)))
+    }
+
+    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+        self.store.fts_search(query, limit).unwrap_or_default()
+    }
+
+    fn links_from(&self, id: &str) -> Vec<Link> {
+        self.store.links_from(id).unwrap_or_default()
+    }
+
+    fn links_to(&self, id: &str) -> Vec<Link> {
+        self.store.links_to(id).unwrap_or_default()
+    }
+
+    fn list_ids(&self, prefix: Option<&str>) -> Vec<String> {
+        self.store.list_ids(prefix).unwrap_or_default()
+    }
+
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)> {
+        self.store.id_title_pairs(prefix).unwrap_or_default()
+    }
+
+    fn health_report(&self) -> Option<HealthReport> {
+        self.store.health_report().ok()
+    }
+
+    fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
+        self.store.neighborhood(id, depth).ok()
+    }
+}
+
+/// Multi-store query layer that fans out reads across primary + instances.
+/// Primary is checked first; search results are merged by score.
+pub struct FederatedQuery {
+    primary: Arc<dyn KbQueryLayer>,
+    instances: Vec<(String, Arc<dyn KbQueryLayer>)>,
+}
+
+impl FederatedQuery {
+    pub fn new(primary: Arc<dyn KbQueryLayer>) -> Self {
+        Self {
+            primary,
+            instances: Vec::new(),
+        }
+    }
+
+    pub fn add_instance(&mut self, name: String, layer: Arc<dyn KbQueryLayer>) {
+        self.instances.push((name, layer));
+    }
+}
+
+impl KbQueryLayer for FederatedQuery {
+    fn get(&self, id: &str) -> Option<Node> {
+        if let Some(node) = self.primary.get(id) {
+            return Some(node);
+        }
+        for (_, inst) in &self.instances {
+            if let Some(node) = inst.get(id) {
+                return Some(node);
+            }
+        }
+        None
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.primary.contains(id) || self.instances.iter().any(|(_, i)| i.contains(id))
+    }
+
+    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+        let mut hits = self.primary.search(query, limit);
+        let mut seen: std::collections::HashSet<String> =
+            hits.iter().map(|h| h.id.clone()).collect();
+        for (_, inst) in &self.instances {
+            for hit in inst.search(query, limit) {
+                if seen.insert(hit.id.clone()) {
+                    hits.push(hit);
+                }
+            }
+        }
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        hits.truncate(limit);
+        hits
+    }
+
+    fn links_from(&self, id: &str) -> Vec<Link> {
+        // Return links from whichever store owns the node
+        if self.primary.contains(id) {
+            return self.primary.links_from(id);
+        }
+        for (_, inst) in &self.instances {
+            if inst.contains(id) {
+                return inst.links_from(id);
+            }
+        }
+        Vec::new()
+    }
+
+    fn links_to(&self, id: &str) -> Vec<Link> {
+        // Merge incoming links from all stores
+        let mut links = self.primary.links_to(id);
+        for (_, inst) in &self.instances {
+            links.extend(inst.links_to(id));
+        }
+        links
+    }
+
+    fn list_ids(&self, prefix: Option<&str>) -> Vec<String> {
+        let mut ids = self.primary.list_ids(prefix);
+        let mut seen: std::collections::HashSet<String> = ids.iter().cloned().collect();
+        for (_, inst) in &self.instances {
+            for id in inst.list_ids(prefix) {
+                if seen.insert(id.clone()) {
+                    ids.push(id);
+                }
+            }
+        }
+        ids
+    }
+
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)> {
+        let mut pairs = self.primary.id_title_pairs(prefix);
+        let mut seen: std::collections::HashSet<String> =
+            pairs.iter().map(|(id, _)| id.clone()).collect();
+        for (_, inst) in &self.instances {
+            for pair in inst.id_title_pairs(prefix) {
+                if seen.insert(pair.0.clone()) {
+                    pairs.push(pair);
+                }
+            }
+        }
+        pairs
+    }
+
+    fn health_report(&self) -> Option<HealthReport> {
+        self.primary.health_report()
+    }
+
+    fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
+        if self.primary.contains(id) {
+            return self.primary.neighborhood(id, depth);
+        }
+        for (_, inst) in &self.instances {
+            if inst.contains(id) {
+                return inst.neighborhood(id, depth);
+            }
+        }
+        None
+    }
+}
+
+/// Fallback query layer wrapping an in-memory `KnowledgeBase`.
+/// Used when no CozoDB store is available.
+pub struct InMemoryQueryLayer {
+    kb: std::sync::Mutex<crate::KnowledgeBase>,
+}
+
+impl InMemoryQueryLayer {
+    pub fn new(kb: crate::KnowledgeBase) -> Self {
+        Self {
+            kb: std::sync::Mutex::new(kb),
+        }
+    }
+
+    /// Get a mutable reference to the underlying KB (for inserts/updates).
+    pub fn kb_mut(&self) -> std::sync::MutexGuard<'_, crate::KnowledgeBase> {
+        self.kb.lock().unwrap()
+    }
+}
+
+impl KbQueryLayer for InMemoryQueryLayer {
+    fn get(&self, id: &str) -> Option<Node> {
+        self.kb.lock().unwrap().get(id).cloned()
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.kb.lock().unwrap().contains(id)
+    }
+
+    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+        let kb = self.kb.lock().unwrap();
+        kb.search(query)
+            .into_iter()
+            .take(limit)
+            .map(|id| SearchHit { id, score: 1.0 })
+            .collect()
+    }
+
+    fn links_from(&self, id: &str) -> Vec<Link> {
+        let kb = self.kb.lock().unwrap();
+        kb.links_from(id)
+            .into_iter()
+            .map(|dst| Link {
+                src: id.to_string(),
+                dst,
+                rel_type: "references".to_string(),
+                display: None,
+                weight: 1.0,
+                confidence: 1.0,
+            })
+            .collect()
+    }
+
+    fn links_to(&self, id: &str) -> Vec<Link> {
+        let kb = self.kb.lock().unwrap();
+        kb.links_to(id)
+            .into_iter()
+            .map(|src| Link {
+                src,
+                dst: id.to_string(),
+                rel_type: "references".to_string(),
+                display: None,
+                weight: 1.0,
+                confidence: 1.0,
+            })
+            .collect()
+    }
+
+    fn list_ids(&self, prefix: Option<&str>) -> Vec<String> {
+        let kb = self.kb.lock().unwrap();
+        kb.list_ids(prefix)
+    }
+
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)> {
+        let kb = self.kb.lock().unwrap();
+        kb.list_ids(prefix)
+            .into_iter()
+            .filter_map(|id| {
+                let title = kb.get(&id)?.title.clone();
+                Some((id, title))
+            })
+            .collect()
+    }
+
+    fn health_report(&self) -> Option<HealthReport> {
+        None // In-memory KB uses KbHealthReport, not store::HealthReport
+    }
+
+    fn neighborhood(&self, _id: &str, _depth: u32) -> Option<SubGraph> {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Node, NodeKind};
+
+    #[test]
+    fn cozo_query_layer_basic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CozoKbStore::open(tmp.path().join("test.cozo")).unwrap());
+        store
+            .insert_node(&Node::new("test:a", "Alpha", NodeKind::Note, "body text"))
+            .unwrap();
+
+        let layer = CozoQueryLayer::new(store);
+        assert!(layer.contains("test:a"));
+        assert!(!layer.contains("test:b"));
+
+        let node = layer.get("test:a").unwrap();
+        assert_eq!(node.title, "Alpha");
+
+        let ids = layer.list_ids(Some("test:"));
+        assert!(ids.contains(&"test:a".to_string()));
+
+        let pairs = layer.id_title_pairs(None);
+        assert!(pairs.iter().any(|(id, _)| id == "test:a"));
+    }
+
+    #[test]
+    fn federated_query_primary_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store1 = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        let store2 = Arc::new(CozoKbStore::open(tmp.path().join("inst.cozo")).unwrap());
+
+        store1
+            .insert_node(&Node::new("shared", "Primary Version", NodeKind::Note, ""))
+            .unwrap();
+        store2
+            .insert_node(&Node::new("shared", "Instance Version", NodeKind::Note, ""))
+            .unwrap();
+        store2
+            .insert_node(&Node::new("only:inst", "Instance Only", NodeKind::Note, ""))
+            .unwrap();
+
+        let primary = Arc::new(CozoQueryLayer::new(store1));
+        let inst = Arc::new(CozoQueryLayer::new(store2));
+        let mut federated = FederatedQuery::new(primary);
+        federated.add_instance("test".into(), inst);
+
+        // Primary wins for shared IDs
+        let node = federated.get("shared").unwrap();
+        assert_eq!(node.title, "Primary Version");
+
+        // Instance-only nodes are found
+        assert!(federated.contains("only:inst"));
+        let node = federated.get("only:inst").unwrap();
+        assert_eq!(node.title, "Instance Only");
+    }
+
+    #[test]
+    fn in_memory_query_layer() {
+        let mut kb = crate::KnowledgeBase::new();
+        kb.insert(Node::new(
+            "note:a",
+            "Alpha",
+            NodeKind::Note,
+            "body [[note:b]]",
+        ));
+        kb.insert(Node::new("note:b", "Beta", NodeKind::Note, ""));
+
+        let layer = InMemoryQueryLayer::new(kb);
+        assert!(layer.contains("note:a"));
+        assert!(!layer.contains("note:c"));
+
+        let links = layer.links_from("note:a");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].dst, "note:b");
+
+        let backlinks = layer.links_to("note:b");
+        assert_eq!(backlinks.len(), 1);
+        assert_eq!(backlinks[0].src, "note:a");
+    }
+}

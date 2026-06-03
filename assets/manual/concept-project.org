@@ -1,0 +1,32 @@
+:PROPERTIES:
+:ID: concept:project
+:KIND: concept
+:END:
+#+title: Project
+#+filetags: :project:workflow:
+
+A **project** in MAE is a directory with optional `.project` TOML configuration.
+
+** Detection
+When you open a file, MAE walks upward from its directory looking for marker files:
+`.project` > `.git` > `Cargo.toml` > `package.json` > `go.mod` > `pyproject.toml` > `Makefile`.
+The first match becomes the project root.
+
+** .project TOML
+Optional declarative config:
+```toml
+name = "My Project"
+root-directory = "~/src/my-project"
+required-resources = ["README.org", "Cargo.toml"]
+```
+
+** SPC p commands
+- `SPC p f` — find file in project ([[cmd:project-find-file]])
+- `SPC p s` — search in project ([[cmd:project-search]])
+- `SPC p d` — browse project directory ([[cmd:project-browse]])
+- `SPC p r` — recent project files ([[cmd:project-recent-files]])
+
+** AI integration
+The AI agent can query project state via the `project_info` tool and search project files via `project_files` and `project_search`.
+
+See also: [[index]], [[concept:ai-as-peer]]

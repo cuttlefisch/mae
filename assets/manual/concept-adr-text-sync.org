@@ -1,0 +1,30 @@
+:PROPERTIES:
+:ID: concept:adr-text-sync
+:KIND: concept
+:END:
+#+title: ADR-002: Text Sync (Accepted)
+#+filetags: :adr:sync:architecture:
+
+**ADR-002: Text Synchronization Model** — Status: **Accepted (yrs/YATA)**
+
+** Decision
+Use yrs (Yjs Rust port) as the sync engine for all collaborative state. Dual structure: yrs YText + ropey mirror for rendering.
+
+** Key Rationale
+- MAE needs to sync structured documents (visual elements, KB nodes), not just text
+- yrs provides YText, YMap, YArray — handles all content types
+- Built-in UndoManager eliminates custom undo work
+- Yjs ecosystem is the de-facto standard (Notion, Excalidraw, TLDraw)
+
+** Alternatives Rejected
+| Library | Why Not |
+|---------|--------|
+| automerge-rs | Performance cliff >100K ops, no built-in undo |
+| diamond-types | Text-only, bus factor = 1 |
+| Custom OT | Combinatorial explosion for visual operations |
+
+Full ADR: `docs/adr/002-text-sync-model.md`
+
+This ADR [[documents:concept:sync-engine][documents the Sync Engine]].
+
+See also: [[concept:sync-engine]], [[concept:collaborative-state]], [[concept:adr-kb-crdt]]

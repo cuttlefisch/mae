@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:buffer-replace-range
+:KIND: scheme_api
+:END:
+#+title: Scheme: buffer-replace-range
+#+filetags: :scheme:api:buffer-editing:
+
+** Signature
+#+begin_src scheme
+(buffer-replace-range START END TEXT)
+#+end_src
+
+Replace characters from START to END with TEXT.
+
+** Example
+#+begin_src scheme
+(buffer-replace-range 0 5 "new")
+#+end_src
+
+*Category:* buffer-editing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

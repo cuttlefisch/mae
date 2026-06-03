@@ -129,7 +129,13 @@ impl Editor {
                             format!("tutorial:{}", topic),
                             format!("category:{}", topic),
                         ];
-                        let found = candidates.iter().find(|id| self.kb.primary.contains(id));
+                        let found = candidates.iter().find(|id| {
+                            if let Some(q) = self.kb.query_layer() {
+                                q.contains(id)
+                            } else {
+                                self.kb.primary.contains(id)
+                            }
+                        });
                         match found {
                             Some(id) => self.open_help_at(id),
                             None => self.set_status(format!("No help for: {}", topic)),
@@ -144,7 +150,12 @@ impl Editor {
                     return true;
                 };
                 let id = format!("cmd:{}", name);
-                if self.kb.primary.contains(&id) {
+                let id_exists = if let Some(q) = self.kb.query_layer() {
+                    q.contains(&id)
+                } else {
+                    self.kb.primary.contains(&id)
+                };
+                if id_exists {
                     self.open_help_at(&id);
                 } else {
                     self.set_status(format!("Unknown command: {}", name));
@@ -742,7 +753,12 @@ impl Editor {
                         // Try to find the option and open its KB node
                         if let Some((_, def)) = self.get_option(n) {
                             let id = format!("option:{}", def.name);
-                            if self.kb.primary.contains(&id) {
+                            let id_exists = if let Some(q) = self.kb.query_layer() {
+                                q.contains(&id)
+                            } else {
+                                self.kb.primary.contains(&id)
+                            };
+                            if id_exists {
                                 self.open_help_at(&id);
                             } else {
                                 // Fallback: show inline

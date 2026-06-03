@@ -1,0 +1,33 @@
+:PROPERTIES:
+:ID: concept:conceal
+:KIND: concept
+:END:
+#+title: Conceal (Link & Markup Rendering)
+#+filetags: :rendering:configuration:conversation:
+
+**Link & Markup Rendering** controls how inline markup is displayed — showing styled labels instead of raw syntax.
+
+** Options
+| Option | Default | Description |
+|--------|---------|-------------|
+| `link_descriptive` | `true` | Strip `[label](url)` markup, show styled label only |
+| `render_markup` | `true` | Render `**bold**`, `` `code` ``, `*bold*`, `/italic/`, `=code=`, `~verbatim~` with styling |
+
+** Configuration
+- `:set link_descriptive false` — show raw `[label](url)` text
+- `:set render_markup false` — disable inline styling in conversation buffers
+- `:setlocal nolink_descriptive` — per-buffer override
+- `config.toml`: `link_descriptive = true` under `[editor]`
+- Scheme: `(set-option! "link-descriptive" "true")`
+
+** Scope
+- **Conversation buffers:** markdown links are stripped to labels; org and markdown inline markup (bold, italic, code) get styling spans
+- **Help buffers:** both markdown and org inline markup are styled
+- Links are clickable via `gx` (`open-link-at-cursor`)
+
+** Safety
+Inline markup spans intentionally exclude `markup.heading` — heading spans would trigger `line_heading_scale()` in `compute_layout()`, breaking uniform line heights in conversation buffers.
+
+[[part_of:concept:org-mode][Part of Org-Mode]].
+
+See also: [[concept:options]], [[concept:buffer]], [[concept:ai-as-peer]]

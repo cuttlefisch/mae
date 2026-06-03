@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:read-file
+:KIND: scheme_api
+:END:
+#+title: Scheme: read-file
+#+filetags: :scheme:api:file-io:
+
+** Signature
+#+begin_src scheme
+(read-file PATH)
+#+end_src
+
+Read a file's contents as a string (max 1MB).
+
+** Example
+#+begin_src scheme
+(read-file "/etc/hostname")
+#+end_src
+
+*Category:* file-io
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

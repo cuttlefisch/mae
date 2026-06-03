@@ -37,14 +37,20 @@ pub mod org;
 pub mod store;
 pub mod watch;
 
+pub mod cache;
 pub mod cozo_store;
+pub mod query;
 
+pub use cache::{CachedQueryLayer, NodeCache};
 pub use cozo_store::CozoKbStore;
-pub use federation::{ImportHealth, ImportReport as FederationImportReport, IngestMode};
-pub use org::IngestReport;
+pub use federation::{
+    import_org_dir_to_store, ImportHealth, ImportReport as FederationImportReport, IngestMode,
+};
+pub use org::{IngestReport, OrgParseResult, ParsedLink};
+pub use query::{CozoQueryLayer, FederatedQuery, InMemoryQueryLayer, KbQueryLayer};
 pub use store::{
-    AgendaFilter, Block, HealthReport, IntegrityError, KbStore, KbStoreError, Link, MetaMember,
-    NodeVersion, SubGraph, VectorHit,
+    AgendaFilter, Block, BrokenLinkInfo, BrokenLinkReason, HealthReport, IntegrityError, KbStore,
+    KbStoreError, Link, MetaMember, NodeVersion, SubGraph, VectorHit,
 };
 
 /// Kind of a node. Controls how the node is surfaced to the user
@@ -334,8 +340,11 @@ pub fn parse_links(body: &str) -> Vec<(String, String)> {
     let bytes = body.as_bytes();
     let mut i = 0;
     while i + 1 < bytes.len() {
-        if bytes[i] == b'[' && bytes[i + 1] == b'[' {
-            // Skip links inside #+begin_src … #+end_src.
+        if bytes[i] == b'[' && bytes[i + 1] == b'['
+            // Skip links inside org verbatim =...= or code ~...~ spans
+            && !(i > 0 && (bytes[i - 1] == b'=' || bytes[i - 1] == b'~'))
+        {
+            // Skip links inside verbatim blocks (src, example, export).
             if code_ranges.iter().any(|&(s, e)| i >= s && i < e) {
                 i += 1;
                 continue;
@@ -343,9 +352,14 @@ pub fn parse_links(body: &str) -> Vec<(String, String)> {
             if let Some(end_rel) = body[i + 2..].find("]]") {
                 let inner = &body[i + 2..i + 2 + end_rel];
                 // Split on '|' for display-text override.
-                let (target, display) = match inner.find('|') {
-                    Some(bar) => (&inner[..bar], &inner[bar + 1..]),
-                    None => (inner, inner),
+                // The internal format uses | as separator (from rewrite_links),
+                // while org source uses ][. Both are handled here.
+                let (target, display) = if let Some(sep) = inner.find("][") {
+                    (&inner[..sep], &inner[sep + 2..])
+                } else if let Some(bar) = inner.find('|') {
+                    (&inner[..bar], &inner[bar + 1..])
+                } else {
+                    (inner, inner)
                 };
                 let target = target.trim();
                 if !target.is_empty() {
@@ -360,25 +374,38 @@ pub fn parse_links(body: &str) -> Vec<(String, String)> {
     out
 }
 
-/// Compute byte ranges of `#+begin_src` … `#+end_src` blocks (case-insensitive).
+/// Compute byte ranges of verbatim blocks where org markup should NOT be parsed.
+///
+/// Matches Emacs behavior: `#+begin_src`, `#+begin_example`, and `#+begin_export`
+/// blocks contain literal content — no link extraction, no markup processing.
+/// `#+begin_quote` is intentionally excluded because Emacs parses org markup inside it.
 fn compute_code_block_ranges(body: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let lower = body.to_ascii_lowercase();
-    let mut search_from = 0;
-    while let Some(start) = lower[search_from..].find("#+begin_src") {
-        let abs_start = search_from + start;
-        if let Some(end) = lower[abs_start..].find("#+end_src") {
-            let abs_end = abs_start + end + "#+end_src".len();
-            let abs_end = body[abs_end..]
-                .find('\n')
-                .map_or(body.len(), |nl| abs_end + nl + 1);
-            ranges.push((abs_start, abs_end));
-            search_from = abs_end;
-        } else {
-            ranges.push((abs_start, body.len()));
-            break;
+    // Block types whose content is verbatim (no org markup parsing)
+    let verbatim_blocks = [
+        ("#+begin_src", "#+end_src"),
+        ("#+begin_example", "#+end_example"),
+        ("#+begin_export", "#+end_export"),
+    ];
+    for (begin_tag, end_tag) in &verbatim_blocks {
+        let mut search_from = 0;
+        while let Some(start) = lower[search_from..].find(begin_tag) {
+            let abs_start = search_from + start;
+            if let Some(end) = lower[abs_start..].find(end_tag) {
+                let abs_end = abs_start + end + end_tag.len();
+                let abs_end = body[abs_end..]
+                    .find('\n')
+                    .map_or(body.len(), |nl| abs_end + nl + 1);
+                ranges.push((abs_start, abs_end));
+                search_from = abs_end;
+            } else {
+                ranges.push((abs_start, body.len()));
+                break;
+            }
         }
     }
+    ranges.sort_by_key(|&(s, _)| s);
     ranges
 }
 

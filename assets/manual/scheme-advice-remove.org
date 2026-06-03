@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:advice-remove!
+:KIND: scheme_api
+:END:
+#+title: Scheme: advice-remove!
+#+filetags: :scheme:api:advice:
+
+** Signature
+#+begin_src scheme
+(advice-remove! COMMAND WHERE FN-NAME)
+#+end_src
+
+Remove advice from a command.
+
+** Example
+#+begin_src scheme
+(advice-remove! "save" :before "my-before-save")
+#+end_src
+
+*Category:* advice
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

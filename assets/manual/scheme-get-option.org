@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:get-option
+:KIND: scheme_api
+:END:
+#+title: Scheme: get-option
+#+filetags: :scheme:api:options:
+
+** Signature
+#+begin_src scheme
+(get-option NAME)
+#+end_src
+
+Return the current value of an option as a string, or #f.
+
+** Example
+#+begin_src scheme
+(get-option "theme") ; => "dracula"
+#+end_src
+
+*Category:* options
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

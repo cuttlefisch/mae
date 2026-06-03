@@ -1,0 +1,51 @@
+:PROPERTIES:
+:ID: tutorial:basic-editing
+:KIND: tutorial
+:END:
+#+title: Tutorial: Basic Editing
+#+filetags: :tutorial:beginner:
+
+* Basic Editing
+
+*Prerequisite:* [[requires:tutorial:basic-movement][Basic Movement]]
+
+** Entering Insert mode
+- =i= -- insert before cursor
+- =a= -- insert after cursor
+- =o= -- open new line below
+- =O= -- open new line above
+- =Escape= -- return to Normal mode
+
+** Deleting
+- =x= -- delete character under cursor
+- =dd= -- delete entire line
+- =dw= -- delete from cursor to next word
+- =d$= -- delete to end of line
+
+** Copy and paste
+- =yy= -- yank (copy) entire line
+- =yw= -- yank word
+- =p= -- paste after cursor
+- =P= -- paste before cursor
+
+** Undo and redo
+- =u= -- undo
+- =Ctrl-r= -- redo
+
+** Saving and quitting
+- =:w= -- save
+- =:q= -- quit
+- =:wq= -- save and quit
+- =:q!= -- quit without saving
+
+** The dot command
+=.= repeats your last edit. Delete a word with =dw=, then press =.= to delete another.
+
+*Next:* [[id:tutorial:mae-navigation][MAE Navigation]]
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

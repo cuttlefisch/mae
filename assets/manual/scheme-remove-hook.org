@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:remove-hook!
+:KIND: scheme_api
+:END:
+#+title: Scheme: remove-hook!
+#+filetags: :scheme:api:hooks:
+
+** Signature
+#+begin_src scheme
+(remove-hook! HOOK-NAME FN-NAME)
+#+end_src
+
+Remove a function from a hook.
+
+** Example
+#+begin_src scheme
+(remove-hook! "buffer-open" "my-on-open")
+#+end_src
+
+*Category:* hooks
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

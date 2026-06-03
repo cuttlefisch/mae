@@ -204,6 +204,10 @@ impl Editor {
                     ) {
                         Ok((kb, report)) => {
                             let health = mae_kb::ImportHealth::from_kb(&kb);
+                            // Retain the CozoDB store handle for runtime queries.
+                            self.kb
+                                .instance_stores
+                                .insert(uuid.clone(), std::sync::Arc::new(store));
                             (kb, report, health)
                         }
                         Err(e) => {
@@ -271,6 +275,9 @@ impl Editor {
             health,
         };
 
+        // Rebuild the query layer to include the new instance.
+        self.kb.rebuild_query_layer();
+
         self.set_status(result.status_summary());
         Some(result)
     }
@@ -281,11 +288,14 @@ impl Editor {
         match found {
             Some(uuid) => {
                 self.kb.instances.remove(&uuid);
+                self.kb.instance_stores.remove(&uuid);
                 self.kb.watchers.remove(&uuid);
                 self.kb.registry.unregister(name_or_uuid);
                 if let Some(data_dir) = self.mae_data_dir() {
                     let _ = self.kb.registry.save(&data_dir);
                 }
+                // Rebuild query layer without the removed instance.
+                self.kb.rebuild_query_layer();
                 self.set_status(format!("KB instance '{}' unregistered", name_or_uuid));
             }
             None => {
@@ -641,6 +651,11 @@ impl Editor {
 
     /// Collect all KB node (id, title) pairs from local + federated instances.
     pub fn kb_all_node_pairs(&self) -> Vec<(String, String)> {
+        if let Some(q) = self.kb.query_layer() {
+            let mut pairs = q.id_title_pairs(None);
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            return pairs;
+        }
         let mut pairs: Vec<(String, String)> = self.kb.primary.all_id_title_pairs();
         let mut seen: std::collections::HashSet<String> =
             pairs.iter().map(|(id, _)| id.clone()).collect();
@@ -661,15 +676,26 @@ impl Editor {
     /// Sorted according to `kb_search_sort` option: alphabetical (default/relevance),
     /// activity (recent first), or alphabetical.
     pub fn kb_all_node_triples(&self) -> Vec<(String, String, String)> {
-        let mut triples: Vec<(String, String, String)> =
-            self.kb.primary.all_id_title_body_triples();
+        let mut triples: Vec<(String, String, String)> = if let Some(q) = self.kb.query_layer() {
+            q.list_ids(None)
+                .into_iter()
+                .filter_map(|id| {
+                    let n = q.get(&id)?;
+                    Some((id, n.title, n.body))
+                })
+                .collect()
+        } else {
+            self.kb.primary.all_id_title_body_triples()
+        };
         let mut seen: std::collections::HashSet<String> =
             triples.iter().map(|(id, _, _)| id.clone()).collect();
 
-        for kb in self.kb.instances.values() {
-            for (id, title, body) in kb.all_id_title_body_triples() {
-                if seen.insert(id.clone()) {
-                    triples.push((id, title, body));
+        if self.kb.query_layer().is_none() {
+            for kb in self.kb.instances.values() {
+                for (id, title, body) in kb.all_id_title_body_triples() {
+                    if seen.insert(id.clone()) {
+                        triples.push((id, title, body));
+                    }
                 }
             }
         }
@@ -701,6 +727,12 @@ impl Editor {
         weights: &mae_kb::activity::ActivityWeights,
         today: (i32, u32, u32),
     ) -> f64 {
+        if let Some(q) = self.kb.query_layer() {
+            if let Some(node) = q.get(id) {
+                return mae_kb::activity::activity_score(&node.properties, weights, today);
+            }
+            return 0.0;
+        }
         if let Some(node) = self.kb.primary.get(id) {
             return mae_kb::activity::activity_score(&node.properties, weights, today);
         }
@@ -932,18 +964,27 @@ impl Editor {
         // Only validate KB-sourced buffers (have a source_file or daily: prefix)
         let node_id: Option<String> = buf.file_path().and_then(|path| {
             // Find a node whose source_file matches this path
-            self.kb
-                .primary
-                .all_id_title_pairs()
-                .into_iter()
-                .find_map(|(id, _)| {
-                    self.kb.primary.get(&id).and_then(|n| {
-                        n.source_file
-                            .as_ref()
-                            .filter(|sf| sf.as_path() == path)
-                            .map(|_| id.clone())
-                    })
+            if let Some(q) = self.kb.query_layer() {
+                q.list_ids(None).into_iter().find(|id| {
+                    q.get(id)
+                        .and_then(|n| n.source_file)
+                        .map(|sf| sf.as_path() == path)
+                        .unwrap_or(false)
                 })
+            } else {
+                self.kb
+                    .primary
+                    .all_id_title_pairs()
+                    .into_iter()
+                    .find_map(|(id, _)| {
+                        self.kb.primary.get(&id).and_then(|n| {
+                            n.source_file
+                                .as_ref()
+                                .filter(|sf| sf.as_path() == path)
+                                .map(|_| id.clone())
+                        })
+                    })
+            }
         });
 
         // Also check dailies buffers
@@ -957,12 +998,19 @@ impl Editor {
         });
 
         if let Some(id) = node_id {
-            let missing = self.kb.primary.validate_links(&id);
-            // Also check federated instances for the targets
-            let missing: Vec<_> = missing
-                .into_iter()
-                .filter(|target| !self.kb.instances.values().any(|kb| kb.contains(target)))
-                .collect();
+            let missing: Vec<String> = if let Some(q) = self.kb.query_layer() {
+                q.links_from(&id)
+                    .into_iter()
+                    .filter(|l| !q.contains(&l.dst))
+                    .map(|l| l.dst)
+                    .collect()
+            } else {
+                let m = self.kb.primary.validate_links(&id);
+                // Also check federated instances for the targets
+                m.into_iter()
+                    .filter(|target| !self.kb.instances.values().any(|kb| kb.contains(target)))
+                    .collect()
+            };
             if !missing.is_empty() {
                 self.set_status(format!(
                     "Warning: {} broken link(s) in this node",
@@ -977,9 +1025,12 @@ impl Editor {
     /// Returns the number of orphans removed.
     pub fn kb_cleanup_orphans(&mut self) -> usize {
         let seed_prefixes = ["cmd:", "concept:", "lesson:", "scheme:", "option:"];
-        let report = self.kb.primary.health_report();
-        let to_remove: Vec<String> = report
-            .orphan_ids
+        let orphan_ids: Vec<String> = if let Some(q) = self.kb.query_layer() {
+            q.health_report().map(|r| r.orphan_ids).unwrap_or_default()
+        } else {
+            self.kb.primary.health_report().orphan_ids
+        };
+        let to_remove: Vec<String> = orphan_ids
             .into_iter()
             .filter(|id| !seed_prefixes.iter().any(|p| id.starts_with(p)))
             .collect();
@@ -1789,6 +1840,153 @@ impl Editor {
                 self.set_status(format!("Query failed: {}", e));
             }
         }
+    }
+
+    // --- Meta-node narrow/widen editing (Phase 7) ---
+
+    /// Narrow to a meta-node component for editing.
+    ///
+    /// If the current help buffer shows a meta-node, presents its members
+    /// for selection. On selection, opens the member node's body in a
+    /// new buffer for editing.
+    pub fn kb_narrow_meta(&mut self) {
+        // Get current KB view's node ID.
+        let node_id = match self.buffers[self.active_buffer_idx()].kb_view() {
+            Some(hv) => hv.current.clone(),
+            None => {
+                self.set_status("kb-narrow: not in a KB view");
+                return;
+            }
+        };
+
+        // Query meta-node members from the store.
+        let members = if let Some(ref store) = self.kb.store {
+            match store.meta_members(&node_id) {
+                Ok(m) if !m.is_empty() => m,
+                Ok(_) => {
+                    self.set_status(format!("'{}' has no meta-members", node_id));
+                    return;
+                }
+                Err(e) => {
+                    self.set_status(format!("kb-narrow: {}", e));
+                    return;
+                }
+            }
+        } else {
+            self.set_status("kb-narrow: no KB store available");
+            return;
+        };
+
+        // Build completion list from members.
+        let items: Vec<(String, String)> = members
+            .iter()
+            .map(|m| {
+                let title = if let Some(q) = self.kb.query_layer() {
+                    q.get(&m.member_id).map(|n| n.title)
+                } else {
+                    self.kb.primary.get(&m.member_id).map(|n| n.title.clone())
+                }
+                .unwrap_or_else(|| m.member_id.clone());
+                (m.member_id.clone(), format!("{} ({})", title, m.role))
+            })
+            .collect();
+
+        // For simplicity, if there's only one member, open it directly.
+        // Otherwise, show first member (full completion UI deferred).
+        let member_id = &items[0].0;
+        self.kb_open_member_for_editing(&node_id, member_id);
+    }
+
+    /// Open a meta-node member for editing in a new buffer.
+    ///
+    /// Buffer name encodes both IDs: `*kb-narrow:META_ID:MEMBER_ID*`
+    fn kb_open_member_for_editing(&mut self, meta_id: &str, member_id: &str) {
+        let node = if let Some(q) = self.kb.query_layer() {
+            q.get(member_id)
+        } else {
+            self.kb.primary.get(member_id).cloned()
+        };
+        let node = match node {
+            Some(n) => n,
+            None => {
+                self.set_status(format!("Node '{}' not found", member_id));
+                return;
+            }
+        };
+
+        // Create an edit buffer with the node's body.
+        let buf_name = format!("*kb-narrow:{}:{}*", meta_id, member_id);
+        let mut buf = crate::Buffer::new();
+        buf.name = buf_name;
+        buf.insert_text_at(0, &node.body);
+        buf.modified = false;
+
+        self.buffers.push(buf);
+        let idx = self.buffers.len() - 1;
+        self.display_buffer(idx);
+        self.set_status(format!(
+            "Narrowed to '{}' — :kb-widen to save and return",
+            member_id
+        ));
+    }
+
+    /// Parse meta_id and member_id from a `*kb-narrow:META:MEMBER*` buffer name.
+    fn parse_narrow_buffer_name(name: &str) -> Option<(String, String)> {
+        let inner = name.strip_prefix("*kb-narrow:")?.strip_suffix('*')?;
+        let colon = inner.find(':')?;
+        let meta_id = &inner[..colon];
+        let member_id = &inner[colon + 1..];
+        if meta_id.is_empty() || member_id.is_empty() {
+            return None;
+        }
+        Some((meta_id.to_string(), member_id.to_string()))
+    }
+
+    /// Save edits from a narrowed meta-node component and widen back.
+    pub fn kb_widen_meta(&mut self) {
+        let idx = self.active_buffer_idx();
+        let buf_name = self.buffers[idx].name.clone();
+
+        // Check if this is a narrowed KB buffer.
+        let (meta_id, member_id) = match Self::parse_narrow_buffer_name(&buf_name) {
+            Some(ids) => ids,
+            None => {
+                self.set_status("kb-widen: not in a narrowed KB buffer");
+                return;
+            }
+        };
+
+        // Extract edited content.
+        let new_body = self.buffers[idx].text().to_string();
+
+        // Update the node in the primary KB.
+        if let Some(node) = self.kb.primary.get_mut(&member_id) {
+            node.body.clone_from(&new_body);
+        }
+
+        // Update in the CozoDB store if available.
+        if let Some(ref store) = self.kb.store {
+            if let Some(node) = self.kb.primary.get(&member_id) {
+                let _ = store.save_all(&[node]);
+            }
+            // Recompose the meta-node body.
+            if let Ok(composed) = store.compose_meta_body(&meta_id) {
+                if let Some(meta_node) = self.kb.primary.get_mut(&meta_id) {
+                    meta_node.body = composed;
+                }
+            }
+        }
+
+        // Close the narrow buffer and return.
+        self.buffers.remove(idx);
+        for win in self.window_mgr.iter_windows_mut() {
+            if win.buffer_idx >= idx {
+                win.buffer_idx = win.buffer_idx.saturating_sub(1);
+            }
+        }
+        let ret = idx.min(self.buffers.len().saturating_sub(1));
+        self.display_buffer(ret);
+        self.set_status(format!("Widened from '{}', changes saved", member_id));
     }
 }
 

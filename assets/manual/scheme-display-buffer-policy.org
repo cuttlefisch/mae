@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:display-buffer-policy
+:KIND: scheme_api
+:END:
+#+title: Scheme: display-buffer-policy
+#+filetags: :scheme:api:configuration:
+
+** Signature
+#+begin_src scheme
+(display-buffer-policy KIND)
+#+end_src
+
+Query the active display rule for a BufferKind. Returns a string like "reuse-or-split:vertical:0.5" or "avoid-conversation".
+
+** Example
+#+begin_src scheme
+(display-buffer-policy "help")
+#+end_src
+
+*Category:* configuration
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:string-trim
+:KIND: scheme_api
+:END:
+#+title: Scheme: string-trim
+#+filetags: :scheme:api:string-utils:
+
+** Signature
+#+begin_src scheme
+(string-trim STR)
+#+end_src
+
+Remove leading and trailing whitespace from STR.
+
+** Example
+#+begin_src scheme
+(string-trim "  hello  ") ; => "hello"
+#+end_src
+
+*Category:* string-utils
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

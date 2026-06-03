@@ -1,0 +1,53 @@
+:PROPERTIES:
+:ID: tutorial:mae-navigation
+:KIND: tutorial
+:END:
+#+title: Tutorial: MAE Navigation
+#+filetags: :tutorial:
+
+* MAE Navigation
+
+MAE's *SPC leader* gives fast access to every subsystem.
+
+** Files
+- =SPC f f= -- fuzzy find file in project
+- =SPC f d= -- file browser (directory listing)
+- =SPC f t= -- toggle file tree sidebar
+- =SPC f r= -- recent files
+- =SPC f c= -- edit config (init.scm)
+
+** Buffers
+- =SPC b b= -- switch buffer (fuzzy palette)
+- =SPC b d= -- close current buffer
+- =SPC b n= / =SPC b p= -- next / previous buffer
+
+** Windows
+- =SPC w v= -- split vertically
+- =SPC w s= -- split horizontally
+- =SPC w h/j/k/l= -- focus left/down/up/right window
+- =SPC w q= -- close window
+- =SPC w == -- balance window sizes
+
+** Project
+- =SPC p s= -- search text in project (grep)
+- =SPC p f= -- find file in project
+
+** Search
+- =/= -- search in current buffer
+- =SPC p s= -- search across project
+- =SPC SPC= -- command palette (search for any command)
+
+** Help
+- =SPC h= -- help menu
+- =SPC h s= -- search help topics
+- =SPC h k= -- describe key
+- =:help topic= -- look up a topic
+
+*Next:* [[id:tutorial:mae-extending][Extending MAE]]
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

@@ -1,0 +1,28 @@
+:PROPERTIES:
+:ID: concept:keymap-inheritance
+:KIND: concept
+:END:
+#+title: Keymap Inheritance
+#+filetags: :data-model:modal-editing:extensibility:
+
+**Keymap inheritance** lets buffer-kind overlay keymaps (git-status, help, debug, file-tree) inherit bindings from a parent keymap.
+
+## Mechanism
+- `Keymap` has a `parent: Option<String>` field.
+- Key lookup: overlay keymap -> parent -> fallback.
+- `which_key_entries_for_current_keymap()` merges overlay + parent entries for the which-key popup.
+
+## Scheme API
+`(define-keymap "name" "parent")` creates a keymap with inheritance.
+
+## Current Overlay Keymaps
+| Keymap | Parent | Buffer Kind |
+|--------|--------|-------------|
+| `git-status` | `normal` | GitStatus |
+| `help` | `normal` | Help |
+| `debug` | `normal` | Debug |
+| `file-tree` | `normal` | FileTree |
+
+[[part_of:concept:mode][Part of Mode]].
+
+See also: [[references:concept:mode][Mode]], [[references:concept:buffer-mode][BufferMode Trait]]

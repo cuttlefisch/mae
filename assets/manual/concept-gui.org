@@ -1,0 +1,30 @@
+:PROPERTIES:
+:ID: concept:gui
+:KIND: concept
+:END:
+#+title: GUI Backend
+#+filetags: :rendering:gui:
+
+MAE has a **dual rendering backend** — terminal (ratatui/crossterm) and GUI (winit + Skia 2D). Both backends share the same editor core, commands, and AI integration.
+
+** Launching
+- `mae --gui file.rs` — hardware-accelerated GUI window.
+- `mae file.rs` — terminal mode (default).
+- Desktop launcher: installed via `make install` to `~/.local/share/applications/mae.desktop`.
+
+** GUI features
+- **Mouse support:** click to place cursor, wheel scroll.
+- **Font configuration:** `config.toml` `[editor] font_size = 14.0` or `:set font_size 16`.
+- **Dirty-flag rendering:** GPU idle when nothing changes (~0% CPU).
+- **Shell colors:** terminal emulator respects editor theme.
+- **Shell scrollback:** Shift-PageUp/PageDown.
+- **FPS overlay:** `SPC t F` or `:set show_fps true`.
+
+** Architecture
+The `Renderer` trait (in `mae-renderer`) defines the backend-agnostic HAL. The `mae-gui` crate implements it using winit for windowing and skia-safe for 2D rendering. The terminal backend uses ratatui/crossterm. The binary selects the backend at startup based on `--gui`.
+
+** Event loop
+- **Terminal:** `crossterm::EventStream` + tokio `select!`.
+- **GUI:** `winit::pump_app_events()` + tokio `select!` with dirty-flag gating.
+
+See also: [[concept:terminal]], [[concept:mode]], [[index]]

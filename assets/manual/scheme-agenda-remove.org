@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:agenda-remove!
+:KIND: scheme_api
+:END:
+#+title: Scheme: agenda-remove!
+#+filetags: :scheme:api:agenda:
+
+** Signature
+#+begin_src scheme
+(agenda-remove! FILE)
+#+end_src
+
+Remove an org file from the agenda sources list.
+
+** Example
+#+begin_src scheme
+(agenda-remove! "~/org/todo.org")
+#+end_src
+
+*Category:* agenda
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

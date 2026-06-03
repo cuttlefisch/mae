@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:module
+:KIND: concept
+:END:
+#+title: Module
+#+filetags: :terminology:
+
+A self-contained package of commands, keybindings, hooks, and options. Modules have a =module.toml= manifest, =autoloads.scm= (eager registration), and =init.scm= (lazy initialization). Modules are Scheme-only packages; Rust-level changes go through the kernel.

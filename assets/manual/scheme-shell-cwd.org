@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:shell-cwd
+:KIND: scheme_api
+:END:
+#+title: Scheme: shell-cwd
+#+filetags: :scheme:api:shell:
+
+** Signature
+#+begin_src scheme
+(shell-cwd BUF-IDX)
+#+end_src
+
+Return the current working directory of a shell buffer.
+
+** Example
+#+begin_src scheme
+(shell-cwd 1)
+#+end_src
+
+*Category:* shell
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

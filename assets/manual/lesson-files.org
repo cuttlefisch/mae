@@ -1,0 +1,27 @@
+:PROPERTIES:
+:ID: lesson:files
+:KIND: lesson
+:END:
+#+title: Lesson 4: Files & Buffers
+#+filetags: :tutorial:
+
+** Lesson 4: Files & Buffers
+
+Prerequisites: [[requires:lesson:editing][Lesson 3: Editing]]
+
+A [[teaches:concept:buffer][buffer]] is the unit of editable content in MAE.
+
+*** File commands
+  ~:w~ — [[cmd:save][save]] file
+  ~:e <file>~ — open file
+  ~:q~ — quit (fails if unsaved)
+  ~:wq~ or ~:x~ — save and quit
+
+*** Leader shortcuts
+  ~SPC f f~ — find file (fuzzy picker)
+  ~SPC f d~ — file browser
+  ~SPC f t~ — file tree sidebar
+  ~SPC b b~ — switch buffer (palette)
+  ~SPC b d~ — close buffer
+
+*Prev:* [[lesson:editing][Lesson 3]]  |  *Next:* [[lesson:ai][Lesson 5: AI]]  |  *Index:* [[tutor:index][Tutorial]]

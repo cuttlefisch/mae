@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:set-local-option!
+:KIND: scheme_api
+:END:
+#+title: Scheme: set-local-option!
+#+filetags: :scheme:api:options:
+
+** Signature
+#+begin_src scheme
+(set-local-option! KEY VALUE)
+#+end_src
+
+Set a buffer-local option on the active buffer.
+
+** Example
+#+begin_src scheme
+(set-local-option! "word_wrap" "true")
+#+end_src
+
+*Category:* options
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

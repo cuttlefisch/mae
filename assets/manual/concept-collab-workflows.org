@@ -1,0 +1,66 @@
+:PROPERTIES:
+:ID: concept:collab-workflows
+:KIND: concept
+:ALIASES: collab workflows, loopback, multi-user
+:END:
+#+title: Collaborative Editing Workflows
+#+filetags: :workflow:sync:collaboration:
+
+**Collaborative Editing Workflows** — practical recipes for the three tiers of MAE collaboration.
+
+** Solo Mode
+No state server is required. MAE operates entirely locally. All edits are still yrs transactions, which means:
+- Full undo/redo with per-user attribution
+- Zero configuration changes needed
+- Instant upgrade path to loopback or collaborative mode
+
+** Loopback Mode (Local Multi-Agent)
+Run `mae-state-server` on the same machine to coordinate multiple MAE instances or AI agents on the same project.
+
+```bash
+mae-state-server                      # listens on 127.0.0.1:9473
+```
+
+Then in each MAE instance:
+```scheme
+(set-option! "collab-server-address" "127.0.0.1:9473")
+(set-option! "collab-auto-connect" "true")
+```
+
+Or interactively: `SPC C s` to start a local server, `SPC C c` to connect.
+
+** Collaborative Mode (Multi-User)
+Point all clients at a shared server:
+```scheme
+(set-option! "collab-server-address" "192.168.1.10:9473")
+```
+
+The server can be started with:
+```bash
+mae-state-server --bind 0.0.0.0:9473
+```
+
+> **Security:** PSK mutual authentication (HMAC-SHA256) is required since v0.11.0.
+> Set `collab_psk` on both server and clients. For untrusted networks, use a VPN.
+
+** Commands
+| Key | Command | Description |
+|-----|---------|-------------|
+| `SPC C s` | `:collab-start-server` | Start a local state server |
+| `SPC C c` | `:collab-connect` | Connect to configured server |
+| `SPC C d` | `:collab-disconnect` | Disconnect from server |
+| `SPC C S` | `:collab-share-buffer` | Share current buffer with peers |
+| `SPC C i` | `:collab-status` | Show connection + peer status |
+
+** Configuration Options
+| Option | Default | Description |
+|--------|---------|-------------|
+| `collab-server-address` | `""` | Server host:port (empty = solo mode) |
+| `collab-auto-connect` | `"false"` | Connect on startup if address is set |
+
+** Diagnostics
+- `:collab-doctor` — comprehensive diagnostic: server reachability, WAL health, peer list
+- `:collab-status` — live connection state, document list, peer cursors
+- `mae doctor` (CLI) — checks state-server process, port binding, WAL integrity
+
+See also: [[references:concept:collab-architecture][Collaborative Editing Architecture]], [[lesson:collab-setup]], [[concept:sync-engine]], [[index]]

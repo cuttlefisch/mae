@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:ai-tool-param!
+:KIND: scheme_api
+:END:
+#+title: Scheme: ai-tool-param!
+#+filetags: :scheme:api:ai-tools:
+
+** Signature
+#+begin_src scheme
+(ai-tool-param! TOOL-NAME PARAM-NAME TYPE DESCRIPTION REQUIRED)
+#+end_src
+
+Add a parameter definition to a registered AI tool.
+
+** Example
+#+begin_src scheme
+(ai-tool-param! "my-tool" "query" "string" "Search query" #t)
+#+end_src
+
+*Category:* ai-tools
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

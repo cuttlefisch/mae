@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:it-test
+:KIND: scheme_api
+:END:
+#+title: Scheme: it-test
+#+filetags: :scheme:api:testing:
+
+** Signature
+#+begin_src scheme
+(it-test NAME THUNK)
+#+end_src
+
+Register a test within a describe-group. NAME is prefixed with the group name. THUNK is the test body.
+
+** Example
+#+begin_src scheme
+(it-test "inserts text" (lambda () (buffer-insert "hello") (should-equal (buffer-string) "hello")))
+#+end_src
+
+*Category:* testing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

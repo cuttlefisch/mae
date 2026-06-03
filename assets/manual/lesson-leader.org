@@ -1,0 +1,33 @@
+:PROPERTIES:
+:ID: lesson:leader
+:KIND: lesson
+:END:
+#+title: Lesson 10: Leader Keys
+#+filetags: :tutorial:
+
+** Lesson 10: Leader Keys
+
+Prerequisites: [[requires:lesson:help][Lesson 9: Help System]]
+
+~SPC~ is the leader key (Doom Emacs style). Press ~SPC~ and wait to see available sub-keys in the which-key popup.
+
+*** Key groups
+| Prefix | Group | Examples |
+|--------+-------+----------|
+| ~SPC f~ | +file | ~SPC f f~ find, ~SPC f s~ save |
+| ~SPC b~ | +buffer | ~SPC b b~ switch, ~SPC b d~ kill |
+| ~SPC w~ | +window | ~SPC w v~ vsplit, ~SPC w s~ hsplit |
+| ~SPC a~ | +ai | ~SPC a p~ prompt, ~SPC a a~ agent |
+| ~SPC h~ | +help | ~SPC h h~ index, ~SPC h k~ describe key |
+| ~SPC t~ | +toggle | ~SPC t t~ theme, ~SPC t l~ line nums |
+| ~SPC l~ | +lsp | ~SPC l d~ diagnostics |
+| ~SPC d~ | +debug | ~SPC d b~ breakpoint, ~SPC d c~ continue |
+| ~SPC p~ | +project | ~SPC p f~ find file, ~SPC p s~ search |
+| ~SPC e~ | +eval | ~SPC e e~ eval line, ~SPC e b~ eval buffer |
+| ~SPC q~ | +quit | ~SPC q q~ quit |
+
+See [[key:leader-keys][full leader key reference]] for the complete list.
+
+See also: [[teaches:concept:command][Commands]], [[index][Help Index]]
+
+*Prev:* [[lesson:help][Lesson 9]]  |  *Next:* [[lesson:debugging][Lesson 11: Debugging]]  |  *Index:* [[tutor:index][Tutorial]]

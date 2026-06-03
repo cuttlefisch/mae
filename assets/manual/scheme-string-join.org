@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:string-join
+:KIND: scheme_api
+:END:
+#+title: Scheme: string-join
+#+filetags: :scheme:api:string-utils:
+
+** Signature
+#+begin_src scheme
+(string-join LIST SEPARATOR)
+#+end_src
+
+Join a list of strings with SEPARATOR.
+
+** Example
+#+begin_src scheme
+(string-join '("a" "b" "c") ",") ; => "a,b,c"
+#+end_src
+
+*Category:* string-utils
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

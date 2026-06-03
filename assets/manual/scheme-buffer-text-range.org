@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:buffer-text-range
+:KIND: scheme_api
+:END:
+#+title: Scheme: buffer-text-range
+#+filetags: :scheme:api:buffer-read:
+
+** Signature
+#+begin_src scheme
+(buffer-text-range START END)
+#+end_src
+
+Return a substring of the active buffer from char START to END.
+
+** Example
+#+begin_src scheme
+(buffer-text-range 0 100)
+#+end_src
+
+*Category:* buffer-read
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

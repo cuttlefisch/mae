@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::org::parse_org_multi_result;
 use crate::store::KbStoreError;
 use crate::{KnowledgeBase, Node};
 
@@ -454,15 +455,16 @@ pub fn import_org_dir_to_store(
             }
         }
 
-        // Parse and ingest the file.
-        let nodes = crate::org::parse_org_multi(&content);
-        if nodes.is_empty() {
+        // Parse with typed link support (query known rel types from store).
+        let known_rel_types = store.known_rel_types().ok();
+        let parse_result = parse_org_multi_result(&content, known_rel_types.as_ref());
+        if parse_result.nodes.is_empty() {
             report.nodes_skipped += 1;
             continue;
         }
 
         let mut file_node_ids = Vec::new();
-        for mut node in nodes {
+        for mut node in parse_result.nodes {
             node.source_file = Some(path.to_path_buf());
             report.links_created += node.links().len();
 
@@ -487,6 +489,20 @@ pub fn import_org_dir_to_store(
                 report
                     .duplicate_ids
                     .push((node.id.clone(), path.to_path_buf()));
+            }
+        }
+
+        // Wire typed links to CozoDB.
+        for (src_id, link) in &parse_result.typed_links {
+            if let Err(e) = store.add_typed_link(src_id, &link.target, &link.rel_type, 1.0) {
+                tracing::debug!(src = %src_id, dst = %link.target, rel = %link.rel_type, error = %e, "typed link insert failed");
+            }
+        }
+
+        // Wire transclusions to meta_members.
+        for (order, (meta_id, member_id, role)) in parse_result.transclusions.iter().enumerate() {
+            if let Err(e) = store.add_meta_member(meta_id, member_id, order as i32, role) {
+                tracing::debug!(meta = %meta_id, member = %member_id, error = %e, "meta_member insert failed");
             }
         }
 

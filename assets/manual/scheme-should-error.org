@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:should-error
+:KIND: scheme_api
+:END:
+#+title: Scheme: should-error
+#+filetags: :scheme:api:testing:
+
+** Signature
+#+begin_src scheme
+(should-error THUNK)
+#+end_src
+
+Assert THUNK signals an error. Passes if an error is raised, fails if THUNK returns normally.
+
+** Example
+#+begin_src scheme
+(should-error (lambda () (error "expected")))
+#+end_src
+
+*Category:* testing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

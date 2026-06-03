@@ -177,7 +177,11 @@ fn execute_kb_share(editor: &mut Editor, args: &Value) -> Result<String, String>
 
     // Collect node IDs from the named KB.
     let node_ids: Vec<String> = if kb_name == mae_core::KB_DEFAULT_NAME || kb_name == "primary" {
-        editor.kb.primary.list_ids(None)
+        if let Some(q) = editor.kb.query_layer() {
+            q.list_ids(None)
+        } else {
+            editor.kb.primary.list_ids(None)
+        }
     } else if let Some(kb) = editor.kb.instances.get(&kb_name) {
         kb.list_ids(None)
     } else {

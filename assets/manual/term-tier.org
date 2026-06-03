@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:tier
+:KIND: concept
+:END:
+#+title: Tier
+#+filetags: :terminology:
+
+AI permission level controlling what actions the agent can take. Tiers: ReadOnly (read buffers, navigate), Write (edit buffers, create files), Shell (execute shell commands), Privileged (all operations). Set via config.toml or =MAE_AI_PERMISSIONS= env var.

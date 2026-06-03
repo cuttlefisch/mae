@@ -46,6 +46,7 @@ graph TD
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
     mae_scheme --> mae_core
+    mae_scheme --> mae_kb
     mae_scheme --> mae_sync
     mae_shell[mae-shell]
     mae_snippets[mae-snippets]
@@ -255,7 +256,9 @@ Source: `crates/kb/src/lib.rs`
 | `org` | mod |
 | `store` | mod |
 | `watch` | mod |
+| `cache` | mod |
 | `cozo_store` | mod |
+| `query` | mod |
 | `NodeKind` | enum |
 | `SubgraphSpec` | struct |
 | `SubgraphResult` | struct |
@@ -475,6 +478,19 @@ Source: `crates/sync/src/lib.rs`
 | `kb-history` | `crates/scheme/src/runtime.rs` |
 | `kb-restore` | `crates/scheme/src/runtime.rs` |
 | `kb-raw-query` | `crates/scheme/src/runtime.rs` |
+| `kb-add-link!` | `crates/scheme/src/runtime.rs` |
+| `kb-remove-link!` | `crates/scheme/src/runtime.rs` |
+| `kb-add-meta-member!` | `crates/scheme/src/runtime.rs` |
+| `kb-remove-meta-member!` | `crates/scheme/src/runtime.rs` |
+| `kb-compose-meta` | `crates/scheme/src/runtime.rs` |
+| `kb-add-rel-type!` | `crates/scheme/src/runtime.rs` |
+| `kb-links-from` | `crates/scheme/src/runtime.rs` |
+| `kb-links-to` | `crates/scheme/src/runtime.rs` |
+| `kb-links-typed` | `crates/scheme/src/runtime.rs` |
+| `kb-meta-members` | `crates/scheme/src/runtime.rs` |
+| `kb-rel-types` | `crates/scheme/src/runtime.rs` |
+| `kb-get-block` | `crates/scheme/src/runtime.rs` |
+| `kb-block-count` | `crates/scheme/src/runtime.rs` |
 | `deprecate-function!` | `crates/scheme/src/runtime.rs` |
 | `register-ai-tool!` | `crates/scheme/src/runtime.rs` |
 | `ai-tool-param!` | `crates/scheme/src/runtime.rs` |
@@ -558,7 +574,7 @@ Source: `crates/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (509 built-in)
+## Commands (511 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1001,6 +1017,8 @@ Source: `crates/sync/src/lib.rs`
 | `daily-prev` | Navigate to previous daily note (SPC n d p) |
 | `daily-next` | Navigate to next daily note (SPC n d n) |
 | `kb-audit` | Run KB audit report (SPC n H a) |
+| `kb-narrow` | Narrow to a meta-node component for editing |
+| `kb-widen` | Save edits and widen back from narrowed meta-node component |
 | `capture-finalize` | Save note and return from capture (C-c C-c) |
 | `capture-abort` | Abort capture, delete note (C-c C-k) |
 | `kb-insert-link` | Insert org-style link to a KB node at cursor (SPC n i) |

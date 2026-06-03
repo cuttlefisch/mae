@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:autoload
+:KIND: concept
+:END:
+#+title: Autoload
+#+filetags: :terminology:
+
+A command stub that loads its module on first use. Registered via =(autoload cmd-name feature doc)= in =autoloads.scm=. When the command is invoked, MAE loads the feature's =init.scm=, then re-dispatches.

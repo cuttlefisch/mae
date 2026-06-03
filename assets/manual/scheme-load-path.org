@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:load-path
+:KIND: scheme_api
+:END:
+#+title: Scheme: load-path
+#+filetags: :scheme:api:packages:
+
+** Signature
+#+begin_src scheme
+(load-path)
+#+end_src
+
+Return the current load-path as a list of directory strings.
+
+** Example
+#+begin_src scheme
+(load-path)
+#+end_src
+
+*Category:* packages
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

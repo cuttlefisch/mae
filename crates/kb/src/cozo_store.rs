@@ -1115,6 +1115,10 @@ impl KbStore for CozoKbStore {
         CozoKbStore::links_typed(self, id, rel_type)
     }
 
+    fn known_rel_types(&self) -> Result<std::collections::HashSet<String>, KbStoreError> {
+        CozoKbStore::known_rel_types(self)
+    }
+
     fn shortest_path(&self, from: &str, to: &str) -> Result<Vec<String>, KbStoreError> {
         CozoKbStore::shortest_path(self, from, to)
     }
@@ -1143,6 +1147,10 @@ impl KbStore for CozoKbStore {
 
     fn remove_meta_member(&self, meta_id: &str, member_id: &str) -> Result<(), KbStoreError> {
         CozoKbStore::remove_meta_member(self, meta_id, member_id)
+    }
+
+    fn compose_meta_body(&self, meta_id: &str) -> Result<String, KbStoreError> {
+        CozoKbStore::compose_meta_body(self, meta_id)
     }
 
     fn get_blocks(&self, parent_id: &str) -> Result<Vec<Block>, KbStoreError> {
@@ -1177,6 +1185,14 @@ impl KbStore for CozoKbStore {
         CozoKbStore::graphrag_search(self, vec, k)
     }
 
+    fn health_report(&self) -> Result<HealthReport, KbStoreError> {
+        CozoKbStore::health_report(self)
+    }
+
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
+        CozoKbStore::id_title_pairs(self, prefix)
+    }
+
     fn backend_name(&self) -> &str {
         "cozo"
     }
@@ -1191,6 +1207,19 @@ impl KbStore for CozoKbStore {
 // ---------------------------------------------------------------------------
 
 impl CozoKbStore {
+    /// Query all known relationship type names from the `rel_types` relation.
+    /// Returns a set of type names (e.g., "teaches", "implements", "references").
+    pub fn known_rel_types(&self) -> Result<std::collections::HashSet<String>, KbStoreError> {
+        let result = self
+            .run_immut("?[name] := *rel_types{name}")
+            .map_err(cozo_err)?;
+        Ok(result
+            .rows
+            .iter()
+            .filter_map(|row| row.first()?.get_str().map(|s| s.to_string()))
+            .collect())
+    }
+
     /// Add a typed link between nodes with confidence score.
     pub fn add_typed_link(
         &self,
@@ -1270,273 +1299,21 @@ impl CozoKbStore {
     }
 
     /// Seed typed relationships between known seed nodes.
+    ///
+    /// Since v0.13.0, content relationships (lesson→concept, concept→concept)
+    /// are expressed as inline typed links in org files and extracted by the
+    /// org parser during ingestion. This function now only seeds relationships
+    /// that can't be expressed in org files (code-generated nodes like cmd:*).
+    ///
     /// Idempotent — uses :put (upsert) so re-running is safe.
     pub fn seed_typed_relationships(&self) -> Result<usize, KbStoreError> {
         let now = self.now_epoch();
-        // (src, dst, rel_type, weight)
+        // Only code-generated relationships remain here.
+        // Content relationships (lesson↔concept, concept↔concept, tutorial chains)
+        // are now inline typed links in assets/manual/*.org files.
         let relationships: Vec<(&str, &str, &str, f64)> = vec![
-            // --- Lesson prerequisite chain (requires) ---
-            ("lesson:modes", "lesson:navigation", "requires", 1.0),
-            ("lesson:editing", "lesson:modes", "requires", 1.0),
-            ("lesson:files", "lesson:editing", "requires", 1.0),
-            ("lesson:ai", "lesson:files", "requires", 1.0),
-            ("lesson:scheme", "lesson:ai", "requires", 1.0),
-            ("lesson:lsp", "lesson:scheme", "requires", 1.0),
-            ("lesson:terminal", "lesson:lsp", "requires", 1.0),
-            ("lesson:help", "lesson:terminal", "requires", 1.0),
-            ("lesson:leader", "lesson:help", "requires", 1.0),
-            ("lesson:debugging", "lesson:leader", "requires", 1.0),
-            ("lesson:observability", "lesson:debugging", "requires", 1.0),
-            (
-                "lesson:kb-import-roam",
-                "lesson:observability",
-                "requires",
-                1.0,
-            ),
-            // --- Lessons teach concepts ---
-            ("lesson:navigation", "concept:buffer", "teaches", 1.0),
-            ("lesson:navigation", "concept:window", "teaches", 1.0),
-            ("lesson:modes", "concept:mode", "teaches", 1.0),
-            ("lesson:editing", "concept:command", "teaches", 0.8),
-            ("lesson:files", "concept:buffer", "teaches", 0.8),
-            ("lesson:ai", "concept:ai-as-peer", "teaches", 1.0),
-            ("lesson:ai", "concept:ai-modes", "teaches", 0.8),
-            ("lesson:scheme", "concept:scheme-api", "teaches", 1.0),
-            ("lesson:lsp", "concept:command", "teaches", 0.5),
-            ("lesson:terminal", "concept:terminal", "teaches", 1.0),
-            ("lesson:help", "concept:knowledge-base", "teaches", 1.0),
-            ("lesson:leader", "concept:command", "teaches", 0.6),
-            ("lesson:debugging", "concept:debugging", "teaches", 1.0),
-            ("lesson:observability", "concept:introspect", "teaches", 0.8),
-            ("lesson:observability", "concept:watchdog", "teaches", 0.8),
-            (
-                "lesson:observability",
-                "concept:event-recording",
-                "teaches",
-                0.8,
-            ),
-            (
-                "lesson:kb-import-roam",
-                "concept:kb-federation",
-                "teaches",
-                1.0,
-            ),
-            (
-                "lesson:collab-setup",
-                "concept:collaborative-state",
-                "teaches",
-                1.0,
-            ),
-            ("lesson:collab-setup", "concept:sync-engine", "teaches", 0.8),
-            // --- Tutorial tracks contain lessons ---
-            (
-                "tutorial:getting-started",
-                "tutorial:vim-familiar",
-                "contains",
-                1.0,
-            ),
-            (
-                "tutorial:getting-started",
-                "tutorial:what-is-modal",
-                "contains",
-                1.0,
-            ),
-            (
-                "tutorial:getting-started",
-                "tutorial:ai-setup",
-                "contains",
-                1.0,
-            ),
-            (
-                "tutorial:getting-started",
-                "tutorial:collab-setup",
-                "contains",
-                1.0,
-            ),
-            // --- Vim track ---
-            ("tutorial:vim-familiar", "lesson:navigation", "teaches", 1.0),
-            ("tutorial:vim-differences", "concept:mode", "teaches", 0.8),
-            (
-                "tutorial:vim-differences",
-                "tutorial:vim-familiar",
-                "requires",
-                1.0,
-            ),
-            // --- Beginner track ---
-            ("tutorial:what-is-modal", "concept:mode", "teaches", 1.0),
-            (
-                "tutorial:basic-movement",
-                "tutorial:what-is-modal",
-                "requires",
-                1.0,
-            ),
-            (
-                "tutorial:basic-editing",
-                "tutorial:basic-movement",
-                "requires",
-                1.0,
-            ),
-            // --- AI track ---
-            ("tutorial:ai-setup", "concept:ai-as-peer", "teaches", 0.8),
-            ("tutorial:ai-agent", "tutorial:ai-setup", "requires", 1.0),
-            ("tutorial:ai-chat", "tutorial:ai-setup", "requires", 1.0),
-            // --- Concept cross-references ---
-            (
-                "concept:ai-as-peer",
-                "concept:scheme-api",
-                "references",
-                0.7,
-            ),
-            ("concept:ai-as-peer", "concept:ai-modes", "explains", 0.8),
-            (
-                "concept:ai-modes",
-                "concept:prompt-tiers",
-                "references",
-                0.8,
-            ),
-            (
-                "concept:knowledge-base",
-                "concept:kb-federation",
-                "references",
-                0.9,
-            ),
-            (
-                "concept:knowledge-base",
-                "concept:kb-workflows",
-                "references",
-                0.8,
-            ),
-            (
-                "concept:knowledge-base",
-                "concept:kb-sharing",
-                "references",
-                0.8,
-            ),
-            (
-                "concept:knowledge-base",
-                "concept:kb-vs-alternatives",
-                "references",
-                0.6,
-            ),
-            (
-                "concept:sync-engine",
-                "concept:collaborative-state",
-                "implements",
-                0.9,
-            ),
-            (
-                "concept:collab-architecture",
-                "concept:collaborative-state",
-                "explains",
-                1.0,
-            ),
-            (
-                "concept:collab-architecture",
-                "concept:sync-engine",
-                "references",
-                0.8,
-            ),
-            (
-                "concept:collab-workflows",
-                "concept:collab-architecture",
-                "references",
-                0.7,
-            ),
-            (
-                "concept:kb-sharing",
-                "concept:sync-engine",
-                "references",
-                0.8,
-            ),
-            ("concept:scheme-api", "concept:hooks", "references", 0.7),
-            ("concept:scheme-api", "concept:options", "references", 0.7),
-            (
-                "concept:option-registry",
-                "concept:options",
-                "implements",
-                0.9,
-            ),
-            (
-                "concept:modules",
-                "concept:package-system",
-                "references",
-                0.8,
-            ),
-            ("concept:modules", "concept:flags", "references", 0.6),
-            (
-                "concept:scheme-testing",
-                "concept:test-runner",
-                "references",
-                0.9,
-            ),
-            (
-                "concept:self-test",
-                "concept:scheme-testing",
-                "references",
-                0.7,
-            ),
-            // --- Concept→concept "part_of" / structural ---
-            ("concept:buffer-mode", "concept:mode", "part_of", 1.0),
-            ("concept:buffer-view", "concept:buffer", "part_of", 1.0),
-            ("concept:keymap-inheritance", "concept:mode", "part_of", 0.8),
-            ("concept:ex-commands", "concept:command", "part_of", 1.0),
-            ("concept:set-syntax", "concept:options", "part_of", 0.8),
-            ("concept:scrollbar", "concept:gui", "part_of", 0.6),
-            ("concept:display-policy", "concept:gui", "part_of", 0.7),
-            ("concept:file-tree", "concept:project", "part_of", 0.7),
-            ("concept:git-status", "concept:project", "part_of", 0.6),
-            ("concept:dailies", "concept:org-mode", "part_of", 0.7),
-            (
-                "concept:mcp-development",
-                "concept:ai-as-peer",
-                "part_of",
-                0.7,
-            ),
-            ("concept:diff-display", "concept:ai-as-peer", "part_of", 0.6),
-            ("concept:watchdog", "concept:ai-as-peer", "part_of", 0.6),
-            (
-                "concept:event-recording",
-                "concept:debugging",
-                "part_of",
-                0.8,
-            ),
-            ("concept:dap-attach", "concept:debugging", "part_of", 0.8),
-            (
-                "concept:render-profiling",
-                "concept:debugging",
-                "part_of",
-                0.6,
-            ),
-            ("concept:introspect", "concept:debugging", "part_of", 0.7),
-            ("concept:autosave", "concept:buffer", "part_of", 0.6),
-            ("concept:conceal", "concept:org-mode", "part_of", 0.6),
-            // --- ADRs document concepts ---
-            (
-                "concept:adr-text-sync",
-                "concept:sync-engine",
-                "documents",
-                1.0,
-            ),
-            (
-                "concept:adr-kb-crdt",
-                "concept:knowledge-base",
-                "documents",
-                1.0,
-            ),
-            // --- Guide explains concepts ---
-            (
-                "guide:extension-authoring",
-                "concept:modules",
-                "explains",
-                0.9,
-            ),
-            (
-                "guide:extension-authoring",
-                "concept:scheme-api",
-                "explains",
-                0.8,
-            ),
-            // --- Index categorizes ---
+            // Index categorizes — kept because index.org links are plain links
+            // and these establish the top-level graph structure.
             ("index", "concept:buffer", "categorizes", 1.0),
             ("index", "concept:mode", "categorizes", 1.0),
             ("index", "concept:ai-as-peer", "categorizes", 1.0),
@@ -1942,6 +1719,8 @@ impl CozoKbStore {
 
     /// Compute a structured health report using Datalog queries.
     pub fn health_report(&self) -> Result<HealthReport, KbStoreError> {
+        use crate::store::{BrokenLinkInfo, BrokenLinkReason};
+
         // Total counts
         let total_nodes = self
             .run_immut("?[id] := *nodes{id, title}, title != ''")
@@ -1966,6 +1745,23 @@ impl CozoKbStore {
             }
         }
 
+        // Namespace counts (derived from node ID prefixes)
+        let ns_result = self
+            .run_immut("?[id] := *nodes{id, title}, title != ''")
+            .map_err(cozo_err)?;
+        let mut namespace_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for row in &ns_result.rows {
+            if let Some(id) = row.first().and_then(|v| v.get_str()) {
+                let ns = if let Some(colon) = id.find(':') {
+                    &id[..colon]
+                } else {
+                    "(none)"
+                };
+                *namespace_counts.entry(ns.to_string()).or_default() += 1;
+            }
+        }
+
         // Links by type
         let rel_result = self
             .run_immut("?[rt, src, dst] := *links{src, dst, rel_type: rt}")
@@ -1978,17 +1774,40 @@ impl CozoKbStore {
             }
         }
 
-        // Orphan nodes (no links in or out)
+        // Orphan nodes (no links in or out) — returns IDs
         let orphan_result = self.run_immut(
             "has_links[id] := *links{src: id}\nhas_links[id] := *links{dst: id}\n?[id] := *nodes{id, title}, not has_links[id], title != ''"
         ).map_err(cozo_err)?;
-        let orphan_count = orphan_result.rows.len();
+        let orphan_ids: Vec<String> = orphan_result
+            .rows
+            .iter()
+            .filter_map(|row| row.first().and_then(|v| v.get_str()).map(|s| s.to_string()))
+            .collect();
 
-        // Broken links (target doesn't exist)
+        // Broken links (target doesn't exist) — returns details
         let broken_result = self.run_immut(
             "exists[id] := *nodes{id, title}, title != ''\n?[src, dst, rt] := *links{src, dst, rel_type: rt}, not exists[dst]"
         ).map_err(cozo_err)?;
-        let broken_link_count = broken_result.rows.len();
+        let broken_links: Vec<BrokenLinkInfo> = broken_result
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let src = row.first()?.get_str()?.to_string();
+                let dst = row.get(1)?.get_str()?.to_string();
+                let rt = row.get(2)?.get_str()?.to_string();
+                let reason = if dst.contains(':') || dst.len() > 3 {
+                    BrokenLinkReason::DeletedNode
+                } else {
+                    BrokenLinkReason::MalformedId
+                };
+                Some(BrokenLinkInfo {
+                    source: src,
+                    target: dst,
+                    rel_type: rt,
+                    reason,
+                })
+            })
+            .collect();
 
         // Hub nodes (highest in-degree, top 10)
         let hub_result = self
@@ -2008,12 +1827,38 @@ impl CozoKbStore {
         Ok(HealthReport {
             total_nodes,
             total_links,
+            namespace_counts,
             by_kind,
             by_rel_type,
-            orphan_count,
-            broken_link_count,
+            orphan_ids,
+            broken_links,
             hub_nodes: hubs,
         })
+    }
+
+    /// Return (id, title) pairs for all nodes, optionally filtered by prefix.
+    pub fn id_title_pairs(
+        &self,
+        prefix: Option<&str>,
+    ) -> Result<Vec<(String, String)>, KbStoreError> {
+        let query = if let Some(p) = prefix {
+            format!(
+                "?[id, title] := *nodes{{id, title}}, title != '', starts_with(id, '{}')",
+                p.replace('\'', "")
+            )
+        } else {
+            "?[id, title] := *nodes{id, title}, title != ''".to_string()
+        };
+        let result = self.run_immut(&query).map_err(cozo_err)?;
+        Ok(result
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let id = row.first()?.get_str()?.to_string();
+                let title = row.get(1)?.get_str()?.to_string();
+                Some((id, title))
+            })
+            .collect())
     }
 
     // --- Phase H: Node versioning ---
@@ -2904,16 +2749,16 @@ mod tests {
     fn seed_typed_relationships_creates_links() {
         let (_tmp, store) = make_store();
         let count = store.seed_typed_relationships().unwrap();
-        assert!(count >= 90, "should seed 90+ relationships, got {count}");
+        // Only 6 code-generated relationships remain (index categorizes).
+        // Content relationships are now inline typed links in org files.
+        assert_eq!(count, 6, "should seed exactly 6 relationships, got {count}");
 
-        // Verify lesson prerequisite chain
-        let links = store.links_typed("lesson:modes", "requires").unwrap();
-        assert_eq!(links.len(), 1);
-        assert_eq!(links[0].dst, "lesson:navigation");
-
-        // Verify teaches relationship
-        let teaches = store.links_typed("lesson:ai", "teaches").unwrap();
-        assert!(!teaches.is_empty(), "lesson:ai should teach something");
+        // Verify index categorizes concept:buffer
+        let links = store.links_typed("index", "categorizes").unwrap();
+        assert!(
+            links.iter().any(|l| l.dst == "concept:buffer"),
+            "index should categorize concept:buffer"
+        );
 
         // Verify idempotency
         let count2 = store.seed_typed_relationships().unwrap();
@@ -3113,9 +2958,118 @@ mod tests {
         let report = store.health_report().unwrap();
         assert_eq!(report.total_nodes, 3);
         assert!(report.total_links >= 1);
-        assert_eq!(report.orphan_count, 1); // "c" has no links
+        assert_eq!(report.orphan_ids.len(), 1); // "c" has no links
         assert!(report.by_kind.get("note").copied().unwrap_or(0) >= 2);
         assert!(report.by_kind.get("concept").copied().unwrap_or(0) >= 1);
+    }
+
+    #[test]
+    fn health_report_typed_links_not_orphans() {
+        let (_tmp, store) = make_store();
+        store
+            .insert_node(&Node::new(
+                "lesson:nav",
+                "Navigation",
+                NodeKind::Lesson,
+                "body",
+            ))
+            .unwrap();
+        store
+            .insert_node(&Node::new(
+                "concept:buffer",
+                "Buffer",
+                NodeKind::Concept,
+                "body",
+            ))
+            .unwrap();
+        // Add a typed link — lesson teaches concept
+        store
+            .add_typed_link("lesson:nav", "concept:buffer", "teaches", 1.0)
+            .unwrap();
+
+        let report = store.health_report().unwrap();
+        assert_eq!(report.total_nodes, 2);
+        assert!(report.total_links >= 1);
+        // Neither should be orphan since they have a typed link between them
+        assert!(
+            report.orphan_ids.is_empty(),
+            "nodes with typed links should not be orphans: {:?}",
+            report.orphan_ids
+        );
+        // Verify namespace counts
+        assert_eq!(
+            report.namespace_counts.get("lesson").copied().unwrap_or(0),
+            1
+        );
+        assert_eq!(
+            report.namespace_counts.get("concept").copied().unwrap_or(0),
+            1
+        );
+        // Verify rel_type counts
+        assert_eq!(report.by_rel_type.get("teaches").copied().unwrap_or(0), 1);
+    }
+
+    #[test]
+    fn health_report_broken_links_with_details() {
+        let (_tmp, store) = make_store();
+        store
+            .insert_node(&Node::new("a", "A", NodeKind::Note, ""))
+            .unwrap();
+        // Add a link to a non-existent node
+        store
+            .add_typed_link("a", "concept:missing", "references", 1.0)
+            .unwrap();
+
+        let report = store.health_report().unwrap();
+        assert_eq!(report.broken_links.len(), 1);
+        assert_eq!(report.broken_links[0].source, "a");
+        assert_eq!(report.broken_links[0].target, "concept:missing");
+        assert_eq!(report.broken_links[0].rel_type, "references");
+    }
+
+    #[test]
+    fn health_report_hub_nodes_ranked() {
+        let (_tmp, store) = make_store();
+        store
+            .insert_node(&Node::new("hub", "Hub", NodeKind::Concept, ""))
+            .unwrap();
+        store
+            .insert_node(&Node::new("a", "A", NodeKind::Note, ""))
+            .unwrap();
+        store
+            .insert_node(&Node::new("b", "B", NodeKind::Note, ""))
+            .unwrap();
+        store
+            .insert_node(&Node::new("c", "C", NodeKind::Note, ""))
+            .unwrap();
+        // All nodes link to "hub"
+        store.add_typed_link("a", "hub", "references", 1.0).unwrap();
+        store.add_typed_link("b", "hub", "references", 1.0).unwrap();
+        store.add_typed_link("c", "hub", "references", 1.0).unwrap();
+
+        let report = store.health_report().unwrap();
+        assert!(!report.hub_nodes.is_empty());
+        assert_eq!(report.hub_nodes[0].0, "hub");
+        assert_eq!(report.hub_nodes[0].1, 3);
+    }
+
+    #[test]
+    fn id_title_pairs_basic() {
+        let (_tmp, store) = make_store();
+        store
+            .insert_node(&Node::new("concept:a", "Alpha", NodeKind::Concept, ""))
+            .unwrap();
+        store
+            .insert_node(&Node::new("lesson:b", "Beta", NodeKind::Lesson, ""))
+            .unwrap();
+
+        let all = store.id_title_pairs(None).unwrap();
+        assert_eq!(all.len(), 2);
+
+        let concepts = store.id_title_pairs(Some("concept:")).unwrap();
+        assert_eq!(concepts.len(), 1);
+        assert_eq!(concepts[0].0, "concept:a");
+        assert_eq!(concepts[0].1, "Alpha");
     }
 
     #[test]

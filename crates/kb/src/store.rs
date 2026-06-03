@@ -160,15 +160,34 @@ pub struct VectorHit {
     pub distance: f64,
 }
 
-/// Structured KB health report.
+/// Classification of why a link is broken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrokenLinkReason {
+    /// Target node was deleted or never existed.
+    DeletedNode,
+    /// Target ID is malformed.
+    MalformedId,
+}
+
+/// A broken link with source context.
+#[derive(Debug, Clone)]
+pub struct BrokenLinkInfo {
+    pub source: String,
+    pub target: String,
+    pub rel_type: String,
+    pub reason: BrokenLinkReason,
+}
+
+/// Structured KB health report (CozoDB-sourced).
 #[derive(Debug, Clone)]
 pub struct HealthReport {
     pub total_nodes: usize,
     pub total_links: usize,
+    pub namespace_counts: std::collections::HashMap<String, usize>,
     pub by_kind: std::collections::HashMap<String, usize>,
     pub by_rel_type: std::collections::HashMap<String, usize>,
-    pub orphan_count: usize,
-    pub broken_link_count: usize,
+    pub orphan_ids: Vec<String>,
+    pub broken_links: Vec<BrokenLinkInfo>,
     pub hub_nodes: Vec<(String, usize)>,
 }
 
@@ -264,6 +283,11 @@ pub trait KbStore: Send + Sync {
         ))
     }
 
+    /// Return all known relationship type names.
+    fn known_rel_types(&self) -> Result<std::collections::HashSet<String>, KbStoreError> {
+        Ok(std::collections::HashSet::new())
+    }
+
     /// Find shortest path between two nodes (BFS).
     fn shortest_path(&self, _from: &str, _to: &str) -> Result<Vec<String>, KbStoreError> {
         Err(KbStoreError::NotSupported(
@@ -309,6 +333,13 @@ pub trait KbStore: Send + Sync {
 
     /// Remove a member from a meta-node.
     fn remove_meta_member(&self, _meta_id: &str, _member_id: &str) -> Result<(), KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "meta-nodes require CozoDB backend".into(),
+        ))
+    }
+
+    /// Recompose a meta-node's body from its members.
+    fn compose_meta_body(&self, _meta_id: &str) -> Result<String, KbStoreError> {
         Err(KbStoreError::NotSupported(
             "meta-nodes require CozoDB backend".into(),
         ))
@@ -391,6 +422,22 @@ pub trait KbStore: Send + Sync {
     fn graphrag_search(&self, _vec: &[f32], _k: usize) -> Result<Vec<VectorHit>, KbStoreError> {
         Err(KbStoreError::NotSupported(
             "GraphRAG requires CozoDB backend".into(),
+        ))
+    }
+
+    // --- Health ---
+
+    /// Compute a structured health report from the backing store.
+    fn health_report(&self) -> Result<HealthReport, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "health report requires CozoDB backend".into(),
+        ))
+    }
+
+    /// Return (id, title) pairs for all nodes, optionally filtered by prefix.
+    fn id_title_pairs(&self, _prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "id_title_pairs requires CozoDB backend".into(),
         ))
     }
 

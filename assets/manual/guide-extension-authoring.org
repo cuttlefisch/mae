@@ -1,0 +1,145 @@
+:PROPERTIES:
+:ID: guide:extension-authoring
+:KIND: concept
+:END:
+#+title: Extension Authoring
+#+filetags: :modules:guide:extensibility:
+
+* Extension Authoring Guide
+
+This guide covers creating, testing, and publishing MAE modules.
+
+** Quick start
+```bash
+mae pkg create my-module
+cd modules/my-module
+# edit module.toml, autoloads.scm, init.scm
+mae pkg doctor my-module
+```
+
+** Module structure
+
+Every module has three files:
+
+*** `module.toml` — identity
+```toml
+[module]
+name = "my-module"
+version = "0.1.0"
+description = "What the module does"
+category = "editor"    # editor | lang | tools | ui | ai | completion
+mae_version = ">=0.9.0"
+
+[flags]
+extra = { doc = "Enable extra feature" }
+
+[dependencies]
+# other-module = ">=0.1.0"
+
+[entry]
+init = "init.scm"
+autoloads = "autoloads.scm"
+```
+
+*** `autoloads.scm` — eager registration
+Runs at startup before user config. Register commands, keybindings, options:
+```scheme
+;; Commands
+(define-command "my-greet" (lambda () (buffer-insert "Hello!")) "Greet")
+
+;; Keybindings
+(define-key "normal" "SPC x g" "my-greet")
+
+;; Options
+(define-option! "my_greeting" "string" "Hello!" "The greeting text")
+
+;; Hooks
+(add-hook! "after-save" "my-after-save-fn")
+
+;; Conditional on flags
+(when-flag "+extra"
+  (define-key "normal" "SPC x e" "my-extra-cmd"))
+```
+
+*** `init.scm` — lazy initialization
+Loaded on first command use via autoload:
+```scheme
+;; Full feature logic here
+(provide-feature "my-module")
+```
+
+** Scheme API reference
+
+*** Buffer operations
+- `(buffer-insert text)` — insert text at cursor
+- `(buffer-delete-range start end)` — delete range
+- `(buffer-replace-range start end text)` — replace range
+- `(buffer-text-range start end)` — read range
+- `*buffer-name*`, `*buffer-text*`, `*buffer-char-count*` — buffer state
+
+*** Cursor & navigation
+- `(cursor-goto row col)` — move cursor
+- `*cursor-row*`, `*cursor-col*` — current position
+- `(open-file path)` — open a file
+- `(switch-to-buffer name)` — switch buffer
+
+*** Commands
+- `(define-command name fn doc)` — register a command
+- `(run-command name)` — execute a command
+- `(command-exists? name)` — check if registered
+- `(undefine-command! name)` — remove (for unload)
+
+*** Keymaps
+- `(define-key keymap key command)` — bind key to command
+- `(define-keymap name parent)` — create a new keymap
+- `(undefine-key! keymap key)` — remove binding
+
+*** Options
+- `(define-option! name type default doc)` — register option
+- `(set-option! name value)` — set value
+- `(get-option name)` — read value
+- `(undefine-option! name)` — remove (for unload)
+
+*** Hooks
+- `(add-hook! hook fn)` — subscribe to event
+- `(remove-hook! hook fn)` — unsubscribe
+- `(run-hook! hook)` — trigger event
+
+*** Module queries
+- `(module-loaded? name)` — is module active?
+- `(module-version name)` — version string or `#f`
+- `(module-list)` — all active module names
+- `(module-flags name)` — enabled flags for module
+- `(when-module name fn)` — conditional on module presence
+- `(when-flag flag fn)` — conditional on flag
+
+*** Deprecation
+- `(deprecate-function! old new since)` — register deprecation
+- `(check-deprecated name)` — check and warn once
+
+** Testing your module
+
+1. **Manifest validation:** `mae pkg doctor my-module`
+2. **Load validation:** `mae --check-config` (loads all modules)
+3. **Live development:** `:module-reload my-module` after editing
+4. **Disable test:** comment out module in init.scm, verify editor starts
+5. **Override test:** add overrides in config.scm, verify they take effect
+
+** Naming conventions
+
+Module authors MUST prefix definitions with the module name:
+- Commands: `my-module-command` (not `command`)
+- Options: `my_module_option` (underscores for TOML)
+- Scheme symbols: `my-module-helper` (not `helper`)
+
+`mae pkg doctor` warns about unprefixed definitions.
+
+** Reference implementation
+
+The `dashboard` module is the simplest complete example. See `modules/dashboard/` for the canonical three-file pattern.
+
+For a more complex example with module-owned keymaps, see `modules/file-tree/`.
+
+This guide [[explains:concept:modules][explains the Module System]] and [[explains:concept:scheme-api][explains the Scheme API]].
+
+See also: [[concept:modules]], [[concept:flags]], [[concept:design-philosophy]], [[concept:package-system]], [[concept:scheme-api]], [[index]]

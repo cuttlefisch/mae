@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:visual-buffer-add-text!
+:KIND: scheme_api
+:END:
+#+title: Scheme: visual-buffer-add-text!
+#+filetags: :scheme:api:visual:
+
+** Signature
+#+begin_src scheme
+(visual-buffer-add-text! X Y TEXT FONT-SIZE COLOR)
+#+end_src
+
+Draw text on the visual canvas.
+
+** Example
+#+begin_src scheme
+(visual-buffer-add-text! 10.0 20.0 "Hello" 16.0 "white")
+#+end_src
+
+*Category:* visual
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

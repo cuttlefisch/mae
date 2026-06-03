@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:should-not
+:KIND: scheme_api
+:END:
+#+title: Scheme: should-not
+#+filetags: :scheme:api:testing:
+
+** Signature
+#+begin_src scheme
+(should-not VAL)
+#+end_src
+
+Assert VAL is falsy. Signals an error on failure.
+
+** Example
+#+begin_src scheme
+(should-not (= 1 2))
+#+end_src
+
+*Category:* testing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

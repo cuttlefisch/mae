@@ -1125,6 +1125,11 @@ impl CommandRegistry {
         reg.register_builtin("daily-prev", "Navigate to previous daily note (SPC n d p)");
         reg.register_builtin("daily-next", "Navigate to next daily note (SPC n d n)");
         reg.register_builtin("kb-audit", "Run KB audit report (SPC n H a)");
+        reg.register_builtin("kb-narrow", "Narrow to a meta-node component for editing");
+        reg.register_builtin(
+            "kb-widen",
+            "Save edits and widen back from narrowed meta-node component",
+        );
         reg.register_builtin(
             "capture-finalize",
             "Save note and return from capture (C-c C-c)",

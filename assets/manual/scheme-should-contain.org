@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:should-contain
+:KIND: scheme_api
+:END:
+#+title: Scheme: should-contain
+#+filetags: :scheme:api:testing:
+
+** Signature
+#+begin_src scheme
+(should-contain HAYSTACK NEEDLE)
+#+end_src
+
+Assert HAYSTACK string contains NEEDLE substring.
+
+** Example
+#+begin_src scheme
+(should-contain (buffer-string) "hello")
+#+end_src
+
+*Category:* testing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

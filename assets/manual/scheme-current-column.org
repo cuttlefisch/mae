@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:current-column
+:KIND: scheme_api
+:END:
+#+title: Scheme: current-column
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(current-column)
+#+end_src
+
+Return the current cursor column (0-indexed).
+
+** Example
+#+begin_src scheme
+(current-column) ; => 10
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

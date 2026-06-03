@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: scheme:*buffer-text*
+:KIND: scheme_api
+:END:
+#+title: Scheme: *buffer-text*
+#+filetags: :scheme:api:variable:
+
+*Type:* string
+
+Full text content of the active buffer.
+
+This is a read-only variable injected from editor state before each Scheme evaluation. Access it directly by name in your Scheme code.
+
+** Example
+#+begin_src scheme
+(message (string-append "Buffer: " *buffer-text*))
+#+end_src
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

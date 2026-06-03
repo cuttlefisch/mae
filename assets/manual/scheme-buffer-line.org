@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:buffer-line
+:KIND: scheme_api
+:END:
+#+title: Scheme: buffer-line
+#+filetags: :scheme:api:buffer-read:
+
+** Signature
+#+begin_src scheme
+(buffer-line N)
+#+end_src
+
+Return the text of line N (0-indexed) in the active buffer.
+
+** Example
+#+begin_src scheme
+(buffer-line 0) ; first line
+#+end_src
+
+*Category:* buffer-read
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

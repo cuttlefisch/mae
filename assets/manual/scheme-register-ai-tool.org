@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:register-ai-tool!
+:KIND: scheme_api
+:END:
+#+title: Scheme: register-ai-tool!
+#+filetags: :scheme:api:ai-tools:
+
+** Signature
+#+begin_src scheme
+(register-ai-tool! NAME DESCRIPTION HANDLER)
+#+end_src
+
+Register a custom AI tool backed by a Scheme function.
+
+** Example
+#+begin_src scheme
+(register-ai-tool! "my-tool" "Does something" "my-handler-fn")
+#+end_src
+
+*Category:* ai-tools
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

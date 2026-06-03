@@ -1,0 +1,42 @@
+:PROPERTIES:
+:ID: tutorial:what-is-modal
+:KIND: tutorial
+:END:
+#+title: Tutorial: What Is Modal Editing?
+#+filetags: :tutorial:beginner:
+
+* What Is Modal Editing?
+
+[[teaches:concept:mode][Teaches: Modes]]
+
+In most editors, pressing =j= types the letter "j". In MAE, what a key does depends on which *mode* you're in.
+
+** Normal mode (default)
+Keys are *commands*: =j= moves down, =dd= deletes a line, =w= jumps to the next word.
+You navigate and manipulate text without ever reaching for the mouse.
+
+** Insert mode
+Keys type text, like a normal editor. Press =i= from Normal mode to enter Insert mode.
+Press =Escape= to return to Normal mode.
+
+** Visual mode
+Select text with movement keys. Press =v= from Normal mode.
+
+** Command mode
+Type commands after =:=. Press =:= from Normal mode.
+
+** Why modal?
+- Your fingers never leave the home row
+- Every key does something useful (no wasted Ctrl-Shift-Alt chords)
+- Composable: =d= + =w= = delete word, =c= + =i= + ="= = change inside quotes
+
+*The golden rule:* If you get lost, press *Escape* to return to Normal mode.
+
+*Next:* [[id:tutorial:basic-movement][Basic Movement]]
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

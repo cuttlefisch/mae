@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:define-keymap
+:KIND: scheme_api
+:END:
+#+title: Scheme: define-keymap
+#+filetags: :scheme:api:keymaps:
+
+** Signature
+#+begin_src scheme
+(define-keymap NAME PARENT)
+#+end_src
+
+Create a new keymap with an optional parent for inheritance.
+
+** Example
+#+begin_src scheme
+(define-keymap "my-mode" "normal")
+#+end_src
+
+*Category:* keymaps
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

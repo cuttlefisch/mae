@@ -1,0 +1,29 @@
+:PROPERTIES:
+:ID: lesson:navigation
+:KIND: lesson
+:END:
+#+title: Lesson 1: Navigation
+#+filetags: :tutorial:
+
+** Lesson 1: Navigation
+
+MAE uses vi-style movement keys in [[concept:mode][Normal mode]].
+
+*** Basic movement
+  ~h~ — move left    ~j~ — move down    ~k~ — move up    ~l~ — move right
+
+*** Word movement
+  ~w~ — next word start    ~b~ — previous word start
+  ~e~ — next word end      ~0~ — line start
+  ~$~ — line end
+
+*** File movement
+  ~gg~ — first line         ~G~ — last line
+  ~Ctrl-d~ — half page down  ~Ctrl-u~ — half page up
+  ~Ctrl-f~ — page down       ~Ctrl-b~ — page up
+
+Try opening a file and moving around with these keys!
+
+This lesson covers [[teaches:concept:buffer][buffers]] and [[teaches:concept:window][windows]] — the fundamental units of content and display.
+
+*Next:* [[lesson:modes][Lesson 2: Modes]]  |  *Index:* [[tutor:index][Tutorial]]

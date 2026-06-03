@@ -1,0 +1,72 @@
+:PROPERTIES:
+:ID: lesson:lsp
+:KIND: lesson
+:END:
+#+title: Lesson 7: LSP
+#+filetags: :tutorial:
+
+** Lesson 7: LSP
+
+Prerequisites: [[requires:lesson:scheme][Lesson 6: Scheme REPL]]
+
+MAE has first-class LSP (Language Server Protocol) support.
+LSP starts automatically when you open a supported file type.
+LSP [[teaches:concept:command][commands]] give you code navigation, diagnostics, and refactoring.
+
+*** Navigation
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~gd~ | [[cmd:lsp-goto-definition]] | Go to definition |
+| ~gr~ | [[cmd:lsp-find-references]] | Find all references |
+| ~K~ | [[cmd:lsp-hover]] | Show hover documentation |
+
+*** Hover Popup
+When ~K~ shows a hover popup:
+- Press ~K~ again to scroll down
+- Any other key dismisses the popup
+- ~:set nolsp_hover_popup~ falls back to status bar display
+
+*** Diagnostics
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~]d~ | [[cmd:lsp-next-diagnostic]] | Jump to next diagnostic |
+| ~[d~ | [[cmd:lsp-prev-diagnostic]] | Jump to previous diagnostic |
+| ~SPC c x~ | [[cmd:lsp-show-diagnostics]] | List all diagnostics |
+| ~SPC t d~ | [[cmd:toggle-lsp-diagnostics-inline]] | Toggle inline underlines |
+
+Diagnostics appear as wavy underlines with end-of-line virtual text.
+Gutter markers show severity: ~E~ error, ~W~ warning, ~I~ info, ~H~ hint.
+
+*** Completion (Insert Mode)
+| Key | Command | Description |
+|-----+---------+-------------|
+| (auto) | [[cmd:lsp-complete]] | Triggered on typing |
+| ~Tab~ | [[cmd:lsp-accept-completion]] | Accept selected item |
+| ~C-n~ | [[cmd:lsp-complete-next]] | Next item |
+| ~C-p~ | [[cmd:lsp-complete-prev]] | Previous item |
+
+*** Code Actions & Refactoring
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~SPC c a~ | [[cmd:lsp-code-action]] | Show code actions at cursor |
+| ~j~/~k~ | next/prev | Navigate the action menu |
+| ~Enter~ | [[cmd:lsp-code-action-select]] | Apply selected action |
+| ~Esc~ | dismiss | Close action menu |
+| ~SPC c R~ | [[cmd:lsp-rename]] | Rename symbol |
+| ~SPC c f~ | [[cmd:lsp-format]] | Format buffer |
+
+*** Status & Configuration
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~SPC c s~ | [[cmd:lsp-status]] | Show LSP server status |
+
+Configure servers in =~/.config/mae/config.toml=:
+#+begin_example
+[lsp.rust]
+command = "rust-analyzer"
+
+[lsp.python]
+command = "pylsp"
+#+end_example
+
+*Prev:* [[lesson:scheme][Lesson 6]]  |  *Next:* [[lesson:terminal][Lesson 8: Terminal]]  |  *Index:* [[tutor:index][Tutorial]]

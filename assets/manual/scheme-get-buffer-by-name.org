@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:get-buffer-by-name
+:KIND: scheme_api
+:END:
+#+title: Scheme: get-buffer-by-name
+#+filetags: :scheme:api:buffer-read:
+
+** Signature
+#+begin_src scheme
+(get-buffer-by-name NAME)
+#+end_src
+
+Return the buffer index for NAME, or #f if not found.
+
+** Example
+#+begin_src scheme
+(get-buffer-by-name "*scratch*")
+#+end_src
+
+*Category:* buffer-read
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

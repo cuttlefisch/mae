@@ -1,0 +1,32 @@
+:PROPERTIES:
+:ID: concept:introspect
+:KIND: concept
+:END:
+#+title: Concept: Introspect
+#+filetags: :debugging:ai:observability:
+
+The *introspect* AI tool produces a diagnostic snapshot of the editor's internal state. It is the AI's equivalent of a doctor's checkup.
+
+** Sections
+| Section | Contents |
+|---------+----------|
+| *threads* | Thread count, names, watchdog status |
+| *performance* | Event loop latency, frame times, memory (RSS) |
+| *locks* | FairMutex contention stats, wait times, holder info |
+| *buffers* | Buffer count, sizes, kinds, modification state |
+| *shell* | Shell process count, PIDs, CWDs, exit status |
+| *ai* | Session state, message count, token usage, model |
+| *frame* | Per-frame render profiling: phase timing, cache hit/miss, visible buffers |
+
+** Usage
+Ask the AI: "introspect" or "show me editor diagnostics."
+The AI calls the ~introspect~ tool and receives a structured JSON report.
+
+** When to use
+- Editor feels slow -> check performance and lock contention sections.
+- Shell not responding -> check shell section for process status.
+- AI behaving oddly -> check AI section for session state.
+
+[[part_of:concept:debugging][Part of Debugging]].
+
+See also: [[concept:watchdog]], [[concept:event-recording]], [[concept:ai-as-peer]], [[index]]

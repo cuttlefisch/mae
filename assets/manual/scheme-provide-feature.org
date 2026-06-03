@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:provide-feature
+:KIND: scheme_api
+:END:
+#+title: Scheme: provide-feature
+#+filetags: :scheme:api:packages:
+
+** Signature
+#+begin_src scheme
+(provide-feature FEATURE)
+#+end_src
+
+Mark FEATURE as loaded in the package system.
+
+** Example
+#+begin_src scheme
+(provide-feature "my-package")
+#+end_src
+
+*Category:* packages
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

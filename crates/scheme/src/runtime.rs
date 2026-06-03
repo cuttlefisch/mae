@@ -107,6 +107,14 @@ struct SharedState {
     declared_packages: Vec<DeclaredPackage>,
     /// KB nodes registered from Scheme via `(define-kb-node! ID TITLE BODY)`.
     pending_kb_nodes: Vec<(String, String, String)>,
+    /// Pending KB typed links: (source, target, rel_type).
+    pending_kb_links: Vec<(String, String, String)>,
+    /// Pending KB link removals: (source, target).
+    pending_kb_link_removals: Vec<(String, String)>,
+    /// Pending KB meta-member additions: (meta_id, member_id, role).
+    pending_kb_meta_adds: Vec<(String, String, String)>,
+    /// Pending KB meta-member removals: (meta_id, member_id).
+    pending_kb_meta_removes: Vec<(String, String)>,
     /// Pending buffer creation: (name).
     pending_create_buffer: Option<String>,
     /// Pending buffer kill by name.
@@ -176,6 +184,9 @@ struct SharedState {
 
     /// Snapshot of option values: (name, value_string).
     option_values: Vec<(String, String)>,
+
+    /// KB store reference for read-only queries (updated by inject_editor_state).
+    kb_store: Option<Arc<dyn mae_kb::KbStore>>,
 
     // --- Visual/region state (updated by inject_editor_state) ---
     /// Whether a visual selection is active.
@@ -1443,6 +1454,304 @@ impl SchemeRuntime {
             },
         );
 
+        // --- Typed link functions ---
+
+        // (kb-add-link! SOURCE-ID TARGET-ID REL-TYPE)
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-add-link!",
+            "Add a typed link between KB nodes",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let src = arg_string(args, 0, "kb-add-link!")?;
+                let dst = arg_string(args, 1, "kb-add-link!")?;
+                let rel = arg_string(args, 2, "kb-add-link!")?;
+                s.lock().unwrap().pending_kb_links.push((src, dst, rel));
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-remove-link! SOURCE-ID TARGET-ID)
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-remove-link!",
+            "Remove a link between KB nodes",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let src = arg_string(args, 0, "kb-remove-link!")?;
+                let dst = arg_string(args, 1, "kb-remove-link!")?;
+                s.lock().unwrap().pending_kb_link_removals.push((src, dst));
+                Ok(Value::Void)
+            },
+        );
+
+        // --- Meta-node functions ---
+
+        // (kb-add-meta-member! META-ID MEMBER-ID ROLE)
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-add-meta-member!",
+            "Add a member to a meta-node",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let meta = arg_string(args, 0, "kb-add-meta-member!")?;
+                let member = arg_string(args, 1, "kb-add-meta-member!")?;
+                let role = arg_string(args, 2, "kb-add-meta-member!")?;
+                s.lock()
+                    .unwrap()
+                    .pending_kb_meta_adds
+                    .push((meta, member, role));
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-remove-meta-member! META-ID MEMBER-ID)
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-remove-meta-member!",
+            "Remove a member from a meta-node",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let meta = arg_string(args, 0, "kb-remove-meta-member!")?;
+                let member = arg_string(args, 1, "kb-remove-meta-member!")?;
+                s.lock()
+                    .unwrap()
+                    .pending_kb_meta_removes
+                    .push((meta, member));
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-compose-meta META-ID) — recompose meta body from members
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-compose-meta",
+            "Recompose a meta-node body from its members",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "kb-compose-meta")?;
+                s.lock()
+                    .unwrap()
+                    .pending_ex_commands
+                    .push(format!("kb-compose-meta {}", id));
+                Ok(Value::Void)
+            },
+        );
+
+        // --- Relationship type management ---
+
+        // (kb-add-rel-type! NAME LABEL DESCRIPTION INVERSE DIRECTED)
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-add-rel-type!",
+            "Add a custom relationship type to the KB",
+            Arity::Fixed(5),
+            move |args: &[Value]| {
+                let name = arg_string(args, 0, "kb-add-rel-type!")?;
+                let label = arg_string(args, 1, "kb-add-rel-type!")?;
+                let desc = arg_string(args, 2, "kb-add-rel-type!")?;
+                let inverse = arg_string(args, 3, "kb-add-rel-type!")?;
+                let directed = match &args[4] {
+                    Value::Bool(b) => *b,
+                    _ => true,
+                };
+                s.lock().unwrap().pending_ex_commands.push(format!(
+                    "kb-add-rel-type {} {} {} {} {}",
+                    name, label, desc, inverse, directed
+                ));
+                Ok(Value::Void)
+            },
+        );
+
+        // --- Read-only KB query functions ---
+
+        // (kb-links-from ID) → list of (target rel-type display)
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-links-from",
+            "Return outgoing typed links from a KB node",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "kb-links-from")?;
+                let state = s.lock().unwrap();
+                if let Some(ref store) = state.kb_store {
+                    match store.links_from(&id) {
+                        Ok(links) => Ok(Value::list(
+                            links
+                                .into_iter()
+                                .map(|l| {
+                                    Value::list(vec![
+                                        Value::string(l.dst),
+                                        Value::string(l.rel_type),
+                                        Value::string(l.display.unwrap_or_default()),
+                                    ])
+                                })
+                                .collect::<Vec<_>>(),
+                        )),
+                        Err(e) => Err(LispError::internal(format!("kb-links-from: {}", e))),
+                    }
+                } else {
+                    Ok(Value::list(vec![]))
+                }
+            },
+        );
+
+        // (kb-links-to ID) → list of (source rel-type display)
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-links-to",
+            "Return incoming typed links to a KB node",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "kb-links-to")?;
+                let state = s.lock().unwrap();
+                if let Some(ref store) = state.kb_store {
+                    match store.links_to(&id) {
+                        Ok(links) => Ok(Value::list(
+                            links
+                                .into_iter()
+                                .map(|l| {
+                                    Value::list(vec![
+                                        Value::string(l.src),
+                                        Value::string(l.rel_type),
+                                        Value::string(l.display.unwrap_or_default()),
+                                    ])
+                                })
+                                .collect::<Vec<_>>(),
+                        )),
+                        Err(e) => Err(LispError::internal(format!("kb-links-to: {}", e))),
+                    }
+                } else {
+                    Ok(Value::list(vec![]))
+                }
+            },
+        );
+
+        // (kb-links-typed ID REL-TYPE) → list of (target display)
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-links-typed",
+            "Return links of a specific relationship type from a node",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "kb-links-typed")?;
+                let rel_type = arg_string(args, 1, "kb-links-typed")?;
+                let state = s.lock().unwrap();
+                if let Some(ref store) = state.kb_store {
+                    match store.links_typed(&id, &rel_type) {
+                        Ok(links) => Ok(Value::list(
+                            links
+                                .into_iter()
+                                .map(|l| {
+                                    Value::list(vec![
+                                        Value::string(l.dst),
+                                        Value::string(l.display.unwrap_or_default()),
+                                    ])
+                                })
+                                .collect::<Vec<_>>(),
+                        )),
+                        Err(e) => Err(LispError::internal(format!("kb-links-typed: {}", e))),
+                    }
+                } else {
+                    Ok(Value::list(vec![]))
+                }
+            },
+        );
+
+        // (kb-meta-members ID) → list of (member-id role order)
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-meta-members",
+            "Return members of a meta-node",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "kb-meta-members")?;
+                let state = s.lock().unwrap();
+                if let Some(ref store) = state.kb_store {
+                    match store.meta_members(&id) {
+                        Ok(members) => Ok(Value::list(
+                            members
+                                .into_iter()
+                                .map(|m| {
+                                    Value::list(vec![
+                                        Value::string(m.member_id),
+                                        Value::string(m.role),
+                                        Value::Int(m.position as i64),
+                                    ])
+                                })
+                                .collect::<Vec<_>>(),
+                        )),
+                        Err(e) => Err(LispError::internal(format!("kb-meta-members: {}", e))),
+                    }
+                } else {
+                    Ok(Value::list(vec![]))
+                }
+            },
+        );
+
+        // (kb-rel-types) → list of type names
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-rel-types",
+            "Return all known relationship type names",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                let state = s.lock().unwrap();
+                if let Some(ref store) = state.kb_store {
+                    match store.known_rel_types() {
+                        Ok(types) => Ok(Value::list(
+                            types.into_iter().map(Value::string).collect::<Vec<_>>(),
+                        )),
+                        Err(e) => Err(LispError::internal(format!("kb-rel-types: {}", e))),
+                    }
+                } else {
+                    Ok(Value::list(vec![]))
+                }
+            },
+        );
+
+        // (kb-get-block ID INDEX) → block text or #f
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-get-block",
+            "Get a specific block from a KB node by index",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "kb-get-block")?;
+                let index = arg_int(args, 1, "kb-get-block")? as usize;
+                let state = s.lock().unwrap();
+                if let Some(ref store) = state.kb_store {
+                    match store.get_block(&id, index) {
+                        Ok(Some(block)) => Ok(Value::string(block.content)),
+                        Ok(None) => Ok(Value::Bool(false)),
+                        Err(_) => Ok(Value::Bool(false)),
+                    }
+                } else {
+                    Ok(Value::Bool(false))
+                }
+            },
+        );
+
+        // (kb-block-count ID) → number of blocks
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-block-count",
+            "Return the number of blocks in a KB node",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "kb-block-count")?;
+                let state = s.lock().unwrap();
+                if let Some(ref store) = state.kb_store {
+                    match store.get_blocks(&id) {
+                        Ok(blocks) => Ok(Value::Int(blocks.len() as i64)),
+                        Err(_) => Ok(Value::Int(0)),
+                    }
+                } else {
+                    Ok(Value::Int(0))
+                }
+            },
+        );
+
         // (deprecate-function! OLD-NAME NEW-NAME SINCE-VERSION)
         let s = shared.clone();
         vm.register_fn(
@@ -2193,6 +2502,30 @@ impl SchemeRuntime {
     pub fn drain_kb_nodes(&mut self) -> Vec<(String, String, String)> {
         let mut state = self.shared.lock().unwrap();
         std::mem::take(&mut state.pending_kb_nodes)
+    }
+
+    /// Drain pending typed link additions: (source, target, rel_type).
+    pub fn drain_kb_links(&mut self) -> Vec<(String, String, String)> {
+        let mut state = self.shared.lock().unwrap();
+        std::mem::take(&mut state.pending_kb_links)
+    }
+
+    /// Drain pending link removals: (source, target).
+    pub fn drain_kb_link_removals(&mut self) -> Vec<(String, String)> {
+        let mut state = self.shared.lock().unwrap();
+        std::mem::take(&mut state.pending_kb_link_removals)
+    }
+
+    /// Drain pending meta-member additions: (meta_id, member_id, role).
+    pub fn drain_kb_meta_adds(&mut self) -> Vec<(String, String, String)> {
+        let mut state = self.shared.lock().unwrap();
+        std::mem::take(&mut state.pending_kb_meta_adds)
+    }
+
+    /// Drain pending meta-member removals: (meta_id, member_id).
+    pub fn drain_kb_meta_removes(&mut self) -> Vec<(String, String)> {
+        let mut state = self.shared.lock().unwrap();
+        std::mem::take(&mut state.pending_kb_meta_removes)
     }
 
     // --- Test framework accessors ---
@@ -3136,6 +3469,7 @@ impl SchemeRuntime {
                 .collect();
             state.sync_enabled = sync_enabled;
             state.pending_update_count = buf.pending_sync_updates.len();
+            state.kb_store = editor.kb.store.clone();
             state.sync_content = buf.sync_doc.as_ref().map(|s| s.content());
             state.encoded_state = buf.sync_doc.as_ref().map(|s| {
                 use base64::Engine as _;
@@ -3313,6 +3647,44 @@ impl SchemeRuntime {
                 .with_tags(["scheme"]);
             editor.kb.primary.insert(node);
             debug!(id = %id, "kb node registered from scheme");
+        }
+
+        // Apply typed link additions from (kb-add-link! SRC DST REL_TYPE)
+        if let Some(ref store) = editor.kb.store {
+            for (src, dst, rel_type) in state.pending_kb_links.drain(..) {
+                if let Err(e) = store.add_typed_link(&src, &dst, &rel_type, 1.0) {
+                    warn!(src = %src, dst = %dst, rel = %rel_type, "kb-add-link! error: {}", e);
+                } else {
+                    debug!(src = %src, dst = %dst, rel = %rel_type, "typed link added from scheme");
+                }
+            }
+            for (src, dst) in state.pending_kb_link_removals.drain(..) {
+                if let Err(e) = store.remove_link(&src, &dst) {
+                    warn!(src = %src, dst = %dst, "kb-remove-link! error: {}", e);
+                } else {
+                    debug!(src = %src, dst = %dst, "link removed from scheme");
+                }
+            }
+            for (meta_id, member_id, role) in state.pending_kb_meta_adds.drain(..) {
+                if let Err(e) = store.add_meta_member(&meta_id, &member_id, 0, &role) {
+                    warn!(meta = %meta_id, member = %member_id, "kb-add-meta-member! error: {}", e);
+                } else {
+                    debug!(meta = %meta_id, member = %member_id, role = %role, "meta member added from scheme");
+                }
+            }
+            for (meta_id, member_id) in state.pending_kb_meta_removes.drain(..) {
+                if let Err(e) = store.remove_meta_member(&meta_id, &member_id) {
+                    warn!(meta = %meta_id, member = %member_id, "kb-remove-meta-member! error: {}", e);
+                } else {
+                    debug!(meta = %meta_id, member = %member_id, "meta member removed from scheme");
+                }
+            }
+        } else {
+            // No store — just drain to avoid accumulating
+            state.pending_kb_links.clear();
+            state.pending_kb_link_removals.clear();
+            state.pending_kb_meta_adds.clear();
+            state.pending_kb_meta_removes.clear();
         }
 
         // Apply editor options via the OptionRegistry (single source of truth)

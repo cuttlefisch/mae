@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:autoload
+:KIND: scheme_api
+:END:
+#+title: Scheme: autoload
+#+filetags: :scheme:api:packages:
+
+** Signature
+#+begin_src scheme
+(autoload COMMAND FEATURE DOC)
+#+end_src
+
+Register a command that auto-loads FEATURE on first use.
+
+** Example
+#+begin_src scheme
+(autoload "my-cmd" "my-pkg" "Does something")
+#+end_src
+
+*Category:* packages
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

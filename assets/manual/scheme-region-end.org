@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:region-end
+:KIND: scheme_api
+:END:
+#+title: Scheme: region-end
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(region-end)
+#+end_src
+
+Return the byte offset of the end of the active region, or #f.
+
+** Example
+#+begin_src scheme
+(region-end)
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

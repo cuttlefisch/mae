@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:run-command
+:KIND: scheme_api
+:END:
+#+title: Scheme: run-command
+#+filetags: :scheme:api:commands:
+
+** Signature
+#+begin_src scheme
+(run-command NAME)
+#+end_src
+
+Dispatch a registered command by name.
+
+** Example
+#+begin_src scheme
+(run-command "save")
+#+end_src
+
+*Category:* commands
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

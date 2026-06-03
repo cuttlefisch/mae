@@ -62,13 +62,17 @@ build-tui:
 dev:
 	$(CARGO) build $(FEAT_FLAG)
 
-## install: build release binary, install to PREFIX, register desktop entry
-install: build
+## install: build release binary + manual KB, install to PREFIX, register desktop entry
+install: build manual-kb
 	@mkdir -p $(PREFIX)
 	@install -m 755 $(RELEASE_BIN) $(PREFIX)/$(BINARY)
 	@install -m 755 $(RELEASE_SHIM) $(PREFIX)/$(SHIM_BINARY)
 	@echo "Installed $(BINARY) -> $(PREFIX)/$(BINARY)"
 	@echo "Installed $(SHIM_BINARY) -> $(PREFIX)/$(SHIM_BINARY)"
+	@mkdir -p $(DATADIR)/mae
+	@cp -r assets/mae-manual.cozo $(DATADIR)/mae/mae-manual.cozo
+	@cp assets/mae-manual.cozo.sha256 $(DATADIR)/mae/mae-manual.cozo.sha256
+	@echo "Installed manual KB -> $(DATADIR)/mae/mae-manual.cozo"
 	@mkdir -p $(DATADIR)/applications
 	@sed 's|Exec=mae|Exec=$(PREFIX)/$(BINARY)|' $(DESKTOP_FILE) > $(DATADIR)/applications/mae.desktop
 	@sed 's|Exec=mae --connect|Exec=$(PREFIX)/$(BINARY) --connect|' assets/mae-connect.desktop > $(DATADIR)/applications/mae-connect.desktop

@@ -1074,16 +1074,19 @@ impl Editor {
             }
             "help" => {
                 // Complete from all KB node IDs + bare names (without namespace prefix)
-                let mut matches: Vec<String> = self
-                    .kb
-                    .primary
-                    .list_ids(None)
-                    .into_iter()
+                let all_ids: Vec<String> = if let Some(q) = self.kb.query_layer() {
+                    q.list_ids(None)
+                } else {
+                    self.kb.primary.list_ids(None)
+                };
+                let mut matches: Vec<String> = all_ids
+                    .iter()
                     .filter(|id| id.starts_with(prefix))
+                    .cloned()
                     .collect();
                 // Also match bare names (e.g. "buffer-insert" matches "scheme:buffer-insert")
                 if !prefix.contains(':') {
-                    for id in self.kb.primary.list_ids(None) {
+                    for id in &all_ids {
                         if let Some(name) = id.split(':').nth(1) {
                             if name.starts_with(prefix) && !matches.contains(&name.to_string()) {
                                 matches.push(name.to_string());

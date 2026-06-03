@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: scheme:*command-list*
+:KIND: scheme_api
+:END:
+#+title: Scheme: *command-list*
+#+filetags: :scheme:api:variable:
+
+*Type:* list of (name doc source)
+
+All registered commands.
+
+This is a read-only variable injected from editor state before each Scheme evaluation. Access it directly by name in your Scheme code.
+
+** Example
+#+begin_src scheme
+(message (string-append "Buffer: " *command-list*))
+#+end_src
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

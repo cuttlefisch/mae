@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:region-active?
+:KIND: scheme_api
+:END:
+#+title: Scheme: region-active?
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(region-active?)
+#+end_src
+
+Return #t if a visual selection (region) is currently active.
+
+** Example
+#+begin_src scheme
+(when (region-active?) (message "Selection active"))
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

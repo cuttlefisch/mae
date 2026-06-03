@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:buffer
+:KIND: concept
+:END:
+#+title: Buffer
+#+filetags: :terminology:
+
+In-memory text content. May have a backing file (file buffer) or not (scratch, conversation, help). Buffers are the fundamental unit of text in MAE -- every window displays exactly one buffer.

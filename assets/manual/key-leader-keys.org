@@ -1,0 +1,190 @@
+:PROPERTIES:
+:ID: key:leader-keys
+:KIND: key
+:END:
+#+title: Keys: SPC Leader Bindings
+#+filetags: :keys:leader:doom:
+
+** SPC Leader Bindings (Doom Emacs style)
+
+MAE uses ~SPC~ as leader in normal mode, organized into 14 groups.
+Press ~SPC~ to see the which-key popup showing available sub-keys.
+
+*** SPC SPC — Command Palette
+Fuzzy-search all commands (like Doom's ~M-x~ or VSCode's ~Ctrl-Shift-P~).
+
+*** SPC / — Project Search
+Quick shortcut for ~project-search~ (ripgrep in project root).
+
+*** SPC b — +buffer
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~s~ | [[cmd:save]] | Save current buffer |
+| ~b~ | [[cmd:switch-buffer]] | Switch buffer (fuzzy) |
+| ~d~ | [[cmd:kill-buffer]] | Kill buffer |
+| ~n~ | [[cmd:next-buffer]] | Next buffer |
+| ~p~ | [[cmd:prev-buffer]] | Previous buffer |
+| ~l~ | [[cmd:alternate-file]] | Alternate file |
+| ~m~ | [[cmd:view-messages]] | Messages buffer |
+| ~N~ | [[cmd:new-buffer]] | New buffer |
+| ~D~ | [[cmd:force-kill-buffer]] | Force kill |
+| ~o~ | [[cmd:kill-other-buffers]] | Kill other buffers |
+| ~S~ | [[cmd:save-all-buffers]] | Save all |
+| ~r~ | [[cmd:revert-buffer]] | Revert from disk |
+
+*** SPC f — +file
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~f~ | [[cmd:find-file]] | Open file picker |
+| ~d~ | [[cmd:file-browser]] | Directory browser |
+| ~s~ | [[cmd:save]] | Save |
+| ~r~ | [[cmd:recent-files]] | Recent files |
+| ~y~ | [[cmd:yank-file-path]] | Yank file path |
+| ~R~ | [[cmd:rename-file]] | Rename file |
+| ~S~ | [[cmd:save-as]] | Save as |
+| ~c~ | [[cmd:edit-config]] | Edit config |
+
+*** SPC p — +project
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~f~ | [[cmd:project-find-file]] | Find file in project |
+| ~s~ | [[cmd:project-search]] | Grep in project |
+| ~d~ | [[cmd:project-browse]] | Browse project dir |
+| ~r~ | [[cmd:project-recent-files]] | Recent project files |
+
+*** SPC w — +window
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~v~ | [[cmd:split-vertical]] | Vertical split |
+| ~s~ | [[cmd:split-horizontal]] | Horizontal split |
+| ~q~ | [[cmd:close-window]] | Close window |
+| ~h/j/k/l~ | focus-{dir} | Move focus |
+
+*** SPC s — +search/syntax
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~s~ | [[cmd:search-buffer]] | Search in buffer |
+| ~n~ | [[cmd:syntax-select-node]] | Select syntax node |
+| ~e~ | [[cmd:syntax-expand-selection]] | Expand selection |
+| ~c~ | [[cmd:syntax-contract-selection]] | Contract selection |
+| ~p~ | [[cmd:project-search]] | Project search |
+| ~h~ | [[cmd:clear-search-highlight]] | Clear highlights |
+
+*** SPC c — +code
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~d~ | [[cmd:lsp-goto-definition]] | Go to definition |
+| ~r~ | [[cmd:lsp-find-references]] | Find references |
+| ~k~ | [[cmd:lsp-hover]] | Hover info |
+| ~x~ | [[cmd:lsp-show-diagnostics]] | Diagnostics |
+| ~a~ | [[cmd:lsp-code-action]] | Code action |
+| ~R~ | [[cmd:lsp-rename]] | Rename symbol |
+| ~f~ | [[cmd:lsp-format]] | Format |
+
+*** SPC g — +git
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~s~ | [[cmd:git-status]] | Git status |
+| ~b~ | [[cmd:git-blame]] | Git blame |
+| ~d~ | [[cmd:git-diff]] | Git diff |
+| ~l~ | [[cmd:git-log]] | Git log |
+
+*** SPC t — +toggle
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~t~ | [[cmd:cycle-theme]] | Cycle theme |
+| ~s~ | [[cmd:set-theme]] | Set theme |
+| ~l~ | [[cmd:toggle-line-numbers]] | Line numbers |
+| ~r~ | [[cmd:toggle-relative-line-numbers]] | Relative numbers |
+| ~w~ | [[cmd:toggle-word-wrap]] | Word wrap |
+| ~F~ | [[cmd:toggle-fps]] | FPS overlay |
+
+*** SPC a — +ai
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~p~ | [[cmd:ai-prompt]] | AI prompt |
+| ~a~ | [[cmd:open-ai-agent]] | Launch agent in shell |
+| ~c~ | [[cmd:ai-cancel]] | Cancel AI |
+
+*** Org-mode
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~TAB~ | [[cmd:org-cycle]] | Three-state fold cycle |
+| ~M-h~ / ~M-Left~ | [[cmd:org-promote]] | Promote heading |
+| ~M-l~ / ~M-Right~ | [[cmd:org-demote]] | Demote heading |
+| ~M-k~ / ~M-Up~ | [[cmd:org-move-subtree-up]] | Move subtree up |
+| ~M-j~ / ~M-Down~ | [[cmd:org-move-subtree-down]] | Move subtree down |
+| ~S-Left~ | [[cmd:org-todo-prev]] | Prev TODO state |
+| ~S-Right~ | [[cmd:org-todo-next]] | Next TODO state |
+| ~Enter~ | [[cmd:org-open-link]] | Follow link |
+
+*** SPC m — +mode (org)
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~s n~ | [[cmd:org-narrow-subtree]] | Narrow to subtree |
+| ~s w~ | [[cmd:org-widen]] | Widen (restore full buffer) |
+
+*** Markdown
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~TAB~ | [[cmd:md-cycle]] | Three-state fold cycle |
+| ~M-h~ / ~M-Left~ | [[cmd:md-promote]] | Promote heading |
+| ~M-l~ / ~M-Right~ | [[cmd:md-demote]] | Demote heading |
+| ~M-k~ / ~M-Up~ | [[cmd:md-move-subtree-up]] | Move subtree up |
+| ~M-j~ / ~M-Down~ | [[cmd:md-move-subtree-down]] | Move subtree down |
+
+*** SPC m — +mode (markdown)
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~s n~ | [[cmd:md-narrow-subtree]] | Narrow to subtree |
+| ~s w~ | [[cmd:md-widen]] | Widen (restore full buffer) |
+
+*** SPC h — +help
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~h~ | [[cmd:help]] | Help index |
+| ~k~ | [[cmd:describe-key]] | Describe key |
+| ~c~ | [[cmd:describe-command]] | Describe command |
+| ~s~ | [[cmd:help-search]] | Search help |
+| ~o~ | [[cmd:describe-option]] | Describe option |
+
+*** SPC d — +debug
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~d~ | [[cmd:debug-start]] | Start debug |
+| ~s~ | [[cmd:debug-self]] | Self-debug |
+| ~b~ | [[cmd:debug-toggle-breakpoint]] | Toggle breakpoint |
+| ~c~ | [[cmd:debug-continue]] | Continue |
+| ~p~ | [[cmd:debug-panel]] | Debug panel |
+| ~n~ | [[cmd:debug-step-over]] | Step over |
+| ~i~ | [[cmd:debug-step-into]] | Step into |
+| ~o~ | [[cmd:debug-step-out]] | Step out |
+
+*** SPC o — +open
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~t~ | [[cmd:terminal]] | Open terminal |
+| ~r~ | [[cmd:terminal-reset]] | Reset terminal |
+| ~c~ | [[cmd:terminal-close]] | Close terminal |
+
+*** SPC n — +notes
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~f~ | [[cmd:kb-find]] | Search KB nodes |
+
+*** SPC e — +eval
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~l~ | [[cmd:eval-line]] | Eval line |
+| ~b~ | [[cmd:eval-buffer]] | Eval buffer |
+| ~o~ | [[cmd:open-scheme-repl]] | REPL |
+| ~s~ | [[cmd:send-to-shell]] | Send line to shell |
+| ~S~ | [[cmd:send-region-to-shell]] | Send region to shell |
+
+*** SPC q — +quit
+| Key | Command | Description |
+|-----+---------+-------------|
+| ~q~ | [[cmd:quit]] | Quit |
+| ~Q~ | [[cmd:force-quit]] | Force quit |
+
+See also: [[key:normal-mode]], [[index]]

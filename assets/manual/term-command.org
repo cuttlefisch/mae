@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:command
+:KIND: concept
+:END:
+#+title: Command
+#+filetags: :terminology:
+
+A named, dispatchable action registered in the CommandRegistry. Commands can be bound to keys, called from Scheme, or invoked by the AI agent. Every command has a name, doc string, and source (Builtin, Scheme, Autoload).

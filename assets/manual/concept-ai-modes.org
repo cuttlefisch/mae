@@ -1,0 +1,50 @@
+:PROPERTIES:
+:ID: concept:ai-modes
+:KIND: concept
+:END:
+#+title: AI Agent vs AI Chat
+#+filetags: :ai:configuration:
+
+MAE provides two distinct AI interfaces, each suited to different workflows.
+
+** AI Agent (`SPC a a`)
+An **external tool** (Claude Code, gemini-cli, etc.) running in MAE's embedded terminal.
+
+**When to use:**
+- Autonomous coding: writing features, fixing bugs, multi-file refactors
+- Tasks that need shell access: running tests, installing packages, git operations
+- When you want the AI to drive and you review the results
+
+**Configuration:**
+```toml
+[ai]
+editor = "claude"  # command to run in terminal
+```
+
+The agent communicates with MAE via the MCP bridge — it can call editor tools just like the built-in AI.
+
+** AI Chat (`SPC a p`)
+MAE's **native conversation** interface with full editor context.
+
+**When to use:**
+- Quick questions about code in your current buffer
+- LSP-aware code review (the AI sees diagnostics, types, references)
+- Editor-integrated tasks: explain this function, suggest a refactor, write a docstring
+- When you want to stay in the editor flow without context-switching
+
+**Configuration:**
+```toml
+[ai]
+provider = "claude"  # or openai, gemini, deepseek
+model = "claude-sonnet-4-20250514"
+```
+
+** Shared configuration
+Both interfaces respect:
+- **Permission tiers:** `readonly`, `standard`, `trusted`, `privileged`
+- **Budget limits:** `budget_warn_tokens`, `budget_limit_tokens`
+- **API keys:** env vars (ANTHROPIC_API_KEY, etc.) or `api_key_command`
+
+This concept is [[explains:concept:ai-as-peer][explained by The AI as Peer Actor]].
+
+See also: [[references:concept:prompt-tiers][Prompt Tiers]], [[tutorial:ai-setup]], [[concept:ai-as-peer]], [[index]]

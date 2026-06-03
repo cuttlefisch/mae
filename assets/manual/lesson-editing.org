@@ -1,0 +1,32 @@
+:PROPERTIES:
+:ID: lesson:editing
+:KIND: lesson
+:END:
+#+title: Lesson 3: Editing
+#+filetags: :tutorial:
+
+** Lesson 3: Editing
+
+Prerequisites: [[requires:lesson:modes][Lesson 2: Modes]]
+
+This lesson [[teaches:concept:command][teaches editing commands]].
+
+*** Inserting text
+  ~i~ — insert before cursor    ~a~ — insert after cursor
+  ~o~ — open line below         ~O~ — open line above
+
+*** Deleting text
+  ~x~ — delete character         [[cmd:delete-line][dd]] — delete line
+  ~dw~ — delete word             ~d$~ — delete to end of line
+
+*** Undo / Redo
+  [[cmd:undo][u]] — undo          ~Ctrl-r~ — redo
+
+*** Clipboard
+  ~yy~ — yank (copy) line       ~p~ — paste after
+  ~P~ — paste before
+
+*** Repeat
+  ~.~ — repeat last edit
+
+*Prev:* [[lesson:modes][Lesson 2]]  |  *Next:* [[lesson:files][Lesson 4: Files]]  |  *Index:* [[tutor:index][Tutorial]]

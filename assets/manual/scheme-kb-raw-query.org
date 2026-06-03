@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:kb-raw-query
+:KIND: scheme_api
+:END:
+#+title: Scheme: kb-raw-query
+#+filetags: :scheme:api:kb-graph:
+
+** Signature
+#+begin_src scheme
+(kb-raw-query DATALOG-STRING)
+#+end_src
+
+Execute a raw CozoDB Datalog query against the knowledge base.
+
+** Example
+#+begin_src scheme
+(kb-raw-query "?[id, title] := *nodes{id, title, kind}, kind = \"concept\"")
+#+end_src
+
+*Category:* kb-graph
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

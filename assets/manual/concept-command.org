@@ -1,0 +1,16 @@
+:PROPERTIES:
+:ID: concept:command
+:KIND: concept
+:END:
+#+title: Command
+#+filetags: :data-model:extensibility:
+
+A **command** is a named, documented operation with a stable string identifier. Commands are registered in a shared CommandRegistry and can be triggered from three peer surfaces:
+
+1. **Human** -- via keybindings (`:command-list` or `SPC SPC`).
+2. **Scheme** -- via `(execute-command "name")` from config or packages.
+3. **AI agent** -- each command is exposed as a tool-call; the agent sees the same doc the human sees on this page.
+
+This is the *entire* reason MAE has the ergonomics it has -- there is exactly one API and it has three callers.
+
+See also: [[references:concept:ai-as-peer][The AI as Peer Actor]], [[concept:command]]

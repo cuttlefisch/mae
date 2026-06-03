@@ -1,0 +1,40 @@
+:PROPERTIES:
+:ID: concept:ex-commands
+:KIND: concept
+:END:
+#+title: Ex-Command Grammar
+#+filetags: :commands:vim:
+
+**Ex-command grammar** for write/quit compound commands.
+
+MAE parses `:w`, `:q`, `:x` commands using a token grammar rather than hardcoded match arms. This means all valid vim compound forms work automatically.
+
+## Grammar
+
+**Verbs:** `w` (write), `q` (quit), `x` (write-if-modified + quit)
+**Modifiers:** `a` (all -- applies to preceding verb), `!` (force, must be terminal)
+
+## Valid Combinations
+
+| Command | Effect |
+|---------|--------|
+| `:w`    | Write current buffer |
+| `:wa`   | Write all buffers |
+| `:q`    | Quit (check modified) |
+| `:q!`   | Quit (force, discard changes) |
+| `:qa`   | Quit all |
+| `:qa!`  | Force quit all |
+| `:wq`   | Write + quit |
+| `:wq!`  | Write + force quit |
+| `:wqa`  | Write all + quit all |
+| `:wqa!` | Write all + force quit all |
+| `:x`    | Write-if-modified + quit |
+| `:xa`   | Write-if-modified all + quit all |
+| `:xa!`  | Write-if-modified all + force quit all |
+
+## Implementation
+The tokenizer lives in `crates/core/src/editor/ex_parse.rs`. `parse_write_quit()` returns `Option<Vec<ExWriteQuit>>` -- None for non-matching commands, Some for valid compound commands.
+
+[[part_of:concept:command][Part of Command]].
+
+See also: [[references:concept:options][Editor Options]]

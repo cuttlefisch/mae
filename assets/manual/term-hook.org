@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:hook
+:KIND: concept
+:END:
+#+title: Hook
+#+filetags: :terminology:
+
+A named event that functions can subscribe to via =(add-hook!)=. When the hook fires, all registered functions execute in registration order. Hooks are composition points -- no advice chaining.

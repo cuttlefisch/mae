@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:keymap-bindings
+:KIND: scheme_api
+:END:
+#+title: Scheme: keymap-bindings
+#+filetags: :scheme:api:keymaps:
+
+** Signature
+#+begin_src scheme
+(keymap-bindings MAP-NAME)
+#+end_src
+
+Return a list of (key command) pairs for a keymap.
+
+** Example
+#+begin_src scheme
+(keymap-bindings "normal")
+#+end_src
+
+*Category:* keymaps
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

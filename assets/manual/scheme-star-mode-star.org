@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: scheme:*mode*
+:KIND: scheme_api
+:END:
+#+title: Scheme: *mode*
+#+filetags: :scheme:api:variable:
+
+*Type:* string
+
+Current editor mode ("normal", "insert", "visual", etc).
+
+This is a read-only variable injected from editor state before each Scheme evaluation. Access it directly by name in your Scheme code.
+
+** Example
+#+begin_src scheme
+(message (string-append "Buffer: " *mode*))
+#+end_src
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

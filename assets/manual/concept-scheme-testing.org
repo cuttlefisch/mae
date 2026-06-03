@@ -1,0 +1,44 @@
+:PROPERTIES:
+:ID: concept:scheme-testing
+:KIND: concept
+:ALIASES: test, ert, buttercup, plenary, tap
+:END:
+#+title: Scheme Testing Framework
+#+filetags: :testing:scheme:development:
+
+MAE has a headless **Scheme test framework** inspired by Emacs ERT/Buttercup and Neovim Plenary. Tests boot a real editor (no mocks) and exercise the same Scheme API available to users.
+
+** BDD Structure
+Tests use `describe-group` / `it-test` blocks (like Buttercup's `describe`/`it`):
+
+```scheme
+(describe-group "Feature name"
+  (lambda ()
+    (it-test "setup"
+      (lambda () (create-buffer "*test*")))
+    (it-test "insert text"
+      (lambda () (buffer-insert "hello")))
+    (it-test "verify"
+      (lambda () (should-equal (buffer-string) "hello")))))
+```
+
+** Assertions
+| Function | Purpose |
+|----------|----------|
+| [[scheme:should]] | Assert truthy |
+| [[scheme:should-not]] | Assert falsy |
+| [[scheme:should-equal]] | Assert equality |
+| [[scheme:should-contain]] | Assert substring |
+| `(should-mode MODE)` | Assert editor mode |
+
+** Running Tests
+```
+mae --test tests/crdt/               # CRDT sync tests
+mae --test tests/editor/             # Editor feature tests
+mae --test tests/collab-e2e/test_smoke.scm  # Single file
+```
+
+** Key Principle: One Op Per Step
+Each `it-test` is one eval→apply cycle. Pending mutations (`buffer-insert`, `goto-char`, etc.) execute during `apply_to_editor` after eval completes. Multiple mutations in one step may execute in unexpected order — split them.
+
+See also: [[references:concept:test-runner][Test Runner]], [[scheme:describe-group]], [[scheme:it-test]], [[index]]

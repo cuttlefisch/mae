@@ -1,0 +1,37 @@
+:PROPERTIES:
+:ID: concept:scheme-api
+:KIND: concept
+:ALIASES: lisp, scripting, extension-api, elisp
+:END:
+#+title: Scheme API
+#+filetags: :extensibility:scheme:api:
+
+MAE exposes ~50 Scheme functions to extension code. They fall into categories:
+
+** Buffer editing
+`buffer-insert`, `buffer-delete-range`, `buffer-replace-range`, `buffer-undo`, `buffer-redo`
+
+** Buffer read
+`*buffer-name*`, `*buffer-text*`, `*buffer-char-count*`, `buffer-text-range`, `*buffer-list*`, `get-buffer-by-name`
+
+** Cursor / navigation
+`cursor-goto`, `*cursor-row*`, `*cursor-col*`, `open-file`, `switch-to-buffer`
+
+** Windows
+`*window-count*`, `*window-list*`
+
+** Options / commands
+`set-option!`, `set-local-option!`, `get-option`, `*option-list*`, `define-command`, `run-command`, `command-exists?`, `*command-list*`
+
+** Keymaps
+`define-key`, `define-keymap`, `undefine-key!`, `*keymap-list*`, `keymap-bindings`
+
+** File I/O
+`read-file`, `file-exists?`, `list-directory`
+
+** Architecture
+Write-side: `SharedState` (Arc<Mutex>) accumulates `pending_*` fields during eval.
+Read-side: `inject_editor_state()` snapshots editor state as globals before eval.
+Apply: `apply_to_editor()` drains pending changes after eval.
+
+See also: [[references:concept:hooks][Hooks]], [[references:concept:options][Editor Options]], [[index]]

@@ -1,0 +1,47 @@
+:PROPERTIES:
+:ID: concept:knowledge-base
+:KIND: concept
+:END:
+#+title: Knowledge Base
+#+filetags: :kb:architecture:
+
+MAE's **knowledge base** is a typed graph database backed by CozoDB (Datalog). It serves as both the built-in manual and a personal knowledge graph (org-roam-equivalent). CozoDB with SQLite storage engine is the sole backend.
+
+## Graph model
+- **CozoDB** (Datalog) primary backend with typed nodes and relationships.
+- 14 `NodeKind` variants: Index, Command, Concept, Key, Note, Project, Category, Lesson, Tutorial, Meta, Block, SchemeApi, Task, View.
+- 20 typed relationship types with declared inverses (`implements`/`implemented_by`, `teaches`/`taught_by`, `requires`/`required_by`, etc.).
+- Full-text search via CozoDB FTS (Tantivy).
+- `NodeSource` provenance: Seed, UserOrg, Manual, Federation.
+
+## Node namespaces
+- `index` -- the entry page.
+- `cmd:<name>` -- one per registered [[references:concept:command][Command]] (auto-generated).
+- `concept:<slug>` -- architectural concepts (hand-authored).
+- `key:<context>` -- keybinding summaries.
+- `option:<name>` -- editor options.
+- `category:<name>` -- command category indices.
+- `scheme:<name>` -- Scheme API functions.
+- `lesson:<slug>` -- interactive tutorials.
+- `tutorial:<slug>` -- getting-started tracks.
+- `term:<name>` -- terminology definitions.
+- `view:<name>` -- stored Datalog view queries.
+
+## Graph features
+- **Typed relationships**: 95+ seed relationships with semantic types.
+- **Node versioning**: Snapshot on update, version history, point-in-time restore.
+- **Meta-nodes**: Compose body from member nodes with cached refresh.
+- **Block addressing**: `parent_id#N` for paragraph-level references.
+- **Agenda queries**: Filter by TODO state, priority, tags, staleness, orphans.
+- **HNSW vector index**: 384-dim embeddings for semantic search (GraphRAG-ready).
+- **Views**: 6 pre-built flavors (kanban, backlog, sprint, timeline, agenda, custom).
+
+## Federation
+The KB supports multiple instances: a local KB (seed + user help) plus N external instances registered from org-roam directories. See [[references:concept:kb-federation][KB Federation]].
+
+## AI surface
+Core tools: `kb_get`, `kb_search`, `kb_list`, `kb_links_from`, `kb_links_to`, `kb_graph`, `kb_health`. Graph tools: `kb_agenda`, `kb_history`, `kb_restore`, `kb_view_query`, `kb_vector_search`, `kb_raw_query`, `kb_shortest_path`, `kb_neighborhood`, `kb_add_link`, `kb_search_context`. Federation: `kb_register`, `kb_unregister`, `kb_reimport`, `kb_instances`.
+
+See also: [[references:concept:kb-federation][KB Federation]], [[references:concept:kb-workflows][KB Workflows]], [[references:concept:kb-sharing][KB Sharing]], [[references:concept:kb-vs-alternatives][KB vs Alternatives]], [[references:concept:ai-as-peer][The AI as Peer Actor]], [[index]]
+
+Documented by: [[documents:concept:adr-kb-crdt][ADR-005: KB as CRDT]]

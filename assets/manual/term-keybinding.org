@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:keybinding
+:KIND: concept
+:END:
+#+title: Keybinding
+#+filetags: :terminology:
+
+A key sequence mapped to a command within a keymap. Key sequences can be single keys (j) or multi-key chords (SPC f f). Bindings are looked up in the active keymap for the current mode.

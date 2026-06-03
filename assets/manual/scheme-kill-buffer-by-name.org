@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:kill-buffer-by-name
+:KIND: scheme_api
+:END:
+#+title: Scheme: kill-buffer-by-name
+#+filetags: :scheme:api:buffer-editing:
+
+** Signature
+#+begin_src scheme
+(kill-buffer-by-name NAME)
+#+end_src
+
+Close the buffer matching NAME.
+
+** Example
+#+begin_src scheme
+(kill-buffer-by-name "*scratch*")
+#+end_src
+
+*Category:* buffer-editing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: scheme:*buffer-count*
+:KIND: scheme_api
+:END:
+#+title: Scheme: *buffer-count*
+#+filetags: :scheme:api:variable:
+
+*Type:* integer
+
+Number of open buffers.
+
+This is a read-only variable injected from editor state before each Scheme evaluation. Access it directly by name in your Scheme code.
+
+** Example
+#+begin_src scheme
+(message (string-append "Buffer: " *buffer-count*))
+#+end_src
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:get-selection
+:KIND: scheme_api
+:END:
+#+title: Scheme: get-selection
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(get-selection)
+#+end_src
+
+Return the text of the active visual selection, or #f if none.
+
+** Example
+#+begin_src scheme
+(get-selection) ; => "selected text"
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

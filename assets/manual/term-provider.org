@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:provider
+:KIND: concept
+:END:
+#+title: Provider
+#+filetags: :terminology:
+
+An AI API backend: Claude, OpenAI, Gemini, or DeepSeek. Configured in config.toml under =[ai]=. The provider determines the model, API format, and capabilities available to the AI agent.

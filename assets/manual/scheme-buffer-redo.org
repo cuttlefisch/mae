@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:buffer-redo
+:KIND: scheme_api
+:END:
+#+title: Scheme: buffer-redo
+#+filetags: :scheme:api:buffer-editing:
+
+** Signature
+#+begin_src scheme
+(buffer-redo)
+#+end_src
+
+Redo the last undone edit in the active buffer.
+
+** Example
+#+begin_src scheme
+(buffer-redo)
+#+end_src
+
+*Category:* buffer-editing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

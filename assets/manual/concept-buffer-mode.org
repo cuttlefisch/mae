@@ -1,0 +1,26 @@
+:PROPERTIES:
+:ID: concept:buffer-mode
+:KIND: concept
+:END:
+#+title: BufferMode Trait
+#+filetags: :data-model:core:extensibility:
+
+The **BufferMode** trait (`buffer_mode.rs`) is the contract every buffer kind implements. It replaces scattered `match buf.kind` blocks with polymorphic dispatch.
+
+## Methods
+| Method | Purpose |
+|--------|---------|
+| `mode_name()` | Display name for the status bar |
+| `keymap_name()` | Overlay keymap name (e.g. `git-status`, `help`) |
+| `read_only()` | Whether inserts are blocked |
+| `default_word_wrap()` | Whether word-wrap defaults to on |
+| `has_gutter()` | Whether line numbers render |
+| `status_hint()` | One-line discoverability text on mode entry |
+| `mode_theme_key()` | Status-bar mode indicator color |
+| `insert_mode()` | Which insert mode to enter (Insert vs ShellInsert) |
+
+`BufferKind` implements `BufferMode`. New buffer types add trait arms, not scattered matches.
+
+[[part_of:concept:mode][Part of Mode]].
+
+See also: [[references:concept:buffer][Buffer]], [[references:concept:keymap-inheritance][Keymap Inheritance]]

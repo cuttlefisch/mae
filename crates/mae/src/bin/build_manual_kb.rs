@@ -6,6 +6,7 @@
 //! Defaults to `assets/mae-manual.cozo` if no output path is given.
 //! Also writes a `.sha256` checksum file alongside the output.
 
+use mae_kb::KbStore;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
@@ -38,7 +39,7 @@ fn main() {
     let kb = mae_core::kb_seed::seed_kb(&commands, &keymaps, &hooks);
 
     let node_count = kb.len();
-    eprintln!("  Seed KB: {node_count} nodes");
+    eprintln!("  Seed KB (code-generated): {node_count} nodes");
 
     // Open a fresh CozoDB store and persist all nodes.
     let store =
@@ -47,16 +48,92 @@ fn main() {
     let persisted = store
         .persist_nodes(&kb)
         .expect("failed to persist nodes to CozoDB");
-    eprintln!("  Persisted: {persisted} nodes");
+    eprintln!("  Persisted code-generated: {persisted} nodes");
 
-    // Seed type system, typed relationships, and views.
+    // Seed type system first (needed for known_rel_types during org parsing).
     store
         .seed_type_system()
         .expect("failed to seed type system");
     eprintln!("  Type system seeded");
 
+    // Parse org files from assets/manual/ and ingest into the store.
+    let manual_dir = PathBuf::from("assets/manual");
+    if manual_dir.is_dir() {
+        let known_types = store.known_rel_types().unwrap_or_default();
+        let mut all_nodes = Vec::new();
+        let mut all_typed_links = Vec::new();
+        let mut all_transclusions = Vec::new();
+
+        // Read and parse each .org file.
+        let mut org_files: Vec<_> = std::fs::read_dir(&manual_dir)
+            .expect("failed to read assets/manual/")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "org"))
+            .collect();
+        org_files.sort();
+
+        for path in &org_files {
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("  Warning: failed to read {}: {}", path.display(), e);
+                    continue;
+                }
+            };
+            let result = mae_kb::org::parse_org_multi_result(&content, Some(&known_types));
+            all_nodes.extend(result.nodes);
+            all_typed_links.extend(result.typed_links);
+            all_transclusions.extend(result.transclusions);
+        }
+
+        let org_node_count = all_nodes.len();
+        let typed_link_count = all_typed_links.len();
+        let transclusion_count = all_transclusions.len();
+
+        // Save org-parsed nodes to the store.
+        let node_refs: Vec<&mae_kb::Node> = all_nodes.iter().collect();
+        if let Err(e) = store.save_all(&node_refs) {
+            eprintln!("  Warning: failed to save org nodes: {}", e);
+        }
+        eprintln!(
+            "  Org files: {} files, {org_node_count} nodes parsed",
+            org_files.len()
+        );
+
+        // Wire typed links.
+        let mut link_count = 0;
+        for (src, link) in &all_typed_links {
+            if let Err(e) = store.add_typed_link(src, &link.target, &link.rel_type, 1.0) {
+                eprintln!(
+                    "  Warning: typed link {}→{} ({}): {}",
+                    src, link.target, link.rel_type, e
+                );
+            } else {
+                link_count += 1;
+            }
+        }
+        eprintln!("  Typed links: {typed_link_count} parsed, {link_count} stored");
+
+        // Wire transclusions.
+        let mut trans_count = 0;
+        for (meta_id, member_id, role) in &all_transclusions {
+            if let Err(e) = store.add_meta_member(meta_id, member_id, trans_count, role) {
+                eprintln!("  Warning: transclusion {meta_id}←{member_id}: {e}");
+            } else {
+                trans_count += 1;
+            }
+        }
+        if transclusion_count > 0 {
+            eprintln!("  Transclusions: {transclusion_count} parsed, {trans_count} stored");
+        }
+    } else {
+        eprintln!("  Warning: assets/manual/ not found, skipping org content");
+    }
+
+    // Seed typed relationships from code (cmd→category, etc.).
     match store.seed_typed_relationships() {
-        Ok(n) => eprintln!("  Typed relationships: {n}"),
+        Ok(n) => eprintln!("  Code-generated relationships: {n}"),
         Err(e) => eprintln!("  Warning: typed relationships: {e}"),
     }
 

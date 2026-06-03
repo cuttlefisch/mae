@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:current-buffer-name
+:KIND: scheme_api
+:END:
+#+title: Scheme: current-buffer-name
+#+filetags: :scheme:api:buffer-read:
+
+** Signature
+#+begin_src scheme
+(current-buffer-name)
+#+end_src
+
+Return the name of the active buffer as a string.
+
+** Example
+#+begin_src scheme
+(current-buffer-name) ; => "main.rs"
+#+end_src
+
+*Category:* buffer-read
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

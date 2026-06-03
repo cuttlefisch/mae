@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:require-feature
+:KIND: scheme_api
+:END:
+#+title: Scheme: require-feature
+#+filetags: :scheme:api:packages:
+
+** Signature
+#+begin_src scheme
+(require-feature FEATURE)
+#+end_src
+
+Request loading of FEATURE from the load-path.
+
+** Example
+#+begin_src scheme
+(require-feature "my-package")
+#+end_src
+
+*Category:* packages
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,131 @@
+:PROPERTIES:
+:ID: tutorial:ai-setup
+:KIND: tutorial
+:END:
+#+title: Tutorial: AI Setup
+#+filetags: :tutorial:ai:
+
+* AI Setup
+
+[[teaches:concept:ai-as-peer][Teaches: AI as Peer]]
+
+MAE has two AI interfaces: *AI Chat* (built-in, =SPC a p=) and *AI Agent* (terminal, =SPC a a=). This guide walks you through configuring either one.
+
+** 1. Prerequisites
+
+You need a running MAE instance (you're reading this, so you have one) and an API key from at least one provider.
+
+** 2. Locate your config
+
+MAE stores configuration at =~/.config/mae/config.toml= (or =$XDG_CONFIG_HOME/mae/config.toml=). Edit it with =SPC f c= or =:edit-config=.
+
+If this is your first launch, the *setup wizard* runs automatically and handles provider selection, model, and API key.
+
+*Checkpoint:* =:describe-configuration= shows config file path and load status.
+
+** 3. Choose a provider
+
+*** Claude (Anthropic)
+1. Get an API key: https://console.anthropic.com/settings/keys
+2. Add to =~/.config/mae/config.toml=:
+#+begin_src toml
+[ai]
+provider = "claude"
+model = "claude-sonnet-4-20250514"
+api_key = "sk-ant-..."
+#+end_src
+3. Or use a secrets manager:
+#+begin_src toml
+api_key_command = "pass show anthropic/api-key"
+#+end_src
+
+*** OpenAI
+1. Get an API key: https://platform.openai.com/api-keys
+2. Config:
+#+begin_src toml
+[ai]
+provider = "openai"
+model = "gpt-4o"
+api_key = "sk-..."
+#+end_src
+
+*** Gemini (Google)
+1. Get an API key: https://aistudio.google.com/apikeys
+2. Config:
+#+begin_src toml
+[ai]
+provider = "gemini"
+model = "gemini-2.5-pro"
+api_key = "AI..."
+#+end_src
+
+*** DeepSeek
+1. Get an API key: https://platform.deepseek.com/api_keys
+2. Config:
+#+begin_src toml
+[ai]
+provider = "deepseek"
+model = "deepseek-chat"
+api_key = "sk-..."
+#+end_src
+
+*** Environment variable alternative
+Instead of putting keys in config, set one of:
+- =ANTHROPIC_API_KEY=, =OPENAI_API_KEY=, =GEMINI_API_KEY=, =DEEPSEEK_API_KEY=
+- Or the universal override: =MAE_AI_API_KEY=
+
+*Checkpoint:* =:ai-status= shows provider name, model, and "configured" status.
+
+** 4. Verify connectivity
+
+Run =:ai-ping= -- you should see "pong" with a latency measurement.
+
+*Checkpoint:* =:ai-ping= returns success (not "no provider configured" or timeout).
+
+** 5. Test your agent
+
+Open AI chat with =SPC a p= (or =:ai-chat=) and try:
+#+begin_quote
+What file am I editing?
+#+end_quote
+
+The AI should respond with your current buffer name -- this proves tool-calling is working end-to-end.
+
+*Checkpoint:* AI responds with current buffer name.
+
+** 6. Security hardening (recommended)
+
+Replace plaintext =api_key = "..."= with a command that fetches from your secrets manager:
+#+begin_src toml
+# Linux (pass)
+api_key_command = "pass show anthropic/api-key"
+
+# macOS Keychain
+api_key_command = "security find-generic-password -s mae-ai -w"
+#+end_src
+
+*Checkpoint:* =:describe-configuration= shows =api_key_source: command= (not =plaintext=).
+
+** 7. AI Agent (terminal-based)
+
+=SPC a a= launches an external AI agent (Claude Code, gemini-cli, etc.) in MAE's embedded terminal. Configure which command to run:
+#+begin_src toml
+[ai]
+editor = "claude"          # or "gemini", "aider", etc.
+#+end_src
+
+The agent gets access to MAE's editor tools via the MCP bridge.
+
+** Next steps
+
+- [[id:tutorial:ai-agent][AI Agent (Terminal)]] -- deep dive on agent workflows
+- [[id:tutorial:ai-chat][AI Chat (Built-in)]] -- conversation UI, persistence, budgets
+- [[id:tutorial:collab-setup][Collaborative Setup]] -- share buffers across machines
+- [[id:concept:ai-as-peer][AI as Peer]] -- architecture: how the AI is a peer actor
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:set-status
+:KIND: scheme_api
+:END:
+#+title: Scheme: set-status
+#+filetags: :scheme:api:display:
+
+** Signature
+#+begin_src scheme
+(set-status MSG)
+#+end_src
+
+Set the status bar message.
+
+** Example
+#+begin_src scheme
+(set-status "Done!")
+#+end_src
+
+*Category:* display
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

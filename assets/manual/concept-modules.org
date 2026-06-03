@@ -1,0 +1,58 @@
+:PROPERTIES:
+:ID: concept:modules
+:KIND: concept
+:ALIASES: plugins, packages, extensions, addons
+:END:
+#+title: Module System
+#+filetags: :modules:extensibility:packages:
+
+The **module system** is MAE's structured package infrastructure, introduced in v0.9.0. It follows the Doom Emacs model: modules are self-contained Scheme packages that register commands, keybindings, options, and hooks — composing on the kernel rather than inheriting from it.
+
+** Structure
+Every module has three files:
+| File | Purpose | When loaded |
+|------|---------|-------------|
+| `module.toml` | Manifest: name, version, deps, flags | Before Scheme init (TOML parsing) |
+| `autoloads.scm` | Keybindings, command stubs, options | Eager: after init.scm, before config.scm |
+| `init.scm` | Feature logic, provides feature | Lazy: on first command use |
+
+** Loading order
+```
+config.toml → SchemeRuntime::new()
+  → init.scm (module declarations)
+  → discover_modules() → resolve_deps() → load_module_autoloads()
+  → config.scm (user customization — runs AFTER module autoloads)
+```
+
+**Key invariant:** Module autoloads run BEFORE `config.scm`. Users can override any module keybinding or option in their config.
+
+** Built-in modules
+MAE ships 9 built-in modules: dashboard, surround, marks-jumps, search, registers, macros, tables, multicursor, file-tree. Each extracts keybindings from hardcoded Rust into Scheme autoloads while commands remain in the kernel.
+
+** Manifest (`module.toml`)
+```toml
+[module]
+name = "search"
+version = "0.1.0"
+description = "Search and highlight"
+category = "editor"
+mae_version = ">=0.9.0"
+```
+
+** CLI
+- `mae pkg list` — show all discovered modules
+- `mae pkg doctor [NAME]` — validate manifests and entry points
+- `mae pkg info <NAME>` — detailed module information
+- `mae pkg create <NAME>` — scaffold a new module
+
+** Introspection
+- `:describe-module <name>` — manifest, commands, options, status
+- `:describe-bindings` — full keymap table for current mode
+- `:describe-mode` — current buffer's mode, keymap, and options
+- `(module-loaded? "name")` — check if a module is loaded
+- `(module-list)` — list all active modules
+
+** Live reload
+`:module-reload <name>` unregisters and re-evaluates a module's autoloads without restarting the editor.
+
+See also: [[references:concept:package-system][Package System]], [[references:concept:flags][Flags]], [[concept:design-philosophy]], [[guide:extension-authoring]], [[index]]

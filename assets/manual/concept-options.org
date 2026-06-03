@@ -1,0 +1,39 @@
+:PROPERTIES:
+:ID: concept:options
+:KIND: concept
+:END:
+#+title: Editor Options
+#+filetags: :options:configuration:scheme:
+
+MAE's editor options can be configured from Scheme using `(set-option! KEY VALUE)`.
+
+** Available options
+| Option | Values | Description |
+|--------|--------|-------------|
+| `line-numbers` | `true`/`false` | Show line numbers in gutter |
+| `relative-line-numbers` | `true`/`false` | Relative line numbering |
+| `word-wrap` | `true`/`false` | Soft-wrap long lines |
+| `break-indent` | `true`/`false` | Indent wrapped continuation lines |
+| `show-break` | string | Character prefix for wrapped lines (e.g. `↪`) |
+| `theme` | theme name | Set the color theme |
+| `show-fps` | `true`/`false` | Show FPS overlay in status bar |
+| `font-size` | float (6-72) | GUI font size in points |
+
+** Usage from Scheme
+```scheme
+;; In init.scm:
+(set-option! "line-numbers" "true")
+(set-option! "relative-line-numbers" "true")
+(set-option! "theme" "dracula")
+(set-option! "word-wrap" "true")
+(set-option! "show-break" "↪ ")
+```
+
+** Toggle commands
+Options can also be toggled interactively via `SPC t`:
+- `SPC t l` — [[cmd:toggle-line-numbers]]
+- `SPC t r` — [[cmd:toggle-relative-line-numbers]]
+- `SPC t w` — [[cmd:toggle-word-wrap]]
+- `SPC t t` — [[cmd:cycle-theme]]
+
+See also: [[concept:hooks]], [[concept:command]], [[index]]

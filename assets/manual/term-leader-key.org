@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:leader-key
+:KIND: concept
+:END:
+#+title: Leader Key
+#+filetags: :terminology:
+
+SPC in normal mode -- the prefix key for command sequences. Inspired by Doom Emacs. SPC f f = find file, SPC b s = switch buffer, SPC h = help, SPC a = AI agent, etc.

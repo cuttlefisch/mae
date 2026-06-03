@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:string-split
+:KIND: scheme_api
+:END:
+#+title: Scheme: string-split
+#+filetags: :scheme:api:string-utils:
+
+** Signature
+#+begin_src scheme
+(string-split STR DELIMITER)
+#+end_src
+
+Split STR by DELIMITER, returning a list of strings.
+
+** Example
+#+begin_src scheme
+(string-split "a,b,c" ",") ; => ("a" "b" "c")
+#+end_src
+
+*Category:* string-utils
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

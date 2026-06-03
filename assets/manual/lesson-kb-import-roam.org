@@ -1,0 +1,58 @@
+:PROPERTIES:
+:ID: lesson:kb-import-roam
+:KIND: lesson
+:END:
+#+title: Lesson 13: Importing Your Knowledge Base
+#+filetags: :tutorial:kb:federation:org-roam:
+
+** Lesson 13: Importing Your Knowledge Base
+
+Prerequisites: [[requires:lesson:observability][Lesson 12: Observability]]
+
+If you have an org-roam directory (or any directory of ~.org~ files with ~:ID:~ properties), you can register it as a federated KB instance in MAE.
+
+*** Prerequisites
+- Your org files need ~:PROPERTIES: :ID: <uuid> :END:~ drawers.
+- Nested subdirectories are supported (recursive import).
+- Files without ~:ID:~ are skipped (counted in the report).
+
+*** Step 1: Register
+#+begin_example
+:kb-register MyNotes ~/RoamNotes
+#+end_example
+Or ask the AI: "import my KB at ~/RoamNotes"
+
+MAE will recursively walk the directory, parse all ~.org~ files, and report results:
+#+begin_example
+Registered 'MyNotes': 2,342 nodes, 4,891 links
+  Health: 45 orphans, 12 broken links, 3 duplicate IDs
+#+end_example
+
+*** Step 2: Verify
+- ~:kb-instances~ — shows your registered instance with node count.
+- ~:kb-health~ — detailed health report (orphans, broken links, namespaces).
+- ~SPC n f~ or ~SPC h s~ — search should find your notes.
+
+*** Step 3: Use
+Your notes are now searchable from ~:help~, ~SPC h~, and the AI agent. The AI can find and summarize your notes just like built-in help.
+
+*** Step 4: Update after edits
+When you edit org files externally, refresh the graph:
+#+begin_example
+:kb-reimport MyNotes
+#+end_example
+
+*** Data safety
+- MAE *never writes* to your org directory (except ~eor-instance.org~ sentinel).
+- Your org files are the source of truth. The index is always re-derivable.
+- Back up your org files with git. The SQLite cache is disposable.
+
+*** Unregister
+#+begin_example
+:kb-unregister MyNotes
+#+end_example
+Removes from registry and frees memory. Your org files are untouched.
+
+*Prev:* [[lesson:observability][Lesson 12]]  |  *Index:* [[tutor:index][Tutorial]]
+
+See also: [[teaches:concept:kb-federation][KB Federation]], [[concept:kb-workflows]], [[concept:kb-vs-alternatives]]

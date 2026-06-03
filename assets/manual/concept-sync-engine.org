@@ -1,0 +1,32 @@
+:PROPERTIES:
+:ID: concept:sync-engine
+:KIND: concept
+:ALIASES: yrs, yjs, crdt, collaboration
+:END:
+#+title: Sync Engine (yrs)
+#+filetags: :architecture:sync:crdt:
+
+The **Sync Engine** is MAE's collaborative state layer, built on yrs (the Rust port of Yjs, using the YATA algorithm). Crate: `yrs` on crates.io.
+
+** Why yrs
+- Handles text (`YText`), structured documents (`YMap`, `YArray`), and knowledge base nodes in a single framework
+- Built-in `UndoManager` with per-user stacks
+- Awareness protocol for cursor/selection sharing
+- Proven at scale: Notion (200M+ users), Excalidraw, TLDraw
+- YATA algorithm: O(n) space, optimized for sequential typing
+
+** Dual Structure
+yrs `YText` is the source of truth for collaborative state. ropey remains the rendering engine (efficient line indexing via `Rope::line()`). A bridge rebuilds the rope from YText on remote changes (~1ms for 10K lines).
+
+** Document Types
+| Type | yrs Representation | Use Case |
+|------|-------------------|----------|
+| Text buffer | `YText` | Code editing |
+| Visual element | `YMap { position, style, children }` | Design system |
+| KB node | `YMap { title: YText, body: YText, tags: YArray }` | Knowledge base |
+
+This concept [[implements:concept:collaborative-state][implements Collaborative State]].
+
+Documented by: [[documents:concept:adr-text-sync][ADR-002: Text Sync]]
+
+See also: [[concept:collaborative-state]], [[concept:adr-text-sync]], [[concept:adr-kb-crdt]]

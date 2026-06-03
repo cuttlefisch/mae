@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:switch-to-buffer
+:KIND: scheme_api
+:END:
+#+title: Scheme: switch-to-buffer
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(switch-to-buffer IDX)
+#+end_src
+
+Switch to the buffer at index IDX.
+
+** Example
+#+begin_src scheme
+(switch-to-buffer 0)
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

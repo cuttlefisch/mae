@@ -620,7 +620,15 @@
           "kind": "mod"
         },
         {
+          "name": "cache",
+          "kind": "mod"
+        },
+        {
           "name": "cozo_store",
+          "kind": "mod"
+        },
+        {
+          "name": "query",
           "kind": "mod"
         },
         {
@@ -806,6 +814,7 @@
       "path": "crates/scheme/src/lib.rs",
       "dependencies": [
         "mae-core",
+        "mae-kb",
         "mae-sync"
       ],
       "public_items": [
@@ -1240,6 +1249,58 @@
     },
     {
       "name": "kb-raw-query",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-add-link!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-remove-link!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-add-meta-member!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-remove-meta-member!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-compose-meta",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-add-rel-type!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-links-from",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-links-to",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-links-typed",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-meta-members",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-rel-types",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-get-block",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-block-count",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -3328,6 +3389,14 @@
     {
       "name": "kb-audit",
       "doc": "Run KB audit report (SPC n H a)"
+    },
+    {
+      "name": "kb-narrow",
+      "doc": "Narrow to a meta-node component for editing"
+    },
+    {
+      "name": "kb-widen",
+      "doc": "Save edits and widen back from narrowed meta-node component"
     },
     {
       "name": "capture-finalize",

@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: scheme:*shell-buffers*
+:KIND: scheme_api
+:END:
+#+title: Scheme: *shell-buffers*
+#+filetags: :scheme:api:variable:
+
+*Type:* list of integers
+
+Buffer indices that are shell terminals.
+
+This is a read-only variable injected from editor state before each Scheme evaluation. Access it directly by name in your Scheme code.
+
+** Example
+#+begin_src scheme
+(message (string-append "Buffer: " *shell-buffers*))
+#+end_src
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

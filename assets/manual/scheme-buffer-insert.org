@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:buffer-insert
+:KIND: scheme_api
+:END:
+#+title: Scheme: buffer-insert
+#+filetags: :scheme:api:buffer-editing:
+
+** Signature
+#+begin_src scheme
+(buffer-insert TEXT)
+#+end_src
+
+Insert TEXT at the current cursor position.
+
+** Example
+#+begin_src scheme
+(buffer-insert "hello world")
+#+end_src
+
+*Category:* buffer-editing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

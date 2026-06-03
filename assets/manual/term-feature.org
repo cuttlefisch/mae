@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:feature
+:KIND: concept
+:END:
+#+title: Feature
+#+filetags: :terminology:
+
+A named capability provided by a module via =(provide-feature name)=. Other code can check availability with =(require-feature name)= or =(feature-loaded? name)=. Features enable lazy loading -- the module's init.scm runs on first =require-feature= call.

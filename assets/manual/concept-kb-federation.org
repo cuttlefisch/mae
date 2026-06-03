@@ -1,0 +1,64 @@
+:PROPERTIES:
+:ID: concept:kb-federation
+:KIND: concept
+:ALIASES: federation,kb-register,org-roam import
+:END:
+#+title: KB Federation
+#+filetags: :kb:federation:org-roam:
+
+KB **federation** lets you register external org directories as searchable knowledge base instances alongside MAE's built-in help.
+
+## Architecture
+```
++---------------------------------------------+
+|           MAE Knowledge Base                |
++---------------+-----------------------------+
+|  Local KB     |  Federated Instances        |
+|  (seed +      |  +---------+ +---------+   |
+|   user help   |  |RoamNotes| | Work KB |   |
+|   + AI)       |  | 2,500   | | 87      |   |
+|  200+ nodes   |  | nodes   | | nodes   |   |
+|               |  +---------+ +---------+   |
++---------------+-----------------------------+
+         | search / get / graph
+    +---------------------+
+    |  :help  |  AI tools |
+    |  SPC h  |  kb_*     |
+    +---------------------+
+```
+
+## Design principle
+**The org directory is READ-ONLY for the KB layer. SQLite is derived.**
+Your org files remain the canonical source of truth. MAE reads them, builds an in-memory graph, and never writes to your org directory (except one sentinel file: `eor-instance.org`).
+
+## Registry
+Stored at `~/.config/mae/kb-registry.toml`. Each instance has:
+- UUID (generated or read from sentinel file)
+- Name (user-chosen display label)
+- Org directory path
+- Enabled flag
+- Last import timestamp
+
+## Sentinel file
+When you register a directory, MAE creates `eor-instance.org` with the instance UUID. This file is safe to delete -- MAE recreates it on next registration. It marks the directory as a MAE KB instance.
+
+## Link scheme
+- `eor:node-id` -- local-first lookup (checks local KB, then instances).
+- `eor:uuid/node-id` -- targeted lookup in a specific instance.
+
+## Import pipeline
+1. Recursive `walkdir` over the org directory.
+2. Parse each `.org` file for `:ID:` properties (file-level + heading-level).
+3. Files without `:ID:` are counted but skipped.
+4. File-path links (images, attachments) are NOT treated as KB links.
+5. Duplicate `:ID:` values are detected and reported.
+6. Health metrics (orphans, broken links, namespaces) computed automatically.
+
+## Commands
+- `:kb-register <name> <path>` -- register and import.
+- `:kb-unregister <name>` -- remove instance.
+- `:kb-reimport <name>` -- refresh after editing org files.
+- `:kb-instances` -- list registered instances.
+- `:kb-health` -- health report (orphans, broken links, namespace counts).
+
+See also: [[references:concept:knowledge-base][Knowledge Base]], [[references:concept:kb-workflows][KB Workflows]], [[lesson:kb-import-roam]]

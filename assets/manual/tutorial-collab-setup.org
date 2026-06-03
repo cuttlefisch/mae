@@ -1,0 +1,115 @@
+:PROPERTIES:
+:ID: tutorial:collab-setup
+:KIND: tutorial
+:END:
+#+title: Tutorial: Collaborative Setup
+#+filetags: :tutorial:collaboration:sync:
+
+* Collaborative Setup
+
+This guide walks you through multi-user collaborative editing -- sharing buffers and knowledge bases between MAE instances on different machines.
+
+** 1. Prerequisites
+
+- Two machines (or two MAE instances) on the same network
+- Both running MAE v0.11.1 or later
+- The =mae-state-server= binary (included in release artifacts)
+
+*Checkpoint:* =:verify= shows version >= 0.11.1.
+
+** 2. Start the state server
+
+On the *host machine*, run:
+#+begin_src bash
+mae-state-server --bind 0.0.0.0:9473
+#+end_src
+
+Note the host's IP address:
+- Linux: =hostname -I=
+- macOS: =ipconfig getifaddr en0=
+
+*Checkpoint:* Server logs "listening on 0.0.0.0:9473".
+
+** 3. Set a shared secret (PSK)
+
+On *both machines*, add to =~/.config/mae/config.toml=:
+#+begin_src toml
+[collaboration]
+psk = "your-shared-secret-here"
+#+end_src
+
+Both machines MUST use the same PSK. For production use, prefer:
+#+begin_src toml
+psk_command = "pass show mae/collab-psk"
+#+end_src
+
+The server also needs the PSK in its config (=~/.config/mae/state-server.toml=):
+#+begin_src toml
+psk = "your-shared-secret-here"
+#+end_src
+
+*Checkpoint:* =:describe-configuration= shows =collab_psk: set=.
+
+** 4. Connect from the second machine
+
+#+begin_example
+:collab-connect <host-ip>:9473
+#+end_example
+
+Or configure auto-connect in =config.toml=:
+#+begin_src toml
+[collaboration]
+server_address = "<host-ip>:9473"
+auto_connect = true
+#+end_src
+
+*Checkpoint:* =:collab-status= shows =connected=, peer count >= 1.
+
+** 5. Share a buffer
+
+On either machine, open a file and run =:collab-share=. On the other machine, =:collab-list= shows shared docs.
+
+*Checkpoint:* =:collab-status= shows shared doc count >= 1; edits appear on both sides.
+
+** 6. Share a knowledge base
+
+On the host: =:kb-share= -- shares the active KB.
+On the peer: =:kb-join= -- joins the shared KB.
+
+*Checkpoint:* =:collab-status= shows KB sync active; =:kb-list= shows shared nodes.
+
+** 7. Verify sync
+
+Edit a shared buffer on one machine -- the change should appear on the other within 1 second. Create a KB node on one machine:
+#+begin_example
+:kb-create "test-sync" "Sync Test" "note" "Hello from machine A"
+#+end_example
+
+*Checkpoint:* =:kb-get "test-sync"= on the other machine returns the node.
+
+** 8. Troubleshooting
+
+Run =:collab-doctor= for comprehensive diagnostics. Common issues:
+- *"connection refused"* -- firewall blocking port 9473, or server not running
+- *"auth failed"* -- PSK mismatch between machines
+- *"timeout"* -- wrong IP address, or machines not on same network
+
+Open firewall if needed:
+- macOS: allow in System Settings > Network > Firewall
+- Linux: =sudo firewall-cmd --add-port=9473/tcp --permanent=
+
+*Checkpoint:* =:collab-doctor= returns all checks green.
+
+** Next steps
+
+- [[id:lesson:collab-setup][Collaborative Editing (detailed lesson)]] -- systemd, client-frame, network setup
+- [[id:concept:collab-architecture][Architecture]] -- how sync works under the hood
+- [[id:concept:kb-sharing][KB Sharing]] -- collaborative knowledge bases in depth
+- [[id:tutorial:ai-setup][AI Setup]] -- configure AI providers
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

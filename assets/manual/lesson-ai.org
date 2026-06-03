@@ -1,0 +1,44 @@
+:PROPERTIES:
+:ID: lesson:ai
+:KIND: lesson
+:END:
+#+title: Lesson 5: AI Features
+#+filetags: :tutorial:
+
+** Lesson 5: AI Features
+
+Prerequisites: [[requires:lesson:files][Lesson 4: Files & Buffers]]
+
+MAE treats the AI agent as a [[teaches:concept:ai-as-peer][peer actor]] — it calls the same primitives as you.
+
+*** [[teaches:concept:ai-modes][AI commands]]
+- ~SPC a p~ — *[[cmd:ai-prompt]]* (send a message / open conversation)
+- ~SPC a a~ — *[[cmd:open-ai-agent]]* (launch a dedicated AI agent in a shell)
+- ~SPC a c~ — *[[cmd:ai-cancel]]* (cancel an in-flight AI operation)
+
+*** Conversation Memory
+Conversations are persistent per project. MAE automatically saves history to ~.mae/conversation.json~ in your project root. If you restart the editor, the previous chat will be restored automatically if ~restore_session~ is enabled.
+
+*** Configuration
+Use ~:set~ or ~(set-option! ...)~ to configure the provider:
+- ~:set ai_provider deepseek~ (or ~openai~, ~claude~, ~gemini~)
+- ~:set ai_model deepseek-reasoner~
+
+*** Tool Architecture
+The AI has access to 100+ tools split into two tiers:
+- *Core* (51 tools): always sent with every request (buffer ops, navigation, project, git basics).
+- *Extended* (on demand): requested via the ~request_tools~ meta-tool. 10 categories: ~lsp~, ~dap~, ~knowledge~, ~shell~, ~commands~, ~git~, ~web~, ~ai~, ~visual~, ~debug~.
+
+Key tools:
+- ~request_tools~ — load a category of extended tools into the conversation.
+- ~editor_save_state~ / ~editor_restore_state~ — deterministic session state capture.
+- ~web_fetch~ — fetch raw content from URLs.
+- ~introspect~ — inspect threads, performance stats, lock contention.
+
+*** Diff Display
+When the AI proposes changes via ~propose_changes~, a ~*AI-Diff*~ buffer shows a [[concept:diff-display][syntax-highlighted unified diff]]. Use ~:ai-accept~ to apply or ~:ai-reject~ to discard.
+
+*** Self-Diagnosis
+The AI can introspect the editor's health. You can ask it to "introspect" to see thread states, performance stats, and lock contention.
+
+*Prev:* [[lesson:files][Lesson 4]]  |  *Next:* [[lesson:scheme][Lesson 6: Scheme]]  |  *Index:* [[tutor:index][Tutorial]]

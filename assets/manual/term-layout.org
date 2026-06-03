@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:layout
+:KIND: concept
+:END:
+#+title: Layout
+#+filetags: :terminology:
+
+The tree of window splits. Horizontal and vertical splits form a binary tree. The layout determines how screen space is divided among windows.

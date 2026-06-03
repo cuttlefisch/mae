@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:keymap
+:KIND: concept
+:END:
+#+title: Keymap
+#+filetags: :terminology:
+
+A named set of keybindings with an optional parent for fallback lookup. MAE has keymaps for each mode (normal, insert, visual, command) plus buffer-kind overlays (help, git-status, file-tree, org, markdown).
