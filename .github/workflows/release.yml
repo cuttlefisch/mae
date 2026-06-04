@@ -28,18 +28,23 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build static binary
+      - name: Build static binary + manual KB
         run: |
           cargo build --release --target x86_64-unknown-linux-musl --package mae
           cargo build --release --target x86_64-unknown-linux-musl --package mae-state-server
+          cargo build --release --bin build-manual-kb
+          ./target/release/build-manual-kb assets/mae-manual.cozo
 
       - name: Prepare artifact
         run: |
-          mkdir -p dist
-          cp target/x86_64-unknown-linux-musl/release/mae dist/mae
-          cp target/x86_64-unknown-linux-musl/release/mae-state-server dist/mae-state-server
-          chmod +x dist/mae dist/mae-state-server
-          tar czf dist/mae-linux-x86_64.tar.gz -C dist mae mae-state-server
+          mkdir -p dist/mae-pkg
+          cp target/x86_64-unknown-linux-musl/release/mae dist/mae-pkg/mae
+          cp target/x86_64-unknown-linux-musl/release/mae-state-server dist/mae-pkg/mae-state-server
+          chmod +x dist/mae-pkg/mae dist/mae-pkg/mae-state-server
+          cp -r assets/mae-manual.cozo dist/mae-pkg/mae-manual.cozo
+          cp -r modules dist/mae-pkg/modules
+          cp assets/sample-config.toml dist/mae-pkg/sample-config.toml
+          tar czf dist/mae-linux-x86_64.tar.gz -C dist/mae-pkg .
 
       - uses: actions/upload-artifact@v7
         with:
@@ -59,8 +64,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build GUI binary
-        run: cargo build --release --features gui --package mae
+      - name: Build GUI binary + manual KB
+        run: |
+          cargo build --release --features gui --package mae
+          cargo build --release --bin build-manual-kb
+          ./target/release/build-manual-kb assets/mae-manual.cozo
 
       - name: Build AppImage
         run: |
@@ -68,18 +76,25 @@ jobs:
           mkdir -p dist/MAE.AppDir/usr/bin
           mkdir -p dist/MAE.AppDir/usr/share/applications
           mkdir -p dist/MAE.AppDir/usr/share/icons/hicolor/scalable/apps
+          mkdir -p dist/MAE.AppDir/usr/share/mae
           cp target/release/mae dist/MAE.AppDir/usr/bin/mae
           chmod +x dist/MAE.AppDir/usr/bin/mae
           cp assets/mae.desktop dist/MAE.AppDir/usr/share/applications/mae.desktop
           cp assets/mae.desktop dist/MAE.AppDir/mae.desktop
           cp assets/mae.svg dist/MAE.AppDir/usr/share/icons/hicolor/scalable/apps/mae.svg
           cp assets/mae.svg dist/MAE.AppDir/mae.svg
+          # Bundle manual KB and modules inside AppImage
+          cp -r assets/mae-manual.cozo dist/MAE.AppDir/usr/share/mae/mae-manual.cozo
+          cp -r modules dist/MAE.AppDir/usr/share/mae/modules
+          cp assets/sample-config.toml dist/MAE.AppDir/usr/share/mae/sample-config.toml
 
-          # AppRun entry point
+          # AppRun entry point — sets env vars so bundled assets are found
           cat > dist/MAE.AppDir/AppRun << 'APPRUN'
           #!/bin/bash
           SELF="$(readlink -f "$0")"
           HERE="${SELF%/*}"
+          export MAE_MANUAL_PATH="${HERE}/usr/share/mae/mae-manual.cozo"
+          export MAE_MODULES_PATH="${HERE}/usr/share/mae/modules"
           exec "${HERE}/usr/bin/mae" --gui "$@"
           APPRUN
           chmod +x dist/MAE.AppDir/AppRun
@@ -106,10 +121,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build TUI binary + state server
+      - name: Build TUI binary + state server + manual KB
         run: |
           cargo build --release --package mae --package mae-state-server
           cp target/release/mae target/release/mae-tui
+          cargo build --release --bin build-manual-kb
+          ./target/release/build-manual-kb assets/mae-manual.cozo
 
       - name: Build GUI binary
         run: cargo build --release --features gui --package mae
@@ -124,10 +141,18 @@ jobs:
           cp target/release/mae "$APP/mae"
           chmod +x "$APP/mae"
 
-          # Create launcher script that passes --gui
+          # Bundle manual KB and modules inside .app
+          cp -r assets/mae-manual.cozo "$RES/mae-manual.cozo"
+          cp -r modules "$RES/modules"
+          cp assets/sample-config.toml "$RES/sample-config.toml"
+
+          # Create launcher script that passes --gui + sets asset paths
           cat > "$APP/MAE" << 'LAUNCHER'
           #!/bin/bash
           SELF="$(dirname "$0")"
+          RES="$SELF/../Resources"
+          export MAE_MANUAL_PATH="$RES/mae-manual.cozo"
+          export MAE_MODULES_PATH="$RES/modules"
           exec "$SELF/mae" --gui "$@"
           LAUNCHER
           chmod +x "$APP/MAE"
@@ -191,11 +216,15 @@ jobs:
           </plist>
           PLIST
 
-          # Also produce a TUI-only tarball (includes state server for collab)
-          cp target/release/mae-tui dist/mae
-          cp target/release/mae-state-server dist/mae-state-server
-          chmod +x dist/mae dist/mae-state-server
-          tar czf dist/mae-macos-aarch64-tui.tar.gz -C dist mae mae-state-server
+          # Also produce a TUI-only tarball (includes state server, modules, manual KB)
+          mkdir -p dist/mae-tui-pkg
+          cp target/release/mae-tui dist/mae-tui-pkg/mae
+          cp target/release/mae-state-server dist/mae-tui-pkg/mae-state-server
+          chmod +x dist/mae-tui-pkg/mae dist/mae-tui-pkg/mae-state-server
+          cp -r assets/mae-manual.cozo dist/mae-tui-pkg/mae-manual.cozo
+          cp -r modules dist/mae-tui-pkg/modules
+          cp assets/sample-config.toml dist/mae-tui-pkg/sample-config.toml
+          tar czf dist/mae-macos-aarch64-tui.tar.gz -C dist/mae-tui-pkg .
 
           # Zip the .app bundle + state server (ditto preserves macOS metadata/resource forks)
           # Both MAE.app and mae-state-server go in the zip so users get everything in one download
@@ -241,12 +270,27 @@ jobs:
 
           | Platform | File | Contents |
           |----------|------|----------|
-          | **macOS GUI** | `MAE-macos-aarch64.zip` | `MAE.app` + `mae-state-server` (collab) |
-          | **macOS TUI** | `mae-macos-aarch64-tui.tar.gz` | `mae` (terminal) + `mae-state-server` |
-          | **Linux GUI** | `mae-linux-x86_64-gui.AppImage` | GUI AppImage (standalone) |
-          | **Linux TUI** | `mae-linux-x86_64.tar.gz` | `mae` (static musl) + `mae-state-server` |
+          | **macOS GUI** | `MAE-macos-aarch64.zip` | `MAE.app` (bundled) + `mae-state-server` (collab) |
+          | **macOS TUI** | `mae-macos-aarch64-tui.tar.gz` | `mae` + `mae-state-server` + modules + manual KB |
+          | **Linux GUI** | `mae-linux-x86_64-gui.AppImage` | Self-contained AppImage (modules + manual KB bundled) |
+          | **Linux TUI** | `mae-linux-x86_64.tar.gz` | `mae` (static musl) + `mae-state-server` + modules + manual KB |
+
+          All packages include the built-in help system (860+ KB nodes) and doom-style keybindings.
 
           ## After Installation
+
+          **AppImage (Linux GUI):** Just run it — all assets are bundled inside.
+
+          **Tarball (Linux/macOS TUI):** Extract and run from the extracted directory:
+          ```bash
+          tar xzf mae-*.tar.gz -C ~/mae && ~/mae/mae
+          ```
+          Or install to `~/.local`:
+          ```bash
+          mkdir -p ~/.local/bin ~/.local/share/mae
+          cp mae mae-state-server ~/.local/bin/
+          cp -r modules mae-manual.cozo ~/.local/share/mae/
+          ```
 
           **macOS (.app bundle):** The app is unsigned. Before first launch, either:
           - **Right-click** → **Open** → click **Open** in the dialog (easiest), or:
