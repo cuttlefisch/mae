@@ -68,7 +68,7 @@ pub async fn dispatch(
                 Some(node) => Ok(json!({
                     "id": node.id,
                     "title": node.title,
-                    "kind": format!("{:?}", node.kind),
+                    "kind": node.kind.as_str(),
                     "body": node.body,
                     "tags": node.tags,
                 })),
@@ -270,7 +270,6 @@ pub enum DaemonError {
     InvalidParams(&'static str),
     NotReady,
     MethodNotFound(String),
-    #[allow(dead_code)]
     Internal(String),
 }
 

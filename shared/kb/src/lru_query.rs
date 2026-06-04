@@ -268,6 +268,40 @@ impl KbQueryLayer for LruQueryLayer {
         }
     }
 
+    fn id_title_body_triples(
+        &self,
+        prefix: Option<&str>,
+        body_limit: usize,
+    ) -> Vec<(String, String, String)> {
+        let mut params = json!({"body_limit": body_limit});
+        if let Some(p) = prefix {
+            params["prefix"] = json!(p);
+        }
+        let result = {
+            let mut client = self.client.lock().unwrap();
+            client.call("kb/id_title_body_triples", params)
+        };
+        match result {
+            Ok(val) => val
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| {
+                            let id = v.get(0)?.as_str()?;
+                            let title = v.get(1)?.as_str()?;
+                            let body = v.get(2)?.as_str().unwrap_or("");
+                            Some((id.to_string(), title.to_string(), body.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(e) => {
+                tracing::debug!(error = %e, "LruQueryLayer: id_title_body_triples failed");
+                Vec::new()
+            }
+        }
+    }
+
     fn health_report(&self) -> Option<HealthReport> {
         let result = {
             let mut client = self.client.lock().unwrap();
@@ -326,20 +360,22 @@ fn parse_node_from_json(val: &Value) -> Option<Node> {
 
 fn parse_node_kind(s: &str) -> crate::NodeKind {
     use crate::NodeKind;
-    match s {
-        "Index" => NodeKind::Index,
-        "Command" => NodeKind::Command,
-        "Concept" => NodeKind::Concept,
-        "Key" => NodeKind::Key,
-        "Project" => NodeKind::Project,
-        "Category" => NodeKind::Category,
-        "Lesson" => NodeKind::Lesson,
-        "Tutorial" => NodeKind::Tutorial,
-        "Meta" => NodeKind::Meta,
-        "Block" => NodeKind::Block,
-        "SchemeApi" => NodeKind::SchemeApi,
-        "Task" => NodeKind::Task,
-        "View" => NodeKind::View,
+    // Daemon sends lowercase via NodeKind::as_str(); accept both cases
+    // for robustness (Debug format is title-case).
+    match s.to_ascii_lowercase().as_str() {
+        "index" => NodeKind::Index,
+        "command" => NodeKind::Command,
+        "concept" => NodeKind::Concept,
+        "key" => NodeKind::Key,
+        "project" => NodeKind::Project,
+        "category" => NodeKind::Category,
+        "lesson" => NodeKind::Lesson,
+        "tutorial" => NodeKind::Tutorial,
+        "meta" => NodeKind::Meta,
+        "block" => NodeKind::Block,
+        "scheme_api" | "schemeapi" => NodeKind::SchemeApi,
+        "task" => NodeKind::Task,
+        "view" => NodeKind::View,
         _ => NodeKind::Note,
     }
 }
@@ -389,7 +425,7 @@ mod tests {
         let val = json!({
             "id": "concept:buffer",
             "title": "Buffer",
-            "kind": "Concept",
+            "kind": "concept",
             "body": "A buffer holds text.",
             "tags": ["core", "editing"],
         });
@@ -428,14 +464,24 @@ mod tests {
 
     #[test]
     fn parse_node_kind_variants() {
+        // Lowercase (as_str format — canonical)
+        assert!(matches!(
+            parse_node_kind("command"),
+            crate::NodeKind::Command
+        ));
+        assert!(matches!(
+            parse_node_kind("concept"),
+            crate::NodeKind::Concept
+        ));
+        // Title-case (Debug format — also accepted)
         assert!(matches!(
             parse_node_kind("Command"),
             crate::NodeKind::Command
         ));
         assert!(matches!(
-            parse_node_kind("Concept"),
-            crate::NodeKind::Concept
+            parse_node_kind("scheme_api"),
+            crate::NodeKind::SchemeApi
         ));
-        assert!(matches!(parse_node_kind("Unknown"), crate::NodeKind::Note));
+        assert!(matches!(parse_node_kind("unknown"), crate::NodeKind::Note));
     }
 }

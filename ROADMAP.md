@@ -204,8 +204,8 @@ The KB had a dual source of truth problem: org files re-parsed on startup, SQLit
 - [x] **Phase 7**: Internal KB link preservation in `rewrite_links_with_types()`, fragment stripping in link storage, GUI heading underline scale fix.
 
 #### Future
-- [ ] **GraphRAG live pipeline** (v0.13.0): Embedding generation (provider trait: OpenAI, Ollama, local), background indexing, AI context injection.
-- [ ] **AI hygiene daemon** (v0.13.0): Background assessment of new/modified nodes, link type suggestions, missing metadata flags.
+- [ ] **GraphRAG live pipeline** (v0.14.0): Embedding generation (provider trait: OpenAI, Ollama, local), background indexing, AI context injection.
+- [x] **AI hygiene daemon** (v0.13.0): Deterministic KB quality assessment — orphan detection, broken links, kind/namespace mismatches, missing metadata. CozoDB `hygiene_suggestions` relation with CRUD. Scheduler integration for periodic scans. JSON-RPC API (scan, report, accept, dismiss). AI-powered inference (link type suggestions) planned for v0.14.0.
 - [ ] **GUI view rendering** (v0.14.0): Kanban board, sprint view, timeline — drag-drop, swimlanes.
 
 ### Phase 13: MAE Scheme Runtime (v0.12.0)

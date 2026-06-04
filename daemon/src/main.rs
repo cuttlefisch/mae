@@ -56,7 +56,9 @@ async fn main() {
 
     // Initialize KB store with SQLite backend
     let data_dir = config.effective_data_dir();
-    std::fs::create_dir_all(&data_dir).ok();
+    if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        tracing::warn!(error = %e, path = %data_dir.display(), "Failed to create data directory");
+    }
     let db_path = data_dir.join("daemon-kb.cozo");
 
     let state = Arc::new(Mutex::new(DaemonState::new()));
@@ -101,7 +103,9 @@ async fn main() {
 
     // Ensure socket parent directory exists
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent).ok();
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(error = %e, path = %parent.display(), "Failed to create socket directory");
+        }
     }
 
     let listener = match UnixListener::bind(socket_path) {
