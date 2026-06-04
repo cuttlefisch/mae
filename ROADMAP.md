@@ -415,6 +415,7 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [ ] **Doc store eviction TOCTOU**: Between identifying eviction candidates (read lock) and evicting (write lock), a client could reconnect. Low probability; fix requires holding write lock during entire eviction.
 - [ ] **Unified buffer-switching strategy**: Three patterns exist (`switch_to_buffer`, `display_buffer_and_focus`, palette). Should converge on one with consistent view state management.
 - [ ] **KB fuzzy body search**: `kb_search` currently matches node titles and tags via FTS5 but not node body content in a fuzzy/substring way. Searching for a term like "DeltaDB" that only appears in the body of some nodes returns no results. Add full-text indexing of node bodies (FTS5 `content` column) so `kb_search` and `:help` fuzzy completion can find concepts mentioned anywhere in the knowledge graph, not just in titles.
+- [ ] **Binary architecture review** (v0.13.0): Evaluate splitting MAE into standalone binaries — `mae` (editor), `mae-daemon` (background services: KB hygiene, embedding generation, collab state server), `mae-scheme` (standalone Scheme REPL/runner). Motivations: (1) CozoDB SQLite storage backend blocked by rusqlite linker conflict when state-server links both rusqlite and cozo-sqlite — separate binaries isolate dependency trees; (2) daemon process enables background KB maintenance without editor running; (3) standalone Scheme binary enables scripting, CI, and testing without editor overhead. Write ADR-014.
 
 ---
 
