@@ -17,12 +17,12 @@ use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
 /// LRU cache entry for a node lookup result.
+/// Only found nodes are cached — missing lookups are not cached to avoid
+/// stale negatives when nodes are created later.
 #[derive(Clone)]
 enum CacheEntry {
     /// Node was found.
     Found(Box<Node>),
-    /// Node was looked up but doesn't exist.
-    Missing,
 }
 
 /// Bounded LRU cache implementing `KbQueryLayer` via daemon RPC.
@@ -54,12 +54,14 @@ impl LruQueryLayer {
     }
 
     /// Evict a single node and its associated link caches.
+    /// Acquires all three locks atomically to prevent races where another
+    /// thread repopulates caches between individual evictions.
     pub fn invalidate(&self, node_id: &str) {
         let mut nc = self.node_cache.lock().unwrap();
-        nc.pop(node_id);
         let mut lfc = self.links_from_cache.lock().unwrap();
-        lfc.pop(node_id);
         let mut ltc = self.links_to_cache.lock().unwrap();
+        nc.pop(node_id);
+        lfc.pop(node_id);
         ltc.pop(node_id);
     }
 
@@ -90,11 +92,8 @@ impl LruQueryLayer {
         // Check cache first
         {
             let mut cache = self.node_cache.lock().unwrap();
-            if let Some(entry) = cache.get(id) {
-                return match entry {
-                    CacheEntry::Found(node) => Some(*node.clone()),
-                    CacheEntry::Missing => None,
-                };
+            if let Some(CacheEntry::Found(node)) = cache.get(id) {
+                return Some(*node.clone());
             }
         }
 
@@ -106,8 +105,10 @@ impl LruQueryLayer {
 
         match result {
             Ok(Value::Null) => {
-                let mut cache = self.node_cache.lock().unwrap();
-                cache.put(id.to_string(), CacheEntry::Missing);
+                // Don't cache missing entries — if a node is created later,
+                // the stale "Missing" would suppress future lookups until
+                // invalidate_all(). Cache hits are the common case; cache
+                // misses for nonexistent nodes are rare.
                 None
             }
             Ok(val) => {
@@ -135,11 +136,11 @@ impl KbQueryLayer for LruQueryLayer {
         // Check node cache first
         {
             let mut cache = self.node_cache.lock().unwrap();
-            if let Some(entry) = cache.get(id) {
-                return matches!(entry, CacheEntry::Found(_));
+            if cache.get(id).is_some() {
+                return true; // Only Found entries are cached
             }
         }
-        // Fetch from daemon (populates cache)
+        // Fetch from daemon (populates cache on hit)
         self.fetch_node(id).is_some()
     }
 

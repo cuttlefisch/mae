@@ -665,7 +665,11 @@ impl super::Editor {
                 self.kb.daemon_socket = std::path::PathBuf::from(value);
             }
             "daemon_cache_size" => {
-                self.kb.daemon_cache_size = parse_option_int(value)? as usize;
+                let v = parse_option_int(value)?;
+                if v < 0 {
+                    return Err("daemon_cache_size must be non-negative".into());
+                }
+                self.kb.daemon_cache_size = v as usize;
             }
             "fill_column" => {
                 let v: usize = value

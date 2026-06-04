@@ -193,6 +193,14 @@ fn read_cl_message<R: BufRead>(reader: &mut R) -> Result<String, DaemonClientErr
         DaemonClientError::ConnectionError("Missing Content-Length header".to_string())
     })?;
 
+    // Guard against unreasonable message sizes (100 MB limit)
+    const MAX_MESSAGE_SIZE: usize = 100 * 1024 * 1024;
+    if len > MAX_MESSAGE_SIZE {
+        return Err(DaemonClientError::ConnectionError(format!(
+            "Content-Length {len} exceeds maximum {MAX_MESSAGE_SIZE}"
+        )));
+    }
+
     // Read body
     let mut body = vec![0u8; len];
     reader.read_exact(&mut body)?;
