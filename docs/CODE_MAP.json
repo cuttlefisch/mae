@@ -576,6 +576,7 @@
     "mae-kb": {
       "path": "shared/kb/src/lib.rs",
       "dependencies": [
+        "mae-mcp",
         "mae-sync",
         "mae-sync"
       ],
@@ -626,6 +627,10 @@
         },
         {
           "name": "cozo_store",
+          "kind": "mod"
+        },
+        {
+          "name": "lru_query",
           "kind": "mod"
         },
         {
@@ -754,6 +759,10 @@
         },
         {
           "name": "client_mgr",
+          "kind": "mod"
+        },
+        {
+          "name": "daemon_client",
           "kind": "mod"
         },
         {

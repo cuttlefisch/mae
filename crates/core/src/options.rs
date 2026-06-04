@@ -431,6 +431,17 @@ impl OptionRegistry {
                 opt!("collab_psk_command", &["collab-psk-command"],
                     "Shell command to retrieve the PSK (preferred over collab_psk for security)",
                     OptionKind::String, "", Some("collaboration.psk_command"), &[]),
+
+                // --- Daemon ---
+                opt!("daemon_enabled", &["daemon-enabled"],
+                    "Connect to mae-daemon for KB persistence and background services",
+                    OptionKind::Bool, "false", Some("daemon.enabled"), &[]),
+                opt!("daemon_socket", &["daemon-socket"],
+                    "Unix socket path for daemon communication",
+                    OptionKind::String, "/tmp/mae-daemon.sock", Some("daemon.socket"), &[]),
+                opt!("daemon_cache_size", &["daemon-cache-size"],
+                    "Maximum nodes in LRU cache (0 = unbounded)",
+                    OptionKind::Int, "200", Some("daemon.cache_size"), &[]),
             ],
         }
     }

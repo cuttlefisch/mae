@@ -45,6 +45,15 @@ pub struct KbContext {
     /// CozoDB-first query layer (federated across primary + instances).
     /// Falls back to in-memory KnowledgeBase when no CozoDB store is available.
     query: Option<Arc<dyn KbQueryLayer>>,
+    /// LRU-cached query layer backed by daemon RPC.
+    /// When set, `effective_query_layer()` returns this instead of the local query layer.
+    daemon_query: Option<Arc<dyn KbQueryLayer>>,
+    /// Whether daemon connection is enabled.
+    pub daemon_enabled: bool,
+    /// Daemon Unix socket path.
+    pub daemon_socket: std::path::PathBuf,
+    /// LRU cache capacity (0 = unbounded).
+    pub daemon_cache_size: usize,
 
     // --- Options ---
     /// KB option: enable/disable file watchers.
@@ -82,9 +91,24 @@ impl KbContext {
         self.registry.instances.first().map(|e| e.name.clone())
     }
 
-    /// Return the CozoDB-first query layer, if available.
+    /// Return the effective query layer: daemon LRU if connected, else local.
     pub fn query_layer(&self) -> Option<&dyn KbQueryLayer> {
+        self.daemon_query.as_deref().or(self.query.as_deref())
+    }
+
+    /// Return the local-only query layer (bypasses daemon).
+    pub fn local_query_layer(&self) -> Option<&dyn KbQueryLayer> {
         self.query.as_deref()
+    }
+
+    /// Set the daemon-backed LRU query layer.
+    pub fn set_daemon_query_layer(&mut self, layer: Option<Arc<dyn KbQueryLayer>>) {
+        self.daemon_query = layer;
+    }
+
+    /// Whether a daemon query layer is active.
+    pub fn has_daemon(&self) -> bool {
+        self.daemon_query.is_some()
     }
 
     /// Build or rebuild the federated query layer from current stores.
@@ -150,6 +174,10 @@ impl KbContext {
             ai_visited_ids: HashSet::new(),
             write_guard: HashSet::new(),
             query: None,
+            daemon_query: None,
+            daemon_enabled: false,
+            daemon_socket: std::path::PathBuf::from("/tmp/mae-daemon.sock"),
+            daemon_cache_size: 200,
             watcher_enabled: true,
             watcher_debounce_ms: 500,
             max_drain_events: 100,

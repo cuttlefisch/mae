@@ -39,6 +39,7 @@ pub mod watch;
 
 pub mod cache;
 pub mod cozo_store;
+pub mod lru_query;
 pub mod query;
 
 pub use cache::{CachedQueryLayer, NodeCache};
