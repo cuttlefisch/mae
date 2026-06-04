@@ -4,9 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### CI
+
+- *(deps)* Bump the ci-dependencies group with 2 updates ([2813128](https://github.com/cuttlefisch/mae/commit/2813128f97bf1c764c97e3cfc998e88744cd49a6))
+
+## [0.11.3] - 2026-06-01
+
 ### Bug Fixes
 
 - *(ci)* Bump test timeout 20m→30m ([c5707d1](https://github.com/cuttlefisch/mae/commit/c5707d17afd6d05d43a06d58ce672ee1ab20a72f))
+
+### Miscellaneous
+
+- Bump version to 0.11.3 ([0c6bb76](https://github.com/cuttlefisch/mae/commit/0c6bb76cc06c49b986d77339c0389453f2603b24))
 
 ## [0.11.2] - 2026-06-01
 
