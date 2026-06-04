@@ -1,13 +1,13 @@
 //! CozoKbStore — graph-native KB persistence using CozoDB (Datalog).
 //!
-//! Sole KB backend since v0.12.0. Uses sled embedded storage (CozoDB default).
-//! Will migrate to CozoDB's native SQLite storage engine once `rusqlite` is
-//! removed from the state-server (currently conflicts via `links = "sqlite3"`).
+//! Sole KB backend since v0.12.0. Storage engine selected by feature flag:
+//! - `storage-sled` (default): sled embedded storage
+//! - `storage-sqlite`: CozoDB's native SQLite engine (used by mae-daemon)
 //!
 //! CozoDB provides:
 //! - Datalog query engine with recursive queries
 //! - ACID + MVCC transactions
-//! - Multiple storage backends (SQLite default, RocksDB optional for high-concurrency)
+//! - Multiple storage backends (sled, SQLite, RocksDB)
 //!
 //! Graph algorithms (PageRank, community detection) require the `graph-algo`
 //! feature, currently disabled due to upstream `graph_builder` rayon compat
@@ -37,17 +37,33 @@ impl std::fmt::Debug for CozoKbStore {
 }
 
 impl CozoKbStore {
-    /// Open (or create) a CozoDB at the given path.
-    ///
-    /// Uses sled embedded storage (CozoDB default). Will migrate to CozoDB's
-    /// native SQLite engine once the `rusqlite` conflict with state-server is
-    /// resolved.
+    /// Open (or create) a CozoDB at the given path using the sled storage engine.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, KbStoreError> {
+        Self::open_with_engine(path, "sled")
+    }
+
+    /// Open (or create) a CozoDB at the given path with a specific storage engine.
+    ///
+    /// Supported engines: `"sled"`, `"sqlite"`, `"mem"`.
+    /// The caller must ensure the appropriate CozoDB storage feature is enabled.
+    pub fn open_with_engine(path: impl Into<PathBuf>, engine: &str) -> Result<Self, KbStoreError> {
         let path = path.into();
-        let db = DbInstance::new("sled", path.to_str().unwrap_or(""), "")
-            .map_err(|e| KbStoreError::Storage(format!("CozoDB open failed: {e}")))?;
+        let db = DbInstance::new(engine, path.to_str().unwrap_or(""), "")
+            .map_err(|e| KbStoreError::Storage(format!("CozoDB open ({engine}) failed: {e}")))?;
 
         let store = Self { db, path };
+        store.ensure_schema()?;
+        Ok(store)
+    }
+
+    /// Open an in-memory CozoDB store (for tests). No storage backend needed.
+    pub fn open_mem() -> Result<Self, KbStoreError> {
+        let db = DbInstance::new("mem", "", "")
+            .map_err(|e| KbStoreError::Storage(format!("CozoDB mem open failed: {e}")))?;
+        let store = Self {
+            db,
+            path: PathBuf::from(":memory:"),
+        };
         store.ensure_schema()?;
         Ok(store)
     }

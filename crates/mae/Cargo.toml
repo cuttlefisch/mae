@@ -21,9 +21,9 @@ mae-ai = { path = "../ai" }
 mae-lsp = { path = "../lsp" }
 mae-dap = { path = "../dap" }
 mae-shell = { path = "../shell" }
-mae-kb = { path = "../kb" }
-mae-mcp = { path = "../mcp" }
-mae-sync = { path = "../sync" }
+mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt"] }
+mae-mcp = { path = "../../shared/mcp" }
+mae-sync = { path = "../../shared/sync" }
 mae-gui = { path = "../gui", optional = true }
 winit = { version = "0.30", optional = true }
 crossterm = { version = "0.29", features = ["event-stream"] }

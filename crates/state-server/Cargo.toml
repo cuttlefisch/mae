@@ -7,10 +7,10 @@ rust-version.workspace = true
 description = "MAE collaborative state server — CRDT sync over TCP"
 
 [dependencies]
-mae-mcp = { path = "../mcp" }
-mae-sync = { path = "../sync" }
+mae-mcp = { path = "../../shared/mcp" }
+mae-sync = { path = "../../shared/sync" }
 tokio = { version = "1", features = ["full", "signal"] }
-rusqlite = { workspace = true }
+rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"

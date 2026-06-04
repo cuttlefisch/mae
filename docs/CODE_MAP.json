@@ -574,8 +574,9 @@
       ]
     },
     "mae-kb": {
-      "path": "crates/kb/src/lib.rs",
+      "path": "shared/kb/src/lib.rs",
       "dependencies": [
+        "mae-sync",
         "mae-sync"
       ],
       "public_items": [
@@ -740,7 +741,7 @@
       ]
     },
     "mae-mcp": {
-      "path": "crates/mcp/src/lib.rs",
+      "path": "shared/mcp/src/lib.rs",
       "dependencies": [],
       "public_items": [
         {
@@ -940,7 +941,7 @@
       ]
     },
     "mae-sync": {
-      "path": "crates/sync/src/lib.rs",
+      "path": "shared/sync/src/lib.rs",
       "dependencies": [],
       "public_items": [
         {

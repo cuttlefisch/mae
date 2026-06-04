@@ -18,6 +18,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
   - `make build-tui` for terminal-only build
   - `make ci` still excludes GUI (skia system deps)
   - `make check-config` validates init.scm + config.toml without launching the editor
+  - **Daemon** (separate workspace): `cd daemon && cargo build`, `cd daemon && cargo test`, `cd daemon && cargo clippy -- -D warnings`
   - **Container workflow** (no local toolchain required):
     - `make docker-ci` — full CI in container (mirrors GitHub CI exactly)
     - `make docker-new-user` — validate first-run flow in pristine environment
@@ -28,7 +29,27 @@ The project README (`README.md`) contains the architecture spec and stack ration
   - `docker compose run --rm --build <service>` is the canonical invocation
 - **Self-test:** Call the `self_test_suite` MCP tool to get the structured JSON test plan, then execute each test by calling the listed MCP tools and checking assertions. If MCP is unavailable, fall back to `make self-test` (headless). Categories: `introspection`, `editing`, `git`, `help`, `project`, `lsp`, `dap`, `babel`, `guidance`, `performance`, `scrolling`.
 
+## Repository Layout
+
+Two workspaces + shared crates (ADR-014):
+
+```
+mae/                              (repo root)
+├── Cargo.toml                    (editor workspace — cozo+sled, rusqlite OK)
+├── Cargo.lock                    (editor lock)
+├── crates/                       (editor-only crates — 18 crates)
+├── daemon/                       (daemon workspace — cozo+sqlite, no rusqlite)
+│   ├── Cargo.toml                (daemon workspace + own Cargo.lock)
+│   └── src/                      (mae-daemon binary)
+└── shared/                       (shared crates — members of editor workspace)
+    ├── kb/                       (mae-kb: CozoDB store, org parser, federation)
+    ├── sync/                     (mae-sync: yrs CRDT, ropey bridge)
+    └── mcp/                      (mae-mcp: JSON-RPC protocol, shim)
+```
+
 ## Crate Layout
+
+### Editor Workspace (`Cargo.toml`)
 
 | Crate | Purpose | Key Dependencies (planned) |
 |---|---|---|
@@ -39,10 +60,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
-| `mae-kb` | Knowledge base — CozoDB graph store (sole backend), typed relationships, org parser, federation | `cozo`, `tree-sitter`, `tree-sitter-org` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
-| `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O | `tokio`, `serde_json` |
-| `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers | `yrs`, `serde`, `base64` |
 | `mae-state-server` | Standalone collab state server — TCP sync, WAL persistence, per-doc locking | `mae-mcp`, `mae-sync`, `rusqlite`, `tokio` |
 | `mae-babel` | Org-mode code block execution (12 languages) | `mae-shell` |
 | `mae-export` | Org/Markdown → HTML/Markdown export | `mae-kb` |
@@ -53,6 +71,20 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-lookup` | Online lookup (dictionary, docs) | `reqwest` |
 | `mae-spell` | Spell checking integration | `mae-core` |
 | `mae` | Binary crate — CLI entry point, config loading, event loops | `clap`, `tokio` |
+
+### Shared Crates (`shared/` — editor workspace members, also used by daemon)
+
+| Crate | Purpose | Key Dependencies |
+|---|---|---|
+| `mae-kb` | Knowledge base — CozoDB graph store, typed relationships, org parser, federation | `cozo`, `tree-sitter`, `tree-sitter-org` |
+| `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers | `yrs`, `serde`, `base64` |
+| `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O | `tokio`, `serde_json` |
+
+### Daemon Workspace (`daemon/Cargo.toml` — separate Cargo.lock)
+
+| Crate | Purpose | Key Dependencies |
+|---|---|---|
+| `mae-daemon` | Background KB persistence, maintenance scheduler, JSON-RPC API | `cozo` (sqlite), `mae-kb`, `mae-mcp`, `mae-sync`, `tokio` |
 
 ## Architecture Principles
 

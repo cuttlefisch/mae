@@ -26,6 +26,9 @@ test_sandbox/
 assets/large_test.org
 assets/long_lines_test.txt
 
+# Daemon workspace build artifacts
+daemon/target/
+
 # Standalone tool build artifacts
 tools/*/target/
 tools/*/Cargo.lock

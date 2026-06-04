@@ -39,6 +39,7 @@ graph TD
     mae_gui --> mae_renderer
     mae_gui --> mae_shell
     mae_kb --> mae_sync
+    mae_kb --> mae_sync
     mae_lookup[mae-lookup]
     mae_lsp[mae-lsp]
     mae_make[mae-make]
@@ -242,7 +243,7 @@ Source: `crates/gui/src/lib.rs`
 
 ## mae-kb
 
-Source: `crates/kb/src/lib.rs`
+Source: `shared/kb/src/lib.rs`
 
 | Item | Kind |
 |------|------|
@@ -305,7 +306,7 @@ Source: `crates/make/src/lib.rs`
 
 ## mae-mcp
 
-Source: `crates/mcp/src/lib.rs`
+Source: `shared/mcp/src/lib.rs`
 
 | Item | Kind |
 |------|------|
@@ -391,7 +392,7 @@ Source: `crates/state-server/src/lib.rs`
 
 ## mae-sync
 
-Source: `crates/sync/src/lib.rs`
+Source: `shared/sync/src/lib.rs`
 
 | Item | Kind |
 |------|------|

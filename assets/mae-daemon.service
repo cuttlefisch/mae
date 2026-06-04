@@ -1,0 +1,35 @@
+# MAE Daemon — background KB persistence and maintenance
+#
+# Installation (recommended):
+#   make install-daemon
+#
+# Manual installation:
+#   cp mae-daemon.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now mae-daemon
+#
+# Logs: journalctl --user -u mae-daemon -f
+
+[Unit]
+Description=MAE Knowledge Base Daemon
+Documentation=https://github.com/cuttlefisch/mae
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/mae-daemon
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/mae %h/.config/mae %t
+PrivateTmp=yes
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,30 @@
+[package]
+name = "mae-daemon"
+version = "0.13.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "MAE daemon — background KB persistence, maintenance, and services"
+
+[[bin]]
+name = "mae-daemon"
+path = "src/main.rs"
+
+[dependencies]
+mae-kb = { path = "../shared/kb", default-features = false, features = ["crdt"] }
+mae-mcp = { path = "../shared/mcp" }
+mae-sync = { path = "../shared/sync" }
+
+# CozoDB with SQLite storage — separate workspace avoids rusqlite links conflict
+cozo = { version = "0.7", default-features = false, features = ["storage-sqlite", "storage-sqlite-src", "rayon"] }
+
+tokio = { version = "1", features = ["full", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "6"
+toml = "1.1"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"

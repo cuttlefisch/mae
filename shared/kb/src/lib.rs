@@ -275,6 +275,7 @@ impl Node {
     ///
     /// If the node already has CRDT bytes (`crdt_doc`), restores from those.
     /// Otherwise creates a fresh yrs document from the text fields.
+    #[cfg(feature = "crdt")]
     pub fn to_crdt_doc(&self) -> Result<mae_sync::kb::KbNodeDoc, mae_sync::SyncError> {
         if let Some(ref bytes) = self.crdt_doc {
             mae_sync::kb::KbNodeDoc::from_bytes(bytes)
@@ -290,6 +291,7 @@ impl Node {
 
     /// Update this node's text fields from a `KbNodeDoc`, and store the
     /// encoded CRDT bytes for persistence.
+    #[cfg(feature = "crdt")]
     pub fn apply_crdt_doc(&mut self, doc: &mae_sync::kb::KbNodeDoc) {
         self.title = doc.title();
         self.body = doc.body();
@@ -301,6 +303,7 @@ impl Node {
     ///
     /// Used when joining a shared KB: the CRDT doc is the source of truth,
     /// and we create a local Node from it for FTS5 indexing and display.
+    #[cfg(feature = "crdt")]
     pub fn from_crdt_doc(
         doc: &mae_sync::kb::KbNodeDoc,
         kind: NodeKind,
@@ -643,7 +646,7 @@ impl KnowledgeBase {
         Some(prev)
     }
 
-    // --- CRDT-aware mutation methods ---
+    // --- CRDT-aware mutation methods (require `crdt` feature) ---
 
     /// Upsert a node with CRDT backing. Creates or updates the `KbNodeDoc` and
     /// stores the encoded CRDT bytes on the node. Returns the update bytes
@@ -651,6 +654,7 @@ impl KnowledgeBase {
     ///
     /// If the node doesn't have CRDT bytes yet (lazy migration), creates a fresh
     /// `KbNodeDoc` from the text fields.
+    #[cfg(feature = "crdt")]
     pub fn upsert_with_crdt(&mut self, node: Node, client_id: u64) -> Option<Vec<u8>> {
         let id = node.id.clone();
 
@@ -694,6 +698,7 @@ impl KnowledgeBase {
     /// If the node doesn't exist yet, creates it from the update bytes.
     /// If it exists without CRDT bytes (lazy migration), creates a fresh
     /// `KbNodeDoc` first, then applies the update.
+    #[cfg(feature = "crdt")]
     pub fn apply_remote_update(
         &mut self,
         node_id: &str,
@@ -736,6 +741,7 @@ impl KnowledgeBase {
     }
 
     /// Get the state vector for a node's CRDT document.
+    #[cfg(feature = "crdt")]
     pub fn node_state_vector(&self, node_id: &str) -> Option<Vec<u8>> {
         let node = self.nodes.get(node_id)?;
         let doc = node.to_crdt_doc().ok()?;
@@ -747,6 +753,7 @@ impl KnowledgeBase {
     /// If `node_ids` is empty, includes all nodes. Otherwise includes only
     /// the specified subset. Returns the collection doc and a list of
     /// `(node_id, encoded_state)` pairs for sharing.
+    #[cfg(feature = "crdt")]
     #[allow(clippy::type_complexity)]
     pub fn to_collection(
         &self,
@@ -1900,8 +1907,9 @@ mod tests {
         );
     }
 
-    // --- Phase 1: KB↔CRDT bridge tests ---
+    // --- Phase 1: KB↔CRDT bridge tests (require `crdt` feature) ---
 
+    #[cfg(feature = "crdt")]
     /// Realistic org content with properties drawer, links, code blocks, Unicode.
     fn realistic_org_body() -> &'static str {
         ":PROPERTIES:\n:ID: test-node-001\n:ROAM_REFS: https://example.com\n:END:\n\
@@ -1913,6 +1921,7 @@ mod tests {
          #+begin_src rust\nfn main() { println!(\"hello\"); }\n#+end_src\n"
     }
 
+    #[cfg(feature = "crdt")]
     #[test]
     fn crdt_bridge_roundtrip_preserves_all_fields() {
         let body = realistic_org_body();
@@ -1937,6 +1946,7 @@ mod tests {
         assert!(restored.crdt_doc.is_some(), "CRDT bytes should be stored");
     }
 
+    #[cfg(feature = "crdt")]
     #[test]
     fn crdt_bridge_roundtrip_via_encode_decode() {
         let body = realistic_org_body();
@@ -1958,6 +1968,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "crdt")]
     #[test]
     fn crdt_bridge_empty_node_roundtrips() {
         let node = Node::new("concept:empty", "Empty", NodeKind::Note, "");
@@ -1970,6 +1981,7 @@ mod tests {
         assert!(restored.tags.is_empty());
     }
 
+    #[cfg(feature = "crdt")]
     #[test]
     fn crdt_bridge_node_with_metadata_roundtrips() {
         let mut crdt_doc = mae_sync::kb::KbNodeDoc::new(
@@ -1991,12 +2003,14 @@ mod tests {
         assert!(node.crdt_doc.is_some());
     }
 
+    #[cfg(feature = "crdt")]
     #[test]
     fn crdt_bridge_corrupted_bytes_returns_error() {
         let result = mae_sync::kb::KbNodeDoc::from_bytes(&[0xFF, 0xFE, 0xFD]);
         assert!(result.is_err(), "corrupted bytes should return error");
     }
 
+    #[cfg(feature = "crdt")]
     #[test]
     fn crdt_bridge_idempotent_encode() {
         let node = Node::new("n1", "Title", NodeKind::Note, "body text").with_tags(vec!["a", "b"]);
@@ -2021,6 +2035,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "crdt")]
     #[test]
     fn collection_from_kb_all_nodes() {
         let mut kb = KnowledgeBase::new();
@@ -2042,6 +2057,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "crdt")]
     #[test]
     fn collection_from_kb_subset() {
         let mut kb = KnowledgeBase::new();
@@ -2060,6 +2076,7 @@ mod tests {
         assert!(!ids.contains(&"n2"), "n2 should not be in subset");
     }
 
+    #[cfg(feature = "crdt")]
     #[test]
     fn collection_encode_decode_preserves_nodes() {
         let mut kb = KnowledgeBase::new();
@@ -2083,6 +2100,7 @@ mod tests {
         assert_eq!(decoded.name(), "Big KB");
     }
 
+    #[cfg(feature = "crdt")]
     #[test]
     fn crdt_bridge_apply_crdt_doc_updates_existing() {
         let mut node =
@@ -2099,6 +2117,7 @@ mod tests {
         assert!(node.crdt_doc.is_some());
     }
 
+    #[cfg(feature = "crdt")]
     #[test]
     fn crdt_bridge_large_body_roundtrips() {
         // 10KB org document
