@@ -45,7 +45,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-service install-completions docker-network-test bench bench-save bench-compare
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-service install-completions docker-network-test bench bench-save bench-compare manual-kb install-manual
 
 # Default target: release build
 all: build
@@ -62,13 +62,18 @@ build-tui:
 dev:
 	$(CARGO) build $(FEAT_FLAG)
 
-## install: build release binary, install to PREFIX, register desktop entry
-install: build
+## install: build release binary + manual KB, install to PREFIX, register desktop entry
+install: build manual-kb
 	@mkdir -p $(PREFIX)
 	@install -m 755 $(RELEASE_BIN) $(PREFIX)/$(BINARY)
 	@install -m 755 $(RELEASE_SHIM) $(PREFIX)/$(SHIM_BINARY)
 	@echo "Installed $(BINARY) -> $(PREFIX)/$(BINARY)"
 	@echo "Installed $(SHIM_BINARY) -> $(PREFIX)/$(SHIM_BINARY)"
+	@mkdir -p $(DATADIR)/mae
+	@rm -rf $(DATADIR)/mae/mae-manual.cozo
+	@cp -r assets/mae-manual.cozo $(DATADIR)/mae/mae-manual.cozo
+	@cp assets/mae-manual.cozo.sha256 $(DATADIR)/mae/mae-manual.cozo.sha256
+	@echo "Installed manual KB -> $(DATADIR)/mae/mae-manual.cozo"
 	@mkdir -p $(DATADIR)/applications
 	@sed 's|Exec=mae|Exec=$(PREFIX)/$(BINARY)|' $(DESKTOP_FILE) > $(DATADIR)/applications/mae.desktop
 	@sed 's|Exec=mae --connect|Exec=$(PREFIX)/$(BINARY) --connect|' assets/mae-connect.desktop > $(DATADIR)/applications/mae-connect.desktop
@@ -335,6 +340,19 @@ doctor:
 ## clean: remove all build artefacts
 clean:
 	$(CARGO) clean
+
+## manual-kb: build the pre-built manual KB (CozoDB file + SHA-256 checksum)
+manual-kb:
+	@mkdir -p assets
+	$(CARGO) run --release --bin build-manual-kb -- assets/mae-manual.cozo
+
+## install-manual: install pre-built manual KB to XDG data dir
+install-manual: manual-kb
+	@mkdir -p $(DATADIR)/mae
+	@rm -rf $(DATADIR)/mae/mae-manual.cozo
+	@cp -r assets/mae-manual.cozo $(DATADIR)/mae/mae-manual.cozo
+	@cp assets/mae-manual.cozo.sha256 $(DATADIR)/mae/mae-manual.cozo.sha256
+	@echo "Installed manual KB -> $(DATADIR)/mae/mae-manual.cozo"
 
 ## build-state-server: build the collaborative state server
 build-state-server:

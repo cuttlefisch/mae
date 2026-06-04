@@ -1,6 +1,6 @@
 //! KB Federation — multi-KB registry and cross-instance operations.
 //!
-//! SQLite is the durable source of truth for KB data.
+//! CozoDB is the durable source of truth for KB data.
 //! Org directories are an import/export format, not the runtime store.
 
 use std::collections::HashMap;
@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::org::parse_org_multi_result;
+use crate::store::KbStoreError;
 use crate::{KnowledgeBase, Node};
 
 /// A registered KB instance.
@@ -245,15 +247,39 @@ impl FederatedKb {
     }
 }
 
+/// How to ingest an external KB directory.
+#[derive(Debug, Clone, Default)]
+pub enum IngestMode {
+    /// Re-parse all files. Existing nodes updated, deleted files' nodes removed.
+    #[default]
+    Full,
+    /// Only re-parse files whose content hash has changed since last import.
+    Incremental,
+}
+
+impl IngestMode {
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "incremental" | "incr" => IngestMode::Incremental,
+            _ => IngestMode::Full,
+        }
+    }
+}
+
 /// Import report from ingesting an org directory.
 #[derive(Debug, Clone, Default)]
 pub struct ImportReport {
     pub nodes_imported: usize,
     pub nodes_skipped: usize,
+    pub nodes_updated: usize,
+    pub nodes_unchanged: usize,
+    pub nodes_removed: usize,
     pub links_created: usize,
     pub duplicate_ids: Vec<(String, PathBuf)>,
     pub errors: Vec<(PathBuf, String)>,
     pub path_to_ids: Vec<(std::path::PathBuf, Vec<String>)>,
+    pub mode: String,
+    pub duration_ms: u64,
 }
 
 /// Health metrics computed after ingestion.
@@ -351,6 +377,163 @@ pub fn import_org_dir(org_dir: &Path) -> (KnowledgeBase, ImportReport, ImportHea
     report.path_to_ids = file_id_map.into_iter().collect();
     let health = ImportHealth::from_kb(&kb);
     (kb, report, health)
+}
+
+/// Import an org-roam directory directly into a CozoDB store.
+///
+/// Unlike `import_org_dir`, this writes nodes directly to CozoDB (no
+/// intermediate in-memory KB). Supports full and incremental modes.
+///
+/// Returns a report and also populates an in-memory KB for the caller
+/// to use as a read cache.
+pub fn import_org_dir_to_store(
+    org_dir: &Path,
+    store: &crate::CozoKbStore,
+    mode: &IngestMode,
+) -> Result<(KnowledgeBase, ImportReport), KbStoreError> {
+    use crate::store::KbStore;
+    use sha2::{Digest, Sha256};
+
+    let start = std::time::Instant::now();
+    let mut kb = KnowledgeBase::new();
+    let mut report = ImportReport {
+        mode: format!("{mode:?}"),
+        ..Default::default()
+    };
+    let mut seen_ids = std::collections::HashSet::new();
+
+    let walker = walkdir::WalkDir::new(org_dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok());
+
+    // Track which files we visit (for detecting deletions in Full mode).
+    let mut visited_files = std::collections::HashSet::new();
+
+    for entry in walker {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("org") {
+            continue;
+        }
+        if path.file_name().and_then(|n| n.to_str()) == Some("eor-instance.org") {
+            continue;
+        }
+
+        let file_path_str = path.to_string_lossy().to_string();
+        visited_files.insert(file_path_str.clone());
+
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                report.errors.push((path.to_path_buf(), e.to_string()));
+                continue;
+            }
+        };
+
+        // Compute content hash for change detection.
+        let content_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+
+        // In incremental mode, skip files whose content hasn't changed.
+        if matches!(mode, IngestMode::Incremental) {
+            if let Ok(Some(stored_hash)) = store.get_source_file_hash(&file_path_str) {
+                if stored_hash == content_hash {
+                    // Content unchanged — load existing node IDs into in-memory KB.
+                    if let Ok(node_ids) = store.get_source_file_node_ids(&file_path_str) {
+                        for id in &node_ids {
+                            if let Ok(Some(node)) = store.get_node(id) {
+                                seen_ids.insert(id.clone());
+                                kb.insert(node);
+                            }
+                        }
+                    }
+                    report.nodes_unchanged += 1;
+                    continue;
+                }
+            }
+        }
+
+        // Parse with typed link support (query known rel types from store).
+        let known_rel_types = store.known_rel_types().ok();
+        let parse_result = parse_org_multi_result(&content, known_rel_types.as_ref());
+        if parse_result.nodes.is_empty() {
+            report.nodes_skipped += 1;
+            continue;
+        }
+
+        let mut file_node_ids = Vec::new();
+        for mut node in parse_result.nodes {
+            node.source_file = Some(path.to_path_buf());
+            report.links_created += node.links().len();
+
+            if seen_ids.insert(node.id.clone()) {
+                file_node_ids.push(node.id.clone());
+
+                // Write to CozoDB.
+                store.insert_node(&node)?;
+                kb.insert(node);
+
+                // Check if this was an update or new node.
+                if let Ok(Some(old_hash)) = store.get_source_file_hash(&file_path_str) {
+                    if !old_hash.is_empty() {
+                        report.nodes_updated += 1;
+                    } else {
+                        report.nodes_imported += 1;
+                    }
+                } else {
+                    report.nodes_imported += 1;
+                }
+            } else {
+                report
+                    .duplicate_ids
+                    .push((node.id.clone(), path.to_path_buf()));
+            }
+        }
+
+        // Wire typed links to CozoDB.
+        for (src_id, link) in &parse_result.typed_links {
+            if let Err(e) = store.add_typed_link(src_id, &link.target, &link.rel_type, 1.0) {
+                tracing::debug!(src = %src_id, dst = %link.target, rel = %link.rel_type, error = %e, "typed link insert failed");
+            }
+        }
+
+        // Wire transclusions to meta_members.
+        for (order, (meta_id, member_id, role)) in parse_result.transclusions.iter().enumerate() {
+            if let Err(e) = store.add_meta_member(meta_id, member_id, order as i32, role) {
+                tracing::debug!(meta = %meta_id, member = %member_id, error = %e, "meta_member insert failed");
+            }
+        }
+
+        // Record source file metadata for incremental reimport.
+        let mtime = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        store.record_source_file(&file_path_str, &content_hash, mtime, &file_node_ids)?;
+
+        report.path_to_ids.push((path.to_path_buf(), file_node_ids));
+    }
+
+    // In full mode, detect deleted files and remove their nodes.
+    if matches!(mode, IngestMode::Full) {
+        if let Ok(tracked_files) = store.list_source_files() {
+            for (tracked_path, _, _) in tracked_files {
+                if !visited_files.contains(&tracked_path) {
+                    // File was deleted — remove its nodes.
+                    if let Ok(removed_ids) = store.remove_source_file(&tracked_path) {
+                        report.nodes_removed += removed_ids.len();
+                    }
+                }
+            }
+        }
+    }
+
+    report.duration_ms = start.elapsed().as_millis() as u64;
+    Ok((kb, report))
 }
 
 /// Read UUID from sentinel file in org directory.

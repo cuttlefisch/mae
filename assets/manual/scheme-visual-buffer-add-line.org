@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:visual-buffer-add-line!
+:KIND: scheme_api
+:END:
+#+title: Scheme: visual-buffer-add-line!
+#+filetags: :scheme:api:visual:
+
+** Signature
+#+begin_src scheme
+(visual-buffer-add-line! X1 Y1 X2 Y2 COLOR THICKNESS)
+#+end_src
+
+Draw a line on the visual canvas.
+
+** Example
+#+begin_src scheme
+(visual-buffer-add-line! 0.0 0.0 100.0 100.0 "white" 2.0)
+#+end_src
+
+*Category:* visual
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

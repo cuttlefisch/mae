@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:wait-until
+:KIND: scheme_api
+:END:
+#+title: Scheme: wait-until
+#+filetags: :scheme:api:testing:
+
+** Signature
+#+begin_src scheme
+(wait-until PRED TIMEOUT-MS)
+#+end_src
+
+Poll PRED every 50ms, sleeping between checks (event-loop-aware). Returns #t on success, signals error on timeout.
+
+** Example
+#+begin_src scheme
+(wait-until (lambda () (file-exists? "/tmp/result.txt")) 5000)
+#+end_src
+
+*Category:* testing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

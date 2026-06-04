@@ -129,7 +129,13 @@ impl Editor {
                             format!("tutorial:{}", topic),
                             format!("category:{}", topic),
                         ];
-                        let found = candidates.iter().find(|id| self.kb.primary.contains(id));
+                        let found = candidates.iter().find(|id| {
+                            if let Some(q) = self.kb.query_layer() {
+                                q.contains(id)
+                            } else {
+                                self.kb.primary.contains(id)
+                            }
+                        });
                         match found {
                             Some(id) => self.open_help_at(id),
                             None => self.set_status(format!("No help for: {}", topic)),
@@ -144,7 +150,12 @@ impl Editor {
                     return true;
                 };
                 let id = format!("cmd:{}", name);
-                if self.kb.primary.contains(&id) {
+                let id_exists = if let Some(q) = self.kb.query_layer() {
+                    q.contains(&id)
+                } else {
+                    self.kb.primary.contains(&id)
+                };
+                if id_exists {
                     self.open_help_at(&id);
                 } else {
                     self.set_status(format!("Unknown command: {}", name));
@@ -242,44 +253,63 @@ impl Editor {
             }
             "kb-reimport" => {
                 match args.map(str::trim).filter(|s| !s.is_empty()) {
-                    None => self.set_status("Usage: :kb-reimport <name>"),
-                    Some(name) => {
-                        self.kb_reimport(name);
+                    None => self.set_status("Usage: :kb-reimport <name> [full|incremental]"),
+                    Some(args_str) => {
+                        let parts: Vec<&str> = args_str.splitn(2, ' ').collect();
+                        let name = parts[0];
+                        let mode = parts.get(1).map(|m| mae_kb::IngestMode::from_str_lossy(m));
+                        self.kb_reimport(name, mode);
                     }
                 }
                 true
             }
-            "kb-save" => {
-                self.dispatch_path_op(
-                    args,
-                    "kb-save",
-                    |editor, p| {
-                        editor
-                            .kb
-                            .primary
-                            .save_to_sqlite(p)
-                            .map(|()| editor.kb.primary.len())
-                            .map_err(|e| format!("kb save failed: {}", e))
-                    },
-                    "Saved",
-                    "to",
-                );
+            "kb-agenda" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status(
+                        "Usage: :kb-agenda todo [STATE] | priority <A-C> | tag <TAG> | orphan | stale <DAYS> | dead-end | custom <DATALOG>"
+                    ),
+                    Some(input) => {
+                        self.dispatch_kb_agenda(input);
+                    }
+                }
                 true
             }
-            "kb-load" => {
-                self.dispatch_path_op(
-                    args,
-                    "kb-load",
-                    |editor, p| {
-                        editor
-                            .kb
-                            .primary
-                            .load_from_sqlite(p)
-                            .map_err(|e| format!("kb load failed: {}", e))
-                    },
-                    "Loaded",
-                    "from",
-                );
+            "kb-history" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-history <node-id>"),
+                    Some(id) => {
+                        self.dispatch_kb_history(id);
+                    }
+                }
+                true
+            }
+            "kb-restore" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-restore <node-id> <version>"),
+                    Some(input) => {
+                        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+                        if parts.len() < 2 {
+                            self.set_status("Usage: :kb-restore <node-id> <version>");
+                        } else if let Ok(ver) = parts[1].trim().parse::<i64>() {
+                            self.dispatch_kb_restore(parts[0], ver);
+                        } else {
+                            self.set_status("Version must be a number");
+                        }
+                    }
+                }
+                true
+            }
+            "kb-raw-query" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-raw-query <datalog-query>"),
+                    Some(query) => {
+                        self.dispatch_kb_raw_query(query);
+                    }
+                }
+                true
+            }
+            "kb-save" | "kb-load" => {
+                self.set_status("KB persistence is now automatic via CozoDB. Use :kb-register / :kb-reimport for external KBs.");
                 true
             }
             "theme" | "set-theme" => {
@@ -723,7 +753,12 @@ impl Editor {
                         // Try to find the option and open its KB node
                         if let Some((_, def)) = self.get_option(n) {
                             let id = format!("option:{}", def.name);
-                            if self.kb.primary.contains(&id) {
+                            let id_exists = if let Some(q) = self.kb.query_layer() {
+                                q.contains(&id)
+                            } else {
+                                self.kb.primary.contains(&id)
+                            };
+                            if id_exists {
                                 self.open_help_at(&id);
                             } else {
                                 // Fallback: show inline

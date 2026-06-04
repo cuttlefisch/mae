@@ -1,0 +1,25 @@
+:PROPERTIES:
+:ID: lesson:terminal
+:KIND: lesson
+:END:
+#+title: Lesson 8: Terminal
+#+filetags: :tutorial:
+
+** Lesson 8: Terminal
+
+Prerequisites: [[requires:lesson:lsp][Lesson 7: LSP]]
+
+MAE embeds a full [[teaches:concept:terminal][terminal emulator]].
+
+*** Commands
+  ~SPC o t~ — open terminal
+  ~Ctrl-\ Ctrl-n~ — exit terminal to Normal mode
+  ~SPC e s~ — send current line to terminal
+  ~SPC e S~ — send selection to terminal
+
+*** Features
+- Full VT100 support (vim, less, top, fzf all work)
+- MCP bridge: AI agents in the terminal can call back into MAE
+- Shell CWD tracking via ~/proc~
+
+*Prev:* [[lesson:lsp][Lesson 7]]  |  *Next:* [[lesson:help][Lesson 9: Help]]  |  *Index:* [[tutor:index][Tutorial]]

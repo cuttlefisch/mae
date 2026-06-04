@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:mode
+:KIND: concept
+:END:
+#+title: Mode
+#+filetags: :terminology:
+
+Current editing state: Normal, Insert, Visual (char/line/block), Command, Search, ShellInsert, FilePicker, FileBrowser, CommandPalette, ConversationInput. Not to be confused with Emacs major-modes -- MAE modes are vi-style modal states.

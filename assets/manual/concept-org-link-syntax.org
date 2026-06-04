@@ -1,0 +1,139 @@
+:PROPERTIES:
+:ID: concept:org-link-syntax
+:KIND: concept
+:ALIASES: typed links, link syntax, org links
+:END:
+#+TITLE: Org Link Syntax — Typed Links, Fragments, and Transclusions
+
+MAE extends standard org-mode link syntax with typed relationships,
+fragment addressing, and transclusion directives. These features enable
+the knowledge base graph to express rich semantic connections between
+nodes.
+
+* Standard Links
+
+The basic link syntax follows org-mode conventions:
+
+- =[[NODE_ID]]= — plain link to a KB node
+- =[[NODE_ID][display text]]= — link with custom display text
+
+Examples:
+
+#+begin_example
+See [[concept:buffer]] for details.
+The [[concept:mode][modal editing system]] is inspired by vi.
+#+end_example
+
+* Typed Links
+
+Typed links express the /relationship type/ between two nodes:
+
+=[[REL_TYPE:NODE_ID]]= or =[[REL_TYPE:NODE_ID][display]]=
+
+The REL_TYPE prefix is separated from the NODE_ID by the /first/ colon.
+Since node IDs already contain colons (e.g., =concept:buffer=), the
+parser distinguishes typed links by checking whether the prefix before
+the first colon is a known relationship type.
+
+** Available Relationship Types
+
+| Type             | Meaning                                  | Example                                       |
+|------------------+------------------------------------------+-----------------------------------------------|
+| =implements=     | A implements B                           | =[[implements:concept:options]]=               |
+| =teaches=        | A teaches/covers B                       | =[[teaches:concept:buffer]]=                   |
+| =requires=       | A requires B as prerequisite             | =[[requires:lesson:navigation]]=               |
+| =references=     | A references B (generic cross-ref)       | =[[references:concept:scheme-api]]=            |
+| =part_of=        | A is a component/subpart of B            | =[[part_of:concept:mode]]=                     |
+| =contains=       | A contains B as a member                 | =[[contains:tutorial:vim-familiar]]=           |
+| =documents=      | A documents/describes B                  | =[[documents:concept:sync-engine]]=            |
+| =explains=       | A explains B in detail                   | =[[explains:concept:collaborative-state]]=     |
+| =extends=        | A extends/enhances B                     | =[[extends:concept:buffer]]=                   |
+| =contradicts=    | A contradicts/disagrees with B           | =[[contradicts:concept:old-design]]=           |
+| =supersedes=     | A replaces/supersedes B                  | =[[supersedes:concept:legacy-store]]=          |
+| =related_to=     | A is related to B (weak association)     | =[[related_to:concept:window]]=                |
+| =configures=     | A configures/parameterizes B             | =[[configures:option:theme]]=                  |
+| =binds=          | A binds a key to B                       | =[[binds:cmd:save]]=                           |
+| =categorized_under= | A belongs to category B              | =[[categorized_under:category:editing]]=       |
+| =federated_from= | A was imported from instance B           | =[[federated_from:instance:roam-notes]]=       |
+| =assigned_to=    | Task A is assigned to person B           | =[[assigned_to:user:alice]]=                   |
+| =belongs_to_sprint= | Task A is in sprint B                 | =[[belongs_to_sprint:sprint:v0.13]]=           |
+| =subtask_of=     | Task A is a subtask of B                 | =[[subtask_of:task:refactor-kb]]=              |
+| =blocks_task=    | Task A blocks task B                     | =[[blocks_task:task:release-v1]]=              |
+
+** Usage in Org Files
+
+Typed links appear inline in the body text, just like standard links:
+
+#+begin_example
+This lesson teaches the fundamentals of buffer navigation.
+See [[teaches:concept:buffer]] and [[teaches:concept:window]].
+
+Prerequisites: [[requires:lesson:modes]].
+#+end_example
+
+When the org parser encounters a typed link, it:
+1. Extracts the rel_type (e.g., =teaches=)
+2. Extracts the target node ID (e.g., =concept:buffer=)
+3. Stores both in the =typed_links= field of the parse result
+4. The link is stored in CozoDB with the correct =rel_type=
+
+* Fragment Links
+
+Fragment links address a specific section or block within a node:
+
+- =[[NODE_ID#heading-slug]]= — named heading fragment
+- =[[NODE_ID#3]]= — numeric block index (0-based)
+- =[[REL_TYPE:NODE_ID#fragment]]= — typed link with fragment
+
+Examples:
+
+#+begin_example
+See [[concept:buffer#rope-internals]] for the data structure.
+Block 3 covers cursors: [[concept:mode#3]].
+This section teaches: [[teaches:concept:scheme-api#hooks]].
+#+end_example
+
+Fragment navigation:
+- Named fragments match heading text (slugified, case-insensitive)
+- Numeric fragments jump to the Nth blank-line-separated block
+- The fragment is stripped from the target ID for node lookup
+
+* Transclusion Directives
+
+Transclusion includes content from another node inline:
+
+=#+TRANSCLUDE: NODE_ID ROLE=
+
+Roles:
+- =content= — include the full body text
+- =reference= — show only a link to the node
+- =transclusion= — inline the body within the current node
+
+Example:
+
+#+begin_example
+#+TRANSCLUDE: concept:buffer-view content
+#+TRANSCLUDE: concept:rope-internals reference
+#+end_example
+
+Transcluded nodes become members of the containing meta-node.
+The =compose_meta_body= function assembles the final text.
+
+* Property Drawer
+
+Every org file in =assets/manual/= uses a property drawer:
+
+The property drawer uses ~:ID:~ for the node identifier, ~:KIND:~ for
+the node type, and ~:ALIASES:~ for search aliases:
+
+~:ID: concept:buffer~, ~:KIND: concept~, ~:ALIASES: rope, text buffer~
+
+The =:KIND:= property maps to [[concept:knowledge-base][NodeKind]]:
+=concept=, =lesson=, =tutorial=, =key=, =note=, =command=, =category=,
+=meta=, =block=, =scheme_api=, =task=, =view=.
+
+* See Also
+
+- [[references:concept:knowledge-base]]
+- [[references:concept:org-mode]]
+- [[references:concept:kb-federation]]

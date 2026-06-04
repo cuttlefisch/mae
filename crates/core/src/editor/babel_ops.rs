@@ -76,6 +76,10 @@ impl Editor {
                 self.set_status("Scheme block queued for evaluation");
                 return;
             }
+            babel::execute::ExecResult::PendingDatalogQuery(query) => {
+                self.dispatch_kb_raw_query(query);
+                return;
+            }
             babel::execute::ExecResult::Error(e) => {
                 self.set_status(format!("Babel error: {}", e));
                 return;
@@ -151,6 +155,7 @@ impl Editor {
                 babel::execute::ExecResult::Value(s) => s.clone(),
                 babel::execute::ExecResult::File(p) => format!("[[file:{}]]", p.display()),
                 babel::execute::ExecResult::PendingSchemeEval(_)
+                | babel::execute::ExecResult::PendingDatalogQuery(_)
                 | babel::execute::ExecResult::Error(_) => continue,
             };
 

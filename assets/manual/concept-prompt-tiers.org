@@ -1,0 +1,32 @@
+:PROPERTIES:
+:ID: concept:prompt-tiers
+:KIND: concept
+:END:
+#+title: Prompt Tiers
+#+filetags: :ai:configuration:
+
+** Prompt Tiers
+
+MAE uses tiered system prompts to optimize AI agent behavior for different models.
+
+*** Full Tier
+Concise prompt (~25 lines) for frontier models with strong implicit reasoning:
+- Claude Opus, Claude Sonnet, GPT-4o, GPT-4 Turbo, Gemini 2.5 Pro, o1
+
+*** Compact Tier
+Explicit guardrails (~70 lines) for smaller/cheaper models:
+- DeepSeek, Claude Haiku, GPT-4o-mini, Gemini Flash, o1-mini
+- Includes: tool preferences, fallback chains, anti-looping rules, common recipes
+
+*** Default Assignments
+Unknown models default to **compact** (safe: over-prompting wastes a few tokens; under-prompting wastes millions in looping).
+
+*** Override
+Set `[ai] prompt_tier = "full"` or `"compact"` in `config.toml` to force a tier regardless of model.
+
+*** Custom Prompts
+Place `pair-programmer.xml` or `pair-programmer-compact.xml` in:
+- `~/.config/mae/prompts/` (user override)
+- `.mae/prompts/` (project-local override)
+
+See also: [[explains:concept:ai-modes][AI Agent vs Chat]], [[references:concept:ai-as-peer][AI as Peer]]

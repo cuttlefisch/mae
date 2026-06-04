@@ -55,7 +55,11 @@ impl Editor {
             "kb-rebuild" => {
                 self.kb.primary =
                     crate::kb_seed::seed_kb(&self.commands, &self.keymaps, &self.hooks);
-                let count = self.kb.primary.list_ids(None).len();
+                let count = if let Some(q) = self.kb.query_layer() {
+                    q.list_ids(None).len()
+                } else {
+                    self.kb.primary.list_ids(None).len()
+                };
                 self.set_status(format!("KB rebuilt: {} nodes", count));
             }
             "kb-audit" => {
@@ -71,6 +75,32 @@ impl Editor {
                 } else {
                     self.set_status(format!("Removed {} orphan note(s)", count));
                 }
+            }
+            "kb-agenda" => {
+                self.set_mode(Mode::Command);
+                self.vi.command_line = "kb-agenda ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
+            }
+            "kb-history" => {
+                self.set_mode(Mode::Command);
+                self.vi.command_line = "kb-history ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
+            }
+            "kb-restore" => {
+                self.set_mode(Mode::Command);
+                self.vi.command_line = "kb-restore ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
+            }
+            "kb-raw-query" => {
+                self.set_mode(Mode::Command);
+                self.vi.command_line = "kb-raw-query ".to_string();
+                self.vi.command_cursor = self.vi.command_line.len();
+            }
+            "kb-narrow" => {
+                self.kb_narrow_meta();
+            }
+            "kb-widen" => {
+                self.kb_widen_meta();
             }
             "capture-finalize" => {
                 if let Some(cap) = self.kb.capture_state.take() {

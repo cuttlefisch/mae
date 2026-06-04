@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:define-key
+:KIND: scheme_api
+:END:
+#+title: Scheme: define-key
+#+filetags: :scheme:api:keymaps:
+
+** Signature
+#+begin_src scheme
+(define-key MAP KEY COMMAND)
+#+end_src
+
+Bind KEY in keymap MAP to COMMAND.
+
+** Example
+#+begin_src scheme
+(define-key "normal" "g g" "goto-first-line")
+#+end_src
+
+*Category:* keymaps
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

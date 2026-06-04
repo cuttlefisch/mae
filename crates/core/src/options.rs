@@ -211,7 +211,7 @@ impl OptionRegistry {
                     "Keybinding flavor: doom (default), vim-pure, emacs, minimal. Selects which keymap module to load at startup.",
                     OptionKind::String, "doom", Some("editor.keymap_flavor"), &[]),
                 opt!("link_descriptive", &["link-descriptive"],
-                    "Show link labels instead of raw markup (Emacs org-link-descriptive). When true, [label](url) and [[target][label]] display as styled labels.",
+                    "Show link labels instead of raw markup (Emacs org-link-descriptive). When true, markdown links and org-style links display as styled labels.",
                     OptionKind::Bool, "true", Some("editor.link_descriptive"), &[]),
                 opt!("render_markup", &["render-markup"],
                     "Apply inline styling (bold/italic/code) in conversation and KB buffers (both markdown and org syntax)",

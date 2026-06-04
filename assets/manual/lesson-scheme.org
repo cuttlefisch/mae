@@ -1,0 +1,26 @@
+:PROPERTIES:
+:ID: lesson:scheme
+:KIND: lesson
+:END:
+#+title: Lesson 6: Scheme REPL
+#+filetags: :tutorial:
+
+** Lesson 6: Scheme REPL
+
+Prerequisites: [[requires:lesson:ai][Lesson 5: AI Features]]
+
+MAE is extensible via R7RS Scheme (mae-scheme). This lesson [[teaches:concept:scheme-api][teaches the Scheme API]]. [[concept:hooks][Hooks]] let Scheme code react to editor events.
+
+*** Evaluate expressions
+  ~SPC e e~ — evaluate current line
+  ~SPC e b~ — evaluate entire buffer
+  ~:eval <expr>~ — evaluate a Scheme expression
+
+*** Try it
+  ~:eval (+ 1 2)~ — should show ~3~
+  ~:eval (set-option! "theme" "dracula")~ — change theme
+
+*** Configuration
+Your ~init.scm~ is loaded at startup. Use ~SPC f c~ to edit it.
+
+*Prev:* [[lesson:ai][Lesson 5]]  |  *Next:* [[lesson:lsp][Lesson 7: LSP]]  |  *Index:* [[tutor:index][Tutorial]]

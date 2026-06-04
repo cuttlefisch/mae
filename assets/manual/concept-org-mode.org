@@ -1,0 +1,55 @@
+:PROPERTIES:
+:ID: concept:org-mode
+:KIND: concept
+:END:
+#+title: Org-mode
+#+filetags: :org:editing:
+
+**Org-mode** in MAE provides structural editing and task management capabilities for `.org` files, inspired by Doom Emacs evil-org.
+
+** Core Features
+
+*** 1. Three-State Heading Cycle (TAB)
+Press `TAB` on a heading to cycle its visibility through three states:
+**Subtree** (everything visible) -> **Folded** (heading only) -> **Children** (body + child headings visible, child bodies folded) -> **Subtree**.
+Leaf headings (no children) toggle between **Subtree** and **Folded**.
+
+*** 2. Fold All / Unfold All
+- `zM` (`close-all-folds`): Fold all headings in the buffer.
+- `zR` (`open-all-folds`): Unfold all headings.
+- `za`: Toggle fold at cursor (tree-sitter or heading).
+
+*** 3. Structural Editing
+- `M-h` / `M-Left`: **Promote** heading (remove one `*` prefix).
+- `M-l` / `M-Right`: **Demote** heading (add one `*` prefix).
+- `M-k` / `M-Up`: **Move subtree up** past previous sibling.
+- `M-j` / `M-Down`: **Move subtree down** past next sibling.
+Moving a subtree automatically clears any folds in the affected range.
+
+*** 4. Narrow / Widen
+- `SPC m s n` (`org-narrow-subtree`): Narrow buffer to current heading's subtree. Only lines in that subtree are visible; cursor is clamped to the range. Status bar shows `[Narrowed]`.
+- `SPC m s w` (`org-widen`): Restore full buffer visibility.
+
+*** 5. Heading Font Scaling
+Org headings render at scaled font sizes for visual hierarchy:
+`*` = 1.5x, `**` = 1.3x, `***` = 1.15x.
+Disable with `:set heading_scale false`.
+
+*** 6. Insert Heading (M-Enter)
+- On a heading line: Insert a new heading at the **same level** after the current subtree.
+- Not on a heading: Insert a level-1 heading below the current line.
+- Automatically enters insert mode with cursor after the heading prefix.
+
+*** 7. Task Management
+- `S-Left` / `S-Right`: Cycle TODO states (`TODO` -> `DONE` -> `None`).
+- `S-Up` / `S-Down`: Cycle priorities (`[#A]` -> `[#B]` -> `[#C]`).
+
+*** 8. Links
+Press `Enter` on a link to follow it. Internal links jump to headings; external links open in your browser.
+
+*** 9. Rich Rendering
+- `*bold*` text is rendered in bold.
+- `/italic/` text is rendered in italics.
+- **Emphasis Markers**: Use `:set org_hide_emphasis_markers true` to hide the surrounding `*` and `/` characters.
+
+See also: [[references:concept:markdown][Markdown]], [[references:concept:knowledge-base][Knowledge Base]], [[references:concept:options][Editor Options]]

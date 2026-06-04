@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:set-option!
+:KIND: scheme_api
+:END:
+#+title: Scheme: set-option!
+#+filetags: :scheme:api:options:
+
+** Signature
+#+begin_src scheme
+(set-option! KEY VALUE)
+#+end_src
+
+Set a global editor option.
+
+** Example
+#+begin_src scheme
+(set-option! "theme" "dracula")
+#+end_src
+
+*Category:* options
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

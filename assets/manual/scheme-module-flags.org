@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:module-flags
+:KIND: scheme_api
+:END:
+#+title: Scheme: module-flags
+#+filetags: :scheme:api:modules:
+
+** Signature
+#+begin_src scheme
+(module-flags NAME)
+#+end_src
+
+Return the flags alist for a loaded module.
+
+** Example
+#+begin_src scheme
+(module-flags "org")
+#+end_src
+
+*Category:* modules
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

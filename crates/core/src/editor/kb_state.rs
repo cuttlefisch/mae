@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use mae_kb::query::KbQueryLayer;
+
 use super::kb_ops::KbWatcherStats;
 use super::CaptureState;
 
@@ -13,15 +15,21 @@ use super::CaptureState;
 pub struct KbContext {
     /// Primary knowledge base instance (manual + user notes + AI-facing kb_* tools).
     pub primary: mae_kb::KnowledgeBase,
-    /// Persistent backing store (SQLite or CozoDB). When present, all KB mutations
+    /// Persistent backing store (CozoDB). When present, all KB mutations
     /// are written through to this store. Loaded at startup, persists across sessions.
     pub store: Option<Arc<dyn mae_kb::KbStore>>,
+    /// Typed CozoDB store handle (same as `store`, but typed for query layer construction).
+    pub primary_cozo: Option<Arc<mae_kb::CozoKbStore>>,
+    /// Pre-built manual KB store (read-only, shipped with MAE binary).
+    pub manual_cozo: Option<Arc<mae_kb::CozoKbStore>>,
     /// Standardized KB data directory layout (XDG-compliant).
     pub data_dir: Option<mae_kb::data_dir::KbDataDir>,
     /// KB federation: registry of external KB instances (org-roam dirs etc.).
     pub registry: mae_kb::federation::KbRegistry,
     /// KB federation: loaded KB instances keyed by registry UUID.
     pub instances: HashMap<String, mae_kb::KnowledgeBase>,
+    /// CozoDB store handles for federated KB instances (retained for runtime queries).
+    pub instance_stores: HashMap<String, Arc<mae_kb::CozoKbStore>>,
     /// KB federation: live file watchers for registered org directories.
     pub watchers: HashMap<String, mae_kb::watch::OrgDirWatcher>,
     /// KB watcher: last drain timestamp per instance UUID (for debounce).
@@ -34,6 +42,9 @@ pub struct KbContext {
     pub ai_visited_ids: HashSet<String>,
     /// Paths currently being written by MAE itself (activity tracking, chain-fill).
     pub write_guard: HashSet<PathBuf>,
+    /// CozoDB-first query layer (federated across primary + instances).
+    /// Falls back to in-memory KnowledgeBase when no CozoDB store is available.
+    query: Option<Arc<dyn KbQueryLayer>>,
 
     // --- Options ---
     /// KB option: enable/disable file watchers.
@@ -71,19 +82,74 @@ impl KbContext {
         self.registry.instances.first().map(|e| e.name.clone())
     }
 
+    /// Return the CozoDB-first query layer, if available.
+    pub fn query_layer(&self) -> Option<&dyn KbQueryLayer> {
+        self.query.as_deref()
+    }
+
+    /// Build or rebuild the federated query layer from current stores.
+    /// Call after store/instance_store changes (register, unregister, reimport).
+    pub fn rebuild_query_layer(&mut self) {
+        // Determine the primary query layer: prefer user's primary CozoDB store,
+        // fall back to the manual KB store if no user store is available.
+        let primary_arc = self
+            .primary_cozo
+            .as_ref()
+            .or(self.manual_cozo.as_ref())
+            .cloned();
+
+        if let Some(ref cozo) = primary_arc {
+            let primary_layer = Arc::new(mae_kb::CozoQueryLayer::new(cozo.clone()));
+            let mut federated = mae_kb::FederatedQuery::new(primary_layer);
+
+            // If we used the user store as primary AND a manual store exists separately,
+            // add the manual store as an instance so its nodes are queryable.
+            if let Some(ref primary) = self.primary_cozo {
+                if let Some(ref manual) = self.manual_cozo {
+                    if !Arc::ptr_eq(primary, manual) {
+                        let manual_layer = Arc::new(mae_kb::CozoQueryLayer::new(manual.clone()));
+                        federated.add_instance("manual".to_string(), manual_layer);
+                    }
+                }
+            }
+
+            for (name, inst_store) in &self.instance_stores {
+                let layer = Arc::new(mae_kb::CozoQueryLayer::new(inst_store.clone()));
+                federated.add_instance(name.clone(), layer);
+            }
+            self.query = Some(Arc::new(federated));
+        }
+    }
+
+    /// Return all available CozoDB store handles (primary + instances).
+    pub fn all_stores(&self) -> Vec<(&str, &dyn mae_kb::KbStore)> {
+        let mut stores: Vec<(&str, &dyn mae_kb::KbStore)> = Vec::new();
+        if let Some(ref s) = self.store {
+            stores.push(("primary", s.as_ref()));
+        }
+        for (name, store) in &self.instance_stores {
+            stores.push((name.as_str(), store.as_ref()));
+        }
+        stores
+    }
+
     pub fn new(primary: mae_kb::KnowledgeBase) -> Self {
         Self {
             primary,
             store: None,
+            primary_cozo: None,
+            manual_cozo: None,
             data_dir: None,
             registry: mae_kb::federation::KbRegistry::default(),
             instances: HashMap::new(),
+            instance_stores: HashMap::new(),
             watchers: HashMap::new(),
             last_drain: HashMap::new(),
             watcher_stats: KbWatcherStats::default(),
             capture_state: None,
             ai_visited_ids: HashSet::new(),
             write_guard: HashSet::new(),
+            query: None,
             watcher_enabled: true,
             watcher_debounce_ms: 500,
             max_drain_events: 100,

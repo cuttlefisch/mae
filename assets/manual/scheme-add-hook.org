@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:add-hook!
+:KIND: scheme_api
+:END:
+#+title: Scheme: add-hook!
+#+filetags: :scheme:api:hooks:
+
+** Signature
+#+begin_src scheme
+(add-hook! HOOK-NAME FN-NAME)
+#+end_src
+
+Register FN-NAME to run when HOOK-NAME fires.
+
+** Example
+#+begin_src scheme
+(add-hook! "buffer-open" "my-on-open")
+#+end_src
+
+*Category:* hooks
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

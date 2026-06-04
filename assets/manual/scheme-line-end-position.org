@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:line-end-position
+:KIND: scheme_api
+:END:
+#+title: Scheme: line-end-position
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(line-end-position)
+#+end_src
+
+Return the byte offset of the end of the current line.
+
+** Example
+#+begin_src scheme
+(line-end-position)
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

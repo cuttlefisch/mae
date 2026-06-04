@@ -541,6 +541,34 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
             "(define-kb-node! \"concept:my-topic\" \"My Topic\" \"concept\" \"Body text\" '(\"tag1\"))",
             "kb-authoring",
         ),
+        (
+            "kb-agenda",
+            "(kb-agenda FILTER [ARGS])",
+            "Query the KB graph via CozoDB Datalog. Filters: todo, priority, tag, orphan, stale, dead-end, custom.",
+            "(kb-agenda \"orphan\")  ;; or (kb-agenda \"todo\" \"TODO\")",
+            "kb-graph",
+        ),
+        (
+            "kb-history",
+            "(kb-history NODE-ID)",
+            "Show version history for a KB node. Requires CozoDB backend.",
+            "(kb-history \"concept:buffer\")",
+            "kb-graph",
+        ),
+        (
+            "kb-restore",
+            "(kb-restore NODE-ID VERSION)",
+            "Restore a KB node to a previous version with integrity verification.",
+            "(kb-restore \"concept:buffer\" 2)",
+            "kb-graph",
+        ),
+        (
+            "kb-raw-query",
+            "(kb-raw-query DATALOG-STRING)",
+            "Execute a raw CozoDB Datalog query against the knowledge base.",
+            "(kb-raw-query \"?[id, title] := *nodes{id, title, kind}, kind = \\\"concept\\\"\")",
+            "kb-graph",
+        ),
         // Advice system
         (
             "advice-add!",
@@ -837,7 +865,7 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
 
     for &(name, sig, doc, example, category) in functions {
         let body = format!(
-            "## Signature\n```scheme\n{sig}\n```\n\n\
+            "** Signature\n```scheme\n{sig}\n```\n\n\
              {doc}\n\n\
              ## Example\n```scheme\n{example}\n```\n\n\
              **Category:** {category}\n\n\
@@ -846,7 +874,7 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
         let id = format!("scheme:{}", name);
         let title = format!("Scheme: {}", name);
         kb.insert(
-            Node::new(id, title, NodeKind::Concept, body).with_tags(["scheme", "api", category]),
+            Node::new(id, title, NodeKind::SchemeApi, body).with_tags(["scheme", "api", category]),
         );
     }
 
@@ -862,7 +890,8 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
         let id = format!("scheme:{}", name);
         let title = format!("Scheme: {}", name);
         kb.insert(
-            Node::new(id, title, NodeKind::Concept, body).with_tags(["scheme", "api", "variable"]),
+            Node::new(id, title, NodeKind::SchemeApi, body)
+                .with_tags(["scheme", "api", "variable"]),
         );
     }
 }

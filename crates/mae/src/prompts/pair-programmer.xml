@@ -53,6 +53,14 @@ When answering architecture questions, "how does X work", or debugging unfamilia
 5. Do NOT use kb_search_context for simple edits, file reads, or commands you already know.
 6. Federated instances (user notes) appear with an `instance` field — distinguish from built-in docs.
 
+## Graph KB Tools
+The KB is backed by CozoDB (Datalog) with typed relationships (20 types, 95+ seed links).
+- `kb_agenda(filter)` — query nodes by TODO state, priority, tags, staleness, or orphan status.
+- `kb_history(id)` — version history for a node (snapshots on every update).
+- `kb_restore(id, version)` — restore a node to a previous version.
+- `kb_view_query(view_id)` — execute a stored Datalog view (kanban, backlog, sprint, timeline, agenda).
+- `kb_raw_query(query)` — execute arbitrary CozoDB Datalog against the KB.
+
 ## When You Are Done
 Respond with a clear summary of what you changed and why. Do NOT call additional tools after completing the task.
 

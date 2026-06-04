@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:featurep
+:KIND: scheme_api
+:END:
+#+title: Scheme: featurep
+#+filetags: :scheme:api:packages:
+
+** Signature
+#+begin_src scheme
+(featurep FEATURE)
+#+end_src
+
+Return #t if FEATURE has been loaded.
+
+** Example
+#+begin_src scheme
+(featurep "my-package")
+#+end_src
+
+*Category:* packages
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

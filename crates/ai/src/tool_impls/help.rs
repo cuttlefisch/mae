@@ -14,18 +14,27 @@ pub fn execute_help_open(editor: &mut Editor, args: &serde_json::Value) -> Resul
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: id".to_string())?;
-    let target = if editor.kb.primary.contains(id) {
+    let kb_contains = |nid: &str| -> bool {
+        if let Some(q) = editor.kb.query_layer() {
+            q.contains(nid)
+        } else {
+            editor.kb.primary.contains(nid)
+        }
+    };
+    let kb_get_body = |nid: &str| -> Option<String> {
+        if let Some(q) = editor.kb.query_layer() {
+            q.get(nid).map(|n| n.body)
+        } else {
+            editor.kb.primary.get(nid).map(|n| n.body.clone())
+        }
+    };
+    let target = if kb_contains(id) {
         id.to_string()
     } else {
         "index".to_string()
     };
-    let content = editor
-        .kb
-        .primary
-        .get(&target)
-        .map(|node| node.body.clone())
-        .unwrap_or_else(|| "Node not found.".to_string());
-    let header = if editor.kb.primary.contains(id) {
+    let content = kb_get_body(&target).unwrap_or_else(|| "Node not found.".to_string());
+    let header = if kb_contains(id) {
         format!("Help: {}\n\n", target)
     } else {
         format!("No KB node '{}' -- showing 'index' instead.\n\n", id)

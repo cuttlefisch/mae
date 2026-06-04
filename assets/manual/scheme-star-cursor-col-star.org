@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: scheme:*cursor-col*
+:KIND: scheme_api
+:END:
+#+title: Scheme: *cursor-col*
+#+filetags: :scheme:api:variable:
+
+*Type:* integer
+
+Current cursor column (0-indexed).
+
+This is a read-only variable injected from editor state before each Scheme evaluation. Access it directly by name in your Scheme code.
+
+** Example
+#+begin_src scheme
+(message (string-append "Buffer: " *cursor-col*))
+#+end_src
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

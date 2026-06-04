@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: scheme:*buffer-modified?*
+:KIND: scheme_api
+:END:
+#+title: Scheme: *buffer-modified?*
+#+filetags: :scheme:api:variable:
+
+*Type:* boolean
+
+Whether the active buffer has unsaved changes.
+
+This is a read-only variable injected from editor state before each Scheme evaluation. Access it directly by name in your Scheme code.
+
+** Example
+#+begin_src scheme
+(message (string-append "Buffer: " *buffer-modified?*))
+#+end_src
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,31 @@
+:PROPERTIES:
+:ID: concept:test-runner
+:KIND: concept
+:ALIASES: mae --test, headless, tap
+:END:
+#+title: Headless Test Runner
+#+filetags: :testing:development:architecture:
+
+The **headless test runner** (`mae --test PATH`) orchestrates Scheme test execution from the Rust side. It is the canonical path for all tests.
+
+** Architecture (3 layers)
+1. **`scheme/lib/mae-test.scm`** — BDD library (describe/it/should/TAP output)
+2. **`crates/mae/src/test_runner.rs`** — Rust orchestrator
+3. **`crates/scheme/src/runtime.rs`** — Scheme primitives
+
+** Execution Flow
+1. Boot editor headless (no terminal/GUI)
+2. Load `mae-test.scm` library
+3. Load test file(s) → registers tests via `describe-group`/`it-test`
+4. Iterate tests from Rust: `eval("(run-nth-test N)")` for each test
+5. Between each test: `apply_to_editor()` + `sync_scheme_state()`
+6. Print TAP v14 output, exit 0 (pass) or 1 (fail)
+
+** SharedState Pattern
+Mutable editor state is stored in `Arc<Mutex<SharedState>>` and registered Rust functions read from it. Functions like `buffer-string`, `buffer-sync-enabled?`, `current-mode`, and `get-buffer-by-name` always return fresh data from SharedState. `inject_editor_state()` updates both the VM globals and SharedState in a single call.
+
+** Adding New Test Primitives
+- **Read-only**: Add to SharedState → register `test-*` Rust fn → add Scheme forwarding in `install_mutable_buffer_accessors` → update in `sync_scheme_state`
+- **Mutations**: Add pending field to SharedState → register Scheme fn → process in `apply_to_editor`
+
+See also: [[concept:scheme-testing]], [[concept:scheme-api]], [[index]]

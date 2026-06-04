@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:flag
+:KIND: concept
+:END:
+#+title: Flag
+#+filetags: :terminology:
+
+An optional sub-feature of a module, enabled with =+name= syntax in the =mae!= block. Flags are declared in =module.toml= and checked in Scheme with =(when-flag "+name" thunk)=. Example: =(org +agenda +babel)=.

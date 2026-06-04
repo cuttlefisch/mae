@@ -1,0 +1,29 @@
+:PROPERTIES:
+:ID: concept:package-system
+:KIND: concept
+:END:
+#+title: Package System
+#+filetags: :extensibility:scheme:packages:
+
+The **package system** enables Scheme-based extensions via `require`/`provide` and the **module system** for structured, discoverable packages.
+
+** Loading primitives
+- `(require "feature")` — searches `load-path` for `feature.scm` and evaluates it.
+- `(provide "feature")` — marks the current file as providing a feature.
+- `(featurep "feature")` — returns `#t` if the feature is loaded.
+
+** Load path
+Default: `~/.config/mae/packages/`, `~/.config/mae/lisp/`.
+- `(load-path)` — returns current search path as a list.
+- `(add-to-load-path! "/path/to/dir")` — prepends to search path.
+
+** Autoload
+`CommandSource::Autoload { feature }` enables deferred loading: when a command is first dispatched, `(require feature)` is triggered, then the command re-dispatches.
+
+** Module system (v0.9.0)
+Modules are self-contained packages with a `module.toml` manifest. They follow a Doom Emacs-inspired three-file model:
+- `module.toml` — identity, version, dependencies, flags
+- `autoloads.scm` — keybindings, command registration (eager, runs before user config)
+- `init.scm` — feature logic (lazy, loaded on first command use)
+
+See also: [[concept:modules]], [[concept:flags]], [[guide:extension-authoring]], [[index]]

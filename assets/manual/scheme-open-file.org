@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:open-file
+:KIND: scheme_api
+:END:
+#+title: Scheme: open-file
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(open-file PATH)
+#+end_src
+
+Open a file in a new buffer.
+
+** Example
+#+begin_src scheme
+(open-file "/tmp/test.txt")
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

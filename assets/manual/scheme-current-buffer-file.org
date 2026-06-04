@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:current-buffer-file
+:KIND: scheme_api
+:END:
+#+title: Scheme: current-buffer-file
+#+filetags: :scheme:api:buffer-read:
+
+** Signature
+#+begin_src scheme
+(current-buffer-file)
+#+end_src
+
+Return the file path of the active buffer, or #f if unsaved.
+
+** Example
+#+begin_src scheme
+(current-buffer-file) ; => "/home/user/src/main.rs"
+#+end_src
+
+*Category:* buffer-read
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

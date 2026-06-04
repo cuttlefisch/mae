@@ -1,0 +1,47 @@
+:PROPERTIES:
+:ID: lesson:debugging
+:KIND: lesson
+:END:
+#+title: Lesson 11: Debugging
+#+filetags: :tutorial:
+
+** Lesson 11: Debugging
+
+Prerequisites: [[requires:lesson:leader][Lesson 10: Leader Keys]]
+
+MAE has a built-in [[teaches:concept:debugging][DAP client]] for debugging any language.
+
+*** Starting a debug session
+  ~:debug-start~ or ~SPC d s~ — launch debuggee with adapter
+  ~:debug-attach <adapter> <pid>~ — [[concept:dap-attach][attach to running process]]
+
+*** Breakpoints
+  ~SPC d b~ — toggle breakpoint on current line
+  Conditional breakpoints: ~:debug-toggle-breakpoint condition="x > 5"~
+  Log-point breakpoints: ~:debug-toggle-breakpoint log="value is {x}"~
+
+*** Stepping
+  ~SPC d c~ — continue execution
+  ~SPC d n~ — step over (next line)
+  ~SPC d i~ — step into function
+  ~SPC d o~ — step out of function
+
+*** Inspecting state
+  ~SPC d p~ — open [[cmd:debug-panel][debug panel]] (threads, stack, variables)
+  ~SPC d v~ — [[cmd:debug-self][self-debug view]] (Rust + Scheme state)
+  ~:debug-eval <expr>~ — evaluate expression in debug context
+
+*** AI debug tools
+The AI agent can drive the debugger using the same tools:
+  ~dap_start~, ~dap_set_breakpoint~, ~dap_remove_breakpoint~, ~dap_continue~
+  ~dap_step~, ~dap_list_variables~, ~dap_inspect_variable~, ~dap_expand_variable~
+  ~dap_select_frame~, ~dap_select_thread~, ~dap_output~, ~dap_evaluate~, ~dap_disconnect~
+
+*** Try it
+1. Open a Python file: ~:e hello.py~
+2. Set a breakpoint: ~SPC d b~
+3. Start debugging: ~:debug-start~
+4. Step through with ~SPC d n~
+5. Inspect variables in the debug panel: ~SPC d p~
+
+*Prev:* [[lesson:leader][Lesson 10]]  |  *Next:* [[lesson:observability][Lesson 12: Observability]]  |  *Index:* [[tutor:index][Tutorial]]

@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:point
+:KIND: scheme_api
+:END:
+#+title: Scheme: point
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(point)
+#+end_src
+
+Return the cursor position as a byte offset from the start of the buffer.
+
+** Example
+#+begin_src scheme
+(point) ; => 1024
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

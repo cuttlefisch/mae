@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:kb-history
+:KIND: scheme_api
+:END:
+#+title: Scheme: kb-history
+#+filetags: :scheme:api:kb-graph:
+
+** Signature
+#+begin_src scheme
+(kb-history NODE-ID)
+#+end_src
+
+Show version history for a KB node. Requires CozoDB backend.
+
+** Example
+#+begin_src scheme
+(kb-history "concept:buffer")
+#+end_src
+
+*Category:* kb-graph
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

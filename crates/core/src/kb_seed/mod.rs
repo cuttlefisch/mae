@@ -224,100 +224,100 @@ fn tutor_nodes() -> Vec<Node> {
         Node::new(
             "tutor:index",
             "MAE Tutorial",
-            NodeKind::Concept,
+            NodeKind::Tutorial,
             TUTOR_INDEX,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "lesson:navigation",
             "Lesson 1: Navigation",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_NAVIGATION,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "lesson:modes",
             "Lesson 2: Modes",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_MODES,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "lesson:editing",
             "Lesson 3: Editing",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_EDITING,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "lesson:files",
             "Lesson 4: Files & Buffers",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_FILES,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "lesson:ai",
             "Lesson 5: AI Features",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_AI,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "lesson:scheme",
             "Lesson 6: Scheme REPL",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_SCHEME,
         )
         .with_tags(["tutorial"]),
-        Node::new("lesson:lsp", "Lesson 7: LSP", NodeKind::Concept, LESSON_LSP)
+        Node::new("lesson:lsp", "Lesson 7: LSP", NodeKind::Lesson, LESSON_LSP)
             .with_tags(["tutorial"]),
         Node::new(
             "lesson:terminal",
             "Lesson 8: Terminal",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_TERMINAL,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "lesson:help",
             "Lesson 9: Help System",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_HELP,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "lesson:leader",
             "Lesson 10: Leader Keys",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_LEADER,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "lesson:debugging",
             "Lesson 11: Debugging",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_DEBUGGING,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "lesson:observability",
             "Lesson 12: Observability",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_OBSERVABILITY,
         )
         .with_tags(["tutorial"]),
         Node::new(
             "lesson:kb-import-roam",
             "Lesson 13: Importing Your Knowledge Base",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_KB_IMPORT,
         )
         .with_tags(["tutorial", "kb", "federation", "org-roam"]),
         Node::new(
             "lesson:collab-setup",
             "Setting Up Collaborative Editing",
-            NodeKind::Concept,
+            NodeKind::Lesson,
             LESSON_COLLAB_SETUP,
         )
         .with_tags(["tutorial", "collaboration", "state-server", "sync"]),
@@ -434,7 +434,7 @@ fn install_category_nodes(
         body.push_str("\nSee also: [[index]], [[concept:command]]");
         let id = format!("category:{}", cat);
         let title = format!("Category: {}", cat);
-        kb.insert(Node::new(id, title, NodeKind::Concept, body).with_tags(["category"]));
+        kb.insert(Node::new(id, title, NodeKind::Category, body).with_tags(["category"]));
     }
 }
 
@@ -1037,13 +1037,14 @@ mod tests {
     }
 
     #[test]
-    fn concept_ai_as_peer_links_to_tools() {
+    fn concept_ai_as_peer_links_to_concepts() {
         let kb = seed_kb_default(&CommandRegistry::with_builtins());
         let links = kb.links_from("concept:ai-as-peer");
-        // A command referenced in the narrative should appear as a link
-        // (the cmd:* targets exist because we generated them).
-        assert!(links.iter().any(|l| l.starts_with("cmd:")));
+        // AI tool names are referenced as backtick text (not links) since they're
+        // AI tools, not editor commands. Concept links should be present.
         assert!(links.contains(&"concept:introspect".to_string()));
+        assert!(links.contains(&"concept:command".to_string()));
+        assert!(links.contains(&"concept:knowledge-base".to_string()));
     }
 
     #[test]

@@ -962,107 +962,168 @@ impl super::Editor {
     }
 
     pub fn show_kb_health_report(&mut self) {
-        let mut report = self.kb.primary.health_report();
-        report.stale_nodes = self.kb.primary.detect_stale_nodes();
         let mut lines = Vec::new();
         lines.push("KB Health Report".to_string());
         lines.push("================".to_string());
         lines.push(String::new());
-        lines.push(format!("Total nodes: {}", report.total_nodes));
-        lines.push(format!("Total links: {}", report.total_links));
-        if report.total_nodes > 0 {
+
+        // Try CozoDB store first (accurate typed link data), fall back to in-memory.
+        let store_report = self.kb.store.as_ref().and_then(|s| s.health_report().ok());
+
+        if let Some(ref report) = store_report {
             lines.push(format!(
-                "Avg links/node: {:.1}",
-                report.total_links as f64 / report.total_nodes as f64
+                "Source: CozoDB ({})",
+                self.kb
+                    .store
+                    .as_ref()
+                    .map(|s| s.backend_name())
+                    .unwrap_or("?")
             ));
-        }
-        lines.push(String::new());
+            lines.push(format!("Total nodes: {}", report.total_nodes));
+            lines.push(format!("Total links: {}", report.total_links));
+            if report.total_nodes > 0 {
+                lines.push(format!(
+                    "Avg links/node: {:.1}",
+                    report.total_links as f64 / report.total_nodes as f64
+                ));
+            }
+            lines.push(String::new());
 
-        // Namespace counts.
-        lines.push("Namespace Counts".to_string());
-        lines.push("----------------".to_string());
-        let mut ns: Vec<_> = report.namespace_counts.iter().collect();
-        ns.sort_by(|a, b| b.1.cmp(a.1));
-        for (name, count) in &ns {
-            lines.push(format!("  {:<20} {}", name, count));
-        }
-        lines.push(String::new());
+            // Namespace counts.
+            lines.push("Namespace Counts".to_string());
+            lines.push("----------------".to_string());
+            let mut ns: Vec<_> = report.namespace_counts.iter().collect();
+            ns.sort_by(|a, b| b.1.cmp(a.1));
+            for (name, count) in &ns {
+                lines.push(format!("  {:<20} {}", name, count));
+            }
+            lines.push(String::new());
 
-        // Orphan nodes.
-        lines.push(format!("Orphan Nodes ({})", report.orphan_ids.len()));
-        lines.push("------------".to_string());
-        if report.orphan_ids.is_empty() {
-            lines.push("  (none)".to_string());
+            // By kind.
+            lines.push("By Kind".to_string());
+            lines.push("-------".to_string());
+            let mut kinds: Vec<_> = report.by_kind.iter().collect();
+            kinds.sort_by(|a, b| b.1.cmp(a.1));
+            for (kind, count) in &kinds {
+                lines.push(format!("  {:<20} {}", kind, count));
+            }
+            lines.push(String::new());
+
+            // By relationship type.
+            if !report.by_rel_type.is_empty() {
+                lines.push("By Relationship Type".to_string());
+                lines.push("--------------------".to_string());
+                let mut rels: Vec<_> = report.by_rel_type.iter().collect();
+                rels.sort_by(|a, b| b.1.cmp(a.1));
+                for (rt, count) in &rels {
+                    lines.push(format!("  {:<20} {}", rt, count));
+                }
+                lines.push(String::new());
+            }
+
+            // Orphan nodes.
+            lines.push(format!("Orphan Nodes ({})", report.orphan_ids.len()));
+            lines.push("------------".to_string());
+            if report.orphan_ids.is_empty() {
+                lines.push("  (none)".to_string());
+            } else {
+                for id in &report.orphan_ids {
+                    lines.push(format!("  {}", id));
+                }
+            }
+            lines.push(String::new());
+
+            // Broken links.
+            lines.push(format!("Broken Links ({})", report.broken_links.len()));
+            lines.push("------------".to_string());
+            if report.broken_links.is_empty() {
+                lines.push("  (none)".to_string());
+            } else {
+                use mae_kb::BrokenLinkReason;
+                let mut deleted: Vec<_> = report
+                    .broken_links
+                    .iter()
+                    .filter(|b| b.reason == BrokenLinkReason::DeletedNode)
+                    .collect();
+                let mut malformed: Vec<_> = report
+                    .broken_links
+                    .iter()
+                    .filter(|b| b.reason == BrokenLinkReason::MalformedId)
+                    .collect();
+                deleted.sort_by_key(|b| &b.target);
+                malformed.sort_by_key(|b| &b.target);
+                if !deleted.is_empty() {
+                    lines.push(format!("  Missing targets ({}):", deleted.len()));
+                    for b in &deleted {
+                        lines.push(format!("    {} —[{}]→ {}", b.source, b.rel_type, b.target));
+                    }
+                }
+                if !malformed.is_empty() {
+                    lines.push(format!("  Malformed IDs ({}):", malformed.len()));
+                    for b in &malformed {
+                        lines.push(format!("    {} → {:?}", b.source, b.target));
+                    }
+                }
+            }
+            lines.push(String::new());
+
+            // Hub nodes.
+            if !report.hub_nodes.is_empty() {
+                lines.push("Hub Nodes (top 10 by in-degree)".to_string());
+                lines.push("-------------------------------".to_string());
+                for (id, degree) in &report.hub_nodes {
+                    lines.push(format!("  {:<40} {}", id, degree));
+                }
+                lines.push(String::new());
+            }
         } else {
-            for id in &report.orphan_ids {
-                lines.push(format!("  {}", id));
-            }
-        }
-        lines.push(String::new());
+            // Fallback: in-memory KnowledgeBase report.
+            lines.push("Source: in-memory (CozoDB store not available)".to_string());
+            let report = self.kb.primary.health_report();
+            lines.push(format!("Total nodes: {}", report.total_nodes));
+            lines.push(format!("Total links: {}", report.total_links));
+            lines.push(String::new());
 
-        // Broken links — grouped by classification.
-        lines.push(format!("Broken Links ({})", report.broken_links.len()));
-        lines.push("------------".to_string());
-        if report.broken_links.is_empty() {
-            lines.push("  (none)".to_string());
-        } else {
-            use mae_kb::BrokenLinkKind;
-            let mut deleted: Vec<_> = report
-                .broken_links
-                .iter()
-                .filter(|b| b.kind == BrokenLinkKind::DeletedNode)
-                .collect();
-            let mut malformed: Vec<_> = report
-                .broken_links
-                .iter()
-                .filter(|b| b.kind == BrokenLinkKind::MalformedId)
-                .collect();
-            let mut placeholder: Vec<_> = report
-                .broken_links
-                .iter()
-                .filter(|b| b.kind == BrokenLinkKind::TemplatePlaceholder)
-                .collect();
-            deleted.sort_by_key(|b| &b.target);
-            malformed.sort_by_key(|b| &b.target);
-            placeholder.sort_by_key(|b| &b.target);
-            if !deleted.is_empty() {
-                lines.push(format!("  Deleted nodes ({}):", deleted.len()));
-                for b in &deleted {
-                    let label = if b.display.is_empty() {
-                        &b.target
-                    } else {
-                        &b.display
-                    };
-                    lines.push(format!(
-                        "    {} → {} ({})",
-                        b.source,
-                        label,
-                        &b.target[..8.min(b.target.len())]
-                    ));
-                }
+            lines.push("Namespace Counts".to_string());
+            lines.push("----------------".to_string());
+            let mut ns: Vec<_> = report.namespace_counts.iter().collect();
+            ns.sort_by(|a, b| b.1.cmp(a.1));
+            for (name, count) in &ns {
+                lines.push(format!("  {:<20} {}", name, count));
             }
-            if !malformed.is_empty() {
-                lines.push(format!("  Malformed IDs ({}):", malformed.len()));
-                for b in &malformed {
-                    lines.push(format!("    {} → {:?}", b.source, b.target));
-                }
-            }
-            if !placeholder.is_empty() {
-                lines.push(format!("  Template placeholders ({}):", placeholder.len()));
-                for b in &placeholder {
-                    lines.push(format!("    {} → {:?}", b.source, b.target));
-                }
-            }
-        }
-        lines.push(String::new());
+            lines.push(String::new());
 
-        // Stale nodes (source file deleted).
-        lines.push(format!("Stale Nodes ({})", report.stale_nodes.len()));
+            lines.push(format!("Orphan Nodes ({})", report.orphan_ids.len()));
+            lines.push("------------".to_string());
+            if report.orphan_ids.is_empty() {
+                lines.push("  (none)".to_string());
+            } else {
+                for id in &report.orphan_ids {
+                    lines.push(format!("  {}", id));
+                }
+            }
+            lines.push(String::new());
+
+            lines.push(format!("Broken Links ({})", report.broken_links.len()));
+            lines.push("------------".to_string());
+            if report.broken_links.is_empty() {
+                lines.push("  (none)".to_string());
+            } else {
+                for b in &report.broken_links {
+                    lines.push(format!("    {} → {}", b.source, b.target));
+                }
+            }
+            lines.push(String::new());
+        }
+
+        // Stale nodes (source file deleted — always from in-memory).
+        let stale_nodes = self.kb.primary.detect_stale_nodes();
+        lines.push(format!("Stale Nodes ({})", stale_nodes.len()));
         lines.push("-------------------".to_string());
-        if report.stale_nodes.is_empty() {
+        if stale_nodes.is_empty() {
             lines.push("  (none)".to_string());
         } else {
-            for s in &report.stale_nodes {
+            for s in &stale_nodes {
                 lines.push(format!(
                     "  {} — {} (was: {})",
                     s.id,

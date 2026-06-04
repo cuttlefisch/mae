@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:ai-tool-require!
+:KIND: scheme_api
+:END:
+#+title: Scheme: ai-tool-require!
+#+filetags: :scheme:api:ai-tools:
+
+** Signature
+#+begin_src scheme
+(ai-tool-require! TOOL-NAME PERMISSION-TIER)
+#+end_src
+
+Set the required permission tier for an AI tool.
+
+** Example
+#+begin_src scheme
+(ai-tool-require! "my-tool" "write")
+#+end_src
+
+*Category:* ai-tools
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

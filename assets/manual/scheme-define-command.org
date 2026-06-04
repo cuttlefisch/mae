@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:define-command
+:KIND: scheme_api
+:END:
+#+title: Scheme: define-command
+#+filetags: :scheme:api:commands:
+
+** Signature
+#+begin_src scheme
+(define-command NAME DOC FN-NAME)
+#+end_src
+
+Register a new command backed by a Scheme function.
+
+** Example
+#+begin_src scheme
+(define-command "greet" "Say hello" "my-greet-fn")
+#+end_src
+
+*Category:* commands
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

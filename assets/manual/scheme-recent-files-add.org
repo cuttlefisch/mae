@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:recent-files-add!
+:KIND: scheme_api
+:END:
+#+title: Scheme: recent-files-add!
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(recent-files-add! PATH)
+#+end_src
+
+Add PATH to the recent files list.
+
+** Example
+#+begin_src scheme
+(recent-files-add! "/tmp/test.txt")
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -27,6 +27,7 @@
       "path": "crates/ai/src/lib.rs",
       "dependencies": [
         "mae-core",
+        "mae-kb",
         "mae-sync"
       ],
       "public_items": [
@@ -611,10 +612,6 @@
           "kind": "mod"
         },
         {
-          "name": "persist",
-          "kind": "mod"
-        },
-        {
           "name": "store",
           "kind": "mod"
         },
@@ -623,7 +620,15 @@
           "kind": "mod"
         },
         {
+          "name": "cache",
+          "kind": "mod"
+        },
+        {
           "name": "cozo_store",
+          "kind": "mod"
+        },
+        {
+          "name": "query",
           "kind": "mod"
         },
         {
@@ -809,6 +814,7 @@
       "path": "crates/scheme/src/lib.rs",
       "dependencies": [
         "mae-core",
+        "mae-kb",
         "mae-sync"
       ],
       "public_items": [
@@ -1227,6 +1233,74 @@
     },
     {
       "name": "define-kb-node!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-agenda",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-history",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-restore",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-raw-query",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-add-link!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-remove-link!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-add-meta-member!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-remove-meta-member!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-compose-meta",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-add-rel-type!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-links-from",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-links-to",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-links-typed",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-meta-members",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-rel-types",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-get-block",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-block-count",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -3081,6 +3155,22 @@
       "doc": "Remove orphan user notes with no links (SPC n C)"
     },
     {
+      "name": "kb-agenda",
+      "doc": "Query KB graph: :kb-agenda todo|priority|tag|orphan|stale|custom [args]"
+    },
+    {
+      "name": "kb-history",
+      "doc": "Show version history for a KB node: :kb-history <node-id>"
+    },
+    {
+      "name": "kb-restore",
+      "doc": "Restore a KB node to a previous version: :kb-restore <node-id> <version>"
+    },
+    {
+      "name": "kb-raw-query",
+      "doc": "Execute raw CozoDB Datalog query: :kb-raw-query <query>"
+    },
+    {
       "name": "describe-display-policy",
       "doc": "Show the active display policy rules (how buffers are placed in windows)"
     },
@@ -3299,6 +3389,14 @@
     {
       "name": "kb-audit",
       "doc": "Run KB audit report (SPC n H a)"
+    },
+    {
+      "name": "kb-narrow",
+      "doc": "Narrow to a meta-node component for editing"
+    },
+    {
+      "name": "kb-widen",
+      "doc": "Save edits and widen back from narrowed meta-node component"
     },
     {
       "name": "capture-finalize",

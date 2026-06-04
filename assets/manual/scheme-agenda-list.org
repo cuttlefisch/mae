@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:agenda-list
+:KIND: scheme_api
+:END:
+#+title: Scheme: agenda-list
+#+filetags: :scheme:api:agenda:
+
+** Signature
+#+begin_src scheme
+(agenda-list)
+#+end_src
+
+Return the list of current agenda source files.
+
+** Example
+#+begin_src scheme
+(agenda-list) ; => ("/home/user/org/todo.org" ...)
+#+end_src
+
+*Category:* agenda
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,92 @@
+:PROPERTIES:
+:ID: concept:hooks
+:KIND: concept
+:END:
+#+title: Hooks
+#+filetags: :hooks:extensibility:scheme:
+
+**Hooks** are MAE's primary extensibility mechanism — they let Scheme code react to editor events without the core knowing anything about Scheme.
+
+** Available hooks (25)
+
+*** Buffer lifecycle
+| Hook name | Fires when |
+|-----------|------------|
+| `before-save` | Just before a buffer is written to disk |
+| `after-save` | After a successful save |
+| `buffer-open` | After a file is opened into a buffer |
+| `buffer-close` | Before a buffer is killed |
+| `buffer-switch` | When active buffer changes |
+| `before-revert` | Before reverting a buffer to disk contents |
+| `after-revert` | After a successful revert |
+| `file-changed-on-disk` | When a buffer's backing file changes externally |
+
+*** Editing
+| Hook name | Fires when |
+|-----------|------------|
+| `after-insert` | After text is inserted via Scheme |
+| `after-delete` | After text is deleted via Scheme |
+| `mode-change` | When the editing mode changes |
+
+*** Commands
+| Hook name | Fires when |
+|-----------|------------|
+| `command-pre` | Before a command is dispatched |
+| `command-post` | After a command completes |
+
+*** Window & Focus
+| Hook name | Fires when |
+|-----------|------------|
+| `window-split` | After a window split |
+| `window-close` | After a window is closed |
+| `focus-in` | When editor gains focus |
+| `focus-out` | When editor loses focus |
+
+*** Application lifecycle
+| Hook name | Fires when |
+|-----------|------------|
+| `app-start` | During editor startup |
+| `app-exit` | During editor shutdown |
+| `after-load` | After a Scheme file is loaded (parameterized: `after-load:filename`) |
+| `module-loaded` | After a module loads (parameterized: `module-loaded:name`) |
+| `module-unloaded` | After a module unloads (reserved — no unload mechanism yet) |
+
+*** Configuration & state
+| Hook name | Fires when |
+|-----------|------------|
+| `option-change` | After an option is set (parameterized: `option-change:name`) |
+| `after-kb-change` | After knowledge base content changes |
+| `sync-update` | After a remote CRDT sync update is applied |
+| `idle` | After a period of user inactivity (reserved — needs timer infrastructure) |
+
+** Usage from Scheme
+```scheme
+;; Register a function to run on save:
+(add-hook! "after-save" "my-after-save")
+
+;; Define the function:
+(define (my-after-save)
+  (display "File saved!"))
+
+;; Remove a hook:
+(remove-hook! "after-save" "my-after-save")
+
+;; Parameterized hooks — react to specific events:
+(add-hook! "option-change:theme" "on-theme-change")
+(add-hook! "module-loaded:keymap-doom" "after-doom-loaded")
+(add-hook! "after-load:init.scm" "post-init-setup")
+```
+
+** Event-driven primitives
+For Scheme code that needs to wait for hooks (e.g. in tests or async workflows):
+```scheme
+(import (mae async))
+(yield-tick)                    ; drain one event loop iteration
+(await-hook "after-save" 5000) ; suspend until hook fires (5s timeout)
+(await-condition pred 3000)     ; wait for predicate to become true
+```
+
+** Design
+Core fires hooks by pushing `(hook-name, fn-name)` entries into `Editor::pending_hook_evals`. The binary drains them and calls the Scheme runtime — the same intent pattern used for LSP and DAP. This keeps the core crate free of Scheme dependencies. The hook namespace is open — modules can register any hook name.
+
+See also: [[concept:command]], [[concept:options]], [[index]]

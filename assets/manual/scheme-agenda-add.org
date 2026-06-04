@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:agenda-add!
+:KIND: scheme_api
+:END:
+#+title: Scheme: agenda-add!
+#+filetags: :scheme:api:agenda:
+
+** Signature
+#+begin_src scheme
+(agenda-add! FILE)
+#+end_src
+
+Add an org file to the agenda sources list.
+
+** Example
+#+begin_src scheme
+(agenda-add! "~/org/todo.org")
+#+end_src
+
+*Category:* agenda
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

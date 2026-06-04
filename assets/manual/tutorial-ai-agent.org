@@ -1,0 +1,42 @@
+:PROPERTIES:
+:ID: tutorial:ai-agent
+:KIND: tutorial
+:END:
+#+title: Tutorial: AI Agent (Terminal)
+#+filetags: :tutorial:ai:
+
+* AI Agent (Terminal)
+
+*Prerequisite:* [[requires:tutorial:ai-setup][AI Setup]]
+
+The *AI Agent* (=SPC a a=) runs an external tool like Claude Code or gemini-cli in MAE's embedded terminal.
+
+** How it works
+1. Press =SPC a a= -- MAE opens a terminal and runs the configured =ai.editor= command
+2. The agent has access to your project files via the filesystem
+3. Via the MCP bridge, the agent can also call MAE's editor tools
+
+** Configuration
+#+begin_src toml
+[ai]
+editor = "claude"          # or "gemini", or a custom command
+#+end_src
+
+** When to use
+- Autonomous coding tasks (write a feature, fix a bug)
+- Complex multi-file refactors
+- Tasks that need shell access (running tests, installing packages)
+- When you want the AI to drive and you review
+
+** Terminal controls
+- =Ctrl-\ Ctrl-n= -- exit terminal mode (return to Normal)
+- The agent's terminal is a full VT100 emulator (colors, scrollback)
+
+*Next:* [[id:tutorial:ai-chat][AI Chat (Built-in)]]
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

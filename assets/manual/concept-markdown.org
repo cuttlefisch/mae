@@ -1,0 +1,44 @@
+:PROPERTIES:
+:ID: concept:markdown
+:KIND: concept
+:END:
+#+title: Markdown
+#+filetags: :markdown:editing:
+
+**Markdown** in MAE provides structural editing for `.md` files, with the same UX as [[references:concept:org-mode][org-mode]] adapted for `#` headings.
+
+** Core Features
+
+*** 1. Three-State Heading Cycle (TAB)
+Press `TAB` on a heading to cycle its visibility:
+**Subtree** (everything visible) -> **Folded** (heading only) -> **Children** (body + child headings visible, child bodies folded) -> **Subtree**.
+Leaf headings (no children) toggle between **Subtree** and **Folded**.
+
+*** 2. Fold All / Unfold All
+- `zM` (`close-all-folds`): Fold all headings in the buffer.
+- `zR` (`open-all-folds`): Unfold all headings.
+
+*** 3. Structural Editing
+- `M-h` / `M-Left`: **Promote** heading (remove one `#` prefix).
+- `M-l` / `M-Right`: **Demote** heading (add one `#` prefix).
+- `M-k` / `M-Up`: **Move subtree up** past previous sibling.
+- `M-j` / `M-Down`: **Move subtree down** past next sibling.
+
+*** 4. Narrow / Widen
+- `SPC m s n` (`md-narrow-subtree`): Narrow buffer to current heading's subtree.
+- `SPC m s w` (`md-widen`): Restore full buffer visibility.
+
+*** 5. Insert Heading (M-Enter)
+- On a heading line: Insert a new heading at the **same level** after the current subtree.
+- Not on a heading: Insert a level-1 heading below the current line.
+- Automatically enters insert mode with cursor after the heading prefix.
+
+*** 6. Heading Font Scaling
+Markdown headings render at scaled font sizes:
+`#` = 1.5x, `##` = 1.3x, `###` = 1.15x.
+Disable with `:set heading_scale false`.
+
+*** 7. Markdown Keymap
+The `markdown` keymap activates automatically for `.md` files and falls back to the `normal` keymap for unbound keys. All structural editing keys mirror the org-mode keymap.
+
+See also: [[references:concept:org-mode][Org-mode]], [[references:concept:options][Editor Options]]

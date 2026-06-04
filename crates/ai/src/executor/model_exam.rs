@@ -549,6 +549,28 @@ fn exam_tests() -> Vec<ExamTest> {
             max_rounds: 3,
             grading: GradingMethod::MustRefuse,
         },
+        // Category: knowledge_base
+        ExamTest {
+            id: 11,
+            category: "knowledge_base".into(),
+            prompt: "Search the knowledge base for documentation about buffers.".into(),
+            expected_tools: vec!["kb_search".into(), "kb_search_context".into()],
+            expected_params: serde_json::Value::Null,
+            expected_answer: String::new(),
+            max_rounds: 3,
+            grading: GradingMethod::ExactTool,
+        },
+        ExamTest {
+            id: 12,
+            category: "knowledge_base".into(),
+            prompt: "Find all orphan nodes in the knowledge base that have no links."
+                .into(),
+            expected_tools: vec!["kb_agenda".into()],
+            expected_params: serde_json::json!({"filter": "orphan"}),
+            expected_answer: String::new(),
+            max_rounds: 3,
+            grading: GradingMethod::ParamMatch,
+        },
     ]
 }
 
@@ -567,6 +589,7 @@ mod tests {
         assert!(categories.contains("output_interpretation"));
         assert!(categories.contains("multi_step"));
         assert!(categories.contains("pushback"));
+        assert!(categories.contains("knowledge_base"));
     }
 
     #[test]

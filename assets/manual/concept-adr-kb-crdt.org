@@ -1,0 +1,33 @@
+:PROPERTIES:
+:ID: concept:adr-kb-crdt
+:KIND: concept
+:END:
+#+title: ADR-005: KB as CRDT
+#+filetags: :adr:kb:sync:architecture:
+
+**ADR-005: KB Nodes as CRDT Documents** — Status: **Accepted**
+
+** Decision
+Each KB node becomes a yrs document with schema:
+```
+YMap { id, title: YText, body: YText, tags: YArray, links: YArray, meta: YMap }
+```
+
+SQLite remains the persistence backend — yrs document bytes stored as BLOBs. FTS5 indexes materialized text from `YText::to_string()`.
+
+** Benefits
+- **Offline editing**: Edit KB nodes without connectivity, merge on reconnect
+- **P2P federation**: Exchange yrs state vectors between MAE instances
+- **AI attribution**: Each transaction carries a client ID
+- **Per-user undo**: yrs UndoManager provides this automatically
+
+** Migration Path
+1. Phase A: SQLite only (current)
+2. Phase B: Optional `crdt_doc BLOB` column, new nodes get yrs docs
+3. Phase C: All nodes have yrs docs, SQLite is read cache + FTS index
+
+Full ADR: `docs/adr/005-kb-crdt.md`
+
+This ADR [[documents:concept:knowledge-base][documents the Knowledge Base]].
+
+See also: [[concept:sync-engine]], [[concept:knowledge-base]], [[concept:collaborative-state]]

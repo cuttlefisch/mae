@@ -1,0 +1,31 @@
+:PROPERTIES:
+:ID: concept:event-recording
+:KIND: concept
+:END:
+#+title: Concept: Event Recording
+#+filetags: :debugging:observability:
+
+*Event recording* captures every input event and command dispatch during a session, enabling reproducible bug reports and automated replay.
+
+** Commands
+- ~:record-start~ — begin capturing events.
+- ~:record-stop~ — stop capturing. Shows event count in status bar.
+- ~:record-save <path>~ — write captured events to a JSON file.
+
+** JSON format
+Each event entry contains:
+- ~timestamp~ — milliseconds since recording started.
+- ~event_type~ — key press, mouse event, command dispatch, etc.
+- ~details~ — serialized event data.
+
+** AI integration
+The ~event_recording~ AI tool can dump the current recording buffer for automated analysis. Ask the AI: "show me the event recording."
+
+** Use cases
+- *Bug reports:* record -> reproduce -> save -> attach JSON to issue.
+- *Macros:* replay a recorded sequence (planned).
+- *Testing:* validate that a sequence of inputs produces expected state.
+
+[[part_of:concept:debugging][Part of Debugging]].
+
+See also: [[concept:watchdog]], [[concept:introspect]], [[index]]

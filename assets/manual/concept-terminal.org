@@ -1,0 +1,51 @@
+:PROPERTIES:
+:ID: concept:terminal
+:KIND: concept
+:ALIASES: console, command-line, bash
+:END:
+#+title: Embedded Terminal
+#+filetags: :terminal:shell:phase-6:
+
+MAE embeds a full **terminal emulator** backed by `alacritty_terminal`, the same engine that powers the Alacritty terminal. Programs like vim, less, top, fzf, and tmux work correctly — this is not a line-oriented shell like eshell.
+
+** Opening a terminal
+- `:terminal` or `SPC o t` — opens a new `*Terminal*` buffer in ShellInsert mode.
+- The terminal runs the user's `$SHELL` in a PTY.
+
+** Modes
+- **ShellInsert** — all keys go directly to the PTY. The terminal is fully interactive.
+- **Normal** — `Ctrl-\ Ctrl-n` exits ShellInsert → Normal mode (Neovim convention). You can then use leader keys (`SPC`), window commands, etc.
+- Press `i` or `a` to re-enter ShellInsert from Normal mode on a terminal buffer.
+
+** Commands
+- [[cmd:terminal]] — open a new terminal buffer.
+- [[cmd:terminal-reset]] (`SPC o r`) — reset/clear the terminal (fixes residual characters from programs like cmatrix that don't clean up on exit).
+- [[cmd:terminal-close]] (`SPC o c`) — close the terminal and kill the shell process.
+- [[cmd:send-to-shell]] (`SPC e s`) — send current line to a terminal.
+- [[cmd:send-region-to-shell]] (`SPC e S`) — send visual selection to a terminal.
+
+** Scheme integration
+- `(shell-cwd BUF-IDX)` — returns the CWD of a shell buffer (via `/proc/PID/cwd`).
+- `(shell-read-output BUF-IDX MAX-LINES)` — reads the last N lines of terminal output.
+- `*shell-buffers*` — list of buffer indices that are Shell-kind.
+
+** MCP bridge
+MAE runs an MCP (Model Context Protocol) server on a Unix socket (`/tmp/mae-PID.sock`). The `MAE_MCP_SOCKET` env var is injected into every spawned terminal. This lets Claude Code (running inside the terminal) call back into the editor via the same tool API the built-in AI uses. The `mae-mcp-shim` binary bridges stdio to the socket.
+
+** File auto-reload
+When switching to a buffer whose backing file has changed on disk:
+- **Clean buffer** (no unsaved edits): reloaded automatically.
+- **Dirty buffer**: warning shown, no clobber.
+The `file-changed-on-disk` hook fires in both cases.
+
+** Process lifecycle
+When the shell process exits (e.g. `exit` or `Ctrl-D`), MAE automatically:
+1. Switches back to Normal mode.
+2. Shuts down the PTY.
+3. Marks the buffer name with `[exited]`.
+Close the buffer manually with `SPC o c` or `:kill-buffer`.
+
+** Architecture
+The `mae-shell` crate wraps `alacritty_terminal::Term` with PTY management. The renderer reads the terminal grid and converts cells to ratatui spans with full color and attribute support. A 30fps render tick ensures smooth output.
+
+See also: [[concept:mode]], [[concept:ai-as-peer]], [[index]]

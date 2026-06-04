@@ -1,0 +1,43 @@
+:PROPERTIES:
+:ID: concept:kb-sharing
+:KIND: concept
+:ALIASES: kb-share, kb-join, kb-leave, shared kb, collaborative kb
+:END:
+#+title: KB Sharing (Collaborative KBs)
+#+filetags: :kb:collaboration:sync:sharing:
+
+**KB Sharing** enables collaborative editing of knowledge bases across MAE instances connected via the state server.
+
+** How It Works
+Each KB node is a yrs CRDT document (see [[concept:adr-kb-crdt]]). When you share a KB, all its nodes are registered as collaborative documents on the state server. Other clients can join the shared KB and receive real-time updates as nodes are edited.
+
+** Commands
+| Key | Command | Description |
+|-----|---------|-------------|
+| `SPC C K s` | `:kb-share` | Share the primary KB (or named instance) |
+| `SPC C K j` | `:kb-join` | Join a shared KB from the server |
+| `SPC C K l` | `:kb-leave` | Leave a shared KB (local copy preserved) |
+| `SPC C K r` | `:kb-list-remote` | List available shared KBs on the server |
+
+** Sync Modes
+The `collab_kb_sync_mode` option controls when local edits are pushed:
+- `"on_save"` (default): push CRDT updates when a node is saved
+- `"manual"`: only sync when explicitly requested via `:collab-sync`
+
+** Offline Support
+When disconnected, edits accumulate in a pending queue. On reconnect, the queue drains automatically — CRDT merge guarantees conflict-free convergence regardless of editing order.
+
+** Status Line
+When KB sharing is active, the status bar shows `[KB:N|status]` where N is the number of shared KBs and status is `synced`, `offline`, or `pending` (has unsent updates).
+
+** Data Storage
+- Local KBs: `$XDG_DATA_HOME/mae/kb/local/{slug}/kb.sqlite`
+- Shared KBs: `$XDG_DATA_HOME/mae/kb/shared/{slug}/kb.sqlite`
+
+** mDNS Discovery
+On a LAN, `:collab-discover` uses mDNS (`_mae-sync._tcp.local`) to find peers running `mae-state-server`. Connect to a discovered peer to browse their shared KBs.
+
+** PSK Authentication
+Set `collab_psk` or `collab_psk_command` to enable HMAC-SHA256 mutual authentication. Both client and server must share the same key.
+
+See also: [[concept:knowledge-base]], [[concept:collab-architecture]], [[references:concept:sync-engine][Sync Engine]], [[concept:adr-kb-crdt]], [[index]]

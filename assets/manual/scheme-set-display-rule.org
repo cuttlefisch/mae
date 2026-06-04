@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:set-display-rule!
+:KIND: scheme_api
+:END:
+#+title: Scheme: set-display-rule!
+#+filetags: :scheme:api:configuration:
+
+** Signature
+#+begin_src scheme
+(set-display-rule! KIND ACTION)
+#+end_src
+
+Override the display policy for a BufferKind. ACTION formats: "replace-focused", "avoid-conversation", "hidden", "reuse-or-split:vertical:0.5".
+
+** Example
+#+begin_src scheme
+(set-display-rule! "help" "replace-focused")
+#+end_src
+
+*Category:* configuration
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

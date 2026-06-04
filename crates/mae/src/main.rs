@@ -9,6 +9,7 @@ mod doctor;
 mod gui_event;
 mod key_handling;
 mod lsp_bridge;
+mod manual_kb;
 mod mdns_discovery;
 pub mod pkg;
 mod scheme_dap_bridge;
@@ -29,6 +30,7 @@ use mae_ai::{AiCommand, AiEvent};
 use mae_core::{Buffer, Editor};
 #[cfg(feature = "gui")]
 use mae_dap::DapCommand;
+use mae_kb::KbStore;
 #[cfg(feature = "gui")]
 use mae_lsp::LspCommand;
 #[cfg(feature = "gui")]
@@ -568,6 +570,58 @@ fn main() -> io::Result<()> {
             .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
             .join("mae");
 
+        // Try to load manual KB from pre-built CozoDB file.
+        // If found, its nodes are loaded into the in-memory KB (replacing
+        // the seed-generated nodes which are identical but slower to produce).
+        if let Some(result) = manual_kb::locate_and_validate(&data_dir, None) {
+            match &result.validation {
+                manual_kb::ManualValidation::Valid => {
+                    debug!(path = %result.path.display(), "manual KB checksum valid");
+                }
+                manual_kb::ManualValidation::Historical { matched_version } => {
+                    warn!(
+                        path = %result.path.display(),
+                        matched = %matched_version,
+                        current = env!("CARGO_PKG_VERSION"),
+                        "manual KB is from an older mae version"
+                    );
+                }
+                manual_kb::ManualValidation::Unknown => {
+                    warn!(
+                        path = %result.path.display(),
+                        "manual KB checksum does not match any known release"
+                    );
+                }
+                manual_kb::ManualValidation::Custom => {
+                    info!(path = %result.path.display(), "using custom manual KB");
+                }
+            }
+
+            // Open the manual KB CozoDB store and retain the handle for runtime queries.
+            match mae_kb::CozoKbStore::open(&result.path) {
+                Ok(manual_store) => {
+                    // Load manual nodes into in-memory KB (fallback for tests/Phase 4).
+                    match manual_store.load_all() {
+                        Ok(nodes) => {
+                            let count = nodes.len();
+                            for node in nodes {
+                                editor.kb.primary.insert(node);
+                            }
+                            info!(count, path = %result.path.display(), "loaded manual KB nodes");
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "failed to load nodes from manual KB (in-memory fallback)");
+                        }
+                    }
+                    // Retain the CozoDB handle so the query layer can query it directly.
+                    editor.kb.manual_cozo = Some(std::sync::Arc::new(manual_store));
+                }
+                Err(e) => {
+                    warn!(error = %e, path = %result.path.display(), "failed to open manual KB store");
+                }
+            }
+        }
+
         // Initialize standardized KB data directory layout (XDG-compliant).
         match mae_kb::data_dir::KbDataDir::new(&data_dir) {
             Ok(kb_data_dir) => {
@@ -580,15 +634,47 @@ fn main() -> io::Result<()> {
                     ),
                     Err(e) => warn!(error = %e, "failed to migrate legacy KB layout"),
                 }
-                // Initialize primary KB store (SQLite).
-                let primary_db = kb_data_dir.root().join("primary.db");
-                match mae_kb::SqliteKbStore::open(&primary_db) {
+                // Initialize primary KB store (CozoDB) for user data.
+                let kb_root = kb_data_dir.root();
+                let cozo_path = kb_root.join("primary.cozo");
+                match mae_kb::CozoKbStore::open(&cozo_path) {
                     Ok(store) => {
-                        info!(path = %primary_db.display(), "primary KB store opened");
-                        editor.kb.store = Some(std::sync::Arc::new(store));
+                        if let Err(e) = store.seed_type_system() {
+                            warn!(error = %e, "failed to seed KB type system");
+                        }
+                        match store.seed_typed_relationships() {
+                            Ok(n) => debug!(count = n, "seeded typed KB relationships"),
+                            Err(e) => {
+                                warn!(error = %e, "failed to seed typed relationships")
+                            }
+                        }
+                        if let Err(e) = store.seed_views() {
+                            warn!(error = %e, "failed to seed KB views");
+                        }
+
+                        // Load user nodes from primary store into in-memory KB.
+                        match store.load_all() {
+                            Ok(user_nodes) if !user_nodes.is_empty() => {
+                                let count = user_nodes.len();
+                                for node in user_nodes {
+                                    editor.kb.primary.insert(node);
+                                }
+
+                                debug!(count, "loaded user KB nodes from primary store");
+                            }
+                            Ok(_) => {} // empty store, nothing to load
+                            Err(e) => {
+                                warn!(error = %e, "failed to load user nodes from primary store");
+                            }
+                        }
+
+                        info!(path = %cozo_path.display(), "primary KB store opened (CozoDB)");
+                        let arc_store = std::sync::Arc::new(store);
+                        editor.kb.primary_cozo = Some(arc_store.clone());
+                        editor.kb.store = Some(arc_store);
                     }
                     Err(e) => {
-                        warn!(error = %e, "failed to open primary KB store");
+                        warn!(error = %e, "failed to open CozoDB KB store");
                     }
                 }
                 editor.kb.data_dir = Some(kb_data_dir);
@@ -615,43 +701,63 @@ fn main() -> io::Result<()> {
             if !inst.enabled {
                 continue;
             }
-            // SQLite-first: try loading from db_path, fall back to org import.
-            if inst.db_path.exists() {
-                info!(name = %inst.name, db = %inst.db_path.display(), "loading KB from SQLite");
-                let mut kb = mae_kb::KnowledgeBase::new();
-                match kb.load_from_sqlite(&inst.db_path) {
-                    Ok(n) => {
-                        info!(name = %inst.name, nodes = n, "KB loaded from SQLite");
-                        editor.kb.instances.insert(inst.uuid.clone(), kb);
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::warn!(name = %inst.name, error = %e, "SQLite load failed, falling back to org import");
-                    }
-                }
-            }
             if inst.org_dir.exists() {
-                info!(name = %inst.name, dir = %inst.org_dir.display(), "loading KB instance from org files");
-                let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
-                info!(
-                    name = %inst.name,
-                    nodes = report.nodes_imported,
-                    skipped = report.nodes_skipped,
-                    errors = report.errors.len(),
-                    "KB instance loaded from org"
-                );
-                // Persist to SQLite for next startup (one-time migration).
-                if let Err(e) = kb.save_to_sqlite(&inst.db_path) {
-                    tracing::warn!(name = %inst.name, error = %e, "failed to persist KB to SQLite");
+                info!(name = %inst.name, dir = %inst.org_dir.display(), "loading KB instance");
+                // Try CozoDB-direct load first (retains store handle for query layer).
+                let loaded_via_cozo = if inst.db_path.exists() {
+                    match mae_kb::CozoKbStore::open(&inst.db_path) {
+                        Ok(store) => match store.load_all() {
+                            Ok(nodes) => {
+                                let count = nodes.len();
+                                let mut kb = mae_kb::KnowledgeBase::new();
+                                for node in nodes {
+                                    kb.insert(node);
+                                }
+                                info!(
+                                    name = %inst.name,
+                                    nodes = count,
+                                    "KB instance loaded from CozoDB"
+                                );
+                                editor.kb.instances.insert(inst.uuid.clone(), kb);
+                                editor
+                                    .kb
+                                    .instance_stores
+                                    .insert(inst.uuid.clone(), std::sync::Arc::new(store));
+                                true
+                            }
+                            Err(e) => {
+                                warn!(error = %e, name = %inst.name, "CozoDB load_all failed, falling back to org import");
+                                false
+                            }
+                        },
+                        Err(e) => {
+                            warn!(error = %e, name = %inst.name, "CozoDB open failed, falling back to org import");
+                            false
+                        }
+                    }
                 } else {
-                    info!(name = %inst.name, db = %inst.db_path.display(), "KB persisted to SQLite (first-run migration)");
+                    false
+                };
+                if !loaded_via_cozo {
+                    let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
+                    info!(
+                        name = %inst.name,
+                        nodes = report.nodes_imported,
+                        skipped = report.nodes_skipped,
+                        errors = report.errors.len(),
+                        "KB instance loaded from org files"
+                    );
+                    editor.kb.instances.insert(inst.uuid.clone(), kb);
                 }
-                editor.kb.instances.insert(inst.uuid.clone(), kb);
             } else {
                 info!(name = %inst.name, dir = %inst.org_dir.display(), "KB instance dir missing, skipping");
             }
         }
         editor.kb.registry = registry;
+
+        // Build the CozoDB-first query layer AFTER all stores are loaded
+        // (primary + manual + federated instances).
+        editor.kb.rebuild_query_layer();
     }
 
     // Fire app-start hook after initialization is complete.

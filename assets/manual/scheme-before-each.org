@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:before-each
+:KIND: scheme_api
+:END:
+#+title: Scheme: before-each
+#+filetags: :scheme:api:testing:
+
+** Signature
+#+begin_src scheme
+(before-each HOOK-FN)
+#+end_src
+
+Register a setup function for the current describe scope. Called before each it-test.
+
+** Example
+#+begin_src scheme
+(before-each (lambda () (create-buffer "*test*")))
+#+end_src
+
+*Category:* testing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:display-region
+:KIND: concept
+:END:
+#+title: Display Region
+#+filetags: :terminology:
+
+A virtual overlay on buffer text that modifies how a range of lines is displayed. Used for folds (hiding lines), link concealment (showing display text instead of raw markup), and code block backgrounds.

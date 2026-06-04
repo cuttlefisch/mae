@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:module-loaded?
+:KIND: scheme_api
+:END:
+#+title: Scheme: module-loaded?
+#+filetags: :scheme:api:modules:
+
+** Signature
+#+begin_src scheme
+(module-loaded? NAME)
+#+end_src
+
+Return #t if the named module is currently loaded.
+
+** Example
+#+begin_src scheme
+(module-loaded? "org") ; => #t
+#+end_src
+
+*Category:* modules
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

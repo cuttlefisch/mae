@@ -15,10 +15,10 @@
 //! - A **node** is a typed, named document with an org-mode body.
 //! - Links are embedded in the body as `[[id]]` or `[[id|display text]]`.
 //! - The store keeps a reverse index so "what links to X?" is O(1).
-//! - **Persistence**: `SqliteKbStore` (via `KbStore` trait) is the durable
-//!   backend. In-memory `KnowledgeBase` is the hot cache; all mutations
-//!   write through to SQLite. Org files are import/export format, not
-//!   runtime source of truth. See ADR-011.
+//! - **Persistence**: `CozoKbStore` (via `KbStore` trait) is the durable
+//!   backend (CozoDB with SQLite storage engine). In-memory `KnowledgeBase`
+//!   is the hot cache; all mutations write through to CozoDB. Org files are
+//!   import/export format, not runtime source of truth. See ADR-011.
 //!
 //! This crate depends on no MAE internals — it's a pure data library
 //! callable from `mae-core`, `mae-ai`, and the editor binary.
@@ -34,20 +34,24 @@ pub mod federation;
 pub mod fuzzy;
 pub mod migrate;
 pub mod org;
-pub mod persist;
 pub mod store;
 pub mod watch;
 
-#[cfg(feature = "cozo")]
+pub mod cache;
 pub mod cozo_store;
+pub mod query;
 
-pub use federation::{ImportHealth, ImportReport as FederationImportReport};
-pub use org::IngestReport;
-pub use persist::PersistError;
-pub use store::{KbStore, KbStoreError, SqliteKbStore};
-
-#[cfg(feature = "cozo")]
+pub use cache::{CachedQueryLayer, NodeCache};
 pub use cozo_store::CozoKbStore;
+pub use federation::{
+    import_org_dir_to_store, ImportHealth, ImportReport as FederationImportReport, IngestMode,
+};
+pub use org::{IngestReport, OrgParseResult, ParsedLink};
+pub use query::{CozoQueryLayer, FederatedQuery, InMemoryQueryLayer, KbQueryLayer};
+pub use store::{
+    AgendaFilter, Block, BrokenLinkInfo, BrokenLinkReason, HealthReport, IntegrityError, KbStore,
+    KbStoreError, Link, MetaMember, NodeVersion, SubGraph, VectorHit,
+};
 
 /// Kind of a node. Controls how the node is surfaced to the user
 /// (e.g. command nodes show up in `describe-command`) and styled by
@@ -67,6 +71,64 @@ pub enum NodeKind {
     Note,
     /// Project node — represents a detected project from a `.project` file.
     Project,
+    /// Grouping node for organizing related concepts.
+    Category,
+    /// Tutorial lesson (numbered, prerequisite-ordered).
+    Lesson,
+    /// Multi-step tutorial track.
+    Tutorial,
+    /// Composite node whose body is cached from component nodes.
+    Meta,
+    /// Paragraph-level sub-node for fine-grained linking.
+    Block,
+    /// Scheme API documentation (functions, variables, macros).
+    SchemeApi,
+    /// Work item with todo_state, priority, assignee, due_date, sprint.
+    Task,
+    /// Configurable query+display node (kanban, backlog, sprint, timeline, agenda).
+    View,
+}
+
+impl NodeKind {
+    /// Convert a `NodeKind` to its canonical string representation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NodeKind::Index => "index",
+            NodeKind::Command => "command",
+            NodeKind::Concept => "concept",
+            NodeKind::Key => "key",
+            NodeKind::Note => "note",
+            NodeKind::Project => "project",
+            NodeKind::Category => "category",
+            NodeKind::Lesson => "lesson",
+            NodeKind::Tutorial => "tutorial",
+            NodeKind::Meta => "meta",
+            NodeKind::Block => "block",
+            NodeKind::SchemeApi => "scheme_api",
+            NodeKind::Task => "task",
+            NodeKind::View => "view",
+        }
+    }
+
+    /// Parse a `NodeKind` from its string representation.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "index" => NodeKind::Index,
+            "command" => NodeKind::Command,
+            "concept" => NodeKind::Concept,
+            "key" => NodeKind::Key,
+            "project" => NodeKind::Project,
+            "category" => NodeKind::Category,
+            "lesson" => NodeKind::Lesson,
+            "tutorial" => NodeKind::Tutorial,
+            "meta" => NodeKind::Meta,
+            "block" => NodeKind::Block,
+            "scheme_api" => NodeKind::SchemeApi,
+            "task" => NodeKind::Task,
+            "view" => NodeKind::View,
+            _ => NodeKind::Note,
+        }
+    }
 }
 
 /// Specification for subgraph extraction.
@@ -278,8 +340,11 @@ pub fn parse_links(body: &str) -> Vec<(String, String)> {
     let bytes = body.as_bytes();
     let mut i = 0;
     while i + 1 < bytes.len() {
-        if bytes[i] == b'[' && bytes[i + 1] == b'[' {
-            // Skip links inside #+begin_src … #+end_src.
+        if bytes[i] == b'[' && bytes[i + 1] == b'['
+            // Skip links inside org verbatim =...= or code ~...~ spans
+            && !(i > 0 && (bytes[i - 1] == b'=' || bytes[i - 1] == b'~'))
+        {
+            // Skip links inside verbatim blocks (src, example, export).
             if code_ranges.iter().any(|&(s, e)| i >= s && i < e) {
                 i += 1;
                 continue;
@@ -287,9 +352,14 @@ pub fn parse_links(body: &str) -> Vec<(String, String)> {
             if let Some(end_rel) = body[i + 2..].find("]]") {
                 let inner = &body[i + 2..i + 2 + end_rel];
                 // Split on '|' for display-text override.
-                let (target, display) = match inner.find('|') {
-                    Some(bar) => (&inner[..bar], &inner[bar + 1..]),
-                    None => (inner, inner),
+                // The internal format uses | as separator (from rewrite_links),
+                // while org source uses ][. Both are handled here.
+                let (target, display) = if let Some(sep) = inner.find("][") {
+                    (&inner[..sep], &inner[sep + 2..])
+                } else if let Some(bar) = inner.find('|') {
+                    (&inner[..bar], &inner[bar + 1..])
+                } else {
+                    (inner, inner)
                 };
                 let target = target.trim();
                 if !target.is_empty() {
@@ -304,25 +374,38 @@ pub fn parse_links(body: &str) -> Vec<(String, String)> {
     out
 }
 
-/// Compute byte ranges of `#+begin_src` … `#+end_src` blocks (case-insensitive).
+/// Compute byte ranges of verbatim blocks where org markup should NOT be parsed.
+///
+/// Matches Emacs behavior: `#+begin_src`, `#+begin_example`, and `#+begin_export`
+/// blocks contain literal content — no link extraction, no markup processing.
+/// `#+begin_quote` is intentionally excluded because Emacs parses org markup inside it.
 fn compute_code_block_ranges(body: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let lower = body.to_ascii_lowercase();
-    let mut search_from = 0;
-    while let Some(start) = lower[search_from..].find("#+begin_src") {
-        let abs_start = search_from + start;
-        if let Some(end) = lower[abs_start..].find("#+end_src") {
-            let abs_end = abs_start + end + "#+end_src".len();
-            let abs_end = body[abs_end..]
-                .find('\n')
-                .map_or(body.len(), |nl| abs_end + nl + 1);
-            ranges.push((abs_start, abs_end));
-            search_from = abs_end;
-        } else {
-            ranges.push((abs_start, body.len()));
-            break;
+    // Block types whose content is verbatim (no org markup parsing)
+    let verbatim_blocks = [
+        ("#+begin_src", "#+end_src"),
+        ("#+begin_example", "#+end_example"),
+        ("#+begin_export", "#+end_export"),
+    ];
+    for (begin_tag, end_tag) in &verbatim_blocks {
+        let mut search_from = 0;
+        while let Some(start) = lower[search_from..].find(begin_tag) {
+            let abs_start = search_from + start;
+            if let Some(end) = lower[abs_start..].find(end_tag) {
+                let abs_end = abs_start + end + end_tag.len();
+                let abs_end = body[abs_end..]
+                    .find('\n')
+                    .map_or(body.len(), |nl| abs_end + nl + 1);
+                ranges.push((abs_start, abs_end));
+                search_from = abs_end;
+            } else {
+                ranges.push((abs_start, body.len()));
+                break;
+            }
         }
     }
+    ranges.sort_by_key(|&(s, _)| s);
     ranges
 }
 
@@ -885,8 +968,9 @@ impl KnowledgeBase {
     }
 
     /// Iterator over all nodes (value-references) — used by persistence
-    /// layers. Order is arbitrary; callers that need a stable order should
-    /// collect and sort by id.
+    /// layers (e.g. `CozoKbStore::persist_nodes`). Order is arbitrary;
+    /// callers that need a stable order should collect and sort by id.
+    #[allow(dead_code)] // Used by Phase 1 persist_nodes (build-manual-kb)
     pub(crate) fn nodes_values(&self) -> impl Iterator<Item = &Node> {
         self.nodes.values()
     }

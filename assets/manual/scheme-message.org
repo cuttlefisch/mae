@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:message
+:KIND: scheme_api
+:END:
+#+title: Scheme: message
+#+filetags: :scheme:api:display:
+
+** Signature
+#+begin_src scheme
+(message TEXT)
+#+end_src
+
+Append TEXT to the *Messages* log buffer.
+
+** Example
+#+begin_src scheme
+(message "Init complete")
+#+end_src
+
+*Category:* display
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

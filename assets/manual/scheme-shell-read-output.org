@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:shell-read-output
+:KIND: scheme_api
+:END:
+#+title: Scheme: shell-read-output
+#+filetags: :scheme:api:shell:
+
+** Signature
+#+begin_src scheme
+(shell-read-output BUF-IDX MAX-LINES)
+#+end_src
+
+Read the last MAX-LINES from a shell buffer's viewport.
+
+** Example
+#+begin_src scheme
+(shell-read-output 1 20)
+#+end_src
+
+*Category:* shell
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -42,6 +42,8 @@ pub struct Config {
     pub org: OrgSection,
     #[serde(default)]
     pub collaboration: CollaborationSection,
+    #[serde(default)]
+    pub kb: KbSection,
 }
 
 /// Current config schema version. Bump when config.toml format changes.
@@ -180,6 +182,13 @@ pub struct CollaborationSection {
     /// KB sync mode: "on_save" (default) or "manual".
     pub kb_sync_mode: Option<String>,
 }
+
+/// KB configuration section.
+///
+/// CozoDB (with SQLite storage engine) is the sole backend since v0.12.1.
+/// This struct is retained for forward compatibility with config.toml.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KbSection {}
 
 fn default_true() -> bool {
     true

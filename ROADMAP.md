@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.11.1 · **Tests:** 5,796+ passing · **Status:** Alpha — Phases 1-13 complete. v0.11.1: KB storage architecture (SQLite-first + KbStore trait + CozoDB backend).
+**Current version:** v0.12.0 · **Tests:** 5,863+ passing · **Status:** Alpha — Phases 1-13 complete. v0.12.0: CozoDB-primary graph KB with typed relationships, meta-nodes, versioning, agenda queries, HNSW embeddings, federated query layer.
 
 ---
 
@@ -12,7 +12,7 @@
 | 2. Scheme Runtime | ✅ Complete | R7RS-small (mae-scheme), `init.scm`, `define-key`, `set-option!`, REPL |
 | 3. AI Integration | ✅ Complete | Claude/OpenAI/Gemini/DeepSeek, 450+ tool-calling, conversation UI, permissions |
 | 4. LSP + DAP + Syntax | ✅ Complete | Full LSP (rename, format, outline, breadcrumbs, peek), DAP (watches, exceptions), 13-language tree-sitter |
-| 5. Knowledge Base | ✅ Complete | SQLite + FTS5, org parser, 200+ nodes, bidirectional links, federation |
+| 5. Knowledge Base | ✅ Complete | CozoDB graph store, 862 nodes, typed relationships, pre-built manual, ingestion pipeline |
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload, send-to-shell |
 | 7. Documentation | ✅ Complete | Tutor (13 lessons), `:describe-configuration`, `--check-config`, `--init-config` |
 | 8. GUI Backend | ✅ Complete | winit + Skia 2D, inline images (PNG/JPG/SVG), variable-height, inertial scroll |
@@ -162,24 +162,51 @@
 - [ ] **Conflict detection**: When multi-client writes land on same node, detect via version counter and surface conflict to user (not silent last-write-wins).
 - [ ] **KB replication**: Read replicas for high-read-throughput scenarios (AI agents doing 600+ node fetches/sec). WAL mode enables this natively for same-host.
 
-### KB Storage Architecture (v0.11.1 — ADR-011)
+### KB Storage Architecture (v0.12.0 — ADR-011)
 
-**Status**: Phase A COMPLETE, Phase B COMPLETE. CozoDB backend available behind feature flag.
+**Status**: ALL PHASES COMPLETE + PERSISTENT KB. CozoDB sole backend. 5,878+ tests passing.
 
 The KB had a dual source of truth problem: org files re-parsed on startup, SQLite declared but unused in hot path. Every collaborative tool at scale uses a database (Notion/Postgres, Roam/Datascript, Logseq migrating FROM files TO DB).
 
-**Decision**: CozoDB-first with SQLite bridge period. See `docs/adr/011-kb-storage.md`.
+**Decision**: CozoDB sole backend (sled storage). rusqlite removed. See `docs/adr/011-kb-storage.md`, `docs/adr/012-persistent-graph-kb.md`.
 
+#### Foundation (v0.11.1)
 - [x] **KbStore trait** (`crates/kb/src/store.rs`): Database-agnostic persistence interface — node CRUD, FTS search, link queries, CRDT ops, pending update queue. `SqliteKbStore` implementation with 11 tests.
 - [x] **SQLite-first startup**: Federated KB instances load from SQLite first, fall back to org import + one-time migration to SQLite.
 - [x] **Write-through persistence**: `kb_create_node`, `kb_update_node`, `kb_delete_node` write through to `SqliteKbStore`.
 - [x] **Durable offline queue**: Pending CRDT updates stored in SQLite `pending_updates` table (survives crashes). Drained on reconnect.
 - [x] **Primary KB store**: `KbContext.store` field holds `Arc<dyn KbStore>` for the primary KB instance (supports any backend).
-- [x] **CozoKbStore**: `#[cfg(feature = "cozo")]` feature-flagged CozoDB backend — Datalog queries, typed relationships, shortest path, neighborhood BFS. 12 tests.
 - [x] **SQLite → CozoDB migration**: `migrate_between_stores()` in `crates/kb/src/migrate.rs` — cross-store data migration with report.
 - [x] **Graph-native AI tools**: `kb_shortest_path`, `kb_neighborhood`, `kb_add_link`, `kb_raw_query` — delegate to KbStore, graceful NotSupported on SQLite.
 - [x] **KB lifecycle E2E**: 24 Rust tests + 3 Scheme test files covering persistence, CRDT, offline queue, import/export, performance.
-- [ ] **GraphRAG** (v0.14.0): Hybrid vector + graph retrieval via CozoDB — single Datalog query combining HNSW entry points + graph expansion.
+
+#### CozoDB Graph KB (v0.12.0)
+- [x] **Phase A**: CozoDB default backend — feature flag removed, `kb_backend` option (cozo/sqlite), auto-migration on first startup.
+- [x] **Phase B**: Enhanced schema — 14 NodeKind variants, 9 new CozoDB relations (node_types, rel_types, blocks, meta_members, node_versions, views, hygiene_suggestions, instance_meta, embeddings), instance UUID, type system seeding (14 node types, 20 rel types with inverses).
+- [x] **Phase C**: 95+ typed seed relationships (`requires`, `teaches`, `part_of`, `documents`, `explains`, `references`, `categorizes`, `contains`) replacing flat `related_to`.
+- [x] **Phase D**: Meta-node composition (add/remove members, cached body refresh), block-level addressing (`parent_id#N`).
+- [x] **Phase E**: Agenda queries via Datalog — Todo, Priority, Tag, Stale, Orphan, DeadEnd, Custom filters.
+- [x] **Phase F**: KB health report via Datalog — node/link counts by kind/type, orphans, broken links, hub nodes.
+- [x] **Phase G**: HNSW vector embeddings (384-dim F32 Cosine), GraphRAG query template, federation instance identity.
+- [x] **Phase H**: Node versioning (snapshot on update, history, point-in-time restore with SHA-256 integrity), 6 pre-built view seeds (kanban, backlog, sprint, timeline, agenda, custom).
+- [x] **Phase I**: 28-test graph validation suite using full seed manual as fixture — validates schema, queries, and tooling.
+- [x] **NodeKind migration**: ~230 seed nodes migrated to correct kinds (lesson→Lesson, tutorial→Tutorial, category→Category, scheme→SchemeApi). 12 broken `related_to` links fixed to 0.
+- [x] **AI tools**: `kb_agenda`, `kb_history`, `kb_restore`, `kb_view_query`, `kb_vector_search` wired into executor + dispatch.
+
+#### Persistent Graph KB (v0.12.0 — ADR-012)
+- [x] **Phase 0**: rusqlite removed (~2,500 lines), SqliteKbStore deleted, sled engine string fixed, `kb_backend` option removed.
+- [x] **Phase 1**: Pre-built manual KB — `build-manual-kb` binary (862 nodes), `manual_kb.rs` locate+validate, SHA-256 checksums, `Editor::with_kb()`, multi-DB startup (manual → user → imported).
+- [x] **Phase 2**: CozoDB-direct ingestion — `import_org_dir_to_store()`, `IngestMode` (Full/Incremental), content hash change detection, `source_files` relation, enhanced `ImportReport`.
+- [x] **Phase 3**: Scale validation — 2,500 nodes + 15,000 links integration test (`cozo_scale_test.rs`).
+- [x] **Phase 3.5**: CozoDB-first query layer — `KbQueryLayer` trait + `CozoQueryLayer` + `FederatedQuery` (multi-store fan-out). 46 read sites migrated from in-memory `KnowledgeBase` to query-layer-first. ADR-013.
+- [x] **Phase 5**: Federated startup — instances load from CozoDB stores (not just org re-import), `rebuild_query_layer()` after all stores loaded, manual KB handle retained.
+- [x] **Phase 6**: Batch KB search — `id_title_body_triples()` single Datalog query replaces N individual `get()` calls. Org heading conventions (markdown→org).
+- [x] **Phase 7**: Internal KB link preservation in `rewrite_links_with_types()`, fragment stripping in link storage, GUI heading underline scale fix.
+
+#### Future
+- [ ] **GraphRAG live pipeline** (v0.13.0): Embedding generation (provider trait: OpenAI, Ollama, local), background indexing, AI context injection.
+- [ ] **AI hygiene daemon** (v0.13.0): Background assessment of new/modified nodes, link type suggestions, missing metadata flags.
+- [ ] **GUI view rendering** (v0.14.0): Kanban board, sprint view, timeline — drag-drop, swimlanes.
 
 ### Phase 13: MAE Scheme Runtime (v0.12.0)
 
@@ -392,6 +419,7 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [ ] **Doc store eviction TOCTOU**: Between identifying eviction candidates (read lock) and evicting (write lock), a client could reconnect. Low probability; fix requires holding write lock during entire eviction.
 - [ ] **Unified buffer-switching strategy**: Three patterns exist (`switch_to_buffer`, `display_buffer_and_focus`, palette). Should converge on one with consistent view state management.
 - [ ] **KB fuzzy body search**: `kb_search` currently matches node titles and tags via FTS5 but not node body content in a fuzzy/substring way. Searching for a term like "DeltaDB" that only appears in the body of some nodes returns no results. Add full-text indexing of node bodies (FTS5 `content` column) so `kb_search` and `:help` fuzzy completion can find concepts mentioned anywhere in the knowledge graph, not just in titles.
+- [ ] **Binary architecture review** (v0.13.0): Evaluate splitting MAE into standalone binaries — `mae` (editor), `mae-daemon` (background services: KB hygiene, embedding generation, collab state server), `mae-scheme` (standalone Scheme REPL/runner). Motivations: (1) CozoDB SQLite storage backend blocked by rusqlite linker conflict when state-server links both rusqlite and cozo-sqlite — separate binaries isolate dependency trees; (2) daemon process enables background KB maintenance without editor running; (3) standalone Scheme binary enables scripting, CI, and testing without editor overhead. Write ADR-014.
 
 ---
 

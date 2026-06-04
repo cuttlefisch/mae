@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:unload-feature
+:KIND: scheme_api
+:END:
+#+title: Scheme: unload-feature
+#+filetags: :scheme:api:modules:
+
+** Signature
+#+begin_src scheme
+(unload-feature NAME)
+#+end_src
+
+Mark a feature as unloaded in the package system.
+
+** Example
+#+begin_src scheme
+(unload-feature "my-package")
+#+end_src
+
+*Category:* modules
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

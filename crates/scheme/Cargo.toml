@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 mae-core = { path = "../core" }
+mae-kb = { path = "../kb" }
 mae-sync = { path = "../sync" }
 base64 = "0.22"
 tracing = { workspace = true }

@@ -214,7 +214,11 @@ async fn run_server(start_args: cli::StartArgs) {
         Ok(listener) => listener,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
             eprintln!("error: address {} is already in use", config.bind);
-            eprintln!("hint: check with `ss -tlnp | grep {}`", config.bind.port());
+            if cfg!(target_os = "macos") {
+                eprintln!("hint: check with `lsof -i :{}`", config.bind.port());
+            } else {
+                eprintln!("hint: check with `ss -tlnp | grep {}`", config.bind.port());
+            }
             eprintln!("hint: use --bind to specify a different address");
             std::process::exit(1);
         }

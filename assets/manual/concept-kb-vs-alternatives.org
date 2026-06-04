@@ -1,0 +1,46 @@
+:PROPERTIES:
+:ID: concept:kb-vs-alternatives
+:KIND: concept
+:ALIASES: obsidian,roam research,notion,logseq
+:END:
+#+title: KB vs Obsidian / Roam Research
+#+filetags: :kb:comparison:obsidian:roam:
+
+How MAE's knowledge base compares to Obsidian and Roam Research.
+
+** Feature comparison
+| Feature | MAE KB | Obsidian | Roam Research |
+|---------|--------|----------|---------------|
+| Data format | Org-mode (plain text) | Markdown | Proprietary JSON |
+| Storage | Local files + SQLite index | Local vault | Cloud (proprietary) |
+| Link model | Typed graph, reverse index | Wiki-links, backlinks | Block references |
+| Search | FTS5 + fuzzy + substring | Basic full-text | Full-text + filter |
+| AI integration | Peer actor (same API) | Plugin (Copilot) | None native |
+| Federation | Multi-directory, cross-KB | Single vault | Single graph |
+| Open source | GPL-3.0 | Freemium, closed core | Proprietary |
+| Offline | Full offline | Full offline | Requires sync |
+| Extensibility | Scheme + module system | JS plugins | CSS themes only |
+
+** Migration paths
+
+*** From Obsidian
+- Obsidian vaults are Markdown files with wiki-style links.
+- Convert to org via pandoc: `pandoc -f markdown -t org input.md -o output.org`
+- Add `:ID:` properties (org-roam's `org-roam-migrate-wizard` helps).
+- Register: `:kb-register MyVault ~/converted-vault`
+
+*** From Roam Research
+- Export as Markdown or JSON from Roam settings.
+- Convert to org, assign `:ID:` properties.
+- `((block-ref))` maps lossy to heading-level `:ID:` nodes.
+- Register: `:kb-register RoamExport ~/roam-export`
+
+** Philosophy: why local-first + AI-peer + plain-text-canonical
+
+1. **Plain text is the only immortal format.** SQLite is derived. Cloud sync is a dependency. Org files survive every tool transition.
+2. **AI as peer, not plugin.** MAE's AI calls `kb_search`, `kb_get`, `kb_graph` -- the same query surface the human uses. No impedance mismatch.
+3. **Federation > monolithic vault.** Life has multiple knowledge domains. Obsidian forces one vault or vault-switching. MAE federates: each domain is a registered instance, searchable together.
+4. **Ownership means exit.** Your org files are yours. No account, no sync service, no API key required to read your own notes.
+5. **Performance at the editor layer.** In-memory graph with pre-lowercased search cache. FTS5 with porter stemmer. Sub-millisecond search across thousands of nodes. No Electron, no browser runtime.
+
+See also: [[references:concept:knowledge-base][Knowledge Base]], [[references:concept:kb-federation][KB Federation]], [[references:concept:kb-workflows][KB Workflows]]

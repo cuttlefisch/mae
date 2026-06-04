@@ -1,0 +1,42 @@
+:PROPERTIES:
+:ID: tutorial:vim-familiar
+:KIND: tutorial
+:END:
+#+title: Tutorial: What Carries Over from Vim
+#+filetags: :tutorial:vim:
+
+* What Carries Over from Vim
+
+[[teaches:lesson:navigation][Teaches: Navigation]]
+
+If you know Vim, you already know most of MAE. These all work as expected:
+
+** Movement
+=h=/=j=/=k=/=l=, =w=/=b=/=e=, =gg=/=G=, =0=/=$=, =Ctrl-d=/=Ctrl-u=, =f=/=t=, =%=
+
+** Modes
+Normal, Insert (=i=/=a=/=o=/=O=), Visual (=v=/=V=), Command (=:=)
+
+** Editing
+=dd=/=yy=/=p=/=P=, =ciw=/=diw=/=yiw=, =x=/=r=, =.= (dot-repeat), =u=/=Ctrl-r=
+
+** Text objects
+=iw=/=aw=, =i"=/=a"=, =i(=/=a(=, =i{=/=a{=, =it=/=at=
+
+** Registers
+="ay= to yank into register a, ="ap= to paste from it. ="+=  for system clipboard.
+
+** Ex commands
+=:w=, =:q=, =:wq=, =:e file=, =:set option=, =/search=
+
+** Macros
+=q{reg}= to record, =q= to stop, =@{reg}= to replay
+
+*Next:* [[id:tutorial:vim-differences][What's Different from Vim]]
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

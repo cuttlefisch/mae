@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:mae-declare-module!
+:KIND: scheme_api
+:END:
+#+title: Scheme: mae-declare-module!
+#+filetags: :scheme:api:modules:
+
+** Signature
+#+begin_src scheme
+(mae-declare-module! NAME . FLAGS)
+#+end_src
+
+Declare a module to be loaded by the module system. FLAGS are optional feature flags.
+
+** Example
+#+begin_src scheme
+(mae-declare-module! "org" '((+journal . #t)))
+#+end_src
+
+*Category:* modules
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

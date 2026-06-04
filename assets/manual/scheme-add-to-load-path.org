@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:add-to-load-path!
+:KIND: scheme_api
+:END:
+#+title: Scheme: add-to-load-path!
+#+filetags: :scheme:api:packages:
+
+** Signature
+#+begin_src scheme
+(add-to-load-path! DIR)
+#+end_src
+
+Prepend DIR to the load-path.
+
+** Example
+#+begin_src scheme
+(add-to-load-path! "~/.config/mae/lisp")
+#+end_src
+
+*Category:* packages
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

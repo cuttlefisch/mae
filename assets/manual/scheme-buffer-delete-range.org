@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:buffer-delete-range
+:KIND: scheme_api
+:END:
+#+title: Scheme: buffer-delete-range
+#+filetags: :scheme:api:buffer-editing:
+
+** Signature
+#+begin_src scheme
+(buffer-delete-range START END)
+#+end_src
+
+Delete characters from byte offset START to END.
+
+** Example
+#+begin_src scheme
+(buffer-delete-range 0 10)
+#+end_src
+
+*Category:* buffer-editing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

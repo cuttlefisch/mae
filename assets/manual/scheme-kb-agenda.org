@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:kb-agenda
+:KIND: scheme_api
+:END:
+#+title: Scheme: kb-agenda
+#+filetags: :scheme:api:kb-graph:
+
+** Signature
+#+begin_src scheme
+(kb-agenda FILTER [ARGS])
+#+end_src
+
+Query the KB graph via CozoDB Datalog. Filters: todo, priority, tag, orphan, stale, dead-end, custom.
+
+** Example
+#+begin_src scheme
+(kb-agenda "orphan")  ;; or (kb-agenda "todo" "TODO")
+#+end_src
+
+*Category:* kb-graph
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

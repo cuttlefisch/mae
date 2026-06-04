@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:define-kb-node!
+:KIND: scheme_api
+:END:
+#+title: Scheme: define-kb-node!
+#+filetags: :scheme:api:kb-authoring:
+
+** Signature
+#+begin_src scheme
+(define-kb-node! ID TITLE KIND BODY . TAGS)
+#+end_src
+
+Create or update a knowledge base node from Scheme.
+
+** Example
+#+begin_src scheme
+(define-kb-node! "concept:my-topic" "My Topic" "concept" "Body text" '("tag1"))
+#+end_src
+
+*Category:* kb-authoring
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

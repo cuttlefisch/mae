@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:point-min
+:KIND: scheme_api
+:END:
+#+title: Scheme: point-min
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(point-min)
+#+end_src
+
+Return the minimum valid byte offset (always 0).
+
+** Example
+#+begin_src scheme
+(point-min) ; => 0
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

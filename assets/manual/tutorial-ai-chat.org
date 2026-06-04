@@ -1,0 +1,55 @@
+:PROPERTIES:
+:ID: tutorial:ai-chat
+:KIND: tutorial
+:END:
+#+title: Tutorial: AI Chat (Built-in)
+#+filetags: :tutorial:ai:
+
+* AI Chat (Built-in)
+
+*Prerequisite:* [[requires:tutorial:ai-setup][AI Setup]]
+
+The *AI Chat* (=SPC a p=) is MAE's native conversation interface.
+
+** How it works
+1. Press =SPC a p= -- the prompt line activates at the bottom of the conversation buffer
+2. Type your message and press Enter
+3. The AI responds with full editor context: it can see your buffers, LSP diagnostics, syntax trees, and debug state
+
+** What the AI can do
+- Read and edit buffers
+- Navigate files and project structure
+- Run registered commands
+- Query LSP (definitions, references, hover)
+- Inspect DAP debug state
+- Search the knowledge base
+
+** Configuration
+#+begin_src toml
+[ai]
+provider = "claude"
+model = "claude-sonnet-4-20250514"
+permission = "trusted"      # readonly, standard, trusted, privileged
+budget_warn_tokens = 50000
+budget_limit_tokens = 100000
+#+end_src
+
+** Conversation persistence
+Conversations are saved per project in =.mae/conversation.json=.
+- =:ai-save= -- manually save the conversation
+- =:ai-load= -- load a saved conversation
+- =restore_session = true= -- auto-restore on startup
+
+** Tips
+- Use =SPC a c= to cancel an in-flight AI request
+- Use =Escape= during AI operation to cancel and regain input
+- The token budget dashboard shows usage in the status bar
+
+See also: [[id:concept:ai-as-peer][AI as Peer]], [[id:concept:ai-modes][Agent vs Chat]]
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

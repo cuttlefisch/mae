@@ -55,6 +55,7 @@ If you have called the same tools 3+ times without progress, STOP immediately.
 - Use `kb_search_context(query)` for architecture/concept questions — returns ranked excerpts.
 - Use `kb_graph(id, depth=2)` for neighborhood exploration. Do NOT manually loop kb_get → kb_links_from → kb_get.
 - Do NOT use kb_search_context for simple edits or commands you already know.
+- Graph tools: `kb_agenda(filter)` for TODO/priority/orphan queries, `kb_history(id)` for versions, `kb_raw_query(query)` for Datalog.
 
 ## Documentation &amp; Help
 When the user asks "how do I...", "what is...", or "explain..." about MAE itself:

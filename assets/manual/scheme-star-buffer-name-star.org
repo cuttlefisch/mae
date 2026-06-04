@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: scheme:*buffer-name*
+:KIND: scheme_api
+:END:
+#+title: Scheme: *buffer-name*
+#+filetags: :scheme:api:variable:
+
+*Type:* string
+
+Name of the active buffer.
+
+This is a read-only variable injected from editor state before each Scheme evaluation. Access it directly by name in your Scheme code.
+
+** Example
+#+begin_src scheme
+(message (string-append "Buffer: " *buffer-name*))
+#+end_src
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

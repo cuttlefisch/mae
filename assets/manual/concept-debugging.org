@@ -1,0 +1,48 @@
+:PROPERTIES:
+:ID: concept:debugging
+:KIND: concept
+:ALIASES: debugger, breakpoints, stepping
+:END:
+#+title: Debugging (DAP)
+#+filetags: :dap:debugging:ai:
+
+MAE integrates with the **Debug Adapter Protocol (DAP)** to provide a full debugging experience accessible to both the human user and the AI agent.
+
+** DAP client
+The DAP client connects to debug adapters via stdin/stdout. Built-in adapter presets: `lldb` (LLVM), `debugpy` (Python), `codelldb` (CodeLLDB / Rust+C++).
+
+** Debug panel
+The `*Debug*` buffer (`SPC d p` or `:debug-panel`) shows threads, stack frames, scopes, and variables in a navigable tree view.
+
+| Key | Action |
+|-----|--------|
+| `j`/`k` | Navigate up/down |
+| `Enter` | Expand/collapse node |
+| `o` | Open source at selected frame |
+| `q` | Close debug panel |
+
+** AI debug tools (13 tools)
+| Tool | Permission | Description |
+|------|-----------|-------------|
+| `dap_start` | Privileged | Launch adapter + debuggee |
+| `dap_set_breakpoint` | Write | Set a breakpoint at file:line |
+| `dap_remove_breakpoint` | Write | Remove a breakpoint |
+| `dap_continue` | Write | Resume execution |
+| `dap_step` | Write | Step over/into/out |
+| `dap_list_variables` | ReadOnly | List variables in current scope |
+| `dap_inspect_variable` | ReadOnly | Inspect a variable's value |
+| `dap_expand_variable` | ReadOnly | Expand a structured variable |
+| `dap_select_frame` | Write | Select a stack frame |
+| `dap_select_thread` | Write | Select a thread |
+| `dap_output` | ReadOnly | Debug adapter output |
+| `dap_evaluate` | Write | Evaluate expression in debuggee |
+| `dap_disconnect` | Write | Disconnect from debug session |
+
+Use `debug_state` to inspect the current session state (threads, frames, breakpoints).
+
+** Permission tiers
+- **Privileged** — `dap_start` (spawns processes).
+- **Write** — execution control (`dap_continue`, `dap_step`, `dap_set_breakpoint`, `dap_remove_breakpoint`, `dap_select_frame`, `dap_select_thread`, `dap_evaluate`, `dap_disconnect`).
+- **ReadOnly** — inspection (`dap_list_variables`, `dap_inspect_variable`, `dap_expand_variable`, `dap_output`).
+
+See also: [[concept:ai-as-peer]], [[cmd:debug-panel]], [[cmd:debug-start]], [[key:leader-keys]], [[index]]

@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:visual-buffer-add-rect!
+:KIND: scheme_api
+:END:
+#+title: Scheme: visual-buffer-add-rect!
+#+filetags: :scheme:api:visual:
+
+** Signature
+#+begin_src scheme
+(visual-buffer-add-rect! X Y W H FILL STROKE)
+#+end_src
+
+Draw a rectangle on the visual canvas.
+
+** Example
+#+begin_src scheme
+(visual-buffer-add-rect! 10.0 10.0 100.0 50.0 "#ff0000" #f)
+#+end_src
+
+*Category:* visual
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

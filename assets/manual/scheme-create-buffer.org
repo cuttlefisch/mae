@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:create-buffer
+:KIND: scheme_api
+:END:
+#+title: Scheme: create-buffer
+#+filetags: :scheme:api:buffer-editing:
+
+** Signature
+#+begin_src scheme
+(create-buffer NAME)
+#+end_src
+
+Create a new empty buffer with the given name and return its index.
+
+** Example
+#+begin_src scheme
+(create-buffer "*notes*")
+#+end_src
+
+*Category:* buffer-editing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,33 @@
+:PROPERTIES:
+:ID: concept:render-profiling
+:KIND: concept
+:ALIASES: display, graphics, skia
+:END:
+#+title: Concept: Render Profiling
+#+filetags: :performance:rendering:observability:
+
+*Render profiling* lets you diagnose GUI frame time issues using built-in MCP tools — no external profiler needed.
+
+** Quick Diagnosis Workflow
+1. *Snapshot frame state:* ~introspect(section: "frame")~ -> identify hot phase (syntax/layout/draw)
+2. *Scroll stress test:* ~perf_benchmark(benchmark: "scroll_stress")~ -> find position-dependent spikes
+3. *Cache analysis:* Check ~caches~ section in the frame snapshot -> which cache is thrashing?
+
+** Frame Snapshot Fields
+| Field | Meaning |
+|-------+---------|
+| ~render_phase_us.syntax~ | Time computing syntax highlight spans |
+| ~render_phase_us.layout~ | Time computing line positions + wrap |
+| ~render_phase_us.draw~ | Time drawing text + backgrounds |
+| ~caches.syntax~ | Tree-sitter parse cache hit/miss |
+| ~caches.markup~ | Org/Markdown markup span cache |
+| ~caches.visual_rows~ | Word-wrap row count cache |
+
+** Deep Debugging with DAP
+- Attach to MAE: ~dap_start(adapter: "lldb", mode: "attach", pid: <PID>)~
+- Set conditional breakpoint: ~dap_set_breakpoint(source: "...", line: N, condition: "scale > 1.0")~
+- Step through the hot path, inspect variables
+
+[[part_of:concept:debugging][Part of Debugging]].
+
+See also: [[concept:introspect]], [[concept:debugging]], [[concept:event-recording]], [[index]]

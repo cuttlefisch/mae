@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:register-module!
+:KIND: scheme_api
+:END:
+#+title: Scheme: register-module!
+#+filetags: :scheme:api:modules:
+
+** Signature
+#+begin_src scheme
+(register-module! NAME VERSION DESCRIPTION)
+#+end_src
+
+Register a module in the module registry.
+
+** Example
+#+begin_src scheme
+(register-module! "my-module" "0.1.0" "My custom module")
+#+end_src
+
+*Category:* modules
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

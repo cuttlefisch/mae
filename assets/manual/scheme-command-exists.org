@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:command-exists?
+:KIND: scheme_api
+:END:
+#+title: Scheme: command-exists?
+#+filetags: :scheme:api:commands:
+
+** Signature
+#+begin_src scheme
+(command-exists? NAME)
+#+end_src
+
+Return #t if a command with NAME is registered.
+
+** Example
+#+begin_src scheme
+(command-exists? "save") ; => #t
+#+end_src
+
+*Category:* commands
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

@@ -1,0 +1,27 @@
+:PROPERTIES:
+:ID: concept:watchdog
+:KIND: concept
+:END:
+#+title: Concept: Watchdog
+#+filetags: :debugging:observability:
+
+The *watchdog* is a background thread that monitors the editor's main event loop for responsiveness.
+
+** How it works
+1. The main thread bumps a heartbeat counter on every event loop iteration.
+2. The watchdog thread checks the counter every 2 seconds.
+3. If the counter hasn't advanced, the watchdog declares a *stall* and:
+   - Logs a warning with the stall duration.
+   - On Linux, dumps ~/proc/self/task/*/status~ for all threads.
+   - Records the stall in an anomaly log for later inspection.
+
+** Configuration
+The watchdog is always active but only logs at ~trace~ level:
+  ~MAE_LOG=mae=trace mae~ — see watchdog heartbeats and stall reports.
+
+** Why this exists
+Emacs has no built-in stall detection — when it hangs, you get a spinning cursor and no diagnostic information. MAE's watchdog provides actionable data immediately.
+
+[[part_of:concept:ai-as-peer][Part of The AI as Peer Actor]].
+
+See also: [[concept:event-recording]], [[concept:introspect]], [[index]]

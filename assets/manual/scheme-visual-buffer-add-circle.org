@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:visual-buffer-add-circle!
+:KIND: scheme_api
+:END:
+#+title: Scheme: visual-buffer-add-circle!
+#+filetags: :scheme:api:visual:
+
+** Signature
+#+begin_src scheme
+(visual-buffer-add-circle! CX CY R FILL STROKE)
+#+end_src
+
+Draw a circle on the visual canvas.
+
+** Example
+#+begin_src scheme
+(visual-buffer-add-circle! 50.0 50.0 25.0 "blue" #f)
+#+end_src
+
+*Category:* visual
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

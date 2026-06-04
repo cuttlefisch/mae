@@ -1,0 +1,34 @@
+:PROPERTIES:
+:ID: concept:set-syntax
+:KIND: concept
+:END:
+#+title: :set Option Syntax
+#+filetags: :options:configuration:vim:
+
+**`:set` option syntax** -- vim-style option configuration.
+
+** Syntax Forms
+
+| Syntax | Effect |
+|--------|--------|
+| `:set option` | Enable (bool) or query (non-bool) |
+| `:set nooption` | Disable bool option |
+| `:set option!` | Toggle bool option |
+| `:set option?` | Query current value |
+| `:set option value` | Assign value |
+| `:set option "value with spaces"` | Quoted value |
+
+** Tab Completion
+
+- `:set <Tab>` completes option names
+- `:set option <Tab>` completes values:
+  - Bool options: `true`, `false`
+  - Enum options: cycles through valid values
+  - Theme options: lists bundled themes
+
+** Implementation
+The parser lives in `crates/core/src/editor/ex_parse.rs` (`parse_set_args()`). Value completion is in `crates/core/src/editor/file_ops.rs` (`complete_set_value()`).
+
+[[part_of:concept:options][Part of Editor Options]].
+
+See also: [[references:concept:command][Command]]

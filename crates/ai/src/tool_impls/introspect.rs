@@ -248,7 +248,11 @@ fn build_frame_section(editor: &Editor) -> serde_json::Value {
 }
 
 fn build_kb_section(editor: &Editor) -> serde_json::Value {
-    let local_nodes = editor.kb.primary.len();
+    let local_nodes = if let Some(q) = editor.kb.query_layer() {
+        q.list_ids(None).len()
+    } else {
+        editor.kb.primary.len()
+    };
     let federated_instances = editor.kb.instances.len();
     let total_federated_nodes: usize = editor.kb.instances.values().map(|kb| kb.len()).sum();
     let watcher_count = editor.kb.watchers.len();

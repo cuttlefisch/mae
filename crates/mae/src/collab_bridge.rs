@@ -1205,7 +1205,11 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             // Get node IDs from the primary KB (or the named instance).
             let node_ids: HashSet<String> =
                 if kb_id == mae_core::KB_DEFAULT_NAME || kb_id == "primary" {
-                    editor.kb.primary.list_ids(None).into_iter().collect()
+                    if let Some(q) = editor.kb.query_layer() {
+                        q.list_ids(None).into_iter().collect()
+                    } else {
+                        editor.kb.primary.list_ids(None).into_iter().collect()
+                    }
                 } else if let Some(kb) = editor.kb.instances.get(&kb_id) {
                     kb.list_ids(None).into_iter().collect()
                 } else {

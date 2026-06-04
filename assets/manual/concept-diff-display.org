@@ -1,0 +1,29 @@
+:PROPERTIES:
+:ID: concept:diff-display
+:KIND: concept
+:END:
+#+title: Diff Display
+#+filetags: :ai:diff:rendering:
+
+**Diff Display** renders unified diffs with syntax-highlighted lines.
+
+** Flow
+1. AI calls `propose_changes` tool with edits
+2. MAE computes a unified diff (LCS-based) between old and new content
+3. The diff is displayed in the `*AI-Diff*` buffer
+4. Lines are colored by type:
+   - `+` lines -> `diff.added` (green)
+   - `-` lines -> `diff.removed` (red)
+   - `@@` headers -> `diff.hunk` (magenta)
+   - `---`/`+++` headers -> `diff.header` (cyan, bold)
+
+** Commands
+- `:ai-accept` -- apply the proposed changes
+- `:ai-reject` -- discard the proposed changes
+
+** Theme Keys
+All 8 bundled themes include `diff.added`, `diff.removed`, `diff.hunk`, and `diff.header` style definitions.
+
+[[part_of:concept:ai-as-peer][Part of The AI as Peer Actor]].
+
+See also: [[references:concept:options][Editor Options]]

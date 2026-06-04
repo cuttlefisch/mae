@@ -19,6 +19,7 @@ graph TD
     mae --> mae_state_server
     mae --> mae_sync
     mae_ai --> mae_core
+    mae_ai --> mae_kb
     mae_ai --> mae_sync
     mae_babel[mae-babel]
     mae_canvas[mae-canvas]
@@ -45,6 +46,7 @@ graph TD
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
     mae_scheme --> mae_core
+    mae_scheme --> mae_kb
     mae_scheme --> mae_sync
     mae_shell[mae-shell]
     mae_snippets[mae-snippets]
@@ -252,10 +254,11 @@ Source: `crates/kb/src/lib.rs`
 | `fuzzy` | mod |
 | `migrate` | mod |
 | `org` | mod |
-| `persist` | mod |
 | `store` | mod |
 | `watch` | mod |
+| `cache` | mod |
 | `cozo_store` | mod |
+| `query` | mod |
 | `NodeKind` | enum |
 | `SubgraphSpec` | struct |
 | `SubgraphResult` | struct |
@@ -471,6 +474,23 @@ Source: `crates/sync/src/lib.rs`
 | `undefine-option!` | `crates/scheme/src/runtime.rs` |
 | `unload-feature` | `crates/scheme/src/runtime.rs` |
 | `define-kb-node!` | `crates/scheme/src/runtime.rs` |
+| `kb-agenda` | `crates/scheme/src/runtime.rs` |
+| `kb-history` | `crates/scheme/src/runtime.rs` |
+| `kb-restore` | `crates/scheme/src/runtime.rs` |
+| `kb-raw-query` | `crates/scheme/src/runtime.rs` |
+| `kb-add-link!` | `crates/scheme/src/runtime.rs` |
+| `kb-remove-link!` | `crates/scheme/src/runtime.rs` |
+| `kb-add-meta-member!` | `crates/scheme/src/runtime.rs` |
+| `kb-remove-meta-member!` | `crates/scheme/src/runtime.rs` |
+| `kb-compose-meta` | `crates/scheme/src/runtime.rs` |
+| `kb-add-rel-type!` | `crates/scheme/src/runtime.rs` |
+| `kb-links-from` | `crates/scheme/src/runtime.rs` |
+| `kb-links-to` | `crates/scheme/src/runtime.rs` |
+| `kb-links-typed` | `crates/scheme/src/runtime.rs` |
+| `kb-meta-members` | `crates/scheme/src/runtime.rs` |
+| `kb-rel-types` | `crates/scheme/src/runtime.rs` |
+| `kb-get-block` | `crates/scheme/src/runtime.rs` |
+| `kb-block-count` | `crates/scheme/src/runtime.rs` |
 | `deprecate-function!` | `crates/scheme/src/runtime.rs` |
 | `register-ai-tool!` | `crates/scheme/src/runtime.rs` |
 | `ai-tool-param!` | `crates/scheme/src/runtime.rs` |
@@ -554,7 +574,7 @@ Source: `crates/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (505 built-in)
+## Commands (511 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -938,6 +958,10 @@ Source: `crates/sync/src/lib.rs`
 | `describe-configuration` | Show a configuration health report (AI, LSP, DAP status) |
 | `kb-health` | Show KB health report (orphans, broken links, namespace counts) |
 | `kb-cleanup-orphans` | Remove orphan user notes with no links (SPC n C) |
+| `kb-agenda` | Query KB graph: :kb-agenda todo|priority|tag|orphan|stale|custom [args] |
+| `kb-history` | Show version history for a KB node: :kb-history <node-id> |
+| `kb-restore` | Restore a KB node to a previous version: :kb-restore <node-id> <version> |
+| `kb-raw-query` | Execute raw CozoDB Datalog query: :kb-raw-query <query> |
 | `describe-display-policy` | Show the active display policy rules (how buffers are placed in windows) |
 | `describe-bindings` | Show all keybindings for the current mode |
 | `describe-module` | Show module summary or detail (:describe-module [name]) |
@@ -993,6 +1017,8 @@ Source: `crates/sync/src/lib.rs`
 | `daily-prev` | Navigate to previous daily note (SPC n d p) |
 | `daily-next` | Navigate to next daily note (SPC n d n) |
 | `kb-audit` | Run KB audit report (SPC n H a) |
+| `kb-narrow` | Narrow to a meta-node component for editing |
+| `kb-widen` | Save edits and widen back from narrowed meta-node component |
 | `capture-finalize` | Save note and return from capture (C-c C-c) |
 | `capture-abort` | Abort capture, delete note (C-c C-k) |
 | `kb-insert-link` | Insert org-style link to a KB node at cursor (SPC n i) |

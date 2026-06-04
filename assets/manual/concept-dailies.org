@@ -1,0 +1,38 @@
+:PROPERTIES:
+:ID: concept:dailies
+:KIND: concept
+:ALIASES: daily notes,journal,org-roam-dailies
+:END:
+#+title: Org-Dailies
+#+filetags: :kb:dailies:journal:org-roam:
+
+**Org-dailies** provides daily journal notes with backward chain-linking, inspired by `org-roam-dailies` in Emacs.
+
+** How It Works
+Each daily note lives at `<dailies-dir>/YYYY-MM-DD.org` with a unique ID (`daily:YYYY-MM-DD`). When you open today's daily, MAE creates the file if needed and **chain-fills** backward -- creating stub files for any gaps and inserting Previous links (e.g. `Previous: YYYY-MM-DD`) to form a continuous backward chain.
+
+** Keybindings (SPC n d)
+| Key | Command | Description |
+|-----|---------|-------------|
+| `SPC n d t` | [[cmd:daily-goto-today]] | Open today's daily (chain-fill) |
+| `SPC n d y` | [[cmd:daily-goto-yesterday]] | Open yesterday's daily |
+| `SPC n d d` | [[cmd:daily-goto-date]] | Open daily for a specific date |
+| `SPC n d p` | [[cmd:daily-prev]] | Navigate to previous daily |
+| `SPC n d n` | [[cmd:daily-next]] | Navigate to next daily |
+
+** Configuration
+- `kb_dailies_dir` -- explicit path (default: `<kb_notes_dir>/daily`)
+- `kb_daily_chain_gap_max` -- max days to chain-fill backward (default: 90)
+
+** Chain-Fill Algorithm
+1. Ensure target date file exists (create stub if needed)
+2. Walk backward day-by-day from target
+3. For each missing day, create a stub `.org` file
+4. Insert `Previous:` link in each stub pointing to the prior day
+5. Stop when hitting a pre-existing daily or exhausting `kb_daily_chain_gap_max`
+
+All file writes use a write-guard to prevent the filesystem watcher from triggering duplicate reimports.
+
+[[part_of:concept:org-mode][Part of Org-Mode]].
+
+See also: [[references:concept:knowledge-base][Knowledge Base]], [[references:concept:kb-workflows][KB Workflows]], [[references:concept:modules][Module System]]

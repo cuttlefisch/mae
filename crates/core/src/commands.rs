@@ -973,6 +973,22 @@ impl CommandRegistry {
             "Remove orphan user notes with no links (SPC n C)",
         );
         reg.register_builtin(
+            "kb-agenda",
+            "Query KB graph: :kb-agenda todo|priority|tag|orphan|stale|custom [args]",
+        );
+        reg.register_builtin(
+            "kb-history",
+            "Show version history for a KB node: :kb-history <node-id>",
+        );
+        reg.register_builtin(
+            "kb-restore",
+            "Restore a KB node to a previous version: :kb-restore <node-id> <version>",
+        );
+        reg.register_builtin(
+            "kb-raw-query",
+            "Execute raw CozoDB Datalog query: :kb-raw-query <query>",
+        );
+        reg.register_builtin(
             "describe-display-policy",
             "Show the active display policy rules (how buffers are placed in windows)",
         );
@@ -1109,6 +1125,11 @@ impl CommandRegistry {
         reg.register_builtin("daily-prev", "Navigate to previous daily note (SPC n d p)");
         reg.register_builtin("daily-next", "Navigate to next daily note (SPC n d n)");
         reg.register_builtin("kb-audit", "Run KB audit report (SPC n H a)");
+        reg.register_builtin("kb-narrow", "Narrow to a meta-node component for editing");
+        reg.register_builtin(
+            "kb-widen",
+            "Save edits and widen back from narrowed meta-node component",
+        );
         reg.register_builtin(
             "capture-finalize",
             "Save note and return from capture (C-c C-c)",

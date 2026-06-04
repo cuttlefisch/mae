@@ -1,0 +1,32 @@
+:PROPERTIES:
+:ID: lesson:help
+:KIND: lesson
+:END:
+#+title: Lesson 9: Help System
+#+filetags: :tutorial:
+
+** Lesson 9: Help System
+
+Prerequisites: [[requires:lesson:terminal][Lesson 8: Terminal]]
+
+MAE's help is a [[teaches:concept:knowledge-base][knowledge base]] — the same data the AI queries via ~kb_*~ tools.
+
+*** Help commands
+  ~SPC h h~ — [[cmd:help][open help index]]
+  ~SPC h k~ — describe key
+  ~SPC h c~ — describe command
+  ~SPC h o~ — describe option
+  ~:help <topic>~ — open help for a topic
+
+*** Navigation
+- *Tab* — fold/unfold heading (or next link if not on heading)
+- *S-Tab* — global visibility cycle (Overview -> Show All)
+- *n* / *p* — next/previous link
+- *Enter* — follow link
+- *e* — edit source file (Obsidian-style toggle)
+- *C-o* — go back    *C-i* — go forward
+- *za* — fold toggle    *zM* — fold all    *zR* — unfold all
+- *q* — close help
+- ~SPC n v~ — return to rendered KB view from source editing
+
+*Prev:* [[lesson:terminal][Lesson 8]]  |  *Next:* [[lesson:leader][Lesson 10: Leader Keys]]  |  *Index:* [[tutor:index][Tutorial]]

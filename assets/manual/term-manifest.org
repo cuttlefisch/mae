@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:manifest
+:KIND: concept
+:END:
+#+title: Manifest
+#+filetags: :terminology:
+
+=module.toml= -- TOML metadata describing a module's identity, version, dependencies, flags, and entry points. Parseable before the Scheme runtime starts, enabling offline introspection (=mae pkg list=).

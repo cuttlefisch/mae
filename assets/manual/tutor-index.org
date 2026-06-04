@@ -1,0 +1,30 @@
+:PROPERTIES:
+:ID: tutor:index
+:KIND: tutorial
+:END:
+#+title: MAE Tutorial
+#+filetags: :tutorial:
+
+Welcome to the MAE Tutorial!
+
+MAE (Modern AI Editor) is an AI-native Lisp machine editor. Work through these lessons to learn the essentials.
+
+** Lessons
+1. [[lesson:navigation][Navigation]] — h/j/k/l, words, pages
+2. [[lesson:modes][Modes]] — Normal, Insert, Visual, Command
+3. [[lesson:editing][Editing]] — insert, delete, undo, repeat
+4. [[lesson:files][Files & Buffers]] — open, save, switch
+5. [[lesson:ai][AI Features]] — the AI as peer actor
+6. [[lesson:scheme][Scheme REPL]] — extend MAE with R7RS Scheme
+7. [[lesson:lsp][LSP]] — go-to-definition, references, hover
+8. [[lesson:terminal][Terminal]] — embedded terminal emulator
+9. [[lesson:help][Help System]] — navigating the knowledge base
+10. [[lesson:leader][Leader Keys]] — SPC-based command groups
+11. [[lesson:debugging][Debugging]] — DAP, breakpoints, stepping, inspect
+12. [[lesson:observability][Observability]] — watchdog, event recording, introspect
+13. [[lesson:collab-setup][Collaborative Editing]] — share buffers in real-time
+
+Navigate with *Tab* to move between links, *Enter* to follow.
+*C-o* goes back, *C-i* goes forward.
+
+See also: [[index][Help Index]]

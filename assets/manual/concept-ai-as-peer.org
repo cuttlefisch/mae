@@ -1,0 +1,34 @@
+:PROPERTIES:
+:ID: concept:ai-as-peer
+:KIND: concept
+:ALIASES: copilot,assistant,llm,chatbot
+:END:
+#+title: The AI as Peer Actor
+#+filetags: :ai:architecture:
+
+MAE's single-most-important design stance: **the AI agent is a peer actor, not a plugin.**
+
+A keybinding and an AI tool-call both resolve to the same [[references:concept:command][Command]] via the same dispatcher. There is no separate "AI mode", no simulated keystrokes, no shadow API. When you type `dd` to delete a line, the agent can invoke `cmd:delete-line` with the same effect, and vice versa.
+
+** What the agent can see
+- Buffer contents (`buffer_read`) across all buffers (`list_buffers`).
+- Cursor state (`cursor_info`) and editor state (`editor_state`).
+- LSP diagnostics (`lsp_diagnostics`) and tree-sitter parse trees (`syntax_tree`).
+- DAP debug state (`debug_state`) when a session is active.
+- This knowledge base (`kb_get`, `kb_search`, `kb_list`).
+- [[references:concept:project][Project state]] via `project_info`, `project_files`, `project_search`.
+- **[[references:concept:introspect][Introspection]]**: The agent can see thread stacks, performance counters, and lock contention.
+
+** Interaction Surfaces
+1. **Internal Peer**: Embedded directly in MAE, sharing your active workspace context. Trigger via `SPC a p`.
+2. **External Agent**: Any MCP-capable client (like Gemini CLI or Claude Code) can connect to MAE via the `mae-mcp-shim`. The external agent gains full control of the editor's tool surface.
+
+** Permission tiers
+Every tool has a permission tier: ReadOnly, Write, Shell, Privileged. Users control how far the agent can act autonomously.
+
+See also: [[references:concept:scheme-api][Scheme API]], [[references:concept:knowledge-base][Knowledge Base]], [[references:concept:command][Command]], [[references:concept:agent-bootstrap][Agent Bootstrap]]
+
+** Subtopics
+- [[part_of:concept:mcp-development][MCP Development Workflow]]
+- [[part_of:concept:diff-display][Diff Display]]
+- [[part_of:concept:watchdog][Watchdog]]

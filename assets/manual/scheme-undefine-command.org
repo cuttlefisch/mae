@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:undefine-command!
+:KIND: scheme_api
+:END:
+#+title: Scheme: undefine-command!
+#+filetags: :scheme:api:modules:
+
+** Signature
+#+begin_src scheme
+(undefine-command! NAME)
+#+end_src
+
+Remove a command from the command registry.
+
+** Example
+#+begin_src scheme
+(undefine-command! "my-old-command")
+#+end_src
+
+*Category:* modules
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

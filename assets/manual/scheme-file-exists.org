@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:file-exists?
+:KIND: scheme_api
+:END:
+#+title: Scheme: file-exists?
+#+filetags: :scheme:api:file-io:
+
+** Signature
+#+begin_src scheme
+(file-exists? PATH)
+#+end_src
+
+Return #t if PATH exists on disk.
+
+** Example
+#+begin_src scheme
+(file-exists? "/tmp/test.txt")
+#+end_src
+
+*Category:* file-io
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

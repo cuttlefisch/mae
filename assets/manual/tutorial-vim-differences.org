@@ -1,0 +1,49 @@
+:PROPERTIES:
+:ID: tutorial:vim-differences
+:KIND: tutorial
+:END:
+#+title: Tutorial: What's Different from Vim
+#+filetags: :tutorial:vim:
+
+* What's Different from Vim
+
+*Prerequisite:* [[requires:tutorial:vim-familiar][What Carries Over from Vim]]
+
+[[teaches:concept:mode][Teaches: Modes]]
+
+** SPC leader instead of backslash
+MAE uses *Space* as the leader key (Doom Emacs style). This gives access to 14+ command groups:
+- =SPC f= -- file operations
+- =SPC b= -- buffer operations
+- =SPC w= -- window operations
+- =SPC a= -- AI commands
+- =SPC h= -- MAE manual
+- =SPC p= -- project commands
+...and more. A *which-key* popup appears after pressing SPC.
+
+** Scheme instead of VimL/Lua
+Configuration is in =init.scm= (R7RS Scheme), not =.vimrc= or =init.lua=.
+Edit it with =SPC f c=.
+
+#+begin_src scheme
+(set-option! "theme" "dracula")
+(define-key "normal" "g g" "goto-first-line")
+(add-hook! "buffer-open" "my-on-open")
+#+end_src
+
+** Built-in AI
+- =SPC a p= -- AI Chat (built-in conversation with editor context)
+- =SPC a a= -- AI Agent (terminal-based, e.g. Claude Code)
+See [[id:tutorial:ai-setup][AI Setup]] for configuration.
+
+** No plugins -- packages
+MAE uses a Scheme-based package system with =require-feature=/=provide-feature= instead of Vim plugins. See [[id:concept:package-system][Package System]].
+
+*Next:* [[id:tutorial:mae-navigation][MAE Navigation]]
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

@@ -1,0 +1,41 @@
+:PROPERTIES:
+:ID: key:normal-mode
+:KIND: key
+:END:
+#+title: Keys: Normal Mode
+#+filetags: :keys:modal-editing:
+
+** Normal-mode keys (summary)
+
+*** Movement
+- ~h j k l~ — left / down / up / right
+- ~w~ / ~b~ / ~e~ — next word / previous word / end of word (see [[cmd:move-word-forward]])
+- ~0~ / ~$~ — start / end of line
+- ~gg~ / ~G~ — first / last line
+- ~f<char>~ — find char on line
+
+*** Operators (compose with any motion)
+- ~d{motion}~ — delete (e.g. ~dw~, ~dG~, ~dgg~, ~d%~, ~d}~)
+- ~c{motion}~ — change (delete + enter insert)
+- ~y{motion}~ — yank (copy)
+- ~dd~ / ~cc~ / ~yy~ — linewise specials
+- ~di(~ / ~ca"~ / ~yi{~ — text objects
+
+*** Editing
+- ~i~ / ~a~ — enter insert mode (before / after cursor) ([[cmd:enter-insert-mode]])
+- ~o~ / ~O~ — open line below / above ([[cmd:open-line-below]])
+- ~u~ / ~C-r~ — undo / redo ([[cmd:undo]], [[cmd:redo]])
+
+*** Leader keys (SPC)
+See [[key:leader-keys]] for the full SPC leader reference.
+
+*** Windows, buffers, files
+- ~:e <path>~ — open file
+- ~:ls~ — list buffers ([[cmd:switch-buffer]])
+- ~C-^~ — switch to alternate buffer
+
+*** Help
+- ~:help~ — open this page
+- ~:describe-command <name>~ — show docs for any command
+
+See also: [[index]], [[concept:mode]]

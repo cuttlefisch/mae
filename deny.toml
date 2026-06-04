@@ -13,16 +13,16 @@ exclude = ["mae-gui", "mae-test-fixtures"]
 # Transitive deps of cozo 0.7.x — we can't fix upstream, tracked for
 # resolution when cozo releases a new version or we swap backends.
 ignore = [
-    # adler → adler2 (cozo → sled → miniz_oxide → adler)
-    { id = "RUSTSEC-2025-0056", reason = "cozo transitive dep, no upstream fix" },
     # bincode unmaintained (cozo → bincode)
     { id = "RUSTSEC-2025-0141", reason = "cozo direct dep, no upstream fix" },
     # fxhash unmaintained (cozo → fxhash)
     { id = "RUSTSEC-2025-0057", reason = "cozo direct dep, no upstream fix" },
-    # instant unmaintained (cozo → sled → parking_lot → instant)
-    { id = "RUSTSEC-2024-0384", reason = "cozo transitive dep, no upstream fix" },
     # lz4_flex: info leak on invalid data (cozo → swapvec → lz4_flex)
     { id = "RUSTSEC-2026-0041", reason = "cozo transitive dep, no upstream fix; data is trusted local" },
+    # adler unmaintained (cozo → sled → …)
+    { id = "RUSTSEC-2024-0384", reason = "sled transitive dep, no upstream fix" },
+    # instant unmaintained (cozo → sled → parking_lot 0.11 → …)
+    { id = "RUSTSEC-2025-0056", reason = "sled transitive dep, no upstream fix" },
 ]
 
 [licenses]

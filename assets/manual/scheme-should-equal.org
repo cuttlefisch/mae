@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:should-equal
+:KIND: scheme_api
+:END:
+#+title: Scheme: should-equal
+#+filetags: :scheme:api:testing:
+
+** Signature
+#+begin_src scheme
+(should-equal A B)
+#+end_src
+
+Assert A equals B (using equal?). Error message includes expected vs actual values.
+
+** Example
+#+begin_src scheme
+(should-equal (buffer-string) "expected text")
+#+end_src
+
+*Category:* testing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

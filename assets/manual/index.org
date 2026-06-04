@@ -1,0 +1,70 @@
+:PROPERTIES:
+:ID: index
+:KIND: index
+:END:
+#+title: MAE Help Index
+
+Welcome to MAE's built-in help. This knowledge base is the same data surface the AI agent queries via its `kb_*` tools -- you and the AI read the same pages.
+
+** Core concepts
+- [[concept:buffer][Buffer]] -- the unit of editable content
+- [[concept:window][Window]] -- a view onto a buffer
+- [[concept:mode][Mode]] -- which keymap is active
+- [[concept:command][Command]] -- the shared API between human, Scheme, and AI
+- [[concept:ai-as-peer][The AI as Peer Actor]] -- the fundamental design stance
+- [[concept:knowledge-base][Knowledge Base]] -- this page, and why it exists
+- [[concept:terminal][Embedded Terminal]] -- full terminal emulator inside MAE + MCP bridge
+- [[concept:hooks][Hooks]] -- Scheme extension points for editor events
+- [[concept:options][Editor Options]] -- configuring MAE from Scheme
+- [[concept:agent-bootstrap][Agent Bootstrap]] -- zero-config MCP tool discovery for AI agents
+- [[concept:self-test][AI Self-Test]] -- validate editor tools and integrations via `:self-test`
+- [[concept:debugging][Debugging (DAP)]] -- DAP client, debug panel, breakpoints, AI debug tools
+- [[concept:watchdog][Watchdog]] -- event loop stall detection and thread dumps
+- [[concept:event-recording][Event Recording]] -- session capture and JSON export
+- [[concept:dap-attach][DAP Attach]] -- cross-instance debugging with PID
+- [[concept:introspect][Introspect]] -- AI diagnostic snapshot (threads/perf/locks/buffers)
+- [[concept:gui][GUI Backend]] -- dual rendering (terminal + GUI), mouse, font config
+- [[concept:git-status][Git Status]] -- Magit-lite porcelain UI
+- [[concept:org-mode][Org-mode]] -- Structural editing, folding, narrowing, and task management
+- [[concept:markdown][Markdown]] -- Structural editing parity with org-mode for `#` headings
+- [[concept:ex-commands][Ex-Command Grammar]] -- Tokenizer for w/q/x compound commands
+- [[concept:set-syntax][:set Syntax]] -- Vim-style option configuration (no-prefix, toggle, query)
+- [[concept:autosave][Autosave]] -- interval-based background save with idle debounce
+- [[concept:file-tree][File Tree]] -- project sidebar with icons and directory expansion
+- [[concept:diff-display][Diff Display]] -- syntax-highlighted unified diffs for AI changes
+- [[concept:scrollbar][Scrollbar]] -- Vertical scrollbar and nyan mode
+- [[concept:conceal][Link & Markup Rendering]] -- Descriptive links and inline styling
+- [[concept:buffer-mode][BufferMode Trait]] -- the contract every buffer kind implements
+- [[concept:buffer-view][BufferView Enum]] -- mode-specific state on Buffer
+- [[concept:keymap-inheritance][Keymap Inheritance]] -- overlay keymaps with parent fallback
+- [[concept:package-system][Package System]] -- require/provide for Scheme extensions
+- [[concept:modules][Module System]] -- structured packages with manifests, flags, and CLI
+- [[concept:flags][Module Flags]] -- optional sub-features with +flag syntax
+- [[concept:design-philosophy][Design Philosophy]] -- composition over inheritance, stable API
+- [[guide:extension-authoring][Extension Authoring Guide]] -- how to create MAE modules
+- [[concept:option-registry][Option Registry]] -- single source of truth for editor settings
+- [[concept:scheme-api][Scheme API]] -- ~50 functions for buffer/window/command/keymap access
+- [[concept:ai-modes][AI Agent vs Chat]] -- when to use each AI interface
+- [[concept:prompt-tiers][Prompt Tiers]] -- model-aware prompt selection (full vs compact)
+- [[concept:display-policy][Display Policy]] -- how buffers are placed in windows (4 actions, O(1) dispatch)
+- [[concept:sync-engine][Sync Engine]] -- yrs (Yjs Rust) CRDT for collaborative state
+- [[concept:collaborative-state][Collaborative State]] -- vision: text + visual + KB sync
+- [[concept:adr-text-sync][ADR-002: Text Sync]] -- decision: yrs/YATA (accepted)
+- [[concept:adr-kb-crdt][ADR-005: KB CRDT]] -- KB nodes as yrs documents
+- [[concept:org-link-syntax][Org Link Syntax]] -- typed links, fragments, transclusions
+
+** Reference
+- [[key:normal-mode][Normal-mode keys]]
+- [[key:leader-keys][SPC leader bindings]] (14 groups, Doom Emacs style)
+- [[concept:project][Project management]]
+- Commands: run `:command-list` for the full list, or visit any `cmd:<name>` node.
+- Browse by category: `category:movement`, `category:editing`, `category:git`, etc.
+
+** Tutorial
+- [[tutorial:getting-started][Getting Started]] -- progressive guide (Vim track / Beginner track / AI setup)
+- [[tutor:index][Lesson-style Tutorial]] -- 12 focused lessons covering all essentials
+
+** Getting around
+- **Enter** on a link follows it.
+- **C-o** goes back, **C-i** goes forward (history, like vim jumps).
+- **q** closes the KB viewer.

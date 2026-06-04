@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:buffer-undo
+:KIND: scheme_api
+:END:
+#+title: Scheme: buffer-undo
+#+filetags: :scheme:api:buffer-editing:
+
+** Signature
+#+begin_src scheme
+(buffer-undo)
+#+end_src
+
+Undo the last edit in the active buffer.
+
+** Example
+#+begin_src scheme
+(buffer-undo)
+#+end_src
+
+*Category:* buffer-editing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

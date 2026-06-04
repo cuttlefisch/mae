@@ -1,0 +1,28 @@
+:PROPERTIES:
+:ID: concept:option-registry
+:KIND: concept
+:END:
+#+title: Option Registry
+#+filetags: :configuration:core:options:
+
+The **option registry** (`options.rs`) is the single source of truth for all editor settings.
+
+Each `OptionDef` has: name, aliases, kind, default, config_key, doc, valid_values.
+Kinds: `Bool`, `String`, `Float`, `Int`, `Theme`.
+
+** Flow
+1. `:set foo bar` → `Editor::set_option("foo", "bar")`
+2. Validates kind + range → sets field on `Editor`
+3. `get_option(name)` reads back the current value
+
+** Scheme
+- `(set-option! "name" "value")` — from Scheme
+- `(get-option "name")` — returns current value as string
+- `*option-list*` — all options as `(name kind default doc)` tuples
+
+** Range clamping
+Options with numeric types are clamped to valid ranges in `set_option()` to prevent rendering corruption (e.g. heading_scale ≤0 → infinite loop).
+
+This concept [[implements:concept:options][implements Editor Options]].
+
+See also: [[concept:command]], [[concept:hooks]], [[index]]

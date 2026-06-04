@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:string-upcase
+:KIND: scheme_api
+:END:
+#+title: Scheme: string-upcase
+#+filetags: :scheme:api:string-utils:
+
+** Signature
+#+begin_src scheme
+(string-upcase STR)
+#+end_src
+
+Return STR converted to uppercase.
+
+** Example
+#+begin_src scheme
+(string-upcase "hello") ; => "HELLO"
+#+end_src
+
+*Category:* string-utils
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

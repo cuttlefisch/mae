@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:kb-restore
+:KIND: scheme_api
+:END:
+#+title: Scheme: kb-restore
+#+filetags: :scheme:api:kb-graph:
+
+** Signature
+#+begin_src scheme
+(kb-restore NODE-ID VERSION)
+#+end_src
+
+Restore a KB node to a previous version with integrity verification.
+
+** Example
+#+begin_src scheme
+(kb-restore "concept:buffer" 2)
+#+end_src
+
+*Category:* kb-graph
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

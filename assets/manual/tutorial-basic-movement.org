@@ -1,0 +1,52 @@
+:PROPERTIES:
+:ID: tutorial:basic-movement
+:KIND: tutorial
+:END:
+#+title: Tutorial: Basic Movement
+#+filetags: :tutorial:beginner:
+
+* Basic Movement
+
+*Prerequisite:* [[requires:tutorial:what-is-modal][What Is Modal Editing?]]
+
+All movement happens in *Normal mode* (press Escape if you're elsewhere).
+
+** Character movement
+#+begin_example
+     k
+  h     l
+     j
+#+end_example
+=h= = left, =j= = down, =k= = up, =l= = right
+
+** Word movement
+- =w= -- jump to next word start
+- =b= -- jump to previous word start
+- =e= -- jump to next word end
+
+** Line movement
+- =0= -- beginning of line
+- =$= -- end of line
+- =^= -- first non-blank character
+
+** File movement
+- =gg= -- go to first line
+- =G= -- go to last line
+- =Ctrl-d= -- half page down
+- =Ctrl-u= -- half page up
+
+** Searching
+- =/pattern= -- search forward
+- =n= -- next match
+- =N= -- previous match
+
+*Try it:* Open a file with =:e filename= and practice moving around!
+
+*Next:* [[id:tutorial:basic-editing][Basic Editing]]
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

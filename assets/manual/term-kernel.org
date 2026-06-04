@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: term:kernel
+:KIND: concept
+:END:
+#+title: Kernel
+#+filetags: :terminology:
+
+MAE's Rust core -- buffer management, window layout, modal editing, event loop, rendering, Scheme runtime, syntax highlighting. The kernel provides primitives that modules compose. If it needs tokio, PTY, or FFI, it's kernel.

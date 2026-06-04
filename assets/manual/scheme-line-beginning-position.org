@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:line-beginning-position
+:KIND: scheme_api
+:END:
+#+title: Scheme: line-beginning-position
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(line-beginning-position)
+#+end_src
+
+Return the byte offset of the beginning of the current line.
+
+** Example
+#+begin_src scheme
+(line-beginning-position)
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

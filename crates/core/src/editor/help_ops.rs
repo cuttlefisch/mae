@@ -28,26 +28,29 @@ pub fn is_builtin_node(id: &str) -> bool {
 }
 
 fn node_kind_label(kind: mae_kb::NodeKind) -> &'static str {
-    mae_kb::persist::kind_to_str(kind)
+    kind.as_str()
 }
 
 /// Render a KB node into plain text and extract link byte ranges.
 /// Returns `(rendered_text, link_spans)`.
-fn render_kb_node(
-    kb: &mae_kb::KnowledgeBase,
+///
+/// Uses the `KbQueryLayer` for node lookup, typed links, and title resolution.
+/// The query layer already returns typed `Link` with `rel_type`, so no separate
+/// store parameter is needed.
+fn render_kb_node_for_query(
+    query: &dyn mae_kb::KbQueryLayer,
     node_id: &str,
-    resolve_title: impl Fn(&str) -> Option<String>,
 ) -> (String, Vec<KbLinkSpan>) {
     let mut out = String::new();
     let mut links: Vec<KbLinkSpan> = Vec::new();
 
-    let Some(node) = kb.get(node_id) else {
+    let Some(node) = query.get(node_id) else {
         out.push_str(&format!("(no such KB node: {})\n", node_id));
         return (out, links);
     };
 
-    // Header — # prefix gives h1 scale in GUI heading renderer
-    out.push_str(&format!("# {}", node.title));
+    // Header — * prefix gives h1 scale in GUI heading renderer
+    out.push_str(&format!("* {}", node.title));
     out.push('\n');
     let content_label = if is_builtin_node(node_id) {
         "MAE Manual"
@@ -89,19 +92,164 @@ fn render_kb_node(
         out.push('\n');
     }
 
-    // Neighborhood
-    let outgoing = kb.links_from(node_id);
-    let incoming = kb.links_to(node_id);
+    // Neighborhood — query layer returns typed links directly
+    let outgoing = query.links_from(node_id);
+    let incoming = query.links_to(node_id);
 
     if !outgoing.is_empty() || !incoming.is_empty() {
         out.push('\n');
-        out.push_str("## Neighborhood\n");
+        out.push_str("** Neighborhood\n");
     }
     if !outgoing.is_empty() {
         out.push_str("Outgoing:\n");
-        for target in &outgoing {
+        for link in &outgoing {
+            let title_text = query
+                .get(&link.dst)
+                .map(|n| n.title)
+                .unwrap_or_else(|| "(missing)".to_string());
+            out.push_str("  ");
+            if link.rel_type != "references" {
+                out.push_str(&link.rel_type);
+                out.push_str(" → ");
+            } else {
+                out.push_str("→ ");
+            }
+            let link_start = out.len();
+            out.push_str(&link.dst);
+            let link_end = out.len();
+            links.push(KbLinkSpan {
+                byte_start: link_start,
+                byte_end: link_end,
+                target: link.dst.clone(),
+            });
+            out.push_str(&format!("  {}\n", title_text));
+        }
+    }
+    if !incoming.is_empty() {
+        out.push_str(&format!("Backlinks ({}):\n", incoming.len()));
+        for link in &incoming {
+            let title_text = query
+                .get(&link.src)
+                .map(|n| n.title)
+                .unwrap_or_else(|| "(missing)".to_string());
+            out.push_str("  ");
+            if link.rel_type != "references" {
+                out.push_str(&link.rel_type);
+                out.push_str(" ← ");
+            } else {
+                out.push_str("← ");
+            }
+            let link_start = out.len();
+            out.push_str(&link.src);
+            let link_end = out.len();
+            links.push(KbLinkSpan {
+                byte_start: link_start,
+                byte_end: link_end,
+                target: link.src.clone(),
+            });
+            out.push_str(&format!("  {}\n", title_text));
+        }
+    }
+
+    out.push('\n');
+    out.push_str(
+        "Tab: fold · n/p: links · Enter: follow · e: edit · C-o/C-i: back/fwd · q: close\n",
+    );
+
+    (out, links)
+}
+
+/// Render a KB node using the in-memory `KnowledgeBase` as fallback when
+/// no query layer is available.
+fn render_kb_node_with_store(
+    kb: &mae_kb::KnowledgeBase,
+    node_id: &str,
+    resolve_title: impl Fn(&str) -> Option<String>,
+    store: Option<&dyn mae_kb::KbStore>,
+) -> (String, Vec<KbLinkSpan>) {
+    let mut out = String::new();
+    let mut links: Vec<KbLinkSpan> = Vec::new();
+
+    let Some(node) = kb.get(node_id) else {
+        out.push_str(&format!("(no such KB node: {})\n", node_id));
+        return (out, links);
+    };
+
+    out.push_str(&format!("* {}", node.title));
+    out.push('\n');
+    let content_label = if is_builtin_node(node_id) {
+        "MAE Manual"
+    } else {
+        "Knowledge Base"
+    };
+    out.push_str(&format!(
+        "{} · {} · {}\n",
+        content_label,
+        node_kind_label(node.kind),
+        node.id
+    ));
+    if !node.tags.is_empty() {
+        out.push_str(&format!("tags: {}\n", node.tags.join(", ")));
+    }
+    out.push('\n');
+
+    let mut in_drawer = false;
+    let header_lines = out.lines().count();
+    for body_line in node.body.lines() {
+        let trimmed = body_line.trim();
+        if trimmed.eq_ignore_ascii_case(":PROPERTIES:") || trimmed.eq_ignore_ascii_case(":LOGBOOK:")
+        {
+            in_drawer = true;
+            continue;
+        }
+        if in_drawer {
+            if trimmed.eq_ignore_ascii_case(":END:") {
+                in_drawer = false;
+            }
+            continue;
+        }
+        if trimmed.starts_with("#+") && out.lines().count() < header_lines + 4 {
+            continue;
+        }
+        render_body_line(body_line, &mut out, &mut links);
+        out.push('\n');
+    }
+
+    let (outgoing_typed, incoming_typed) = if let Some(st) = store {
+        let out_links = st.links_from(node_id).unwrap_or_default();
+        let in_links = st.links_to(node_id).unwrap_or_default();
+        (Some(out_links), Some(in_links))
+    } else {
+        (None, None)
+    };
+
+    let outgoing_ids = kb.links_from(node_id);
+    let incoming_ids = kb.links_to(node_id);
+
+    if !outgoing_ids.is_empty() || !incoming_ids.is_empty() {
+        out.push('\n');
+        out.push_str("** Neighborhood\n");
+    }
+    if !outgoing_ids.is_empty() {
+        out.push_str("Outgoing:\n");
+        for target in &outgoing_ids {
             let title_text = resolve_title(target).unwrap_or_else(|| "(missing)".to_string());
-            out.push_str("  → ");
+            let rel_label = outgoing_typed.as_ref().and_then(|typed| {
+                typed.iter().find(|l| l.dst == *target).and_then(|l| {
+                    if l.rel_type != "references" {
+                        Some(l.rel_type.as_str())
+                    } else {
+                        None
+                    }
+                })
+            });
+            out.push_str("  ");
+            if let Some(rel) = rel_label {
+                out.push_str(rel);
+                out.push_str(" → ");
+            } else {
+                out.push_str("→ ");
+            }
             let link_start = out.len();
             out.push_str(target);
             let link_end = out.len();
@@ -113,11 +261,26 @@ fn render_kb_node(
             out.push_str(&format!("  {}\n", title_text));
         }
     }
-    if !incoming.is_empty() {
-        out.push_str(&format!("Backlinks ({}):\n", incoming.len()));
-        for src in &incoming {
+    if !incoming_ids.is_empty() {
+        out.push_str(&format!("Backlinks ({}):\n", incoming_ids.len()));
+        for src in &incoming_ids {
             let title_text = resolve_title(src).unwrap_or_else(|| "(missing)".to_string());
-            out.push_str("  ← ");
+            let rel_label = incoming_typed.as_ref().and_then(|typed| {
+                typed.iter().find(|l| l.src == *src).and_then(|l| {
+                    if l.rel_type != "references" {
+                        Some(l.rel_type.as_str())
+                    } else {
+                        None
+                    }
+                })
+            });
+            out.push_str("  ");
+            if let Some(rel) = rel_label {
+                out.push_str(rel);
+                out.push_str(" ← ");
+            } else {
+                out.push_str("← ");
+            }
             let link_start = out.len();
             out.push_str(src);
             let link_end = out.len();
@@ -184,7 +347,7 @@ impl Editor {
     pub fn describe_command_live(&self, cmd_name: &str) -> Option<String> {
         let cmd = self.commands.get(cmd_name)?;
         let mut out = String::new();
-        out.push_str(&format!("# {}\n", cmd_name));
+        out.push_str(&format!("* {}\n", cmd_name));
         out.push_str(&cmd.doc);
         out.push('\n');
 
@@ -228,6 +391,9 @@ impl Editor {
     /// isn't found.
     /// Check if a node ID exists in the local KB or any federated instance.
     fn kb_contains_any(&self, id: &str) -> bool {
+        if let Some(q) = self.kb.query_layer() {
+            return q.contains(id);
+        }
         if self.kb.primary.contains(id) {
             return true;
         }
@@ -236,6 +402,9 @@ impl Editor {
 
     /// Resolve a node title across local + federated KBs.
     fn kb_resolve_title(&self, id: &str) -> Option<String> {
+        if let Some(q) = self.kb.query_layer() {
+            return q.get(id).map(|n| n.title);
+        }
         if let Some(n) = self.kb.primary.get(id) {
             return Some(n.title.clone());
         }
@@ -249,6 +418,18 @@ impl Editor {
 
     /// Get the KnowledgeBase that contains a given node ID (local first, then federated).
     fn kb_for_node(&self, id: &str) -> Option<&mae_kb::KnowledgeBase> {
+        // Use query_layer for the existence check when available, but we still need
+        // to return a &KnowledgeBase reference so we do the structural search regardless.
+        if let Some(q) = self.kb.query_layer() {
+            if q.contains(id) {
+                // Node exists somewhere; prefer primary, fall back to instances.
+                if self.kb.primary.contains(id) {
+                    return Some(&self.kb.primary);
+                }
+                return self.kb.instances.values().find(|kb| kb.contains(id));
+            }
+            return None;
+        }
         if self.kb.primary.contains(id) {
             return Some(&self.kb.primary);
         }
@@ -261,7 +442,12 @@ impl Editor {
         } else {
             // Try namespace prefix expansion: "buffer" → "concept:buffer", "save" → "cmd:save"
             let mut found = None;
-            for prefix in self.kb.primary.namespace_prefixes() {
+            let ns_prefixes = if let Some(q) = self.kb.query_layer() {
+                q.namespace_prefixes()
+            } else {
+                self.kb.primary.namespace_prefixes()
+            };
+            for prefix in ns_prefixes {
                 let expanded = format!("{}{}", prefix, node_id);
                 if self.kb_contains_any(&expanded) {
                     found = Some(expanded);
@@ -311,8 +497,13 @@ impl Editor {
                 let mut out = String::new();
                 let mut links = Vec::new();
                 // Add header info from KB node if it exists
-                if let Some(node) = self.kb.primary.get(&node_id) {
-                    out.push_str(&format!("# {}", node.title));
+                let header_node = if let Some(q) = self.kb.query_layer() {
+                    q.get(&node_id)
+                } else {
+                    self.kb.primary.get(&node_id).cloned()
+                };
+                if let Some(node) = header_node {
+                    out.push_str(&format!("* {}", node.title));
                     out.push('\n');
                     out.push_str(&format!("{} · {}\n", node_kind_label(node.kind), node.id));
                     if !node.tags.is_empty() {
@@ -325,45 +516,89 @@ impl Editor {
                     render_body_line(body_line, &mut out, &mut links);
                     out.push('\n');
                 }
-                // Add neighborhood from KB (federation-aware)
-                let outgoing = self.kb.primary.links_from(&node_id);
-                let incoming = self.kb.primary.links_to(&node_id);
-                if !outgoing.is_empty() || !incoming.is_empty() {
+                // Add neighborhood from KB (federation-aware, typed links)
+                let outgoing_links = if let Some(q) = self.kb.query_layer() {
+                    q.links_from(&node_id)
+                } else {
+                    self.kb
+                        .primary
+                        .links_from(&node_id)
+                        .into_iter()
+                        .map(|dst| mae_kb::store::Link {
+                            src: node_id.clone(),
+                            dst,
+                            rel_type: "references".into(),
+                            display: None,
+                            weight: 1.0,
+                            confidence: 1.0,
+                        })
+                        .collect()
+                };
+                let incoming_links = if let Some(q) = self.kb.query_layer() {
+                    q.links_to(&node_id)
+                } else {
+                    self.kb
+                        .primary
+                        .links_to(&node_id)
+                        .into_iter()
+                        .map(|src| mae_kb::store::Link {
+                            src,
+                            dst: node_id.clone(),
+                            rel_type: "references".into(),
+                            display: None,
+                            weight: 1.0,
+                            confidence: 1.0,
+                        })
+                        .collect()
+                };
+                if !outgoing_links.is_empty() || !incoming_links.is_empty() {
                     out.push('\n');
-                    out.push_str("## Neighborhood\n");
+                    out.push_str("** Neighborhood\n");
                 }
-                if !outgoing.is_empty() {
+                if !outgoing_links.is_empty() {
                     out.push_str("Outgoing:\n");
-                    for target in &outgoing {
+                    for link in &outgoing_links {
                         let title_text = self
-                            .kb_resolve_title(target)
+                            .kb_resolve_title(&link.dst)
                             .unwrap_or_else(|| "(missing)".to_string());
-                        out.push_str("  → ");
+                        out.push_str("  ");
+                        if link.rel_type != "references" {
+                            out.push_str(&link.rel_type);
+                            out.push_str(" → ");
+                        } else {
+                            out.push_str("→ ");
+                        }
                         let link_start = out.len();
-                        out.push_str(target);
+                        out.push_str(&link.dst);
                         let link_end = out.len();
                         links.push(KbLinkSpan {
                             byte_start: link_start,
                             byte_end: link_end,
-                            target: target.clone(),
+                            target: link.dst.clone(),
                         });
                         out.push_str(&format!("  {}\n", title_text));
                     }
                 }
-                if !incoming.is_empty() {
-                    out.push_str(&format!("Backlinks ({}):\n", incoming.len()));
-                    for src in &incoming {
+                if !incoming_links.is_empty() {
+                    out.push_str(&format!("Backlinks ({}):\n", incoming_links.len()));
+                    for link in &incoming_links {
                         let title_text = self
-                            .kb_resolve_title(src)
+                            .kb_resolve_title(&link.src)
                             .unwrap_or_else(|| "(missing)".to_string());
-                        out.push_str("  ← ");
+                        out.push_str("  ");
+                        if link.rel_type != "references" {
+                            out.push_str(&link.rel_type);
+                            out.push_str(" ← ");
+                        } else {
+                            out.push_str("← ");
+                        }
                         let link_start = out.len();
-                        out.push_str(src);
+                        out.push_str(&link.src);
                         let link_end = out.len();
                         links.push(KbLinkSpan {
                             byte_start: link_start,
                             byte_end: link_end,
-                            target: src.clone(),
+                            target: link.src.clone(),
                         });
                         out.push_str(&format!("  {}\n", title_text));
                     }
@@ -373,29 +608,45 @@ impl Editor {
                     "Tab: fold · n/p: links · Enter: follow · e: edit · C-o/C-i: back/fwd · q: close\n",
                 );
                 (out, links)
+            } else if let Some(q) = self.kb.query_layer() {
+                render_kb_node_for_query(q, &node_id)
             } else {
                 let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb.primary);
                 let local = &self.kb.primary;
                 let federated = &self.kb.instances;
-                render_kb_node(kb, &node_id, |id| {
+                let store_ref = self.kb.store.as_deref();
+                render_kb_node_with_store(
+                    kb,
+                    &node_id,
+                    |id| {
+                        local.get(id).map(|n| n.title.clone()).or_else(|| {
+                            federated
+                                .values()
+                                .find_map(|fkb| fkb.get(id).map(|n| n.title.clone()))
+                        })
+                    },
+                    store_ref,
+                )
+            }
+        } else if let Some(q) = self.kb.query_layer() {
+            render_kb_node_for_query(q, &node_id)
+        } else {
+            let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb.primary);
+            let local = &self.kb.primary;
+            let federated = &self.kb.instances;
+            let store_ref = self.kb.store.as_deref();
+            render_kb_node_with_store(
+                kb,
+                &node_id,
+                |id| {
                     local.get(id).map(|n| n.title.clone()).or_else(|| {
                         federated
                             .values()
                             .find_map(|fkb| fkb.get(id).map(|n| n.title.clone()))
                     })
-                })
-            }
-        } else {
-            let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb.primary);
-            let local = &self.kb.primary;
-            let federated = &self.kb.instances;
-            render_kb_node(kb, &node_id, |id| {
-                local.get(id).map(|n| n.title.clone()).or_else(|| {
-                    federated
-                        .values()
-                        .find_map(|fkb| fkb.get(id).map(|n| n.title.clone()))
-                })
-            })
+                },
+                store_ref,
+            )
         };
         // Temporarily allow writing to the read-only buffer.
         self.buffers[buf_idx].read_only = false;
@@ -445,7 +696,7 @@ impl Editor {
                 }
             }
         }
-        let (target, buf_idx) = {
+        let (target, buf_idx, fragment) = {
             let Some(view) = self.kb_view() else {
                 self.set_status("Not in a help buffer");
                 return;
@@ -458,6 +709,14 @@ impl Editor {
                 return;
             };
             let mut target = link.target.clone();
+            // Split off fragment (e.g., "concept:buffer#architecture")
+            let fragment = if let Some(hash_pos) = target.find('#') {
+                let frag = target[hash_pos + 1..].to_string();
+                target = target[..hash_pos].to_string();
+                Some(frag)
+            } else {
+                None
+            };
             if !self.kb_contains_any(&target) {
                 // Attempt fuzzy resolution via federated search
                 let results = self.kb_federated_search(&target);
@@ -476,13 +735,62 @@ impl Editor {
             let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Kb) else {
                 return;
             };
-            (target, buf_idx)
+            (target, buf_idx, fragment)
         };
         if let Some(view) = self.kb_view_mut() {
             view.navigate_to(target);
         }
         self.kb_populate_buffer(buf_idx);
-        self.window_mgr.focused_window_mut().cursor_row = 0;
+        // Handle fragment navigation: scroll to heading or block index
+        let frag_row = fragment.and_then(|frag| {
+            let rope = self.buffers[buf_idx].rope();
+            if let Ok(idx) = frag.parse::<usize>() {
+                // Numeric fragment: jump to paragraph block N
+                // Count blank-line-separated blocks
+                let mut block = 0;
+                for (line_idx, line) in rope.lines().enumerate() {
+                    let text: String = line.chars().collect();
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    if block == idx {
+                        return Some(line_idx);
+                    }
+                    // A block boundary is a non-empty line after a blank line
+                    if line_idx > 0 {
+                        let prev: String = rope.line(line_idx - 1).chars().collect();
+                        if prev.trim().is_empty() {
+                            block += 1;
+                            if block == idx {
+                                return Some(line_idx);
+                            }
+                        }
+                    }
+                }
+                None
+            } else {
+                // Named fragment: search for heading matching the slug
+                let slug_lower = frag.to_lowercase().replace(['-', '_'], " ");
+                for (line_idx, line) in rope.lines().enumerate() {
+                    let text: String = line.chars().collect();
+                    let trimmed = text.trim_start();
+                    if trimmed.starts_with('#') || trimmed.starts_with('*') {
+                        // Extract heading text (strip # or * prefix)
+                        let heading = trimmed.trim_start_matches(['#', '*']).trim();
+                        let heading_slug = heading.to_lowercase();
+                        if heading_slug.contains(&slug_lower) {
+                            return Some(line_idx);
+                        }
+                    }
+                }
+                None
+            }
+        });
+        if let Some(row) = frag_row {
+            self.window_mgr.focused_window_mut().cursor_row = row;
+        } else {
+            self.window_mgr.focused_window_mut().cursor_row = 0;
+        }
         self.window_mgr.focused_window_mut().cursor_col = 0;
     }
 
@@ -697,8 +1005,18 @@ impl Editor {
         }
 
         // Search KB nodes by source_file metadata
-        for id in self.kb.primary.list_ids(None) {
-            if let Some(node) = self.kb.primary.get(&id) {
+        let primary_ids = if let Some(q) = self.kb.query_layer() {
+            q.list_ids(None)
+        } else {
+            self.kb.primary.list_ids(None)
+        };
+        for id in primary_ids {
+            let node = if let Some(q) = self.kb.query_layer() {
+                q.get(&id)
+            } else {
+                self.kb.primary.get(&id).cloned()
+            };
+            if let Some(node) = node {
                 if let Some(ref sf) = node.source_file {
                     if sf == path {
                         return Some(id);
@@ -1178,8 +1496,8 @@ mod tests {
         e.open_help_at("index");
         let text: String = e.buffers[e.active_buffer_idx()].rope().chars().collect();
         assert!(
-            text.starts_with("# "),
-            "title should have # prefix for heading scale, got: {}",
+            text.starts_with("* "),
+            "title should have * prefix for org heading scale, got: {}",
             &text[..text.len().min(40)]
         );
     }
@@ -1190,7 +1508,7 @@ mod tests {
         e.open_help_at("index");
         let text: String = e.buffers[e.active_buffer_idx()].rope().chars().collect();
         assert!(
-            text.contains("## Neighborhood"),
+            text.contains("** Neighborhood"),
             "neighborhood should use ## heading"
         );
     }
@@ -1258,16 +1576,16 @@ mod tests {
             "user:fold-test",
             "Fold Test",
             mae_kb::NodeKind::Note,
-            "## Section 1\nBody 1\nBody 2\n## Section 2\nBody 3\n",
+            "** Section 1\nBody 1\nBody 2\n** Section 2\nBody 3\n",
         );
         e.kb.primary.insert(node);
         e.open_help_at("user:fold-test");
         let buf_idx = e.active_buffer_idx();
-        // Find the ## Section 1 line (should be after title + metadata)
+        // Find the ** Section 1 line (should be after title + metadata)
         let text: String = e.buffers[buf_idx].rope().chars().collect();
         let section_row = text
             .lines()
-            .position(|l| l.starts_with("## Section 1"))
+            .position(|l| l.starts_with("** Section 1"))
             .unwrap();
         e.window_mgr.focused_window_mut().cursor_row = section_row;
         e.help_heading_cycle();
@@ -1290,7 +1608,7 @@ mod tests {
             "user:fold-all-test",
             "Fold All",
             mae_kb::NodeKind::Note,
-            "## A\nBody A\n## B\nBody B\n",
+            "** A\nBody A\n** B\nBody B\n",
         );
         e.kb.primary.insert(node);
         e.open_help_at("user:fold-all-test");
@@ -1425,5 +1743,110 @@ mod tests {
                 .all(|b| b.kind != crate::BufferKind::Conversation),
             "conversation buffers should be removed"
         );
+    }
+
+    // --- Phase 3: render_kb_node_for_query typed link labels ---
+
+    #[test]
+    fn render_for_query_shows_typed_link_labels() {
+        use mae_kb::query::CozoQueryLayer;
+        use mae_kb::store::KbStore;
+        use mae_kb::{CozoKbStore, Node, NodeKind};
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CozoKbStore::open(tmp.path().join("test.cozo")).unwrap());
+        store
+            .insert_node(&Node::new(
+                "lesson:nav",
+                "Navigation",
+                NodeKind::Lesson,
+                "Learn to move.",
+            ))
+            .unwrap();
+        store
+            .insert_node(&Node::new(
+                "concept:buffer",
+                "Buffer",
+                NodeKind::Concept,
+                "A text buffer.",
+            ))
+            .unwrap();
+        // Add a typed link: lesson:nav teaches concept:buffer
+        store
+            .add_typed_link("lesson:nav", "concept:buffer", "teaches", 1.0)
+            .unwrap();
+
+        let layer = CozoQueryLayer::new(store);
+        let (text, links) = render_kb_node_for_query(&layer, "lesson:nav");
+
+        // The neighborhood section should show "teaches → concept:buffer"
+        assert!(
+            text.contains("teaches → concept:buffer"),
+            "typed link label should appear in rendered output, got:\n{}",
+            text
+        );
+        // There should be a navigable link to concept:buffer
+        assert!(
+            links.iter().any(|l| l.target == "concept:buffer"),
+            "concept:buffer should be a navigable link"
+        );
+    }
+
+    #[test]
+    fn render_for_query_backlink_shows_typed_label() {
+        use mae_kb::query::CozoQueryLayer;
+        use mae_kb::store::KbStore;
+        use mae_kb::{CozoKbStore, Node, NodeKind};
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CozoKbStore::open(tmp.path().join("test.cozo")).unwrap());
+        store
+            .insert_node(&Node::new("lesson:nav", "Navigation", NodeKind::Lesson, ""))
+            .unwrap();
+        store
+            .insert_node(&Node::new(
+                "concept:buffer",
+                "Buffer",
+                NodeKind::Concept,
+                "A text buffer.",
+            ))
+            .unwrap();
+        store
+            .add_typed_link("lesson:nav", "concept:buffer", "teaches", 1.0)
+            .unwrap();
+
+        let layer = CozoQueryLayer::new(store);
+        // Render concept:buffer — should show lesson:nav as a backlink with "teaches ←" label
+        let (text, links) = render_kb_node_for_query(&layer, "concept:buffer");
+
+        assert!(
+            text.contains("teaches ← lesson:nav"),
+            "backlink should show typed label, got:\n{}",
+            text
+        );
+        assert!(
+            links.iter().any(|l| l.target == "lesson:nav"),
+            "lesson:nav should be a navigable backlink"
+        );
+    }
+
+    #[test]
+    fn render_for_query_missing_node() {
+        use mae_kb::query::CozoQueryLayer;
+        use mae_kb::CozoKbStore;
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CozoKbStore::open(tmp.path().join("test.cozo")).unwrap());
+        let layer = CozoQueryLayer::new(store);
+        let (text, links) = render_kb_node_for_query(&layer, "nonexistent:id");
+
+        assert!(
+            text.contains("no such KB node"),
+            "should show missing node message"
+        );
+        assert!(links.is_empty(), "no links for missing node");
     }
 }

@@ -1,0 +1,44 @@
+:PROPERTIES:
+:ID: lesson:observability
+:KIND: lesson
+:END:
+#+title: Lesson 12: Observability
+#+filetags: :tutorial:
+
+** Lesson 12: Observability
+
+Prerequisites: [[requires:lesson:debugging][Lesson 11: Debugging]]
+
+MAE has built-in tools for diagnosing issues and understanding editor behavior.
+
+*** Watchdog
+The [[teaches:concept:watchdog][watchdog]] monitors the event loop for stalls. If the main thread stops responding for >2 seconds, it dumps thread backtraces to the log.
+  ~MAE_LOG=mae=trace mae~ — enable watchdog logging
+  The watchdog runs automatically; no user action needed.
+
+*** Event recording
+[[teaches:concept:event-recording][Event recording]] captures every input event and command dispatch for replay and bug reporting.
+  ~:record-start~ — start recording
+  Type some keys, trigger the bug...
+  ~:record-stop~ — stop recording
+  ~:record-save /tmp/events.json~ — save to JSON file
+
+*** Try it
+1. ~:record-start~
+2. Type ~iHello, world!~ then Escape
+3. ~:record-stop~ — note the event count
+4. ~:record-save /tmp/demo.json~
+
+*** Introspect
+The [[teaches:concept:introspect][introspect]] AI tool provides a diagnostic snapshot of the editor's internal state: threads, performance counters, lock contention, buffers, shell processes, and AI session info.
+  Ask the AI: "introspect" to see the full report.
+
+*** Messages buffer
+  ~:messages~ or ~SPC b m~ — view the *Messages* log
+  All status messages, warnings, and errors are captured here.
+
+*** Debug mode
+  ~SPC t D~ — toggle debug mode (RSS/CPU/frame-time in status bar)
+  ~SPC t F~ — toggle FPS overlay
+
+*Prev:* [[lesson:debugging][Lesson 11]]  |  *Next:* [[lesson:kb-import-roam][Lesson 13]]  |  *Index:* [[tutor:index][Tutorial]]

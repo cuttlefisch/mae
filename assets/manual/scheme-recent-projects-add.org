@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:recent-projects-add!
+:KIND: scheme_api
+:END:
+#+title: Scheme: recent-projects-add!
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(recent-projects-add! PATH)
+#+end_src
+
+Add PATH to the recent projects list.
+
+** Example
+#+begin_src scheme
+(recent-projects-add! "~/src/my-project")
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

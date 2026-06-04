@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:describe-group
+:KIND: scheme_api
+:END:
+#+title: Scheme: describe-group
+#+filetags: :scheme:api:testing:
+
+** Signature
+#+begin_src scheme
+(describe-group NAME THUNK)
+#+end_src
+
+BDD grouping -- sets a group prefix for nested it-test blocks. THUNK is a zero-argument lambda that registers tests.
+
+** Example
+#+begin_src scheme
+(describe-group "My feature" (lambda () (it-test "works" (lambda () (should #t)))))
+#+end_src
+
+*Category:* testing
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

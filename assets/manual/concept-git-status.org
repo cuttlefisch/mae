@@ -1,0 +1,57 @@
+:PROPERTIES:
+:ID: concept:git-status
+:KIND: concept
+:END:
+#+title: Git Status (Magit-lite)
+#+filetags: :git:workflow:
+
+The **Git Status** buffer (`*git-status*`) is a high-fidelity "porcelain" UI inspired by Emacs Magit. It allows you to manage your repository state without leaving the editor.
+
+** Multi-Level Fold
+Press `TAB` on a section header, file entry, or hunk header to fold/unfold that level independently. Collapse indicators (`▸`/`▾`) show fold state.
+
+** Keybindings
+| Key | Action | Command |
+|-----|--------|---------|
+| `s` | Stage (context-aware) | [[cmd:git-stage]] |
+| `u` | Unstage (context-aware) | [[cmd:git-unstage]] |
+| `x` | Discard (context-aware) | [[cmd:git-discard]] |
+| `S` | Stage ALL | [[cmd:git-stage-all]] |
+| `U` | Unstage ALL | [[cmd:git-unstage-all]] |
+| `c c` | Commit | [[cmd:git-commit]] |
+| `c a` | Amend | [[cmd:git-amend]] |
+| `l l` | Log view | [[cmd:git-log]] |
+| `g r` | Refresh | [[cmd:git-status]] |
+| `TAB` | Toggle fold (section/file/hunk) | [[cmd:git-toggle-fold]] |
+| `n` / `p` | Next/prev hunk | [[cmd:git-next-hunk]] / [[cmd:git-prev-hunk]] |
+| `P p` | Push | [[cmd:git-push]] |
+| `F p` | Pull | [[cmd:git-pull]] |
+| `f f` | Fetch | [[cmd:git-fetch]] |
+| `b b` | Switch branch | [[cmd:git-branch-switch]] |
+| `b n` | Create branch | [[cmd:git-branch-create]] |
+| `b d` | Delete branch | [[cmd:git-branch-delete]] |
+| `z z` | Stash push | [[cmd:git-stash-push]] |
+| `z p` | Stash pop | [[cmd:git-stash-pop]] |
+| `z a` | Stash apply | [[cmd:git-stash-apply]] |
+| `z d` | Stash drop | [[cmd:git-stash-drop]] |
+| `Enter` | Open file | [[cmd:git-status-open]] |
+| `q` | Exit | [[cmd:enter-normal-mode]] |
+
+** Context-Aware Dispatch
+`s`/`u`/`x` operate based on cursor position:
+- **On a diff hunk/line**: stage/unstage/discard that hunk.
+- **On a file entry**: stage/unstage/discard the whole file.
+- **On a section header**: stage/unstage all files in that section.
+
+** Inline Diff
+Press `TAB` on a file entry to expand/collapse its inline diff. Each hunk can be further folded independently.
+
+** Workflow
+1. Open status via `SPC g s`.
+2. Navigate with `j`/`k`, jump hunks with `n`/`p`.
+3. Stage files/hunks with `s`.
+4. Commit with `c c` (opens a commit message buffer).
+
+[[part_of:concept:project][Part of Project]].
+
+See also: [[references:concept:project][Project]], [[references:concept:terminal][Embedded Terminal]], [[references:concept:buffer-mode][BufferMode Trait]]

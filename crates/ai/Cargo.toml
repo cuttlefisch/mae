@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 mae-core = { path = "../core" }
+mae-kb = { path = "../kb" }
 mae-sync = { path = "../sync" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

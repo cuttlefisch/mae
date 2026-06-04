@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:point-max
+:KIND: scheme_api
+:END:
+#+title: Scheme: point-max
+#+filetags: :scheme:api:navigation:
+
+** Signature
+#+begin_src scheme
+(point-max)
+#+end_src
+
+Return the maximum valid byte offset (end of buffer).
+
+** Example
+#+begin_src scheme
+(point-max) ; => 5678
+#+end_src
+
+*Category:* navigation
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

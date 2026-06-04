@@ -1,0 +1,39 @@
+:PROPERTIES:
+:ID: concept:flags
+:KIND: concept
+:END:
+#+title: Module Flags
+#+filetags: :modules:flags:configuration:
+
+**Flags** are optional sub-features that modules can declare. They follow Doom Emacs's `+flag` syntax and enable conditional loading of module functionality.
+
+** Declaration
+Flags are declared in `module.toml`:
+```toml
+[flags]
+agenda = { doc = "Task/schedule agenda view across org files" }
+babel = { doc = "Code block execution and tangling" }
+```
+
+** Usage in Scheme
+```scheme
+(when-flag "+agenda"
+  (autoload "open-agenda" "org-agenda" "Open agenda view")
+  (define-key "normal" "SPC o a" "open-agenda"))
+```
+
+** Enabling flags
+Flags are enabled in `init.scm` via the `mae!` macro (planned):
+```scheme
+(mae!
+  :lang (org +agenda +babel)
+  :editor (multicursor +align))
+```
+
+** Validation
+`mae pkg doctor` warns about:
+- Unknown flags (typos)
+- Flags declared but never checked
+- Missing flag documentation
+
+See also: [[concept:modules]], [[concept:package-system]], [[index]]

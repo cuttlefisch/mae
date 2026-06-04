@@ -1,0 +1,37 @@
+:PROPERTIES:
+:ID: concept:dap-attach
+:KIND: concept
+:END:
+#+title: Concept: DAP Attach
+#+filetags: :debugging:dap:
+
+*DAP attach* lets MAE connect its debugger to an already-running process, rather than launching a new debuggee.
+
+** Usage
+~:debug-attach <adapter> <pid>~
+
+** Adapters
+| Adapter | Language | Notes |
+|---------+----------+-------|
+| ~lldb~ | C/C++/Rust | Requires ~lldb-dap~ (LLVM project) |
+| ~debugpy~ | Python | Requires ~debugpy~ pip package |
+| ~codelldb~ | Rust/C++ | CodeLLDB VS Code extension adapter |
+
+** Example
+#+begin_example
+;; Attach to a Python process:
+:debug-attach debugpy 12345
+
+;; Attach to a Rust binary:
+:debug-attach codelldb 67890
+#+end_example
+
+** Cross-instance debugging
+You can debug one MAE instance from another — attach to the target's PID and set breakpoints in the Rust source. This is how MAE developers debug the editor itself.
+
+** AI tool
+The ~dap_start~ AI tool supports an ~attach~ mode with ~pid~ parameter.
+
+[[part_of:concept:debugging][Part of Debugging]].
+
+See also: [[concept:debugging]], [[cmd:debug-start]], [[index]]

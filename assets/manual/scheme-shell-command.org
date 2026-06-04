@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:shell-command
+:KIND: scheme_api
+:END:
+#+title: Scheme: shell-command
+#+filetags: :scheme:api:shell:
+
+** Signature
+#+begin_src scheme
+(shell-command CMD)
+#+end_src
+
+Execute CMD in a subprocess and return its stdout as a string.
+
+** Example
+#+begin_src scheme
+(shell-command "date") ; => "Mon May 12 ..."
+#+end_src
+
+*Category:* shell
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

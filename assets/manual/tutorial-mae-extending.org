@@ -1,0 +1,50 @@
+:PROPERTIES:
+:ID: tutorial:mae-extending
+:KIND: tutorial
+:END:
+#+title: Tutorial: Extending MAE
+#+filetags: :tutorial:
+
+* Extending MAE
+
+MAE is extensible via *R7RS Scheme* (the mae-scheme runtime).
+
+** The REPL
+- =:eval (+ 1 2)= -- evaluate an expression (result shown in status bar)
+- =SPC e e= -- evaluate current line
+- =SPC e b= -- evaluate entire buffer
+
+** Configuration (init.scm)
+Your config file is =~/.config/mae/init.scm=. Open it with =SPC f c=.
+
+#+begin_src scheme
+;; Set theme
+(set-option! "theme" "dracula")
+
+;; Custom keybinding
+(define-key "normal" "g r" "lsp-find-references")
+
+;; React to editor events
+(add-hook! "buffer-save" "my-on-save")
+
+;; Define a custom command
+(define-command "hello" "Say hello" "my-hello-fn")
+(define (my-hello-fn) (set-status "Hello from Scheme!"))
+#+end_src
+
+** Packages
+Place =.scm= files in =~/.config/mae/packages/=. Use =require-feature= and =provide-feature= to manage dependencies.
+See [[id:concept:package-system][Package System]] for details.
+
+** Full Scheme API
+MAE exposes ~50 functions and 18 variables to Scheme.
+See [[id:concept:scheme-api][Scheme API]] for the full reference, or use =:help scheme:function-name= for individual docs.
+
+See also: [[id:tutorial:ai-setup][Set up AI]]
+
+*** Getting Help
+- =SPC h= opens the MAE manual
+- =SPC h s= searches all help topics
+- =:help TOPIC= looks up any command, option, or concept
+- =SPC h k= describes what a key does
+- =SPC SPC= opens the command palette -- search for anything

@@ -1,0 +1,52 @@
+:PROPERTIES:
+:ID: concept:collab-architecture
+:KIND: concept
+:ALIASES: collab, real-time, state-server, multiplayer
+:END:
+#+title: Collaborative Editing Architecture
+#+filetags: :architecture:sync:collaboration:
+
+**Collaborative Editing Architecture** describes how MAE synchronises editor state across multiple clients — from solo AI agents on a single machine to multi-user sessions over a LAN or the internet.
+
+** Document Addressing
+Every collaborative document is identified by a URI with one of three namespaces:
+| Namespace | Example | Meaning |
+|-----------|---------|--------|
+| `file:` | `file:///home/user/project/main.rs` | Local or remote file buffer |
+| `kb:` | `kb://default/concept:collab-architecture` | Knowledge-base node |
+| `shared:` | `shared://session-id/scratchpad` | Anonymous shared document |
+
+** Data Flow
+```
+Local editor
+  └─ user/AI edit → yrs transaction (YText insert/delete)
+       └─ mae-sync encodes update bytes
+            └─ TCP framed write → state server (sync/update)
+                 └─ server applies to doc store, WAL flush
+                      └─ broadcast diff → connected peers
+                           └─ peer decodes → ropey mirror rebuild → redraw
+```
+
+** Save Protocol
+File saves use content-hash verification (SHA-256) to guard against silent mtime failures. Before writing, MAE reads the current on-disk bytes, computes their SHA-256, and compares it with the last-known hash. If they differ an external modification warning is raised. After writing, the new hash is stored as the baseline. Advisory lock files (`.{name}.mae.lock`) prevent simultaneous writes from two editor instances.
+
+** State Server Role
+The `mae-state-server` binary is a **document hub**, not a source of truth. Documents are authoritative at the client; the server:
+- Holds the latest merged CRDT state (yrs doc bytes)
+- Appends every `sync/update` to a SQLite WAL before applying to memory
+- Broadcasts diffs to all connected peers (bounded queues, write timeout 5 s)
+- Compacts WAL into a snapshot once the WAL exceeds the configured threshold (default 500 entries)
+- Recovers by loading the latest snapshot then replaying the WAL tail on restart
+
+** Three Workflow Tiers
+| Tier | Server | Use case |
+|------|--------|----------|
+| **Solo** | none | Single user, no collaboration needed |
+| **Loopback** | `127.0.0.1:9473` | Multiple MAE instances or AI agents on one machine |
+| **Collaborative** | remote host | Multi-user editing across machines |
+
+In solo mode the sync layer is still active locally — edits are yrs transactions — but no TCP connection is opened. This means switching from solo to loopback requires only `(set-option! "collab-server-address" "127.0.0.1:9473")` and a reconnect; no data migration is needed.
+
+This concept [[explains:concept:collaborative-state][explains Collaborative State]].
+
+See also: [[references:concept:sync-engine][Sync Engine]], [[concept:collab-workflows]], [[concept:collaborative-state]], [[concept:adr-text-sync]], [[index]]

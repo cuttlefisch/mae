@@ -1,0 +1,22 @@
+:PROPERTIES:
+:ID: scheme:visual-buffer-clear!
+:KIND: scheme_api
+:END:
+#+title: Scheme: visual-buffer-clear!
+#+filetags: :scheme:api:visual:
+
+** Signature
+#+begin_src scheme
+(visual-buffer-clear!)
+#+end_src
+
+Clear all shapes from the visual canvas.
+
+** Example
+#+begin_src scheme
+(visual-buffer-clear!)
+#+end_src
+
+*Category:* visual
+
+See also: [[id:concept:scheme-api][Scheme API]], [[id:index][Index]]

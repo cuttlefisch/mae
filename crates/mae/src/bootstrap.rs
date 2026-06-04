@@ -953,17 +953,21 @@ pub fn load_modules(
 
     // Built-in modules — search multiple locations so both dev builds
     // (run from repo root) and installed binaries work.
-    let mut builtin_dirs = vec![
-        // 1. CWD/modules (dev: `cargo run` from repo root)
-        PathBuf::from("modules"),
-        // 2. Next to the executable (installed: ~/.local/bin/../share/mae/modules)
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("modules")))
-            .unwrap_or_default(),
-    ];
-    // 3. XDG data dir: ~/.local/share/mae/modules (installed modules)
-    if let Some(data) = dirs_candidate("mae/modules") {
+    let mut builtin_dirs = Vec::new();
+    // 0. MAE_MODULES_PATH env var (AppImage, custom installs)
+    if let Ok(path) = std::env::var("MAE_MODULES_PATH") {
+        builtin_dirs.push(PathBuf::from(path));
+    }
+    // 1. CWD/modules (dev: `cargo run` from repo root)
+    builtin_dirs.push(PathBuf::from("modules"));
+    // 2. Next to the executable (tarball installs)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            builtin_dirs.push(exe_dir.join("modules"));
+        }
+    }
+    // 3. XDG data dir: ~/.local/share/mae/modules (make install)
+    if let Some(data) = data_dir_candidate("mae/modules") {
         builtin_dirs.push(data);
     }
     // 4. Compile-time CARGO_MANIFEST_DIR (dev builds only)
@@ -1473,6 +1477,18 @@ pub fn dirs_candidate(rel: &str) -> Option<PathBuf> {
             std::env::var("HOME")
                 .ok()
                 .map(|h| PathBuf::from(h).join(".config"))
+        })
+        .map(|base| base.join(rel))
+}
+
+pub fn data_dir_candidate(rel: &str) -> Option<PathBuf> {
+    std::env::var("XDG_DATA_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join(".local/share"))
         })
         .map(|base| base.join(rel))
 }
