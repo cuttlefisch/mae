@@ -93,7 +93,7 @@ impl LruQueryLayer {
         {
             let mut cache = self.node_cache.lock().unwrap();
             if let Some(CacheEntry::Found(node)) = cache.get(id) {
-                return Some(*node.clone());
+                return Some((**node).clone());
             }
         }
 

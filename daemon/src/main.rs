@@ -96,7 +96,9 @@ async fn main() {
             }
             Err(_) => {
                 // Stale socket — clean it up
-                std::fs::remove_file(socket_path).ok();
+                if let Err(e) = std::fs::remove_file(socket_path) {
+                    tracing::warn!(error = %e, path = %socket_path.display(), "Failed to remove stale socket");
+                }
             }
         }
     }
@@ -162,8 +164,8 @@ async fn main() {
     // Broadcast shutdown
     let _ = shutdown_tx.send(());
 
-    // Clean up socket
-    std::fs::remove_file(socket_path).ok();
+    // Clean up socket (best-effort at shutdown)
+    let _ = std::fs::remove_file(socket_path);
 
     // Wait for tasks
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {

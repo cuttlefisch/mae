@@ -80,7 +80,7 @@ pub async fn dispatch(
             let query = params["query"]
                 .as_str()
                 .ok_or(DaemonError::InvalidParams("missing 'query'"))?;
-            let limit = params["limit"].as_u64().unwrap_or(20) as usize;
+            let limit = std::cmp::min(params["limit"].as_u64().unwrap_or(20), 1000) as usize;
             let state = state.lock().await;
             let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
             let hits: Vec<Value> = ql
@@ -166,7 +166,8 @@ pub async fn dispatch(
 
         "kb/id_title_body_triples" => {
             let prefix = params["prefix"].as_str();
-            let body_limit = params["body_limit"].as_u64().unwrap_or(0) as usize;
+            let body_limit =
+                std::cmp::min(params["body_limit"].as_u64().unwrap_or(0), 10_000) as usize;
             let state = state.lock().await;
             let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
             let triples: Vec<Value> = ql
@@ -258,6 +259,8 @@ pub async fn dispatch(
             }))
         }
 
+        // daemon/shutdown is intercepted by handle_client() before dispatch;
+        // this arm exists for completeness if dispatch is called directly.
         "daemon/shutdown" => Ok(json!({"shutting_down": true})),
 
         _ => Err(DaemonError::MethodNotFound(method.to_string())),
