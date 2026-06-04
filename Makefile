@@ -58,6 +58,10 @@ build:
 build-tui:
 	$(CARGO) build --release
 
+## build-daemon: build the daemon binary (CozoDB+SQLite)
+build-daemon:
+	cd daemon && $(CARGO) build --release
+
 ## dev: compile a debug binary (faster compile, includes debug info)
 dev:
 	$(CARGO) build $(FEAT_FLAG)
@@ -208,6 +212,10 @@ run:
 test:
 	$(CARGO) test --workspace
 
+## test-daemon: run daemon workspace tests
+test-daemon:
+	cd daemon && $(CARGO) test
+
 ## test-tui: run workspace tests without GUI (no skia deps required)
 test-tui:
 	$(CARGO) test --workspace --exclude mae-gui
@@ -235,6 +243,10 @@ fmt-check:
 clippy:
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
+## clippy-daemon: run linter on daemon workspace
+clippy-daemon:
+	cd daemon && $(CARGO) clippy --all-targets -- -D warnings
+
 ## ci: run the full CI pipeline locally (fmt + clippy + check + test + scheme tests)
 ci: fmt-check
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -247,6 +259,10 @@ ci: fmt-check
 	@echo "==> Code-map freshness..."
 	cd tools/code-map && $(CARGO) run --release -- --workspace-root ../.. --check
 	@echo "CI passed ✓"
+
+## ci-all: editor + daemon CI (both workspaces)
+ci-all: ci test-daemon clippy-daemon
+	@echo "CI all (editor + daemon) passed ✓"
 
 ## ci-extended: thorough CI — run before opening a PR (ci + CRDT tests + docker smoke)
 ci-extended: ci
