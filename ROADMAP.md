@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.12.0-dev · **Tests:** 5,878+ passing · **Status:** Alpha — Phases 1-13 complete. v0.12.0: CozoDB-primary graph KB with typed relationships, meta-nodes, versioning, agenda queries, HNSW embeddings.
+**Current version:** v0.12.0 · **Tests:** 5,863+ passing · **Status:** Alpha — Phases 1-13 complete. v0.12.0: CozoDB-primary graph KB with typed relationships, meta-nodes, versioning, agenda queries, HNSW embeddings, federated query layer.
 
 ---
 
@@ -198,6 +198,10 @@ The KB had a dual source of truth problem: org files re-parsed on startup, SQLit
 - [x] **Phase 1**: Pre-built manual KB — `build-manual-kb` binary (862 nodes), `manual_kb.rs` locate+validate, SHA-256 checksums, `Editor::with_kb()`, multi-DB startup (manual → user → imported).
 - [x] **Phase 2**: CozoDB-direct ingestion — `import_org_dir_to_store()`, `IngestMode` (Full/Incremental), content hash change detection, `source_files` relation, enhanced `ImportReport`.
 - [x] **Phase 3**: Scale validation — 2,500 nodes + 15,000 links integration test (`cozo_scale_test.rs`).
+- [x] **Phase 3.5**: CozoDB-first query layer — `KbQueryLayer` trait + `CozoQueryLayer` + `FederatedQuery` (multi-store fan-out). 46 read sites migrated from in-memory `KnowledgeBase` to query-layer-first. ADR-013.
+- [x] **Phase 5**: Federated startup — instances load from CozoDB stores (not just org re-import), `rebuild_query_layer()` after all stores loaded, manual KB handle retained.
+- [x] **Phase 6**: Batch KB search — `id_title_body_triples()` single Datalog query replaces N individual `get()` calls. Org heading conventions (markdown→org).
+- [x] **Phase 7**: Internal KB link preservation in `rewrite_links_with_types()`, fragment stripping in link storage, GUI heading underline scale fix.
 
 #### Future
 - [ ] **GraphRAG live pipeline** (v0.13.0): Embedding generation (provider trait: OpenAI, Ollama, local), background indexing, AI context injection.

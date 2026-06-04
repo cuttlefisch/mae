@@ -164,6 +164,11 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - 6 pre-built view seeds (kanban, backlog, sprint, timeline, agenda, custom)
 - KB queries from Scheme and AI (5 new tools: kb_agenda, kb_history, kb_restore, kb_view_query, kb_vector_search)
 - Help buffer with navigation, link following, neighborhood display
+- CozoDB-first query layer: `KbQueryLayer` trait → `CozoQueryLayer` → `FederatedQuery` (46 read sites migrated)
+- Batch KB search: `id_title_body_triples()` single Datalog query (replaces per-node `get()`)
+- Federated startup: instances load from CozoDB stores, query layer built after all stores loaded
+- Org heading conventions: KB content uses org-mode `*`/`**` headings (not markdown `#`/`##`)
+- Internal KB link preservation in org parser + fragment stripping in link storage
 
 ### Phase 6: Embedded Shell — COMPLETE (M1-M4 + MCP bridge + file auto-reload)
 - Terminal emulator via `alacritty_terminal` (full VT100, colors, attributes) ✅
