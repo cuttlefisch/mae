@@ -260,6 +260,7 @@ Source: `shared/kb/src/lib.rs`
 | `watch` | mod |
 | `cache` | mod |
 | `cozo_store` | mod |
+| `hygiene` | mod |
 | `lru_query` | mod |
 | `query` | mod |
 | `NodeKind` | enum |

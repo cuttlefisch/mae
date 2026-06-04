@@ -177,6 +177,74 @@ pub async fn dispatch(
             Ok(json!(triples))
         }
 
+        // --- Hygiene ---
+        "kb/hygiene_scan" => {
+            let state = state.lock().await;
+            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
+            let result = crate::hygiene::run_hygiene_scan(store);
+            Ok(json!({
+                "suggestions_created": result.suggestions_created,
+                "nodes_scanned": result.nodes_scanned,
+                "errors": result.errors,
+            }))
+        }
+
+        "kb/hygiene_report" => {
+            let category = params["category"].as_str();
+            let status = params["status"].as_str();
+            let state = state.lock().await;
+            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
+            let suggestions = store
+                .list_suggestions(category, status)
+                .map_err(|e| DaemonError::Internal(e.to_string()))?;
+            let items: Vec<Value> = suggestions
+                .iter()
+                .map(|s| {
+                    json!({
+                        "node_id": s.node_id,
+                        "suggestion_id": s.suggestion_id,
+                        "category": s.category,
+                        "message": s.message,
+                        "suggested_action": s.suggested_action_json,
+                        "confidence": s.confidence,
+                        "status": s.status,
+                        "created_at": s.created_at,
+                    })
+                })
+                .collect();
+            Ok(json!(items))
+        }
+
+        "kb/hygiene_accept" => {
+            let node_id = params["node_id"]
+                .as_str()
+                .ok_or(DaemonError::InvalidParams("missing 'node_id'"))?;
+            let suggestion_id = params["suggestion_id"]
+                .as_i64()
+                .ok_or(DaemonError::InvalidParams("missing 'suggestion_id'"))?;
+            let state = state.lock().await;
+            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
+            store
+                .update_suggestion_status(node_id, suggestion_id, "accepted")
+                .map_err(|e| DaemonError::Internal(e.to_string()))?;
+            Ok(json!({"ok": true}))
+        }
+
+        "kb/hygiene_dismiss" => {
+            let node_id = params["node_id"]
+                .as_str()
+                .ok_or(DaemonError::InvalidParams("missing 'node_id'"))?;
+            let suggestion_id = params["suggestion_id"]
+                .as_i64()
+                .ok_or(DaemonError::InvalidParams("missing 'suggestion_id'"))?;
+            let state = state.lock().await;
+            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
+            store
+                .update_suggestion_status(node_id, suggestion_id, "dismissed")
+                .map_err(|e| DaemonError::Internal(e.to_string()))?;
+            Ok(json!({"ok": true}))
+        }
+
         // --- Lifecycle ---
         "daemon/status" => {
             let state = state.lock().await;

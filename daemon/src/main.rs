@@ -12,6 +12,7 @@
 
 mod config;
 mod handler;
+pub mod hygiene;
 mod scheduler;
 
 use config::DaemonConfig;
@@ -119,7 +120,7 @@ async fn main() {
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
     // Start scheduler
-    let scheduler = DaemonScheduler::new(DaemonConfig::load());
+    let scheduler = DaemonScheduler::new(DaemonConfig::load(), Arc::clone(&state));
     let scheduler_shutdown = shutdown_tx.subscribe();
     let scheduler_handle = tokio::spawn(async move {
         scheduler.run(scheduler_shutdown).await;

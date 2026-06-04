@@ -630,6 +630,10 @@
           "kind": "mod"
         },
         {
+          "name": "hygiene",
+          "kind": "mod"
+        },
+        {
           "name": "lru_query",
           "kind": "mod"
         },

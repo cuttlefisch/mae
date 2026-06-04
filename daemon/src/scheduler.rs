@@ -1,6 +1,7 @@
 //! DaemonScheduler — tokio interval tasks for background KB maintenance.
 
 use crate::config::DaemonConfig;
+use crate::handler::DaemonState;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
@@ -10,6 +11,8 @@ pub struct DaemonScheduler {
     config: DaemonConfig,
     /// Shared daemon state for scheduler tasks to operate on.
     state: Arc<Mutex<SchedulerState>>,
+    /// Shared daemon state (stores, query layer).
+    daemon_state: Arc<Mutex<DaemonState>>,
 }
 
 /// Mutable state accessed by scheduler tasks.
@@ -26,10 +29,11 @@ pub struct SchedulerState {
 }
 
 impl DaemonScheduler {
-    pub fn new(config: DaemonConfig) -> Self {
+    pub fn new(config: DaemonConfig, daemon_state: Arc<Mutex<DaemonState>>) -> Self {
         Self {
             config,
             state: Arc::new(Mutex::new(SchedulerState::default())),
+            daemon_state,
         }
     }
 
@@ -67,10 +71,28 @@ impl DaemonScheduler {
                     tracing::debug!(cycle = s.maintenance_cycles, "DB maintenance tick");
                 }
                 _ = health_tick.tick() => {
-                    // TODO: broken links, stale nodes, orphan detection
                     let mut s = state.lock().await;
                     s.health_cycles += 1;
                     tracing::debug!(cycle = s.health_cycles, "Health check tick");
+                    drop(s);
+
+                    // Run hygiene scan if a store is available
+                    let ds = self.daemon_state.lock().await;
+                    if let Some(ref store) = ds.store {
+                        let store = std::sync::Arc::clone(store);
+                        drop(ds); // Release lock before blocking scan
+                        let result = crate::hygiene::run_hygiene_scan(&store);
+                        if result.suggestions_created > 0 {
+                            tracing::info!(
+                                created = result.suggestions_created,
+                                scanned = result.nodes_scanned,
+                                "Hygiene scan complete"
+                            );
+                        }
+                        for err in &result.errors {
+                            tracing::warn!(error = %err, "Hygiene scan error");
+                        }
+                    }
                 }
             }
         }
@@ -87,7 +109,8 @@ mod tests {
     #[tokio::test]
     async fn scheduler_starts_and_stops() {
         let config = DaemonConfig::default();
-        let scheduler = DaemonScheduler::new(config);
+        let daemon_state = Arc::new(Mutex::new(DaemonState::new()));
+        let scheduler = DaemonScheduler::new(config, daemon_state);
         let state = Arc::clone(&scheduler.state);
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
