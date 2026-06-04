@@ -5,22 +5,22 @@
 #+title: MCP Development Workflow
 #+filetags: :mcp:ai:tools:development:
 
-## MCP Development Workflow
+** MCP Development Workflow
 
 All 130+ MAE tools are exposed via MCP with full parity. When developing MAE inside MAE (e.g. with Claude Code via `mae-mcp-shim`), these tools provide structured access to LSP, DAP, KB, and editor state.
 
-### Tool Categories
+*** Tool Categories
 - **Code Navigation (LSP):** `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_workspace_symbol`, `lsp_document_symbols`, `lsp_diagnostics`
 - **Debugging (DAP):** `dap_start`, `dap_set_breakpoint`, `dap_continue`, `dap_step`, `debug_state`
 - **Knowledge Base:** `kb_search`, `kb_get`, `kb_links_from`, `kb_links_to`, `kb_graph`
 - **Buffer/Editor:** `buffer_read`, `buffer_write`, `project_search`, `command_list`, `execute_command`, `eval_scheme`, `audit_configuration`, `introspect`
 - **Validation:** `self_test_suite` -- structured JSON test plan
 
-### Connection
+*** Connection
 Socket: `/tmp/mae-{PID}.sock`
 Shim: `mae-mcp-shim` (stdio <-> Unix socket bridge)
 
-### When to Use
+*** When to Use
 - **Navigating MAE code:** `lsp_definition` / `lsp_references` over grep -- structured, no false positives
 - **Understanding architecture:** `kb_search` or `kb_get` -- curated docs
 - **Debugging MAE:** `dap_start` with `lldb-dap`, `debug_state` for inspection

@@ -8,7 +8,7 @@
 
 How MAE's knowledge base compares to Obsidian and Roam Research.
 
-## Feature comparison
+** Feature comparison
 | Feature | MAE KB | Obsidian | Roam Research |
 |---------|--------|----------|---------------|
 | Data format | Org-mode (plain text) | Markdown | Proprietary JSON |
@@ -21,21 +21,21 @@ How MAE's knowledge base compares to Obsidian and Roam Research.
 | Offline | Full offline | Full offline | Requires sync |
 | Extensibility | Scheme + module system | JS plugins | CSS themes only |
 
-## Migration paths
+** Migration paths
 
-### From Obsidian
+*** From Obsidian
 - Obsidian vaults are Markdown files with wiki-style links.
 - Convert to org via pandoc: `pandoc -f markdown -t org input.md -o output.org`
 - Add `:ID:` properties (org-roam's `org-roam-migrate-wizard` helps).
 - Register: `:kb-register MyVault ~/converted-vault`
 
-### From Roam Research
+*** From Roam Research
 - Export as Markdown or JSON from Roam settings.
 - Convert to org, assign `:ID:` properties.
 - `((block-ref))` maps lossy to heading-level `:ID:` nodes.
 - Register: `:kb-register RoamExport ~/roam-export`
 
-## Philosophy: why local-first + AI-peer + plain-text-canonical
+** Philosophy: why local-first + AI-peer + plain-text-canonical
 
 1. **Plain text is the only immortal format.** SQLite is derived. Cloud sync is a dependency. Org files survive every tool transition.
 2. **AI as peer, not plugin.** MAE's AI calls `kb_search`, `kb_get`, `kb_graph` -- the same query surface the human uses. No impedance mismatch.

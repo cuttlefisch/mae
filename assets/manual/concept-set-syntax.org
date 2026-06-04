@@ -7,7 +7,7 @@
 
 **`:set` option syntax** -- vim-style option configuration.
 
-## Syntax Forms
+** Syntax Forms
 
 | Syntax | Effect |
 |--------|--------|
@@ -18,7 +18,7 @@
 | `:set option value` | Assign value |
 | `:set option "value with spaces"` | Quoted value |
 
-## Tab Completion
+** Tab Completion
 
 - `:set <Tab>` completes option names
 - `:set option <Tab>` completes values:
@@ -26,7 +26,7 @@
   - Enum options: cycles through valid values
   - Theme options: lists bundled themes
 
-## Implementation
+** Implementation
 The parser lives in `crates/core/src/editor/ex_parse.rs` (`parse_set_args()`). Value completion is in `crates/core/src/editor/file_ops.rs` (`complete_set_value()`).
 
 [[part_of:concept:options][Part of Editor Options]].

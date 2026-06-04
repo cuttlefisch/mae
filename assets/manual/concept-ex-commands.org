@@ -9,12 +9,12 @@
 
 MAE parses `:w`, `:q`, `:x` commands using a token grammar rather than hardcoded match arms. This means all valid vim compound forms work automatically.
 
-## Grammar
+** Grammar
 
 **Verbs:** `w` (write), `q` (quit), `x` (write-if-modified + quit)
 **Modifiers:** `a` (all -- applies to preceding verb), `!` (force, must be terminal)
 
-## Valid Combinations
+** Valid Combinations
 
 | Command | Effect |
 |---------|--------|
@@ -32,7 +32,7 @@ MAE parses `:w`, `:q`, `:x` commands using a token grammar rather than hardcoded
 | `:xa`   | Write-if-modified all + quit all |
 | `:xa!`  | Write-if-modified all + force quit all |
 
-## Implementation
+** Implementation
 The tokenizer lives in `crates/core/src/editor/ex_parse.rs`. `parse_write_quit()` returns `Option<Vec<ExWriteQuit>>` -- None for non-matching commands, Some for valid compound commands.
 
 [[part_of:concept:command][Part of Command]].

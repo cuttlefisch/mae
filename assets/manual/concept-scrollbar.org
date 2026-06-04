@@ -7,22 +7,22 @@
 
 **Vertical scrollbar** for the GUI rendering backend.
 
-## Configuration
+** Configuration
 - `:set scrollbar true` (default: enabled)
 - `:set scrollbar false` to disable
 
-## Layout
+** Layout
 The scrollbar occupies 1 column at the right edge of the text area. Space is allocated in `FrameLayout::compute_layout()` *before* wrap/layout computation, so text wrapping respects the reduced width.
 
-## Rendering
+** Rendering
 - **Track**: full content-area height, theme color `ui.scrollbar.track`
 - **Thumb**: proportional to viewport/total ratio, theme color `ui.scrollbar.thumb`
 - Minimum thumb height: 1 cell
 
-## Mouse Interaction
+** Mouse Interaction
 Click in the scrollbar column to jump to that scroll position.
 
-## Nyan Mode
+** Nyan Mode
 `:set nyan_mode true` enables a rainbow progress bar in the status line, showing scroll position as a filled bar with a cat marker.
 
 [[part_of:concept:gui][Part of GUI Backend]].

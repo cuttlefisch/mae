@@ -172,6 +172,14 @@ impl KbQueryLayer for CachedQueryLayer {
         self.inner.id_title_pairs(prefix)
     }
 
+    fn id_title_body_triples(
+        &self,
+        prefix: Option<&str>,
+        body_limit: usize,
+    ) -> Vec<(String, String, String)> {
+        self.inner.id_title_body_triples(prefix, body_limit)
+    }
+
     fn health_report(&self) -> Option<HealthReport> {
         self.inner.health_report()
     }

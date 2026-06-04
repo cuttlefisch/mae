@@ -7,10 +7,10 @@
 
 The **Git Status** buffer (`*git-status*`) is a high-fidelity "porcelain" UI inspired by Emacs Magit. It allows you to manage your repository state without leaving the editor.
 
-## Multi-Level Fold
+** Multi-Level Fold
 Press `TAB` on a section header, file entry, or hunk header to fold/unfold that level independently. Collapse indicators (`▸`/`▾`) show fold state.
 
-## Keybindings
+** Keybindings
 | Key | Action | Command |
 |-----|--------|---------|
 | `s` | Stage (context-aware) | [[cmd:git-stage]] |
@@ -37,16 +37,16 @@ Press `TAB` on a section header, file entry, or hunk header to fold/unfold that 
 | `Enter` | Open file | [[cmd:git-status-open]] |
 | `q` | Exit | [[cmd:enter-normal-mode]] |
 
-## Context-Aware Dispatch
+** Context-Aware Dispatch
 `s`/`u`/`x` operate based on cursor position:
 - **On a diff hunk/line**: stage/unstage/discard that hunk.
 - **On a file entry**: stage/unstage/discard the whole file.
 - **On a section header**: stage/unstage all files in that section.
 
-## Inline Diff
+** Inline Diff
 Press `TAB` on a file entry to expand/collapse its inline diff. Each hunk can be further folded independently.
 
-## Workflow
+** Workflow
 1. Open status via `SPC g s`.
 2. Navigate with `j`/`k`, jump hunks with `n`/`p`.
 3. Stage files/hunks with `s`.

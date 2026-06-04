@@ -91,10 +91,13 @@ fn main() {
         let typed_link_count = all_typed_links.len();
         let transclusion_count = all_transclusions.len();
 
-        // Save org-parsed nodes to the store.
-        let node_refs: Vec<&mae_kb::Node> = all_nodes.iter().collect();
-        if let Err(e) = store.save_all(&node_refs) {
-            eprintln!("  Warning: failed to save org nodes: {}", e);
+        // Insert org-parsed nodes into the store (upsert, no delete).
+        // We use insert_node rather than save_all to avoid CozoDB sled
+        // tombstone issue: :rm leaves partial tuples that break load_all().
+        for node in &all_nodes {
+            if let Err(e) = store.insert_node(node) {
+                eprintln!("  Warning: failed to insert org node {}: {}", node.id, e);
+            }
         }
         eprintln!(
             "  Org files: {} files, {org_node_count} nodes parsed",

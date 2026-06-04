@@ -49,8 +49,8 @@ fn render_kb_node_for_query(
         return (out, links);
     };
 
-    // Header — # prefix gives h1 scale in GUI heading renderer
-    out.push_str(&format!("# {}", node.title));
+    // Header — * prefix gives h1 scale in GUI heading renderer
+    out.push_str(&format!("* {}", node.title));
     out.push('\n');
     let content_label = if is_builtin_node(node_id) {
         "MAE Manual"
@@ -98,7 +98,7 @@ fn render_kb_node_for_query(
 
     if !outgoing.is_empty() || !incoming.is_empty() {
         out.push('\n');
-        out.push_str("## Neighborhood\n");
+        out.push_str("** Neighborhood\n");
     }
     if !outgoing.is_empty() {
         out.push_str("Outgoing:\n");
@@ -175,7 +175,7 @@ fn render_kb_node_with_store(
         return (out, links);
     };
 
-    out.push_str(&format!("# {}", node.title));
+    out.push_str(&format!("* {}", node.title));
     out.push('\n');
     let content_label = if is_builtin_node(node_id) {
         "MAE Manual"
@@ -228,7 +228,7 @@ fn render_kb_node_with_store(
 
     if !outgoing_ids.is_empty() || !incoming_ids.is_empty() {
         out.push('\n');
-        out.push_str("## Neighborhood\n");
+        out.push_str("** Neighborhood\n");
     }
     if !outgoing_ids.is_empty() {
         out.push_str("Outgoing:\n");
@@ -347,7 +347,7 @@ impl Editor {
     pub fn describe_command_live(&self, cmd_name: &str) -> Option<String> {
         let cmd = self.commands.get(cmd_name)?;
         let mut out = String::new();
-        out.push_str(&format!("# {}\n", cmd_name));
+        out.push_str(&format!("* {}\n", cmd_name));
         out.push_str(&cmd.doc);
         out.push('\n');
 
@@ -503,7 +503,7 @@ impl Editor {
                     self.kb.primary.get(&node_id).cloned()
                 };
                 if let Some(node) = header_node {
-                    out.push_str(&format!("# {}", node.title));
+                    out.push_str(&format!("* {}", node.title));
                     out.push('\n');
                     out.push_str(&format!("{} · {}\n", node_kind_label(node.kind), node.id));
                     if !node.tags.is_empty() {
@@ -553,7 +553,7 @@ impl Editor {
                 };
                 if !outgoing_links.is_empty() || !incoming_links.is_empty() {
                     out.push('\n');
-                    out.push_str("## Neighborhood\n");
+                    out.push_str("** Neighborhood\n");
                 }
                 if !outgoing_links.is_empty() {
                     out.push_str("Outgoing:\n");
@@ -1496,8 +1496,8 @@ mod tests {
         e.open_help_at("index");
         let text: String = e.buffers[e.active_buffer_idx()].rope().chars().collect();
         assert!(
-            text.starts_with("# "),
-            "title should have # prefix for heading scale, got: {}",
+            text.starts_with("* "),
+            "title should have * prefix for org heading scale, got: {}",
             &text[..text.len().min(40)]
         );
     }
@@ -1508,7 +1508,7 @@ mod tests {
         e.open_help_at("index");
         let text: String = e.buffers[e.active_buffer_idx()].rope().chars().collect();
         assert!(
-            text.contains("## Neighborhood"),
+            text.contains("** Neighborhood"),
             "neighborhood should use ## heading"
         );
     }
@@ -1576,16 +1576,16 @@ mod tests {
             "user:fold-test",
             "Fold Test",
             mae_kb::NodeKind::Note,
-            "## Section 1\nBody 1\nBody 2\n## Section 2\nBody 3\n",
+            "** Section 1\nBody 1\nBody 2\n** Section 2\nBody 3\n",
         );
         e.kb.primary.insert(node);
         e.open_help_at("user:fold-test");
         let buf_idx = e.active_buffer_idx();
-        // Find the ## Section 1 line (should be after title + metadata)
+        // Find the ** Section 1 line (should be after title + metadata)
         let text: String = e.buffers[buf_idx].rope().chars().collect();
         let section_row = text
             .lines()
-            .position(|l| l.starts_with("## Section 1"))
+            .position(|l| l.starts_with("** Section 1"))
             .unwrap();
         e.window_mgr.focused_window_mut().cursor_row = section_row;
         e.help_heading_cycle();
@@ -1608,7 +1608,7 @@ mod tests {
             "user:fold-all-test",
             "Fold All",
             mae_kb::NodeKind::Note,
-            "## A\nBody A\n## B\nBody B\n",
+            "** A\nBody A\n** B\nBody B\n",
         );
         e.kb.primary.insert(node);
         e.open_help_at("user:fold-all-test");

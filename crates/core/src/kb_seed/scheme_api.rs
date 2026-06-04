@@ -865,7 +865,7 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
 
     for &(name, sig, doc, example, category) in functions {
         let body = format!(
-            "## Signature\n```scheme\n{sig}\n```\n\n\
+            "** Signature\n```scheme\n{sig}\n```\n\n\
              {doc}\n\n\
              ## Example\n```scheme\n{example}\n```\n\n\
              **Category:** {category}\n\n\

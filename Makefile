@@ -70,6 +70,7 @@ install: build manual-kb
 	@echo "Installed $(BINARY) -> $(PREFIX)/$(BINARY)"
 	@echo "Installed $(SHIM_BINARY) -> $(PREFIX)/$(SHIM_BINARY)"
 	@mkdir -p $(DATADIR)/mae
+	@rm -rf $(DATADIR)/mae/mae-manual.cozo
 	@cp -r assets/mae-manual.cozo $(DATADIR)/mae/mae-manual.cozo
 	@cp assets/mae-manual.cozo.sha256 $(DATADIR)/mae/mae-manual.cozo.sha256
 	@echo "Installed manual KB -> $(DATADIR)/mae/mae-manual.cozo"
@@ -348,6 +349,7 @@ manual-kb:
 ## install-manual: install pre-built manual KB to XDG data dir
 install-manual: manual-kb
 	@mkdir -p $(DATADIR)/mae
+	@rm -rf $(DATADIR)/mae/mae-manual.cozo
 	@cp -r assets/mae-manual.cozo $(DATADIR)/mae/mae-manual.cozo
 	@cp assets/mae-manual.cozo.sha256 $(DATADIR)/mae/mae-manual.cozo.sha256
 	@echo "Installed manual KB -> $(DATADIR)/mae/mae-manual.cozo"

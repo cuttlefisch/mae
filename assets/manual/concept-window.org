@@ -8,10 +8,10 @@
 
 A **window** is a rectangular view onto a [[references:concept:buffer][buffer]]. MAE's tiling WindowManager owns the layout tree (splits, sizes) and exactly one window is focused at a time.
 
-## Why cursor state lives here, not on the buffer
+** Why cursor state lives here, not on the buffer
 Emacs has taught us that two windows can legitimately view the same buffer at different points. If cursor state lived on the buffer, this would be impossible without extra hacks. MAE inherits this shape.
 
-## What MAE windows are NOT
+** What MAE windows are NOT
 - NOT an OS-level window (Emacs's terminology for that is a "frame" -- MAE has no frames).
 - NOT a tab (MAE has no tabs).
 

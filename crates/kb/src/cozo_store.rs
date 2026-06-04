@@ -462,7 +462,9 @@ impl CozoKbStore {
 
         // Parse and insert new links
         let now = self.now_epoch();
-        for (dst, display) in crate::parse_links(&node.body) {
+        for (dst_raw, display) in crate::parse_links(&node.body) {
+            // Strip fragment (e.g., "concept:buffer#rope-internals" → "concept:buffer")
+            let dst = dst_raw.split('#').next().unwrap_or(&dst_raw).to_string();
             let disp = if dst == display {
                 String::new()
             } else {
@@ -1228,7 +1230,9 @@ impl CozoKbStore {
         rel_type: &str,
         weight: f64,
     ) -> Result<(), KbStoreError> {
-        self.add_typed_link_with_confidence(src, dst, rel_type, weight, 1.0)
+        // Strip fragment (e.g., "concept:buffer#rope-internals" → "concept:buffer")
+        let dst_clean = dst.split('#').next().unwrap_or(dst);
+        self.add_typed_link_with_confidence(src, dst_clean, rel_type, weight, 1.0)
     }
 
     /// Add a typed link with explicit confidence (0.0–1.0).
@@ -1857,6 +1861,49 @@ impl CozoKbStore {
                 let id = row.first()?.get_str()?.to_string();
                 let title = row.get(1)?.get_str()?.to_string();
                 Some((id, title))
+            })
+            .collect())
+    }
+
+    /// Batch query returning (id, title, body) for all nodes.
+    /// Body is truncated to `body_limit` chars (0 = no body column).
+    pub fn id_title_body_triples(
+        &self,
+        prefix: Option<&str>,
+        body_limit: usize,
+    ) -> Result<Vec<(String, String, String)>, KbStoreError> {
+        let query = if body_limit == 0 {
+            // No body needed — same as id_title_pairs
+            if let Some(p) = prefix {
+                format!(
+                    "?[id, title, body] := *nodes{{id, title}}, title != '', starts_with(id, '{}'), body = ''",
+                    p.replace('\'', "")
+                )
+            } else {
+                "?[id, title, body] := *nodes{id, title}, title != '', body = ''".to_string()
+            }
+        } else if let Some(p) = prefix {
+            format!(
+                "?[id, title, body] := *nodes{{id, title, body}}, title != '', starts_with(id, '{}')",
+                p.replace('\'', "")
+            )
+        } else {
+            "?[id, title, body] := *nodes{id, title, body}, title != ''".to_string()
+        };
+        let result = self.run_immut(&query).map_err(cozo_err)?;
+        Ok(result
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let id = row.first()?.get_str()?.to_string();
+                let title = row.get(1)?.get_str()?.to_string();
+                let body_raw = row.get(2)?.get_str().unwrap_or("");
+                let body = if body_limit > 0 && body_raw.len() > body_limit {
+                    body_raw.chars().take(body_limit).collect()
+                } else {
+                    body_raw.to_string()
+                };
+                Some((id, title, body))
             })
             .collect())
     }

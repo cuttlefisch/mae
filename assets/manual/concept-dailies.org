@@ -8,10 +8,10 @@
 
 **Org-dailies** provides daily journal notes with backward chain-linking, inspired by `org-roam-dailies` in Emacs.
 
-## How It Works
+** How It Works
 Each daily note lives at `<dailies-dir>/YYYY-MM-DD.org` with a unique ID (`daily:YYYY-MM-DD`). When you open today's daily, MAE creates the file if needed and **chain-fills** backward -- creating stub files for any gaps and inserting Previous links (e.g. `Previous: YYYY-MM-DD`) to form a continuous backward chain.
 
-## Keybindings (SPC n d)
+** Keybindings (SPC n d)
 | Key | Command | Description |
 |-----|---------|-------------|
 | `SPC n d t` | [[cmd:daily-goto-today]] | Open today's daily (chain-fill) |
@@ -20,11 +20,11 @@ Each daily note lives at `<dailies-dir>/YYYY-MM-DD.org` with a unique ID (`daily
 | `SPC n d p` | [[cmd:daily-prev]] | Navigate to previous daily |
 | `SPC n d n` | [[cmd:daily-next]] | Navigate to next daily |
 
-## Configuration
+** Configuration
 - `kb_dailies_dir` -- explicit path (default: `<kb_notes_dir>/daily`)
 - `kb_daily_chain_gap_max` -- max days to chain-fill backward (default: 90)
 
-## Chain-Fill Algorithm
+** Chain-Fill Algorithm
 1. Ensure target date file exists (create stub if needed)
 2. Walk backward day-by-day from target
 3. For each missing day, create a stub `.org` file

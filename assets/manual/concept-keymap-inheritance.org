@@ -7,15 +7,15 @@
 
 **Keymap inheritance** lets buffer-kind overlay keymaps (git-status, help, debug, file-tree) inherit bindings from a parent keymap.
 
-## Mechanism
+** Mechanism
 - `Keymap` has a `parent: Option<String>` field.
 - Key lookup: overlay keymap -> parent -> fallback.
 - `which_key_entries_for_current_keymap()` merges overlay + parent entries for the which-key popup.
 
-## Scheme API
+** Scheme API
 `(define-keymap "name" "parent")` creates a keymap with inheritance.
 
-## Current Overlay Keymaps
+** Current Overlay Keymaps
 | Keymap | Parent | Buffer Kind |
 |--------|--------|-------------|
 | `git-status` | `normal` | GitStatus |

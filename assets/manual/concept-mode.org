@@ -7,7 +7,7 @@
 
 MAE is **modal** like Vim. The current [[references:concept:mode][Mode]] determines which keymap is active.
 
-## Modes
+** Modes
 - **Normal** -- movement and commands (default).
 - **Insert** -- literal text entry.
 - **Visual(Char|Line)** -- selection.

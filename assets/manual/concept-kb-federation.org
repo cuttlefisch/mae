@@ -8,7 +8,7 @@
 
 KB **federation** lets you register external org directories as searchable knowledge base instances alongside MAE's built-in help.
 
-## Architecture
+** Architecture
 ```
 +---------------------------------------------+
 |           MAE Knowledge Base                |
@@ -27,11 +27,11 @@ KB **federation** lets you register external org directories as searchable knowl
     +---------------------+
 ```
 
-## Design principle
+** Design principle
 **The org directory is READ-ONLY for the KB layer. SQLite is derived.**
 Your org files remain the canonical source of truth. MAE reads them, builds an in-memory graph, and never writes to your org directory (except one sentinel file: `eor-instance.org`).
 
-## Registry
+** Registry
 Stored at `~/.config/mae/kb-registry.toml`. Each instance has:
 - UUID (generated or read from sentinel file)
 - Name (user-chosen display label)
@@ -39,14 +39,14 @@ Stored at `~/.config/mae/kb-registry.toml`. Each instance has:
 - Enabled flag
 - Last import timestamp
 
-## Sentinel file
+** Sentinel file
 When you register a directory, MAE creates `eor-instance.org` with the instance UUID. This file is safe to delete -- MAE recreates it on next registration. It marks the directory as a MAE KB instance.
 
-## Link scheme
+** Link scheme
 - `eor:node-id` -- local-first lookup (checks local KB, then instances).
 - `eor:uuid/node-id` -- targeted lookup in a specific instance.
 
-## Import pipeline
+** Import pipeline
 1. Recursive `walkdir` over the org directory.
 2. Parse each `.org` file for `:ID:` properties (file-level + heading-level).
 3. Files without `:ID:` are counted but skipped.
@@ -54,7 +54,7 @@ When you register a directory, MAE creates `eor-instance.org` with the instance 
 5. Duplicate `:ID:` values are detected and reported.
 6. Health metrics (orphans, broken links, namespaces) computed automatically.
 
-## Commands
+** Commands
 - `:kb-register <name> <path>` -- register and import.
 - `:kb-unregister <name>` -- remove instance.
 - `:kb-reimport <name>` -- refresh after editing org files.

@@ -676,14 +676,9 @@ impl Editor {
     /// Sorted according to `kb_search_sort` option: alphabetical (default/relevance),
     /// activity (recent first), or alphabetical.
     pub fn kb_all_node_triples(&self) -> Vec<(String, String, String)> {
+        // Body truncated to 500 chars — only used for fuzzy search, not display.
         let mut triples: Vec<(String, String, String)> = if let Some(q) = self.kb.query_layer() {
-            q.list_ids(None)
-                .into_iter()
-                .filter_map(|id| {
-                    let n = q.get(&id)?;
-                    Some((id, n.title, n.body))
-                })
-                .collect()
+            q.id_title_body_triples(None, 500)
         } else {
             self.kb.primary.all_id_title_body_triples()
         };

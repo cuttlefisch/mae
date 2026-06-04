@@ -20,6 +20,8 @@ pub struct KbContext {
     pub store: Option<Arc<dyn mae_kb::KbStore>>,
     /// Typed CozoDB store handle (same as `store`, but typed for query layer construction).
     pub primary_cozo: Option<Arc<mae_kb::CozoKbStore>>,
+    /// Pre-built manual KB store (read-only, shipped with MAE binary).
+    pub manual_cozo: Option<Arc<mae_kb::CozoKbStore>>,
     /// Standardized KB data directory layout (XDG-compliant).
     pub data_dir: Option<mae_kb::data_dir::KbDataDir>,
     /// KB federation: registry of external KB instances (org-roam dirs etc.).
@@ -88,9 +90,29 @@ impl KbContext {
     /// Build or rebuild the federated query layer from current stores.
     /// Call after store/instance_store changes (register, unregister, reimport).
     pub fn rebuild_query_layer(&mut self) {
-        if let Some(ref cozo) = self.primary_cozo {
+        // Determine the primary query layer: prefer user's primary CozoDB store,
+        // fall back to the manual KB store if no user store is available.
+        let primary_arc = self
+            .primary_cozo
+            .as_ref()
+            .or(self.manual_cozo.as_ref())
+            .cloned();
+
+        if let Some(ref cozo) = primary_arc {
             let primary_layer = Arc::new(mae_kb::CozoQueryLayer::new(cozo.clone()));
             let mut federated = mae_kb::FederatedQuery::new(primary_layer);
+
+            // If we used the user store as primary AND a manual store exists separately,
+            // add the manual store as an instance so its nodes are queryable.
+            if let Some(ref primary) = self.primary_cozo {
+                if let Some(ref manual) = self.manual_cozo {
+                    if !Arc::ptr_eq(primary, manual) {
+                        let manual_layer = Arc::new(mae_kb::CozoQueryLayer::new(manual.clone()));
+                        federated.add_instance("manual".to_string(), manual_layer);
+                    }
+                }
+            }
+
             for (name, inst_store) in &self.instance_stores {
                 let layer = Arc::new(mae_kb::CozoQueryLayer::new(inst_store.clone()));
                 federated.add_instance(name.clone(), layer);
@@ -116,6 +138,7 @@ impl KbContext {
             primary,
             store: None,
             primary_cozo: None,
+            manual_cozo: None,
             data_dir: None,
             registry: mae_kb::federation::KbRegistry::default(),
             instances: HashMap::new(),

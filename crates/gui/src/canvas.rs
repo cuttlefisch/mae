@@ -812,14 +812,16 @@ impl SkiaCanvas {
     }
 
     /// Draw an underline span at exact pixel coordinates.
-    pub fn draw_underline_at_pixel(
+    /// `scale` adjusts the ascent for heading-scaled lines (1.0 = normal text).
+    pub fn draw_underline_at_pixel_scaled(
         &mut self,
         pixel_x: f32,
         pixel_y: f32,
         pixel_w: f32,
         color: Color4f,
+        scale: f32,
     ) {
-        let underline_y = pixel_y + self.ascent + 1.0;
+        let underline_y = pixel_y + self.ascent * scale + 1.0;
         let mut paint = Paint::new(color, None);
         paint.set_style(skia_safe::PaintStyle::Stroke);
         paint.set_stroke_width(1.0);

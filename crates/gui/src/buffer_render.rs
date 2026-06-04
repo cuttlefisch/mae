@@ -905,11 +905,12 @@ fn draw_styled_at(
             } else if let Some((start_idx, start_col, fg)) = ul_start.take() {
                 if use_pixel {
                     let pw = pixel_offsets[i] - pixel_offsets[start_idx];
-                    canvas.draw_underline_at_pixel(
+                    canvas.draw_underline_at_pixel_scaled(
                         base_x + pixel_offsets[start_idx],
                         pixel_y,
                         pw,
                         fg,
+                        scale,
                     );
                 } else {
                     let width = col_offsets[i] - start_col;
@@ -920,7 +921,13 @@ fn draw_styled_at(
         if let Some((start_idx, start_col, fg)) = ul_start {
             if use_pixel {
                 let pw = pixel_offsets[styles.len()] - pixel_offsets[start_idx];
-                canvas.draw_underline_at_pixel(base_x + pixel_offsets[start_idx], pixel_y, pw, fg);
+                canvas.draw_underline_at_pixel_scaled(
+                    base_x + pixel_offsets[start_idx],
+                    pixel_y,
+                    pw,
+                    fg,
+                    scale,
+                );
             } else {
                 let width = col_offsets[styles.len()] - start_col;
                 canvas.draw_underline_at_y(pixel_y, col + start_col, width, fg);

@@ -34,6 +34,29 @@ pub trait KbQueryLayer: Send + Sync {
     /// Return (id, title) pairs for all nodes, optionally filtered by prefix.
     fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)>;
 
+    /// Return (id, title, body) triples for all nodes.
+    /// Body is truncated to `body_limit` chars (0 = no body).
+    /// Default implementation calls `id_title_pairs` + `get` per node (slow).
+    fn id_title_body_triples(
+        &self,
+        prefix: Option<&str>,
+        body_limit: usize,
+    ) -> Vec<(String, String, String)> {
+        self.id_title_pairs(prefix)
+            .into_iter()
+            .map(|(id, title)| {
+                let body = if body_limit > 0 {
+                    self.get(&id)
+                        .map(|n| n.body.chars().take(body_limit).collect())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                (id, title, body)
+            })
+            .collect()
+    }
+
     /// Compute a structured health report.
     fn health_report(&self) -> Option<HealthReport>;
 
@@ -98,6 +121,16 @@ impl KbQueryLayer for CozoQueryLayer {
 
     fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)> {
         self.store.id_title_pairs(prefix).unwrap_or_default()
+    }
+
+    fn id_title_body_triples(
+        &self,
+        prefix: Option<&str>,
+        body_limit: usize,
+    ) -> Vec<(String, String, String)> {
+        self.store
+            .id_title_body_triples(prefix, body_limit)
+            .unwrap_or_default()
     }
 
     fn health_report(&self) -> Option<HealthReport> {
@@ -215,6 +248,24 @@ impl KbQueryLayer for FederatedQuery {
         pairs
     }
 
+    fn id_title_body_triples(
+        &self,
+        prefix: Option<&str>,
+        body_limit: usize,
+    ) -> Vec<(String, String, String)> {
+        let mut triples = self.primary.id_title_body_triples(prefix, body_limit);
+        let mut seen: std::collections::HashSet<String> =
+            triples.iter().map(|(id, _, _)| id.clone()).collect();
+        for (_, inst) in &self.instances {
+            for triple in inst.id_title_body_triples(prefix, body_limit) {
+                if seen.insert(triple.0.clone()) {
+                    triples.push(triple);
+                }
+            }
+        }
+        triples
+    }
+
     fn health_report(&self) -> Option<HealthReport> {
         self.primary.health_report()
     }
@@ -311,6 +362,26 @@ impl KbQueryLayer for InMemoryQueryLayer {
             .filter_map(|id| {
                 let title = kb.get(&id)?.title.clone();
                 Some((id, title))
+            })
+            .collect()
+    }
+
+    fn id_title_body_triples(
+        &self,
+        prefix: Option<&str>,
+        body_limit: usize,
+    ) -> Vec<(String, String, String)> {
+        let kb = self.kb.lock().unwrap();
+        kb.list_ids(prefix)
+            .into_iter()
+            .filter_map(|id| {
+                let node = kb.get(&id)?;
+                let body = if body_limit > 0 {
+                    node.body.chars().take(body_limit).collect()
+                } else {
+                    String::new()
+                };
+                Some((id, node.title.clone(), body))
             })
             .collect()
     }

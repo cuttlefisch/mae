@@ -7,7 +7,7 @@
 
 The **BufferMode** trait (`buffer_mode.rs`) is the contract every buffer kind implements. It replaces scattered `match buf.kind` blocks with polymorphic dispatch.
 
-## Methods
+** Methods
 | Method | Purpose |
 |--------|---------|
 | `mode_name()` | Display name for the status bar |

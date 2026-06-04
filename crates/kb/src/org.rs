@@ -578,6 +578,16 @@ pub fn rewrite_links_with_types(body: &str, known_rel_types: Option<&HashSet<Str
                             out.push_str(d);
                         }
                         out.push_str("]]");
+                    } else if is_kb_node_id(target_raw) {
+                        // Internal KB link (concept:buffer, key:normal-mode, etc.)
+                        // — preserve as [[target|display]] for the help renderer.
+                        out.push_str("[[");
+                        out.push_str(target_raw);
+                        if let Some(d) = display {
+                            out.push('|');
+                            out.push_str(d);
+                        }
+                        out.push_str("]]");
                     } else if let Some(d) = display {
                         // External link — emit "display (target)" so
                         // the brackets don't collide with our scanner.
@@ -603,6 +613,36 @@ pub fn rewrite_links_with_types(body: &str, known_rel_types: Option<&HashSet<Str
         i += ch.len_utf8();
     }
     out
+}
+
+/// Known KB node ID namespace prefixes. A link target matching one of these
+/// is an internal KB link and should be preserved as `[[target|display]]`.
+const KB_NAMESPACES: &[&str] = &[
+    "concept:",
+    "cmd:",
+    "key:",
+    "category:",
+    "lesson:",
+    "module:",
+    "option:",
+    "scheme:",
+    "term:",
+    "tutor:",
+    "tutorial:",
+    "guide:",
+    "view:",
+    "task:",
+    "meta:",
+    "index",
+    "daily:",
+];
+
+/// Check if a link target looks like an internal KB node ID.
+fn is_kb_node_id(target: &str) -> bool {
+    if target == "index" {
+        return true;
+    }
+    KB_NAMESPACES.iter().any(|ns| target.starts_with(ns))
 }
 
 /// Check if a link target starts with a known typed relationship prefix.
@@ -1393,6 +1433,38 @@ Body.
         assert!(
             out.contains("[[concept:buffer|Buffer Management]]"),
             "typed prefix should be stripped: {out}"
+        );
+    }
+
+    #[test]
+    fn rewrite_links_preserves_kb_node_ids() {
+        let body = "See [[concept:buffer][Buffer]] and [[cmd:save][Save]] and [[tutorial:getting-started][Getting Started]].";
+        let out = rewrite_links(body);
+        assert!(
+            out.contains("[[concept:buffer|Buffer]]"),
+            "concept: link should be preserved: {out}"
+        );
+        assert!(
+            out.contains("[[cmd:save|Save]]"),
+            "cmd: link should be preserved: {out}"
+        );
+        assert!(
+            out.contains("[[tutorial:getting-started|Getting Started]]"),
+            "tutorial: link should be preserved: {out}"
+        );
+    }
+
+    #[test]
+    fn rewrite_links_preserves_bare_kb_node_ids() {
+        let body = "See [[concept:buffer]] and [[index]].";
+        let out = rewrite_links(body);
+        assert!(
+            out.contains("[[concept:buffer]]"),
+            "bare concept link should be preserved: {out}"
+        );
+        assert!(
+            out.contains("[[index]]"),
+            "bare index link should be preserved: {out}"
         );
     }
 

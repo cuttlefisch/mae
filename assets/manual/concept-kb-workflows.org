@@ -8,23 +8,23 @@
 
 Workflows for exploring, authoring, migrating, and maintaining your knowledge base.
 
-## Exploration
+** Exploration
 - `:help <topic>` or `SPC h h` -- fuzzy search all KB nodes.
 - `SPC h s` -- full-text search.
 - `SPC n f` / `:kb-find` -- search with fuzzy matching.
 - Tab/Enter in Help buffer -- follow links, navigate graph.
 - `C-o` -- jump back in help history.
 
-## Authoring
+** Authoring
 - Create `.org` files in `~/.config/mae/help/` with `:ID:` properties.
 - `:help-edit <topic>` -- open/create a user help node for editing.
 - User-authored nodes are loaded on startup alongside seed nodes.
 
-## Migration from org-roam
+** Migration from org-roam
 See [[lesson:kb-import-roam]] for step-by-step instructions.
 Quick version: `:kb-register MyNotes ~/org-roam`
 
-## Backup and restore
+** Backup and restore
 **Your org files ARE the backup.** They're plain text on disk -- version them with git, sync them with any tool you like.
 - The SQLite cache is disposable: delete it and reimport, zero data loss.
 - `:kb-save <path>` exports a SQLite snapshot (useful for sharing the index).
@@ -32,11 +32,11 @@ Quick version: `:kb-register MyNotes ~/org-roam`
 - `:kb-reimport <name>` rebuilds from org source.
 - **There is no new data format to manage.** Your existing org files + git workflow = complete data lifecycle.
 
-## Health monitoring
+** Health monitoring
 - `:kb-health` -- orphan nodes, broken links, namespace distribution.
 - Health metrics are also reported automatically after `:kb-register` and `:kb-reimport`.
 
-## AI access
+** AI access
 The AI agent uses the same tools: `kb_search`, `kb_get`, `kb_graph`. It sees everything you see. Ask it: "find notes about X" or "import my KB at ~/RoamNotes".
 
 See also: [[references:concept:knowledge-base][Knowledge Base]], [[references:concept:kb-federation][KB Federation]]

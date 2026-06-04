@@ -5,20 +5,20 @@
 #+title: Display Policy
 #+filetags: :core:window:conversation:
 
-## Display Policy
+** Display Policy
 
 Controls how buffers become visible in windows -- the O(1) enum-dispatch replacement for Emacs's 29 `display-buffer-*` functions and regex alist.
 
-### The Problem
+*** The Problem
 Five direct `focused_window_mut().buffer_idx` calls (help, messages, debug, git-status, file-tree) had zero conversation awareness. If the AI agent called `help_open` while focused on the tiny AI input pane, the KB buffer got crammed in and the conversation layout was destroyed.
 
-### The 4 Actions (vs Emacs's 29)
+*** The 4 Actions (vs Emacs's 29)
 - **ReplaceFocused** -- replace the focused window, but fall through to AvoidConversation if focused on a conversation buffer (git-status, dashboard)
 - **AvoidConversation** -- route via `switch_to_buffer_non_conversation` which has a 3-step strategy protecting conversation pairs (text, diff)
 - **ReuseOrSplit** -- reuse an existing window of the same BufferKind, or create a split with the given direction and ratio (help -> 50% vsplit, messages -> 30% hsplit)
 - **Hidden** -- buffer exists for programmatic access only, never shown (conversation -- managed by `open_conversation_buffer`)
 
-### Default Rules
+*** Default Rules
 | Kind        | Action               | Rationale                   |
 | Text        | AvoidConversation    | Normal files never invade   |
 | Help        | ReuseOrSplit V 50%   | Reuse help window or vsplit |
@@ -27,11 +27,11 @@ Five direct `focused_window_mut().buffer_idx` calls (help, messages, debug, git-
 | GitStatus   | ReplaceFocused       | Full window (Magit style)   |
 | Conversation| Hidden               | Managed internally          |
 
-### Customization
+*** Customization
 From init.scm: `(set-display-rule! "help" "reuse-or-split:vertical:0.5")`
 Inspect: `(display-buffer-policy "help")` or `SPC h D` ([[cmd:describe-display-policy]])
 
-### Emacs Comparison
+*** Emacs Comparison
 Emacs: `display-buffer-alist` (29 action functions, regex matching, order-dependent). Doom: `set-popup-rules!` (simpler but still regex). MAE: enum dispatch by BufferKind -- O(1), no order bugs, no regex.
 
 [[part_of:concept:gui][Part of GUI Backend]].

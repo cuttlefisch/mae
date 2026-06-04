@@ -597,21 +597,25 @@ fn main() -> io::Result<()> {
                 }
             }
 
-            // Load manual nodes from the pre-built CozoDB file.
+            // Open the manual KB CozoDB store and retain the handle for runtime queries.
             match mae_kb::CozoKbStore::open(&result.path) {
-                Ok(manual_store) => match manual_store.load_all() {
-                    Ok(nodes) => {
-                        let count = nodes.len();
-                        for node in nodes {
-                            editor.kb.primary.insert(node);
+                Ok(manual_store) => {
+                    // Load manual nodes into in-memory KB (fallback for tests/Phase 4).
+                    match manual_store.load_all() {
+                        Ok(nodes) => {
+                            let count = nodes.len();
+                            for node in nodes {
+                                editor.kb.primary.insert(node);
+                            }
+                            info!(count, path = %result.path.display(), "loaded manual KB nodes");
                         }
-
-                        info!(count, path = %result.path.display(), "loaded manual KB nodes");
+                        Err(e) => {
+                            warn!(error = %e, "failed to load nodes from manual KB (in-memory fallback)");
+                        }
                     }
-                    Err(e) => {
-                        warn!(error = %e, "failed to load nodes from manual KB");
-                    }
-                },
+                    // Retain the CozoDB handle so the query layer can query it directly.
+                    editor.kb.manual_cozo = Some(std::sync::Arc::new(manual_store));
+                }
                 Err(e) => {
                     warn!(error = %e, path = %result.path.display(), "failed to open manual KB store");
                 }
@@ -680,9 +684,6 @@ fn main() -> io::Result<()> {
             }
         }
 
-        // Build the CozoDB-first query layer (federated across primary + instances).
-        editor.kb.rebuild_query_layer();
-
         // Migrate kb-registry.toml from config → data (v0.9.0)
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
@@ -701,21 +702,62 @@ fn main() -> io::Result<()> {
                 continue;
             }
             if inst.org_dir.exists() {
-                info!(name = %inst.name, dir = %inst.org_dir.display(), "loading KB instance from org files");
-                let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
-                info!(
-                    name = %inst.name,
-                    nodes = report.nodes_imported,
-                    skipped = report.nodes_skipped,
-                    errors = report.errors.len(),
-                    "KB instance loaded from org"
-                );
-                editor.kb.instances.insert(inst.uuid.clone(), kb);
+                info!(name = %inst.name, dir = %inst.org_dir.display(), "loading KB instance");
+                // Try CozoDB-direct load first (retains store handle for query layer).
+                let loaded_via_cozo = if inst.db_path.exists() {
+                    match mae_kb::CozoKbStore::open(&inst.db_path) {
+                        Ok(store) => match store.load_all() {
+                            Ok(nodes) => {
+                                let count = nodes.len();
+                                let mut kb = mae_kb::KnowledgeBase::new();
+                                for node in nodes {
+                                    kb.insert(node);
+                                }
+                                info!(
+                                    name = %inst.name,
+                                    nodes = count,
+                                    "KB instance loaded from CozoDB"
+                                );
+                                editor.kb.instances.insert(inst.uuid.clone(), kb);
+                                editor
+                                    .kb
+                                    .instance_stores
+                                    .insert(inst.uuid.clone(), std::sync::Arc::new(store));
+                                true
+                            }
+                            Err(e) => {
+                                warn!(error = %e, name = %inst.name, "CozoDB load_all failed, falling back to org import");
+                                false
+                            }
+                        },
+                        Err(e) => {
+                            warn!(error = %e, name = %inst.name, "CozoDB open failed, falling back to org import");
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+                if !loaded_via_cozo {
+                    let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
+                    info!(
+                        name = %inst.name,
+                        nodes = report.nodes_imported,
+                        skipped = report.nodes_skipped,
+                        errors = report.errors.len(),
+                        "KB instance loaded from org files"
+                    );
+                    editor.kb.instances.insert(inst.uuid.clone(), kb);
+                }
             } else {
                 info!(name = %inst.name, dir = %inst.org_dir.display(), "KB instance dir missing, skipping");
             }
         }
         editor.kb.registry = registry;
+
+        // Build the CozoDB-first query layer AFTER all stores are loaded
+        // (primary + manual + federated instances).
+        editor.kb.rebuild_query_layer();
     }
 
     // Fire app-start hook after initialization is complete.
