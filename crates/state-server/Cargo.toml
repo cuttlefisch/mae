@@ -18,9 +18,9 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 async-trait = "0.1"
-sha2 = "0.10"
-hmac = "0.12"
-rand = "0.8"
+sha2 = "0.11"
+hmac = "0.13"
+rand = "0.9"
 
 [lib]
 name = "mae_state_server"
@@ -32,5 +32,5 @@ path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = "3"
-sha2 = "0.10"
+sha2 = "0.11"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
