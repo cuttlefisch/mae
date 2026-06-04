@@ -60,7 +60,7 @@ jobs:
       # The release test build above already produced the GUI binary.
       - name: Upload mae binary
         if: matrix.toolchain == 'stable' && matrix.step == 'test'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mae-binary
           path: target/release/mae
@@ -140,7 +140,7 @@ jobs:
       - name: Install GUI dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libfreetype6-dev
       - name: Download mae binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: mae-binary
           path: target/release
