@@ -44,6 +44,8 @@ pub struct Config {
     pub collaboration: CollaborationSection,
     #[serde(default)]
     pub kb: KbSection,
+    #[serde(default)]
+    pub daemon: DaemonSection,
 }
 
 /// Current config schema version. Bump when config.toml format changes.
@@ -189,6 +191,20 @@ pub struct CollaborationSection {
 /// This struct is retained for forward compatibility with config.toml.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KbSection {}
+
+/// Daemon configuration section.
+///
+/// Controls connection to `mae-daemon` for persistent KB (CozoDB+SQLite),
+/// background maintenance, and services that outlive the editor session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DaemonSection {
+    /// Connect to mae-daemon for KB persistence and background services.
+    pub enabled: Option<bool>,
+    /// Unix socket path for daemon communication.
+    pub socket: Option<String>,
+    /// Maximum nodes in editor LRU cache (0 = unbounded).
+    pub cache_size: Option<usize>,
+}
 
 fn default_true() -> bool {
     true

@@ -152,6 +152,31 @@ pub async fn dispatch(
             }
         }
 
+        "kb/id_title_pairs" => {
+            let prefix = params["prefix"].as_str();
+            let state = state.lock().await;
+            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
+            let pairs: Vec<Value> = ql
+                .id_title_pairs(prefix)
+                .into_iter()
+                .map(|(id, title)| json!([id, title]))
+                .collect();
+            Ok(json!(pairs))
+        }
+
+        "kb/id_title_body_triples" => {
+            let prefix = params["prefix"].as_str();
+            let body_limit = params["body_limit"].as_u64().unwrap_or(0) as usize;
+            let state = state.lock().await;
+            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
+            let triples: Vec<Value> = ql
+                .id_title_body_triples(prefix, body_limit)
+                .into_iter()
+                .map(|(id, title, body)| json!([id, title, body]))
+                .collect();
+            Ok(json!(triples))
+        }
+
         // --- Lifecycle ---
         "daemon/status" => {
             let state = state.lock().await;

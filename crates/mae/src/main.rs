@@ -526,6 +526,17 @@ fn main() -> io::Result<()> {
         info!(address = %addr, "CLI --connect: auto-connect enabled");
     }
 
+    // Apply daemon settings from config → OptionRegistry.
+    if let Some(enabled) = app_config.daemon.enabled {
+        let _ = editor.set_option("daemon_enabled", &enabled.to_string());
+    }
+    if let Some(ref socket) = app_config.daemon.socket {
+        let _ = editor.set_option("daemon_socket", socket);
+    }
+    if let Some(size) = app_config.daemon.cache_size {
+        let _ = editor.set_option("daemon_cache_size", &size.to_string());
+    }
+
     // Apply performance thresholds from config.
     if let Some(v) = app_config.performance.large_file_lines {
         editor.large_file_lines = v;
@@ -758,6 +769,30 @@ fn main() -> io::Result<()> {
         // Build the CozoDB-first query layer AFTER all stores are loaded
         // (primary + manual + federated instances).
         editor.kb.rebuild_query_layer();
+    }
+
+    // Optionally connect to mae-daemon for LRU-cached KB access.
+    // Falls back gracefully to local sled KB if daemon is unavailable.
+    if editor.kb.daemon_enabled {
+        let socket = editor.kb.daemon_socket.clone();
+        let cache_size = editor.kb.daemon_cache_size;
+        let mut client = mae_mcp::daemon_client::DaemonClient::new(&socket);
+        match client.connect() {
+            Ok(()) => {
+                info!(socket = %socket.display(), cache_size, "connected to mae-daemon");
+                let lru = mae_kb::lru_query::LruQueryLayer::new(client, cache_size);
+                editor
+                    .kb
+                    .set_daemon_query_layer(Some(std::sync::Arc::new(lru)));
+            }
+            Err(e) => {
+                warn!(
+                    socket = %socket.display(),
+                    error = %e,
+                    "daemon unavailable, using local KB"
+                );
+            }
+        }
     }
 
     // Fire app-start hook after initialization is complete.
