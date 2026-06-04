@@ -2,13 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.12.0] - 2026-06-04
+## [0.11.4] - 2026-06-04
 
 ### Bug Fixes
 
-- *(release)* Use ditto for macOS .app zip to preserve metadata ([e913a4b](https://github.com/cuttlefisch/mae/commit/e913a4b44eef16db31b0caf1937b30a6f124a0f3))
-- *(release)* Include mae-state-server in macOS GUI zip + improve release notes ([4007e99](https://github.com/cuttlefisch/mae/commit/4007e99b5e0128970042cc69d9fb87760eddac72))
-- *(kb)* Migrate ~230 seed nodes to correct NodeKind + fix 12 broken links ([2c55e06](https://github.com/cuttlefisch/mae/commit/2c55e06ea1c8b52befaca513d38599f785cc1c14))
 - *(kb)* Update_crdt_doc missing origin_instance + relax FTS threshold ([0dd479c](https://github.com/cuttlefisch/mae/commit/0dd479cd62561b3e2adea4be7e6643a0e49aaf95))
 - *(release)* Bundle manual KB, modules, and sample config in all release artifacts ([2903920](https://github.com/cuttlefisch/mae/commit/29039200993bab7da042b18c7f95ce37eb4948d1))
 - *(kb)* Federated query layer, batch loading, org heading conventions ([8bae241](https://github.com/cuttlefisch/mae/commit/8bae241848e4d6bdb7cfe8aa059c01c9afc22709))
@@ -16,12 +13,39 @@ All notable changes to this project will be documented in this file.
 ### CI
 
 - Skip CozoDB integration tests on nightly Rust ([74a93d0](https://github.com/cuttlefisch/mae/commit/74a93d0f26263206d4eb3d269df8348c5947b251))
+- *(deps)* Bump the ci-dependencies group with 2 updates ([2813128](https://github.com/cuttlefisch/mae/commit/2813128f97bf1c764c97e3cfc998e88744cd49a6))
+
+### Documentation
+
+- Update ROADMAP + CLAUDE.md for v0.12.0 persistent KB completion ([caddc38](https://github.com/cuttlefisch/mae/commit/caddc387e5d5dff62f7e4650914c1254e7b67374))
+- ADR-013 KB query architecture + fix nightly CI + roadmap binary review ([b252812](https://github.com/cuttlefisch/mae/commit/b252812ca423be54770110a6c14b902403e52936))
+
+### Features
+
+- *(kb)* Ex-commands, Scheme wrappers, Babel Datalog, docs + self-test updates ([fa59e09](https://github.com/cuttlefisch/mae/commit/fa59e09860dd6577d51ae14e82b24ced6e587375))
+- *(kb)* Persistent graph KB — remove rusqlite, pre-built manual KB ([773bb37](https://github.com/cuttlefisch/mae/commit/773bb37217424a2222cac41c0da97f29fd40b44f))
+- *(kb)* CozoDB-direct ingestion pipeline with IngestMode + content hash tracking ([06d91d5](https://github.com/cuttlefisch/mae/commit/06d91d5330443030bb7f38a6cf16f82ce4bc7db1))
+- *(kb)* Scale validation test + ADR-012 Phase 2/3 docs ([66dd16f](https://github.com/cuttlefisch/mae/commit/66dd16fe17cd6747a3ece6fbbf2fa93f57c1d997))
+- *(kb)* CozoDB-first query layer — KbQueryLayer trait + 46 migration sites ([b89cee6](https://github.com/cuttlefisch/mae/commit/b89cee6269092db2cd0f7498b9c81d5a4415883e))
+
+### Miscellaneous
+
+- Bump version to 0.12.0 + changelog + roadmap update ([feadcb7](https://github.com/cuttlefisch/mae/commit/feadcb70ca9ecaeffc363f3ecca6d2e3e7d315aa))
+- *(deps)* Update compatible dependencies via cargo update ([0d4a3d8](https://github.com/cuttlefisch/mae/commit/0d4a3d8da187a0eb7d78debae74aa2f9bce4c08b))
+- Bump version to 0.11.4 ([267e70a](https://github.com/cuttlefisch/mae/commit/267e70a3ac906308d72e144e42f0f2e2947d4462))
+
+## [0.11.3] - 2026-06-01
+
+### Bug Fixes
+
+- *(ci)* Bump test timeout 20m→30m ([c5707d1](https://github.com/cuttlefisch/mae/commit/c5707d17afd6d05d43a06d58ce672ee1ab20a72f))
+- *(release)* Use ditto for macOS .app zip to preserve metadata ([e913a4b](https://github.com/cuttlefisch/mae/commit/e913a4b44eef16db31b0caf1937b30a6f124a0f3))
+- *(release)* Include mae-state-server in macOS GUI zip + improve release notes ([4007e99](https://github.com/cuttlefisch/mae/commit/4007e99b5e0128970042cc69d9fb87760eddac72))
+- *(kb)* Migrate ~230 seed nodes to correct NodeKind + fix 12 broken links ([2c55e06](https://github.com/cuttlefisch/mae/commit/2c55e06ea1c8b52befaca513d38599f785cc1c14))
 
 ### Documentation
 
 - Update ROADMAP + ADR-011 for v0.12.0 CozoDB-primary graph KB ([a80bfae](https://github.com/cuttlefisch/mae/commit/a80bfae529362bccacae3ff353140a23bc79b072))
-- Update ROADMAP + CLAUDE.md for v0.12.0 persistent KB completion ([caddc38](https://github.com/cuttlefisch/mae/commit/caddc387e5d5dff62f7e4650914c1254e7b67374))
-- ADR-013 KB query architecture + fix nightly CI + roadmap binary review ([b252812](https://github.com/cuttlefisch/mae/commit/b252812ca423be54770110a6c14b902403e52936))
 
 ### Features
 
@@ -29,23 +53,6 @@ All notable changes to this project will be documented in this file.
 - *(kb)* HNSW vector embeddings + GraphRAG query template (Phase G) ([fbdcfb5](https://github.com/cuttlefisch/mae/commit/fbdcfb5a9cda9038df7a018d73d9386796d87202))
 - *(kb)* Seed 6 pre-built view flavors (Phase H complete) ([37ac4c7](https://github.com/cuttlefisch/mae/commit/37ac4c79dd7317c08966d808524f06a9dba366cb))
 - *(kb)* AI tools for graph KB + Phase I validation suite ([5abfd01](https://github.com/cuttlefisch/mae/commit/5abfd01abec63e39d18a697209ddc1c437106e97))
-- *(kb)* Ex-commands, Scheme wrappers, Babel Datalog, docs + self-test updates ([fa59e09](https://github.com/cuttlefisch/mae/commit/fa59e09860dd6577d51ae14e82b24ced6e587375))
-- *(kb)* Persistent graph KB — remove rusqlite, pre-built manual KB ([773bb37](https://github.com/cuttlefisch/mae/commit/773bb37217424a2222cac41c0da97f29fd40b44f))
-- *(kb)* CozoDB-direct ingestion pipeline with IngestMode + content hash tracking ([06d91d5](https://github.com/cuttlefisch/mae/commit/06d91d5330443030bb7f38a6cf16f82ce4bc7db1))
-- *(kb)* Scale validation test + ADR-012 Phase 2/3 docs ([66dd16f](https://github.com/cuttlefisch/mae/commit/66dd16fe17cd6747a3ece6fbbf2fa93f57c1d997))
-- *(kb)* CozoDB-first query layer — KbQueryLayer trait + 46 migration sites ([b89cee6](https://github.com/cuttlefisch/mae/commit/b89cee6269092db2cd0f7498b9c81d5a4415883e))
-
-## [Unreleased]
-
-### CI
-
-- *(deps)* Bump the ci-dependencies group with 2 updates ([2813128](https://github.com/cuttlefisch/mae/commit/2813128f97bf1c764c97e3cfc998e88744cd49a6))
-
-## [0.11.3] - 2026-06-01
-
-### Bug Fixes
-
-- *(ci)* Bump test timeout 20m→30m ([c5707d1](https://github.com/cuttlefisch/mae/commit/c5707d17afd6d05d43a06d58ce672ee1ab20a72f))
 
 ### Miscellaneous
 
