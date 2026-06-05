@@ -71,6 +71,10 @@ jobs:
             echo "Updated $f to $VERSION"
           done
 
+          # Update install script version string.
+          sed -i "s/^VERSION=\".*\"/VERSION=\"$VERSION\"/" assets/install.sh
+          echo "Updated assets/install.sh to $VERSION"
+
       - name: Generate changelog
         run: |
           cargo install git-cliff
@@ -84,7 +88,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add VERSION CHANGELOG.md Cargo.toml \
             shared/kb/Cargo.toml shared/sync/Cargo.toml shared/mcp/Cargo.toml \
-            daemon/Cargo.toml
+            daemon/Cargo.toml assets/install.sh
           git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
           # Delete existing tag if present (handles re-runs after partial failure)
           git tag -d "$VERSION" 2>/dev/null || true
