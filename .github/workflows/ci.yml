@@ -74,7 +74,8 @@ jobs:
       - name: Build install artifacts
         if: matrix.toolchain == 'stable' && matrix.step == 'test'
         run: |
-          cargo build --release --package mae-state-server --package mae-mcp --bin build-manual-kb
+          cargo build --release --package mae-state-server --package mae-mcp
+          cargo build --release --package mae --bin build-manual-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
 
       - name: Stage editor artifacts
