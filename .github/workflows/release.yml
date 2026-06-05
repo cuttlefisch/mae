@@ -133,7 +133,7 @@ jobs:
 
       - name: Build TUI binary + state server + daemon + manual KB
         run: |
-          cargo build --release --package mae --package mae-state-server
+          cargo build --release --package mae --package mae-state-server --package mae-mcp
           cp target/release/mae target/release/mae-tui
           cargo build --release --bin build-manual-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
