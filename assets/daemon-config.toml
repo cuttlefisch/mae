@@ -1,0 +1,26 @@
+# MAE Daemon Configuration
+# Place at: ~/.config/mae/daemon.toml
+
+# Unix socket path for client connections
+# socket = "/run/user/1000/mae-daemon.sock"
+
+# KB data directory (XDG-compliant default: ~/.local/share/mae)
+# data_dir = "/home/user/.local/share/mae"
+
+# Log level filter (e.g. "info", "mae_daemon=debug,warn")
+# log_level = "info"
+
+# Watcher drain interval in milliseconds
+# watcher_interval_ms = 500
+
+# DB maintenance interval in seconds
+# maintenance_interval_secs = 3600
+
+# CRDT sync push interval in seconds
+# sync_interval_secs = 30
+
+# Activity decay interval in seconds
+# decay_interval_secs = 3600
+
+# Health check interval in seconds
+# health_interval_secs = 300

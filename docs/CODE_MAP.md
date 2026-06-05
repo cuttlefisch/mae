@@ -38,6 +38,8 @@ graph TD
     mae_gui --> mae_core
     mae_gui --> mae_renderer
     mae_gui --> mae_shell
+    mae_kb --> mae_mcp
+    mae_kb --> mae_sync
     mae_kb --> mae_sync
     mae_lookup[mae-lookup]
     mae_lsp[mae-lsp]
@@ -242,7 +244,7 @@ Source: `crates/gui/src/lib.rs`
 
 ## mae-kb
 
-Source: `crates/kb/src/lib.rs`
+Source: `shared/kb/src/lib.rs`
 
 | Item | Kind |
 |------|------|
@@ -258,6 +260,8 @@ Source: `crates/kb/src/lib.rs`
 | `watch` | mod |
 | `cache` | mod |
 | `cozo_store` | mod |
+| `hygiene` | mod |
+| `lru_query` | mod |
 | `query` | mod |
 | `NodeKind` | enum |
 | `SubgraphSpec` | struct |
@@ -305,13 +309,14 @@ Source: `crates/make/src/lib.rs`
 
 ## mae-mcp
 
-Source: `crates/mcp/src/lib.rs`
+Source: `shared/mcp/src/lib.rs`
 
 | Item | Kind |
 |------|------|
 | `broadcast` | mod |
 | `client` | mod |
 | `client_mgr` | mod |
+| `daemon_client` | mod |
 | `protocol` | mod |
 | `session` | mod |
 | `McpToolRequest` | struct |
@@ -391,7 +396,7 @@ Source: `crates/state-server/src/lib.rs`
 
 ## mae-sync
 
-Source: `crates/sync/src/lib.rs`
+Source: `shared/sync/src/lib.rs`
 
 | Item | Kind |
 |------|------|

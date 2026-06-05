@@ -28,22 +28,32 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build static binary + manual KB
+      - name: Build static binary + manual KB + daemon
         run: |
           cargo build --release --target x86_64-unknown-linux-musl --package mae
           cargo build --release --target x86_64-unknown-linux-musl --package mae-state-server
+          cargo build --release --target x86_64-unknown-linux-musl --package mae-mcp
           cargo build --release --bin build-manual-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
+          cd daemon && cargo build --release --target x86_64-unknown-linux-musl
 
       - name: Prepare artifact
         run: |
           mkdir -p dist/mae-pkg
           cp target/x86_64-unknown-linux-musl/release/mae dist/mae-pkg/mae
           cp target/x86_64-unknown-linux-musl/release/mae-state-server dist/mae-pkg/mae-state-server
-          chmod +x dist/mae-pkg/mae dist/mae-pkg/mae-state-server
+          cp target/x86_64-unknown-linux-musl/release/mae-mcp-shim dist/mae-pkg/mae-mcp-shim
+          cp daemon/target/x86_64-unknown-linux-musl/release/mae-daemon dist/mae-pkg/mae-daemon
+          chmod +x dist/mae-pkg/mae dist/mae-pkg/mae-state-server dist/mae-pkg/mae-mcp-shim dist/mae-pkg/mae-daemon
           cp -r assets/mae-manual.cozo dist/mae-pkg/mae-manual.cozo
+          cp assets/mae-manual.cozo.sha256 dist/mae-pkg/mae-manual.cozo.sha256
           cp -r modules dist/mae-pkg/modules
           cp assets/sample-config.toml dist/mae-pkg/sample-config.toml
+          cp assets/daemon-config.toml dist/mae-pkg/daemon-config.toml
+          cp assets/mae-daemon.service dist/mae-pkg/mae-daemon.service
+          cp assets/mae-state-server.service dist/mae-pkg/mae-state-server.service
+          cp assets/install.sh dist/mae-pkg/install.sh
+          chmod +x dist/mae-pkg/install.sh
           tar czf dist/mae-linux-x86_64.tar.gz -C dist/mae-pkg .
 
       - uses: actions/upload-artifact@v7
@@ -121,12 +131,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build TUI binary + state server + manual KB
+      - name: Build TUI binary + state server + daemon + manual KB
         run: |
           cargo build --release --package mae --package mae-state-server
           cp target/release/mae target/release/mae-tui
           cargo build --release --bin build-manual-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
+          cd daemon && cargo build --release
 
       - name: Build GUI binary
         run: cargo build --release --features gui --package mae
@@ -220,18 +231,24 @@ jobs:
           mkdir -p dist/mae-tui-pkg
           cp target/release/mae-tui dist/mae-tui-pkg/mae
           cp target/release/mae-state-server dist/mae-tui-pkg/mae-state-server
-          chmod +x dist/mae-tui-pkg/mae dist/mae-tui-pkg/mae-state-server
+          cp target/release/mae-mcp-shim dist/mae-tui-pkg/mae-mcp-shim
+          cp daemon/target/release/mae-daemon dist/mae-tui-pkg/mae-daemon
+          chmod +x dist/mae-tui-pkg/mae dist/mae-tui-pkg/mae-state-server dist/mae-tui-pkg/mae-mcp-shim dist/mae-tui-pkg/mae-daemon
           cp -r assets/mae-manual.cozo dist/mae-tui-pkg/mae-manual.cozo
           cp -r modules dist/mae-tui-pkg/modules
           cp assets/sample-config.toml dist/mae-tui-pkg/sample-config.toml
+          cp assets/daemon-config.toml dist/mae-tui-pkg/daemon-config.toml
+          cp assets/install.sh dist/mae-tui-pkg/install.sh
+          chmod +x dist/mae-tui-pkg/install.sh
           tar czf dist/mae-macos-aarch64-tui.tar.gz -C dist/mae-tui-pkg .
 
-          # Zip the .app bundle + state server (ditto preserves macOS metadata/resource forks)
-          # Both MAE.app and mae-state-server go in the zip so users get everything in one download
+          # Zip the .app bundle + services (ditto preserves macOS metadata/resource forks)
           mkdir -p dist/mae-gui-pkg
           cp -R dist/MAE.app dist/mae-gui-pkg/MAE.app
           cp target/release/mae-state-server dist/mae-gui-pkg/mae-state-server
-          chmod +x dist/mae-gui-pkg/mae-state-server
+          cp target/release/mae-mcp-shim dist/mae-gui-pkg/mae-mcp-shim
+          cp daemon/target/release/mae-daemon dist/mae-gui-pkg/mae-daemon
+          chmod +x dist/mae-gui-pkg/mae-state-server dist/mae-gui-pkg/mae-mcp-shim dist/mae-gui-pkg/mae-daemon
           cd dist && ditto -c -k --sequesterRsrc mae-gui-pkg MAE-macos-aarch64.zip
 
       - uses: actions/upload-artifact@v7
@@ -270,10 +287,10 @@ jobs:
 
           | Platform | File | Contents |
           |----------|------|----------|
-          | **macOS GUI** | `MAE-macos-aarch64.zip` | `MAE.app` (bundled) + `mae-state-server` (collab) |
-          | **macOS TUI** | `mae-macos-aarch64-tui.tar.gz` | `mae` + `mae-state-server` + modules + manual KB |
+          | **macOS GUI** | `MAE-macos-aarch64.zip` | `MAE.app` + `mae-state-server` + `mae-daemon` + `mae-mcp-shim` |
+          | **macOS TUI** | `mae-macos-aarch64-tui.tar.gz` | `mae` + all services + modules + manual KB + configs |
           | **Linux GUI** | `mae-linux-x86_64-gui.AppImage` | Self-contained AppImage (modules + manual KB bundled) |
-          | **Linux TUI** | `mae-linux-x86_64.tar.gz` | `mae` (static musl) + `mae-state-server` + modules + manual KB |
+          | **Linux TUI** | `mae-linux-x86_64.tar.gz` | `mae` (static musl) + all services + modules + manual KB + systemd units |
 
           All packages include the built-in help system (860+ KB nodes) and doom-style keybindings.
 
@@ -281,24 +298,20 @@ jobs:
 
           **AppImage (Linux GUI):** Just run it — all assets are bundled inside.
 
-          **Tarball (Linux/macOS TUI):** Extract and run from the extracted directory:
+          **Tarball (Linux/macOS TUI):** Extract and run the installer:
           ```bash
-          tar xzf mae-*.tar.gz -C ~/mae && ~/mae/mae
-          ```
-          Or install to `~/.local`:
-          ```bash
-          mkdir -p ~/.local/bin ~/.local/share/mae
-          cp mae mae-state-server ~/.local/bin/
-          cp -r modules mae-manual.cozo ~/.local/share/mae/
+          mkdir ~/mae && tar xzf mae-*.tar.gz -C ~/mae
+          cd ~/mae && ./install.sh              # installs to ~/.local (default)
+          # or: ./install.sh /usr/local          # system-wide install
           ```
 
           **macOS (.app bundle):** The app is unsigned. Before first launch, either:
           - **Right-click** → **Open** → click **Open** in the dialog (easiest), or:
           - Terminal: `xattr -c /path/to/MAE.app`
 
-          **macOS state server:** Move `mae-state-server` to a directory in your `$PATH`:
+          **macOS services:** From the extracted zip, move services to your `$PATH`:
           ```bash
-          cp mae-state-server /usr/local/bin/
+          cp mae-state-server mae-daemon mae-mcp-shim /usr/local/bin/
           ```
 
           **First launch:** MAE runs a setup wizard — choose your AI provider, model, API key, and theme.

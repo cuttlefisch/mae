@@ -7,8 +7,8 @@ license.workspace = true
 
 [dependencies]
 mae-core = { path = "../core" }
-mae-kb = { path = "../kb" }
-mae-sync = { path = "../sync" }
+mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt"] }
+mae-sync = { path = "../../shared/sync" }
 base64 = "0.22"
 tracing = { workspace = true }
 libc = "0.2"

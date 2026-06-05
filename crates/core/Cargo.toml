@@ -9,12 +9,12 @@ license.workspace = true
 mae-babel = { path = "../babel" }
 mae-export = { path = "../export" }
 mae-format = { path = "../format" }
-mae-kb = { path = "../kb" }
+mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt"] }
 mae-lookup = { path = "../lookup" }
 mae-make = { path = "../make" }
 mae-snippets = { path = "../snippets" }
 mae-spell = { path = "../spell" }
-mae-sync = { path = "../sync" }
+mae-sync = { path = "../../shared/sync" }
 ropey = "1"
 unicode-width = "0.2"
 unicode-segmentation = "1.12"

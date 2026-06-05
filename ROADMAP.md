@@ -204,8 +204,8 @@ The KB had a dual source of truth problem: org files re-parsed on startup, SQLit
 - [x] **Phase 7**: Internal KB link preservation in `rewrite_links_with_types()`, fragment stripping in link storage, GUI heading underline scale fix.
 
 #### Future
-- [ ] **GraphRAG live pipeline** (v0.13.0): Embedding generation (provider trait: OpenAI, Ollama, local), background indexing, AI context injection.
-- [ ] **AI hygiene daemon** (v0.13.0): Background assessment of new/modified nodes, link type suggestions, missing metadata flags.
+- [ ] **GraphRAG live pipeline** (v0.14.0): Embedding generation (provider trait: OpenAI, Ollama, local), background indexing, AI context injection.
+- [x] **AI hygiene daemon** (v0.13.0): Deterministic KB quality assessment — orphan detection, broken links, kind/namespace mismatches, missing metadata. CozoDB `hygiene_suggestions` relation with CRUD. Scheduler integration for periodic scans. JSON-RPC API (scan, report, accept, dismiss). AI-powered inference (link type suggestions) planned for v0.14.0.
 - [ ] **GUI view rendering** (v0.14.0): Kanban board, sprint view, timeline — drag-drop, swimlanes.
 
 ### Phase 13: MAE Scheme Runtime (v0.12.0)
@@ -419,7 +419,7 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [ ] **Doc store eviction TOCTOU**: Between identifying eviction candidates (read lock) and evicting (write lock), a client could reconnect. Low probability; fix requires holding write lock during entire eviction.
 - [ ] **Unified buffer-switching strategy**: Three patterns exist (`switch_to_buffer`, `display_buffer_and_focus`, palette). Should converge on one with consistent view state management.
 - [ ] **KB fuzzy body search**: `kb_search` currently matches node titles and tags via FTS5 but not node body content in a fuzzy/substring way. Searching for a term like "DeltaDB" that only appears in the body of some nodes returns no results. Add full-text indexing of node bodies (FTS5 `content` column) so `kb_search` and `:help` fuzzy completion can find concepts mentioned anywhere in the knowledge graph, not just in titles.
-- [ ] **Binary architecture review** (v0.13.0): Evaluate splitting MAE into standalone binaries — `mae` (editor), `mae-daemon` (background services: KB hygiene, embedding generation, collab state server), `mae-scheme` (standalone Scheme REPL/runner). Motivations: (1) CozoDB SQLite storage backend blocked by rusqlite linker conflict when state-server links both rusqlite and cozo-sqlite — separate binaries isolate dependency trees; (2) daemon process enables background KB maintenance without editor running; (3) standalone Scheme binary enables scripting, CI, and testing without editor overhead. Write ADR-014.
+- [x] **Binary architecture split** (v0.13.0, ADR-014): Split MAE into editor workspace + daemon workspace with separate `Cargo.lock` files. `mae-daemon` binary with CozoDB+SQLite backend for persistent KB, background maintenance (scheduler with watcher/maintenance/health ticks), and JSON-RPC API over Unix socket. Shared crates (`mae-kb`, `mae-sync`, `mae-mcp`) moved to `shared/` with feature flags (`storage-sled`, `crdt`). `CozoKbStore::open_with_engine()` + `open_mem()` for backend-agnostic storage. Resolves rusqlite linker conflict (separate dependency trees). LRU cache query layer (`LruQueryLayer`) + `DaemonClient` for editor-daemon integration. Config: `[daemon]` section with 3 options. CI/CD: daemon job, release artifacts include `mae-daemon`. ADR-014 written.
 
 ---
 

@@ -574,8 +574,10 @@
       ]
     },
     "mae-kb": {
-      "path": "crates/kb/src/lib.rs",
+      "path": "shared/kb/src/lib.rs",
       "dependencies": [
+        "mae-mcp",
+        "mae-sync",
         "mae-sync"
       ],
       "public_items": [
@@ -625,6 +627,14 @@
         },
         {
           "name": "cozo_store",
+          "kind": "mod"
+        },
+        {
+          "name": "hygiene",
+          "kind": "mod"
+        },
+        {
+          "name": "lru_query",
           "kind": "mod"
         },
         {
@@ -740,7 +750,7 @@
       ]
     },
     "mae-mcp": {
-      "path": "crates/mcp/src/lib.rs",
+      "path": "shared/mcp/src/lib.rs",
       "dependencies": [],
       "public_items": [
         {
@@ -753,6 +763,10 @@
         },
         {
           "name": "client_mgr",
+          "kind": "mod"
+        },
+        {
+          "name": "daemon_client",
           "kind": "mod"
         },
         {
@@ -940,7 +954,7 @@
       ]
     },
     "mae-sync": {
-      "path": "crates/sync/src/lib.rs",
+      "path": "shared/sync/src/lib.rs",
       "dependencies": [],
       "public_items": [
         {

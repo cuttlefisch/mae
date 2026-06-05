@@ -169,6 +169,9 @@ impl super::Editor {
                 }
             }
             "collab_psk_command" => self.collab.psk_command.clone(),
+            "daemon_enabled" => self.kb.daemon_enabled.to_string(),
+            "daemon_socket" => self.kb.daemon_socket.display().to_string(),
+            "daemon_cache_size" => self.kb.daemon_cache_size.to_string(),
             "fill_column" => self.fill_column.to_string(),
             _ => return None,
         };
@@ -654,6 +657,19 @@ impl super::Editor {
             }
             "collab_psk_command" => {
                 self.collab.psk_command = value.to_string();
+            }
+            "daemon_enabled" => {
+                self.kb.daemon_enabled = parse_option_bool(value)?;
+            }
+            "daemon_socket" => {
+                self.kb.daemon_socket = std::path::PathBuf::from(value);
+            }
+            "daemon_cache_size" => {
+                let v = parse_option_int(value)?;
+                if v < 0 {
+                    return Err("daemon_cache_size must be non-negative".into());
+                }
+                self.kb.daemon_cache_size = v as usize;
             }
             "fill_column" => {
                 let v: usize = value

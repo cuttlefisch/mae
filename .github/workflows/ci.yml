@@ -69,13 +69,56 @@ jobs:
         if: matrix.step == 'fmt'
         run: cargo fmt --all --check
 
-      # The release test build above already produced the GUI binary.
-      - name: Upload mae binary
+      # Build remaining binaries + manual KB for downstream jobs.
+      # cargo test --release already compiled most deps — this is incremental.
+      - name: Build install artifacts
+        if: matrix.toolchain == 'stable' && matrix.step == 'test'
+        run: |
+          cargo build --release --package mae-state-server --package mae-mcp
+          cargo build --release --package mae --bin build-manual-kb
+          ./target/release/build-manual-kb assets/mae-manual.cozo
+
+      - name: Stage editor artifacts
+        if: matrix.toolchain == 'stable' && matrix.step == 'test'
+        run: |
+          mkdir -p /tmp/mae-artifacts
+          cp target/release/mae /tmp/mae-artifacts/
+          cp target/release/mae-state-server /tmp/mae-artifacts/
+          cp target/release/mae-mcp-shim /tmp/mae-artifacts/
+          cp -r assets/mae-manual.cozo /tmp/mae-artifacts/
+          cp assets/mae-manual.cozo.sha256 /tmp/mae-artifacts/
+
+      - name: Upload editor artifacts
         if: matrix.toolchain == 'stable' && matrix.step == 'test'
         uses: actions/upload-artifact@v7
         with:
           name: mae-binary
-          path: target/release/mae
+          path: /tmp/mae-artifacts/
+          retention-days: 1
+
+  daemon:
+    name: daemon / check + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "daemon -> daemon/target"
+      - name: clippy
+        run: cd daemon && cargo clippy --all-targets -- -D warnings
+      - name: test
+        run: cd daemon && cargo test
+        timeout-minutes: 5
+      - name: fmt
+        run: cd daemon && cargo fmt --check
+      - name: Build release binary
+        run: cd daemon && cargo build --release
+      - name: Upload daemon binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: mae-daemon-binary
+          path: daemon/target/release/mae-daemon
           retention-days: 1
 
   audit:
@@ -158,9 +201,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: mae-binary
-          path: target/release
-      - name: Make binary executable
-        run: chmod +x target/release/mae
+          path: /tmp/mae-dl
+      - name: Install mae binary
+        run: |
+          mkdir -p target/release
+          cp /tmp/mae-dl/mae target/release/mae
+          chmod +x target/release/mae
       - name: Validate init.scm
         run: ./target/release/mae --check-config
       - name: Editor tests
@@ -214,6 +260,131 @@ jobs:
       - name: Run collab E2E
         run: make docker-collab-test
         timeout-minutes: 15
+
+  install-test:
+    name: install / script validation
+    runs-on: ubuntu-latest
+    needs: [check, daemon]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download editor binaries + manual KB
+        uses: actions/download-artifact@v8
+        with:
+          name: mae-binary
+          path: /tmp/mae-dl
+
+      - name: Download daemon binary
+        uses: actions/download-artifact@v8
+        with:
+          name: mae-daemon-binary
+          path: /tmp/daemon-dl
+
+      - name: Assemble tarball directory
+        run: |
+          mkdir -p /tmp/mae-pkg
+          cp /tmp/mae-dl/mae /tmp/mae-pkg/mae
+          cp /tmp/mae-dl/mae-state-server /tmp/mae-pkg/mae-state-server
+          cp /tmp/mae-dl/mae-mcp-shim /tmp/mae-pkg/mae-mcp-shim
+          cp /tmp/daemon-dl/mae-daemon /tmp/mae-pkg/mae-daemon
+          chmod +x /tmp/mae-pkg/mae /tmp/mae-pkg/mae-state-server /tmp/mae-pkg/mae-mcp-shim /tmp/mae-pkg/mae-daemon
+          cp -r /tmp/mae-dl/mae-manual.cozo /tmp/mae-pkg/mae-manual.cozo
+          cp /tmp/mae-dl/mae-manual.cozo.sha256 /tmp/mae-pkg/mae-manual.cozo.sha256
+          cp -r modules /tmp/mae-pkg/modules
+          cp assets/sample-config.toml /tmp/mae-pkg/sample-config.toml
+          cp assets/daemon-config.toml /tmp/mae-pkg/daemon-config.toml
+          cp assets/mae-daemon.service /tmp/mae-pkg/mae-daemon.service
+          cp assets/mae-state-server.service /tmp/mae-pkg/mae-state-server.service
+          cp assets/install.sh /tmp/mae-pkg/install.sh
+          chmod +x /tmp/mae-pkg/install.sh
+
+      - name: Run install.sh
+        run: |
+          cd /tmp/mae-pkg
+          ./install.sh "$HOME/.local"
+
+      - name: Verify fresh install
+        run: |
+          set -e
+          echo "=== Checking binaries ==="
+          test -x "$HOME/.local/bin/mae"              && echo "OK: mae"
+          test -x "$HOME/.local/bin/mae-mcp-shim"     && echo "OK: mae-mcp-shim"
+          test -x "$HOME/.local/bin/mae-state-server"  && echo "OK: mae-state-server"
+          test -x "$HOME/.local/bin/mae-daemon"        && echo "OK: mae-daemon"
+
+          echo "=== Checking data ==="
+          test -d "$HOME/.local/share/mae/mae-manual.cozo"  && echo "OK: manual KB"
+          test -d "$HOME/.local/share/mae/modules"          && echo "OK: modules"
+          MODULE_COUNT=$(find "$HOME/.local/share/mae/modules" -name "manifest.toml" | wc -l)
+          test "$MODULE_COUNT" -ge 10 && echo "OK: $MODULE_COUNT modules found"
+
+          echo "=== Checking config ==="
+          test -f "$HOME/.config/mae/config.toml"   && echo "OK: config.toml"
+          test -f "$HOME/.config/mae/daemon.toml"    && echo "OK: daemon.toml"
+
+          echo "=== Checking systemd units ==="
+          test -f "$HOME/.config/systemd/user/mae-daemon.service"        && echo "OK: mae-daemon.service"
+          test -f "$HOME/.config/systemd/user/mae-state-server.service"  && echo "OK: mae-state-server.service"
+
+          echo "=== Checking binary runs ==="
+          "$HOME/.local/bin/mae" --version
+          "$HOME/.local/bin/mae" --check-config
+
+      - name: Verify upgrade (reinstall over existing)
+        run: |
+          set -e
+          # Add a sentinel to config to verify it's preserved
+          echo "# user customization" >> "$HOME/.config/mae/config.toml"
+          BEFORE=$(wc -l < "$HOME/.config/mae/config.toml")
+
+          # Run install again — should detect upgrade
+          cd /tmp/mae-pkg && ./install.sh "$HOME/.local"
+
+          # Config must NOT have been overwritten
+          AFTER=$(wc -l < "$HOME/.config/mae/config.toml")
+          test "$BEFORE" -eq "$AFTER" && echo "OK: config preserved on upgrade"
+          grep -q "user customization" "$HOME/.config/mae/config.toml" && echo "OK: sentinel line preserved"
+
+          # Binaries must still work
+          "$HOME/.local/bin/mae" --version && echo "OK: mae works after upgrade"
+
+      - name: Verify uninstall via install.sh
+        run: |
+          set -e
+          cd /tmp/mae-pkg && ./install.sh --uninstall "$HOME/.local"
+
+          echo "=== Checking binaries removed ==="
+          ! test -f "$HOME/.local/bin/mae"              && echo "OK: mae removed"
+          ! test -f "$HOME/.local/bin/mae-mcp-shim"     && echo "OK: mae-mcp-shim removed"
+          ! test -f "$HOME/.local/bin/mae-state-server"  && echo "OK: mae-state-server removed"
+          ! test -f "$HOME/.local/bin/mae-daemon"        && echo "OK: mae-daemon removed"
+
+          echo "=== Checking data removed ==="
+          ! test -d "$HOME/.local/share/mae/mae-manual.cozo"  && echo "OK: manual KB removed"
+          ! test -d "$HOME/.local/share/mae/modules"          && echo "OK: modules removed"
+
+          echo "=== Checking systemd units removed ==="
+          ! test -f "$HOME/.config/systemd/user/mae-daemon.service"        && echo "OK: daemon unit removed"
+          ! test -f "$HOME/.config/systemd/user/mae-state-server.service"  && echo "OK: state-server unit removed"
+
+          echo "=== Checking config preserved ==="
+          test -f "$HOME/.config/mae/config.toml"  && echo "OK: config.toml preserved"
+          test -f "$HOME/.config/mae/daemon.toml"   && echo "OK: daemon.toml preserved"
+
+      - name: Verify reinstall after uninstall
+        run: |
+          set -e
+          cd /tmp/mae-pkg && ./install.sh "$HOME/.local"
+          "$HOME/.local/bin/mae" --version && echo "OK: clean reinstall works"
+          # Config should still have the sentinel from the upgrade test
+          grep -q "user customization" "$HOME/.config/mae/config.toml" && echo "OK: user config survived uninstall+reinstall"
+
+      - name: Verify Makefile uninstall
+        run: |
+          make uninstall
+          ! test -f "$HOME/.local/bin/mae"         && echo "OK: mae removed"
+          ! test -f "$HOME/.local/bin/mae-daemon"  && echo "OK: mae-daemon removed"
+          echo "OK: Makefile uninstall clean"
 
   code-map:
     name: code-map freshness

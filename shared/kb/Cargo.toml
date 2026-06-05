@@ -1,0 +1,29 @@
+[package]
+name = "mae-kb"
+description = "Knowledge base layer (graph store, links)"
+version = "0.12.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[features]
+default = ["storage-sled"]
+storage-sled = ["cozo/storage-sled"]
+crdt = ["dep:mae-sync"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.1"
+tracing = "0.1"
+walkdir = "2"
+notify = "8"
+lru = "0.16"
+mae-sync = { path = "../sync", optional = true }
+mae-mcp = { path = "../mcp" }
+cozo = { version = "0.7", default-features = false, features = ["rayon"] }
+sha2 = "0.10"
+ndarray = "0.15"
+
+[dev-dependencies]
+tempfile = "3"
+mae-sync = { path = "../sync" }

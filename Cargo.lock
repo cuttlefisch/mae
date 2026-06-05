@@ -2564,6 +2564,8 @@ name = "mae-kb"
 version = "0.12.0"
 dependencies = [
  "cozo",
+ "lru",
+ "mae-mcp",
  "mae-sync",
  "ndarray",
  "notify",
