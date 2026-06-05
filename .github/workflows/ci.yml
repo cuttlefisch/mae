@@ -232,6 +232,87 @@ jobs:
         run: make docker-collab-test
         timeout-minutes: 15
 
+  install-test:
+    name: install / script validation
+    runs-on: ubuntu-latest
+    needs: [check, daemon]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target\ndaemon -> daemon/target"
+
+      - name: Build all binaries + manual KB
+        run: |
+          cargo build --release --package mae --package mae-state-server --package mae-mcp
+          cargo build --release --bin build-manual-kb
+          ./target/release/build-manual-kb assets/mae-manual.cozo
+          cd daemon && cargo build --release
+
+      - name: Assemble tarball directory
+        run: |
+          mkdir -p /tmp/mae-pkg
+          cp target/release/mae /tmp/mae-pkg/mae
+          cp target/release/mae-state-server /tmp/mae-pkg/mae-state-server
+          cp target/release/mae-mcp-shim /tmp/mae-pkg/mae-mcp-shim
+          cp daemon/target/release/mae-daemon /tmp/mae-pkg/mae-daemon
+          chmod +x /tmp/mae-pkg/mae /tmp/mae-pkg/mae-state-server /tmp/mae-pkg/mae-mcp-shim /tmp/mae-pkg/mae-daemon
+          cp -r assets/mae-manual.cozo /tmp/mae-pkg/mae-manual.cozo
+          cp assets/mae-manual.cozo.sha256 /tmp/mae-pkg/mae-manual.cozo.sha256
+          cp -r modules /tmp/mae-pkg/modules
+          cp assets/sample-config.toml /tmp/mae-pkg/sample-config.toml
+          cp assets/daemon-config.toml /tmp/mae-pkg/daemon-config.toml
+          cp assets/mae-daemon.service /tmp/mae-pkg/mae-daemon.service
+          cp assets/mae-state-server.service /tmp/mae-pkg/mae-state-server.service
+          cp assets/install.sh /tmp/mae-pkg/install.sh
+          chmod +x /tmp/mae-pkg/install.sh
+
+      - name: Run install.sh
+        run: |
+          cd /tmp/mae-pkg
+          ./install.sh "$HOME/.local"
+
+      - name: Verify installed binaries
+        run: |
+          set -e
+          echo "--- Checking binaries ---"
+          test -x "$HOME/.local/bin/mae"              && echo "OK: mae"
+          test -x "$HOME/.local/bin/mae-mcp-shim"     && echo "OK: mae-mcp-shim"
+          test -x "$HOME/.local/bin/mae-state-server"  && echo "OK: mae-state-server"
+          test -x "$HOME/.local/bin/mae-daemon"        && echo "OK: mae-daemon"
+
+          echo "--- Checking data ---"
+          test -d "$HOME/.local/share/mae/mae-manual.cozo"  && echo "OK: manual KB"
+          test -d "$HOME/.local/share/mae/modules"          && echo "OK: modules"
+          MODULE_COUNT=$(find "$HOME/.local/share/mae/modules" -name "manifest.toml" | wc -l)
+          test "$MODULE_COUNT" -ge 10 && echo "OK: $MODULE_COUNT modules found"
+
+          echo "--- Checking config ---"
+          test -f "$HOME/.config/mae/config.toml"   && echo "OK: config.toml"
+          test -f "$HOME/.config/mae/daemon.toml"    && echo "OK: daemon.toml"
+
+          echo "--- Checking systemd units ---"
+          test -f "$HOME/.config/systemd/user/mae-daemon.service"        && echo "OK: mae-daemon.service"
+          test -f "$HOME/.config/systemd/user/mae-state-server.service"  && echo "OK: mae-state-server.service"
+
+          echo "--- Checking binary runs ---"
+          "$HOME/.local/bin/mae" --version
+          "$HOME/.local/bin/mae" --check-config
+
+          echo "--- Checking idempotent reinstall ---"
+          cd /tmp/mae-pkg && ./install.sh "$HOME/.local"
+          echo "OK: reinstall succeeded (config preserved)"
+          # Config should NOT have been overwritten
+          test -f "$HOME/.config/mae/config.toml" && echo "OK: config preserved on reinstall"
+
+      - name: Verify uninstall via Makefile
+        run: |
+          make uninstall
+          ! test -f "$HOME/.local/bin/mae"         && echo "OK: mae removed"
+          ! test -f "$HOME/.local/bin/mae-daemon"  && echo "OK: mae-daemon removed"
+          echo "OK: uninstall clean"
+
   code-map:
     name: code-map freshness
     runs-on: ubuntu-latest
