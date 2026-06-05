@@ -61,9 +61,15 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           # Update the workspace version in the root Cargo.toml.
-          # Crates use version.workspace = true, so only the root needs updating.
+          # Editor crates use version.workspace = true, so the root handles them.
           sed -i "0,/^version = \".*\"/s//version = \"$VERSION\"/" Cargo.toml
-          echo "Updated Cargo.toml to $VERSION"
+          echo "Updated root Cargo.toml to $VERSION"
+
+          # Shared crates and daemon have their own version fields (not workspace-inherited).
+          for f in shared/kb/Cargo.toml shared/sync/Cargo.toml shared/mcp/Cargo.toml daemon/Cargo.toml; do
+            sed -i "0,/^version = \".*\"/s//version = \"$VERSION\"/" "$f"
+            echo "Updated $f to $VERSION"
+          done
 
       - name: Generate changelog
         run: |
@@ -76,7 +82,9 @@ jobs:
           VERSION="v${{ steps.version.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add VERSION CHANGELOG.md Cargo.toml
+          git add VERSION CHANGELOG.md Cargo.toml \
+            shared/kb/Cargo.toml shared/sync/Cargo.toml shared/mcp/Cargo.toml \
+            daemon/Cargo.toml
           git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
           # Delete existing tag if present (handles re-runs after partial failure)
           git tag -d "$VERSION" 2>/dev/null || true

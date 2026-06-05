@@ -2427,7 +2427,7 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
  "crossterm",
@@ -2462,7 +2462,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2480,11 +2480,11 @@ dependencies = [
 
 [[package]]
 name = "mae-babel"
-version = "0.13.0"
+version = "0.12.0"
 
 [[package]]
 name = "mae-canvas"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2492,7 +2492,7 @@ dependencies = [
 
 [[package]]
 name = "mae-core"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "criterion",
  "hostname",
@@ -2536,7 +2536,7 @@ dependencies = [
 
 [[package]]
 name = "mae-dap"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "mae-core",
  "serde",
@@ -2547,18 +2547,18 @@ dependencies = [
 
 [[package]]
 name = "mae-export"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "mae-babel",
 ]
 
 [[package]]
 name = "mae-format"
-version = "0.13.0"
+version = "0.12.0"
 
 [[package]]
 name = "mae-gui"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -2572,7 +2572,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "cozo",
  "lru 0.12.5",
@@ -2591,14 +2591,14 @@ dependencies = [
 
 [[package]]
 name = "mae-lookup"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-lsp"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2608,14 +2608,14 @@ dependencies = [
 
 [[package]]
 name = "mae-make"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-mcp"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2626,7 +2626,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -2638,7 +2638,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
  "libc",
@@ -2650,7 +2650,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
@@ -2659,15 +2659,15 @@ dependencies = [
 
 [[package]]
 name = "mae-snippets"
-version = "0.13.0"
+version = "0.12.0"
 
 [[package]]
 name = "mae-spell"
-version = "0.13.0"
+version = "0.12.0"
 
 [[package]]
 name = "mae-state-server"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "async-trait",
  "dirs",
@@ -2688,7 +2688,7 @@ dependencies = [
 
 [[package]]
 name = "mae-sync"
-version = "0.13.0"
+version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
  "criterion",
