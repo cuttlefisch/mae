@@ -273,45 +273,88 @@ jobs:
           cd /tmp/mae-pkg
           ./install.sh "$HOME/.local"
 
-      - name: Verify installed binaries
+      - name: Verify fresh install
         run: |
           set -e
-          echo "--- Checking binaries ---"
+          echo "=== Checking binaries ==="
           test -x "$HOME/.local/bin/mae"              && echo "OK: mae"
           test -x "$HOME/.local/bin/mae-mcp-shim"     && echo "OK: mae-mcp-shim"
           test -x "$HOME/.local/bin/mae-state-server"  && echo "OK: mae-state-server"
           test -x "$HOME/.local/bin/mae-daemon"        && echo "OK: mae-daemon"
 
-          echo "--- Checking data ---"
+          echo "=== Checking data ==="
           test -d "$HOME/.local/share/mae/mae-manual.cozo"  && echo "OK: manual KB"
           test -d "$HOME/.local/share/mae/modules"          && echo "OK: modules"
           MODULE_COUNT=$(find "$HOME/.local/share/mae/modules" -name "manifest.toml" | wc -l)
           test "$MODULE_COUNT" -ge 10 && echo "OK: $MODULE_COUNT modules found"
 
-          echo "--- Checking config ---"
+          echo "=== Checking config ==="
           test -f "$HOME/.config/mae/config.toml"   && echo "OK: config.toml"
           test -f "$HOME/.config/mae/daemon.toml"    && echo "OK: daemon.toml"
 
-          echo "--- Checking systemd units ---"
+          echo "=== Checking systemd units ==="
           test -f "$HOME/.config/systemd/user/mae-daemon.service"        && echo "OK: mae-daemon.service"
           test -f "$HOME/.config/systemd/user/mae-state-server.service"  && echo "OK: mae-state-server.service"
 
-          echo "--- Checking binary runs ---"
+          echo "=== Checking binary runs ==="
           "$HOME/.local/bin/mae" --version
           "$HOME/.local/bin/mae" --check-config
 
-          echo "--- Checking idempotent reinstall ---"
-          cd /tmp/mae-pkg && ./install.sh "$HOME/.local"
-          echo "OK: reinstall succeeded (config preserved)"
-          # Config should NOT have been overwritten
-          test -f "$HOME/.config/mae/config.toml" && echo "OK: config preserved on reinstall"
+      - name: Verify upgrade (reinstall over existing)
+        run: |
+          set -e
+          # Add a sentinel to config to verify it's preserved
+          echo "# user customization" >> "$HOME/.config/mae/config.toml"
+          BEFORE=$(wc -l < "$HOME/.config/mae/config.toml")
 
-      - name: Verify uninstall via Makefile
+          # Run install again — should detect upgrade
+          cd /tmp/mae-pkg && ./install.sh "$HOME/.local"
+
+          # Config must NOT have been overwritten
+          AFTER=$(wc -l < "$HOME/.config/mae/config.toml")
+          test "$BEFORE" -eq "$AFTER" && echo "OK: config preserved on upgrade"
+          grep -q "user customization" "$HOME/.config/mae/config.toml" && echo "OK: sentinel line preserved"
+
+          # Binaries must still work
+          "$HOME/.local/bin/mae" --version && echo "OK: mae works after upgrade"
+
+      - name: Verify uninstall via install.sh
+        run: |
+          set -e
+          cd /tmp/mae-pkg && ./install.sh --uninstall "$HOME/.local"
+
+          echo "=== Checking binaries removed ==="
+          ! test -f "$HOME/.local/bin/mae"              && echo "OK: mae removed"
+          ! test -f "$HOME/.local/bin/mae-mcp-shim"     && echo "OK: mae-mcp-shim removed"
+          ! test -f "$HOME/.local/bin/mae-state-server"  && echo "OK: mae-state-server removed"
+          ! test -f "$HOME/.local/bin/mae-daemon"        && echo "OK: mae-daemon removed"
+
+          echo "=== Checking data removed ==="
+          ! test -d "$HOME/.local/share/mae/mae-manual.cozo"  && echo "OK: manual KB removed"
+          ! test -d "$HOME/.local/share/mae/modules"          && echo "OK: modules removed"
+
+          echo "=== Checking systemd units removed ==="
+          ! test -f "$HOME/.config/systemd/user/mae-daemon.service"        && echo "OK: daemon unit removed"
+          ! test -f "$HOME/.config/systemd/user/mae-state-server.service"  && echo "OK: state-server unit removed"
+
+          echo "=== Checking config preserved ==="
+          test -f "$HOME/.config/mae/config.toml"  && echo "OK: config.toml preserved"
+          test -f "$HOME/.config/mae/daemon.toml"   && echo "OK: daemon.toml preserved"
+
+      - name: Verify reinstall after uninstall
+        run: |
+          set -e
+          cd /tmp/mae-pkg && ./install.sh "$HOME/.local"
+          "$HOME/.local/bin/mae" --version && echo "OK: clean reinstall works"
+          # Config should still have the sentinel from the upgrade test
+          grep -q "user customization" "$HOME/.config/mae/config.toml" && echo "OK: user config survived uninstall+reinstall"
+
+      - name: Verify Makefile uninstall
         run: |
           make uninstall
           ! test -f "$HOME/.local/bin/mae"         && echo "OK: mae removed"
           ! test -f "$HOME/.local/bin/mae-daemon"  && echo "OK: mae-daemon removed"
-          echo "OK: uninstall clean"
+          echo "OK: Makefile uninstall clean"
 
   code-map:
     name: code-map freshness
