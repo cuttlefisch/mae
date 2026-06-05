@@ -69,11 +69,12 @@ jobs:
         if: matrix.step == 'fmt'
         run: cargo fmt --all --check
 
-      # The release test build above already produced all release binaries.
-      - name: Build manual KB
+      # Build remaining binaries + manual KB for downstream jobs.
+      # cargo test --release already compiled most deps — this is incremental.
+      - name: Build install artifacts
         if: matrix.toolchain == 'stable' && matrix.step == 'test'
         run: |
-          cargo build --release --bin build-manual-kb
+          cargo build --release --package mae-state-server --package mae-mcp --bin build-manual-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
 
       - name: Stage editor artifacts
