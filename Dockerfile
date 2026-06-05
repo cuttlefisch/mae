@@ -33,12 +33,10 @@ COPY crates/scheme/Cargo.toml crates/scheme/Cargo.toml
 COPY crates/lsp/Cargo.toml crates/lsp/Cargo.toml
 COPY crates/dap/Cargo.toml crates/dap/Cargo.toml
 COPY crates/ai/Cargo.toml crates/ai/Cargo.toml
-COPY crates/kb/Cargo.toml crates/kb/Cargo.toml
 COPY crates/mae/Cargo.toml crates/mae/Cargo.toml
 COPY crates/shell/Cargo.toml crates/shell/Cargo.toml
-COPY crates/mcp/Cargo.toml crates/mcp/Cargo.toml
-COPY crates/sync/Cargo.toml crates/sync/Cargo.toml
 COPY crates/state-server/Cargo.toml crates/state-server/Cargo.toml
+COPY crates/canvas/Cargo.toml crates/canvas/Cargo.toml
 COPY crates/babel/Cargo.toml crates/babel/Cargo.toml
 COPY crates/export/Cargo.toml crates/export/Cargo.toml
 COPY crates/snippets/Cargo.toml crates/snippets/Cargo.toml
@@ -47,6 +45,9 @@ COPY crates/make/Cargo.toml crates/make/Cargo.toml
 COPY crates/lookup/Cargo.toml crates/lookup/Cargo.toml
 COPY crates/spell/Cargo.toml crates/spell/Cargo.toml
 COPY test_fixtures/Cargo.toml test_fixtures/Cargo.toml
+COPY shared/kb/Cargo.toml shared/kb/Cargo.toml
+COPY shared/sync/Cargo.toml shared/sync/Cargo.toml
+COPY shared/mcp/Cargo.toml shared/mcp/Cargo.toml
 
 # Create dummy source files so cargo can resolve the dependency graph
 RUN mkdir -p crates/core/src && echo "" > crates/core/src/lib.rs && \
@@ -56,13 +57,14 @@ RUN mkdir -p crates/core/src && echo "" > crates/core/src/lib.rs && \
     mkdir -p crates/lsp/src && echo "" > crates/lsp/src/lib.rs && \
     mkdir -p crates/dap/src && echo "" > crates/dap/src/lib.rs && \
     mkdir -p crates/ai/src && echo "" > crates/ai/src/lib.rs && \
-    mkdir -p crates/kb/src && echo "" > crates/kb/src/lib.rs && \
     mkdir -p crates/mae/src && echo "fn main() {}" > crates/mae/src/main.rs && \
     mkdir -p crates/shell/src && echo "" > crates/shell/src/lib.rs && \
-    mkdir -p crates/mcp/src && echo "" > crates/mcp/src/lib.rs && \
-    echo "fn main() {}" > crates/mcp/src/shim.rs && \
-    mkdir -p crates/sync/src && echo "" > crates/sync/src/lib.rs && \
     mkdir -p crates/state-server/src && echo "fn main() {}" > crates/state-server/src/main.rs && \
+    mkdir -p crates/canvas/src && echo "" > crates/canvas/src/lib.rs && \
+    mkdir -p shared/kb/src && echo "" > shared/kb/src/lib.rs && \
+    mkdir -p shared/sync/src && echo "" > shared/sync/src/lib.rs && \
+    mkdir -p shared/mcp/src && echo "" > shared/mcp/src/lib.rs && \
+    echo "fn main() {}" > shared/mcp/src/shim.rs && \
     mkdir -p crates/babel/src && echo "" > crates/babel/src/lib.rs && \
     mkdir -p crates/export/src && echo "" > crates/export/src/lib.rs && \
     mkdir -p crates/snippets/src && echo "" > crates/snippets/src/lib.rs && \
@@ -84,7 +86,7 @@ FROM base AS builder
 COPY . .
 
 # Touch all source files so cargo knows they changed vs the dummy stubs
-RUN find crates/ test_fixtures/ -name '*.rs' -exec touch {} +
+RUN find crates/ shared/ test_fixtures/ -name '*.rs' -exec touch {} +
 
 RUN cargo build --release --workspace --exclude mae-gui
 
