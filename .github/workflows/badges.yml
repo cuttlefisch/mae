@@ -22,16 +22,16 @@ jobs:
       - name: Count tests
         id: tests
         run: |
-          OUTPUT=$(cargo test --workspace --exclude mae-test-fixtures 2>&1)
+          OUTPUT=$(cargo test --workspace --features gui 2>&1) || true
           TOTAL=$(echo "$OUTPUT" | grep -oP '\d+ passed' | awk '{s+=$1} END {print s}')
-          FORMATTED=$(printf "%'d" "$TOTAL")
+          FORMATTED=$(printf "%'d" "${TOTAL:-0}")
           echo "count=$FORMATTED" >> $GITHUB_OUTPUT
 
       - name: Count lines of code
         id: loc
         run: |
           cargo install tokei --locked 2>/dev/null || true
-          JSON=$(tokei crates/ modules/ scheme/ -t Rust,Scheme,TOML -o json)
+          JSON=$(tokei crates/ shared/ daemon/src/ modules/ -t Rust,Scheme,TOML -o json)
           CODE=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['Total']['code'])")
           echo "count=~$((CODE / 1000))k" >> $GITHUB_OUTPUT
 
