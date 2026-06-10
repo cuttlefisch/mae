@@ -33,7 +33,7 @@ jobs:
 
       - name: Report success
         if: steps.check.outputs.exit_code == '0'
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: 51
           body: |
@@ -74,7 +74,7 @@ jobs:
 
       - name: Report cozo ndarray upgrade
         if: steps.cozo-check.outputs.changed == 'true'
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: 51
           body: |
