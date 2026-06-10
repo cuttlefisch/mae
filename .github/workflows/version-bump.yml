@@ -22,9 +22,13 @@ jobs:
         env:
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
         run: |
+          # Skip version bump entirely with release:none label.
           # Only bump minor/major with explicit PR labels.
           # Default is always patch — no commit message inference.
-          if echo "$PR_LABELS" | grep -q 'release:major'; then
+          if echo "$PR_LABELS" | grep -q 'release:none'; then
+            echo "bump=none" >> "$GITHUB_OUTPUT"
+            echo "Bump type: none (skipped via PR label)"
+          elif echo "$PR_LABELS" | grep -q 'release:major'; then
             echo "bump=major" >> "$GITHUB_OUTPUT"
             echo "Bump type: major (from PR label)"
           elif echo "$PR_LABELS" | grep -q 'release:minor'; then
@@ -36,6 +40,7 @@ jobs:
           fi
 
       - name: Bump version
+        if: steps.bump-type.outputs.bump != 'none'
         id: version
         run: |
           if [ -f VERSION ]; then
@@ -58,6 +63,7 @@ jobs:
           echo "Bumped: $CURRENT -> $NEW"
 
       - name: Update Cargo.toml versions
+        if: steps.bump-type.outputs.bump != 'none'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           # Update the workspace version in the root Cargo.toml.
@@ -76,12 +82,14 @@ jobs:
           echo "Updated assets/install.sh to $VERSION"
 
       - name: Generate changelog
+        if: steps.bump-type.outputs.bump != 'none'
         run: |
           cargo install git-cliff
           git cliff --output CHANGELOG.md
           echo "Generated CHANGELOG.md"
 
       - name: Commit and tag
+        if: steps.bump-type.outputs.bump != 'none'
         run: |
           VERSION="v${{ steps.version.outputs.version }}"
           git config user.name "github-actions[bot]"
