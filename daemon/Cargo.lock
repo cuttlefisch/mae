@@ -966,7 +966,7 @@ dependencies = [
 
 [[package]]
 name = "mae-daemon"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "cozo",
  "dirs",
@@ -985,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "cozo",
  "lru",
@@ -1003,7 +1003,7 @@ dependencies = [
 
 [[package]]
 name = "mae-mcp"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "mae-sync"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "base64 0.22.1",
  "ropey",
@@ -2593,9 +2593,9 @@ dependencies = [
 
 [[package]]
 name = "yrs"
-version = "0.22.0"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34419a20030ca6e452431d317d4d22b797507dfc380953a4f4fc01ee8491516b"
+checksum = "cea9488df47b1e7068710c05c7e2506daf4e81e5ff140f58157320396c2ed0a2"
 dependencies = [
  "arc-swap",
  "async-lock",
@@ -2606,7 +2606,7 @@ dependencies = [
  "serde_json",
  "smallstr",
  "smallvec",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -1,0 +1,91 @@
+name: Blocked Dep Compat Check
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"  # Every Monday at 09:00 UTC
+  workflow_dispatch:       # Manual trigger
+
+permissions:
+  issues: write
+
+jobs:
+  check-sha2:
+    name: Test sha2 0.11 compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Patch sha2 to 0.11 + hmac to 0.13
+        run: |
+          # Bump sha2 to 0.11 and hmac to 0.13 in all Cargo.toml files
+          find . -name Cargo.toml -not -path '*/target/*' \
+            -exec sed -i 's/sha2 = "0\.10"/sha2 = "0.11"/' {} +
+          find . -name Cargo.toml -not -path '*/target/*' \
+            -exec sed -i 's/hmac = "0\.12"/hmac = "0.13"/' {} +
+
+      - name: Check compilation
+        id: check
+        run: cargo check --workspace 2>&1 | tee /tmp/sha2-check.log; echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Report success
+        if: steps.check.outputs.exit_code == '0'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: 51
+          body: |
+            **sha2 0.11 + hmac 0.13 now compiles!**
+
+            The `sha2 0.11` / `hmac 0.13` blocker appears resolved.
+            `cargo check --workspace` passed with patched versions.
+
+            Next steps:
+            1. Remove `sha2` from `dependabot.yml` ignore list
+            2. Migrate `format!("{:x}", hasher.finalize())` callsites to byte-iter hex formatting
+            3. Bump sha2 and hmac in all Cargo.toml files
+
+            _Automated by dep-compat-check workflow_
+
+  check-ndarray:
+    name: Test ndarray 0.16+ compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check latest cozo ndarray requirement
+        id: cozo-check
+        run: |
+          # Check what ndarray version cozo currently requires
+          COZO_NDARRAY=$(cargo tree -p mae-kb -i ndarray 2>/dev/null | grep -oP 'ndarray v\K[0-9]+\.[0-9]+' | sort -V | head -1)
+          echo "cozo_ndarray=$COZO_NDARRAY" >> "$GITHUB_OUTPUT"
+          echo "cozo requires ndarray $COZO_NDARRAY"
+          if [ "$(echo "$COZO_NDARRAY" | cut -d. -f1-2)" != "0.15" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report cozo ndarray upgrade
+        if: steps.cozo-check.outputs.changed == 'true'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: 51
+          body: |
+            **cozo no longer pins ndarray 0.15!**
+
+            `cozo` now requires ndarray **${{ steps.cozo-check.outputs.cozo_ndarray }}**.
+            The ndarray version conflict may be resolved.
+
+            Next steps:
+            1. Remove `ndarray` from `dependabot.yml` ignore list
+            2. Bump ndarray in `shared/kb/Cargo.toml` to match cozo's requirement
+            3. Verify `cargo check --workspace` passes
+
+            _Automated by dep-compat-check workflow_

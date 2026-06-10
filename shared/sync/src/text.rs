@@ -3,8 +3,8 @@
 use ropey::Rope;
 use std::sync::{Arc, Mutex};
 use yrs::{
-    doc::OffsetKind, undo::UndoManager, updates::decoder::Decode, updates::encoder::Encode, Doc,
-    GetString, ReadTxn, Subscription, Text, Transact,
+    block::ClientID, doc::OffsetKind, undo::UndoManager, updates::decoder::Decode,
+    updates::encoder::Encode, Doc, GetString, ReadTxn, Subscription, Text, Transact,
 };
 
 use crate::SyncError;
@@ -26,7 +26,7 @@ pub(crate) fn new_doc() -> Doc {
 /// Create a yrs Doc with a specific client ID and UTF-16 offset kind.
 pub(crate) fn new_doc_with_client_id(client_id: u64) -> Doc {
     Doc::with_options(yrs::Options {
-        client_id,
+        client_id: ClientID::new(client_id),
         offset_kind: OffsetKind::Utf16,
         ..Default::default()
     })
@@ -225,7 +225,11 @@ impl TextSync {
         // Diagnostic: log update contents and state vector before apply.
         let update_sv = update_decoded.state_vector();
         for (&client_id, &clock) in update_sv.iter() {
-            tracing::info!(client_id, clock, "  update contains ops from");
+            tracing::info!(
+                client_id = client_id.get(),
+                clock,
+                "  update contains ops from"
+            );
         }
         let sv_before = {
             let txn = self.doc.transact();
@@ -238,7 +242,7 @@ impl TextSync {
             let local_clock = sv_before.get(&client_id);
             if local_clock > 0 {
                 tracing::warn!(
-                    client_id,
+                    client_id = client_id.get(),
                     update_clock,
                     local_clock,
                     "OVERLAP: update client already in local state vector"
@@ -267,7 +271,7 @@ impl TextSync {
 
         if content_changed {
             tracing::info!(
-                local_client_id = self.doc.client_id(),
+                local_client_id = self.doc.client_id().get(),
                 update_len = update.len(),
                 content_len_before = content_before.len(),
                 content_len_after = content_after.len(),
@@ -275,7 +279,7 @@ impl TextSync {
             );
         } else {
             tracing::warn!(
-                local_client_id = self.doc.client_id(),
+                local_client_id = self.doc.client_id().get(),
                 update_len = update.len(),
                 sv_unchanged,
                 sv_before_entries = sv_before.len(),
@@ -283,10 +287,10 @@ impl TextSync {
                 "TextSync::apply_update — content UNCHANGED (no-op)"
             );
             for (&client_id, &clock) in sv_before.iter() {
-                tracing::warn!(client_id, clock, "  sv_before entry");
+                tracing::warn!(client_id = client_id.get(), clock, "  sv_before entry");
             }
             for (&client_id, &clock) in sv_after.iter() {
-                tracing::warn!(client_id, clock, "  sv_after entry");
+                tracing::warn!(client_id = client_id.get(), clock, "  sv_after entry");
             }
         }
 
@@ -500,8 +504,8 @@ impl TextSync {
             ..Default::default()
         };
 
-        let mgr: UndoManager<CursorMeta> =
-            UndoManager::with_scope_and_options(&self.doc, &text, options);
+        let mut mgr: UndoManager<CursorMeta> = UndoManager::with_options(options);
+        mgr.expand_scope(&self.doc, &text);
 
         // Subscribe to updates so we can capture undo/redo-generated deltas.
         let captured = self.captured_updates.clone();
@@ -537,7 +541,7 @@ impl TextSync {
 
     /// The client ID of the underlying yrs document.
     pub fn client_id(&self) -> u64 {
-        self.doc.client_id()
+        self.doc.client_id().get()
     }
 
     /// Whether the UndoManager is active.
@@ -629,7 +633,7 @@ impl TextSync {
     /// Clear all undo/redo history.
     pub fn clear_undo(&mut self) {
         if let Some(mgr) = &mut self.undo_mgr {
-            mgr.clear();
+            mgr.clear_all();
         }
     }
 
@@ -867,22 +871,26 @@ mod tests {
             doc.apply_update(&state).unwrap();
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut pending_updates: Vec<Vec<(usize, Vec<u8>)>> = vec![Vec::new(); 5];
 
         // Each doc does 200 random operations
         for _ in 0..200 {
             for i in 0..5 {
                 let len = docs[i].content().len() as u32;
-                if len == 0 || rng.gen_bool(0.6) {
+                if len == 0 || rng.random_bool(0.6) {
                     // Insert
-                    let pos = if len == 0 { 0 } else { rng.gen_range(0..len) };
-                    let ch = (b'a' + rng.gen_range(0..26u8)) as char;
+                    let pos = if len == 0 {
+                        0
+                    } else {
+                        rng.random_range(0..len)
+                    };
+                    let ch = (b'a' + rng.random_range(0..26u8)) as char;
                     let update = docs[i].insert(pos, &ch.to_string());
                     pending_updates[i].push((i, update));
                 } else {
                     // Delete
-                    let pos = rng.gen_range(0..len);
+                    let pos = rng.random_range(0..len);
                     let update = docs[i].delete(pos, 1);
                     pending_updates[i].push((i, update));
                 }
@@ -1540,10 +1548,9 @@ mod tests {
     }
 
     #[test]
-    fn large_client_id_corrupted_by_v1_encoding() {
-        // yrs v0.22 v1 encoding uses variable-length integers that silently
-        // corrupt client_ids exceeding ~32 bits. This test documents the bug
-        // that caused collab sync to fail when using (PID << 16 | buf_idx).
+    fn large_client_id_survives_v1_encoding() {
+        // yrs v0.22 had a bug where v1 encoding corrupted client_ids exceeding
+        // ~32 bits. yrs v0.27 uses 53-bit ClientID, fixing this issue.
         let client_id: u64 = 268029984770; // (4089813 << 16) | 2
         let ts = TextSync::with_client_id("hello world", client_id);
         assert_eq!(
@@ -1556,11 +1563,12 @@ mod tests {
         let update = yrs::Update::decode_v1(&state).unwrap();
         let sv = update.state_vector();
 
-        // The encoded state has a DIFFERENT client_id due to v1 encoding corruption.
+        // yrs 0.27 preserves large client_ids through v1 encoding.
         for (&cid, &_clock) in sv.iter() {
-            assert_ne!(
-                cid, client_id,
-                "v1 encoding should corrupt large client_ids"
+            assert_eq!(
+                cid.get(),
+                client_id,
+                "large client_id should survive v1 encoding in yrs 0.27+"
             );
         }
     }
@@ -1577,7 +1585,11 @@ mod tests {
         let sv = update.state_vector();
 
         for (&cid, &_clock) in sv.iter() {
-            assert_eq!(cid, client_id, "small client_id should survive v1 encoding");
+            assert_eq!(
+                cid.get(),
+                client_id,
+                "small client_id should survive v1 encoding"
+            );
         }
     }
 

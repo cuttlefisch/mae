@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(node.id(), "n1");
         assert_eq!(node.title(), "T");
         // Verify client_id is set on the yrs Doc
-        assert_eq!(node.doc().client_id(), 42);
+        assert_eq!(node.doc().client_id().get(), 42);
     }
 
     #[test]
@@ -674,7 +674,7 @@ mod tests {
         let bytes = original.encode();
         let restored = KbNodeDoc::from_bytes_with_client_id(&bytes, 20).unwrap();
         assert_eq!(restored.id(), "n1");
-        assert_eq!(restored.doc().client_id(), 20);
+        assert_eq!(restored.doc().client_id().get(), 20);
     }
 
     // --- encode_diff tests ---

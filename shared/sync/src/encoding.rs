@@ -164,7 +164,7 @@ mod tests {
         // The state vector should contain entries for all 100 client IDs.
         for client_id in 1u64..=100 {
             assert!(
-                sv_decoded.get(&client_id) > 0,
+                sv_decoded.get(&yrs::block::ClientID::new(client_id)) > 0,
                 "state vector missing clock for client {client_id}"
             );
         }
