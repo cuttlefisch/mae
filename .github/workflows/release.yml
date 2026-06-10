@@ -23,14 +23,14 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
 
-      - name: Install musl tools
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y musl-tools clang libfontconfig1-dev libfreetype6-dev
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build static binary + manual KB + daemon
+      - name: Build GUI binary (glibc) + services (musl) + manual KB + daemon
         run: |
-          cargo build --release --target x86_64-unknown-linux-musl --package mae
+          cargo build --release --features gui --package mae
           cargo build --release --target x86_64-unknown-linux-musl --package mae-state-server
           cargo build --release --target x86_64-unknown-linux-musl --package mae-mcp
           cargo build --release --bin build-manual-kb
@@ -40,7 +40,7 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p dist/mae-pkg
-          cp target/x86_64-unknown-linux-musl/release/mae dist/mae-pkg/mae
+          cp target/release/mae dist/mae-pkg/mae
           cp target/x86_64-unknown-linux-musl/release/mae-state-server dist/mae-pkg/mae-state-server
           cp target/x86_64-unknown-linux-musl/release/mae-mcp-shim dist/mae-pkg/mae-mcp-shim
           cp daemon/target/x86_64-unknown-linux-musl/release/mae-daemon dist/mae-pkg/mae-daemon
@@ -290,7 +290,7 @@ jobs:
           | **macOS GUI** | `MAE-macos-aarch64.zip` | `MAE.app` + `mae-state-server` + `mae-daemon` + `mae-mcp-shim` |
           | **macOS TUI** | `mae-macos-aarch64-tui.tar.gz` | `mae` + all services + modules + manual KB + configs |
           | **Linux GUI** | `mae-linux-x86_64-gui.AppImage` | Self-contained AppImage (modules + manual KB bundled) |
-          | **Linux TUI** | `mae-linux-x86_64.tar.gz` | `mae` (static musl) + all services + modules + manual KB + systemd units |
+          | **Linux** | `mae-linux-x86_64.tar.gz` | `mae` (GUI-enabled) + all services (static musl) + modules + manual KB + systemd units |
 
           All packages include the built-in help system (860+ KB nodes) and doom-style keybindings.
 
