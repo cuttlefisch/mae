@@ -10,14 +10,15 @@ updates:
       rust-dependencies:
         patterns: ["*"]
     ignore:
-      # sha2 0.11 uses hybrid-array (drops LowerHex trait, breaks 10+ callsites)
-      # and is incompatible with hmac 0.12. Revisit when hmac 0.13+ is stable.
+      # sha2 0.11.x uses hybrid-array (drops LowerHex, incompatible with hmac 0.12).
+      # Only ignore 0.11.x — a future 0.12+ may resolve the trait/hmac compat.
+      # Tracking: https://github.com/cuttlefisch/mae/issues/51
       - dependency-name: "sha2"
-        versions: [">=0.11"]
-      # ndarray 0.17 is incompatible with cozo 0.7 (which vendors ndarray 0.15).
-      # Revisit when cozo upgrades its ndarray dependency.
+        versions: ["0.11.x"]
+      # ndarray 0.16.x/0.17.x are incompatible with cozo 0.7 (pins ndarray 0.15).
+      # Only ignore known-bad ranges — a future ndarray or cozo release may unblock.
       - dependency-name: "ndarray"
-        versions: [">=0.16"]
+        versions: ["0.16.x", "0.17.x"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
