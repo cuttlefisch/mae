@@ -333,3 +333,4 @@ jobs:
             dist/MAE-macos-aarch64.zip
             dist/mae-macos-aarch64-tui.tar.gz
           fail_on_unmatched_files: true
+          token: ${{ secrets.RELEASE_PAT }}
