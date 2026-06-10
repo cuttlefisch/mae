@@ -41,7 +41,7 @@ libc = "0.2"
 mdns-sd = "0.20"
 hostname = "0.4"
 mae-state-server = { path = "../state-server" }
-sha2 = "0.10"
+sha2 = "0.11"
 
 [features]
 gui = ["dep:mae-gui", "dep:winit"]
