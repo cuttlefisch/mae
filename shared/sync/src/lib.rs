@@ -178,7 +178,9 @@ pub fn compare_state_vectors(
     let remote = StateVector::decode_v1(remote_sv)
         .map_err(|e| SyncError::Encoding(format!("remote sv decode: {e}")))?;
 
-    let mut all_ids: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    use yrs::block::ClientID;
+
+    let mut all_ids: std::collections::BTreeSet<ClientID> = std::collections::BTreeSet::new();
     for (&cid, _) in local.iter() {
         all_ids.insert(cid);
     }
@@ -216,7 +218,7 @@ pub fn compare_state_vectors(
             }
             (false, false) => unreachable!(),
         };
-        clocks.push((cid, status));
+        clocks.push((cid.get(), status));
     }
 
     Ok(SyncDiagnosis {

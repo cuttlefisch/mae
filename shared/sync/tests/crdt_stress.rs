@@ -32,7 +32,7 @@ fn stress_100_clients_single_doc() {
     const NUM_CLIENTS: u64 = 100;
     const EDITS_PER_CLIENT: usize = 100;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     // Create 100 TextSync instances, each with a unique client_id.
     // Use test_client_id to produce realistic 32-bit hashed IDs.
@@ -48,8 +48,12 @@ fn stress_100_clients_single_doc() {
         for _ in 0..EDITS_PER_CLIENT {
             let content = client.content();
             let len = content.chars().count();
-            let pos = if len == 0 { 0 } else { rng.gen_range(0..=len) };
-            let ch = (b'a' + rng.gen_range(0..26u8)) as char;
+            let pos = if len == 0 {
+                0
+            } else {
+                rng.random_range(0..=len)
+            };
+            let ch = (b'a' + rng.random_range(0..26u8)) as char;
             let update = client.insert(pos as u32, &ch.to_string());
             updates.push(update);
         }
@@ -106,7 +110,7 @@ fn stress_100_clients_single_doc() {
 #[test]
 fn stress_interleaved_undo_redo() {
     const TOTAL_EDITS: usize = 1000;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut ts = TextSync::with_client_id("", test_client_id(2000, 0));
     ts.enable_undo();
 
@@ -115,7 +119,7 @@ fn stress_interleaved_undo_redo() {
     let mut redo_count = 0u64;
 
     for i in 0..TOTAL_EDITS {
-        let roll: f64 = rng.gen();
+        let roll: f64 = rng.random();
         if roll < 0.3 && edit_count > 0 {
             // 30% chance: undo
             let result = ts.undo();
@@ -132,7 +136,11 @@ fn stress_interleaved_undo_redo() {
             // Insert a character
             let content = ts.content();
             let len = content.chars().count();
-            let pos = if len == 0 { 0 } else { rng.gen_range(0..=len) };
+            let pos = if len == 0 {
+                0
+            } else {
+                rng.random_range(0..=len)
+            };
             let ch = (b'A' + (i % 26) as u8) as char;
             ts.insert(pos as u32, &ch.to_string());
             edit_count += 1;
@@ -235,18 +243,18 @@ fn stress_utf16_edge_cases() {
 
 #[test]
 fn stress_rapid_reconcile_convergence() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut ts_a = TextSync::with_client_id("initial", test_client_id(4000, 0));
     let state = ts_a.encode_state();
     let mut ts_b = TextSync::from_state_with_client_id(&state, test_client_id(4001, 0)).unwrap();
 
     for round in 0..100 {
         // Each side reconciles to a different random target.
-        let target_a: String = (0..rng.gen_range(5..50))
-            .map(|_| (b'a' + rng.gen_range(0..26u8)) as char)
+        let target_a: String = (0..rng.random_range(5..50))
+            .map(|_| (b'a' + rng.random_range(0..26u8)) as char)
             .collect();
-        let target_b: String = (0..rng.gen_range(5..50))
-            .map(|_| (b'A' + rng.gen_range(0..26u8)) as char)
+        let target_b: String = (0..rng.random_range(5..50))
+            .map(|_| (b'A' + rng.random_range(0..26u8)) as char)
             .collect();
 
         let update_a = ts_a.reconcile_to(&target_a);

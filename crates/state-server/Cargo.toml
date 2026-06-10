@@ -10,7 +10,7 @@ description = "MAE collaborative state server — CRDT sync over TCP"
 mae-mcp = { path = "../../shared/mcp" }
 mae-sync = { path = "../../shared/sync" }
 tokio = { version = "1", features = ["full", "signal"] }
-rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
@@ -20,7 +20,7 @@ dirs = "6"
 async-trait = "0.1"
 sha2 = "0.10"
 hmac = "0.12"
-rand = "0.8"
+rand = "0.9"
 
 [lib]
 name = "mae_state_server"
