@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Features
+
+- *(deps)* Upgrade yrs 0.27, rand 0.9, rusqlite 0.40 ([a85fd07](https://github.com/cuttlefisch/mae/commit/a85fd07862f410d7b917243fdeb7b2cbdcec84c4))
+
+### Miscellaneous
+
+- *(ci)* Ignore incompatible dep versions in dependabot ([3da2ca3](https://github.com/cuttlefisch/mae/commit/3da2ca3e42d7e579ed368c31de15d213ffeae4d2))
+- *(ci)* Add weekly compat check for blocked dep upgrades ([3fb03f0](https://github.com/cuttlefisch/mae/commit/3fb03f0cc7229ee6b7d2aeba7d1529f1e6260165))
+
+## [0.13.0] - 2026-06-10
+
 ### Bug Fixes
 
 - Daemon/LRU code quality — NodeKind consistency, logging, missing override ([f6be9ea](https://github.com/cuttlefisch/mae/commit/f6be9ea1fcad1a8bae33e67cbecd62ee844164be))
@@ -12,6 +23,9 @@ All notable changes to this project will be documented in this file.
 - Dockerfile paths for shared/ crates + upgrade lru to 0.16 ([60f32df](https://github.com/cuttlefisch/mae/commit/60f32df1b5ac966552d8cf410ba6d0dc06f83cc7))
 - *(ci)* Build state-server + mcp-shim before staging artifacts ([0d5fe9e](https://github.com/cuttlefisch/mae/commit/0d5fe9e562ef0726bd6a649829e489c64fc727e1))
 - *(ci)* Split cargo build commands for different packages ([7dfb1ab](https://github.com/cuttlefisch/mae/commit/7dfb1ab398bdbc77d0a579c0d6a8efb71285733d))
+- *(ci)* Badges workflow — add gui feature, fix tokei paths ([4ca8625](https://github.com/cuttlefisch/mae/commit/4ca862523fc84756d07ef4c8ae4ef915f64692cb))
+- *(release)* Build mae-mcp package in macOS release job ([0c82d7a](https://github.com/cuttlefisch/mae/commit/0c82d7aa28b46976d8768d2ef6e965a79dddda64))
+- *(release)* Build Linux tarball with GUI (glibc) + fix download guide ([04d1310](https://github.com/cuttlefisch/mae/commit/04d13107e8def607ce6d8b2058e4ec749b67b9b8))
 
 ### CI
 
@@ -26,12 +40,14 @@ All notable changes to this project will be documented in this file.
 - AI hygiene daemon — deterministic KB quality assessment ([30c8deb](https://github.com/cuttlefisch/mae/commit/30c8deb35bcf903158c2c08e4e17470b288c90f6))
 - Complete release pipeline + install script for v0.13.0 ([b8a7ba4](https://github.com/cuttlefisch/mae/commit/b8a7ba499dfb6883788f1e0661bded262f1781a8))
 - Install script upgrade/uninstall support + CI validation ([df9fd34](https://github.com/cuttlefisch/mae/commit/df9fd34a997d96a10d16219f8cddc27fdeaaf481))
+- *(ci)* Add release:none label to skip version bump ([29cf4e5](https://github.com/cuttlefisch/mae/commit/29cf4e5d48ac63a2b8d20168fad0265fa5fcf535))
 
 ### Miscellaneous
 
 - Bump version to 0.11.5 ([a28d8a2](https://github.com/cuttlefisch/mae/commit/a28d8a2ba7aa1a7dc19346026501bad1f03b5c0a))
 - CI/CD, Makefile, release pipeline for daemon + ADR-014 ([2532d8c](https://github.com/cuttlefisch/mae/commit/2532d8c302ad7d11ffcd6a09ad8fadfb0f1659a7))
 - Revert version to 0.12.0 + update version-bump workflow ([1710aec](https://github.com/cuttlefisch/mae/commit/1710aec1c42e20638a1a0aeb65aee2826714c2b8))
+- Bump version to 0.13.0 ([8c30de5](https://github.com/cuttlefisch/mae/commit/8c30de557b1b9770a3c878c2b0f9ff14aa94e25e))
 
 ## [0.11.4] - 2026-06-04
 
