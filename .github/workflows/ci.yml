@@ -143,6 +143,8 @@ jobs:
       - name: File safety tests
         run: cargo test --package mae-core --lib -- content_hash file_lock --test-threads=1
         timeout-minutes: 3
+      - name: Build daemon binary
+        run: cd daemon && cargo build
       - name: Daemon collab tests
         run: cd daemon && cargo test -- --test-threads=1 --nocapture
         timeout-minutes: 10

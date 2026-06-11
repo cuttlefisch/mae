@@ -232,9 +232,52 @@ impl TcpClient {
     }
 }
 
+/// Find the mae-daemon binary. Checks daemon workspace target dirs first,
+/// then editor workspace target dirs, then falls back to None (use cargo run).
+fn find_daemon_binary() -> Option<std::path::PathBuf> {
+    if let Ok(bin) = std::env::var("MAE_DAEMON_BIN") {
+        return Some(std::path::PathBuf::from(bin));
+    }
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let candidates = [
+        workspace_root.join("daemon/target/debug/mae-daemon"),
+        workspace_root.join("daemon/target/release/mae-daemon"),
+        workspace_root.join("target/debug/mae-daemon"),
+        workspace_root.join("target/release/mae-daemon"),
+    ];
+    candidates.into_iter().find(|p| p.exists())
+}
+
+/// Spawn mae-daemon with given args. Uses pre-built binary or falls back to cargo run.
+fn spawn_daemon(args: &[&str]) -> tokio::process::Child {
+    if let Some(bin) = find_daemon_binary() {
+        Command::new(bin)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("failed to spawn mae-daemon")
+    } else {
+        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        Command::new("cargo")
+            .args(
+                std::iter::once("run")
+                    .chain(std::iter::once("--"))
+                    .chain(args.iter().copied()),
+            )
+            .current_dir(workspace_root.join("daemon"))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("failed to spawn mae-daemon via cargo run in daemon/")
+    }
+}
+
 /// Spawn mae-daemon on a random port, wait for it to listen, return (child, port).
 ///
-/// Uses `MAE_STATE_SERVER_BIN` env var if set (pre-built binary), otherwise
+/// Uses `MAE_DAEMON_BIN` env var if set (pre-built binary), otherwise
 /// falls back to `cargo run` (works in CI but deadlocks when `cargo test` holds
 /// the workspace lock).
 async fn spawn_server() -> (tokio::process::Child, String, tempfile::TempDir) {
@@ -250,45 +293,7 @@ async fn spawn_server() -> (tokio::process::Child, String, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let data_dir = tmp.path().to_str().unwrap().to_string();
 
-    let child = if let Ok(bin) = std::env::var("MAE_STATE_SERVER_BIN") {
-        Command::new(bin)
-            .args(["--bind", &addr, "--data-dir", &data_dir])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("failed to spawn mae-daemon binary")
-    } else {
-        // Fallback: look in target/debug (cargo builds test deps there).
-        let target_bin =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/mae-daemon");
-        if target_bin.exists() {
-            Command::new(&target_bin)
-                .args(["--bind", &addr, "--data-dir", &data_dir])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-                .expect("failed to spawn mae-daemon from target/debug")
-        } else {
-            Command::new("cargo")
-                .args([
-                    "run",
-                    "-p",
-                    "mae-daemon",
-                    "--",
-                    "--bind",
-                    &addr,
-                    "--data-dir",
-                    &data_dir,
-                ])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-                .expect("failed to spawn mae-daemon via cargo run")
-        }
-    };
+    let child = spawn_daemon(&["--bind", &addr, "--data-dir", &data_dir]);
 
     // Wait for server to accept connections.
     for _ in 0..50 {
@@ -442,13 +447,7 @@ async fn tcp_reconnect_after_server_restart() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Restart on the same port.
-    let _server2 = Command::new("cargo")
-        .args(["run", "-p", "mae-daemon", "--", "--bind", &addr])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("failed to restart");
+    let _server2 = spawn_daemon(&["--bind", &addr]);
 
     // Wait for new server.
     for _ in 0..50 {
@@ -492,13 +491,7 @@ async fn tcp_offline_edit_reconnect_resync() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Restart server on same port.
-    let _server2 = Command::new("cargo")
-        .args(["run", "-p", "mae-daemon", "--", "--bind", &addr])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("failed to restart");
+    let _server2 = spawn_daemon(&["--bind", &addr]);
 
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1226,35 +1219,7 @@ data_dir = "{}"
     )
     .unwrap();
 
-    let target_bin =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/mae-daemon");
-
-    let child = if target_bin.exists() {
-        Command::new(&target_bin)
-            .args(["--bind", &addr, "--config", config_path.to_str().unwrap()])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("failed to spawn mae-daemon with PSK config")
-    } else {
-        Command::new("cargo")
-            .args([
-                "run",
-                "-p",
-                "mae-daemon",
-                "--",
-                "--bind",
-                &addr,
-                "--config",
-                config_path.to_str().unwrap(),
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("failed to spawn mae-daemon via cargo run")
-    };
+    let child = spawn_daemon(&["--bind", &addr, "--config", config_path.to_str().unwrap()]);
 
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(100)).await;

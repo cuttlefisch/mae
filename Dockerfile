@@ -35,7 +35,7 @@ COPY crates/dap/Cargo.toml crates/dap/Cargo.toml
 COPY crates/ai/Cargo.toml crates/ai/Cargo.toml
 COPY crates/mae/Cargo.toml crates/mae/Cargo.toml
 COPY crates/shell/Cargo.toml crates/shell/Cargo.toml
-COPY daemon/Cargo.toml daemon/Cargo.toml
+COPY daemon/Cargo.toml daemon/Cargo.lock daemon/
 COPY crates/canvas/Cargo.toml crates/canvas/Cargo.toml
 COPY crates/babel/Cargo.toml crates/babel/Cargo.toml
 COPY crates/export/Cargo.toml crates/export/Cargo.toml
@@ -59,7 +59,7 @@ RUN mkdir -p crates/core/src && echo "" > crates/core/src/lib.rs && \
     mkdir -p crates/ai/src && echo "" > crates/ai/src/lib.rs && \
     mkdir -p crates/mae/src && echo "fn main() {}" > crates/mae/src/main.rs && \
     mkdir -p crates/shell/src && echo "" > crates/shell/src/lib.rs && \
-    mkdir -p daemon/src && echo "fn main() {}" > daemon/src/main.rs && \
+    mkdir -p daemon/src && echo "fn main() {}" > daemon/src/main.rs && echo "" > daemon/src/lib.rs && \
     mkdir -p crates/canvas/src && echo "" > crates/canvas/src/lib.rs && \
     mkdir -p shared/kb/src && echo "" > shared/kb/src/lib.rs && \
     mkdir -p shared/sync/src && echo "" > shared/sync/src/lib.rs && \
@@ -86,9 +86,10 @@ FROM base AS builder
 COPY . .
 
 # Touch all source files so cargo knows they changed vs the dummy stubs
-RUN find crates/ shared/ test_fixtures/ -name '*.rs' -exec touch {} +
+RUN find crates/ shared/ daemon/ test_fixtures/ -name '*.rs' -exec touch {} +
 
 RUN cargo build --release --workspace --exclude mae-gui
+RUN cd daemon && cargo build --release
 
 # ---------------------------------------------------------------------------
 # Stage: ci — lint + test (build failure = image build failure)
@@ -120,7 +121,7 @@ RUN mkdir -p /home/mae/.config/mae /home/mae/.local/share/mae /home/mae/.local/s
 
 COPY --from=builder /mae/target/release/mae /usr/local/bin/mae
 COPY --from=builder /mae/target/release/mae-mcp-shim /usr/local/bin/mae-mcp-shim
-COPY --from=builder /mae/target/release/mae-daemon /usr/local/bin/mae-daemon
+COPY --from=builder /mae/daemon/target/release/mae-daemon /usr/local/bin/mae-daemon
 
 # OCI labels
 LABEL org.opencontainers.image.source="https://github.com/cuttlefisch/mae"
