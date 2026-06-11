@@ -309,7 +309,7 @@ jobs:
           echo "=== Checking data ==="
           test -d "$HOME/.local/share/mae/mae-manual.cozo"  && echo "OK: manual KB"
           test -d "$HOME/.local/share/mae/modules"          && echo "OK: modules"
-          MODULE_COUNT=$(find "$HOME/.local/share/mae/modules" -name "manifest.toml" | wc -l)
+          MODULE_COUNT=$(find "$HOME/.local/share/mae/modules" -name "module.toml" | wc -l)
           test "$MODULE_COUNT" -ge 10 && echo "OK: $MODULE_COUNT modules found"
 
           echo "=== Checking config ==="

@@ -395,11 +395,11 @@ step "Installing modules"
 if [ -d "$SCRIPT_DIR/modules" ]; then
     mkdir -p "$DATADIR/mae/modules"
     cp -r "$SCRIPT_DIR/modules/"* "$DATADIR/mae/modules/"
-    MODULE_COUNT=$(find "$DATADIR/mae/modules" -name "manifest.toml" 2>/dev/null | wc -l | tr -d ' ')
+    MODULE_COUNT=$(find "$DATADIR/mae/modules" -name "module.toml" 2>/dev/null | wc -l | tr -d ' ')
     if [ "$MODULE_COUNT" -ge 1 ]; then
         ok "$MODULE_COUNT modules -> $DATADIR/mae/modules/"
     else
-        fail "modules copied but no manifest.toml found"
+        fail "modules copied but no module.toml found"
     fi
 else
     fail "modules directory not found in package"
@@ -549,7 +549,7 @@ else
     fail "manual KB missing"
 fi
 
-MODULE_COUNT=$(find "$DATADIR/mae/modules" -name "manifest.toml" 2>/dev/null | wc -l | tr -d ' ')
+MODULE_COUNT=$(find "$DATADIR/mae/modules" -name "module.toml" 2>/dev/null | wc -l | tr -d ' ')
 if [ "$MODULE_COUNT" -ge 1 ]; then
     ok "$MODULE_COUNT modules installed"
 else
