@@ -36,9 +36,9 @@ Additionally, the dependency declarations were triply inconsistent:
 ## Storage Backend: Sled (not SQLite)
 
 The plan called for CozoDB's native SQLite storage (`storage-sqlite-src`), but this
-conflicts with `rusqlite` in `mae-state-server` via the shared `links = "sqlite3"` Cargo
-metadata. Since state-server needs `rusqlite` for WAL-based CRDT persistence, we keep
-sled for now. Migration to CozoDB SQLite is deferred until state-server drops rusqlite.
+conflicts with `rusqlite` via the shared `links = "sqlite3"` Cargo metadata. The editor
+workspace uses sled for CozoDB. The daemon (separate workspace/Cargo.lock) uses CozoDB
+with `storage-sqlite` + the `sqlite` crate for collab WAL persistence, avoiding the conflict.
 
 | Backend | Status | Notes |
 |---------|--------|-------|

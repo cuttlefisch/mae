@@ -2,7 +2,7 @@
 Type=Application
 Name=MAE (Connected)
 GenericName=Text Editor (Collaborative)
-Comment=Open MAE connected to the state server
+Comment=Open MAE connected to the daemon
 Exec=mae --gui --connect
 Icon=mae
 Terminal=false

@@ -16,7 +16,6 @@ graph TD
     mae --> mae_renderer
     mae --> mae_scheme
     mae --> mae_shell
-    mae --> mae_state_server
     mae --> mae_sync
     mae_ai --> mae_core
     mae_ai --> mae_kb
@@ -53,8 +52,6 @@ graph TD
     mae_shell[mae-shell]
     mae_snippets[mae-snippets]
     mae_spell[mae-spell]
-    mae_state_server --> mae_mcp
-    mae_state_server --> mae_sync
     mae_sync[mae-sync]
 ```
 
@@ -313,6 +310,7 @@ Source: `shared/mcp/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `auth` | mod |
 | `broadcast` | mod |
 | `client` | mod |
 | `client_mgr` | mod |
@@ -382,17 +380,6 @@ Source: `crates/spell/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `checker` | mod |
-
-## mae-state-server
-
-Source: `crates/state-server/src/lib.rs`
-
-| Item | Kind |
-|------|------|
-| `auth` | mod |
-| `doc_store` | mod |
-| `handler` | mod |
-| `storage` | mod |
 
 ## mae-sync
 
@@ -1079,14 +1066,14 @@ Source: `shared/sync/src/lib.rs`
 | `record-start` | Start event recording for debugging |
 | `record-stop` | Stop event recording |
 | `record-save` | Save recorded events to JSON file (:record-save <path>) |
-| `collab-start` | Start local state server |
-| `collab-connect` | Connect to collaborative state server |
-| `collab-disconnect` | Disconnect from state server |
+| `collab-start` | Start local daemon |
+| `collab-connect` | Connect to collaborative daemon |
+| `collab-disconnect` | Disconnect from daemon |
 | `collab-status` | Show collaborative editing status |
 | `collab-share` | Share current buffer for collaboration |
 | `collab-sync` | Force sync current buffer |
 | `collab-doctor` | Run collaborative editing diagnostics |
-| `collab-list` | List shared documents on the state server (SPC C l) |
+| `collab-list` | List shared documents on the daemon (SPC C l) |
 | `collab-join` | Join a shared document (SPC C j) |
 | `collab-discover` | Discover MAE peers on the local network via mDNS |
 | `move-down` | Move cursor down |

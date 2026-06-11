@@ -1,4 +1,4 @@
-//! Client connection handler for the state server.
+//! Client connection handler for the collab server.
 //!
 //! Each TCP (or Unix) client gets its own tokio task running this handler.
 //! Uses `mae_mcp::read_message` for framing and `mae_mcp::write_framed`
@@ -19,8 +19,8 @@ use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::auth::AuthProvider;
 use crate::doc_store::DocStore;
+use mae_mcp::auth::AuthProvider;
 
 /// Write timeout for event notifications to clients (seconds).
 const WRITE_TIMEOUT_SECS: u64 = 5;
@@ -84,7 +84,7 @@ pub async fn handle_client<R, W>(
 
     let mut session = ClientSession::new();
     let session_id = session.id;
-    info!(session = session_id, "state-server client connected");
+    info!(session = session_id, "collab client connected");
 
     // Track which docs this session has interacted with for disconnect cleanup.
     let mut session_docs: HashSet<String> = HashSet::new();
@@ -300,7 +300,7 @@ pub async fn handle_client<R, W>(
     info!(
         session = session_id,
         docs_touched = session_docs.len(),
-        "state-server client session ended"
+        "collab client session ended"
     );
 }
 

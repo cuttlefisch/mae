@@ -19,7 +19,7 @@
 | **WAL sequence** | Monotonically increasing server-side ID for each persisted update. |
 | **Sharer** | Client that creates a document on the server via `sync/share`. |
 | **Joiner** | Client that obtains document state from the server via `sync/resync`. |
-| **Relay** | The state server — applies updates, persists WAL, broadcasts to peers. |
+| **Relay** | The daemon (`mae-daemon`) — applies updates, persists WAL, broadcasts to peers. |
 
 ---
 
@@ -367,7 +367,7 @@ Completed in v0.11.0:
 5. ~~No awareness protocol~~ — `sync/awareness` JSON-RPC relay with 50ms throttle, 30s timeout, echo filtering, 8-color theme palette, GUI+TUI rendering *(v0.11.0)*
 
 Still deferred:
-6. **No P2P transport.** All sync goes through the state server. mDNS LAN discovery planned (v0.12.0+).
+6. **No P2P transport.** All sync goes through the daemon. mDNS LAN discovery planned (v0.12.0+).
 7. **No E2E encryption.** Transport is plaintext TCP. TLS planned.
 
 ---

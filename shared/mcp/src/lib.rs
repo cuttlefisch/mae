@@ -14,7 +14,7 @@
 //! - **Socket side** (MAE server <-> shim, or direct clients): Content-Length
 //!   framing (LSP-compatible). Each message is preceded by a
 //!   `Content-Length: N\r\n\r\n` header. This is also used for TCP transport
-//!   (collab state server, multi-client).
+//!   (collab daemon, multi-client).
 //!
 //! - **Stdio side** (shim <-> Claude Code): Newline-delimited JSON per the
 //!   MCP stdio transport specification. Each message is a single JSON object
@@ -39,6 +39,7 @@
 //! (LSP-compatible) with automatic fallback to line-based framing for
 //! backward compatibility with existing `mae-mcp-shim` clients.
 
+pub mod auth;
 pub mod broadcast;
 pub mod client;
 pub mod client_mgr;
@@ -497,7 +498,7 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
 ///
 /// Handles protocol methods (initialize, ping, subscribe, health, etc.)
 /// and dispatches tool calls and sync methods via the `tool_tx` channel.
-/// Reusable by any server (editor MCP, state-server) that needs JSON-RPC dispatch.
+/// Reusable by any server (editor MCP, daemon) that needs JSON-RPC dispatch.
 pub async fn handle_request(
     msg: &str,
     tool_definitions: &[ToolInfo],

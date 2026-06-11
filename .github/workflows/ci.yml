@@ -55,10 +55,10 @@ jobs:
             # that crash the process. These tests pass on stable.
             cargo test --workspace --exclude mae
             cargo test -p mae --bins
-            cargo test -p mae --test collab_bridge_integration
             cargo test -p mae --test mcp_event_loop_integration
             # Skipped on nightly: kb_graph_validation, kb_lifecycle_e2e,
-            # collab_stress, collab_tcp_e2e (all CozoDB or #[ignore])
+            # collab_tcp_e2e (all CozoDB or #[ignore])
+            # collab_bridge_integration and collab_stress moved to daemon workspace
             cargo test --doc --workspace
           fi
       - name: cargo clippy
@@ -74,7 +74,7 @@ jobs:
       - name: Build install artifacts
         if: matrix.toolchain == 'stable' && matrix.step == 'test'
         run: |
-          cargo build --release --package mae-state-server --package mae-mcp
+          cargo build --release --package mae-mcp
           cargo build --release --package mae --bin build-manual-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
 
@@ -83,7 +83,6 @@ jobs:
         run: |
           mkdir -p /tmp/mae-artifacts
           cp target/release/mae /tmp/mae-artifacts/
-          cp target/release/mae-state-server /tmp/mae-artifacts/
           cp target/release/mae-mcp-shim /tmp/mae-artifacts/
           cp -r assets/mae-manual.cozo /tmp/mae-artifacts/
           cp assets/mae-manual.cozo.sha256 /tmp/mae-artifacts/
@@ -144,16 +143,13 @@ jobs:
       - name: File safety tests
         run: cargo test --package mae-core --lib -- content_hash file_lock --test-threads=1
         timeout-minutes: 3
-      - name: State server tests
-        run: cargo test --package mae-state-server -- --test-threads=1 --nocapture
+      - name: Build daemon binary
+        run: cd daemon && cargo build
+      - name: Daemon collab tests
+        run: cd daemon && cargo test -- --test-threads=1 --nocapture
         timeout-minutes: 10
         env:
-          RUST_LOG: "mae_state_server=debug,mae_sync=debug,warn"
-      - name: Collab bridge integration tests
-        run: cargo test --package mae --test collab_bridge_integration -- --test-threads=1 --nocapture
-        timeout-minutes: 5
-        env:
-          RUST_LOG: "mae_state_server=debug,mae_sync=debug,warn"
+          RUST_LOG: "mae_daemon=debug,mae_sync=debug,warn"
       - name: TCP E2E tests (PSK auth + KB protocol)
         run: |
           cargo test --package mae --test collab_tcp_e2e -- tcp_psk --ignored --test-threads=1 --nocapture
@@ -163,7 +159,7 @@ jobs:
         timeout-minutes: 5
         env:
           MAE_TCP_E2E: "1"
-          RUST_LOG: "mae_state_server=debug,warn"
+          RUST_LOG: "mae_daemon=debug,warn"
       - name: KB lifecycle E2E (CozoDB)
         run: cargo test --package mae --test kb_lifecycle_e2e -- --ignored --test-threads=1 --nocapture
         timeout-minutes: 5
@@ -172,8 +168,8 @@ jobs:
       - name: Build manual KB
         run: cargo run --bin build-manual-kb -- /tmp/mae-manual.cozo
         timeout-minutes: 3
-      - name: State server check-config
-        run: cargo run --package mae-state-server -- --check-config
+      - name: Daemon check-config
+        run: cd daemon && cargo run -- --check-config
         timeout-minutes: 1
 
   containers:
@@ -284,17 +280,15 @@ jobs:
         run: |
           mkdir -p /tmp/mae-pkg
           cp /tmp/mae-dl/mae /tmp/mae-pkg/mae
-          cp /tmp/mae-dl/mae-state-server /tmp/mae-pkg/mae-state-server
           cp /tmp/mae-dl/mae-mcp-shim /tmp/mae-pkg/mae-mcp-shim
           cp /tmp/daemon-dl/mae-daemon /tmp/mae-pkg/mae-daemon
-          chmod +x /tmp/mae-pkg/mae /tmp/mae-pkg/mae-state-server /tmp/mae-pkg/mae-mcp-shim /tmp/mae-pkg/mae-daemon
+          chmod +x /tmp/mae-pkg/mae /tmp/mae-pkg/mae-mcp-shim /tmp/mae-pkg/mae-daemon
           cp -r /tmp/mae-dl/mae-manual.cozo /tmp/mae-pkg/mae-manual.cozo
           cp /tmp/mae-dl/mae-manual.cozo.sha256 /tmp/mae-pkg/mae-manual.cozo.sha256
           cp -r modules /tmp/mae-pkg/modules
           cp assets/sample-config.toml /tmp/mae-pkg/sample-config.toml
           cp assets/daemon-config.toml /tmp/mae-pkg/daemon-config.toml
           cp assets/mae-daemon.service /tmp/mae-pkg/mae-daemon.service
-          cp assets/mae-state-server.service /tmp/mae-pkg/mae-state-server.service
           cp assets/install.sh /tmp/mae-pkg/install.sh
           chmod +x /tmp/mae-pkg/install.sh
 
@@ -309,7 +303,6 @@ jobs:
           echo "=== Checking binaries ==="
           test -x "$HOME/.local/bin/mae"              && echo "OK: mae"
           test -x "$HOME/.local/bin/mae-mcp-shim"     && echo "OK: mae-mcp-shim"
-          test -x "$HOME/.local/bin/mae-state-server"  && echo "OK: mae-state-server"
           test -x "$HOME/.local/bin/mae-daemon"        && echo "OK: mae-daemon"
 
           echo "=== Checking data ==="
@@ -324,7 +317,6 @@ jobs:
 
           echo "=== Checking systemd units ==="
           test -f "$HOME/.config/systemd/user/mae-daemon.service"        && echo "OK: mae-daemon.service"
-          test -f "$HOME/.config/systemd/user/mae-state-server.service"  && echo "OK: mae-state-server.service"
 
           echo "=== Checking binary runs ==="
           "$HOME/.local/bin/mae" --version
@@ -356,7 +348,6 @@ jobs:
           echo "=== Checking binaries removed ==="
           ! test -f "$HOME/.local/bin/mae"              && echo "OK: mae removed"
           ! test -f "$HOME/.local/bin/mae-mcp-shim"     && echo "OK: mae-mcp-shim removed"
-          ! test -f "$HOME/.local/bin/mae-state-server"  && echo "OK: mae-state-server removed"
           ! test -f "$HOME/.local/bin/mae-daemon"        && echo "OK: mae-daemon removed"
 
           echo "=== Checking data removed ==="
@@ -365,7 +356,6 @@ jobs:
 
           echo "=== Checking systemd units removed ==="
           ! test -f "$HOME/.config/systemd/user/mae-daemon.service"        && echo "OK: daemon unit removed"
-          ! test -f "$HOME/.config/systemd/user/mae-state-server.service"  && echo "OK: state-server unit removed"
 
           echo "=== Checking config preserved ==="
           test -f "$HOME/.config/mae/config.toml"  && echo "OK: config.toml preserved"

@@ -3,37 +3,37 @@
 :KIND: lesson
 :END:
 #+title: Setting Up Collaborative Editing
-#+filetags: :tutorial:collaboration:state-server:sync:
+#+filetags: :tutorial:collaboration:daemon:sync:
 
 ** Setting Up Collaborative Editing
 
-This lesson [[teaches:concept:collaborative-state][teaches collaborative state]] and the [[teaches:concept:sync-engine][sync engine]]. It walks you through enabling real-time collaborative editing in MAE, from installing the state server to sharing your first buffer with a peer.
+This lesson [[teaches:concept:collaborative-state][teaches collaborative state]] and the [[teaches:concept:sync-engine][sync engine]]. It walks you through enabling real-time collaborative editing in MAE, from installing the daemon to sharing your first buffer with a peer.
 
-*** Step 1 — Install the state server
+*** Step 1 — Install the daemon
 
-Build and install ~mae-state-server~ from source:
+Build and install ~mae-daemon~ from source:
 #+begin_src bash
-cargo install --path crates/state-server
+cargo install --path daemon
 # or use the Makefile shortcut:
-make install-state-server
+make install-daemon
 #+end_src
 
 Verify it is on your PATH:
 #+begin_src bash
-mae-state-server --version
+mae-daemon --version
 #+end_src
 
 *** Step 2 — Start the server
 
 For local (loopback) use:
 #+begin_src bash
-mae-state-server
+mae-daemon
 # Listening on 127.0.0.1:9473
 #+end_src
 
 For multi-machine use, bind to all interfaces:
 #+begin_src bash
-mae-state-server --bind 0.0.0.0:9473
+mae-daemon --bind 0.0.0.0:9473
 #+end_src
 
 Or press ~SPC C s~ inside MAE to start a local server automatically.
@@ -48,7 +48,7 @@ In =~/.config/mae/config.toml=:
 psk = "your-shared-secret-here"
 #+end_example
 
-For the server, add the same key to =~/.config/mae/state-server.toml=:
+For the server, add the same key to =~/.config/mae/daemon.toml=:
 #+begin_example
 psk = "your-shared-secret-here"
 #+end_example
@@ -111,11 +111,11 @@ Ask the AI: "connect to the collab server and share this buffer" to have it set 
 
 *** Systemd User Service
 
-Install and enable the state server as a systemd user service:
+Install and enable the daemon as a systemd user service:
 #+begin_src bash
 make install-service
-systemctl --user enable --now mae-state-server
-journalctl --user -u mae-state-server -f  # view logs
+systemctl --user enable --now mae-daemon
+journalctl --user -u mae-daemon -f  # view logs
 #+end_src
 
 *** Client-Frame Workflow
@@ -135,7 +135,7 @@ bindsym $mod+Shift+e exec mae --connect
 
 For multi-machine collaboration, bind to all interfaces:
 #+begin_src bash
-mae-state-server --bind 0.0.0.0:9473
+mae-daemon --bind 0.0.0.0:9473
 #+end_src
 
 Open the firewall port:
@@ -146,7 +146,7 @@ Open the firewall port:
 
 *** Troubleshooting
 
-- *Connection refused* — check ~mae-state-server~ is running: ~ss -tlnp | grep 9473~
+- *Connection refused* — check ~mae-daemon~ is running: ~ss -tlnp | grep 9473~
 - *Auth failed* — PSK mismatch: ensure server and all clients use the same ~collab_psk~
 - *No peers visible* — ensure all clients use the same ~collab-server-address~
 - *Stale state after restart* — run ~:collab-doctor~ to inspect WAL health; the server recovers from WAL automatically on restart

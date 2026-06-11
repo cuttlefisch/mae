@@ -108,7 +108,7 @@ MAE is organized as a Rust workspace with 20 crates and 19 Scheme modules.
 | `mae-lookup` | Documentation lookup |
 | `mae-spell` | Spell checking |
 | `mae-sync` | CRDT sync (yrs/YATA), ropey bridge, collaborative state |
-| `mae-state-server` | Standalone collab state server — TCP sync, WAL persistence |
+| `mae-daemon` | Background daemon — KB persistence, collab sync, WAL persistence (merged from mae-state-server) |
 | `mae` | Binary crate — CLI entry point, config loading, event loops |
 
 The 19 Scheme modules in `modules/` provide keybinding overlays and optional features (agenda, dashboard, git-status, org, tables, surround, multicursor, etc.). See [docs/CODE_MAP.md](docs/CODE_MAP.md) for the dependency graph and module sizes.
@@ -180,7 +180,7 @@ ci: add cargo-deny to CI pipeline
 test(lsp): add rename integration tests
 ```
 
-Scope = crate name without `mae-` prefix: `core`, `gui`, `ai`, `lsp`, `dap`, `scheme`, `shell`, `kb`, `mcp`, `renderer`, `sync`, `state-server`, `babel`.
+Scope = crate name without `mae-` prefix: `core`, `gui`, `ai`, `lsp`, `dap`, `scheme`, `shell`, `kb`, `mcp`, `renderer`, `sync`, `daemon`, `babel`.
 
 ### Versioning
 

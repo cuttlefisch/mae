@@ -927,7 +927,7 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
         categories.push(serde_json::json!({
             "name": "collab",
             "conditional": true,
-            "requires_note": "Requires running state server (mae-state-server)",
+            "requires_note": "Requires running state server (mae-daemon)",
             "tests": [
                 {
                     "id": "collab.1",

@@ -26,7 +26,7 @@ make test-scheme-all                        # All Scheme tests
 ```bash
 MAE_TCP_E2E=1 cargo test -p mae --test collab_tcp_e2e -- --ignored --nocapture  # TCP collab
 make docker-ci                  # Full CI in container
-make docker-collab-test         # Collab E2E (state-server + clients in Docker)
+make docker-collab-test         # Collab E2E (daemon + clients in Docker)
 ```
 
 ### Tiered CI Targets
@@ -160,7 +160,7 @@ Multi-process collab tests with real TCP connections.
 | DAP | 18+ | — | Mock adapter, all request types |
 | MCP | 65+ | — | Protocol, framing, handle_request |
 | CRDT sync | 36+ | 151+ | Convergence, concurrent, 3-client, encoding edge cases |
-| Collab/state server | 26+ | 12+ | Storage, doc store, handler, limits, options |
+| Collab/daemon | 26+ | 12+ | Storage, doc store, handler, limits, options |
 | Git ops | 11+ | — | Diff parsing, blame, status |
 | Config | 23+ | — | TOML parsing, defaults |
 | Shell | 40+ | — | PTY, lifecycle, modes |

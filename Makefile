@@ -45,7 +45,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check build-state-server install-state-server install-service install-daemon install-daemon-service install-completions docker-network-test bench bench-save bench-compare manual-kb install-manual
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual
 
 # Default target: release build
 all: build
@@ -119,17 +119,10 @@ install-tui: build-tui
 install-upgrade:
 	@set -e; \
 	OLD_V=$$($(PREFIX)/$(BINARY) --version 2>/dev/null || echo "(not installed)"); \
-	OLD_SV=$$($(PREFIX)/mae-state-server --version 2>/dev/null || echo "(not installed)"); \
 	echo "=== MAE Upgrade ==="; \
 	echo "Current: $$OLD_V"; \
-	echo "Current state-server: $$OLD_SV"; \
 	echo ""; \
-	RESTART_SERVER=0; RESTART_DAEMON=0; \
-	if systemctl --user is-active mae-state-server >/dev/null 2>&1; then \
-		echo "Stopping mae-state-server..."; \
-		systemctl --user stop mae-state-server; \
-		RESTART_SERVER=1; \
-	fi; \
+	RESTART_DAEMON=0; \
 	if systemctl --user is-active mae-daemon >/dev/null 2>&1; then \
 		echo "Stopping mae-daemon..."; \
 		systemctl --user stop mae-daemon; \
@@ -139,22 +132,17 @@ install-upgrade:
 		cp $(PREFIX)/$(BINARY) $(PREFIX)/$(BINARY).bak; \
 		echo "Backed up $(BINARY) -> $(BINARY).bak"; \
 	fi; \
-	if [ -f $(PREFIX)/mae-state-server ]; then \
-		cp $(PREFIX)/mae-state-server $(PREFIX)/mae-state-server.bak; \
-		echo "Backed up mae-state-server -> mae-state-server.bak"; \
-	fi; \
 	if [ -f $(PREFIX)/mae-daemon ]; then \
 		cp $(PREFIX)/mae-daemon $(PREFIX)/mae-daemon.bak; \
 		echo "Backed up mae-daemon -> mae-daemon.bak"; \
 	fi; \
 	echo ""; \
 	echo "Building..."; \
-	$(MAKE) build build-state-server build-daemon; \
+	$(MAKE) build build-daemon; \
 	echo ""; \
 	echo "Installing..."; \
-	$(MAKE) install install-service install-daemon-service; \
+	$(MAKE) install install-daemon-service; \
 	NEW_V=$$($(PREFIX)/$(BINARY) --version 2>/dev/null || echo "unknown"); \
-	NEW_SV=$$($(PREFIX)/mae-state-server --version 2>/dev/null || echo "unknown"); \
 	OLD_MAJOR=$$(echo "$$OLD_V" | sed 's/mae //' | cut -d. -f1); \
 	NEW_MAJOR=$$(echo "$$NEW_V" | sed 's/mae //' | cut -d. -f1); \
 	if [ -n "$$OLD_MAJOR" ] && [ -n "$$NEW_MAJOR" ] && [ "$$OLD_MAJOR" != "$$NEW_MAJOR" ] 2>/dev/null; then \
@@ -163,11 +151,6 @@ install-upgrade:
 		echo "  Config or protocol changes may require manual migration."; \
 		echo "  Check CHANGELOG.md for breaking changes."; \
 	fi; \
-	if [ "$$RESTART_SERVER" = "1" ]; then \
-		echo "Restarting mae-state-server..."; \
-		systemctl --user start mae-state-server || \
-			echo "WARNING: Failed to restart mae-state-server"; \
-	fi; \
 	if [ "$$RESTART_DAEMON" = "1" ]; then \
 		echo "Restarting mae-daemon..."; \
 		systemctl --user start mae-daemon || \
@@ -175,37 +158,30 @@ install-upgrade:
 	fi; \
 	echo ""; \
 	echo "=== Upgrade Complete ==="; \
-	echo "  $$OLD_V -> $$NEW_V"; \
-	echo "  $$OLD_SV -> $$NEW_SV"
+	echo "  $$OLD_V -> $$NEW_V"
 
-## install-all: install editor + state server + daemon + systemd services
-install-all: install install-service install-daemon-service
+## install-all: install editor + daemon + systemd services
+install-all: install install-daemon-service
 	@echo ""
 	@echo "Full install complete."
 	@echo "  mae                      — launch editor"
-	@echo "  mae --connect            — launch connected to state server"
-	@echo "  systemctl --user enable --now mae-state-server"
 	@echo "  systemctl --user enable --now mae-daemon"
 
 ## uninstall: remove installed binaries, desktop entries, icon, and systemd services
 uninstall:
 	@rm -f $(PREFIX)/$(BINARY)
 	@rm -f $(PREFIX)/$(SHIM_BINARY)
-	@rm -f $(PREFIX)/mae-state-server
 	@rm -f $(PREFIX)/mae-daemon
 	@rm -f $(DATADIR)/applications/mae.desktop
 	@rm -f $(DATADIR)/applications/mae-connect.desktop
 	@rm -f $(DATADIR)/icons/hicolor/scalable/apps/mae.svg
 	@echo "Removed $(PREFIX)/$(BINARY)"
 	@echo "Removed $(PREFIX)/$(SHIM_BINARY)"
-	@echo "Removed $(PREFIX)/mae-state-server"
 	@echo "Removed $(PREFIX)/mae-daemon"
 	@echo "Removed $(DATADIR)/applications/mae*.desktop"
 	@echo "Removed $(DATADIR)/icons/hicolor/scalable/apps/mae.svg"
 	@rm -rf $(DATADIR)/mae/modules
 	@echo "Removed $(DATADIR)/mae/modules/"
-	@systemctl --user disable --now mae-state-server 2>/dev/null || true
-	@rm -f $(HOME)/.config/systemd/user/mae-state-server.service
 	@systemctl --user disable --now mae-daemon 2>/dev/null || true
 	@rm -f $(HOME)/.config/systemd/user/mae-daemon.service
 	@systemctl --user daemon-reload 2>/dev/null || true
@@ -380,47 +356,6 @@ install-manual: manual-kb
 	@cp assets/mae-manual.cozo.sha256 $(DATADIR)/mae/mae-manual.cozo.sha256
 	@echo "Installed manual KB -> $(DATADIR)/mae/mae-manual.cozo"
 
-## build-state-server: build the collaborative state server
-build-state-server:
-	$(CARGO) build --release --package mae-state-server
-
-## install-state-server: build + install mae-state-server to PREFIX
-install-state-server: build-state-server
-	@mkdir -p $(PREFIX)
-	@install -m 755 $(TARGET_DIR)/release/mae-state-server $(PREFIX)/mae-state-server
-	@echo "Installed mae-state-server -> $(PREFIX)/mae-state-server"
-
-## install-service: install state-server systemd user unit
-install-service: install-state-server
-	@mkdir -p $(HOME)/.config/systemd/user
-	@install -m 644 assets/mae-state-server.service $(HOME)/.config/systemd/user/mae-state-server.service
-	@systemctl --user daemon-reload 2>/dev/null || true
-	@echo ""
-	@echo "Installed mae-state-server.service -> ~/.config/systemd/user/"
-	@echo "Binary: $(PREFIX)/mae-state-server"
-	@echo ""
-	@echo "Next steps:"
-	@echo "  systemctl --user enable --now mae-state-server   # start + auto-start on login"
-	@echo "  journalctl --user -u mae-state-server -f         # view logs"
-	@echo ""
-	@echo "Sway/i3 keybind (add to config):"
-	@echo '  bindsym $$mod+Shift+e exec mae --connect'
-
-## install-completions: install shell completions for mae-state-server
-install-completions:
-	@if [ -d /usr/share/bash-completion/completions ]; then \
-		install -m 644 crates/state-server/completions/mae-state-server.bash /usr/share/bash-completion/completions/mae-state-server; \
-		echo "Installed bash completions"; \
-	fi
-	@if [ -d /usr/share/zsh/site-functions ]; then \
-		install -m 644 crates/state-server/completions/mae-state-server.zsh /usr/share/zsh/site-functions/_mae-state-server; \
-		echo "Installed zsh completions"; \
-	fi
-	@if [ -d /usr/share/fish/vendor_completions.d ]; then \
-		install -m 644 crates/state-server/completions/mae-state-server.fish /usr/share/fish/vendor_completions.d/mae-state-server.fish; \
-		echo "Installed fish completions"; \
-	fi
-
 ## install-daemon: build + install mae-daemon to PREFIX
 install-daemon: build-daemon
 	@mkdir -p $(PREFIX)
@@ -488,10 +423,6 @@ docker-collab-test:
 	echo "--- verifier exit code: $${RC:-unknown} ---"; \
 	docker compose -f docker-compose.collab-test.yml down --volumes --timeout 10; \
 	exit $${RC:-1}
-
-## docker-network-test: run state-server network E2E tests in Docker
-docker-network-test:
-	docker compose -f docker-compose.test-network.yml run --rm --build test
 
 ## docker-ci: run full CI pipeline in a container (no local toolchain needed)
 docker-ci:

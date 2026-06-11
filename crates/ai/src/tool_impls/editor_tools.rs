@@ -931,10 +931,10 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
     let collab_configured =
         collab_auto || !matches!(editor.collab.status, mae_core::CollabStatus::Off);
     let collab_status_str = editor.collab.status.as_str();
-    let state_server_found = on_path("mae-state-server");
+    let state_server_found = on_path("mae-daemon");
     if collab_auto && !state_server_found {
         issues.push(
-            "collab_auto_connect is true but mae-state-server binary not found on PATH".to_string(),
+            "collab_auto_connect is true but mae-daemon binary not found on PATH".to_string(),
         );
     }
 

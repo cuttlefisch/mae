@@ -1,6 +1,6 @@
 # Docker Compose for collab CRDT E2E tests.
 #
-# Topology: state-server + client-a + client-b + undo-sharer + undo-joiner + verifier
+# Topology: daemon + client-a + client-b + undo-sharer + undo-joiner + verifier
 # Scenarios: separate filesystems + shared filesystem convergence + two-client CRDT undo
 #
 # Usage:
@@ -8,15 +8,15 @@
 #   (runs foreground, inspects verifier exit code from stopped container)
 
 services:
-  state-server:
+  daemon:
     build:
       context: .
       dockerfile: Dockerfile
       target: runtime
-    entrypoint: ["mae-state-server", "--bind", "0.0.0.0:9473"]
+    entrypoint: ["mae-daemon", "--bind", "0.0.0.0:9473"]
     stop_grace_period: 10s
     environment:
-      RUST_LOG: "mae_mcp=warn,mae_state_server=debug,mae_sync=debug,info"
+      RUST_LOG: "mae_mcp=warn,mae_daemon=debug,mae_sync=debug,info"
     healthcheck:
       # TCP SYN check — no protocol payload, no PeerJoined/PeerLeft noise.
       # Interval increased to 10s to reduce session churn during long tests.
@@ -42,12 +42,12 @@ services:
       - sync:/sync
       - shared-workspace:/shared
     environment:
-      MAE_COLLAB_SERVER: "state-server:9473"
+      MAE_COLLAB_SERVER: "daemon:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
       MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,info"
     depends_on:
-      state-server:
+      daemon:
         condition: service_healthy
     networks:
       - collab-test
@@ -66,12 +66,12 @@ services:
       - sync:/sync
       - shared-workspace:/shared
     environment:
-      MAE_COLLAB_SERVER: "state-server:9473"
+      MAE_COLLAB_SERVER: "daemon:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
       MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,info"
     depends_on:
-      state-server:
+      daemon:
         condition: service_healthy
     networks:
       - collab-test
@@ -89,12 +89,12 @@ services:
       - ./scheme/lib:/usr/share/mae/lib:ro
       - sync:/sync
     environment:
-      MAE_COLLAB_SERVER: "state-server:9473"
+      MAE_COLLAB_SERVER: "daemon:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
       MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,mae::sync_broadcast=debug,mae_core::buffer=info,info"
     depends_on:
-      state-server:
+      daemon:
         condition: service_healthy
     networks:
       - collab-test
@@ -112,12 +112,12 @@ services:
       - ./scheme/lib:/usr/share/mae/lib:ro
       - sync:/sync
     environment:
-      MAE_COLLAB_SERVER: "state-server:9473"
+      MAE_COLLAB_SERVER: "daemon:9473"
       MAE_COLLAB_AUTO_CONNECT: "1"
       MAE_SKIP_WIZARD: "1"
       MAE_LOG: "mae_mcp=warn,mae::collab_bridge=debug,mae::sync_broadcast=debug,mae_core::buffer=info,info"
     depends_on:
-      state-server:
+      daemon:
         condition: service_healthy
     networks:
       - collab-test

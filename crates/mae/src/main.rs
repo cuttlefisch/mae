@@ -103,7 +103,7 @@ fn main() -> io::Result<()> {
         println!("  --print-config-template Print the default commented template to stdout");
         println!("  --gui                   Launch with GUI backend (default when available)");
         println!("  --no-gui, --tui, -nw    Force terminal mode (like emacs -nw)");
-        println!("  --connect [ADDR]        Connect to state server (like emacsclient -c)");
+        println!("  --connect [ADDR]        Connect to daemon (like emacsclient -c)");
         println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
         println!("  --setup-agents [DIR]    Write .mcp.json & agent settings for discovery");
         println!("  --check-config          Validate init.scm + config.toml and exit (for CI)");

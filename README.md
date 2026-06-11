@@ -19,7 +19,7 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
 - **AI as peer actor** — 450+ editor commands exposed as AI tools. The AI calls
   the same `dispatch_builtin()` as your keybindings. No shadow API, no simulated
   keystrokes.
-- **Collaborative editing** — CRDT sync engine (yrs/YATA) with state server,
+- **Collaborative editing** — CRDT sync engine (yrs/YATA) with daemon,
   WAL persistence, per-user undo, awareness protocol, PSK authentication, and
   mDNS peer discovery. Collaborative KB sharing enables real-time knowledge base
   sync across instances with offline edit + reconnect support.
@@ -103,7 +103,7 @@ mae (binary)
  ├── mae-kb          Knowledge base — CozoDB graph store, typed relationships, org parser, federation
  ├── mae-mcp         MCP server — Unix socket, JSON-RPC, stdio shim
  ├── mae-sync        Collaborative sync — yrs CRDT, ropey bridge, encoding helpers
- ├── mae-state-server  Standalone collab state server — TCP sync, WAL persistence
+ ├── mae-daemon        Background daemon — KB persistence, collab sync, WAL persistence
  ├── mae-babel       Org-babel executor — 12 languages, persistent sessions, language backends
  ├── mae-export      Org/Markdown export — HTML, Markdown, TOC, syntax highlighting
  ├── mae-snippets    YASnippet-style templates — tab-stops, mirrors, transforms
@@ -368,7 +368,7 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, KB federation |
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
 | 11. Module System | ✅ Complete | 19 modules (Doom model), `mae pkg` CLI, flags, live reload |
-| 12. Collaborative Editing | ✅ Complete | CRDT state server, multi-peer sync, WAL persistence, awareness, per-user undo, PSK auth, KB sharing E2E |
+| 12. Collaborative Editing | ✅ Complete | CRDT daemon sync, multi-peer sync, WAL persistence, awareness, per-user undo, PSK auth, KB sharing E2E |
 | 13. Scheme Runtime | ✅ Complete | mae-scheme R7RS-small VM, Steel fully removed, 2,200+ Scheme tests |
 | 14. Graph KB | ✅ Complete | CozoDB default, 20 typed rel types, agenda queries, versioning, HNSW index, views |
 | **Next** | 🔧 In progress | AI hygiene, task management, live GraphRAG, GUI views. See [ROADMAP.md](ROADMAP.md) |

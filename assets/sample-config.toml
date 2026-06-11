@@ -108,10 +108,10 @@ editor = "claude"
 # agenda_files = ["~/org", "~/work/notes"]
 
 [collaboration]
-# State server address for collaborative editing
+# Daemon address for collaborative editing
 # server_address = "127.0.0.1:9473"
 
-# Automatically connect to state server on startup
+# Automatically connect to daemon on startup
 # auto_connect = false
 
 # Automatically share new file buffers when connected

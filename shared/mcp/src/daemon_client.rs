@@ -1,7 +1,7 @@
 //! DaemonClient — synchronous JSON-RPC client over Unix socket.
 //!
 //! Connects to `mae-daemon` via Unix domain socket using Content-Length
-//! framed JSON-RPC (same protocol as MCP server and state-server).
+//! framed JSON-RPC (same protocol as MCP server and daemon).
 //!
 //! Uses blocking I/O (`std::os::unix::net::UnixStream`) so it can be
 //! called from synchronous `KbQueryLayer` trait methods without requiring

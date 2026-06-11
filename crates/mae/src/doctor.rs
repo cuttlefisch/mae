@@ -236,7 +236,7 @@ pub fn run_doctor() -> i32 {
     // --- Collaborative Editing ---
     section("Collaborative Editing");
 
-    if check_binary("mae-state-server").is_some() {
+    if check_binary("mae-daemon").is_some() {
         println!("  {} state-server binary: found", GREEN_CHECK);
     } else {
         println!("  {} state-server binary: not found", YELLOW_WARN);
@@ -269,7 +269,7 @@ pub fn run_doctor() -> i32 {
 
     // Systemd service status
     let systemd_active = Command::new("systemctl")
-        .args(["--user", "is-active", "mae-state-server"])
+        .args(["--user", "is-active", "mae-daemon"])
         .output()
         .ok()
         .map(|o| o.status.success())
@@ -278,7 +278,7 @@ pub fn run_doctor() -> i32 {
         println!("  {} systemd user service: active", GREEN_CHECK);
     } else {
         println!(
-            "  {} systemd user service: inactive — systemctl --user enable --now mae-state-server",
+            "  {} systemd user service: inactive — systemctl --user enable --now mae-daemon",
             YELLOW_WARN
         );
     }
@@ -295,7 +295,7 @@ pub fn run_doctor() -> i32 {
         println!("  {} TCP reachable: {}", GREEN_CHECK, collab_addr);
     } else {
         println!(
-            "  {} TCP unreachable: {} — is mae-state-server listening?",
+            "  {} TCP unreachable: {} — is mae-daemon listening?",
             RED_CROSS, collab_addr
         );
         errors += 1;

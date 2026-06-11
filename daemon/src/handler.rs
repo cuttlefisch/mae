@@ -1,7 +1,7 @@
 //! JSON-RPC method dispatch for daemon requests.
 //!
 //! Reuses `mae_mcp::{read_message, write_framed}` — same Content-Length
-//! framing as the MCP server and state-server.
+//! framing as the MCP server and collab server.
 
 use mae_kb::query::KbQueryLayer;
 use mae_kb::store::SearchHit;

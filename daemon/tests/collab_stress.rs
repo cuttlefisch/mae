@@ -4,10 +4,10 @@
 
 use std::sync::{Arc, Once};
 
+use mae_daemon::collab_handler::handle_client;
+use mae_daemon::doc_store::DocStore;
+use mae_daemon::storage::SqliteBackend;
 use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
-use mae_state_server::doc_store::DocStore;
-use mae_state_server::handler::handle_client;
-use mae_state_server::storage::SqliteBackend;
 use mae_sync::encoding::update_to_base64;
 use mae_sync::text::TextSync;
 use tokio::io::BufReader;

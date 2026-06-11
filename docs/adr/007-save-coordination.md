@@ -7,7 +7,7 @@
 ## Context
 
 MAE's collaborative editing (ADR-006) synchronizes CRDT state between clients
-via a state server, but has no protocol for coordinating file saves. Multiple
+via the daemon, but has no protocol for coordinating file saves. Multiple
 clients editing the same document need clear answers to:
 
 1. Who writes to disk? When?

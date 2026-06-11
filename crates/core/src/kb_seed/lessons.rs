@@ -489,27 +489,27 @@ See also: [[concept:kb-federation]], [[concept:kb-workflows]], [[concept:kb-vs-a
 pub(super) const LESSON_COLLAB_SETUP: &str = "\
 ## Setting Up Collaborative Editing\n\n\
 This lesson walks you through enabling real-time collaborative editing in MAE, \
-from installing the state server to sharing your first buffer with a peer.\n\n\
-### Step 1 — Install the state server\n\n\
-Build and install `mae-state-server` from source:\n\
+from installing the daemon to sharing your first buffer with a peer.\n\n\
+### Step 1 — Install the daemon\n\n\
+Build and install `mae-daemon` from source:\n\
 ```bash\n\
-cargo install --path crates/state-server\n\
+cargo install --path daemon\n\
 # or use the Makefile shortcut:\n\
-make install-state-server\n\
+make install-daemon\n\
 ```\n\n\
 Verify it is on your PATH:\n\
 ```bash\n\
-mae-state-server --version\n\
+mae-daemon --version\n\
 ```\n\n\
 ### Step 2 — Start the server\n\n\
 For local (loopback) use:\n\
 ```bash\n\
-mae-state-server\n\
+mae-daemon\n\
 # Listening on 127.0.0.1:9473\n\
 ```\n\n\
 For multi-machine use, bind to all interfaces:\n\
 ```bash\n\
-mae-state-server --bind 0.0.0.0:9473\n\
+mae-daemon --bind 0.0.0.0:9473\n\
 ```\n\n\
 Or press `SPC C s` inside MAE to start a local server automatically.\n\n\
 ### Step 3 — Set a shared secret (PSK authentication)\n\n\
@@ -520,7 +520,7 @@ In `~/.config/mae/config.toml`:\n\
 [collaboration]\n\
 psk = \"your-shared-secret-here\"\n\
 ```\n\n\
-For the server, add the same key to `~/.config/mae/state-server.toml`:\n\
+For the server, add the same key to `~/.config/mae/daemon.toml`:\n\
 ```toml\n\
 psk = \"your-shared-secret-here\"\n\
 ```\n\n\
@@ -569,11 +569,11 @@ The AI agent has direct access to collaboration state via four tools:\n\n\
 Ask the AI: \"connect to the collab server and share this buffer\" to \
 have it set everything up for you.\n\n\
 ### Systemd User Service\n\n\
-Install and enable the state server as a systemd user service:\n\
+Install and enable the daemon as a systemd user service:\n\
 ```bash\n\
 make install-service\n\
-systemctl --user enable --now mae-state-server\n\
-journalctl --user -u mae-state-server -f  # view logs\n\
+systemctl --user enable --now mae-daemon\n\
+journalctl --user -u mae-daemon -f  # view logs\n\
 ```\n\n\
 ### Client-Frame Workflow\n\n\
 Use `mae --connect` to open a frame that auto-connects to the server \
@@ -589,7 +589,7 @@ bindsym $mod+Shift+e exec mae --connect\n\
 ### Network & Firewall\n\n\
 For multi-machine collaboration, bind to all interfaces:\n\
 ```bash\n\
-mae-state-server --bind 0.0.0.0:9473\n\
+mae-daemon --bind 0.0.0.0:9473\n\
 ```\n\n\
 Open the firewall port:\n\
 - Fedora: `sudo firewall-cmd --add-port=9473/tcp --permanent && sudo firewall-cmd --reload`\n\
@@ -597,7 +597,7 @@ Open the firewall port:\n\
 **Security:** MAE uses PSK (HMAC-SHA256) mutual authentication. Set `collab_psk` \
 on both server and clients. For untrusted networks, use a VPN (Tailscale/WireGuard).\n\n\
 ### Troubleshooting\n\n\
-- **Connection refused** — check `mae-state-server` is running: `ss -tlnp | grep 9473`\n\
+- **Connection refused** — check `mae-daemon` is running: `ss -tlnp | grep 9473`\n\
 - **Auth failed** — PSK mismatch: ensure server and all clients use the same `collab_psk`\n\
 - **No peers visible** — ensure all clients use the same `collab-server-address`\n\
 - **Stale state after restart** — run `:collab-doctor` to inspect WAL health; \

@@ -100,9 +100,9 @@ impl CollabStatus {
 /// `pending_lsp_requests` and `pending_dap_intents`.
 #[derive(Debug, Clone)]
 pub enum CollabIntent {
-    /// Start a local state server process.
+    /// Start a local daemon process.
     StartServer,
-    /// Connect to a remote state server.
+    /// Connect to a remote daemon.
     Connect { address: String },
     /// Disconnect from the current server.
     Disconnect,

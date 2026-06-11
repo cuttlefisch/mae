@@ -201,7 +201,7 @@ A `KbCollectionDoc` is a CRDT manifest representing a shared knowledge base. It 
 - **Node manifest** — the set of node IDs belonging to this collection.
 - **Convergent state** — collection-level metadata (name, description, sync mode).
 
-Collections are addressed as `kbc:{kb_id}` in the sync protocol and route through the same state-server infrastructure as collaborative buffers.
+Collections are addressed as `kbc:{kb_id}` in the sync protocol and route through the same daemon infrastructure as collaborative buffers.
 
 ### Data Directory Layout
 
@@ -234,7 +234,7 @@ See `crates/kb/src/backup.rs` for implementation details.
 
 Sharing a KB follows the same lifecycle as collaborative buffers:
 
-1. **Share** — host publishes the collection doc to the state-server, which creates per-node CRDT documents.
+1. **Share** — host publishes the collection doc to the daemon, which creates per-node CRDT documents.
 2. **Join** — peer requests the collection manifest, then syncs individual node documents on demand.
 3. **Leave** — peer unsubscribes from updates; local state is retained for offline use.
 
@@ -255,7 +255,7 @@ See `crates/kb/src/export.rs`.
 - **PSK mutual auth** — HMAC-SHA256 challenge-response before `initialize`. Both peers must share a pre-configured key.
 - **SSH key auth** — planned for v0.12.0, replacing PSK for multi-user deployments.
 
-Until authentication is enabled, collaborative KB access is trusted-LAN only (same security model as the state-server).
+Until authentication is enabled, collaborative KB access is trusted-LAN only (same security model as the daemon).
 
 ## Philosophy
 

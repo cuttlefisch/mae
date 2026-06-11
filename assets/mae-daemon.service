@@ -1,4 +1,4 @@
-# MAE Daemon — background KB persistence and maintenance
+# MAE Daemon — background KB persistence, collaboration, and maintenance
 #
 # Installation (recommended):
 #   make install-daemon
@@ -11,7 +11,7 @@
 # Logs: journalctl --user -u mae-daemon -f
 
 [Unit]
-Description=MAE Knowledge Base Daemon
+Description=MAE Background Service (KB + Collaboration)
 Documentation=https://github.com/cuttlefisch/mae
 After=network.target
 

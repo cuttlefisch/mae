@@ -35,7 +35,7 @@ Two workspaces + shared crates (ADR-014):
 
 ```
 mae/                              (repo root)
-├── Cargo.toml                    (editor workspace — cozo+sled, rusqlite OK)
+├── Cargo.toml                    (editor workspace — cozo+sled)
 ├── Cargo.lock                    (editor lock)
 ├── crates/                       (editor-only crates — 18 crates)
 ├── daemon/                       (daemon workspace — cozo+sqlite, no rusqlite)
@@ -61,7 +61,6 @@ mae/                              (repo root)
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
-| `mae-state-server` | Standalone collab state server — TCP sync, WAL persistence, per-doc locking | `mae-mcp`, `mae-sync`, `rusqlite`, `tokio` |
 | `mae-babel` | Org-mode code block execution (12 languages) | `mae-shell` |
 | `mae-export` | Org/Markdown → HTML/Markdown export | `mae-kb` |
 | `mae-canvas` | Visual buffer (diagrams, drawings) | `mae-core` |
@@ -84,7 +83,7 @@ mae/                              (repo root)
 
 | Crate | Purpose | Key Dependencies |
 |---|---|---|
-| `mae-daemon` | Background KB persistence, maintenance scheduler, JSON-RPC API | `cozo` (sqlite), `mae-kb`, `mae-mcp`, `mae-sync`, `tokio` |
+| `mae-daemon` | Background service — KB persistence, collaborative editing (TCP sync + WAL), maintenance scheduler, JSON-RPC API | `cozo` (sqlite), `sqlite`, `mae-kb`, `mae-mcp`, `mae-sync`, `tokio` |
 
 ## Architecture Principles
 
@@ -123,7 +122,7 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 11. **CRDT-first sync (yrs/YATA).** All collaborative state flows through yrs (Yjs Rust port). Text buffers use `YText`, visual documents use `YMap`/`YArray`, KB nodes are yrs documents. The ropey rope is a read-only rendering mirror rebuilt from yrs on remote changes. Local edits generate yrs transactions (attributed, undoable via per-user `UndoManager`). This is the universal substrate — no separate sync mechanism for different content types. See ADR-002, ADR-005, ADR-006. Local undo/redo uses `reconcile_to()` (character-level LCS diff) to generate CRDT-safe deltas instead of full-state replacements.
 
-12. **Local-first by design.** MAE satisfies 5 of 7 Ink & Switch local-first ideals today (no spinners, multi-device, network optional, collaboration without conflict, user ownership). P2P collaboration and E2E encryption will complete the remaining two. The state server is an optimization for persistence and discovery, not a requirement for collaboration.
+12. **Local-first by design.** MAE satisfies 5 of 7 Ink & Switch local-first ideals today (no spinners, multi-device, network optional, collaboration without conflict, user ownership). P2P collaboration and E2E encryption will complete the remaining two. The daemon is an optimization for persistence and discovery, not a requirement for collaboration.
 
 ### Rendering Pipeline
 The GUI renderer uses a three-phase pipeline: `compute_layout()` produces
@@ -136,144 +135,21 @@ See `crates/gui/src/RENDERING.md` for detailed rules.
 Start terminal-only. Skip GUI until the model works.
 Granular milestone tracking lives in **ROADMAP.md**.
 
-### Phase 1: Core + Renderer (MVP) — COMPLETE
-- Buffer type using ropey (insert, delete, cursor movement)
-- Event loop (keyboard input → command dispatch)
-- Terminal renderer via ratatui/crossterm
-- Basic modal editing (vi-like normal/insert modes)
-- Single-file editing with save/load
+All phases below are COMPLETE. See ROADMAP.md for granular milestone details.
 
-### Phase 2: Scheme Runtime — COMPLETE
-- mae-scheme R7RS-small runtime as the extension language
-- Buffer operations exposed to Scheme
-- Config file loading (`init.scm`)
-- Command binding from Scheme (`(define-key ...)`)
-- REPL / eval-expression (`:eval`)
+| Phase | Summary | Tests |
+|-------|---------|-------|
+| 1. Core + Renderer | ropey buffer, event loop, ratatui/crossterm, vi-modal editing | — |
+| 2. Scheme Runtime | R7RS-small, `init.scm`, `(define-key ...)`, REPL | — |
+| 3. AI Integration | Claude/OpenAI/Gemini/DeepSeek, tool-calling, permission tiers | 1,148 |
+| 3d–3h. Hardening | Full vim, multi-file AI, agent reliability, context compaction | 1,673 |
+| 4. LSP + DAP + Syntax | LSP nav/completion, DAP debugging, tree-sitter (13 langs), KB | — |
+| 5. Knowledge Base | CozoDB graph (Datalog), federated queries, org parser, HNSW vectors | — |
+| 6. Embedded Shell | alacritty_terminal, MCP server, file auto-reload | — |
+| 7. Documentation | Help system (862 KB nodes), tutorials, `:describe-configuration` | — |
+| 8. GUI Backend | winit + Skia, inline images, multi-cursor, magit-style git | 2,629 |
 
-### Phase 3: AI Integration — COMPLETE
-- Tool-calling transport (Claude, OpenAI, Gemini, and DeepSeek APIs)
-- Scheme API surface mapped to AI tool definitions (10 tools + all commands)
-- AI can read/edit buffers, navigate, execute commands, inspect editor state
-- Conversation buffer with streaming, tool call display
-- Permission tiers (ReadOnly/Write/Shell/Privileged)
-
-### Phases 3d–3h: Editor Essentials + AI Multi-File + Hardening + Vim Parity — COMPLETE (1148 tests)
-- Full vi modal editing: visual mode, text objects, marks, macros, count prefix, search, dot-repeat
-- Multi-file AI tools: open_file, switch_buffer, project_search, create_file
-- Conversation persistence: :ai-save / :ai-load with versioned JSON schema
-- Architecture hardened: editor.rs split into 9 submodules, all growth bounded,
-  AI security (blocklist, circuit breaker, backpressure), error handling audited
-- Registers & clipboard, vim-surround, Scheme REPL, AI prompt UX, command palette
-- **v0.4.1**: Second modularization pass — 6 god files split into module directories (key_handling, main, tools, executor, session), 12 code smell fixes, model-agnostic system prompt (1,590 tests)
-- **v0.5.0**: Agent reliability — progress checkpoint system (semantic stagnation detection), softened oscillation detector (warn-then-abort), self-test mode, watchdog recovery (cancel AI on prolonged stall), prompt caching (Claude cache_control), token budget dashboard (cache hit rate, context utilization), context compaction (extractive summarization before hard trimming), graceful degradation (auto-shed tools at >85%/92% context pressure), web_fetch tool, ANSI-only themes (light-ansi, dark-ansi), XDG-compliant transcript logging, DAP observability (enriched timeouts, protocol tracing, failure guidance) (1,673 tests)
-
-### Phase 4: LSP + DAP + Syntax + KB — COMPLETE (M1-M4 each)
-- LSP client: connection, navigation (gd/gr/K), diagnostics, completion popup ✅
-- DAP client: protocol types, breakpoints, step/continue, AI debug tools ✅
-- Tree-sitter syntax highlighting: 13 languages, structural selection ✅
-- Gutter rendering: breakpoints, execution line, diagnostic severity markers ✅
-- Knowledge base: in-memory graph, SQLite persistence, org-mode parser, manual + user KB, AI KB tools ✅
-- LSP AI tools: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_workspace_symbol`, `lsp_document_symbols` ✅
-- Debug panel UI complete ✅
-
-### Phase 5: Knowledge Base — COMPLETE
-- CozoDB sole graph store (Datalog) — rusqlite/SqliteKbStore removed, sled storage backend
-- Pre-built manual KB: `build-manual-kb` binary generates versioned `.cozo` file (862 nodes)
-- Multi-DB startup: manual KB (read-only) + user KB (read-write) + imported KBs
-- SHA-256 checksum validation for shipped manual KB files
-- `Editor::with_kb()` constructor for pre-populated KB (skips `seed_kb()`)
-- CozoDB-direct ingestion: `import_org_dir_to_store()`, `IngestMode` (Full/Incremental)
-- Content hash change detection + `source_files` CozoDB relation for incremental reimport
-- `:kb-reimport <name> [full|incremental]` command + AI tool mode parameter
-- Scale validated: 2,500 nodes + 15,000 links integration test
-- 14 NodeKind variants, 20 typed relationship types with inverses
-- Org-mode parser (hand-rolled, multi-node files)
-- Bidirectional link primitives + typed link graph
-- Node versioning (snapshot, history, point-in-time restore)
-- Meta-node composition + block-level addressing
-- Agenda queries via Datalog (Todo/Priority/Tag/Stale/Orphan/DeadEnd/Custom)
-- HNSW vector index (384-dim, Cosine — schema ready, populated v0.13.0)
-- 6 pre-built view seeds (kanban, backlog, sprint, timeline, agenda, custom)
-- KB queries from Scheme and AI (5 new tools: kb_agenda, kb_history, kb_restore, kb_view_query, kb_vector_search)
-- Help buffer with navigation, link following, neighborhood display
-- CozoDB-first query layer: `KbQueryLayer` trait → `CozoQueryLayer` → `FederatedQuery` (46 read sites migrated)
-- Batch KB search: `id_title_body_triples()` single Datalog query (replaces per-node `get()`)
-- Federated startup: instances load from CozoDB stores, query layer built after all stores loaded
-- Org heading conventions: KB content uses org-mode `*`/`**` headings (not markdown `#`/`##`)
-- Internal KB link preservation in org parser + fragment stripping in link storage
-
-### Phase 6: Embedded Shell — COMPLETE (M1-M4 + MCP bridge + file auto-reload)
-- Terminal emulator via `alacritty_terminal` (full VT100, colors, attributes) ✅
-- ShellInsert mode, Ctrl-\ Ctrl-n exit, process lifecycle handling ✅
-- Scheme hooks (7 hook points) + `set-option!` configuration ✅
-- Shell integration + README overhaul ✅
-- Scheme shell functions: `shell-cwd`, `shell-read-output`, `*shell-buffers*` ✅
-- Send-to-shell: `SPC e s` (line), `SPC e S` (region) ✅
-- MCP server: Unix socket, JSON-RPC, stdio shim, tool re-export ✅
-- File auto-reload: mtime tracking, clean buffer reload, dirty buffer warning, `file-changed-on-disk` hook ✅
-
-### Phase 7: Embedded Documentation — COMPLETE (M1-M4)
-- Scheme primitive KB nodes (scheme:*) for ~45 functions + 18 variables ✅
-- Progressive getting-started tutorial (3 tracks: vim, beginner, AI) ✅
-- `:help` fuzzy completion with expanded namespace fallback ✅
-- `:help` Tab completion → HelpSearch palette ✅
-- WhichKeyEntry doc field populated from CommandRegistry ✅
-- User help nodes from `~/.config/mae/help/*.org` ✅
-- `:help-edit` command for authoring user help ✅
-- Org internal link jump bugfix ✅
-- `reload-config` command implementation ✅
-- AI Agent/Chat naming UX (which-key, splash, tutorial) ✅
-- Layered init.scm loading (user → project, error isolation) ✅
-- `after-load` hook ✅
-- `--debug-init` CLI flag + verbose init logging ✅
-- `:describe-configuration` health report command ✅
-- `audit_configuration` MCP tool (structured JSON) ✅
-- `--check-config --report` CLI extension ✅
-
-### Phase 8: GUI Rendering Backend — M1-M7 + M9 COMPLETE (2,629 tests)
-- `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
-- `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
-- `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅
-- Configurable shell exit sequence: shell-insert keymap (not hardcoded) ✅
-- Configurable AI permission tier: config.toml + `MAE_AI_PERMISSIONS` env var ✅
-- GUI event loop: `run_app` + `EventLoopProxy<MaeEvent>` (Alacritty pattern) ✅
-- Full keyboard input in GUI: all modes, shell-insert, modifier tracking ✅
-- CI exclusion: `mae-gui` excluded from workspace CI (skia system deps) ✅
-- init.scm fix: inject editor state before Scheme evaluation ✅
-- Self-test suite: `:self-test`, `self_test_suite` MCP tool, `--self-test` CLI flag ✅
-- Input lock during AI operations (Esc/Ctrl-C to cancel) ✅
-- CWD-based project detection at startup ✅
-- AI tool parity: `ai_save`, `ai_load`, `rename_file`, `close_buffer` force param ✅
-- Ex-command registry parity: 6 commands registered for AI access ✅
-- LSP AI tools: deferred async resolution for definition/references/hover/symbols ✅
-- Event loop refactor: shared `ai_event_handler` + `shell_lifecycle` modules ✅
-- GUI visual polish: cursor, status bar, splash screen, mouse, shell scrollback ✅
-- Desktop launcher (.desktop + SVG icon) for GNOME/sway ✅
-- Font size config, FPS overlay, :set/:edit-config, ZZ/ZQ ✅
-- OptionRegistry: single source of truth for all editor options ✅
-- `describe-option` command + `SPC h o` binding ✅
-- `:set-save` — persist option changes to config.toml ✅
-- Event loop refactor: `run_app` + `EventLoopProxy<MaeEvent>` replaces `pump_app_events` ✅
-- `GuiApp` owns all state, `bridge_task` on background tokio thread ✅
-- `main()` is plain `fn` — tokio runtime built manually ✅
-- v0.3.0 polish: BackTab, font zoom, `:read !cmd`, per-buffer projects, status line (git/LSP/tier), AI agent launcher, session persistence, sample config ✅
-- Tutor→KB: 11 linked lesson nodes, `:tutor` opens help with Tab/Enter/C-o navigation ✅
-- Shell auto-close on exit (no blank frames), agent shells tagged for distinct cleanup ✅
-- Shell CPU idle: generation-based dirty tracking (30%→~0%) ✅
-- `find-file` uses project root with CWD fallback ✅
-- Debug stats show FPS instead of μs frame timing ✅
-- Debugging powerhouse: watchdog thread, introspect AI tool, event recording, DAP attach/evaluate ✅
-- Conditional/logpoint breakpoints, lock contention tracking, anomaly detection ✅
-- Doom-style init.scm: 8 sections, all 14 options, hooks, keybindings, AI config ✅
-- Tutor KB: 12 lessons (added Debugging + Observability), 4 new concept nodes ✅
-- `--check-config` CLI flag + CI E2E validation step ✅
-- Magit-style status buffer, swap files, display optimization, variable-height polish ✅
-- Mouse focus: click-to-focus, scroll-under-mouse, idle deferred work ✅
-- Inline images: PNG/JPG/SVG rendering below text lines, org-mode `[[file:...]]` auto-preview ✅
-- Native SVG rendering via skia `svg::Dom` — vector text, perfect scaling, same font stack as editor ✅
-- Smooth sub-line scrolling past images, viewport clipping, scroll guard fixes ✅
-- Rich content: multi-cursor edits, TUI shift normalization ✅
-- **Next: Org export & babel (9 M5), PDF preview (8 M8), module system (7 M4)**
+**Current:** 5,863+ tests. **Next:** Org export & babel, PDF preview, module system.
 
 ## Key Design Decisions Already Made
 
@@ -425,7 +301,7 @@ Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (
 | Tool | Purpose |
 |------|---------|
 | `collab_status` | Connection state, peer count, synced docs |
-| `collab_connect` | Connect to a state server |
+| `collab_connect` | Connect to a daemon for collab |
 | `collab_share` | Share a buffer for collaborative editing |
 | `collab_doctor` | Run connectivity diagnostics |
 | `collab_list` | List shared documents on the server |
@@ -526,56 +402,30 @@ Planned upgrade path: msgpack wire format (Content-Type negotiation).
 `mae-sync` wraps yrs with MAE-specific document schemas and provides the
 ropey bridge. See ADR-006 for full architecture.
 
-### State Server (`mae-state-server`)
+### Daemon (`mae-daemon`)
 
-Standalone binary for multi-machine collaborative editing. Manages CRDT
-documents over TCP with WAL-based SQLite persistence.
+Unified background service: KB persistence (Unix socket) + collaborative editing (TCP). Replaces the former `mae-state-server` (merged in v0.13.2).
 
 **Usage:**
 ```bash
-mae-state-server                    # listen on 127.0.0.1:9473
-mae-state-server --bind 0.0.0.0:9473 --unix-socket /tmp/mae-collab.sock
-mae-state-server --check-config     # validate configuration
-mae-state-server doctor             # run diagnostics
+mae-daemon                          # KB (Unix socket) + collab (TCP 9473)
+mae-daemon --check-config           # validate configuration
+mae-daemon doctor                   # run diagnostics
 ```
 
 **Architecture:**
-- Per-document locking (`RwLock<HashMap<String, Arc<Mutex<DocEntry>>>>`)
-- SQLite connection pool: FNV-1a hash-sharded (default 4 shards, WAL mode)
-- WAL-first persistence: append to SQLite WAL before in-memory apply
-- Compaction: background task every `compaction_interval_secs` (default 60s)
-- Idle eviction: docs unused for `idle_eviction_secs` (default 300s) are compacted + removed
-- Recovery: load snapshot + replay WAL tail on startup
-- Save protocol: SHA-256 content-hash via `docs/save_intent` + `docs/save_committed`
-- Event sequence tracking: `wal_seq` on SyncUpdate for gap detection + `sync/resync`
+- Dual listener: Unix socket for KB queries, TCP for collab sync
+- Per-document locking, WAL-first SQLite persistence, background compaction
+- PSK mutual authentication (HMAC-SHA256, `mae_mcp::auth`)
 - Transport-generic I/O: `mae_mcp::{read_message, write_framed, handle_request}`
 
-**Config:** `~/.config/mae/state-server.toml` (TOML, XDG-compliant)
-
-**Sync protocol methods:** `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`, `sync/resync`, `sync/share`, `docs/list`, `docs/content`, `docs/stats`, `docs/save_intent`, `docs/save_committed`, `docs/delete`, `$/debug`
+**Config:** `~/.config/mae/daemon.toml` (TOML, XDG-compliant). Legacy: auto-reads `state-server.toml` if `daemon.toml` not found.
 
 **Editor commands (SPC C prefix, doom keymap):**
 - `collab-start` (SPC C s), `collab-connect` (SPC C c), `collab-disconnect` (SPC C d)
 - `collab-status` (SPC C i), `collab-share` (SPC C S), `collab-sync` (SPC C y), `collab-doctor` (SPC C D)
 
-**AI tools:** `collab_status`, `collab_connect`, `collab_share`, `collab_doctor`, `collab_list`, `collab_discover`, `kb_share`, `kb_join`, `kb_leave`
-
-**Scheme API:** `(collab-status)` → alist, `(collab-synced-buffers)` → list
-
-**Options:** `collab_server_address`, `collab_auto_connect`, `collab_auto_share`, `collab_reconnect_interval`, `collab_user_name`, `collab_auto_resolve_paths`, `collab_default_save_dir`, `collab_save_on_remote_update`
-
-**Join-save model:** Joined buffers have no local file path by default. Users use `:saveas` to persist locally. `collab_auto_resolve_paths` enables prompted project-root mapping via MiniDialog. Server-side suffix matching resolves bare filenames (e.g. `:collab-join test.txt` finds `file:no-project/test.txt`).
-
-**Persistent doc_id:** MAE's doc_ids persist across sessions (unique in the industry — Zed/VS Code/JetBrains all use session-scoped identity). Persistent identity enables asynchronous collaboration — documents survive host disconnection, support offline editing, and provide cross-session continuity.
-
-**P2P readiness:** Transport layer (`read_message`/`write_framed`) is generic over `AsyncWrite`/`AsyncBufRead` — P2P-ready by design. P2P collaboration via mDNS LAN discovery is planned (ROADMAP).
-
-**Security:** PSK mutual authentication (HMAC-SHA256) since v0.11.0. Both server and clients must share the same `collab_psk`. For untrusted networks, use a VPN (Tailscale/WireGuard).
-Auth roadmap: ✅ PSK (v0.11.0+) → SSH key exchange (planned) → OAuth/OIDC (planned, via `initialize` params extension).
-
-**Systemd:** `assets/mae-state-server.service` (user unit)
-
-**Build:** `make build-state-server`, `make install-state-server`
+**Systemd:** `assets/mae-daemon.service` (user unit)
 
 ## API Stability
 

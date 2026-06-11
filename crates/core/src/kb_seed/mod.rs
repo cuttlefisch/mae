@@ -320,7 +320,7 @@ fn tutor_nodes() -> Vec<Node> {
             NodeKind::Lesson,
             LESSON_COLLAB_SETUP,
         )
-        .with_tags(["tutorial", "collaboration", "state-server", "sync"]),
+        .with_tags(["tutorial", "collaboration", "daemon", "sync"]),
     ]
 }
 
@@ -888,7 +888,7 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_COLLAB_ARCHITECTURE,
         )
         .with_tags(["architecture", "sync", "collaboration"])
-        .with_aliases(["collab", "real-time", "state-server", "multiplayer"]),
+        .with_aliases(["collab", "real-time", "daemon", "multiplayer"]),
         Node::new(
             "concept:collab-workflows",
             "Collaborative Editing Workflows",

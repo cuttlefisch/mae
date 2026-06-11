@@ -16,7 +16,7 @@ real-time KB sync, and clean leave.
 
 ### Prerequisites
 
-- `mae-state-server` binary available on Machine A (or a shared server host)
+- `mae-daemon` binary available on Machine A (or a shared server host)
 - Both machines have MAE v0.11.0+ installed
 - Port 9473/tcp open between the two machines
 - A shared PSK file distributed via a secure channel beforehand
@@ -30,7 +30,7 @@ real-time KB sync, and clean leave.
 openssl rand -hex 32 > ~/.config/mae/collab-psk.txt
 
 # Write server config
-cat > ~/.config/mae/state-server.toml << 'EOF'
+cat > ~/.config/mae/daemon.toml << 'EOF'
 bind = "0.0.0.0:9473"
 [auth]
 mode = "psk"
@@ -38,13 +38,13 @@ psk_command = "cat ~/.config/mae/collab-psk.txt"
 EOF
 
 # Start server
-mae-state-server
+mae-daemon
 ```
 
 Expected output (server terminal):
 ```
-INFO mae_state_server: listening on 0.0.0.0:9473
-INFO mae_state_server: PSK auth enabled (HMAC-SHA256)
+INFO mae_daemon: listening on 0.0.0.0:9473
+INFO mae_daemon: PSK auth enabled (HMAC-SHA256)
 ```
 
 **1.2 — Configure client PSK (Machine B)**
@@ -150,7 +150,7 @@ Status line on Machine B returns to: `[collab:connected]` (no KB indicator)
 
 ```bash
 # Machine A: stop server
-Ctrl-C  (in the mae-state-server terminal)
+Ctrl-C  (in the mae-daemon terminal)
 
 # Both machines: disconnect
 :collab-disconnect   (or close MAE)
@@ -179,7 +179,7 @@ sync works over that embedded instance without a dedicated server process.
 
 Expected output:
 ```
-Embedded state server started on 0.0.0.0:9473
+Embedded daemon started on 0.0.0.0:9473
 ```
 
 Status line: `[collab:server] [collab:connected]`
@@ -362,7 +362,7 @@ correcting the key allows a successful reconnect.
 
 ### Prerequisites
 
-- `mae-state-server` running on Machine A with a known PSK
+- `mae-daemon` running on Machine A with a known PSK
 - Machine B configured with an intentionally wrong PSK
 
 ### Steps
@@ -372,20 +372,20 @@ correcting the key allows a successful reconnect.
 ```bash
 echo "correct-psk-value" > ~/.config/mae/collab-psk.txt
 
-cat > ~/.config/mae/state-server.toml << 'EOF'
+cat > ~/.config/mae/daemon.toml << 'EOF'
 bind = "0.0.0.0:9473"
 [auth]
 mode = "psk"
 psk = "correct-psk-value"
 EOF
 
-mae-state-server
+mae-daemon
 ```
 
 Expected (server):
 ```
-INFO mae_state_server: listening on 0.0.0.0:9473
-INFO mae_state_server: PSK auth enabled (HMAC-SHA256)
+INFO mae_daemon: listening on 0.0.0.0:9473
+INFO mae_daemon: PSK auth enabled (HMAC-SHA256)
 ```
 
 **4.2 — Configure wrong PSK on Machine B**
@@ -413,8 +413,8 @@ Status line: no collab indicator (connection was not established).
 
 Server log should show:
 ```
-WARN mae_state_server::auth: PSK auth failed for <Machine B IP> — HMAC mismatch
-INFO mae_state_server: connection from <Machine B IP> rejected
+WARN mae_daemon::auth: PSK auth failed for <Machine B IP> — HMAC mismatch
+INFO mae_daemon: connection from <Machine B IP> rejected
 ```
 
 No editor state or KB data was exchanged.
@@ -604,7 +604,7 @@ collab-doctor: OK
 ```
 :kb-leave default     (Machine B)
 :collab-disconnect    (Machine B)
-# Machine A: stop state server
+# Machine A: stop daemon
 Ctrl-C
 ```
 
@@ -614,8 +614,8 @@ Ctrl-C
 
 | Command | Keybinding | Purpose |
 |---------|-----------|---------|
-| `:collab-start` | `SPC C s` | Start embedded state server |
-| `:collab-connect <addr>` | `SPC C c` | Connect to state server |
+| `:collab-start` | `SPC C s` | Start embedded daemon |
+| `:collab-connect <addr>` | `SPC C c` | Connect to daemon |
 | `:collab-disconnect` | — | Disconnect from server |
 | `:collab-discover` | `SPC C P` | mDNS peer browser |
 | `:collab-share` | `SPC C S` | Share current buffer |
@@ -632,7 +632,7 @@ Ctrl-C
 
 | Option | Config Key | Default | Description |
 |--------|-----------|---------|-------------|
-| `collab_server_address` | `[collaboration] server_address` | — | State server address |
+| `collab_server_address` | `[collaboration] server_address` | — | Daemon address |
 | `collab_psk` | `[collaboration] psk` | — | Plaintext PSK (prefer `psk_command`) |
 | `collab_psk_command` | `[collaboration] psk_command` | — | Shell command that prints the PSK |
 | `collab_kb_sync_mode` | `[collaboration] kb_sync_mode` | `on_save` | `on_save` or `manual` |

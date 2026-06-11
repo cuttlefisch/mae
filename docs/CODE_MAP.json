@@ -13,7 +13,6 @@
         "mae-renderer",
         "mae-scheme",
         "mae-shell",
-        "mae-state-server",
         "mae-sync"
       ],
       "public_items": [
@@ -754,6 +753,10 @@
       "dependencies": [],
       "public_items": [
         {
+          "name": "auth",
+          "kind": "mod"
+        },
+        {
           "name": "broadcast",
           "kind": "mod"
         },
@@ -924,31 +927,6 @@
       "public_items": [
         {
           "name": "checker",
-          "kind": "mod"
-        }
-      ]
-    },
-    "mae-state-server": {
-      "path": "crates/state-server/src/lib.rs",
-      "dependencies": [
-        "mae-mcp",
-        "mae-sync"
-      ],
-      "public_items": [
-        {
-          "name": "auth",
-          "kind": "mod"
-        },
-        {
-          "name": "doc_store",
-          "kind": "mod"
-        },
-        {
-          "name": "handler",
-          "kind": "mod"
-        },
-        {
-          "name": "storage",
           "kind": "mod"
         }
       ]
@@ -3634,15 +3612,15 @@
     },
     {
       "name": "collab-start",
-      "doc": "Start local state server"
+      "doc": "Start local daemon"
     },
     {
       "name": "collab-connect",
-      "doc": "Connect to collaborative state server"
+      "doc": "Connect to collaborative daemon"
     },
     {
       "name": "collab-disconnect",
-      "doc": "Disconnect from state server"
+      "doc": "Disconnect from daemon"
     },
     {
       "name": "collab-status",
@@ -3662,7 +3640,7 @@
     },
     {
       "name": "collab-list",
-      "doc": "List shared documents on the state server (SPC C l)"
+      "doc": "List shared documents on the daemon (SPC C l)"
     },
     {
       "name": "collab-join",
