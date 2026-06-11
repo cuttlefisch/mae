@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- *(ci)* Use RELEASE_PAT for GitHub release creation ([bca2d20](https://github.com/cuttlefisch/mae/commit/bca2d204856fe43bfeed5f5e4d73fd253354f076))
+- *(install)* Consolidate mae-state-server into mae-daemon + fix macOS bundle ([7ac86b9](https://github.com/cuttlefisch/mae/commit/7ac86b9c6b02d78c10cf058e702ed5d720f8d4fa))
+- *(ci)* Daemon binary lookup for separate workspace ([bbe74fd](https://github.com/cuttlefisch/mae/commit/bbe74fd468c446e95db87f207c8ee1c681430a13))
+- *(ci)* Add --config/--bind/--data-dir CLI flags to daemon ([752598c](https://github.com/cuttlefisch/mae/commit/752598ceb8b2c2363ce45d6d7d6731cac967a713))
+
+### CI
+
+- *(deps)* Bump peter-evans/create-or-update-comment ([12eec27](https://github.com/cuttlefisch/mae/commit/12eec2715be028157349a4ede6adbda62a6ea888))
+
+## [0.13.1] - 2026-06-10
+
 ### Features
 
 - *(deps)* Upgrade yrs 0.27, rand 0.9, rusqlite 0.40 ([a85fd07](https://github.com/cuttlefisch/mae/commit/a85fd07862f410d7b917243fdeb7b2cbdcec84c4))
@@ -12,6 +25,7 @@ All notable changes to this project will be documented in this file.
 
 - *(ci)* Ignore incompatible dep versions in dependabot ([3da2ca3](https://github.com/cuttlefisch/mae/commit/3da2ca3e42d7e579ed368c31de15d213ffeae4d2))
 - *(ci)* Add weekly compat check for blocked dep upgrades ([3fb03f0](https://github.com/cuttlefisch/mae/commit/3fb03f0cc7229ee6b7d2aeba7d1529f1e6260165))
+- Bump version to 0.13.1 ([0815704](https://github.com/cuttlefisch/mae/commit/08157047bf882a3e2d551976b52f0204fa99ae47))
 
 ## [0.13.0] - 2026-06-10
 
