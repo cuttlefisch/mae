@@ -1,7 +1,7 @@
 :PROPERTIES:
 :ID: concept:collab-architecture
 :KIND: concept
-:ALIASES: collab, real-time, state-server, multiplayer
+:ALIASES: collab, real-time, daemon, multiplayer
 :END:
 #+title: Collaborative Editing Architecture
 #+filetags: :architecture:sync:collaboration:
@@ -31,7 +31,7 @@ Local editor
 File saves use content-hash verification (SHA-256) to guard against silent mtime failures. Before writing, MAE reads the current on-disk bytes, computes their SHA-256, and compares it with the last-known hash. If they differ an external modification warning is raised. After writing, the new hash is stored as the baseline. Advisory lock files (`.{name}.mae.lock`) prevent simultaneous writes from two editor instances.
 
 ** State Server Role
-The `mae-state-server` binary is a **document hub**, not a source of truth. Documents are authoritative at the client; the server:
+The `mae-daemon` binary is a **document hub**, not a source of truth. Documents are authoritative at the client; the server:
 - Holds the latest merged CRDT state (yrs doc bytes)
 - Appends every `sync/update` to a SQLite WAL before applying to memory
 - Broadcasts diffs to all connected peers (bounded queues, write timeout 5 s)

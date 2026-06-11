@@ -6,7 +6,7 @@
 
 ## Context
 
-Real-world smoke testing with two MAE editors connected via the state server
+Real-world smoke testing with two MAE editors connected via the daemon
 revealed transport-layer bugs: cancel-safety in `read_message` within
 `tokio::select!`, framing protocol mismatches in tests, and WAL sequence gaps.
 This prompted an assessment of whether the CRDT algorithm itself (yrs/YATA)
@@ -50,7 +50,7 @@ algorithm that claims superior memory characteristics.
    `AsyncBufRead + AsyncWrite`. P2P for LAN needs: mDNS discovery,
    bidirectional sync (currently unidirectional client-to-server), per-peer
    state reconciliation. Feasible in 2-4 weeks after transport bugs are fixed.
-   State server remains valuable as persistence/relay node. Neither algorithm
+   Daemon remains valuable as persistence/relay node. Neither algorithm
    choice gates P2P -- the transport layer is the bottleneck.
 
 ## Decision

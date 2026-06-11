@@ -10,10 +10,10 @@
 
 set -euo pipefail
 
-VERSION="0.13.1"  # updated by version-bump workflow
+VERSION="0.13.2"  # updated by version-bump workflow
 
-BINARIES="mae mae-mcp-shim mae-state-server mae-daemon"
-SERVICES="mae-state-server mae-daemon"
+BINARIES="mae mae-mcp-shim mae-daemon"
+SERVICES="mae-daemon"
 
 # ========================================================================
 # Argument parsing
@@ -170,7 +170,7 @@ if [ "$ACTION" = "uninstall" ]; then
     # --- Remove systemd units ---
     step "Removing systemd units"
     SYSTEMD_DIR="$CONFIGDIR/systemd/user"
-    for unit in mae-state-server.service mae-daemon.service; do
+    for unit in mae-daemon.service; do
         if [ -f "$SYSTEMD_DIR/$unit" ]; then
             rm -f "$SYSTEMD_DIR/$unit"
             ok "removed $unit"
@@ -324,7 +324,7 @@ if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
     SYSTEMD_DIR="$CONFIGDIR/systemd/user"
     mkdir -p "$SYSTEMD_DIR"
 
-    for unit in mae-state-server.service mae-daemon.service; do
+    for unit in mae-daemon.service; do
         if [ -f "$SCRIPT_DIR/$unit" ]; then
             # Rewrite ExecStart to match actual install PREFIX
             sed "s|%h/.local/bin/|$BINDIR/|g" "$SCRIPT_DIR/$unit" > "$SYSTEMD_DIR/$unit"
@@ -415,7 +415,7 @@ if [ "$UPGRADE" -eq 0 ]; then
     if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
         printf "${BOLD}Optional services:${RESET}\n"
         echo "  systemctl --user enable --now mae-daemon         # KB background persistence"
-        echo "  systemctl --user enable --now mae-state-server   # collaborative editing"
+        echo "  systemctl --user enable --now mae-daemon           # KB + collaborative editing"
         echo ""
     fi
 

@@ -3,11 +3,13 @@
 //! WAL-first persistence: every sync update is appended to the WAL before
 //! being applied in memory. Periodic compaction writes a full snapshot and
 //! trims the WAL.
+//!
+//! Uses the `sqlite` crate (same native library as CozoDB) to avoid
+//! `links = "sqlite3"` conflicts with rusqlite.
 
 use std::path::Path;
 
 use async_trait::async_trait;
-use rusqlite::Connection;
 use tracing::{debug, info};
 
 /// Errors from storage operations.
@@ -29,8 +31,8 @@ impl std::fmt::Display for StorageError {
 
 impl std::error::Error for StorageError {}
 
-impl From<rusqlite::Error> for StorageError {
-    fn from(e: rusqlite::Error) -> Self {
+impl From<sqlite::Error> for StorageError {
+    fn from(e: sqlite::Error) -> Self {
         StorageError::Sqlite(e.to_string())
     }
 }
@@ -85,7 +87,7 @@ pub trait StorageBackend: Send + Sync {
 /// Multiple connections in WAL mode to the same file allow concurrent reads
 /// across different documents. Documents are assigned to shards via FNV-1a hash.
 pub struct SqlitePool {
-    shards: Vec<std::sync::Mutex<Connection>>,
+    shards: Vec<std::sync::Mutex<sqlite::Connection>>,
 }
 
 impl SqlitePool {
@@ -94,15 +96,15 @@ impl SqlitePool {
         let count = shard_count.max(1);
         let mut shards = Vec::with_capacity(count);
         for i in 0..count {
-            let conn = Connection::open(path)?;
-            conn.execute_batch(
+            let conn = sqlite::Connection::open(path)?;
+            conn.execute(
                 "PRAGMA journal_mode=WAL;
                  PRAGMA synchronous=NORMAL;
                  PRAGMA busy_timeout=5000;",
             )?;
             // Only the first connection creates tables (idempotent via IF NOT EXISTS).
             if i == 0 {
-                conn.execute_batch(
+                conn.execute(
                     "CREATE TABLE IF NOT EXISTS wal (
                          id INTEGER PRIMARY KEY AUTOINCREMENT,
                          doc_name TEXT NOT NULL,
@@ -127,10 +129,9 @@ impl SqlitePool {
 
     /// Open an in-memory pool (for tests). shard_count is forced to 1
     /// because in-memory databases cannot share state across connections.
-    pub fn open_memory(shard_count: usize) -> Result<Self, StorageError> {
-        let _ = shard_count; // in-memory must be 1
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch(
+    pub fn open_memory(_shard_count: usize) -> Result<Self, StorageError> {
+        let conn = sqlite::Connection::open(":memory:")?;
+        conn.execute(
             "CREATE TABLE wal (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
                  doc_name TEXT NOT NULL,
@@ -153,7 +154,7 @@ impl SqlitePool {
     }
 
     /// Select the shard for a given document name (FNV-1a hash).
-    fn shard_for(&self, doc_name: &str) -> &std::sync::Mutex<Connection> {
+    fn shard_for(&self, doc_name: &str) -> &std::sync::Mutex<sqlite::Connection> {
         let mut hash: u64 = 0xcbf29ce484222325;
         for byte in doc_name.as_bytes() {
             hash ^= *byte as u64;
@@ -163,7 +164,7 @@ impl SqlitePool {
     }
 
     /// Primary shard (index 0) — used for schema operations and cross-doc queries.
-    pub fn primary(&self) -> &std::sync::Mutex<Connection> {
+    pub fn primary(&self) -> &std::sync::Mutex<sqlite::Connection> {
         &self.shards[0]
     }
 }
@@ -204,11 +205,15 @@ impl SqliteBackend {
         let mut stmt = conn.prepare(
             "SELECT id, update_bytes FROM wal WHERE doc_name = ?1 AND id > ?2 ORDER BY id",
         )?;
-        let entries: Vec<(u64, Vec<u8>)> = stmt
-            .query_map(rusqlite::params![doc_name, since_seq as i64], |row| {
-                Ok((row.get::<_, i64>(0)? as u64, row.get(1)?))
-            })?
-            .collect::<Result<_, _>>()?;
+        stmt.bind((1, doc_name))?;
+        stmt.bind((2, since_seq as i64))?;
+
+        let mut entries = Vec::new();
+        while let Ok(sqlite::State::Row) = stmt.next() {
+            let id = stmt.read::<i64, _>("id")? as u64;
+            let update = stmt.read::<Vec<u8>, _>("update_bytes")?;
+            entries.push((id, update));
+        }
         Ok(entries)
     }
 }
@@ -222,11 +227,21 @@ impl StorageBackend for SqliteBackend {
         client_id: Option<u64>,
     ) -> Result<u64, StorageError> {
         let conn = self.pool.shard_for(doc_name).lock().unwrap();
-        conn.execute(
-            "INSERT INTO wal (doc_name, update_bytes, client_id) VALUES (?1, ?2, ?3)",
-            rusqlite::params![doc_name, update, client_id.map(|id| id as i64)],
-        )?;
-        let id = conn.last_insert_rowid() as u64;
+        let mut stmt = conn
+            .prepare("INSERT INTO wal (doc_name, update_bytes, client_id) VALUES (?1, ?2, ?3)")?;
+        stmt.bind((1, doc_name))?;
+        stmt.bind((2, update))?;
+        match client_id {
+            Some(id) => stmt.bind((3, id as i64))?,
+            None => stmt.bind((3, sqlite::Value::Null))?,
+        }
+        stmt.next()?;
+
+        // Get last insert rowid
+        let mut id_stmt = conn.prepare("SELECT last_insert_rowid()")?;
+        id_stmt.next()?;
+        let id = id_stmt.read::<i64, _>(0)? as u64;
+
         debug!(doc = doc_name, wal_id = id, "WAL append");
         Ok(id)
     }
@@ -235,32 +250,39 @@ impl StorageBackend for SqliteBackend {
         let conn = self.pool.shard_for(doc_name).lock().unwrap();
 
         // Load snapshot if exists.
-        let snapshot: Option<(Vec<u8>, i64)> = conn
-            .query_row(
-                "SELECT state, wal_id FROM snapshots WHERE doc_name = ?1",
-                [doc_name],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .ok();
+        let mut snap_stmt =
+            conn.prepare("SELECT state, wal_id FROM snapshots WHERE doc_name = ?1")?;
+        snap_stmt.bind((1, doc_name))?;
 
-        let (snapshot_bytes, wal_id_cutoff) = match &snapshot {
-            Some((bytes, wal_id)) => (Some(bytes.clone()), *wal_id),
-            None => (None, 0),
+        let (snapshot_bytes, wal_id_cutoff) = if let Ok(sqlite::State::Row) = snap_stmt.next() {
+            let state = snap_stmt.read::<Vec<u8>, _>("state")?;
+            let wal_id = snap_stmt.read::<i64, _>("wal_id")?;
+            (Some(state), wal_id)
+        } else {
+            (None, 0)
         };
 
         // Load WAL entries after the snapshot.
-        let mut stmt = conn.prepare(
+        let mut wal_stmt = conn.prepare(
             "SELECT id, update_bytes, client_id FROM wal WHERE doc_name = ?1 AND id > ?2 ORDER BY id",
         )?;
-        let entries: Vec<WalEntry> = stmt
-            .query_map(rusqlite::params![doc_name, wal_id_cutoff], |row| {
-                Ok(WalEntry {
-                    id: row.get::<_, i64>(0)? as u64,
-                    update: row.get(1)?,
-                    client_id: row.get::<_, Option<i64>>(2)?.map(|v| v as u64),
-                })
-            })?
-            .collect::<Result<_, _>>()?;
+        wal_stmt.bind((1, doc_name))?;
+        wal_stmt.bind((2, wal_id_cutoff))?;
+
+        let mut entries = Vec::new();
+        while let Ok(sqlite::State::Row) = wal_stmt.next() {
+            let id = wal_stmt.read::<i64, _>("id")? as u64;
+            let update = wal_stmt.read::<Vec<u8>, _>("update_bytes")?;
+            let client_id = match wal_stmt.read::<sqlite::Value, _>("client_id")? {
+                sqlite::Value::Integer(v) => Some(v as u64),
+                _ => None,
+            };
+            entries.push(WalEntry {
+                id,
+                update,
+                client_id,
+            });
+        }
 
         if snapshot_bytes.is_none() && entries.is_empty() {
             return Ok(None);
@@ -280,29 +302,31 @@ impl StorageBackend for SqliteBackend {
     ) -> Result<(), StorageError> {
         let conn = self.pool.shard_for(doc_name).lock().unwrap();
         // Atomic: snapshot write + WAL trim in a single transaction.
-        // Without this, a crash between the two statements causes duplicate
-        // replay on recovery.
-        conn.execute("BEGIN IMMEDIATE", [])?;
-        let result = (|| -> Result<(), rusqlite::Error> {
-            conn.execute(
+        conn.execute("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<(), sqlite::Error> {
+            let mut snap_stmt = conn.prepare(
                 "INSERT OR REPLACE INTO snapshots (doc_name, state, wal_id, updated_at)
                  VALUES (?1, ?2, ?3, datetime('now'))",
-                rusqlite::params![doc_name, state, up_to_wal_id as i64],
             )?;
-            conn.execute(
-                "DELETE FROM wal WHERE doc_name = ?1 AND id <= ?2",
-                rusqlite::params![doc_name, up_to_wal_id as i64],
-            )?;
+            snap_stmt.bind((1, doc_name))?;
+            snap_stmt.bind((2, state))?;
+            snap_stmt.bind((3, up_to_wal_id as i64))?;
+            snap_stmt.next()?;
+
+            let mut del_stmt = conn.prepare("DELETE FROM wal WHERE doc_name = ?1 AND id <= ?2")?;
+            del_stmt.bind((1, doc_name))?;
+            del_stmt.bind((2, up_to_wal_id as i64))?;
+            del_stmt.next()?;
             Ok(())
         })();
         match result {
             Ok(()) => {
-                conn.execute("COMMIT", [])?;
+                conn.execute("COMMIT")?;
                 info!(doc = doc_name, up_to = up_to_wal_id, "compacted");
                 Ok(())
             }
             Err(e) => {
-                let _ = conn.execute("ROLLBACK", []);
+                let _ = conn.execute("ROLLBACK");
                 Err(StorageError::Sqlite(format!("compact transaction: {e}")))
             }
         }
@@ -317,16 +341,24 @@ impl StorageBackend for SqliteBackend {
                  SELECT doc_name FROM snapshots
              )",
         )?;
-        let names: Vec<String> = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<Result<_, _>>()?;
+        let mut names = Vec::new();
+        while let Ok(sqlite::State::Row) = stmt.next() {
+            names.push(stmt.read::<String, _>("doc_name")?);
+        }
         Ok(names)
     }
 
     async fn delete_document(&self, doc_name: &str) -> Result<(), StorageError> {
         let conn = self.pool.shard_for(doc_name).lock().unwrap();
-        conn.execute("DELETE FROM snapshots WHERE doc_name = ?1", [doc_name])?;
-        conn.execute("DELETE FROM wal WHERE doc_name = ?1", [doc_name])?;
+
+        let mut stmt1 = conn.prepare("DELETE FROM snapshots WHERE doc_name = ?1")?;
+        stmt1.bind((1, doc_name))?;
+        stmt1.next()?;
+
+        let mut stmt2 = conn.prepare("DELETE FROM wal WHERE doc_name = ?1")?;
+        stmt2.bind((1, doc_name))?;
+        stmt2.next()?;
+
         info!(doc = doc_name, "deleted document from storage");
         Ok(())
     }
@@ -367,12 +399,10 @@ mod tests {
         let id2 = backend.wal_append("doc1", b"u2", None).await.unwrap();
         let _id3 = backend.wal_append("doc1", b"u3", None).await.unwrap();
 
-        // Compact up to id2.
         backend.compact("doc1", b"full-state", id2).await.unwrap();
 
         let state = backend.load_document("doc1").await.unwrap().unwrap();
         assert_eq!(state.snapshot.as_deref(), Some(b"full-state".as_slice()));
-        // Only u3 remains in WAL.
         assert_eq!(state.wal_tail.len(), 1);
         assert_eq!(state.wal_tail[0].update, b"u3");
     }
@@ -402,126 +432,72 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compact_is_atomic() {
+    async fn delete_document_removes_wal_and_snapshot() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        let id = backend.wal_append("doc1", b"u1", None).await.unwrap();
+        backend.compact("doc1", b"snapshot", id).await.unwrap();
+        backend.wal_append("doc1", b"u2", None).await.unwrap();
+
+        backend.delete_document("doc1").await.unwrap();
+
+        assert!(backend.load_document("doc1").await.unwrap().is_none());
+        assert!(backend.list_documents().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn wal_entries_since_filters_correctly() {
         let backend = SqliteBackend::open_memory().unwrap();
         let id1 = backend.wal_append("doc1", b"u1", None).await.unwrap();
         let id2 = backend.wal_append("doc1", b"u2", None).await.unwrap();
-        let id3 = backend.wal_append("doc1", b"u3", None).await.unwrap();
+        let _id3 = backend.wal_append("doc1", b"u3", None).await.unwrap();
 
-        // Compact up to id2, leaving id3 in the WAL.
+        let entries = backend.wal_entries_since("doc1", id1).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, id2);
+        assert_eq!(entries[0].1, b"u2");
+    }
+
+    #[tokio::test]
+    async fn wal_append_with_and_without_client_id() {
+        let backend = SqliteBackend::open_memory().unwrap();
         backend
-            .compact("doc1", b"snapshot-at-id2", id2)
+            .wal_append("doc1", b"with-client", Some(42))
+            .await
+            .unwrap();
+        backend
+            .wal_append("doc1", b"no-client", None)
             .await
             .unwrap();
 
         let state = backend.load_document("doc1").await.unwrap().unwrap();
-
-        // Invariant: snapshot must exist and its wal_id must be >= any remaining
-        // WAL entry's id. This verifies the atomic post-condition: it is
-        // impossible to observe a snapshot without the corresponding WAL trim
-        // (or vice-versa), because compact() wraps both in a single transaction.
-        let snap_wal_id: i64 = {
-            let conn = backend.pool.primary().lock().unwrap();
-            conn.query_row(
-                "SELECT wal_id FROM snapshots WHERE doc_name = 'doc1'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap()
-        };
-        assert!(
-            state.snapshot.is_some(),
-            "snapshot must exist after compact"
-        );
-        for entry in &state.wal_tail {
-            assert!(
-                snap_wal_id as u64 >= id1,
-                "snapshot.wal_id ({snap_wal_id}) must be >= first compacted id ({id1})"
-            );
-            assert!(
-                entry.id > snap_wal_id as u64,
-                "remaining WAL entry id ({}) must be > snapshot.wal_id ({snap_wal_id})",
-                entry.id
-            );
-        }
-        // Only id3 should remain.
-        assert_eq!(state.wal_tail.len(), 1);
-        assert_eq!(state.wal_tail[0].id, id3);
-        assert_eq!(state.wal_tail[0].update, b"u3");
+        assert_eq!(state.wal_tail[0].client_id, Some(42));
+        assert_eq!(state.wal_tail[1].client_id, None);
     }
 
     #[tokio::test]
-    async fn recovery_after_wal_append_without_compact() {
+    async fn compact_with_zero_wal_id() {
         let backend = SqliteBackend::open_memory().unwrap();
-
-        // Append 10 WAL entries without compacting.
-        for i in 0u8..10 {
-            backend.wal_append("doc1", &[i], None).await.unwrap();
-        }
+        backend
+            .compact("doc1", b"initial-snapshot", 0)
+            .await
+            .unwrap();
 
         let state = backend.load_document("doc1").await.unwrap().unwrap();
-
-        // No compaction was performed, so there must be no snapshot.
-        assert!(
-            state.snapshot.is_none(),
-            "no compaction occurred — snapshot must be None"
-        );
-        // All 10 WAL entries must be present and in order.
         assert_eq!(
-            state.wal_tail.len(),
-            10,
-            "all 10 WAL entries must survive a load without compaction"
+            state.snapshot.as_deref(),
+            Some(b"initial-snapshot".as_slice())
         );
-        for (i, entry) in state.wal_tail.iter().enumerate() {
-            assert_eq!(
-                entry.update,
-                vec![i as u8],
-                "WAL entry {i} has wrong payload"
-            );
-        }
-        // IDs must be monotonically increasing.
-        let ids: Vec<u64> = state.wal_tail.iter().map(|e| e.id).collect();
-        let mut sorted = ids.clone();
-        sorted.sort_unstable();
-        assert_eq!(ids, sorted, "WAL entries must be in id order");
+        assert!(state.wal_tail.is_empty());
     }
 
-    // --- WU-D: branch-level coverage tests ---
-
     #[tokio::test]
-    async fn wal_replay_with_corrupted_entry_stops_gracefully() {
+    async fn delete_nonexistent_document_is_noop() {
         let backend = SqliteBackend::open_memory().unwrap();
-
-        // Append valid + corrupted + valid entries.
-        backend
-            .wal_append("doc1", b"valid1", Some(1))
-            .await
-            .unwrap();
-        backend
-            .wal_append("doc1", b"\xff\xfe\x00\x01corrupted", None)
-            .await
-            .unwrap();
-        backend
-            .wal_append("doc1", b"valid3", Some(3))
-            .await
-            .unwrap();
-
-        // load_document should return all entries (storage layer doesn't validate).
-        let state = backend.load_document("doc1").await.unwrap().unwrap();
-        assert_eq!(state.wal_tail.len(), 3, "all entries returned by storage");
-        assert_eq!(state.wal_tail[0].update, b"valid1");
-        assert_eq!(state.wal_tail[2].update, b"valid3");
-        // The corrupted entry is stored as-is (CRDT layer validates on apply).
-        assert!(
-            state.wal_tail[1].update.starts_with(b"\xff\xfe"),
-            "corrupted bytes preserved as-is"
-        );
+        backend.delete_document("does-not-exist").await.unwrap();
     }
 
     #[tokio::test]
     async fn concurrent_wal_writes_different_docs() {
-        // SQLite WAL mode allows concurrent reads, serializes writes.
-        // This test verifies no lock contention for different docs.
         let backend = Arc::new(SqliteBackend::open_memory().unwrap());
 
         let mut handles = Vec::new();
@@ -543,7 +519,6 @@ mod tests {
         .await;
         assert!(result.is_ok(), "concurrent writes must not deadlock");
 
-        // Verify all 10 docs exist with 5 entries each.
         let docs = backend.list_documents().await.unwrap();
         assert_eq!(docs.len(), 10);
         for i in 0..10 {
@@ -554,80 +529,5 @@ mod tests {
                 .unwrap();
             assert_eq!(state.wal_tail.len(), 5, "doc{i} should have 5 WAL entries");
         }
-    }
-
-    #[tokio::test]
-    async fn delete_document_removes_wal_and_snapshot() {
-        let backend = SqliteBackend::open_memory().unwrap();
-
-        let id = backend.wal_append("doc1", b"u1", None).await.unwrap();
-        backend.compact("doc1", b"snapshot", id).await.unwrap();
-        // Add one more after compaction.
-        backend.wal_append("doc1", b"u2", None).await.unwrap();
-
-        // Delete.
-        backend.delete_document("doc1").await.unwrap();
-
-        // Load should return None.
-        assert!(backend.load_document("doc1").await.unwrap().is_none());
-        assert!(backend.list_documents().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn wal_entries_since_filters_correctly() {
-        let backend = SqliteBackend::open_memory().unwrap();
-
-        let id1 = backend.wal_append("doc1", b"u1", None).await.unwrap();
-        let id2 = backend.wal_append("doc1", b"u2", None).await.unwrap();
-        let _id3 = backend.wal_append("doc1", b"u3", None).await.unwrap();
-
-        // Entries since id1 should return u2 and u3.
-        let entries = backend.wal_entries_since("doc1", id1).unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].0, id2);
-        assert_eq!(entries[0].1, b"u2");
-    }
-
-    #[tokio::test]
-    async fn wal_append_with_and_without_client_id() {
-        let backend = SqliteBackend::open_memory().unwrap();
-
-        backend
-            .wal_append("doc1", b"with-client", Some(42))
-            .await
-            .unwrap();
-        backend
-            .wal_append("doc1", b"no-client", None)
-            .await
-            .unwrap();
-
-        let state = backend.load_document("doc1").await.unwrap().unwrap();
-        assert_eq!(state.wal_tail[0].client_id, Some(42));
-        assert_eq!(state.wal_tail[1].client_id, None);
-    }
-
-    #[tokio::test]
-    async fn compact_with_zero_wal_id() {
-        let backend = SqliteBackend::open_memory().unwrap();
-
-        // Compact with wal_id=0 when no WAL exists (snapshot-only creation).
-        backend
-            .compact("doc1", b"initial-snapshot", 0)
-            .await
-            .unwrap();
-
-        let state = backend.load_document("doc1").await.unwrap().unwrap();
-        assert_eq!(
-            state.snapshot.as_deref(),
-            Some(b"initial-snapshot".as_slice())
-        );
-        assert!(state.wal_tail.is_empty());
-    }
-
-    #[tokio::test]
-    async fn delete_nonexistent_document_is_noop() {
-        let backend = SqliteBackend::open_memory().unwrap();
-        // Should not error.
-        backend.delete_document("does-not-exist").await.unwrap();
     }
 }

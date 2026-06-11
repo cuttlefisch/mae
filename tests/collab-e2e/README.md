@@ -11,7 +11,7 @@ multiple editor instances connected via the state server.
 │                     Docker Compose Network                       │
 │                                                                  │
 │  ┌──────────────┐  TCP:9473   ┌──────────────────────────┐      │
-│  │ state-server │◄────────────│ client-a (test_share.scm)│      │
+│  │    daemon    │◄────────────│ client-a (test_share.scm)│      │
 │  │              │◄────────────│ client-b (test_join.scm) │      │
 │  │              │◄────────────│ undo-sharer              │      │
 │  │              │◄────────────│ undo-joiner              │      │
@@ -129,7 +129,7 @@ All timing is dominated by content barriers, not fixed sleeps:
 
 ```
 Timeline (approximate — barriers make exact timing variable):
-  0s   state-server starts, healthcheck passes
+  0s   daemon starts, healthcheck passes
   ~3s  all 4 clients connect (wait-connected)
   ~5s  client-a shares test.txt (wait-synced)
   ~5s  undo-sharer shares undo-test.txt (wait-synced)
@@ -177,7 +177,7 @@ On test failure, the runner dumps:
 
 | Symptom | Likely Cause |
 |---------|-------------|
-| wait-for-content timeout | CRDT update not propagating — check state-server logs |
+| wait-for-content timeout | CRDT update not propagating — check daemon logs |
 | wait-content-absent timeout | Undo not generating CRDT update — check UndoManager setup |
 | wait-synced timeout | Share intent not reaching bridge — check drain_collab_intents |
 | Buffer not found after join | Join intent lost — check collab_bridge join handler |

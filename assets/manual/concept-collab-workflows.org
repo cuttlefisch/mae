@@ -15,10 +15,10 @@ No state server is required. MAE operates entirely locally. All edits are still 
 - Instant upgrade path to loopback or collaborative mode
 
 ** Loopback Mode (Local Multi-Agent)
-Run `mae-state-server` on the same machine to coordinate multiple MAE instances or AI agents on the same project.
+Run `mae-daemon` on the same machine to coordinate multiple MAE instances or AI agents on the same project.
 
 ```bash
-mae-state-server                      # listens on 127.0.0.1:9473
+mae-daemon                      # listens on 127.0.0.1:9473
 ```
 
 Then in each MAE instance:
@@ -37,7 +37,7 @@ Point all clients at a shared server:
 
 The server can be started with:
 ```bash
-mae-state-server --bind 0.0.0.0:9473
+mae-daemon --bind 0.0.0.0:9473
 ```
 
 > **Security:** PSK mutual authentication (HMAC-SHA256) is required since v0.11.0.
@@ -46,7 +46,7 @@ mae-state-server --bind 0.0.0.0:9473
 ** Commands
 | Key | Command | Description |
 |-----|---------|-------------|
-| `SPC C s` | `:collab-start-server` | Start a local state server |
+| `SPC C s` | `:collab-start-server` | Start a local daemon |
 | `SPC C c` | `:collab-connect` | Connect to configured server |
 | `SPC C d` | `:collab-disconnect` | Disconnect from server |
 | `SPC C S` | `:collab-share-buffer` | Share current buffer with peers |
@@ -61,6 +61,6 @@ mae-state-server --bind 0.0.0.0:9473
 ** Diagnostics
 - `:collab-doctor` — comprehensive diagnostic: server reachability, WAL health, peer list
 - `:collab-status` — live connection state, document list, peer cursors
-- `mae doctor` (CLI) — checks state-server process, port binding, WAL integrity
+- `mae doctor` (CLI) — checks daemon process, port binding, WAL integrity
 
 See also: [[references:concept:collab-architecture][Collaborative Editing Architecture]], [[lesson:collab-setup]], [[concept:sync-engine]], [[index]]

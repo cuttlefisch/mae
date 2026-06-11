@@ -3,7 +3,7 @@
 //! Gated with `#[ignore]` — run via:
 //!   MAE_TCP_E2E=1 cargo test -p mae --test collab_tcp_e2e -- --ignored --nocapture
 //!
-//! Spawns `mae-state-server` on a random port, connects via real TCP.
+//! Spawns `mae-daemon` on a random port, connects via real TCP.
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -232,7 +232,7 @@ impl TcpClient {
     }
 }
 
-/// Spawn mae-state-server on a random port, wait for it to listen, return (child, port).
+/// Spawn mae-daemon on a random port, wait for it to listen, return (child, port).
 ///
 /// Uses `MAE_STATE_SERVER_BIN` env var if set (pre-built binary), otherwise
 /// falls back to `cargo run` (works in CI but deadlocks when `cargo test` holds
@@ -257,11 +257,11 @@ async fn spawn_server() -> (tokio::process::Child, String, tempfile::TempDir) {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .expect("failed to spawn mae-state-server binary")
+            .expect("failed to spawn mae-daemon binary")
     } else {
         // Fallback: look in target/debug (cargo builds test deps there).
-        let target_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/debug/mae-state-server");
+        let target_bin =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/mae-daemon");
         if target_bin.exists() {
             Command::new(&target_bin)
                 .args(["--bind", &addr, "--data-dir", &data_dir])
@@ -269,13 +269,13 @@ async fn spawn_server() -> (tokio::process::Child, String, tempfile::TempDir) {
                 .stderr(Stdio::piped())
                 .kill_on_drop(true)
                 .spawn()
-                .expect("failed to spawn mae-state-server from target/debug")
+                .expect("failed to spawn mae-daemon from target/debug")
         } else {
             Command::new("cargo")
                 .args([
                     "run",
                     "-p",
-                    "mae-state-server",
+                    "mae-daemon",
                     "--",
                     "--bind",
                     &addr,
@@ -286,7 +286,7 @@ async fn spawn_server() -> (tokio::process::Child, String, tempfile::TempDir) {
                 .stderr(Stdio::piped())
                 .kill_on_drop(true)
                 .spawn()
-                .expect("failed to spawn mae-state-server via cargo run")
+                .expect("failed to spawn mae-daemon via cargo run")
         }
     };
 
@@ -297,7 +297,7 @@ async fn spawn_server() -> (tokio::process::Child, String, tempfile::TempDir) {
             return (child, addr, tmp);
         }
     }
-    panic!("mae-state-server did not start within 5s on {}", addr);
+    panic!("mae-daemon did not start within 5s on {}", addr);
 }
 
 fn should_run() -> bool {
@@ -443,7 +443,7 @@ async fn tcp_reconnect_after_server_restart() {
 
     // Restart on the same port.
     let _server2 = Command::new("cargo")
-        .args(["run", "-p", "mae-state-server", "--", "--bind", &addr])
+        .args(["run", "-p", "mae-daemon", "--", "--bind", &addr])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -493,7 +493,7 @@ async fn tcp_offline_edit_reconnect_resync() {
 
     // Restart server on same port.
     let _server2 = Command::new("cargo")
-        .args(["run", "-p", "mae-state-server", "--", "--bind", &addr])
+        .args(["run", "-p", "mae-daemon", "--", "--bind", &addr])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -1226,8 +1226,8 @@ data_dir = "{}"
     )
     .unwrap();
 
-    let target_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/debug/mae-state-server");
+    let target_bin =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/mae-daemon");
 
     let child = if target_bin.exists() {
         Command::new(&target_bin)
@@ -1236,13 +1236,13 @@ data_dir = "{}"
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .expect("failed to spawn mae-state-server with PSK config")
+            .expect("failed to spawn mae-daemon with PSK config")
     } else {
         Command::new("cargo")
             .args([
                 "run",
                 "-p",
-                "mae-state-server",
+                "mae-daemon",
                 "--",
                 "--bind",
                 &addr,
@@ -1253,7 +1253,7 @@ data_dir = "{}"
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .expect("failed to spawn mae-state-server via cargo run")
+            .expect("failed to spawn mae-daemon via cargo run")
     };
 
     for _ in 0..50 {
@@ -1262,7 +1262,7 @@ data_dir = "{}"
             return (child, addr, tmp);
         }
     }
-    panic!("PSK mae-state-server did not start within 5s on {}", addr);
+    panic!("PSK mae-daemon did not start within 5s on {}", addr);
 }
 
 /// TcpClient with PSK auth: performs client_handshake before initialize.
@@ -1277,7 +1277,7 @@ impl TcpClient {
         };
 
         // Perform PSK handshake before initialize.
-        use mae_state_server::auth::{AuthProvider, PskAuth};
+        use mae_mcp::auth::{AuthProvider, PskAuth};
         let auth = PskAuth::new(psk);
         auth.client_handshake(&mut client.reader, &mut client.writer)
             .await
@@ -1317,7 +1317,7 @@ async fn tcp_psk_wrong_key_rejected() {
     let mut reader = BufReader::new(read);
     let mut writer = write;
 
-    use mae_state_server::auth::{AuthProvider, PskAuth};
+    use mae_mcp::auth::{AuthProvider, PskAuth};
     let wrong_auth = PskAuth::new("wrong-key");
     let result = wrong_auth.client_handshake(&mut reader, &mut writer).await;
 

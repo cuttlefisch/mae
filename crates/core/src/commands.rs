@@ -1320,16 +1320,16 @@ impl CommandRegistry {
         );
 
         // Collaboration
-        reg.register_builtin("collab-start", "Start local state server");
-        reg.register_builtin("collab-connect", "Connect to collaborative state server");
-        reg.register_builtin("collab-disconnect", "Disconnect from state server");
+        reg.register_builtin("collab-start", "Start local daemon");
+        reg.register_builtin("collab-connect", "Connect to collaborative daemon");
+        reg.register_builtin("collab-disconnect", "Disconnect from daemon");
         reg.register_builtin("collab-status", "Show collaborative editing status");
         reg.register_builtin("collab-share", "Share current buffer for collaboration");
         reg.register_builtin("collab-sync", "Force sync current buffer");
         reg.register_builtin("collab-doctor", "Run collaborative editing diagnostics");
         reg.register_builtin(
             "collab-list",
-            "List shared documents on the state server (SPC C l)",
+            "List shared documents on the daemon (SPC C l)",
         );
         reg.register_builtin("collab-join", "Join a shared document (SPC C j)");
         reg.register_builtin(

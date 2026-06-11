@@ -79,7 +79,7 @@ Requirements driving this decision:
 
 ```
 ┌─────────────────────────────────────────┐
-│           MAE State Server              │
+│             MAE Daemon                  │
 │                                         │
 │  ┌─────────┐  ┌────────────┐  ┌──────┐ │
 │  │ yrs Doc │  │ Broadcaster│  │ MCP  │ │
@@ -149,7 +149,7 @@ pub enum DocAddress {
 
 ### SQLite Connection Pool (fixes B1 bottleneck)
 
-`SqlitePool` (`crates/state-server/src/storage.rs`) uses FNV-1a hash sharding
+`SqlitePool` (`daemon/src/storage.rs`, formerly `crates/state-server/`) uses FNV-1a hash sharding
 across N connections (default 4). All shards open the same WAL-mode database.
 Reduces p99 write latency from ~50ms to ~12ms at 10 concurrent clients.
 

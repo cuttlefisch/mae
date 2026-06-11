@@ -5,10 +5,10 @@
 
 use std::sync::{Arc, Once};
 
+use mae_daemon::collab_handler::handle_client;
+use mae_daemon::doc_store::DocStore;
+use mae_daemon::storage::SqliteBackend;
 use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
-use mae_state_server::doc_store::DocStore;
-use mae_state_server::handler::handle_client;
-use mae_state_server::storage::SqliteBackend;
 use mae_sync::encoding::{base64_to_update, update_to_base64};
 use mae_sync::text::TextSync;
 use tokio::io::{AsyncWriteExt, BufReader};
@@ -2040,7 +2040,7 @@ async fn wal_compaction_preserves_data_under_active_editing() {
 #[tokio::test]
 async fn server_restart_recovers_wal_state() {
     init_tracing();
-    let backend: Arc<dyn mae_state_server::storage::StorageBackend> =
+    let backend: Arc<dyn mae_daemon::storage::StorageBackend> =
         Arc::new(SqliteBackend::open_memory().unwrap());
     let store = Arc::new(DocStore::new(Arc::clone(&backend), 500));
     let bc = test_broadcaster();

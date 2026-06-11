@@ -1,4 +1,4 @@
-//! Authentication providers for the state server.
+//! Authentication providers for MCP transport.
 //!
 //! The `AuthProvider` trait abstracts over authentication mechanisms.
 //! The server runs the provider's handshake before the JSON-RPC `initialize`

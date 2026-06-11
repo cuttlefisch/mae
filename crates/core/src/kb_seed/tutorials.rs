@@ -535,12 +535,12 @@ buffers and knowledge bases between MAE instances on different machines.\n\n\
 ## 1. Prerequisites\n\n\
 - Two machines (or two MAE instances) on the same network\n\
 - Both running MAE v0.11.1 or later\n\
-- The `mae-state-server` binary (included in release artifacts)\n\n\
+- The `mae-daemon` binary (included in release artifacts)\n\n\
 **Checkpoint:** `:verify` shows version >= 0.11.1.\n\n\
-## 2. Start the state server\n\n\
+## 2. Start the daemon\n\n\
 On the **host machine**, run:\n\
 ```bash\n\
-mae-state-server --bind 0.0.0.0:9473\n\
+mae-daemon --bind 0.0.0.0:9473\n\
 ```\n\n\
 Note the host's IP address:\n\
 - Linux: `hostname -I`\n\
@@ -557,7 +557,7 @@ Both machines MUST use the same PSK. For production use, prefer:\n\
 psk_command = \"pass show mae/collab-psk\"\n\
 ```\n\n\
 The server also needs the PSK in its config \
-(`~/.config/mae/state-server.toml`):\n\
+(`~/.config/mae/daemon.toml`):\n\
 ```toml\n\
 psk = \"your-shared-secret-here\"\n\
 ```\n\n\

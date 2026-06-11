@@ -1502,7 +1502,7 @@ external modification warning is raised. After writing, the new hash is \
 stored as the baseline. Advisory lock files (`.{name}.mae.lock`) prevent \
 simultaneous writes from two editor instances.\n\n\
 ** State Server Role\n\
-The `mae-state-server` binary is a **document hub**, not a source of truth. \
+The `mae-daemon` binary is a **document hub**, not a source of truth. \
 Documents are authoritative at the client; the server:\n\
 - Holds the latest merged CRDT state (yrs doc bytes)\n\
 - Appends every `sync/update` to a SQLite WAL before applying to memory\n\
@@ -1532,10 +1532,10 @@ still yrs transactions, which means:\n\
 - Zero configuration changes needed\n\
 - Instant upgrade path to loopback or collaborative mode\n\n\
 ** Loopback Mode (Local Multi-Agent)\n\
-Run `mae-state-server` on the same machine to coordinate multiple MAE \
+Run `mae-daemon` on the same machine to coordinate multiple MAE \
 instances or AI agents on the same project.\n\n\
 ```bash\n\
-mae-state-server                      # listens on 127.0.0.1:9473\n\
+mae-daemon                      # listens on 127.0.0.1:9473\n\
 ```\n\n\
 Then in each MAE instance:\n\
 ```scheme\n\
@@ -1550,7 +1550,7 @@ Point all clients at a shared server:\n\
 ```\n\n\
 The server can be started with:\n\
 ```bash\n\
-mae-state-server --bind 0.0.0.0:9473\n\
+mae-daemon --bind 0.0.0.0:9473\n\
 ```\n\n\
 > **Security:** PSK mutual authentication (HMAC-SHA256) is required since v0.11.0.\n\
 > Set `collab_psk` on both server and clients. For untrusted networks, use a VPN.\n\n\
@@ -1671,7 +1671,7 @@ N is the number of shared KBs and status is `synced`, `offline`, or \
 - Shared KBs: `$XDG_DATA_HOME/mae/kb/shared/{slug}/kb.sqlite`\n\n\
 ** mDNS Discovery\n\
 On a LAN, `:collab-discover` uses mDNS (`_mae-sync._tcp.local`) to find \
-peers running `mae-state-server`. Connect to a discovered peer to browse \
+peers running `mae-daemon`. Connect to a discovered peer to browse \
 their shared KBs.\n\n\
 ** PSK Authentication\n\
 Set `collab_psk` or `collab_psk_command` to enable HMAC-SHA256 mutual \

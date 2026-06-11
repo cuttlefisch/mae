@@ -119,7 +119,7 @@
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; 6. Collaborative Editing
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; Connect to a collaborative state server for multi-user editing.
+;; Connect to a collaborative daemon for multi-user editing.
 ;; See :help concept:collab-architecture for details.
 ;; (set-option! "collab-server-address" "127.0.0.1:9473")
 ;; (set-option! "collab-auto-connect" "true")

@@ -1521,7 +1521,7 @@ async fn run_collab_task(
 
     // Resolve PSK: if prefixed with "cmd:", run the command to get the key.
     let resolved_psk = if let Some(cmd) = psk_config.strip_prefix("cmd:") {
-        mae_state_server::auth::load_psk(Some(cmd), None)
+        mae_mcp::auth::load_psk(Some(cmd), None)
             .await
             .unwrap_or_default()
     } else {
@@ -2832,7 +2832,7 @@ async fn handle_disconnected_cmd(
             }
         }
         CollabCommand::StartServer => {
-            match tokio::process::Command::new("mae-state-server")
+            match tokio::process::Command::new("mae-daemon")
                 .arg("start")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::piped())
@@ -2905,7 +2905,7 @@ async fn handle_disconnected_cmd(
                     try_send_evt(
                         evt_tx,
                         CollabEvent::ServerFailed {
-                            error: format!("Failed to spawn mae-state-server: {}", e),
+                            error: format!("Failed to spawn mae-daemon: {}", e),
                         },
                     );
                 }
@@ -3024,7 +3024,7 @@ where
     R: tokio::io::AsyncBufRead + Unpin + Send,
     W: tokio::io::AsyncWrite + Unpin + Send,
 {
-    use mae_state_server::auth::{AuthProvider, PskAuth};
+    use mae_mcp::auth::{AuthProvider, PskAuth};
 
     if psk.is_empty() {
         return Ok(());
@@ -3191,12 +3191,9 @@ pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
         ));
         lines.push(String::new());
         lines.push("Troubleshooting:".to_string());
-        lines.push("  1. Is mae-state-server running?".to_string());
-        lines.push("     Start: systemctl --user start mae-state-server".to_string());
-        lines.push(format!(
-            "     Or:    mae-state-server --bind {}",
-            ctx.address
-        ));
+        lines.push("  1. Is mae-daemon running?".to_string());
+        lines.push("     Start: systemctl --user start mae-daemon".to_string());
+        lines.push(format!("     Or:    mae-daemon --bind {}", ctx.address));
         lines.push("  2. Check if the port is listening:".to_string());
         lines.push("     ss -tlnp | grep 9473".to_string());
         lines.push("  3. Check firewall:".to_string());
@@ -5080,7 +5077,7 @@ mod tests {
     async fn perform_psk_auth_correct_key_succeeds() {
         // Test perform_psk_auth against a real PskAuth server handshake
         // using tokio duplex streams (no TCP needed).
-        use mae_state_server::auth::{AuthProvider, PskAuth};
+        use mae_mcp::auth::{AuthProvider, PskAuth};
         use tokio::io::{duplex, BufReader, BufWriter};
 
         let psk = "test-secret-for-collab-bridge";
@@ -5114,7 +5111,7 @@ mod tests {
 
     #[tokio::test]
     async fn perform_psk_auth_wrong_key_fails() {
-        use mae_state_server::auth::{AuthProvider, PskAuth};
+        use mae_mcp::auth::{AuthProvider, PskAuth};
         use tokio::io::{duplex, BufReader, BufWriter};
 
         let (client_stream, server_stream) = duplex(4096);

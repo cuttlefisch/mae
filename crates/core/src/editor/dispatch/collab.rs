@@ -13,7 +13,7 @@ impl Editor {
         match name {
             "collab-start" => {
                 self.collab.pending_intent = Some(CollabIntent::StartServer);
-                self.set_status("Starting local state server...");
+                self.set_status("Starting local daemon...");
                 self.mark_full_redraw();
                 Some(true)
             }
@@ -28,7 +28,7 @@ impl Editor {
             }
             "collab-disconnect" => {
                 self.collab.pending_intent = Some(CollabIntent::Disconnect);
-                self.set_status("Disconnecting from state server...");
+                self.set_status("Disconnecting from daemon...");
                 self.mark_full_redraw();
                 Some(true)
             }

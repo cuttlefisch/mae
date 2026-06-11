@@ -17,7 +17,7 @@ pub(super) fn collab_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "collab_connect".into(),
-            description: "Connect to a mae-state-server for collaborative editing. Queues a connection intent for the event loop.".into(),
+            description: "Connect to a mae-daemon for collaborative editing. Queues a connection intent for the event loop.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(

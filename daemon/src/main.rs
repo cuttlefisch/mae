@@ -1,14 +1,15 @@
-//! mae-daemon — background KB persistence and maintenance service.
+//! mae-daemon — background KB persistence, collaboration, and maintenance service.
 //!
 //! Provides:
 //! - CozoDB with SQLite storage backend (no sled SIGABRT on nightly)
 //! - JSON-RPC API over Unix socket for editor KB queries
+//! - TCP collab server (CRDT sync, WAL-first persistence, PSK auth)
 //! - Background file watching, ingestion, and health checks
 //! - Optional: AI hygiene suggestions, embedding generation
 //!
 //! The daemon is optional — the editor works standalone with local sled-backed
 //! CozoDB. The daemon is an upgrade that provides persistent SQLite KB,
-//! background maintenance, and services that outlive the editor session.
+//! collaboration, and services that outlive the editor session.
 
 mod config;
 mod handler;
@@ -17,13 +18,17 @@ mod scheduler;
 
 use config::DaemonConfig;
 use handler::DaemonState;
+use mae_daemon::{collab_handler, doc_store, storage};
 use mae_kb::CozoKbStore;
+use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
 use scheduler::DaemonScheduler;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use storage::StorageBackend;
 use tokio::io::BufReader;
 use tokio::net::UnixListener;
 use tokio::sync::Mutex;
+use tracing::{debug, error, info, warn};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -37,11 +42,12 @@ async fn main() {
     }
 
     if args.iter().any(|a| a == "--check-config") {
-        let config = DaemonConfig::load();
-        println!("Socket: {}", config.socket.display());
-        println!("Data dir: {}", config.effective_data_dir().display());
-        println!("Log level: {}", config.log_level);
-        println!("Config OK");
+        run_check_config();
+        return;
+    }
+
+    if args.get(1).map(|s| s.as_str()) == Some("doctor") {
+        run_doctor();
         return;
     }
 
@@ -120,7 +126,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    tracing::info!(socket = %socket_path.display(), "Listening for connections");
+    tracing::info!(socket = %socket_path.display(), "KB listener ready");
 
     // Shutdown channel
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
@@ -132,7 +138,23 @@ async fn main() {
         scheduler.run(scheduler_shutdown).await;
     });
 
-    // Accept loop
+    // --- Collab server (absorbed from mae-state-server) ---
+    if config.collab.enabled {
+        let collab_issues = config.check_collab();
+        if !collab_issues.is_empty() {
+            for issue in &collab_issues {
+                error!(issue = %issue, "collab configuration error");
+            }
+            // Non-fatal: KB service continues, collab disabled
+            warn!("collab service disabled due to config errors");
+        } else {
+            spawn_collab_server(&config).await;
+        }
+    } else {
+        info!("collab service disabled in config");
+    }
+
+    // KB accept loop
     let accept_state = Arc::clone(&state);
     let accept_shutdown = shutdown_tx.subscribe();
     let accept_handle = tokio::spawn(async move {
@@ -177,7 +199,257 @@ async fn main() {
     tracing::info!("mae-daemon stopped");
 }
 
-/// Accept loop: spawn a task per client connection.
+/// Spawn the collab TCP server (absorbed from mae-state-server).
+async fn spawn_collab_server(config: &DaemonConfig) {
+    let collab = &config.collab;
+
+    // Open collab storage
+    let collab_data_dir = config.resolve_collab_data_dir();
+    let db_path = collab_data_dir.join("state.db");
+    let backend = match storage::SqliteBackend::open(&db_path) {
+        Ok(b) => Arc::new(b),
+        Err(e) => {
+            error!(error = %e, path = %db_path.display(), "failed to open collab SQLite");
+            warn!("collab service disabled");
+            return;
+        }
+    };
+
+    // Create doc store and broadcaster
+    let doc_store = Arc::new(
+        doc_store::DocStore::new(backend.clone(), collab.storage.compact_threshold)
+            .with_max_documents(collab.sync.max_documents)
+            .with_max_wal_entries(collab.storage.max_wal_entries)
+            .with_max_document_size(collab.sync.max_document_size_bytes),
+    );
+    let broadcaster: SharedBroadcaster = Arc::new(std::sync::Mutex::new(EventBroadcaster::new()));
+
+    // Recover documents from storage
+    match backend.list_documents().await {
+        Ok(docs) => {
+            if !docs.is_empty() {
+                info!(
+                    count = docs.len(),
+                    "recovering collab documents from storage"
+                );
+                for doc_name in &docs {
+                    if let Err(e) = doc_store.state_vector(doc_name).await {
+                        warn!(doc = %doc_name, error = %e, "recovery failed");
+                    }
+                }
+                info!(count = docs.len(), "collab recovery complete");
+            }
+        }
+        Err(e) => warn!(error = %e, "failed to list collab documents for recovery"),
+    }
+
+    // Create auth provider
+    let auth_mode = collab.auth.mode.clone();
+    let use_psk = auth_mode == "psk";
+    let psk_key: Option<String> = if use_psk {
+        let key = mae_mcp::auth::load_psk(
+            collab.auth.psk_command.as_deref(),
+            collab.auth.psk.as_deref(),
+        )
+        .await;
+        if key.is_none() {
+            error!("collab.auth.mode = 'psk' but no PSK could be loaded");
+            warn!("collab service disabled");
+            return;
+        }
+        key
+    } else {
+        None
+    };
+    info!(auth = %auth_mode, "collab authentication configured");
+
+    // Bind TCP
+    let tcp_listener = match tokio::net::TcpListener::bind(&collab.bind).await {
+        Ok(listener) => listener,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            error!(addr = %collab.bind, "collab address already in use");
+            warn!("collab service disabled");
+            return;
+        }
+        Err(e) => {
+            error!(error = %e, addr = %collab.bind, "failed to bind collab TCP");
+            warn!("collab service disabled");
+            return;
+        }
+    };
+
+    let server_start_time = std::time::Instant::now();
+    info!(
+        bind = %collab.bind,
+        data_dir = %collab_data_dir.display(),
+        "collab server started"
+    );
+
+    // Spawn background compaction + eviction task
+    {
+        let compact_interval = collab.sync.compaction_interval_secs;
+        let eviction_secs = collab.sync.idle_eviction_secs;
+        let store = Arc::clone(&doc_store);
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(compact_interval.max(10)));
+            interval.tick().await; // skip first immediate tick
+            loop {
+                interval.tick().await;
+
+                let names = store.document_names().await;
+                for name in &names {
+                    if let Err(e) = store.compact_doc(name).await {
+                        warn!(doc = %name, error = %e, "background compaction failed");
+                    }
+                }
+                if !names.is_empty() {
+                    debug!(count = names.len(), "background compaction complete");
+                }
+
+                if eviction_secs > 0 {
+                    let evicted = store.evict_idle(eviction_secs).await;
+                    if !evicted.is_empty() {
+                        debug!(count = evicted.len(), "idle eviction complete");
+                    }
+                }
+            }
+        });
+    }
+
+    // Spawn TCP accept loop
+    tokio::spawn(async move {
+        loop {
+            match tcp_listener.accept().await {
+                Ok((stream, addr)) => {
+                    info!(addr = %addr, "collab TCP client connected");
+                    let (reader, writer) = stream.into_split();
+                    let reader = BufReader::new(reader);
+                    let store = Arc::clone(&doc_store);
+                    let bc = Arc::clone(&broadcaster);
+                    let psk_clone = psk_key.clone();
+                    tokio::spawn(async move {
+                        if let Some(ref key) = psk_clone {
+                            let psk_auth = mae_mcp::auth::PskAuth::new(key);
+                            collab_handler::handle_client_with_auth(
+                                reader,
+                                writer,
+                                &psk_auth,
+                                store,
+                                bc,
+                                server_start_time,
+                            )
+                            .await;
+                        } else {
+                            collab_handler::handle_client(
+                                reader,
+                                writer,
+                                store,
+                                bc,
+                                server_start_time,
+                            )
+                            .await;
+                        }
+                    });
+                }
+                Err(e) => error!(error = %e, "collab TCP accept error"),
+            }
+        }
+    });
+}
+
+fn run_check_config() {
+    let config = DaemonConfig::load();
+    println!("Socket: {}", config.socket.display());
+    println!("Data dir: {}", config.effective_data_dir().display());
+    println!("Log level: {}", config.log_level);
+
+    // Collab config
+    println!("Collab enabled: {}", config.collab.enabled);
+    if config.collab.enabled {
+        println!("  bind: {}", config.collab.bind);
+        println!("  storage.backend: {}", config.collab.storage.backend);
+        println!(
+            "  storage.compact_threshold: {}",
+            config.collab.storage.compact_threshold
+        );
+        println!(
+            "  sync.heartbeat_interval_secs: {}",
+            config.collab.sync.heartbeat_interval_secs
+        );
+        println!("  sync.max_documents: {}", config.collab.sync.max_documents);
+        println!(
+            "  collab data_dir: {}",
+            config.resolve_collab_data_dir().display()
+        );
+        println!("  auth.mode: {}", config.collab.auth.mode);
+
+        let issues = config.check_collab();
+        if !issues.is_empty() {
+            eprintln!("Collab configuration issues:");
+            for issue in &issues {
+                eprintln!("  - {issue}");
+            }
+            std::process::exit(1);
+        }
+    }
+
+    println!("Config OK");
+}
+
+fn run_doctor() {
+    println!("mae-daemon doctor");
+    println!("  version: {VERSION}");
+
+    // Check config
+    let config = DaemonConfig::load();
+
+    // Check KB data directory
+    let data_dir = config.effective_data_dir();
+    if data_dir.exists() {
+        println!("  kb data_dir: {} (exists)", data_dir.display());
+    } else {
+        println!("  kb data_dir: {} (will be created)", data_dir.display());
+    }
+
+    // Check collab
+    if config.collab.enabled {
+        let issues = config.check_collab();
+        if issues.is_empty() {
+            println!("  collab config: OK");
+        } else {
+            println!("  collab config: {} issue(s)", issues.len());
+            for issue in &issues {
+                println!("    - {issue}");
+            }
+        }
+
+        // Check collab storage
+        let collab_data_dir = config.resolve_collab_data_dir();
+        let db_path = collab_data_dir.join("state.db");
+        match storage::SqliteBackend::open(&db_path) {
+            Ok(_) => println!("  collab sqlite: OK ({})", db_path.display()),
+            Err(e) => println!("  collab sqlite: FAILED ({e})"),
+        }
+
+        // Check port
+        match std::net::TcpListener::bind(config.collab.bind) {
+            Ok(_) => println!("  collab port {}: available", config.collab.bind.port()),
+            Err(e) => println!(
+                "  collab port {}: {} ({})",
+                config.collab.bind.port(),
+                e,
+                config.collab.bind
+            ),
+        }
+    } else {
+        println!("  collab: disabled");
+    }
+
+    println!("  yrs version: 0.22");
+}
+
+/// Accept loop: spawn a task per KB client connection.
 async fn accept_loop(
     listener: UnixListener,
     state: Arc<Mutex<DaemonState>>,
@@ -205,7 +477,7 @@ async fn accept_loop(
     }
 }
 
-/// Handle a single client connection using Content-Length framed JSON-RPC.
+/// Handle a single KB client connection using Content-Length framed JSON-RPC.
 async fn handle_client(
     stream: tokio::net::UnixStream,
     state: Arc<Mutex<DaemonState>>,
@@ -233,7 +505,6 @@ async fn handle_client(
             });
             let body = serde_json::to_vec(&response)?;
             mae_mcp::write_framed(&mut writer, &body, std::time::Duration::from_secs(5)).await?;
-            // Signal shutdown (caller will handle)
             return Ok(());
         }
 

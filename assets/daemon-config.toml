@@ -24,3 +24,28 @@
 
 # Health check interval in seconds
 # health_interval_secs = 300
+
+# ========================================================================
+# Collaborative Editing (TCP server for multi-machine sync)
+# ========================================================================
+[collab]
+# Enable/disable the collab TCP server
+# enabled = true
+
+# TCP bind address for collaborative editing
+# bind = "127.0.0.1:9473"
+
+# Pre-shared key for mutual authentication (required for untrusted networks)
+# psk = ""
+
+# [collab.storage]
+# Collab WAL data directory (default: data_dir/collab)
+# data_dir = ""
+# Number of SQLite shards (default: 4)
+# pool_size = 4
+
+# [collab.sync]
+# Background compaction interval in seconds
+# compaction_interval_secs = 60
+# Idle document eviction timeout in seconds
+# idle_eviction_secs = 300

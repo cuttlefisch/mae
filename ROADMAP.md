@@ -66,7 +66,7 @@
 
 ### Release Artifact Packaging
 
-- [x] **Linux TUI**: `.tar.gz` archive containing `mae` + `mae-state-server` static musl binaries.
+- [x] **Linux TUI**: `.tar.gz` archive containing `mae` + `mae-daemon` static musl binaries.
 - [x] **Linux GUI**: AppImage (`.AppImage`) — portable, no install required. Uses existing `mae.desktop` + `mae.svg`.
 - [x] **macOS GUI**: `.app` bundle in `.zip` — Finder-compatible, with `Info.plist`, icon, launcher script.
 - [x] **macOS TUI**: `.tar.gz` archive containing `mae` binary.
@@ -102,8 +102,8 @@
 
 ### Near-term: Server-Client Architecture
 
-- [ ] **Multi-AI file contention protocol**: When multiple AI-assisted editors (MAE, VS Code + Copilot, Cursor, aider) operate on the same project simultaneously, file writes race, LSP state goes stale, and undo histories diverge. Short-term: git worktree isolation (each agent in its own worktree, merge at commit time). Medium-term: advisory file locks (`.mae.lock`), inotify coordination to detect external changes and pause AI operations. Long-term: canonical state server (see below).
-- [x] **State server v1** (`mae-state-server` binary): Standalone CRDT sync server over TCP (port 9473). Per-document locking, WAL-first SQLite persistence, periodic compaction, transport-generic I/O (reuses `mae_mcp` primitives). Sync protocol: `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`. No auth (trusted LAN only).
+- [ ] **Multi-AI file contention protocol**: When multiple AI-assisted editors (MAE, VS Code + Copilot, Cursor, aider) operate on the same project simultaneously, file writes race, LSP state goes stale, and undo histories diverge. Short-term: git worktree isolation (each agent in its own worktree, merge at commit time). Medium-term: advisory file locks (`.mae.lock`), inotify coordination to detect external changes and pause AI operations. Long-term: canonical daemon (see below).
+- [x] **State server v1** (`mae-daemon`, formerly `mae-state-server`): Standalone CRDT sync server over TCP (port 9473). Per-document locking, WAL-first SQLite persistence, periodic compaction, transport-generic I/O (reuses `mae_mcp` primitives). Sync protocol: `sync/update`, `sync/state_vector`, `sync/full_state`, `sync/diff`. No auth (trusted LAN only).
 - [x] **State server v1.5** (scalability + UX): Sharded SQLite pool (4 shards), save protocol (SHA-256 content-hash), event sequence tracking (wal_seq), background compaction + idle eviction. Editor: 7 commands (SPC C prefix), 4 AI tools, status bar segment, 5 options, doctor integration, audit_configuration collab section. New methods: `sync/resync`, `docs/stats`, `docs/save_intent`, `docs/save_committed`, `$/debug`.
 - [x] **Client ID echo filtering**: Server `broadcast_except()` skips the originating session on `sync/update`. Eliminates wasted bandwidth/CPU from self-echo and prevents share duplication race.
 - [x] **Collab stub audit** (v0.11.0 correctness): Systematic review completed. Resolved items:
@@ -114,7 +114,7 @@
   - ~~No `peer_joined`/`peer_left` events~~ — exist in `EditorEvent`, broadcast by server on connect/disconnect
   - `SaveIntentResult` returned by server, now consumed by editor save path ✅
   - `save_intent` now called from editor `:w` for synced buffers ✅
-  - `docs/metadata` endpoint added to state server ✅
+  - `docs/metadata` endpoint added to daemon ✅
   - `WalEntry::client_id` stored but never read for audit/attribution (deferred — needs Phase F auth)
   - `StorageError::Io` variant reserved but unused (pluggable backends — by design)
 - [ ] **State server v2** (Phase F): Auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Completed: awareness protocol ✅, per-user undo ✅ (yrs `UndoManager`), git-based identity ✅, heartbeat/keepalive ✅, buffer status indicators ✅, Bugs 2-4 ✅ *(8de53b8)*, PSK mutual auth ✅ *(fffa39f)*, KB protocol handlers ✅ *(fffa39f)*, **KB sharing E2E** ✅ (bridge + continuous sync + offline + mDNS). Next: SSH key exchange, msgpack wire format.
@@ -136,7 +136,7 @@
   - Phase B: Buffer integration (sync_doc field, local edits → yrs transactions) ✅
   - Phase C: MCP sync methods (state_vector, apply_update) ✅
   - Phase D: Push-based sync event broadcasting ✅
-  - Phase E (state-server): TCP transport, WAL persistence, per-doc locking ✅
+  - Phase E (daemon): TCP transport, WAL persistence, per-doc locking ✅
   - Phase F: Awareness protocol ✅, per-user undo ✅, multi-machine sync
 - [ ] **Networked feature E2E coverage gate**: Every networked feature (sync, save, awareness, auth) requires E2E test coverage before release. Coverage targets:
   - Save protocol: save_intent → hash check → save_committed → peer notification (~80%)
@@ -312,7 +312,7 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [ ] **Live recompilation in debugger** — Swank's SLDB allows fixing a function while paused at a breakpoint, then resuming. mae-scheme's `define_global` already supports hot reload; wiring it to the DAP resume flow would complete the picture.
 
 ### Near-term: Other
-- [ ] **Version compatibility policy**: Semver enforcement on upgrade — protocol version negotiation in state-server (`initialize` params), config schema migration on major bumps, `make install-upgrade` blocking on incompatible major versions (currently warns only). Prerequisite for v1.0.
+- [ ] **Version compatibility policy**: Semver enforcement on upgrade — protocol version negotiation in daemon (`initialize` params), config schema migration on major bumps, `make install-upgrade` blocking on incompatible major versions (currently warns only). Prerequisite for v1.0.
 - [ ] PDF preview (GUI inline rendering via `hayro` pure-Rust rasterizer + midnight mode)
 - [ ] Semantic code search (vector embeddings)
 - [x] Org ↔ Markdown bidirectional conversion (`:markdown-to-org`, `:org-to-markdown`)
@@ -431,7 +431,7 @@ Items E1–E8 track open design questions and planned improvements for the colla
   4-tier identity: git remote → `.project` name → directory basename → FNV-1a hash. `compute_doc_address()` uses `git remote get-url origin` → normalize → FNV-1a. Persistent across sessions (unique in the industry).
 
 - [ ] **E2. KB sync model** *(Future)*
-  KB notes (`DocAddress::KbNode`) shared between peers via yrs docs on state server. Conflict resolution for bidirectional link graph.
+  KB notes (`DocAddress::KbNode`) shared between peers via yrs docs on daemon. Conflict resolution for bidirectional link graph.
 
 - [ ] **E3. Directory creation policy for collab saves** *(Future)*
   `collab_create_parent_dirs` option (default: false) — auto-create missing parent dirs on `:saveas`. Safety: prompt before creating directories.

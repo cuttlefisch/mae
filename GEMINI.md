@@ -28,7 +28,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
     - `make docker-dev` — interactive dev shell with Rust toolchain
     - `make docker-smoke` — quick binary smoke test
     - `make docker-clean` — remove Docker images and cache
-    - `make docker-collab-test` — collab CRDT E2E test (state-server + 2 clients + verifier)
+    - `make docker-collab-test` — collab CRDT E2E test (daemon + 2 clients + verifier)
   - Dockerfile: multi-stage (base -> builder -> ci -> runtime), TUI-only (no Skia in container)
   - `docker compose run --rm --build <service>` is the canonical invocation
 
@@ -47,7 +47,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) |
 | `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O |
 | `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers |
-| `mae-state-server` | Standalone collab state server — TCP sync, WAL persistence, per-doc locking |
+| `mae-daemon` | Background daemon — KB persistence, collab sync, WAL persistence, per-doc locking (merged from mae-state-server) |
 | `mae-babel` | Org-babel executor — 12 languages, persistent sessions, language backends |
 | `mae-export` | Org/Markdown export — HTML, Markdown, TOC, syntax highlighting |
 | `mae-snippets` | YASnippet-style templates — tab-stops, mirrors, transforms |
@@ -79,7 +79,7 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 9. **CRDT-first sync (yrs/YATA).** All collaborative state flows through yrs (Yjs Rust port). The ropey rope is a read-only rendering mirror. See ADR-002.
 
-10. **Local-first by design.** MAE satisfies 5 of 7 Ink & Switch local-first ideals today. The state server is an optimization, not a requirement.
+10. **Local-first by design.** MAE satisfies 5 of 7 Ink & Switch local-first ideals today. The daemon is an optimization, not a requirement.
 
 ## Key Design Decisions
 
@@ -107,11 +107,11 @@ Collaborative state uses **yrs** (Yjs Rust port, YATA algorithm). `mae-sync` wra
 - `DocAddress` enum: `File { project_hash, rel_path }`, `Shared { name }`, `KbNode { node_id }`
 - Local undo/redo uses `reconcile_to()` (character-level LCS diff) for CRDT-safe deltas
 
-## State Server (`mae-state-server`)
+## Daemon (`mae-daemon`)
 
-Standalone binary for multi-machine collaborative editing.
+Background daemon for KB persistence and multi-machine collaborative editing (incorporates the former `mae-state-server`).
 
-**Usage:** `mae-state-server [--bind 0.0.0.0:9473] [--unix-socket /path] [--check-config] [doctor]`
+**Usage:** `mae-daemon [--bind 0.0.0.0:9473] [--unix-socket /path] [--check-config] [doctor]`
 
 **Architecture:**
 - Per-document locking (`RwLock<HashMap<String, Arc<Mutex<DocEntry>>>>`)

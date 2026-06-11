@@ -6,7 +6,7 @@ Share your MAE knowledge base with other users for real-time collaborative editi
 
 - Two or more MAE instances (v0.11.0+)
 - Network connectivity between peers (LAN or internet)
-- `mae-state-server` running (dedicated or embedded)
+- `mae-daemon` running (dedicated or embedded)
 
 ## Quick Start
 
@@ -14,7 +14,7 @@ Share your MAE knowledge base with other users for real-time collaborative editi
 
 ```bash
 # On a shared machine:
-mae-state-server --bind 0.0.0.0:9473
+mae-daemon --bind 0.0.0.0:9473
 
 # User A (host):
 mae ~/my-notes/
@@ -56,8 +56,8 @@ mae
 
 | Command | Keybinding | Description |
 |---------|-----------|-------------|
-| `:collab-start` | `SPC C s` | Start embedded state server |
-| `:collab-connect <addr>` | `SPC C c` | Connect to state server |
+| `:collab-start` | `SPC C s` | Start embedded daemon |
+| `:collab-connect <addr>` | `SPC C c` | Connect to daemon |
 | `:kb-share [name]` | `SPC C K s` | Share KB (default: primary) |
 | `:kb-join <kb-id>` | `SPC C K j` | Join a shared KB |
 | `:kb-leave <kb-id>` | `SPC C K l` | Stop syncing (keeps local copy) |
@@ -91,7 +91,7 @@ kb_sync_mode = "on_save"
 
 1. All KB nodes are encoded as yrs CRDT documents (`KbNodeDoc`)
 2. A collection manifest (`KbCollectionDoc`) is created listing all nodes
-3. Both are uploaded to the state server
+3. Both are uploaded to the daemon
 4. Other connected users can now `:kb-join`
 
 ### Joining (`:kb-join`)
@@ -159,7 +159,7 @@ Both the server and all clients must share the same key.
    pass insert mae/collab-psk
    ```
 
-2. **Configure the server** (`~/.config/mae/state-server.toml`):
+2. **Configure the server** (`~/.config/mae/daemon.toml`):
    ```toml
    [auth]
    mode = "psk"
@@ -201,13 +201,13 @@ This is suitable for trusted local networks only.
 
 | Service | Protocol | Port | Direction |
 |---------|----------|------|-----------|
-| State server | TCP | 9473 (default) | Inbound to server |
+| Daemon | TCP | 9473 (default) | Inbound to server |
 | mDNS discovery | UDP | 5353 (multicast) | Bidirectional |
 
 ### Linux Firewall (firewalld)
 
 ```bash
-# Allow state server port (on the machine running mae-state-server):
+# Allow daemon port (on the machine running mae-daemon):
 sudo firewall-cmd --add-port=9473/tcp --permanent
 
 # Allow mDNS for peer discovery (both machines):
@@ -220,7 +220,7 @@ sudo firewall-cmd --reload
 ### Linux Firewall (iptables/nftables)
 
 ```bash
-# State server:
+# Daemon:
 sudo iptables -A INPUT -p tcp --dport 9473 -j ACCEPT
 
 # mDNS:
@@ -229,15 +229,15 @@ sudo iptables -A INPUT -p udp --dport 5353 -d 224.0.0.251 -j ACCEPT
 
 ### macOS Firewall
 
-macOS allows mDNS by default (Bonjour). For the state server port:
+macOS allows mDNS by default (Bonjour). For the daemon port:
 
-1. **System Settings → Network → Firewall** → allow incoming connections for `mae-state-server`
+1. **System Settings → Network → Firewall** → allow incoming connections for `mae-daemon`
 2. Or via command line:
    ```bash
    # macOS firewall is typically permissive for user apps.
    # If blocked, add an explicit exception:
-   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/local/bin/mae-state-server
-   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp /usr/local/bin/mae-state-server
+   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/local/bin/mae-daemon
+   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp /usr/local/bin/mae-daemon
    ```
 
 ### Router / WLAN Requirements
@@ -269,14 +269,14 @@ dns-sd -B _mae-sync._tcp local.
 ```bash
 # 1. Install/build MAE
 cargo install --path crates/mae
-cargo install --path crates/state-server
+cargo install --path daemon
 
 # 2. Create PSK
 mkdir -p ~/.config/mae
 openssl rand -hex 32 > ~/.config/mae/collab-psk.txt
 
 # 3. Configure server
-cat > ~/.config/mae/state-server.toml << 'EOF'
+cat > ~/.config/mae/daemon.toml << 'EOF'
 bind = "0.0.0.0:9473"
 [auth]
 mode = "psk"
@@ -284,7 +284,7 @@ psk_command = "cat ~/.config/mae/collab-psk.txt"
 EOF
 
 # 4. Start server
-mae-state-server
+mae-daemon
 
 # 5. Get your IP
 ip addr show | grep "inet " | grep -v 127.0.0.1
@@ -357,10 +357,10 @@ Common issues:
 
 ```bash
 # Full KB sharing lifecycle:
-RUST_LOG="mae::collab_bridge=debug,mae_state_server::handler=debug,mae_kb=debug" mae
+RUST_LOG="mae::collab_bridge=debug,mae_daemon::handler=debug,mae_kb=debug" mae
 
 # Server-side:
-RUST_LOG="mae_state_server=debug" mae-state-server
+RUST_LOG="mae_daemon=debug" mae-daemon
 
 # mDNS discovery:
 RUST_LOG="mae::mdns_discovery=debug" mae
@@ -384,17 +384,17 @@ See [ADR-005](adr/adr-005-kb-crdt.md) and [ADR-006](adr/adr-006-collaborative-st
 ## Server Deployment (Cloud / VPS)
 
 For persistent availability across devices or over the internet, run
-`mae-state-server` on a VPS or home server.
+`mae-daemon` on a VPS or home server.
 
 ```bash
 # Bind to all interfaces on the VPS:
-mae-state-server --bind 0.0.0.0:9473
+mae-daemon --bind 0.0.0.0:9473
 
-# Or set in state-server.toml:
+# Or set in daemon.toml:
 bind = "0.0.0.0:9473"
 ```
 
-**Important:** `mae-state-server` speaks raw TCP with JSON-RPC framing — it
+**Important:** `mae-daemon` speaks raw TCP with JSON-RPC framing — it
 is NOT an HTTP service. Do not put it behind an HTTP reverse proxy (nginx,
 Caddy, etc.). A TCP load-balancer (HAProxy stream mode) is fine.
 
@@ -402,7 +402,7 @@ Caddy, etc.). A TCP load-balancer (HAProxy stream mode) is fine.
 
 **ufw (Ubuntu/Debian):**
 ```bash
-sudo ufw allow 9473/tcp comment "MAE state server"
+sudo ufw allow 9473/tcp comment "MAE daemon"
 sudo ufw reload
 ```
 
@@ -418,22 +418,22 @@ sudo nft add rule inet filter input tcp dport 9473 accept
 ```
 
 For internet-facing deployments, always configure a PSK (`[auth] mode = "psk"`
-in `state-server.toml`). Without PSK, anyone who can reach port 9473 can read
+in `daemon.toml`). Without PSK, anyone who can reach port 9473 can read
 and write your shared KB.
 
 ---
 
 ## Systemd Hardening
 
-The bundled unit file (`assets/mae-state-server.service`) runs as a user
+The bundled unit file (`assets/mae-daemon.service`) runs as a user
 service. For a system-level deployment with additional hardening, create a
 drop-in override:
 
 ```bash
-sudo systemctl edit mae-state-server
+sudo systemctl edit mae-daemon
 ```
 
-Example hardened override (`/etc/systemd/system/mae-state-server.d/hardening.conf`):
+Example hardened override (`/etc/systemd/system/mae-daemon.d/hardening.conf`):
 
 ```ini
 [Service]
@@ -460,8 +460,8 @@ SystemCallErrorNumber=EPERM
 After editing:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl restart mae-state-server
-sudo systemctl status mae-state-server
+sudo systemctl restart mae-daemon
+sudo systemctl status mae-daemon
 ```
 
 Verify it is running and the data directory is writable before connecting clients.
@@ -470,19 +470,19 @@ Verify it is running and the data directory is writable before connecting client
 
 ## VPN / WireGuard Tunnel
 
-For internet deployments, binding `mae-state-server` to a WireGuard tunnel
+For internet deployments, binding `mae-daemon` to a WireGuard tunnel
 interface provides network-level encryption as defense-in-depth alongside PSK
 authentication.
 
 ```toml
-# state-server.toml — bind to WireGuard interface only
+# daemon.toml — bind to WireGuard interface only
 bind = "10.0.0.1:9473"   # wg0 address
 ```
 
 ```bash
 # Bring up wg0 first, then start the server:
 sudo wg-quick up wg0
-mae-state-server
+mae-daemon
 ```
 
 Clients connect to the WireGuard peer address:
@@ -502,7 +502,7 @@ the PSK is also compromised.
 
 ## IPv6
 
-`mae-state-server` supports IPv6. To listen on all interfaces (dual-stack):
+`mae-daemon` supports IPv6. To listen on all interfaces (dual-stack):
 
 ```toml
 bind = "[::]:9473"
@@ -535,7 +535,7 @@ states is transmitted, not the full node body.
 | Full node sync on join | ~1–20 KB per node |
 | Collection manifest (100 nodes) | ~5–15 KB |
 
-**Capacity estimates** for a single `mae-state-server` instance on modest
+**Capacity estimates** for a single `mae-daemon` instance on modest
 hardware (2 CPU cores, 1 GB RAM):
 
 | Metric | Estimate |
@@ -596,20 +596,20 @@ Issues
 
 ---
 
-## mae-state-server doctor
+## mae-daemon doctor
 
 The server binary has its own diagnostics subcommand:
 
 ```bash
-mae-state-server doctor
+mae-daemon doctor
 ```
 
 Example output:
 ```
-mae-state-server doctor
+mae-daemon doctor
   bind:          0.0.0.0:9473        [listening]
   auth:          PSK (HMAC-SHA256)   [configured]
-  database:      /var/lib/mae/state-server.db  [ok, 3 shards]
+  database:      /var/lib/mae/daemon.db  [ok, 3 shards]
   wal_size:      142 KB
   documents:     12 active, 0 evicted
   peers:         2 connected
@@ -620,7 +620,7 @@ mae-state-server doctor
 ```
 
 Flags:
-- `--check-config` — validate `state-server.toml` without binding a port
+- `--check-config` — validate `daemon.toml` without binding a port
 - `doctor` — live diagnostics (requires a running instance or starts briefly)
 
 ---
@@ -628,7 +628,7 @@ Flags:
 ## Embedded Server Lifecycle
 
 When you run `:collab-start` (`SPC C s`), MAE spawns an embedded
-`mae-state-server` instance as an async task within the editor process.
+`mae-daemon` instance as an async task within the editor process.
 
 **Start:**
 ```
@@ -648,7 +648,7 @@ When you run `:collab-start` (`SPC C s`), MAE spawns an embedded
 There is no `:collab-stop` command. The embedded server exits when MAE exits.
 This is by design: the embedded server is a convenience feature for P2P
 sessions, not a long-running daemon. For persistent availability, run a
-dedicated `mae-state-server` (see [Server Deployment](#server-deployment-cloud--vps) above).
+dedicated `mae-daemon` (see [Server Deployment](#server-deployment-cloud--vps) above).
 
 When MAE closes with peers connected, those peers will see a TCP disconnect
 within the OS keepalive timeout. They can reconnect to a new session if you

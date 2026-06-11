@@ -13,15 +13,15 @@ This guide walks you through multi-user collaborative editing -- sharing buffers
 
 - Two machines (or two MAE instances) on the same network
 - Both running MAE v0.11.1 or later
-- The =mae-state-server= binary (included in release artifacts)
+- The =mae-daemon= binary (included in release artifacts)
 
 *Checkpoint:* =:verify= shows version >= 0.11.1.
 
-** 2. Start the state server
+** 2. Start the daemon
 
 On the *host machine*, run:
 #+begin_src bash
-mae-state-server --bind 0.0.0.0:9473
+mae-daemon --bind 0.0.0.0:9473
 #+end_src
 
 Note the host's IP address:
@@ -43,7 +43,7 @@ Both machines MUST use the same PSK. For production use, prefer:
 psk_command = "pass show mae/collab-psk"
 #+end_src
 
-The server also needs the PSK in its config (=~/.config/mae/state-server.toml=):
+The server also needs the PSK in its config (=~/.config/mae/daemon.toml=):
 #+begin_src toml
 psk = "your-shared-secret-here"
 #+end_src

@@ -134,7 +134,7 @@ development, `planned` = on public roadmap.
 | CRDT algorithm | yrs (YATA) | OT (proprietary) | yrs (YATA) | CRDT (custom) | N |
 | Persistent document identity (survives disconnect) | Y | N | N | N | N |
 | Local-first (works offline, sync when reconnected) | Y | N | P | P | N |
-| Self-hosted state server | Y | N | N | P | N |
+| Self-hosted daemon | Y | N | N | P | N |
 | No vendor cloud dependency for collab | Y | N | N | Y | N |
 | Offline edit queue (sync on reconnect) | Y | N | N | N | N |
 | Per-user undo stack (CRDT-safe) | Y | N | Y | N | N |
@@ -195,7 +195,7 @@ development, `planned` = on public roadmap.
   users write for personal notes is the format used for editor documentation, tutorial
   lessons, command references, and concept pages. This unifies the note-taking and
   documentation experiences.
-- "Federated KB instances" means multiple running MAE instances (or the state server) can
+- "Federated KB instances" means multiple running MAE instances (or the daemon) can
   share KB subsets over the same yrs CRDT transport used for text buffers.
 - VSCode extensions like Foam and Dendron provide wiki-link graphs, but they are not
   integrated with the editor's AI or embedded in the help system.
@@ -279,7 +279,7 @@ among CRDT-based editors in this comparison.
 - Zed: session-scoped doc IDs. If the host closes the editor, the session ends.
 - VSCode Live Share: session-scoped, server-mediated.
 - MAE: doc IDs survive host disconnection. Contributors can edit offline. Changes
-  merge via CRDT when connectivity resumes. The state server persists documents across
+  merge via CRDT when connectivity resumes. The daemon persists documents across
   machine restarts with WAL-backed SQLite.
 
 This enables genuinely asynchronous collaboration — closer to git's model than to Google
@@ -295,7 +295,7 @@ MAE satisfies five of the seven Ink & Switch local-first ideals today:
 4. Collaboration without conflict (yrs CRDT handles concurrent edits)
 5. The user owns their data (GPL, self-hosted, no vendor API required for collab)
 
-The `mae-state-server` binary is a standalone TCP server that any user can run on their
+The `mae-daemon` binary is a standalone TCP server that any user can run on their
 own hardware. There is no MAE-operated cloud service. Collaboration does not require an
 account, a subscription, or outbound connections to a third-party server.
 
@@ -386,7 +386,7 @@ These are forward-looking capabilities that extend MAE's unique position.
 | RAG pipeline (embeddings + vector search) | AI-heavy research workflows | Planned (ROADMAP Phase 12) | Would inject semantically relevant KB nodes into AI context automatically |
 | Web UI for KB | Non-editor users, team wikis | Not started | Requires HTTP server for KB export; read-only view would suffice initially |
 | Per-node KB permissions | Enterprise teams | Not started | Current sharing is all-or-nothing per KB instance |
-| True P2P (no state server required) | Fully decentralized workflows | Planned | mDNS discovery ships; direct peer transport without state server not done |
+| True P2P (no daemon required) | Fully decentralized workflows | Planned | mDNS discovery ships; direct peer transport without daemon not done |
 | AI harness (per-model prompt tuning) | Teams running multiple model providers | Planned (ROADMAP) | Model profiles exist in `mae-ai`; prompt template per model not surfaced to users |
 | PDF preview | LaTeX / org-export users | Planned (Phase 8 M8) | Org HTML export ships; PDF via LaTeX pipeline not yet integrated |
 | Org-mode publish (static site) | Bloggers, docs sites | Not started | Would require a multi-file export pipeline |

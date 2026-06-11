@@ -71,7 +71,7 @@ Key points:
 | `$/ping` | request | Heartbeat, returns `"pong"` |
 | `$/health` | request | Session diagnostics (uptime, message count, initialized flag) |
 | `$/resync` | request | Session state dump for recovery |
-| `$/debug` | request | Server-wide debug info (state-server only) |
+| `$/debug` | request | Server-wide debug info (daemon only) |
 
 ### Tool Methods
 
@@ -86,7 +86,7 @@ Key points:
 |--------|------|-------------|
 | `notifications/subscribe` | request | Subscribe to event types |
 
-### Sync Methods (State Server)
+### Sync Methods (Daemon)
 
 | Method | Type | Description |
 |--------|------|-------------|
@@ -152,7 +152,7 @@ Event types: `buffer_edit`, `cursor_move`, `diagnostics`, `mode_change`, `buffer
 | Transport | Used by | Address |
 |-----------|---------|---------|
 | Unix socket | Editor MCP server | `/tmp/mae-{PID}.sock` |
-| TCP | State server | `127.0.0.1:9473` (configurable) |
+| TCP | Daemon | `127.0.0.1:9473` (configurable) |
 | stdio | Shim bridge, MCP client | stdin/stdout of child process |
 
 ## Client Implementation

@@ -102,7 +102,7 @@ fn execute_collab_doctor(editor: &mut Editor) -> Result<String, String> {
             "passed": false,
             "detail": format!("Cannot reach {}", address),
             "remediation": {
-                "start_server": "systemctl --user start mae-state-server",
+                "start_server": "systemctl --user start mae-daemon",
                 "check_listening": "ss -tlnp | grep 9473",
                 "firewalld": "sudo firewall-cmd --add-port=9473/tcp --permanent && sudo firewall-cmd --reload",
                 "ufw": "sudo ufw allow 9473/tcp",

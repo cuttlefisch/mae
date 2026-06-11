@@ -310,26 +310,26 @@ Stand up a shared KB session, have team members join, co-edit nodes in real time
 
 ### Workflow
 
-1. **Host:** start the MAE state server (if not already running):
+1. **Host:** start the MAE daemon (if not already running):
    ```bash
-   mae-state-server --bind 0.0.0.0:9473
+   mae-daemon --bind 0.0.0.0:9473
    ```
-   Or as a systemd user unit: `systemctl --user start mae-state-server`.
+   Or as a systemd user unit: `systemctl --user start mae-daemon`.
 
 2. **Host:** launch MAE and start a collab session:
    ```
    mae ~/team-kb
    SPC C s       → collab-start
    ```
-   MAE connects to the local state server and registers the session.
+   MAE connects to the local daemon and registers the session.
 
 3. **Host:** share the KB:
    ```
    :kb-share "team-arch"
    ```
-   The KB collection is registered on the state server. MAE prints the join address (`mae://hostname:9473/team-arch`).
+   The KB collection is registered on the daemon. MAE prints the join address (`mae://hostname:9473/team-arch`).
 
-4. **Guest:** connect to the host's state server:
+4. **Guest:** connect to the host's daemon:
    ```
    SPC C c       → collab-connect
    ```
@@ -374,7 +374,7 @@ Stand up a shared KB session, have team members join, co-edit nodes in real time
 
 ### What to Verify
 
-- PSK auth prevents unauthenticated connections to the state server.
+- PSK auth prevents unauthenticated connections to the daemon.
 - Concurrent edits to the same node by two users converge to the same content (CRDT invariant).
 - mDNS discovery lists the host without manual address entry on the same LAN.
 - The status line KB indicator transitions from `pending` to `synced` after the sync completes.
@@ -383,7 +383,7 @@ Stand up a shared KB session, have team members join, co-edit nodes in real time
 
 ### Key Features Used
 
-- `mae-state-server` standalone binary (TCP, WAL SQLite, per-doc locking)
+- `mae-daemon` binary (TCP, WAL SQLite, per-doc locking)
 - PSK mutual auth (HMAC-SHA256) in TCP accept path
 - `collab-start`, `collab-connect`, `collab-disconnect` (SPC C s/c/d)
 - `:kb-share`, `:kb-join`, `:kb-leave`

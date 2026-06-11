@@ -9,7 +9,7 @@
 MAE was a monolithic binary (`crates/mae/src/main.rs`) that linked every crate
 in the workspace. This caused three concrete problems:
 
-1. **Linker conflict blocks CozoDB SQLite**: `rusqlite` (state-server) and
+1. **Linker conflict blocks CozoDB SQLite**: `rusqlite` (formerly in state-server, now daemon) and
    `cozo/storage-sqlite-src` both declare `links = "sqlite3"` in their Cargo
    manifests. Same workspace = duplicate symbols. CozoDB was forced to use
    `storage-sled` (unmaintained since 2021, SIGABRT on nightly Rust).
@@ -53,7 +53,7 @@ local sled-backed CozoDB when daemon is unavailable.
 
 Owns KB persistence (CozoDB+SQLite), background maintenance, file watching,
 ingestion pipeline. Communicates via JSON-RPC over Unix socket using the same
-Content-Length framing as MCP server and state-server.
+Content-Length framing as MCP server and the former state-server (now merged into daemon).
 
 The daemon is **optional** — the editor works standalone with local sled KB.
 

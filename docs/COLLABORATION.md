@@ -1,6 +1,6 @@
 # Collaborative Editing in MAE
 
-MAE supports real-time collaborative editing through the `mae-state-server` — a
+MAE supports real-time collaborative editing through `mae-daemon` — a
 standalone CRDT document hub backed by WAL-persisted SQLite. Multiple editor
 instances (human users or AI agents) converge automatically using the
 [yrs](https://github.com/y-crdt/y-crdt) Rust port of Yjs (YATA algorithm).
@@ -23,13 +23,13 @@ Every collaborative document is identified by a URI namespace:
 Local edit (user or AI)
   → yrs transaction (YText insert/delete)
     → mae-sync encodes update bytes
-      → TCP framed write → state server  (sync/update)
+      → TCP framed write → daemon  (sync/update)
         → WAL flush → in-memory apply
           → broadcast diff → connected peers
             → peer decodes → ropey mirror rebuild → redraw
 ```
 
-The state server is a **document hub**, not the source of truth. Clients hold
+The daemon is a **document hub**, not the source of truth. Clients hold
 the authoritative CRDT state; the server merges and redistributes. On restart it
 recovers by loading the latest snapshot then replaying the WAL tail.
 
@@ -48,11 +48,11 @@ option change — no data migration required.
 
 ### Workflow B — Loopback (local multi-agent)
 
-Multiple MAE instances or AI agents on one machine share a local server.
+Multiple MAE instances or AI agents on one machine share a local daemon.
 
 ```bash
-# Terminal 1: start the server
-mae-state-server
+# Terminal 1: start the daemon
+mae-daemon
 # Listening on 127.0.0.1:9473
 
 # Terminal 2+: start MAE instances
@@ -82,7 +82,7 @@ Or use the interactive commands: `SPC C s` (start server), `SPC C c` (connect).
 
 ```bash
 # Server machine
-mae-state-server --bind 0.0.0.0:9473
+mae-daemon --bind 0.0.0.0:9473
 ```
 
 Each client (`config.toml` or `init.scm`):
@@ -143,12 +143,12 @@ username = "alice"
 
 ---
 
-## 4. State Server Deployment
+## 4. Daemon Deployment
 
 ### CLI
 
 ```
-mae-state-server [OPTIONS] [SUBCOMMAND]
+mae-daemon [OPTIONS] [SUBCOMMAND]
 
 Options:
   --bind <ADDR>          Listen address (default: 127.0.0.1:9473)
@@ -165,24 +165,24 @@ Examples:
 
 ```bash
 # Local loopback only
-mae-state-server
+mae-daemon
 
 # LAN / VPN (all interfaces)
-mae-state-server --bind 0.0.0.0:9473
+mae-daemon --bind 0.0.0.0:9473
 
 # Custom database path
-mae-state-server --db /var/lib/mae/collab.db
+mae-daemon --db /var/lib/mae/collab.db
 
 # Validate config without starting
-mae-state-server --check-config
+mae-daemon --check-config
 
 # Diagnose a running or stopped server
-mae-state-server doctor
+mae-daemon doctor
 ```
 
 ### Systemd (user unit)
 
-A unit file is provided at `assets/mae-state-server.service`. The recommended
+A unit file is provided at `assets/mae-daemon.service`. The recommended
 way to install it is:
 
 ```bash
@@ -193,36 +193,36 @@ make install-service
 Then enable and start:
 
 ```bash
-systemctl --user enable --now mae-state-server
-systemctl --user status mae-state-server
-journalctl --user -u mae-state-server -f   # logs
+systemctl --user enable --now mae-daemon
+systemctl --user status mae-daemon
+journalctl --user -u mae-daemon -f   # logs
 ```
 
 Manual installation (without make):
 
 ```bash
-cp assets/mae-state-server.service ~/.config/systemd/user/
+cp assets/mae-daemon.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now mae-state-server
+systemctl --user enable --now mae-daemon
 ```
 
 ### Build and Install
 
 ```bash
 # Build binary
-make build-state-server
+make build-daemon
 
 # Install to ~/.local/bin
-make install-state-server
+make install-daemon
 
 # Or directly
-cargo install --path crates/state-server
+cargo install --path daemon
 ```
 
 ### Client-Frame Workflow
 
 Once the service is running, use `mae --connect` to open a new editor frame
-that auto-connects to the state server — similar to `emacsclient -c`:
+that auto-connects to the daemon — similar to `emacsclient -c`:
 
 ```bash
 mae --connect                    # GUI, auto-connects to 127.0.0.1:9473
@@ -245,14 +245,14 @@ bindsym $mod+Shift+e exec mae --connect
 
 ### Binding to All Interfaces
 
-By default, `mae-state-server` listens on `127.0.0.1:9473` (loopback only).
+By default, `mae-daemon` listens on `127.0.0.1:9473` (loopback only).
 For multi-machine collaboration, bind to all interfaces:
 
 ```bash
-mae-state-server --bind 0.0.0.0:9473
+mae-daemon --bind 0.0.0.0:9473
 ```
 
-Or in `~/.config/mae/state-server.toml`:
+Or in `~/.config/mae/daemon.toml`:
 
 ```toml
 bind = "0.0.0.0:9473"
@@ -261,16 +261,16 @@ bind = "0.0.0.0:9473"
 Or via a systemd override:
 
 ```bash
-systemctl --user edit mae-state-server
+systemctl --user edit mae-daemon
 # Add:
 # [Service]
 # ExecStart=
-# ExecStart=%h/.local/bin/mae-state-server --bind 0.0.0.0:9473
+# ExecStart=%h/.local/bin/mae-daemon --bind 0.0.0.0:9473
 ```
 
 ### Firewall Rules
 
-The state server binary runs as a user service (no sudo). Only firewall
+The daemon binary runs as a user service (no sudo). Only firewall
 changes need root privileges.
 
 **firewalld (Fedora/RHEL/CentOS):**
@@ -308,7 +308,7 @@ Recommendations:
 - **Trusted LAN**: Bind to `0.0.0.0` with firewall rules limiting source IPs.
 - **Untrusted networks**: Use [Tailscale](https://tailscale.com) or
   [WireGuard](https://www.wireguard.com) — both create encrypted tunnels
-  that make the state server appear on a private IP. No firewall rules needed.
+  that make the daemon appear on a private IP. No firewall rules needed.
 - **Never** bind to `0.0.0.0` on a machine with a public IP without a VPN.
 
 ### Connectivity Check
@@ -329,7 +329,7 @@ From inside MAE: `SPC C D` (`:collab-doctor`) or `mae doctor` from the CLI.
 
 | Key | Command | Description |
 |-----|---------|-------------|
-| `SPC C s` | `:collab-start-server` | Start a local state server process |
+| `SPC C s` | `:collab-start-server` | Start a local daemon process |
 | `SPC C c` | `:collab-connect` | Connect to configured server |
 | `SPC C d` | `:collab-disconnect` | Disconnect from current server |
 | `SPC C S` | `:collab-share-buffer` | Share active buffer with connected peers |
@@ -446,10 +446,10 @@ MAE preserves sync state during disconnection and reconciles on reconnect.
 ss -tlnp | grep 9473
 
 # View server logs
-journalctl --user -u mae-state-server -f
+journalctl --user -u mae-daemon -f
 
 # Run the doctor subcommand
-mae-state-server doctor
+mae-daemon doctor
 ```
 
 ### From Inside MAE
@@ -457,14 +457,14 @@ mae-state-server doctor
 - `SPC C i` / `:collab-status` — live peer list and document state
 - `:collab-doctor` — full diagnostic: TCP reachability, WAL row count, compaction
   status, peer latency
-- `MAE_LOG=mae_state_server=debug mae-state-server` — verbose server logging
+- `MAE_LOG=mae_daemon=debug mae-daemon` — verbose daemon logging
 
 ### MCP Debug Tool
 
 Ask the AI to call `$/debug` on the server:
 
 ```
-User: show me the state server internals
+User: show me the daemon internals
 AI: [calls collab_doctor or issues $/debug via sync transport]
 ```
 
@@ -472,7 +472,7 @@ AI: [calls collab_doctor or issues $/debug via sync transport]
 
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
-| Connection refused | Server not running | `mae-state-server` or `SPC C s` |
+| Connection refused | Server not running | `mae-daemon` or `SPC C s` |
 | No peers visible | Wrong `collab-server-address` | Check all clients use same address |
 | Stale state after restart | WAL replay needed | Automatic; check logs for errors |
 | Slow sync | Peer write timeout | Increase `collab-write-timeout-ms` |
@@ -480,7 +480,7 @@ AI: [calls collab_doctor or issues $/debug via sync transport]
 
 ### WAL Integrity
 
-The state server appends every `sync/update` to the SQLite WAL **before**
+The daemon appends every `sync/update` to the SQLite WAL **before**
 applying it to memory. On restart:
 
 1. Load the latest compacted snapshot (if any).
@@ -531,7 +531,7 @@ permissions. Use it for intra-machine IPC where tighter isolation is needed.
 
 ### Reconnection
 
-1. Client connects to state server
+1. Client connects to daemon
 2. Sends `sync/diff` with local state vector
 3. Server returns missing updates
 4. Client applies updates → rebuilds rope → status bar shows diff count
@@ -616,4 +616,4 @@ When the last client disconnects (`peer_count` reaches 0):
 - `:help concept:collab-architecture` — KB node with data-flow diagram
 - `:help concept:collab-workflows` — KB node with per-workflow recipes
 - `:help lesson:collab-setup` — step-by-step setup tutorial
-- `assets/mae-state-server.service` — systemd unit file
+- `assets/mae-daemon.service` — systemd unit file

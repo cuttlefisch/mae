@@ -15,7 +15,7 @@
   (lambda ()
 
     ;; --- Connect ---
-    (it-test "connects to state server"
+    (it-test "connects to daemon"
       (lambda ()
         (wait-connected 30000)))
 

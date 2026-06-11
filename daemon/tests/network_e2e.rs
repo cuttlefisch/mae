@@ -1,4 +1,4 @@
-//! Network E2E tests for mae-state-server.
+//! Network E2E tests for mae-daemon.
 //!
 //! These tests spawn a real TCP server and connect multiple clients.
 //! Gated on `MAE_STATE_SERVER` env var for CI (requires port binding).
@@ -55,7 +55,7 @@ async fn send_recv(stream: &mut tokio::net::TcpStream, msg: &serde_json::Value) 
     serde_json::from_value(value).unwrap()
 }
 
-// Tests connect to a running mae-state-server binary (set MAE_STATE_SERVER=host:port).
+// Tests connect to a running mae-daemon binary (set MAE_STATE_SERVER=host:port).
 
 #[tokio::test]
 async fn tcp_initialize_and_ping() {
