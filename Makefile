@@ -167,7 +167,7 @@ install-all: install install-daemon-service
 	@echo "  mae                      — launch editor"
 	@echo "  systemctl --user enable --now mae-daemon"
 
-## uninstall: remove installed binaries, desktop entries, icon, and systemd services
+## uninstall: remove installed binaries, desktop entries, icon, and services
 uninstall:
 	@rm -f $(PREFIX)/$(BINARY)
 	@rm -f $(PREFIX)/$(SHIM_BINARY)
@@ -182,10 +182,18 @@ uninstall:
 	@echo "Removed $(DATADIR)/icons/hicolor/scalable/apps/mae.svg"
 	@rm -rf $(DATADIR)/mae/modules
 	@echo "Removed $(DATADIR)/mae/modules/"
-	@systemctl --user disable --now mae-daemon 2>/dev/null || true
-	@rm -f $(HOME)/.config/systemd/user/mae-daemon.service
-	@systemctl --user daemon-reload 2>/dev/null || true
-	@echo "Removed systemd services"
+	@if [ "$$(uname -s)" = "Darwin" ]; then \
+		launchctl bootout gui/$$(id -u)/com.cuttlefisch.mae-daemon 2>/dev/null || true; \
+		rm -f $(HOME)/Library/LaunchAgents/com.cuttlefisch.mae-daemon.plist; \
+		echo "Removed launchd agent"; \
+		rm -rf $(HOME)/Applications/MAE.app; \
+		echo "Removed ~/Applications/MAE.app"; \
+	else \
+		systemctl --user disable --now mae-daemon 2>/dev/null || true; \
+		rm -f $(HOME)/.config/systemd/user/mae-daemon.service; \
+		systemctl --user daemon-reload 2>/dev/null || true; \
+		echo "Removed systemd services"; \
+	fi
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
 		update-desktop-database $(DATADIR)/applications 2>/dev/null || true; \
 	fi
@@ -367,18 +375,33 @@ install-daemon: build-daemon
 	fi
 	@echo "Installed mae-daemon -> $(PREFIX)/mae-daemon"
 
-## install-daemon-service: install daemon systemd user unit
+## install-daemon-service: install daemon service (systemd on Linux, launchd on macOS)
 install-daemon-service: install-daemon
-	@mkdir -p $(HOME)/.config/systemd/user
-	@install -m 644 assets/mae-daemon.service $(HOME)/.config/systemd/user/mae-daemon.service
-	@systemctl --user daemon-reload 2>/dev/null || true
-	@echo ""
-	@echo "Installed mae-daemon.service -> ~/.config/systemd/user/"
-	@echo "Binary: $(PREFIX)/mae-daemon"
-	@echo ""
-	@echo "Next steps:"
-	@echo "  systemctl --user enable --now mae-daemon   # start + auto-start on login"
-	@echo "  journalctl --user -u mae-daemon -f         # view logs"
+	@if [ "$$(uname -s)" = "Darwin" ]; then \
+		mkdir -p $(HOME)/Library/LaunchAgents; \
+		mkdir -p $(HOME)/Library/Logs/mae; \
+		sed -e 's|__BINDIR__|$(PREFIX)|g' -e 's|__LOGDIR__|$(HOME)/Library/Logs/mae|g' \
+			assets/com.cuttlefisch.mae-daemon.plist \
+			> $(HOME)/Library/LaunchAgents/com.cuttlefisch.mae-daemon.plist; \
+		echo ""; \
+		echo "Installed launchd agent -> ~/Library/LaunchAgents/"; \
+		echo "Binary: $(PREFIX)/mae-daemon"; \
+		echo ""; \
+		echo "Next steps:"; \
+		echo "  launchctl load ~/Library/LaunchAgents/com.cuttlefisch.mae-daemon.plist"; \
+		echo "  tail -f ~/Library/Logs/mae/mae-daemon.log"; \
+	else \
+		mkdir -p $(HOME)/.config/systemd/user; \
+		install -m 644 assets/mae-daemon.service $(HOME)/.config/systemd/user/mae-daemon.service; \
+		systemctl --user daemon-reload 2>/dev/null || true; \
+		echo ""; \
+		echo "Installed mae-daemon.service -> ~/.config/systemd/user/"; \
+		echo "Binary: $(PREFIX)/mae-daemon"; \
+		echo ""; \
+		echo "Next steps:"; \
+		echo "  systemctl --user enable --now mae-daemon   # start + auto-start on login"; \
+		echo "  journalctl --user -u mae-daemon -f         # view logs"; \
+	fi
 
 ## test-scheme: run Scheme test files locally (pass TEST_PATH=path)
 test-scheme: build-tui

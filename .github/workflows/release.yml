@@ -50,6 +50,7 @@ jobs:
           cp assets/daemon-config.toml dist/mae-pkg/daemon-config.toml
           cp assets/mae-daemon.service dist/mae-pkg/mae-daemon.service
           cp assets/install.sh dist/mae-pkg/install.sh
+          cp assets/com.cuttlefisch.mae-daemon.plist dist/mae-pkg/com.cuttlefisch.mae-daemon.plist
           chmod +x dist/mae-pkg/install.sh
           tar czf dist/mae-linux-x86_64.tar.gz -C dist/mae-pkg .
 
@@ -236,6 +237,7 @@ jobs:
           cp assets/sample-config.toml dist/mae-tui-pkg/sample-config.toml
           cp assets/daemon-config.toml dist/mae-tui-pkg/daemon-config.toml
           cp assets/install.sh dist/mae-tui-pkg/install.sh
+          cp assets/com.cuttlefisch.mae-daemon.plist dist/mae-tui-pkg/com.cuttlefisch.mae-daemon.plist
           chmod +x dist/mae-tui-pkg/install.sh
           tar czf dist/mae-macos-aarch64-tui.tar.gz -C dist/mae-tui-pkg .
 
@@ -254,6 +256,7 @@ jobs:
           cp assets/sample-config.toml dist/mae-gui-pkg/sample-config.toml
           cp assets/daemon-config.toml dist/mae-gui-pkg/daemon-config.toml
           cp assets/mae-daemon.service dist/mae-gui-pkg/mae-daemon.service
+          cp assets/com.cuttlefisch.mae-daemon.plist dist/mae-gui-pkg/com.cuttlefisch.mae-daemon.plist
           cp assets/install.sh dist/mae-gui-pkg/install.sh
           chmod +x dist/mae-gui-pkg/install.sh
           cd dist && ditto -c -k --sequesterRsrc mae-gui-pkg MAE-macos-aarch64.zip
@@ -301,31 +304,32 @@ jobs:
 
           All packages include the built-in help system (860+ KB nodes) and doom-style keybindings.
 
-          ## After Installation
+          ## Installation
 
           **AppImage (Linux GUI):** Just run it — all assets are bundled inside.
 
-          **Tarball (Linux/macOS TUI):** Extract and run the installer:
+          **Everything else:** Extract and run the installer:
           ```bash
-          mkdir ~/mae && tar xzf mae-*.tar.gz -C ~/mae
-          cd ~/mae && ./install.sh              # installs to ~/.local (default)
-          # or: ./install.sh /usr/local          # system-wide install
+          # Linux tarball
+          mkdir ~/mae && tar xzf mae-linux-*.tar.gz -C ~/mae
+          cd ~/mae && ./install.sh
+
+          # macOS GUI (zip)
+          unzip MAE-macos-aarch64.zip -d ~/mae
+          cd ~/mae && ./install.sh
+
+          # macOS TUI (tarball)
+          mkdir ~/mae && tar xzf mae-macos-*.tar.gz -C ~/mae
+          cd ~/mae && ./install.sh
           ```
 
-          **macOS (.app bundle):** The app is unsigned. Before first launch, either:
-          - **Right-click** → **Open** → click **Open** in the dialog (easiest), or:
-          - Terminal: `xattr -c /path/to/MAE.app`
+          The installer handles everything: binaries to `~/.local/bin/`, modules, manual KB, config scaffolding, `.app` bundle to `~/Applications` (macOS), systemd units (Linux), and launchd agents (macOS).
 
-          **macOS services:** From the extracted zip, move services to your `$PATH`:
-          ```bash
-          cp mae-daemon mae-mcp-shim /usr/local/bin/
-          ```
+          Use `./install.sh /usr/local` for a system-wide install. Use `./install.sh --uninstall` to remove.
 
           **First launch:** MAE runs a setup wizard — choose your AI provider, model, API key, and theme.
 
-          **Guided setup:**
-          - `:help tutorial:ai-setup` — step-by-step AI configuration (Claude/OpenAI/Gemini/DeepSeek)
-          - `:help tutorial:collab-setup` — multi-user collaborative editing
+          **Learn more:** `:help tutorial:getting-started`, `:help tutorial:ai-setup`, `:help tutorial:collab-setup`
 
           **Verify:** `:ai-ping` (AI connectivity) and `:collab-doctor` (collaboration diagnostics)
           FOOTER

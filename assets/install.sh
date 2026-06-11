@@ -14,6 +14,7 @@ VERSION="0.13.2"  # updated by version-bump workflow
 
 BINARIES="mae mae-mcp-shim mae-daemon"
 SERVICES="mae-daemon"
+LAUNCHD_LABEL="com.cuttlefisch.mae-daemon"
 
 # ========================================================================
 # Argument parsing
@@ -36,10 +37,12 @@ for arg in "$@"; do
             echo "  ./install.sh --uninstall /opt   # remove from /opt"
             echo ""
             echo "Install locations:"
-            echo "  PREFIX/bin/              binaries"
-            echo "  XDG_DATA_HOME/mae/       manual KB, modules"
-            echo "  XDG_CONFIG_HOME/mae/     config files (preserved on upgrade/uninstall)"
-            echo "  ~/.config/systemd/user/  systemd units (Linux)"
+            echo "  PREFIX/bin/                      binaries"
+            echo "  XDG_DATA_HOME/mae/               manual KB, modules"
+            echo "  XDG_CONFIG_HOME/mae/              config files (preserved on upgrade/uninstall)"
+            echo "  ~/.config/systemd/user/           systemd units (Linux)"
+            echo "  ~/Library/LaunchAgents/           launchd agents (macOS)"
+            echo "  ~/Applications/ or /Applications/ .app bundle (macOS)"
             exit 0
             ;;
         --uninstall)
@@ -67,22 +70,54 @@ else
 fi
 
 ERRORS=0
+WARNINGS=0
 
 step()    { printf "\n${BOLD}:: %s${RESET}\n" "$*"; }
 ok()      { printf "   ${GREEN}[OK]${RESET} %s\n" "$*"; }
 fail()    { printf "   ${RED}[!!]${RESET} %s\n" "$*"; ERRORS=$((ERRORS + 1)); }
 skip()    { printf "   ${DIM}[--]${RESET} %s\n" "$*"; }
-warn()    { printf "   ${YELLOW}[??]${RESET} %s\n" "$*"; }
+warn()    { printf "   ${YELLOW}[??]${RESET} %s\n" "$*"; WARNINGS=$((WARNINGS + 1)); }
 verify()  { if [ -e "$1" ]; then ok "$2"; else fail "$2 — not found: $1"; fi; }
+
+# Verify a file is executable
+verify_exec() {
+    if [ -x "$1" ]; then
+        ok "$2"
+    elif [ -f "$1" ]; then
+        fail "$2 — exists but not executable: $1"
+    else
+        fail "$2 — not found: $1"
+    fi
+}
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# macOS .app install location
+if [ "$OS" = "Darwin" ]; then
+    if [ -w "/Applications" ]; then
+        APP_DIR="/Applications"
+    else
+        APP_DIR="$HOME/Applications"
+    fi
+    LAUNCHD_DIR="$HOME/Library/LaunchAgents"
+    LOGDIR="$HOME/Library/Logs/mae"
+fi
+
 # ========================================================================
 # Stop running services before modifying binaries
 # ========================================================================
 stop_services() {
+    if [ "$OS" = "Darwin" ]; then
+        if launchctl list "$LAUNCHD_LABEL" >/dev/null 2>&1; then
+            launchctl unload "$LAUNCHD_DIR/$LAUNCHD_LABEL.plist" 2>/dev/null || true
+            ok "stopped $LAUNCHD_LABEL (launchd)"
+            STOPPED_LAUNCHD=1
+        fi
+        return
+    fi
+
     if [ "$OS" != "Linux" ] || ! command -v systemctl >/dev/null 2>&1; then
         return
     fi
@@ -90,7 +125,6 @@ stop_services() {
         if systemctl --user is-active "$svc" >/dev/null 2>&1; then
             systemctl --user stop "$svc" 2>/dev/null || true
             ok "stopped $svc"
-            # Record that we stopped it so we can restart later
             eval "STOPPED_${svc//-/_}=1"
         fi
     done
@@ -98,6 +132,17 @@ stop_services() {
 
 # Restart services that were running before we stopped them
 restart_services() {
+    if [ "$OS" = "Darwin" ]; then
+        if [ "${STOPPED_LAUNCHD:-0}" = "1" ]; then
+            if launchctl load "$LAUNCHD_DIR/$LAUNCHD_LABEL.plist" 2>/dev/null; then
+                ok "restarted $LAUNCHD_LABEL (launchd)"
+            else
+                warn "failed to restart $LAUNCHD_LABEL — load manually: launchctl load $LAUNCHD_DIR/$LAUNCHD_LABEL.plist"
+            fi
+        fi
+        return
+    fi
+
     if [ "$OS" != "Linux" ] || ! command -v systemctl >/dev/null 2>&1; then
         return
     fi
@@ -123,7 +168,14 @@ if [ "$ACTION" = "uninstall" ]; then
 
     # --- Stop services ---
     step "Stopping services"
-    if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
+    if [ "$OS" = "Darwin" ]; then
+        if launchctl list "$LAUNCHD_LABEL" >/dev/null 2>&1; then
+            launchctl unload "$LAUNCHD_DIR/$LAUNCHD_LABEL.plist" 2>/dev/null || true
+            ok "stopped $LAUNCHD_LABEL"
+        else
+            skip "$LAUNCHD_LABEL not running"
+        fi
+    elif [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
         for svc in $SERVICES; do
             if systemctl --user is-active "$svc" >/dev/null 2>&1; then
                 systemctl --user stop "$svc" 2>/dev/null || true
@@ -137,7 +189,7 @@ if [ "$ACTION" = "uninstall" ]; then
             fi
         done
     else
-        skip "systemd not available"
+        skip "no service manager available"
     fi
 
     # --- Remove binaries ---
@@ -145,11 +197,30 @@ if [ "$ACTION" = "uninstall" ]; then
     for bin in $BINARIES; do
         if [ -f "$BINDIR/$bin" ]; then
             rm -f "$BINDIR/$bin"
-            ok "removed $bin"
+            if [ ! -f "$BINDIR/$bin" ]; then
+                ok "removed $bin"
+            else
+                fail "failed to remove $bin"
+            fi
         else
             skip "$bin not installed"
         fi
     done
+
+    # --- Remove .app bundle (macOS) ---
+    if [ "$OS" = "Darwin" ]; then
+        step "Removing .app bundle"
+        for dir in "$HOME/Applications" "/Applications"; do
+            if [ -d "$dir/MAE.app" ]; then
+                rm -rf "$dir/MAE.app"
+                if [ ! -d "$dir/MAE.app" ]; then
+                    ok "removed $dir/MAE.app"
+                else
+                    fail "failed to remove $dir/MAE.app"
+                fi
+            fi
+        done
+    fi
 
     # --- Remove data (KB + modules, NOT user KBs) ---
     step "Removing shared data"
@@ -167,19 +238,26 @@ if [ "$ACTION" = "uninstall" ]; then
         skip "modules not found"
     fi
 
-    # --- Remove systemd units ---
-    step "Removing systemd units"
-    SYSTEMD_DIR="$CONFIGDIR/systemd/user"
-    for unit in mae-daemon.service; do
-        if [ -f "$SYSTEMD_DIR/$unit" ]; then
-            rm -f "$SYSTEMD_DIR/$unit"
-            ok "removed $unit"
+    # --- Remove service units ---
+    step "Removing service configuration"
+    if [ "$OS" = "Darwin" ]; then
+        if [ -f "$LAUNCHD_DIR/$LAUNCHD_LABEL.plist" ]; then
+            rm -f "$LAUNCHD_DIR/$LAUNCHD_LABEL.plist"
+            ok "removed $LAUNCHD_LABEL.plist"
         else
-            skip "$unit not installed"
+            skip "launchd agent not installed"
         fi
-    done
-    if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
-        systemctl --user daemon-reload 2>/dev/null || true
+    elif [ "$OS" = "Linux" ]; then
+        SYSTEMD_DIR="$CONFIGDIR/systemd/user"
+        if [ -f "$SYSTEMD_DIR/mae-daemon.service" ]; then
+            rm -f "$SYSTEMD_DIR/mae-daemon.service"
+            ok "removed mae-daemon.service"
+        else
+            skip "mae-daemon.service not installed"
+        fi
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl --user daemon-reload 2>/dev/null || true
+        fi
     fi
 
     # --- Preserve user config ---
@@ -189,7 +267,6 @@ if [ "$ACTION" = "uninstall" ]; then
         skip "  (remove manually if desired: rm -rf $CONFIGDIR/mae)"
     fi
     if [ -d "$DATADIR/mae" ]; then
-        # Check if anything remains (user KBs, transcripts, etc.)
         REMAINING=$(find "$DATADIR/mae" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')
         if [ "$REMAINING" -gt 0 ]; then
             skip "data dir has $REMAINING remaining items: $DATADIR/mae/"
@@ -201,7 +278,11 @@ if [ "$ACTION" = "uninstall" ]; then
     fi
 
     echo ""
-    printf "${GREEN}${BOLD}Uninstall complete.${RESET}\n"
+    if [ "$ERRORS" -eq 0 ]; then
+        printf "${GREEN}${BOLD}Uninstall complete.${RESET}\n"
+    else
+        printf "${YELLOW}${BOLD}Uninstall completed with $ERRORS error(s).${RESET}\n"
+    fi
     echo ""
     exit 0
 fi
@@ -245,17 +326,49 @@ fi
 step "Installing binaries to $BINDIR"
 mkdir -p "$BINDIR"
 
+INSTALLED_BINS=0
 for bin in $BINARIES; do
     if [ -f "$SCRIPT_DIR/$bin" ]; then
         install -m 755 "$SCRIPT_DIR/$bin" "$BINDIR/$bin"
-        verify "$BINDIR/$bin" "$bin"
+        verify_exec "$BINDIR/$bin" "$bin"
+        INSTALLED_BINS=$((INSTALLED_BINS + 1))
     else
         skip "$bin (not in package)"
     fi
 done
 
+if [ "$INSTALLED_BINS" -eq 0 ]; then
+    fail "no binaries found in package — is this a valid MAE distribution?"
+fi
+
 # ========================================================================
-# 2. Manual KB (knowledge base with 860+ help nodes)
+# 2. macOS .app bundle
+# ========================================================================
+if [ "$OS" = "Darwin" ] && [ -d "$SCRIPT_DIR/MAE.app" ]; then
+    step "Installing MAE.app to $APP_DIR"
+    mkdir -p "$APP_DIR"
+
+    # Remove old .app if present
+    if [ -d "$APP_DIR/MAE.app" ]; then
+        rm -rf "$APP_DIR/MAE.app"
+        ok "removed previous MAE.app"
+    fi
+
+    cp -R "$SCRIPT_DIR/MAE.app" "$APP_DIR/MAE.app"
+    verify "$APP_DIR/MAE.app/Contents/MacOS/mae" "MAE.app binary"
+    verify "$APP_DIR/MAE.app/Contents/Info.plist" "MAE.app Info.plist"
+
+    # Clear quarantine attribute (unsigned app)
+    if command -v xattr >/dev/null 2>&1; then
+        xattr -cr "$APP_DIR/MAE.app" 2>/dev/null || true
+        ok "cleared quarantine flag (xattr -cr)"
+    fi
+elif [ "$OS" = "Darwin" ]; then
+    skip "MAE.app not in package (TUI-only install)"
+fi
+
+# ========================================================================
+# 3. Manual KB (knowledge base with 860+ help nodes)
 # ========================================================================
 step "Installing manual KB"
 mkdir -p "$DATADIR/mae"
@@ -275,7 +388,7 @@ else
 fi
 
 # ========================================================================
-# 3. Modules (keybinding overlays, 19 Scheme modules)
+# 4. Modules (keybinding overlays, 19 Scheme modules)
 # ========================================================================
 step "Installing modules"
 
@@ -283,13 +396,17 @@ if [ -d "$SCRIPT_DIR/modules" ]; then
     mkdir -p "$DATADIR/mae/modules"
     cp -r "$SCRIPT_DIR/modules/"* "$DATADIR/mae/modules/"
     MODULE_COUNT=$(find "$DATADIR/mae/modules" -name "manifest.toml" 2>/dev/null | wc -l | tr -d ' ')
-    verify "$DATADIR/mae/modules" "$MODULE_COUNT modules -> $DATADIR/mae/modules/"
+    if [ "$MODULE_COUNT" -ge 1 ]; then
+        ok "$MODULE_COUNT modules -> $DATADIR/mae/modules/"
+    else
+        fail "modules copied but no manifest.toml found"
+    fi
 else
     fail "modules directory not found in package"
 fi
 
 # ========================================================================
-# 4. Configuration (never overwrite existing user config)
+# 5. Configuration (never overwrite existing user config)
 # ========================================================================
 step "Installing configuration"
 mkdir -p "$CONFIGDIR/mae"
@@ -297,7 +414,7 @@ mkdir -p "$CONFIGDIR/mae"
 if [ -f "$SCRIPT_DIR/sample-config.toml" ]; then
     if [ ! -f "$CONFIGDIR/mae/config.toml" ]; then
         cp "$SCRIPT_DIR/sample-config.toml" "$CONFIGDIR/mae/config.toml"
-        ok "config.toml -> $CONFIGDIR/mae/ (new)"
+        verify "$CONFIGDIR/mae/config.toml" "config.toml (new)"
     else
         skip "config.toml already exists (preserved)"
     fi
@@ -308,7 +425,7 @@ fi
 if [ -f "$SCRIPT_DIR/daemon-config.toml" ]; then
     if [ ! -f "$CONFIGDIR/mae/daemon.toml" ]; then
         cp "$SCRIPT_DIR/daemon-config.toml" "$CONFIGDIR/mae/daemon.toml"
-        ok "daemon.toml -> $CONFIGDIR/mae/ (new)"
+        verify "$CONFIGDIR/mae/daemon.toml" "daemon.toml (new)"
     else
         skip "daemon.toml already exists (preserved)"
     fi
@@ -317,31 +434,55 @@ else
 fi
 
 # ========================================================================
-# 5. Systemd services (Linux only)
+# 6. Service management (systemd on Linux, launchd on macOS)
 # ========================================================================
 if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
     step "Installing systemd user services"
     SYSTEMD_DIR="$CONFIGDIR/systemd/user"
     mkdir -p "$SYSTEMD_DIR"
 
-    for unit in mae-daemon.service; do
-        if [ -f "$SCRIPT_DIR/$unit" ]; then
-            # Rewrite ExecStart to match actual install PREFIX
-            sed "s|%h/.local/bin/|$BINDIR/|g" "$SCRIPT_DIR/$unit" > "$SYSTEMD_DIR/$unit"
-            verify "$SYSTEMD_DIR/$unit" "$unit"
-        else
-            skip "$unit not in package"
-        fi
-    done
+    if [ -f "$SCRIPT_DIR/mae-daemon.service" ]; then
+        # Rewrite ExecStart to match actual install PREFIX
+        sed "s|%h/.local/bin/|$BINDIR/|g" "$SCRIPT_DIR/mae-daemon.service" > "$SYSTEMD_DIR/mae-daemon.service"
+        verify "$SYSTEMD_DIR/mae-daemon.service" "mae-daemon.service"
+    else
+        skip "mae-daemon.service not in package"
+    fi
 
     systemctl --user daemon-reload 2>/dev/null || true
     ok "systemctl --user daemon-reload"
 elif [ "$OS" = "Linux" ]; then
     skip "systemd not available — service files not installed"
+elif [ "$OS" = "Darwin" ]; then
+    step "Installing launchd agent"
+    mkdir -p "$LAUNCHD_DIR"
+    mkdir -p "$LOGDIR"
+
+    PLIST_SRC="$SCRIPT_DIR/$LAUNCHD_LABEL.plist"
+    PLIST_DST="$LAUNCHD_DIR/$LAUNCHD_LABEL.plist"
+
+    if [ -f "$PLIST_SRC" ]; then
+        # Rewrite paths in plist template
+        sed -e "s|__BINDIR__|$BINDIR|g" \
+            -e "s|__LOGDIR__|$LOGDIR|g" \
+            "$PLIST_SRC" > "$PLIST_DST"
+        verify "$PLIST_DST" "launchd agent ($LAUNCHD_LABEL)"
+
+        # Validate plist syntax
+        if command -v plutil >/dev/null 2>&1; then
+            if plutil -lint "$PLIST_DST" >/dev/null 2>&1; then
+                ok "plist syntax valid"
+            else
+                fail "plist syntax invalid — launchd won't load it"
+            fi
+        fi
+    else
+        skip "launchd plist not in package"
+    fi
 fi
 
 # ========================================================================
-# 6. Desktop entries (Linux only)
+# 7. Desktop integration hints
 # ========================================================================
 if [ "$OS" = "Linux" ]; then
     step "Desktop integration"
@@ -390,6 +531,47 @@ else
     fail "mae binary not found at $BINDIR/mae"
 fi
 
+# Verify supporting binaries
+for bin in mae-mcp-shim mae-daemon; do
+    if [ -x "$BINDIR/$bin" ]; then
+        ok "$bin is executable"
+    elif [ -f "$BINDIR/$bin" ]; then
+        fail "$bin exists but is not executable"
+    else
+        warn "$bin not installed (optional)"
+    fi
+done
+
+# Verify data files
+if [ -d "$DATADIR/mae/mae-manual.cozo" ]; then
+    ok "manual KB present"
+else
+    fail "manual KB missing"
+fi
+
+MODULE_COUNT=$(find "$DATADIR/mae/modules" -name "manifest.toml" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$MODULE_COUNT" -ge 1 ]; then
+    ok "$MODULE_COUNT modules installed"
+else
+    fail "no modules found"
+fi
+
+# Verify config
+if [ -f "$CONFIGDIR/mae/config.toml" ]; then
+    ok "config.toml present"
+else
+    warn "config.toml missing — run 'mae --init-config' to create one"
+fi
+
+# Verify .app bundle (macOS)
+if [ "$OS" = "Darwin" ] && [ -d "$APP_DIR/MAE.app" ]; then
+    if [ -x "$APP_DIR/MAE.app/Contents/MacOS/mae" ]; then
+        ok "MAE.app installed to $APP_DIR"
+    else
+        fail "MAE.app present but binary not executable"
+    fi
+fi
+
 # ========================================================================
 # Summary
 # ========================================================================
@@ -401,30 +583,39 @@ if [ "$ERRORS" -eq 0 ]; then
         printf "${GREEN}${BOLD}Installation complete!${RESET}\n"
     fi
 else
-    printf "${YELLOW}${BOLD}Completed with $ERRORS warning(s)${RESET}\n"
+    printf "${RED}${BOLD}Completed with $ERRORS error(s)${RESET}\n"
+fi
+
+if [ "$WARNINGS" -gt 0 ]; then
+    printf "${DIM}($WARNINGS warning(s) — see above)${RESET}\n"
 fi
 
 echo ""
 if [ "$UPGRADE" -eq 0 ]; then
     printf "${BOLD}Getting started:${RESET}\n"
-    echo "  mae --init-config              # first-time setup wizard"
-    echo "  mae file.rs                    # open a file (GUI)"
-    echo "  mae -nw file.rs                # open a file (terminal)"
+    if [ "$OS" = "Darwin" ] && [ -d "$APP_DIR/MAE.app" ]; then
+        echo "  open $APP_DIR/MAE.app            # launch GUI"
+    fi
+    echo "  mae file.rs                      # open a file (GUI)"
+    echo "  mae -nw file.rs                  # open a file (terminal)"
     echo ""
 
     if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
         printf "${BOLD}Optional services:${RESET}\n"
-        echo "  systemctl --user enable --now mae-daemon         # KB background persistence"
-        echo "  systemctl --user enable --now mae-daemon           # KB + collaborative editing"
+        echo "  systemctl --user enable --now mae-daemon   # KB persistence + collab"
+        echo ""
+    elif [ "$OS" = "Darwin" ]; then
+        printf "${BOLD}Optional services:${RESET}\n"
+        echo "  launchctl load ~/Library/LaunchAgents/$LAUNCHD_LABEL.plist   # KB persistence + collab"
         echo ""
     fi
 
     printf "${BOLD}Learn more:${RESET}\n"
-    echo "  :help tutorial:getting-started   # interactive tutorial"
-    echo "  :help tutorial:ai-setup          # AI provider configuration"
-    echo "  :help concept:daemon             # daemon setup guide"
+    echo "  :help tutorial:getting-started     # interactive tutorial"
+    echo "  :help tutorial:ai-setup            # AI provider configuration"
+    echo "  :help tutorial:collab-setup        # collaborative editing"
 else
     printf "${BOLD}Manage:${RESET}\n"
-    echo "  ./install.sh --uninstall         # remove MAE"
+    echo "  ./install.sh --uninstall           # remove MAE"
 fi
 echo ""
