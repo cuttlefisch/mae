@@ -156,6 +156,32 @@ impl Default for DaemonConfig {
 }
 
 impl DaemonConfig {
+    /// Load config from the given path, falling back to defaults.
+    pub fn load_from(path: &std::path::Path) -> Self {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => match toml::from_str(&contents) {
+                Ok(config) => config,
+                Err(e) => {
+                    eprintln!("Warning: failed to parse {}: {}", path.display(), e);
+                    // Try legacy format
+                    if let Ok(legacy) = toml::from_str::<LegacyServerConfig>(&contents) {
+                        let mut config = Self::default();
+                        config.collab.bind = legacy.bind;
+                        config.collab.storage = legacy.storage;
+                        config.collab.sync = legacy.sync;
+                        config.collab.auth = legacy.auth;
+                        return config;
+                    }
+                    Self::default()
+                }
+            },
+            Err(e) => {
+                eprintln!("Warning: failed to read {}: {}", path.display(), e);
+                Self::default()
+            }
+        }
+    }
+
     /// Load config from `~/.config/mae/daemon.toml`, falling back to defaults.
     /// Also checks for legacy `state-server.toml` and auto-migrates collab settings.
     pub fn load() -> Self {

@@ -51,7 +51,42 @@ async fn main() {
         return;
     }
 
-    let config = DaemonConfig::load();
+    // Parse optional CLI overrides: --config, --bind, --data-dir
+    let mut config_path: Option<String> = None;
+    let mut bind_override: Option<String> = None;
+    let mut data_dir_override: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--config" if i + 1 < args.len() => {
+                config_path = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--bind" if i + 1 < args.len() => {
+                bind_override = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--data-dir" if i + 1 < args.len() => {
+                data_dir_override = Some(args[i + 1].clone());
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+
+    let mut config = if let Some(ref path) = config_path {
+        DaemonConfig::load_from(std::path::Path::new(path))
+    } else {
+        DaemonConfig::load()
+    };
+    if let Some(ref addr) = bind_override {
+        if let Ok(parsed) = addr.parse() {
+            config.collab.bind = parsed;
+        }
+    }
+    if let Some(ref dir) = data_dir_override {
+        config.data_dir = Some(std::path::PathBuf::from(dir));
+    }
 
     // Initialize tracing
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()

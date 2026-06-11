@@ -1201,25 +1201,30 @@ async fn spawn_psk_server(psk: &str) -> (tokio::process::Child, String, tempfile
     let addr = format!("127.0.0.1:{}", port);
 
     let tmp = tempfile::tempdir().unwrap();
-    let config_path = tmp.path().join("state-server.toml");
+    let config_path = tmp.path().join("daemon.toml");
     let data_dir = tmp.path().join("data");
     std::fs::create_dir_all(&data_dir).unwrap();
     std::fs::write(
         &config_path,
         format!(
-            r#"bind = "{addr}"
-[auth]
+            r#"data_dir = "{data_dir}"
+
+[collab]
+bind = "{addr}"
+
+[collab.auth]
 mode = "psk"
 psk = "{psk}"
-[storage]
-data_dir = "{}"
+
+[collab.storage]
+data_dir = "{data_dir}"
 "#,
-            data_dir.display()
+            data_dir = data_dir.display()
         ),
     )
     .unwrap();
 
-    let child = spawn_daemon(&["--bind", &addr, "--config", config_path.to_str().unwrap()]);
+    let child = spawn_daemon(&["--config", config_path.to_str().unwrap()]);
 
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(100)).await;
