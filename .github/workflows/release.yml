@@ -34,6 +34,8 @@ jobs:
           cargo build --release --target x86_64-unknown-linux-musl --package mae-mcp
           cargo build --release --bin build-manual-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
+          # Strip sled lock files from manual KB
+          find assets/mae-manual.cozo -name "*.lock" -delete 2>/dev/null || true
           cd daemon && cargo build --release --target x86_64-unknown-linux-musl
 
       - name: Prepare artifact
@@ -77,6 +79,8 @@ jobs:
           cargo build --release --features gui --package mae
           cargo build --release --bin build-manual-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
+          # Strip sled lock files from manual KB
+          find assets/mae-manual.cozo -name "*.lock" -delete 2>/dev/null || true
 
       - name: Build AppImage
         run: |
@@ -135,6 +139,8 @@ jobs:
           cp target/release/mae target/release/mae-tui
           cargo build --release --bin build-manual-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
+          # Strip sled lock files — quarantine on macOS prevents reopening
+          find assets/mae-manual.cozo -name "*.lock" -delete 2>/dev/null || true
           cd daemon && cargo build --release
 
       - name: Build GUI binary
@@ -306,6 +312,14 @@ jobs:
 
           ## Installation
 
+          **macOS (Homebrew — recommended):**
+          ```bash
+          brew tap cuttlefisch/mae
+          brew install mae                    # CLI + daemon + modules + manual KB
+          brew install --cask mae             # optional: GUI .app bundle
+          brew services start mae             # optional: background daemon
+          ```
+
           **AppImage (Linux GUI):** Just run it — all assets are bundled inside.
 
           **Everything else:** Extract and run the installer:
@@ -345,3 +359,57 @@ jobs:
             dist/mae-macos-aarch64-tui.tar.gz
           fail_on_unmatched_files: true
           token: ${{ secrets.RELEASE_PAT }}
+
+  update-homebrew:
+    name: Update Homebrew tap
+    needs: [release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute checksums
+        id: sha
+        run: |
+          TUI_SHA=$(sha256sum dist/mae-macos-aarch64-tui.tar.gz | awk '{print $1}')
+          GUI_SHA=$(sha256sum dist/MAE-macos-aarch64.zip | awk '{print $1}')
+          LINUX_SHA=$(sha256sum dist/mae-linux-x86_64.tar.gz | awk '{print $1}')
+          echo "tui=$TUI_SHA" >> "$GITHUB_OUTPUT"
+          echo "gui=$GUI_SHA" >> "$GITHUB_OUTPUT"
+          echo "linux=$LINUX_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/cuttlefisch/homebrew-mae.git" tap
+          cd tap
+
+          # Update Formula
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" Formula/mae.rb
+
+          # Update checksums in Formula (on_macos block first, then on_linux)
+          # Use awk to replace sha256 lines in order
+          awk -v tui="${{ steps.sha.outputs.tui }}" \
+              -v linux="${{ steps.sha.outputs.linux }}" \
+              'BEGIN{mac=0; lin=0}
+               /on_macos/{mac=1}
+               /on_linux/{lin=1; mac=0}
+               /sha256/ && mac && !mac_done {sub(/sha256 ".*"/, "sha256 \""tui"\""); mac_done=1}
+               /sha256/ && lin && !lin_done {sub(/sha256 ".*"/, "sha256 \""linux"\""); lin_done=1}
+               {print}' Formula/mae.rb > Formula/mae.rb.tmp && mv Formula/mae.rb.tmp Formula/mae.rb
+
+          # Update Cask
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" Casks/mae.rb
+          sed -i "s/sha256 \".*\"/sha256 \"${{ steps.sha.outputs.gui }}\"/" Casks/mae.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "mae ${VERSION}"
+          git push
