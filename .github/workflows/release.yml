@@ -153,8 +153,11 @@ jobs:
           RES="dist/MAE.app/Contents/Resources"
           mkdir -p "$APP" "$RES"
 
-          cp target/release/mae "$APP/mae"
-          chmod +x "$APP/mae"
+          # IMPORTANT: macOS uses case-insensitive filesystems by default.
+          # The binary and launcher MUST have distinct names (not just
+          # differing in case), or the launcher script overwrites the binary.
+          cp target/release/mae "$APP/mae-bin"
+          chmod +x "$APP/mae-bin"
 
           # Bundle manual KB and modules inside .app
           cp -r assets/mae-manual.cozo "$RES/mae-manual.cozo"
@@ -162,13 +165,14 @@ jobs:
           cp assets/sample-config.toml "$RES/sample-config.toml"
 
           # Create launcher script that passes --gui + sets asset paths
+          # CFBundleExecutable = "MAE" → macOS runs this script
           cat > "$APP/MAE" << 'LAUNCHER'
           #!/bin/bash
           SELF="$(dirname "$0")"
           RES="$SELF/../Resources"
           export MAE_MANUAL_PATH="$RES/mae-manual.cozo"
           export MAE_MODULES_PATH="$RES/modules"
-          exec "$SELF/mae" --gui "$@"
+          exec "$SELF/mae-bin" --gui "$@"
           LAUNCHER
           chmod +x "$APP/MAE"
 

@@ -471,6 +471,29 @@ Items E1–E8 track open design questions and planned improvements for the colla
 
 ---
 
+## Inter-Agent Communication (Future)
+
+Multi-agent collaboration over MAE's collab infrastructure — enabling AI agents on different machines to share context, delegate tasks, and coordinate troubleshooting.
+
+- [ ] **A1. Shared scratchpad** *(Near-term)*
+  Agents share a collab buffer for unstructured notes. `on-remote-edit` hook notifies the local AI when the remote agent writes. Minimal protocol — just CRDT-synced text.
+
+- [ ] **A2. Structured agent messaging** *(Medium-term)*
+  Typed JSON messages over a dedicated `YMap` document per agent pair. MCP tools: `agent_send`, `agent_recv`, `agent_list_peers`, `agent_broadcast`. Request/response correlation IDs. Routed through existing daemon transport (TCP :9473).
+
+- [ ] **A3. Agent peer discovery** *(Medium-term)*
+  Extend mDNS (`collab-discover`) to advertise agent capabilities. Agents can find each other without manual address configuration.
+
+- [ ] **A4. Shared reasoning space** *(Long-term)*
+  KB-backed collaborative context — agents create/link/update KB nodes with typed relationships (`diagnosed-by`, `blocked-by`, `resolved-by`). Builds on KB federation. Shared problem statements, findings, and plans without blowing context windows.
+
+- [ ] **A5. Trust and delegation protocol** *(Long-term)*
+  Permission model for cross-agent tool calls. Agent A requesting Agent B to run a shell command on a remote machine needs explicit authorization. Capability-based delegation with audit trail.
+
+**Design questions:** push vs poll notification, context window efficiency (structured summaries vs raw conversation), lead-agent vs peer coordination, security boundaries for cross-machine tool execution.
+
+---
+
 ## Completed Features (collapsed)
 
 <details>
