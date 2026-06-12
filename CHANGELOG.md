@@ -6,12 +6,22 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(macos)* App bundle case collision, TERM leak, PATH gaps ([c4e387d](https://github.com/cuttlefisch/mae/commit/c4e387d2739c36fd8bb13e2fd13ccb19060de1fd))
+
+## [0.13.5] - 2026-06-12
+
+### Bug Fixes
+
 - *(ci)* Wait for CI to pass before tagging release ([1aec578](https://github.com/cuttlefisch/mae/commit/1aec57897008f6479973b09691c78103831ce5b4))
 
 ### Features
 
 - *(macos)* Homebrew tap + quarantine/PATH fixes ([18e7ad5](https://github.com/cuttlefisch/mae/commit/18e7ad5196350a9e081f188fbab2c5e62e2e4b72))
 - Interactive setup wizard + config consolidation ([eb291c3](https://github.com/cuttlefisch/mae/commit/eb291c33acc48e4eb26d48c6002f3e4eedea1f27))
+
+### Miscellaneous
+
+- Bump version to 0.13.5 ([ad1924f](https://github.com/cuttlefisch/mae/commit/ad1924f1efbf6ae14ba292dee0ec3d4e68bfe8df))
 
 ## [0.13.4] - 2026-06-12
 
