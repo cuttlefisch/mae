@@ -47,7 +47,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) |
 | `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O |
 | `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers |
-| `mae-daemon` | Background daemon — KB persistence, collab sync, WAL persistence, per-doc locking (merged from mae-state-server) |
+| `mae-daemon` | Background daemon — KB persistence, collab sync, WAL persistence, per-doc locking |
 | `mae-babel` | Org-babel executor — 12 languages, persistent sessions, language backends |
 | `mae-export` | Org/Markdown export — HTML, Markdown, TOC, syntax highlighting |
 | `mae-snippets` | YASnippet-style templates — tab-stops, mirrors, transforms |
@@ -109,7 +109,7 @@ Collaborative state uses **yrs** (Yjs Rust port, YATA algorithm). `mae-sync` wra
 
 ## Daemon (`mae-daemon`)
 
-Background daemon for KB persistence and multi-machine collaborative editing (incorporates the former `mae-state-server`).
+Background daemon for KB persistence and multi-machine collaborative editing.
 
 **Usage:** `mae-daemon [--bind 0.0.0.0:9473] [--unix-socket /path] [--check-config] [doctor]`
 

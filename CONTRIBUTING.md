@@ -108,7 +108,7 @@ MAE is organized as a Rust workspace with 20 crates and 19 Scheme modules.
 | `mae-lookup` | Documentation lookup |
 | `mae-spell` | Spell checking |
 | `mae-sync` | CRDT sync (yrs/YATA), ropey bridge, collaborative state |
-| `mae-daemon` | Background daemon — KB persistence, collab sync, WAL persistence (merged from mae-state-server) |
+| `mae-daemon` | Background daemon — KB persistence, collab sync, WAL persistence |
 | `mae` | Binary crate — CLI entry point, config loading, event loops |
 
 The 19 Scheme modules in `modules/` provide keybinding overlays and optional features (agenda, dashboard, git-status, org, tables, surround, multicursor, etc.). See [docs/CODE_MAP.md](docs/CODE_MAP.md) for the dependency graph and module sizes.

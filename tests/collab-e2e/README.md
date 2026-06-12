@@ -2,7 +2,7 @@
 
 Docker-based end-to-end tests for MAE's collaborative editing features.
 Validates CRDT sync, per-user undo/redo, and file convergence across
-multiple editor instances connected via the state server.
+multiple editor instances connected via the daemon.
 
 ## Architecture
 

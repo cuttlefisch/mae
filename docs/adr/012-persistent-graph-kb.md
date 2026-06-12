@@ -43,7 +43,7 @@ with `storage-sqlite` + the `sqlite` crate for collab WAL persistence, avoiding 
 | Backend | Status | Notes |
 |---------|--------|-------|
 | `storage-sled` | **Current** | Pure Rust, compiles everywhere, no linker conflicts |
-| `storage-sqlite-src` | Deferred | Conflicts with state-server's rusqlite |
+| `storage-sqlite-src` | Deferred | Conflicts with daemon's rusqlite (separate workspace) |
 | `storage-rocksdb` | Rejected | 35MB binary overhead, C++ build deps |
 
 ## Architecture

@@ -289,10 +289,11 @@ jobs:
           cp assets/sample-config.toml /tmp/mae-pkg/sample-config.toml
           cp assets/daemon-config.toml /tmp/mae-pkg/daemon-config.toml
           cp assets/mae-daemon.service /tmp/mae-pkg/mae-daemon.service
+          cp assets/com.cuttlefisch.mae-daemon.plist /tmp/mae-pkg/com.cuttlefisch.mae-daemon.plist
           cp assets/install.sh /tmp/mae-pkg/install.sh
           chmod +x /tmp/mae-pkg/install.sh
 
-      - name: Run install.sh
+      - name: Run install.sh (fresh)
         run: |
           cd /tmp/mae-pkg
           ./install.sh "$HOME/.local"
@@ -308,7 +309,7 @@ jobs:
           echo "=== Checking data ==="
           test -d "$HOME/.local/share/mae/mae-manual.cozo"  && echo "OK: manual KB"
           test -d "$HOME/.local/share/mae/modules"          && echo "OK: modules"
-          MODULE_COUNT=$(find "$HOME/.local/share/mae/modules" -name "manifest.toml" | wc -l)
+          MODULE_COUNT=$(find "$HOME/.local/share/mae/modules" -name "module.toml" | wc -l)
           test "$MODULE_COUNT" -ge 10 && echo "OK: $MODULE_COUNT modules found"
 
           echo "=== Checking config ==="
@@ -316,11 +317,21 @@ jobs:
           test -f "$HOME/.config/mae/daemon.toml"    && echo "OK: daemon.toml"
 
           echo "=== Checking systemd units ==="
-          test -f "$HOME/.config/systemd/user/mae-daemon.service"        && echo "OK: mae-daemon.service"
+          test -f "$HOME/.config/systemd/user/mae-daemon.service"  && echo "OK: mae-daemon.service"
 
           echo "=== Checking binary runs ==="
           "$HOME/.local/bin/mae" --version
           "$HOME/.local/bin/mae" --check-config
+
+          echo "=== Checking install script output reported no errors ==="
+          cd /tmp/mae-pkg
+          OUTPUT=$(./install.sh "$HOME/.local" 2>&1)
+          if echo "$OUTPUT" | grep -q '\[!!\]'; then
+            echo "FAIL: install script reported errors"
+            echo "$OUTPUT" | grep '\[!!\]'
+            exit 1
+          fi
+          echo "OK: install script reports clean"
 
       - name: Verify upgrade (reinstall over existing)
         run: |
@@ -355,7 +366,7 @@ jobs:
           ! test -d "$HOME/.local/share/mae/modules"          && echo "OK: modules removed"
 
           echo "=== Checking systemd units removed ==="
-          ! test -f "$HOME/.config/systemd/user/mae-daemon.service"        && echo "OK: daemon unit removed"
+          ! test -f "$HOME/.config/systemd/user/mae-daemon.service"  && echo "OK: daemon unit removed"
 
           echo "=== Checking config preserved ==="
           test -f "$HOME/.config/mae/config.toml"  && echo "OK: config.toml preserved"
