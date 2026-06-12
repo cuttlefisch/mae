@@ -88,7 +88,7 @@ jobs:
           git cliff --output CHANGELOG.md
           echo "Generated CHANGELOG.md"
 
-      - name: Commit and tag
+      - name: Commit version bump
         if: steps.bump-type.outputs.bump != 'none'
         run: |
           VERSION="v${{ steps.version.outputs.version }}"
@@ -98,8 +98,50 @@ jobs:
             shared/kb/Cargo.toml shared/sync/Cargo.toml shared/mcp/Cargo.toml \
             daemon/Cargo.toml assets/install.sh
           git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
+          git push origin main
+
+      - name: Wait for CI to pass on main
+        if: steps.bump-type.outputs.bump != 'none'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+        run: |
+          # Get the SHA of the version bump commit we just pushed
+          SHA=$(git rev-parse HEAD)
+          echo "Waiting for CI on commit $SHA..."
+
+          # Poll for up to 20 minutes (CI typically takes ~10-15 min)
+          for i in $(seq 1 40); do
+            # Check if the CI workflow has completed on this commit
+            STATUS=$(gh api "repos/${{ github.repository }}/commits/${SHA}/status" --jq '.state' 2>/dev/null || echo "pending")
+
+            # Also check the check-suites (Actions use check runs, not commit statuses)
+            CONCLUSION=$(gh api "repos/${{ github.repository }}/commits/${SHA}/check-suites" \
+              --jq '[.check_suites[] | select(.app.slug == "github-actions")] | if length == 0 then "pending" elif all(.conclusion == "success" or .conclusion == "skipped") then "success" elif any(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled") then "failure" else "pending" end' 2>/dev/null || echo "pending")
+
+            echo "  Attempt $i: status=$STATUS, check-suites=$CONCLUSION"
+
+            if [ "$CONCLUSION" = "success" ]; then
+              echo "CI passed!"
+              break
+            elif [ "$CONCLUSION" = "failure" ]; then
+              echo "::error::CI failed on main — skipping tag to prevent broken release"
+              exit 1
+            fi
+
+            sleep 30
+          done
+
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "::error::CI did not complete within 20 minutes — skipping tag"
+            exit 1
+          fi
+
+      - name: Tag release
+        if: steps.bump-type.outputs.bump != 'none'
+        run: |
+          VERSION="v${{ steps.version.outputs.version }}"
           # Delete existing tag if present (handles re-runs after partial failure)
           git tag -d "$VERSION" 2>/dev/null || true
           git push origin ":refs/tags/$VERSION" 2>/dev/null || true
           git tag "$VERSION"
-          git push origin main --tags
+          git push origin --tags

@@ -938,6 +938,43 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         );
     }
 
+    // Setup status for AI agent guidance
+    let ai_configured = !provider.is_empty() && (api_key_set || provider == "ollama");
+    let kb_notes_dir_set = editor.kb.notes_dir.is_some();
+    let daemon_enabled = editor.kb.daemon_enabled;
+    let theme_customized = editor.theme.name != "default";
+
+    let mut unconfigured: Vec<&str> = Vec::new();
+    let mut suggested_commands: Vec<&str> = Vec::new();
+    if !ai_configured {
+        unconfigured.push("ai");
+        suggested_commands.push(":setup-ai");
+    }
+    if !collab_configured {
+        unconfigured.push("collab");
+        suggested_commands.push(":setup-collab");
+    }
+    if !kb_notes_dir_set {
+        unconfigured.push("kb_notes");
+        suggested_commands.push(":setup-kb");
+    }
+    if !daemon_enabled {
+        unconfigured.push("daemon");
+        suggested_commands.push(":setup-daemon");
+    }
+
+    let ai_key_method = if api_key_set {
+        if api_key_source.starts_with("env:") {
+            "env_var"
+        } else if api_key_source.starts_with("command:") {
+            "key_command"
+        } else {
+            "config"
+        }
+    } else {
+        "none"
+    };
+
     let report = serde_json::json!({
         "ai_agent": {
             "command": ai_cmd,
@@ -964,6 +1001,16 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         "modules": modules_json,
         "options_modified": options_modified,
         "display_policy": display_policy,
+        "setup_status": {
+            "ai_configured": ai_configured,
+            "ai_key_method": ai_key_method,
+            "collab_configured": collab_configured,
+            "kb_notes_dir_set": kb_notes_dir_set,
+            "daemon_enabled": daemon_enabled,
+            "theme_customized": theme_customized,
+            "unconfigured": unconfigured,
+            "suggested_commands": suggested_commands,
+        },
         "issues": issues,
     });
 

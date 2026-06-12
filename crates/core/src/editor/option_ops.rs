@@ -1,4 +1,4 @@
-use crate::options::{parse_option_bool, parse_option_int, OptionKind};
+use crate::options::{parse_option_bool, parse_option_int};
 
 impl super::Editor {
     pub fn set_local_option(&mut self, name: &str, value: &str) -> Result<String, String> {
@@ -687,15 +687,15 @@ impl super::Editor {
         Ok(format!("{} = {}", def_name, current))
     }
 
-    /// Persist an option's current value to `~/.config/mae/config.toml`.
-    pub fn save_option_to_config(&self, name: &str) -> Result<String, String> {
+    /// Persist an option's current value to `~/.config/mae/init.scm`.
+    ///
+    /// Writes a `(set-option! "name" "value")` call between sentinel markers.
+    /// User's own `(set-option!)` calls outside the markers take precedence
+    /// (evaluated after, since Scheme is sequential).
+    pub fn save_option_to_init(&self, name: &str) -> Result<String, String> {
         let (value, def) = self
             .get_option(name)
             .ok_or_else(|| format!("Unknown option: {}", name))?;
-        let config_key = def
-            .config_key
-            .as_deref()
-            .ok_or_else(|| format!("Option '{}' cannot be saved to config", def.name))?;
 
         let config_dir = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
             std::path::PathBuf::from(xdg).join("mae")
@@ -704,75 +704,67 @@ impl super::Editor {
         } else {
             return Err("Cannot determine config directory".into());
         };
-        let config_path = config_dir.join("config.toml");
 
-        // Read existing config as a TOML table, or start fresh
-        let mut table: toml::Table = if config_path.exists() {
-            let content = std::fs::read_to_string(&config_path)
-                .map_err(|e| format!("Failed to read config: {}", e))?;
-            content
-                .parse::<toml::Table>()
-                .map_err(|e| format!("Failed to parse config: {}", e))?
+        std::fs::create_dir_all(&config_dir)
+            .map_err(|e| format!("Failed to create config dir: {}", e))?;
+
+        let init_path = config_dir.join("init.scm");
+        let content = if init_path.exists() {
+            std::fs::read_to_string(&init_path)
+                .map_err(|e| format!("Failed to read init.scm: {}", e))?
         } else {
-            std::fs::create_dir_all(&config_dir)
-                .map_err(|e| format!("Failed to create config dir: {}", e))?;
-            toml::Table::new()
+            String::new()
         };
 
-        // Parse config_key like "editor.line_numbers" into section + key
-        let parts: Vec<&str> = config_key.splitn(2, '.').collect();
-        if parts.len() != 2 {
-            return Err(format!("Invalid config key: {}", config_key));
-        }
-        let (section_name, key_name) = (parts[0], parts[1]);
+        let set_line = format!("(set-option! \"{}\" \"{}\")", def.name, value);
+        let pattern = format!("(set-option! \"{}\"", def.name);
 
-        // Ensure the section table exists
-        if !table.contains_key(section_name) {
-            table.insert(
-                section_name.to_string(),
-                toml::Value::Table(toml::Table::new()),
-            );
-        }
-        let section = table
-            .get_mut(section_name)
-            .and_then(|v| v.as_table_mut())
-            .ok_or_else(|| format!("Config key '{}' is not a table", section_name))?;
+        const MARKER_START: &str = ";; --- MAE managed options ---";
+        const MARKER_END: &str = ";; --- end managed options ---";
 
-        // Set the value with the appropriate TOML type, validating the parse.
-        let toml_val = match def.kind {
-            OptionKind::Bool => {
-                let b: bool = value
-                    .parse()
-                    .map_err(|_| format!("Invalid bool: '{}'", value))?;
-                toml::Value::Boolean(b)
-            }
-            OptionKind::Int => {
-                let i: i64 = value
-                    .parse()
-                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                toml::Value::Integer(i)
-            }
-            OptionKind::Float => {
-                let f: f64 = value
-                    .parse()
-                    .map_err(|_| format!("Invalid float: '{}'", value))?;
-                toml::Value::Float(f)
-            }
-            OptionKind::String | OptionKind::Theme => toml::Value::String(value.clone()),
+        let new_content = if content.contains(&pattern) {
+            // Replace existing line containing this option
+            content
+                .lines()
+                .map(|line| {
+                    if line.trim_start().starts_with(&pattern) {
+                        set_line.as_str()
+                    } else {
+                        line
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else if content.contains(MARKER_START) {
+            // Append before end marker
+            content.replace(MARKER_END, &format!("{}\n{}", set_line, MARKER_END))
+        } else {
+            // Create managed section
+            format!(
+                "{}\n\n{}\n{}\n{}\n",
+                content.trim_end(),
+                MARKER_START,
+                set_line,
+                MARKER_END,
+            )
         };
-        section.insert(key_name.to_string(), toml_val);
 
-        let output = toml::to_string_pretty(&table)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
-        std::fs::write(&config_path, output)
-            .map_err(|e| format!("Failed to write config: {}", e))?;
+        std::fs::write(&init_path, new_content)
+            .map_err(|e| format!("Failed to write init.scm: {}", e))?;
 
         Ok(format!(
             "Saved {} = {} to {}",
             def.name,
             value,
-            config_path.display()
+            init_path.display()
         ))
+    }
+
+    /// Legacy: persist to config.toml. Kept for backward compatibility
+    /// with `persist_editor_preference()` in the binary crate.
+    pub fn save_option_to_config(&self, name: &str) -> Result<String, String> {
+        // Delegate to init.scm — the sole user config surface going forward
+        self.save_option_to_init(name)
     }
 
     /// Open a scratch `*Options*` buffer listing all options with current values.

@@ -1,13 +1,14 @@
 //! MAE configuration file loading, precedence resolution, and first-run wizard.
 //!
-//! Precedence (highest → lowest):
+//! Config precedence (highest → lowest):
 //!   1. Environment variables (MAE_AI_PROVIDER, ANTHROPIC_API_KEY, MAE_AI_MODEL, …)
-//!   2. `$XDG_CONFIG_HOME/mae/config.toml` (defaults to `~/.config/mae/config.toml`)
-//!   3. Built-in defaults
+//!   2. `init.scm` — `(set-option!)` calls (primary user config surface)
+//!   3. `config.toml` — legacy bootstrap (AI provider + theme for pre-Scheme loading)
+//!   4. Built-in defaults (OptionDef structs in options.rs)
 //!
-//! The first-run wizard writes a complete `config.toml` on first launch when
-//! stdin is a TTY and no config file is present. Mirrors pudb's first-run
-//! preferences dialog but as a simple stdio prompt (runs before the TUI starts).
+//! The wizard writes both config.toml (bootstrap) and init.scm (all options).
+//! `:set-save` persists to init.scm only. Going forward, init.scm is the
+//! sole user config surface.
 //!
 //! Env var `MAE_SKIP_WIZARD=1` disables the wizard (useful for CI, containers,
 //! and non-interactive launches).
@@ -678,6 +679,8 @@ pub fn maybe_run_first_run_wizard() -> io::Result<bool> {
 
 /// Interactive wizard body. Separated from the gating logic so it can be
 /// invoked explicitly (`mae --init-config`) even when env vars are set.
+///
+/// Writes both config.toml (bootstrap: AI + theme) and init.scm (all options).
 pub fn run_wizard() -> io::Result<()> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -693,32 +696,38 @@ pub fn run_wizard() -> io::Result<()> {
     )?;
     writeln!(
         out,
-        "  (You can re-run this any time with `mae --init-config`.)"
+        "  (You can re-run this any time with `mae --init-config --force`.)"
     )?;
-    writeln!(out)?;
 
-    writeln!(out, "  AI provider:")?;
+    // Accumulate init.scm managed options
+    let mut init_options: Vec<(String, String)> = Vec::new();
+    let mut cfg = Config::default();
+
+    // --- 1. AI Provider ---
+    writeln!(out)?;
+    writeln!(out, "  \x1b[1m1. AI Provider\x1b[0m")?;
     writeln!(
         out,
-        "    1. claude  — Anthropic Claude (requires ANTHROPIC_API_KEY)"
+        "    1. claude   — Anthropic Claude (requires ANTHROPIC_API_KEY)"
     )?;
-    writeln!(out, "    2. openai  — OpenAI API (requires OPENAI_API_KEY)")?;
     writeln!(
         out,
-        "    3. gemini  — Google Gemini (requires GEMINI_API_KEY)"
+        "    2. openai   — OpenAI API (requires OPENAI_API_KEY)"
     )?;
     writeln!(
         out,
-        "    4. ollama  — Local Ollama (no key, uses http://localhost:11434)"
+        "    3. gemini   — Google Gemini (requires GEMINI_API_KEY)"
+    )?;
+    writeln!(
+        out,
+        "    4. ollama   — Local Ollama (no key, uses http://localhost:11434)"
     )?;
     writeln!(
         out,
         "    5. deepseek — DeepSeek API (requires DEEPSEEK_API_KEY)"
     )?;
-    writeln!(out, "    6. skip    — Don't configure AI now")?;
+    writeln!(out, "    6. skip     — Don't configure AI now")?;
     let choice = prompt(&mut out, "Choice [1-6, default=6]", "6")?;
-
-    let mut cfg = Config::default();
 
     let (provider, ask_key, default_model, default_base) = match choice.as_str() {
         "1" | "claude" => ("claude", true, "claude-sonnet-4-20250514", None),
@@ -726,64 +735,313 @@ pub fn run_wizard() -> io::Result<()> {
         "3" | "gemini" => ("gemini", true, "gemini-2.5-flash", None),
         "4" | "ollama" => ("ollama", false, "llama3", Some("http://localhost:11434/v1")),
         "5" | "deepseek" => ("deepseek", true, "deepseek-chat", None),
-        _ => {
-            writeln!(
-                out,
-                "  Skipped. Written empty config so the wizard won't run again."
-            )?;
-            let path = save_config(&cfg)?;
-            writeln!(out, "  Wrote {}", path.display())?;
-            writeln!(out)?;
-            return Ok(());
-        }
+        _ => ("", false, "", None),
     };
 
-    cfg.ai.provider = Some(provider.into());
+    if !provider.is_empty() {
+        cfg.ai.provider = Some(provider.into());
+        init_options.push(("ai_provider".into(), provider.into()));
 
-    let model = prompt(
-        &mut out,
-        &format!("Model [{}]", default_model),
-        default_model,
-    )?;
-    cfg.ai.model = Some(model);
-
-    if let Some(base) = default_base {
-        let base = prompt(&mut out, &format!("Base URL [{}]", base), base)?;
-        cfg.ai.base_url = Some(base);
-    } else {
-        let base = prompt(&mut out, "Base URL (optional, leave blank for default)", "")?;
-        if !base.is_empty() {
-            cfg.ai.base_url = Some(base);
-        }
-    }
-
-    if ask_key {
-        writeln!(
-            out,
-            "  API key: leave blank to keep reading ${}_API_KEY from the environment.",
-            match provider {
-                "openai" => "OPENAI",
-                "gemini" => "GEMINI",
-                "deepseek" => "DEEPSEEK",
-                _ => "ANTHROPIC",
-            }
+        let model = prompt(
+            &mut out,
+            &format!("Model [{}]", default_model),
+            default_model,
         )?;
-        let key = prompt(&mut out, "API key (blank = env var)", "")?;
-        if !key.is_empty() {
-            cfg.ai.api_key = Some(key);
+        cfg.ai.model = Some(model.clone());
+        init_options.push(("ai_model".into(), model));
+
+        if let Some(base) = default_base {
+            let base = prompt(&mut out, &format!("Base URL [{}]", base), base)?;
+            cfg.ai.base_url = Some(base);
+        } else {
+            let base = prompt(&mut out, "Base URL (optional, leave blank for default)", "")?;
+            if !base.is_empty() {
+                cfg.ai.base_url = Some(base);
+            }
+        }
+
+        if ask_key {
+            writeln!(out)?;
+            writeln!(out, "  API key storage:")?;
+            writeln!(
+                out,
+                "    1. Environment variable (recommended) — reads ${}_API_KEY",
+                match provider {
+                    "openai" => "OPENAI",
+                    "gemini" => "GEMINI",
+                    "deepseek" => "DEEPSEEK",
+                    _ => "ANTHROPIC",
+                }
+            )?;
+            writeln!(out, "    2. Password manager — enter retrieval command")?;
+            writeln!(
+                out,
+                "    3. Paste key directly (not recommended for production)"
+            )?;
+            let key_choice = prompt(&mut out, "Choice [1-3, default=1]", "1")?;
+            match key_choice.as_str() {
+                "2" => {
+                    let suggestion = platform_key_storage_suggestion("mae-ai");
+                    writeln!(out, "    Suggestion: {}", suggestion)?;
+                    let cmd = prompt(&mut out, "Key command", suggestion)?;
+                    if !cmd.is_empty() {
+                        cfg.ai.api_key_command = Some(cmd.clone());
+                        init_options.push(("ai_api_key_command".into(), cmd));
+                    }
+                }
+                "3" => {
+                    let key = prompt(&mut out, "API key", "")?;
+                    if !key.is_empty() {
+                        cfg.ai.api_key = Some(key);
+                    }
+                }
+                _ => {
+                    writeln!(out, "    Set the env var before launching MAE.")?;
+                }
+            }
         }
     }
 
-    let theme = prompt(&mut out, "Theme [default]", "default")?;
-    cfg.editor.theme = Some(theme);
-
-    let path = save_config(&cfg)?;
+    // --- 2. Theme ---
     writeln!(out)?;
-    writeln!(out, "  Wrote {}", path.display())?;
+    writeln!(out, "  \x1b[1m2. Theme\x1b[0m")?;
+    let theme = prompt(&mut out, "Theme [default]", "default")?;
+    cfg.editor.theme = Some(theme.clone());
+    init_options.push(("theme".into(), theme));
+
+    // --- 3. Collaboration ---
+    writeln!(out)?;
+    writeln!(out, "  \x1b[1m3. Collaboration\x1b[0m")?;
+    writeln!(out, "    1. solo      — No collaboration (default)")?;
+    writeln!(
+        out,
+        "    2. loopback  — Local daemon, multi-window (127.0.0.1:9473)"
+    )?;
+    writeln!(
+        out,
+        "    3. network   — Multi-machine (prompts for address + PSK)"
+    )?;
+    writeln!(out, "    4. skip")?;
+    let collab_choice = prompt(&mut out, "Choice [1-4, default=1]", "1")?;
+
+    match collab_choice.as_str() {
+        "2" | "loopback" => {
+            cfg.collaboration.server_address = Some("127.0.0.1:9473".into());
+            cfg.collaboration.auto_connect = Some(true);
+            init_options.push(("collab_server_address".into(), "127.0.0.1:9473".into()));
+            init_options.push(("collab_auto_connect".into(), "true".into()));
+            writeln!(out, "    Loopback mode configured.")?;
+        }
+        "3" | "network" => {
+            let addr = prompt(&mut out, "Server address [0.0.0.0:9473]", "0.0.0.0:9473")?;
+            cfg.collaboration.server_address = Some(addr.clone());
+            cfg.collaboration.auto_connect = Some(true);
+            init_options.push(("collab_server_address".into(), addr));
+            init_options.push(("collab_auto_connect".into(), "true".into()));
+
+            writeln!(out)?;
+            writeln!(out, "  PSK authentication (recommended for network mode):")?;
+            let psk_suggestion = platform_key_storage_suggestion("mae-collab-psk");
+            writeln!(out, "    Suggestion: {}", psk_suggestion)?;
+            let psk_cmd = prompt(&mut out, "PSK command (blank = no auth)", "")?;
+            if !psk_cmd.is_empty() {
+                cfg.collaboration.psk_command = Some(psk_cmd.clone());
+                init_options.push(("collab_psk_command".into(), psk_cmd));
+            }
+        }
+        _ => { /* solo or skip */ }
+    }
+
+    // --- 4. KB Notes Directory ---
+    writeln!(out)?;
+    writeln!(out, "  \x1b[1m4. KB Notes Directory\x1b[0m")?;
+    let default_notes = platform_default_notes_dir();
+    let notes_dir = prompt(
+        &mut out,
+        &format!("Notes directory [{}]", default_notes.display()),
+        &default_notes.display().to_string(),
+    )?;
+    if !notes_dir.is_empty() {
+        let expanded = shellexpand_tilde(&notes_dir);
+        let _ = fs::create_dir_all(&expanded);
+        init_options.push(("kb_notes_dir".into(), notes_dir));
+        writeln!(out, "    Created {}", expanded)?;
+    }
+
+    // --- 5. Daemon ---
+    writeln!(out)?;
+    writeln!(out, "  \x1b[1m5. Daemon\x1b[0m")?;
+    let enable_daemon = prompt(&mut out, "Enable background daemon? [Y/n]", "Y")?;
+    let daemon_enabled = !matches!(enable_daemon.to_lowercase().as_str(), "n" | "no");
+    if daemon_enabled {
+        cfg.daemon.enabled = Some(true);
+        init_options.push(("daemon_enabled".into(), "true".into()));
+        writeln!(out, "    Daemon enabled.")?;
+        let svc = detect_platform_service_manager();
+        match svc {
+            ServiceManager::Homebrew => {
+                writeln!(out, "    Start with: brew services start mae")?;
+            }
+            ServiceManager::Launchd => {
+                writeln!(
+                    out,
+                    "    Start with: launchctl load ~/Library/LaunchAgents/com.cuttlefisch.mae-daemon.plist"
+                )?;
+            }
+            ServiceManager::Systemd => {
+                writeln!(
+                    out,
+                    "    Start with: systemctl --user enable --now mae-daemon"
+                )?;
+            }
+            ServiceManager::None => {
+                writeln!(out, "    Start manually: mae-daemon &")?;
+            }
+        }
+    }
+
+    // --- Write config files ---
+    // config.toml (bootstrap: AI + theme for pre-Scheme loading)
+    let toml_path = save_config(&cfg)?;
+
+    // init.scm (all managed options)
+    let init_path = write_managed_init_options(&init_options)?;
+
+    writeln!(out)?;
+    writeln!(out, "  Wrote {}", toml_path.display())?;
+    writeln!(out, "  Wrote {}", init_path.display())?;
     writeln!(out, "  Launching MAE...")?;
     writeln!(out)?;
-    info!(path = %path.display(), "first-run wizard complete");
+    info!(path = %toml_path.display(), "first-run wizard complete");
     Ok(())
+}
+
+/// Write `(set-option!)` calls to init.scm between sentinel markers.
+/// Preserves any existing content in the file.
+fn write_managed_init_options(options: &[(String, String)]) -> io::Result<PathBuf> {
+    let dir = config_path().parent().unwrap().to_path_buf();
+    let init_path = dir.join("init.scm");
+    fs::create_dir_all(&dir)?;
+
+    let existing = if init_path.exists() {
+        fs::read_to_string(&init_path)?
+    } else {
+        default_init_template().to_string()
+    };
+
+    const MARKER_START: &str = ";; --- MAE managed options ---";
+    const MARKER_END: &str = ";; --- end managed options ---";
+
+    let managed_block: String = options
+        .iter()
+        .map(|(k, v)| format!("(set-option! \"{}\" \"{}\")", k, v))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let new_content = if existing.contains(MARKER_START) {
+        // Replace the entire managed section
+        if let (Some(start), Some(end)) = (existing.find(MARKER_START), existing.find(MARKER_END)) {
+            let before = &existing[..start];
+            let after = &existing[end + MARKER_END.len()..];
+            format!(
+                "{}{}\n{}\n{}{}",
+                before, MARKER_START, managed_block, MARKER_END, after
+            )
+        } else {
+            format!(
+                "{}\n\n{}\n{}\n{}\n",
+                existing.trim_end(),
+                MARKER_START,
+                managed_block,
+                MARKER_END
+            )
+        }
+    } else {
+        format!(
+            "{}\n\n{}\n{}\n{}\n",
+            existing.trim_end(),
+            MARKER_START,
+            managed_block,
+            MARKER_END
+        )
+    };
+
+    fs::write(&init_path, new_content)?;
+    Ok(init_path)
+}
+
+/// Expand leading `~` to `$HOME`.
+fn shellexpand_tilde(path: &str) -> String {
+    if path.starts_with('~') {
+        if let Ok(home) = std::env::var("HOME") {
+            return path.replacen('~', &home, 1);
+        }
+    }
+    path.to_string()
+}
+
+/// Platform-appropriate default notes directory.
+fn platform_default_notes_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+    if cfg!(target_os = "macos") {
+        PathBuf::from(home).join("Documents").join("mae-notes")
+    } else {
+        PathBuf::from(home).join("mae-notes")
+    }
+}
+
+/// Suggest a platform-appropriate password manager command.
+fn platform_key_storage_suggestion(service: &str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        match service {
+            "mae-ai" => "security find-generic-password -s mae-ai -w",
+            "mae-collab-psk" => "security find-generic-password -s mae-collab-psk -a mae -w",
+            _ => "security find-generic-password -s mae -w",
+        }
+    } else {
+        match service {
+            "mae-ai" => "pass show mae/api-key",
+            "mae-collab-psk" => "pass show mae/collab-psk",
+            _ => "pass show mae/secret",
+        }
+    }
+}
+
+/// Detected service manager for daemon start instructions.
+enum ServiceManager {
+    Homebrew,
+    Launchd,
+    Systemd,
+    None,
+}
+
+/// Detect which service manager is available.
+fn detect_platform_service_manager() -> ServiceManager {
+    if cfg!(target_os = "macos") {
+        // Check Homebrew first
+        if std::process::Command::new("brew")
+            .args(["--prefix"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return ServiceManager::Homebrew;
+        }
+        ServiceManager::Launchd
+    } else if std::process::Command::new("systemctl")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        ServiceManager::Systemd
+    } else {
+        ServiceManager::None
+    }
 }
 
 /// Read a line from stdin with a prompt. Returns the default if the user

@@ -237,15 +237,10 @@ pub fn run_doctor() -> i32 {
     section("Collaborative Editing");
 
     if check_binary("mae-daemon").is_some() {
-        println!("  {} state-server binary: found", GREEN_CHECK);
+        println!("  {} daemon binary: found", GREEN_CHECK);
     } else {
-        println!("  {} state-server binary: not found", YELLOW_WARN);
+        println!("  {} daemon binary: not found", YELLOW_WARN);
         warnings += 1;
-    }
-
-    match std::env::var("MAE_STATE_SERVER") {
-        Ok(val) => println!("  {} MAE_STATE_SERVER env: {}", GREEN_CHECK, val),
-        Err(_) => println!("  {} MAE_STATE_SERVER env: not set", YELLOW_WARN),
     }
 
     // Read collab options from the parsed config (uses load_config which is
@@ -267,20 +262,56 @@ pub fn run_doctor() -> i32 {
         collab_auto
     );
 
-    // Systemd service status
-    let systemd_active = Command::new("systemctl")
-        .args(["--user", "is-active", "mae-daemon"])
-        .output()
-        .ok()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if systemd_active {
-        println!("  {} systemd user service: active", GREEN_CHECK);
-    } else {
-        println!(
-            "  {} systemd user service: inactive — systemctl --user enable --now mae-daemon",
-            YELLOW_WARN
-        );
+    // Service status: platform-specific detection
+    #[cfg(target_os = "macos")]
+    {
+        // Check Homebrew service first
+        let brew_status = Command::new("brew")
+            .args(["services", "info", "mae", "--json"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok());
+        if let Some(ref info) = brew_status {
+            if info.contains("\"running\"") {
+                println!("  {} daemon: running (brew services)", GREEN_CHECK);
+            } else {
+                println!(
+                    "  {} daemon: not running — brew services start mae",
+                    YELLOW_WARN
+                );
+            }
+        } else {
+            // Fall back to launchctl check
+            let launchd = Command::new("launchctl")
+                .args(["list", "com.cuttlefisch.mae-daemon"])
+                .output()
+                .ok()
+                .map(|o| o.status.success());
+            match launchd {
+                Some(true) => println!("  {} daemon: running (launchd)", GREEN_CHECK),
+                _ => println!(
+                    "  {} daemon: not running — launchctl load ~/Library/LaunchAgents/com.cuttlefisch.mae-daemon.plist",
+                    YELLOW_WARN
+                ),
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let systemd_active = Command::new("systemctl")
+            .args(["--user", "is-active", "mae-daemon"])
+            .output()
+            .ok()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if systemd_active {
+            println!("  {} systemd user service: active", GREEN_CHECK);
+        } else {
+            println!(
+                "  {} systemd user service: inactive — systemctl --user enable --now mae-daemon",
+                YELLOW_WARN
+            );
+        }
     }
 
     // TCP reachability
@@ -337,6 +368,27 @@ pub fn run_doctor() -> i32 {
                     YELLOW_WARN
                 );
                 warnings += 1;
+            }
+        }
+
+        // macOS Application Firewall check
+        #[cfg(target_os = "macos")]
+        {
+            let fw = Command::new("/usr/libexec/ApplicationFirewall/socketfilterfw")
+                .arg("--getglobalstate")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok());
+            match fw {
+                Some(ref s) if s.contains("enabled") => {
+                    println!(
+                        "  {} macOS firewall enabled — ensure mae-daemon is allowed in System Settings > Network > Firewall",
+                        YELLOW_WARN
+                    );
+                    warnings += 1;
+                }
+                Some(_) => println!("  {} macOS firewall: disabled", GREEN_CHECK),
+                None => {} // Can't check, skip
             }
         }
 

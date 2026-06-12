@@ -142,6 +142,75 @@ pub(super) fn handle_command_palette_mode(
                         Some(mae_core::CollabIntent::JoinDoc { doc_id: doc_name });
                     editor.set_status("Joining document...");
                 }
+                (Some(provider), PalettePurpose::SetupAiProvider) => {
+                    if provider == "skip" {
+                        editor.set_status("AI setup skipped");
+                        editor.setup_all_pending = false;
+                    } else {
+                        let default_model = match provider.as_str() {
+                            "claude" => "claude-sonnet-4-20250514",
+                            "openai" => "gpt-4o",
+                            "gemini" => "gemini-2.5-flash",
+                            "ollama" => "llama3",
+                            "deepseek" => "deepseek-chat",
+                            _ => "",
+                        };
+                        editor.mini_dialog =
+                            Some(mae_core::command_palette::MiniDialogState::single_input(
+                                "AI Model",
+                                default_model,
+                                default_model,
+                                mae_core::command_palette::MiniDialogContext::SetupAiModel {
+                                    provider: provider.clone(),
+                                },
+                            ));
+                        editor.command_palette =
+                            Some(mae_core::command_palette::CommandPalette::with_name_list(
+                                &[],
+                                mae_core::command_palette::PalettePurpose::MiniDialog,
+                            ));
+                        editor.set_mode(mae_core::Mode::CommandPalette);
+                    }
+                }
+                (Some(mode), PalettePurpose::SetupCollabMode) => match mode.as_str() {
+                    "skip" | "solo" => {
+                        editor.set_status(if mode == "skip" {
+                            "Collab setup skipped"
+                        } else {
+                            "Collaboration: solo mode"
+                        });
+                        if editor.setup_all_pending {
+                            editor.dispatch_next_setup_section();
+                        }
+                    }
+                    "loopback" => {
+                        let _ = editor.set_option("collab_server_address", "127.0.0.1:9473");
+                        let _ = editor.set_option("collab_auto_connect", "true");
+                        let _ = editor.save_option_to_init("collab_server_address");
+                        let _ = editor.save_option_to_init("collab_auto_connect");
+                        editor.set_status("Collaboration: loopback (127.0.0.1:9473, auto-connect)");
+                        editor.refresh_setup_hub();
+                        if editor.setup_all_pending {
+                            editor.dispatch_next_setup_section();
+                        }
+                    }
+                    "network" => {
+                        editor.mini_dialog =
+                            Some(mae_core::command_palette::MiniDialogState::single_input(
+                                "Server address",
+                                "0.0.0.0:9473",
+                                "0.0.0.0:9473",
+                                mae_core::command_palette::MiniDialogContext::SetupCollabAddress,
+                            ));
+                        editor.command_palette =
+                            Some(mae_core::command_palette::CommandPalette::with_name_list(
+                                &[],
+                                mae_core::command_palette::PalettePurpose::MiniDialog,
+                            ));
+                        editor.set_mode(mae_core::Mode::CommandPalette);
+                    }
+                    _ => editor.set_status("Unknown collab mode"),
+                },
                 (_, PalettePurpose::MiniDialog) => {
                     // Handled by handle_mini_dialog — should not reach here
                 }
@@ -483,6 +552,127 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
                     Err(e) => editor.set_status(format!("Reload failed: {}", e)),
                 }
                 editor.fire_hook("file-changed-on-disk");
+            }
+        }
+
+        // --- Setup wizard mini-dialog chains ---
+        MiniDialogContext::SetupAiModel { provider } => {
+            let model = dialog.fields[0].value.trim().to_string();
+            if model.is_empty() {
+                editor.set_status("AI setup cancelled");
+                editor.setup_all_pending = false;
+                return;
+            }
+            let provider = provider.clone();
+            // Open next step: API key command
+            let hint = match provider.as_str() {
+                "claude" => "security find-generic-password -s mae-ai -w",
+                "openai" => "security find-generic-password -s mae-openai -w",
+                "ollama" => "",
+                _ => "",
+            };
+            editor.mini_dialog = Some(mae_core::command_palette::MiniDialogState::single_input(
+                "API key command (blank = env var)",
+                "",
+                hint,
+                mae_core::command_palette::MiniDialogContext::SetupAiKeyCommand {
+                    provider: provider.clone(),
+                    model,
+                },
+            ));
+            editor.command_palette =
+                Some(mae_core::command_palette::CommandPalette::with_name_list(
+                    &[],
+                    mae_core::command_palette::PalettePurpose::MiniDialog,
+                ));
+            editor.set_mode(mae_core::Mode::CommandPalette);
+        }
+        MiniDialogContext::SetupAiKeyCommand { provider, model } => {
+            let key_cmd = dialog.fields[0].value.trim().to_string();
+            let provider = provider.clone();
+            let model = model.clone();
+            // Apply all three AI options
+            let _ = editor.set_option("ai_provider", &provider);
+            let _ = editor.set_option("ai_model", &model);
+            let _ = editor.save_option_to_init("ai_provider");
+            let _ = editor.save_option_to_init("ai_model");
+            if !key_cmd.is_empty() {
+                let _ = editor.set_option("ai_api_key_command", &key_cmd);
+                let _ = editor.save_option_to_init("ai_api_key_command");
+            }
+            editor.set_status(format!("AI configured: {} / {}", provider, model));
+            editor.refresh_setup_hub();
+            if editor.setup_all_pending {
+                editor.dispatch_next_setup_section();
+            }
+        }
+        MiniDialogContext::SetupCollabAddress => {
+            let address = dialog.fields[0].value.trim().to_string();
+            if address.is_empty() {
+                editor.set_status("Collab setup cancelled");
+                editor.setup_all_pending = false;
+                return;
+            }
+            // Chain to PSK input
+            let hint = if cfg!(target_os = "macos") {
+                "security find-generic-password -s mae-collab-psk -a mae -w"
+            } else {
+                "pass show mae/collab-psk"
+            };
+            editor.mini_dialog = Some(mae_core::command_palette::MiniDialogState::single_input(
+                "PSK command (blank = no auth)",
+                "",
+                hint,
+                mae_core::command_palette::MiniDialogContext::SetupCollabPsk { address },
+            ));
+            editor.command_palette =
+                Some(mae_core::command_palette::CommandPalette::with_name_list(
+                    &[],
+                    mae_core::command_palette::PalettePurpose::MiniDialog,
+                ));
+            editor.set_mode(mae_core::Mode::CommandPalette);
+        }
+        MiniDialogContext::SetupCollabPsk { address } => {
+            let psk_cmd = dialog.fields[0].value.trim().to_string();
+            let address = address.clone();
+            let _ = editor.set_option("collab_server_address", &address);
+            let _ = editor.set_option("collab_auto_connect", "true");
+            let _ = editor.save_option_to_init("collab_server_address");
+            let _ = editor.save_option_to_init("collab_auto_connect");
+            if !psk_cmd.is_empty() {
+                let _ = editor.set_option("collab_psk_command", &psk_cmd);
+                let _ = editor.save_option_to_init("collab_psk_command");
+            }
+            editor.set_status(format!("Collaboration: network ({})", address));
+            editor.refresh_setup_hub();
+            if editor.setup_all_pending {
+                editor.dispatch_next_setup_section();
+            }
+        }
+        MiniDialogContext::SetupKbNotesDir => {
+            let dir_str = dialog.fields[0].value.trim().to_string();
+            if dir_str.is_empty() {
+                editor.set_status("KB notes setup cancelled");
+                editor.setup_all_pending = false;
+                return;
+            }
+            // Expand ~ and create directory
+            let expanded = if dir_str.starts_with('~') {
+                if let Ok(home) = std::env::var("HOME") {
+                    dir_str.replacen('~', &home, 1)
+                } else {
+                    dir_str.clone()
+                }
+            } else {
+                dir_str.clone()
+            };
+            let _ = std::fs::create_dir_all(&expanded);
+            let _ = editor.set_option("kb_notes_dir", &dir_str);
+            let _ = editor.save_option_to_init("kb_notes_dir");
+            editor.set_status(format!("KB notes directory: {}", expanded));
+            editor.refresh_setup_hub();
+            if editor.setup_all_pending {
+                editor.dispatch_next_setup_section();
             }
         }
     }

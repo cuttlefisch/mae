@@ -736,8 +736,8 @@ impl Editor {
                             return true;
                         }
                     }
-                    // Save current value to config.toml
-                    match self.save_option_to_config(key) {
+                    // Save current value to init.scm
+                    match self.save_option_to_init(key) {
                         Ok(msg) => self.set_status(msg),
                         Err(e) => self.set_status(e),
                     }

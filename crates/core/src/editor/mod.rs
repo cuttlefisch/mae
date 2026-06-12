@@ -994,6 +994,10 @@ pub struct Editor {
     /// Paths for which this editor instance holds advisory file locks.
     /// Locks are acquired on file open and released on buffer close or exit.
     pub locked_files: HashSet<PathBuf>,
+    /// When true, `:setup-all` is chaining through unconfigured sections.
+    /// Each section's completion handler checks for the next unconfigured section.
+    /// Cleared on Escape or when all sections are done.
+    pub setup_all_pending: bool,
     /// Collaborative editing state (connection, sync, options).
     pub collab: CollabState,
 }
@@ -1178,6 +1182,7 @@ impl Editor {
             pending_pkg_commands: Vec::new(),
             pending_git_diff: None,
             locked_files: HashSet::new(),
+            setup_all_pending: false,
             collab: CollabState::new(),
         }
     }

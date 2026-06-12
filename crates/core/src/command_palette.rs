@@ -43,6 +43,8 @@ pub enum PalettePurpose {
     KbInsertLink,
     MiniDialog,
     CollabJoin,
+    SetupAiProvider,
+    SetupCollabMode,
 }
 
 impl PalettePurpose {
@@ -65,6 +67,8 @@ impl PalettePurpose {
             Self::KbInsertLink => "Insert Link",
             Self::MiniDialog => "Dialog",
             Self::CollabJoin => "Join Document",
+            Self::SetupAiProvider => "AI Provider",
+            Self::SetupCollabMode => "Collaboration Mode",
         }
     }
 }
@@ -132,6 +136,18 @@ pub enum MiniDialogContext {
         buf_idx: usize,
         resolved_path: std::path::PathBuf,
     },
+    SetupAiModel {
+        provider: String,
+    },
+    SetupAiKeyCommand {
+        provider: String,
+        model: String,
+    },
+    SetupCollabAddress,
+    SetupCollabPsk {
+        address: String,
+    },
+    SetupKbNotesDir,
 }
 
 /// State for a multi-field mini-dialog (edit-link, rename, etc.)
@@ -162,6 +178,11 @@ impl MiniDialogState {
                 MiniDialogContext::FileTreeCreate { .. } => "Create",
                 MiniDialogContext::OrgSetTags { .. } => "Set Tags",
                 MiniDialogContext::AgendaFilterTag => "Filter by Tag",
+                MiniDialogContext::SetupAiModel { .. } => "AI Model",
+                MiniDialogContext::SetupAiKeyCommand { .. } => "API Key Command",
+                MiniDialogContext::SetupCollabAddress => "Server Address",
+                MiniDialogContext::SetupCollabPsk { .. } => "PSK Command",
+                MiniDialogContext::SetupKbNotesDir => "Notes Directory",
                 _ => "Input",
             },
         }
@@ -382,7 +403,24 @@ impl CommandPalette {
         Self::with_name_list(names, PalettePurpose::CollabJoin)
     }
 
-    fn with_name_list(names: &[&str], purpose: PalettePurpose) -> Self {
+    /// Setup: AI provider selection. Used by `:setup-ai`.
+    pub fn for_setup_ai_provider() -> Self {
+        Self::with_name_list(
+            &["claude", "openai", "gemini", "ollama", "deepseek", "skip"],
+            PalettePurpose::SetupAiProvider,
+        )
+    }
+
+    /// Setup: collaboration mode selection. Used by `:setup-collab`.
+    pub fn for_setup_collab_mode() -> Self {
+        Self::with_name_list(
+            &["solo", "loopback", "network", "skip"],
+            PalettePurpose::SetupCollabMode,
+        )
+    }
+
+    /// Build a palette from a simple name list with the given purpose.
+    pub fn with_name_list(names: &[&str], purpose: PalettePurpose) -> Self {
         let entries: Vec<PaletteEntry> = names
             .iter()
             .map(|n| PaletteEntry {
@@ -538,6 +576,8 @@ mod tests {
             PalettePurpose::KbInsertLink,
             PalettePurpose::MiniDialog,
             PalettePurpose::CollabJoin,
+            PalettePurpose::SetupAiProvider,
+            PalettePurpose::SetupCollabMode,
         ];
         for p in &purposes {
             assert!(!p.label().is_empty(), "{:?} has empty label", p);

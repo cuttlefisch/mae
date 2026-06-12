@@ -113,6 +113,13 @@ fn well_known_paths(data_dir: &Path) -> Vec<PathBuf> {
     paths.push(PathBuf::from("/usr/share/mae/mae-manual.cozo"));
     paths.push(PathBuf::from("/usr/local/share/mae/mae-manual.cozo"));
 
+    // Homebrew (macOS Apple Silicon).
+    paths.push(PathBuf::from("/opt/homebrew/share/mae/mae-manual.cozo"));
+    // Homebrew (macOS Intel / Linux Homebrew).
+    paths.push(PathBuf::from(
+        "/home/linuxbrew/.linuxbrew/share/mae/mae-manual.cozo",
+    ));
+
     paths
 }
 

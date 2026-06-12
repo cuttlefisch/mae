@@ -341,6 +341,16 @@ if [ "$INSTALLED_BINS" -eq 0 ]; then
     fail "no binaries found in package — is this a valid MAE distribution?"
 fi
 
+# Clear quarantine on CLI binaries (macOS — unsigned binaries get quarantined)
+if [ "$OS" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
+    for bin in $BINARIES; do
+        if [ -f "$BINDIR/$bin" ]; then
+            xattr -cr "$BINDIR/$bin" 2>/dev/null || true
+        fi
+    done
+    ok "cleared quarantine on CLI binaries"
+fi
+
 # ========================================================================
 # 2. macOS .app bundle
 # ========================================================================
@@ -383,6 +393,12 @@ if [ -d "$SCRIPT_DIR/mae-manual.cozo" ]; then
         cp "$SCRIPT_DIR/mae-manual.cozo.sha256" "$DATADIR/mae/mae-manual.cozo.sha256"
         ok "SHA-256 checksum stored (validated at runtime)"
     fi
+
+    # Clear quarantine on manual KB (macOS — quarantine prevents sled from opening)
+    if [ "$OS" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
+        xattr -cr "$DATADIR/mae/mae-manual.cozo" 2>/dev/null || true
+        ok "cleared quarantine on manual KB"
+    fi
 else
     fail "mae-manual.cozo not found in package"
 fi
@@ -400,6 +416,12 @@ if [ -d "$SCRIPT_DIR/modules" ]; then
         ok "$MODULE_COUNT modules -> $DATADIR/mae/modules/"
     else
         fail "modules copied but no module.toml found"
+    fi
+
+    # Clear quarantine on modules (macOS)
+    if [ "$OS" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
+        xattr -cr "$DATADIR/mae/modules" 2>/dev/null || true
+        ok "cleared quarantine on modules"
     fi
 else
     fail "modules directory not found in package"
@@ -514,8 +536,27 @@ case ":$PATH:" in
         ok "$BINDIR is on PATH"
         ;;
     *)
-        warn "$BINDIR is not on your PATH — add to your shell profile:"
-        echo "       export PATH=\"$BINDIR:\$PATH\""
+        warn "$BINDIR is not on your PATH"
+        if [ "$OS" = "Darwin" ]; then
+            SHELL_NAME="$(basename "${SHELL:-/bin/zsh}")"
+            case "$SHELL_NAME" in
+                zsh)
+                    echo "       Add to ~/.zprofile (or ~/.zshrc):"
+                    echo "         export PATH=\"$BINDIR:\$PATH\""
+                    ;;
+                bash)
+                    echo "       Add to ~/.bash_profile:"
+                    echo "         export PATH=\"$BINDIR:\$PATH\""
+                    ;;
+                *)
+                    echo "       Add to your shell profile:"
+                    echo "         export PATH=\"$BINDIR:\$PATH\""
+                    ;;
+            esac
+        else
+            echo "       Add to your shell profile:"
+            echo "         export PATH=\"$BINDIR:\$PATH\""
+        fi
         ;;
 esac
 

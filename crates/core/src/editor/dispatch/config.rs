@@ -23,8 +23,8 @@ impl Editor {
                 if !init_path.exists() {
                     let _ = std::fs::create_dir_all(&config_dir);
                     let template = "\
-;; MAE init.scm — Scheme configuration (loaded after config.toml)
-;; This file is the primary config surface. TOML is bootstrap-only.
+;; MAE init.scm — Primary configuration surface
+;; Run :setup-wizard for interactive configuration.
 ;;
 ;; Examples:
 ;;   (set-option! \"theme\" \"catppuccin-mocha\")
@@ -44,9 +44,59 @@ impl Editor {
                 self.open_file(init_path.display().to_string());
             }
             "setup-wizard" => {
-                self.set_status(
-                    "Run `mae --init-config --force` from a terminal to re-run the setup wizard. Or use :edit-settings to edit config.toml directly."
-                );
+                self.open_setup_hub();
+            }
+            "setup-ai" => {
+                self.command_palette =
+                    Some(crate::command_palette::CommandPalette::for_setup_ai_provider());
+                self.set_mode(Mode::CommandPalette);
+            }
+            "setup-collab" => {
+                self.command_palette =
+                    Some(crate::command_palette::CommandPalette::for_setup_collab_mode());
+                self.set_mode(Mode::CommandPalette);
+            }
+            "setup-kb" => {
+                let default_dir = platform_default_notes_dir();
+                let current = self
+                    .kb
+                    .notes_dir
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| default_dir.display().to_string());
+                self.mini_dialog = Some(crate::command_palette::MiniDialogState::single_input(
+                    "Notes directory",
+                    &current,
+                    default_dir.display().to_string(),
+                    crate::command_palette::MiniDialogContext::SetupKbNotesDir,
+                ));
+                self.command_palette =
+                    Some(crate::command_palette::CommandPalette::with_name_list(
+                        &[],
+                        crate::command_palette::PalettePurpose::MiniDialog,
+                    ));
+                self.set_mode(Mode::CommandPalette);
+            }
+            "setup-daemon" => {
+                let new_val = !self.kb.daemon_enabled;
+                let _ = self.set_option("daemon_enabled", &new_val.to_string());
+                let _ = self.save_option_to_init("daemon_enabled");
+                let msg = if new_val {
+                    let hint = if cfg!(target_os = "macos") {
+                        "Start with: brew services start mae (or launchctl)"
+                    } else {
+                        "Start with: systemctl --user enable --now mae-daemon"
+                    };
+                    format!("Daemon enabled. {}", hint)
+                } else {
+                    "Daemon disabled.".to_string()
+                };
+                self.set_status(msg);
+                self.refresh_setup_hub();
+            }
+            "setup-all" => {
+                self.setup_all_pending = true;
+                self.dispatch_next_setup_section();
             }
             "edit-settings" => {
                 let config_path = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
@@ -328,5 +378,128 @@ impl Editor {
         }
         self.mark_full_redraw();
         Some(true)
+    }
+
+    /// Generate and display the `*Setup*` hub buffer.
+    fn open_setup_hub(&mut self) {
+        let content = self.generate_setup_content();
+        // Reuse existing *Setup* buffer or create new
+        let existing = self.buffers.iter().position(|b| b.name == "*Setup*");
+        let buf_idx = if let Some(idx) = existing {
+            self.buffers[idx].replace_contents(&content);
+            self.buffers[idx].modified = false;
+            idx
+        } else {
+            let mut buf = crate::buffer::Buffer::new();
+            buf.name = "*Setup*".to_string();
+            buf.replace_contents(&content);
+            buf.modified = false;
+            buf.read_only = true;
+            let idx = self.buffers.len();
+            self.buffers.push(buf);
+            idx
+        };
+        self.display_buffer(buf_idx);
+    }
+
+    /// Refresh the `*Setup*` buffer if it exists.
+    pub fn refresh_setup_hub(&mut self) {
+        let content = self.generate_setup_content();
+        if let Some(idx) = self.buffers.iter().position(|b| b.name == "*Setup*") {
+            self.buffers[idx].replace_contents(&content);
+            self.buffers[idx].modified = false;
+        }
+    }
+
+    /// Generate the setup hub buffer content.
+    fn generate_setup_content(&self) -> String {
+        let ai_status = if self.ai.provider.is_empty() {
+            "not configured".to_string()
+        } else {
+            let model_part = if self.ai.model.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", self.ai.model)
+            };
+            format!("{}{}", self.ai.provider, model_part)
+        };
+
+        let theme_status = self.theme.name.clone();
+
+        let collab_status = if self.collab.auto_connect {
+            format!(
+                "{} ({})",
+                self.collab.status.as_str(),
+                self.collab.server_address
+            )
+        } else {
+            "solo (not configured)".to_string()
+        };
+
+        let kb_status = self
+            .kb
+            .notes_dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "not set".to_string());
+
+        let daemon_status = if self.kb.daemon_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+
+        format!(
+            "\
+MAE Setup
+=========
+
+Section              Status                              Command
+-------              ------                              -------
+AI Provider          {:<35} :setup-ai
+Theme                {:<35} :set-theme
+Collaboration        {:<35} :setup-collab
+KB Notes             {:<35} :setup-kb
+Daemon               {:<35} :setup-daemon
+
+  :setup-all    — configure all unconfigured sections
+  q             — close this buffer
+",
+            ai_status, theme_status, collab_status, kb_status, daemon_status
+        )
+    }
+
+    /// Dispatch the next unconfigured setup section for `:setup-all`.
+    pub fn dispatch_next_setup_section(&mut self) {
+        if !self.setup_all_pending {
+            return;
+        }
+        if self.ai.provider.is_empty() {
+            self.dispatch_builtin("setup-ai");
+        } else if !self.collab.auto_connect
+            && self.collab.server_address.as_str() == crate::DEFAULT_COLLAB_ADDRESS
+        {
+            self.dispatch_builtin("setup-collab");
+        } else if self.kb.notes_dir.is_none() {
+            self.dispatch_builtin("setup-kb");
+        } else if !self.kb.daemon_enabled {
+            self.dispatch_builtin("setup-daemon");
+        } else {
+            self.setup_all_pending = false;
+            self.set_status("All sections configured!");
+            self.refresh_setup_hub();
+        }
+    }
+}
+
+/// Platform-appropriate default notes directory.
+fn platform_default_notes_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+    if cfg!(target_os = "macos") {
+        std::path::PathBuf::from(home)
+            .join("Documents")
+            .join("mae-notes")
+    } else {
+        std::path::PathBuf::from(home).join("mae-notes")
     }
 }
