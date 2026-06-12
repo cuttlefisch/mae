@@ -73,7 +73,10 @@ fn spawn_mae_with_pty() -> (std::process::Child, String, std::fs::File) {
             .pre_exec(move || {
                 // Create a new session and set controlling terminal.
                 libc::setsid();
-                libc::ioctl(slave_fd, libc::TIOCSCTTY, 0);
+                // `ioctl`'s request arg differs by platform (c_ulong on macOS,
+                // c_int on Linux) and `TIOCSCTTY`'s type follows suit — cast to
+                // the inferred request type so this compiles on both.
+                libc::ioctl(slave_fd, libc::TIOCSCTTY as _, 0);
                 libc::dup2(slave_fd, 0); // stdin
                 libc::dup2(slave_fd, 1); // stdout
                 libc::dup2(slave_fd, 2); // stderr

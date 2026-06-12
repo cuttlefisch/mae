@@ -159,8 +159,16 @@ fn open_file_from_different_project_does_not_switch_global() {
         buf_b.project_root.is_some(),
         "buffer should have its own project_root"
     );
+    // Canonicalize both sides: on macOS the temp dir lives under `/var`, a
+    // symlink to `/private/var`, so comparing the app's raw path against a
+    // canonicalized expected path diverges. Compare resolved real paths.
     assert_eq!(
-        buf_b.project_root.as_ref().unwrap(),
-        &dir_b.path().canonicalize().unwrap()
+        buf_b
+            .project_root
+            .as_ref()
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
+        dir_b.path().canonicalize().unwrap()
     );
 }

@@ -66,6 +66,70 @@ pub struct SkiaCanvas {
     image_cache: HashMap<PathBuf, Option<CachedImage>>,
 }
 
+/// System monospace families to fall back to when no preferred font is found.
+/// At least one ships with every supported OS (macOS: Menlo/Monaco; Linux:
+/// DejaVu/Liberation/Noto; Windows: Consolas), so the GUI always has a usable
+/// monospace font and never refuses to launch over a missing font.
+const SYSTEM_MONO: &[&str] = &[
+    "Menlo",
+    "SF Mono",
+    "Monaco",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Noto Sans Mono",
+    "Consolas",
+    "Courier New",
+    "monospace",
+];
+
+/// Build the ordered list of *preferred* monospace families: the configured
+/// override first (if any), then Nerd Font variants (for icon glyphs), then
+/// popular coding fonts. System fallbacks (`SYSTEM_MONO`) are appended at
+/// resolution time, not here.
+fn monospace_preferred(font_family: Option<&str>) -> Vec<String> {
+    font_family
+        .into_iter()
+        .map(|s| s.to_string())
+        .chain(
+            [
+                "JetBrainsMono Nerd Font Mono",
+                "JetBrainsMono Nerd Font",
+                "JetBrains Mono",
+                "Fira Code",
+                "Cascadia Code",
+            ]
+            .into_iter()
+            .map(|s| s.to_string()),
+        )
+        .collect()
+}
+
+/// True if any of the `preferred` families is installed. Used to decide
+/// whether to warn about falling back to a system font.
+fn preferred_font_available(font_mgr: &FontMgr, preferred: &[String]) -> bool {
+    preferred.iter().any(|fam| {
+        font_mgr
+            .match_family_style(fam, FontStyle::normal())
+            .is_some()
+    })
+}
+
+/// Resolve a typeface for `style`, never failing on a present font manager:
+/// preferred families → system monospace families → the platform's default
+/// typeface (`legacy_make_typeface` returns a usable default for any input).
+fn resolve_monospace_typeface(
+    font_mgr: &FontMgr,
+    preferred: &[String],
+    style: FontStyle,
+) -> Option<Typeface> {
+    preferred
+        .iter()
+        .map(String::as_str)
+        .chain(SYSTEM_MONO.iter().copied())
+        .find_map(|fam| font_mgr.match_family_style(fam, style))
+        .or_else(|| font_mgr.legacy_make_typeface(None, style))
+}
+
 impl SkiaCanvas {
     /// Create a new Skia raster surface with monospace font metrics.
     ///
@@ -88,56 +152,11 @@ impl SkiaCanvas {
         // platform's default typeface. A missing "fancy" font must NEVER block
         // GUI launch — we fall back to a system monospace font and warn.
         let font_mgr = FontMgr::default();
-
-        let preferred: Vec<String> = font_family
-            .into_iter()
-            .map(|s| s.to_string())
-            .chain(
-                [
-                    "JetBrainsMono Nerd Font Mono",
-                    "JetBrainsMono Nerd Font",
-                    "JetBrains Mono",
-                    "Fira Code",
-                    "Cascadia Code",
-                ]
-                .into_iter()
-                .map(|s| s.to_string()),
-            )
-            .collect();
-
-        // System monospace families — at least one ships with every supported
-        // OS (macOS: Menlo/Monaco; Linux: DejaVu/Liberation/Noto; Windows:
-        // Consolas), so the GUI always has a usable monospace font.
-        const SYSTEM_MONO: &[&str] = &[
-            "Menlo",
-            "SF Mono",
-            "Monaco",
-            "DejaVu Sans Mono",
-            "Liberation Mono",
-            "Noto Sans Mono",
-            "Consolas",
-            "Courier New",
-            "monospace",
-        ];
-
-        // Resolve a typeface for `style`, never failing: preferred families →
-        // system monospace families → the platform's default typeface
-        // (`legacy_make_typeface` returns a usable default for any input).
-        let resolve = |style: FontStyle| -> Option<Typeface> {
-            preferred
-                .iter()
-                .map(String::as_str)
-                .chain(SYSTEM_MONO.iter().copied())
-                .find_map(|fam| font_mgr.match_family_style(fam, style))
-                .or_else(|| font_mgr.legacy_make_typeface(None, style))
-        };
+        let preferred = monospace_preferred(font_family);
 
         // Warn if none of the preferred fonts are installed — we still launch
         // with a system fallback rather than failing.
-        let preferred_available = preferred
-            .iter()
-            .any(|fam| font_mgr.match_family_style(fam, FontStyle::normal()).is_some());
-        if !preferred_available {
+        if !preferred_font_available(&font_mgr, &preferred) {
             warn!(
                 "no preferred monospace font found (JetBrains Mono / Fira Code / \
                  Cascadia Code) — falling back to a system monospace font; install \
@@ -145,12 +164,16 @@ impl SkiaCanvas {
             );
         }
 
-        let typeface = resolve(FontStyle::normal()).ok_or_else(|| {
-            io::Error::other("no monospace or system font available on this system")
-        })?;
-        let bold_typeface = resolve(FontStyle::bold()).unwrap_or_else(|| typeface.clone());
-        let italic_typeface = resolve(FontStyle::italic());
-        let italic_bold_typeface = resolve(FontStyle::bold_italic());
+        let typeface = resolve_monospace_typeface(&font_mgr, &preferred, FontStyle::normal())
+            .ok_or_else(|| {
+                io::Error::other("no monospace or system font available on this system")
+            })?;
+        let bold_typeface = resolve_monospace_typeface(&font_mgr, &preferred, FontStyle::bold())
+            .unwrap_or_else(|| typeface.clone());
+        let italic_typeface =
+            resolve_monospace_typeface(&font_mgr, &preferred, FontStyle::italic());
+        let italic_bold_typeface =
+            resolve_monospace_typeface(&font_mgr, &preferred, FontStyle::bold_italic());
 
         let icon_typeface = icon_font_family
             .and_then(|fam| font_mgr.match_family_style(fam, FontStyle::normal()))
@@ -1408,6 +1431,49 @@ mod tests {
         assert_eq!(inner.height, 0);
     }
 
+    // --- monospace font fallback ------------------------------------------
+
+    #[test]
+    fn preferred_list_uses_configured_font_first() {
+        let p = monospace_preferred(Some("My Special Mono"));
+        assert_eq!(p.first().map(String::as_str), Some("My Special Mono"));
+        // Built-in preferred fonts still follow the override.
+        assert!(p.iter().any(|f| f == "JetBrains Mono"));
+    }
+
+    #[test]
+    fn preferred_list_defaults_to_nerd_and_coding_fonts() {
+        let p = monospace_preferred(None);
+        assert_eq!(
+            p.first().map(String::as_str),
+            Some("JetBrainsMono Nerd Font Mono")
+        );
+        assert!(p.iter().any(|f| f == "Fira Code"));
+        assert!(p.iter().any(|f| f == "Cascadia Code"));
+    }
+
+    #[test]
+    fn bogus_preferred_font_is_not_reported_available() {
+        let font_mgr = FontMgr::default();
+        let bogus = vec!["NoSuchFont-zzz-000".to_string()];
+        assert!(!preferred_font_available(&font_mgr, &bogus));
+    }
+
+    #[test]
+    fn resolve_never_fails_over_a_missing_font() {
+        // The core guarantee: a missing "fancy" font must never block GUI
+        // launch. Even with NO preferred families, resolution falls through to
+        // a system monospace family or the platform default typeface and yields
+        // a usable font. (CI installs fontconfig/freetype; macOS ships Menlo.)
+        let font_mgr = FontMgr::default();
+        assert!(resolve_monospace_typeface(&font_mgr, &[], FontStyle::normal()).is_some());
+
+        // A bogus configured font must not change the outcome — the fallback
+        // chain still resolves a font.
+        let bogus = vec!["NoSuchFont-zzz-000".to_string()];
+        assert!(resolve_monospace_typeface(&font_mgr, &bogus, FontStyle::normal()).is_some());
+    }
+
     #[test]
     fn styled_cell_draw_basic() {
         // Just verify StyledCell/StyledLine types work with canvas API.
@@ -1460,13 +1526,14 @@ mod tests {
     /// the measured advance).
     #[test]
     fn bold_and_regular_advances_match() {
-        let fm = FontMgr::new();
-        let tf_regular = fm
-            .match_family_style("monospace", FontStyle::normal())
-            .expect("must have monospace regular");
-        let tf_bold = fm
-            .match_family_style("monospace", FontStyle::bold())
-            .expect("must have monospace bold");
+        let fm = FontMgr::default();
+        // Resolve through the same fallback the renderer uses so the test works
+        // cross-platform — the "monospace" generic family does not resolve on
+        // macOS (CoreText), only via fontconfig on Linux.
+        let tf_regular = resolve_monospace_typeface(&fm, &[], FontStyle::normal())
+            .expect("a monospace/system font must resolve");
+        let tf_bold = resolve_monospace_typeface(&fm, &[], FontStyle::bold())
+            .expect("a monospace/system font must resolve");
 
         let base_size = 14.0;
         for &scale in &[1.0_f32, 1.15, 1.3, 1.5] {
@@ -1498,10 +1565,9 @@ mod tests {
     fn cursor_pixel_x_matches_skia_string_advance() {
         use crate::layout::FrameLayout;
 
-        let fm = FontMgr::new();
-        let tf = fm
-            .match_family_style("monospace", FontStyle::normal())
-            .expect("must have a monospace font");
+        let fm = FontMgr::default();
+        let tf = resolve_monospace_typeface(&fm, &[], FontStyle::normal())
+            .expect("a monospace/system font must resolve");
 
         let base_size = 14.0;
         let base_font = Font::from_typeface(&tf, base_size);
@@ -1543,10 +1609,9 @@ mod tests {
     /// This test proves our old `char_width * scale * cell_width` model was wrong.
     #[test]
     fn font_advance_scaling_is_nonlinear() {
-        let fm = FontMgr::new();
-        let tf = fm
-            .match_family_style("monospace", FontStyle::normal())
-            .expect("must have a monospace font");
+        let fm = FontMgr::default();
+        let tf = resolve_monospace_typeface(&fm, &[], FontStyle::normal())
+            .expect("a monospace/system font must resolve");
 
         let base_size = 14.0;
         let base_font = Font::from_typeface(&tf, base_size);
