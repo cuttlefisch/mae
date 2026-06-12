@@ -95,9 +95,11 @@ jobs:
           cp assets/mae.desktop dist/MAE.AppDir/mae.desktop
           cp assets/mae.svg dist/MAE.AppDir/usr/share/icons/hicolor/scalable/apps/mae.svg
           cp assets/mae.svg dist/MAE.AppDir/mae.svg
-          # Bundle manual KB and modules inside AppImage
+          # Bundle manual KB, modules, and the patched JetBrains Mono Nerd Font
+          # (license-clean — see assets/fonts/LICENSES.md) inside AppImage
           cp -r assets/mae-manual.cozo dist/MAE.AppDir/usr/share/mae/mae-manual.cozo
           cp -r modules dist/MAE.AppDir/usr/share/mae/modules
+          cp -r assets/fonts dist/MAE.AppDir/usr/share/mae/fonts
           cp assets/sample-config.toml dist/MAE.AppDir/usr/share/mae/sample-config.toml
 
           # AppRun entry point — sets env vars so bundled assets are found
@@ -107,6 +109,7 @@ jobs:
           HERE="${SELF%/*}"
           export MAE_MANUAL_PATH="${HERE}/usr/share/mae/mae-manual.cozo"
           export MAE_MODULES_PATH="${HERE}/usr/share/mae/modules"
+          export MAE_FONT_DIR="${HERE}/usr/share/mae/fonts"
           exec "${HERE}/usr/bin/mae" --gui "$@"
           APPRUN
           chmod +x dist/MAE.AppDir/AppRun
@@ -155,9 +158,11 @@ jobs:
           cp target/release/mae "$APP/mae"
           chmod +x "$APP/mae"
 
-          # Bundle manual KB and modules inside .app
+          # Bundle manual KB, modules, and the patched JetBrains Mono Nerd Font
+          # (license-clean — see assets/fonts/LICENSES.md) inside .app
           cp -r assets/mae-manual.cozo "$RES/mae-manual.cozo"
           cp -r modules "$RES/modules"
+          cp -r assets/fonts "$RES/fonts"
           cp assets/sample-config.toml "$RES/sample-config.toml"
 
           # Create launcher script that passes --gui + sets asset paths
@@ -167,6 +172,7 @@ jobs:
           RES="$SELF/../Resources"
           export MAE_MANUAL_PATH="$RES/mae-manual.cozo"
           export MAE_MODULES_PATH="$RES/modules"
+          export MAE_FONT_DIR="$RES/fonts"
           exec "$SELF/mae" --gui "$@"
           LAUNCHER
           chmod +x "$APP/MAE"

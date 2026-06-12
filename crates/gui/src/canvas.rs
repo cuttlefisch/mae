@@ -222,7 +222,11 @@ impl SkiaCanvas {
             })
             .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", FontStyle::normal()))
             .or_else(|| font_mgr.match_family_style("Symbols Nerd Font Mono", FontStyle::normal()))
-            .or_else(|| font_mgr.match_family_style("Symbols Nerd Font", FontStyle::normal()));
+            .or_else(|| font_mgr.match_family_style("Symbols Nerd Font", FontStyle::normal()))
+            // Fall back to the bundled patched JetBrains Mono Nerd Font, which
+            // carries the icon glyphs — so icons render without a system Nerd
+            // Font install (e.g. inside MAE.app).
+            .or_else(|| bundled.and_then(|d| load_bundled_typeface(&font_mgr, d, FontStyle::normal())));
 
         let font_size = font_size_override.unwrap_or(14.0);
         let font = Font::from_typeface(typeface, font_size);
