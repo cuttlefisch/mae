@@ -133,10 +133,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build TUI binary + daemon + manual KB
+      - name: Build shim + daemon + manual KB
         run: |
-          cargo build --release --package mae --package mae-mcp
-          cp target/release/mae target/release/mae-tui
+          cargo build --release --package mae-mcp
           cargo build --release --bin build-manual-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
           # Strip sled lock files — quarantine on macOS prevents reopening
@@ -231,27 +230,33 @@ jobs:
           </plist>
           PLIST
 
-          # Also produce a TUI-only tarball (includes daemon, modules, manual KB)
-          mkdir -p dist/mae-tui-pkg
-          cp target/release/mae-tui dist/mae-tui-pkg/mae
-          cp target/release/mae-mcp-shim dist/mae-tui-pkg/mae-mcp-shim
-          cp daemon/target/release/mae-daemon dist/mae-tui-pkg/mae-daemon
-          chmod +x dist/mae-tui-pkg/mae dist/mae-tui-pkg/mae-mcp-shim dist/mae-tui-pkg/mae-daemon
-          cp -r assets/mae-manual.cozo dist/mae-tui-pkg/mae-manual.cozo
-          cp assets/mae-manual.cozo.sha256 dist/mae-tui-pkg/mae-manual.cozo.sha256
-          cp -r modules dist/mae-tui-pkg/modules
-          cp assets/sample-config.toml dist/mae-tui-pkg/sample-config.toml
-          cp assets/daemon-config.toml dist/mae-tui-pkg/daemon-config.toml
-          cp assets/install.sh dist/mae-tui-pkg/install.sh
-          cp assets/com.cuttlefisch.mae-daemon.plist dist/mae-tui-pkg/com.cuttlefisch.mae-daemon.plist
-          chmod +x dist/mae-tui-pkg/install.sh
-          tar czf dist/mae-macos-aarch64-tui.tar.gz -C dist/mae-tui-pkg .
+          # CLI tarball (consumed by the Homebrew formula): the GUI-capable
+          # `mae` binary. It launches the GUI on a desktop session and falls
+          # back to the terminal UI over SSH / on a tty / headless (or with
+          # `-nw`), so a single binary serves both. Plus services, modules,
+          # manual KB, and configs.
+          mkdir -p dist/mae-cli-pkg
+          cp target/release/mae dist/mae-cli-pkg/mae
+          cp target/release/mae-mcp-shim dist/mae-cli-pkg/mae-mcp-shim
+          cp daemon/target/release/mae-daemon dist/mae-cli-pkg/mae-daemon
+          chmod +x dist/mae-cli-pkg/mae dist/mae-cli-pkg/mae-mcp-shim dist/mae-cli-pkg/mae-daemon
+          cp -r assets/mae-manual.cozo dist/mae-cli-pkg/mae-manual.cozo
+          cp assets/mae-manual.cozo.sha256 dist/mae-cli-pkg/mae-manual.cozo.sha256
+          cp -r modules dist/mae-cli-pkg/modules
+          cp assets/sample-config.toml dist/mae-cli-pkg/sample-config.toml
+          cp assets/daemon-config.toml dist/mae-cli-pkg/daemon-config.toml
+          cp assets/install.sh dist/mae-cli-pkg/install.sh
+          cp assets/com.cuttlefisch.mae-daemon.plist dist/mae-cli-pkg/com.cuttlefisch.mae-daemon.plist
+          chmod +x dist/mae-cli-pkg/install.sh
+          tar czf dist/mae-macos-aarch64.tar.gz -C dist/mae-cli-pkg .
 
           # Build complete macOS GUI package — users unzip → ./install.sh
           mkdir -p dist/mae-gui-pkg
           cp -R dist/MAE.app dist/mae-gui-pkg/MAE.app
-          # All binaries (install.sh expects these by name)
-          cp target/release/mae-tui dist/mae-gui-pkg/mae
+          # All binaries (install.sh expects these by name). The GUI-capable
+          # `mae` is used for the CLI here too (auto-detects display; -nw forces
+          # terminal mode), matching the formula.
+          cp target/release/mae dist/mae-gui-pkg/mae
           cp target/release/mae-mcp-shim dist/mae-gui-pkg/mae-mcp-shim
           cp daemon/target/release/mae-daemon dist/mae-gui-pkg/mae-daemon
           chmod +x dist/mae-gui-pkg/mae dist/mae-gui-pkg/mae-mcp-shim dist/mae-gui-pkg/mae-daemon
@@ -272,7 +277,7 @@ jobs:
           name: mae-macos-aarch64
           path: |
             dist/MAE-macos-aarch64.zip
-            dist/mae-macos-aarch64-tui.tar.gz
+            dist/mae-macos-aarch64.tar.gz
 
   release:
     name: Publish release
@@ -303,8 +308,8 @@ jobs:
 
           | Platform | File | Contents |
           |----------|------|----------|
-          | **macOS GUI** | `MAE-macos-aarch64.zip` | `MAE.app` + `mae-daemon` + `mae-mcp-shim` + installer |
-          | **macOS TUI** | `mae-macos-aarch64-tui.tar.gz` | `mae` + all services + modules + manual KB + configs |
+          | **macOS app** | `MAE-macos-aarch64.zip` | `MAE.app` + `mae-daemon` + `mae-mcp-shim` + installer |
+          | **macOS CLI** | `mae-macos-aarch64.tar.gz` | GUI-capable `mae` (GUI by default; `-nw` for terminal) + all services + modules + manual KB + configs |
           | **Linux GUI** | `mae-linux-x86_64-gui.AppImage` | Self-contained AppImage (modules + manual KB bundled) |
           | **Linux** | `mae-linux-x86_64.tar.gz` | `mae` (GUI-enabled) + all services (static musl) + modules + manual KB + systemd units |
 
@@ -356,7 +361,7 @@ jobs:
             dist/mae-linux-x86_64.tar.gz
             dist/mae-linux-x86_64-gui.AppImage
             dist/MAE-macos-aarch64.zip
-            dist/mae-macos-aarch64-tui.tar.gz
+            dist/mae-macos-aarch64.tar.gz
           fail_on_unmatched_files: true
           token: ${{ secrets.RELEASE_PAT }}
 
@@ -375,10 +380,10 @@ jobs:
       - name: Compute checksums
         id: sha
         run: |
-          TUI_SHA=$(sha256sum dist/mae-macos-aarch64-tui.tar.gz | awk '{print $1}')
+          MAC_SHA=$(sha256sum dist/mae-macos-aarch64.tar.gz | awk '{print $1}')
           GUI_SHA=$(sha256sum dist/MAE-macos-aarch64.zip | awk '{print $1}')
           LINUX_SHA=$(sha256sum dist/mae-linux-x86_64.tar.gz | awk '{print $1}')
-          echo "tui=$TUI_SHA" >> "$GITHUB_OUTPUT"
+          echo "mac=$MAC_SHA" >> "$GITHUB_OUTPUT"
           echo "gui=$GUI_SHA" >> "$GITHUB_OUTPUT"
           echo "linux=$LINUX_SHA" >> "$GITHUB_OUTPUT"
 
@@ -393,15 +398,22 @@ jobs:
           # Update Formula
           sed -i "s/version \".*\"/version \"${VERSION}\"/" Formula/mae.rb
 
+          # Point the macOS formula at the GUI-capable CLI tarball (renamed from
+          # the old `-tui` artifact, which is no longer produced). The binary
+          # launches the GUI by default and falls back to the terminal UI over
+          # SSH/tty/headless. Idempotent once renamed. Kept in this step so the
+          # formula url stays in sync with the artifact name at release time.
+          sed -i "s#mae-macos-aarch64-tui\.tar\.gz#mae-macos-aarch64.tar.gz#" Formula/mae.rb
+
           # Update checksums in Formula (on_macos block first, then on_linux)
           # Use awk to replace sha256 lines in order
-          awk -v tui="${{ steps.sha.outputs.tui }}" \
+          awk -v mac="${{ steps.sha.outputs.mac }}" \
               -v linux="${{ steps.sha.outputs.linux }}" \
-              'BEGIN{mac=0; lin=0}
-               /on_macos/{mac=1}
-               /on_linux/{lin=1; mac=0}
-               /sha256/ && mac && !mac_done {sub(/sha256 ".*"/, "sha256 \""tui"\""); mac_done=1}
-               /sha256/ && lin && !lin_done {sub(/sha256 ".*"/, "sha256 \""linux"\""); lin_done=1}
+              'BEGIN{in_mac=0; in_lin=0}
+               /on_macos/{in_mac=1}
+               /on_linux/{in_lin=1; in_mac=0}
+               /sha256/ && in_mac && !mac_done {sub(/sha256 ".*"/, "sha256 \""mac"\""); mac_done=1}
+               /sha256/ && in_lin && !lin_done {sub(/sha256 ".*"/, "sha256 \""linux"\""); lin_done=1}
                {print}' Formula/mae.rb > Formula/mae.rb.tmp && mv Formula/mae.rb.tmp Formula/mae.rb
 
           # Update Cask
