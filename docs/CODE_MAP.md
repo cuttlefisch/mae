@@ -566,7 +566,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (511 built-in)
+## Commands (516 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -942,7 +942,12 @@ Source: `shared/sync/src/lib.rs`
 | `save-as` | Save buffer to new path (SPC f S) |
 | `edit-config` | Open init.scm config for editing (SPC f c) |
 | `edit-settings` | Open config.toml settings (SPC f P) |
-| `setup-wizard` | Show how to re-run the first-run setup wizard |
+| `setup-wizard` | Interactive configuration hub |
+| `setup-ai` | Configure AI provider, model, and API key |
+| `setup-collab` | Configure collaboration mode and authentication |
+| `setup-kb` | Set knowledge base notes directory |
+| `setup-daemon` | Toggle background daemon |
+| `setup-all` | Run all unconfigured setup sections |
 | `toggle-fps` | Toggle FPS overlay in status bar (SPC t F) |
 | `debug-mode` | Toggle debug mode: RSS/CPU/frame time in status bar (SPC t D) |
 | `reload-config` | Reload config.toml and re-evaluate init.scm |

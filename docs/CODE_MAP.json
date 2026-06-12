@@ -3116,7 +3116,27 @@
     },
     {
       "name": "setup-wizard",
-      "doc": "Show how to re-run the first-run setup wizard"
+      "doc": "Interactive configuration hub"
+    },
+    {
+      "name": "setup-ai",
+      "doc": "Configure AI provider, model, and API key"
+    },
+    {
+      "name": "setup-collab",
+      "doc": "Configure collaboration mode and authentication"
+    },
+    {
+      "name": "setup-kb",
+      "doc": "Set knowledge base notes directory"
+    },
+    {
+      "name": "setup-daemon",
+      "doc": "Toggle background daemon"
+    },
+    {
+      "name": "setup-all",
+      "doc": "Run all unconfigured setup sections"
     },
     {
       "name": "toggle-fps",

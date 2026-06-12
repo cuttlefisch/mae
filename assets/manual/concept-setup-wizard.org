@@ -1,0 +1,54 @@
+:PROPERTIES:
+:ID: concept:setup-wizard
+:KIND: concept
+:END:
+#+title: Setup Wizard
+#+filetags: :concept:configuration:
+
+* Setup Wizard
+
+MAE's interactive setup wizard configures AI, collaboration, KB notes, theme, and daemon.
+
+** Entry Points
+
+- *CLI:* =mae --init-config= (first-run) or =mae --init-config --force= (re-run)
+- *In-editor:* =:setup-wizard= opens the hub buffer; individual sections via =:setup-ai=, =:setup-collab=, =:setup-kb=, =:setup-daemon=
+- *All-at-once:* =:setup-all= chains through unconfigured sections
+- *AI-assisted:* ask the AI agent "help me configure collaboration" — it uses =audit_configuration= to detect gaps
+
+** Config Architecture
+
+=init.scm= is the primary config surface. The wizard writes =(set-option!)= calls between sentinel markers:
+
+#+begin_src scheme
+;; --- MAE managed options ---
+(set-option! "theme" "catppuccin-mocha")
+(set-option! "kb_notes_dir" "~/Documents/mae-notes/")
+(set-option! "collab_server_address" "127.0.0.1:9473")
+;; --- end managed options ---
+#+end_src
+
+=config.toml= is bootstrap-only (AI provider + theme, loaded before Scheme). =:set-save= persists to =init.scm=.
+
+** Secrets
+
+Never store API keys or PSKs in config files. Use =_command= options with a password manager:
+
+- *macOS:* =security find-generic-password -s mae-ai -w=
+- *Linux:* =pass show mae/api-key=
+
+** Sections
+
+| Section | Command | What it configures |
+|---------+-----------------+---------------------------------------------|
+| AI | =:setup-ai= | Provider, model, API key command (3-step chain) |
+| Theme | =:set-theme= | Color theme |
+| Collab | =:setup-collab= | Solo / loopback / network + PSK |
+| KB Notes | =:setup-kb= | Notes directory for daily notes and KB |
+| Daemon | =:setup-daemon= | Toggle background daemon |
+
+** See Also
+
+- [[id:tutorial:ai-setup][AI Setup Tutorial]]
+- [[id:tutorial:collab-setup][Collaboration Setup Tutorial]]
+- [[id:tutorial:getting-started][Getting Started]]

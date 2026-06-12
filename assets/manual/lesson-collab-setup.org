@@ -109,7 +109,7 @@ The AI agent has direct access to collaboration state via four tools:
 
 Ask the AI: "connect to the collab server and share this buffer" to have it set everything up for you.
 
-*** Systemd User Service
+*** Linux: Systemd User Service
 
 Install and enable the daemon as a systemd user service:
 #+begin_src bash
@@ -117,6 +117,28 @@ make install-service
 systemctl --user enable --now mae-daemon
 journalctl --user -u mae-daemon -f  # view logs
 #+end_src
+
+*** macOS: Homebrew Service
+
+If installed via Homebrew:
+#+begin_src bash
+brew services start mae
+brew services info mae  # check status
+#+end_src
+
+*** macOS: launchd (manual)
+
+#+begin_src bash
+cp assets/com.cuttlefisch.mae-daemon.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.cuttlefisch.mae-daemon.plist
+launchctl list com.cuttlefisch.mae-daemon  # check status
+#+end_src
+
+To stop: =launchctl unload ~/Library/LaunchAgents/com.cuttlefisch.mae-daemon.plist=
+
+*** macOS: Firewall
+
+If the macOS Application Firewall is enabled (System Settings > Network > Firewall), allow =mae-daemon= when prompted, or manually add it in Firewall Options.
 
 *** Client-Frame Workflow
 

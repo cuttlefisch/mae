@@ -943,10 +943,15 @@ impl CommandRegistry {
         reg.register_builtin("save-as", "Save buffer to new path (SPC f S)");
         reg.register_builtin("edit-config", "Open init.scm config for editing (SPC f c)");
         reg.register_builtin("edit-settings", "Open config.toml settings (SPC f P)");
+        reg.register_builtin("setup-wizard", "Interactive configuration hub");
+        reg.register_builtin("setup-ai", "Configure AI provider, model, and API key");
         reg.register_builtin(
-            "setup-wizard",
-            "Show how to re-run the first-run setup wizard",
+            "setup-collab",
+            "Configure collaboration mode and authentication",
         );
+        reg.register_builtin("setup-kb", "Set knowledge base notes directory");
+        reg.register_builtin("setup-daemon", "Toggle background daemon");
+        reg.register_builtin("setup-all", "Run all unconfigured setup sections");
         reg.register_builtin("toggle-fps", "Toggle FPS overlay in status bar (SPC t F)");
         reg.register_builtin(
             "debug-mode",

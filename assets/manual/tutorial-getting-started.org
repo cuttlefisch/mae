@@ -17,6 +17,9 @@ Choose your track:
 ** I'm new to modal editing
 -> [[id:tutorial:what-is-modal][Start here]] -- what modes are, basic movement, basic editing
 
+** First-time setup
+-> [[id:concept:setup-wizard][Setup Wizard]] -- configure AI, collab, KB notes, daemon in one flow
+
 ** Set up AI
 -> [[id:tutorial:ai-setup][AI Setup]] -- API key configuration, provider selection, agent vs chat
 

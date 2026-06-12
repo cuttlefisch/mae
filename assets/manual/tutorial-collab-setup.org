@@ -17,9 +17,30 @@ This guide walks you through multi-user collaborative editing -- sharing buffers
 
 *Checkpoint:* =:verify= shows version >= 0.11.1.
 
+** Quick Setup
+
+Use =:setup-collab= for interactive configuration, or =:setup-all= to configure everything.
+
 ** 2. Start the daemon
 
 On the *host machine*, run:
+
+*** Linux (systemd)
+#+begin_src bash
+systemctl --user enable --now mae-daemon
+#+end_src
+
+*** macOS (Homebrew)
+#+begin_src bash
+brew services start mae
+#+end_src
+
+*** macOS (launchctl)
+#+begin_src bash
+launchctl load ~/Library/LaunchAgents/com.cuttlefisch.mae-daemon.plist
+#+end_src
+
+*** Manual
 #+begin_src bash
 mae-daemon --bind 0.0.0.0:9473
 #+end_src
@@ -38,9 +59,20 @@ On *both machines*, add to =~/.config/mae/config.toml=:
 psk = "your-shared-secret-here"
 #+end_src
 
-Both machines MUST use the same PSK. For production use, prefer:
+Both machines MUST use the same PSK. For production use, prefer a secrets manager:
+
+*** Linux (pass)
 #+begin_src toml
 psk_command = "pass show mae/collab-psk"
+#+end_src
+
+*** macOS (Keychain)
+#+begin_src bash
+# Store the PSK:
+security add-generic-password -s mae-collab-psk -a mae -w "your-shared-secret"
+#+end_src
+#+begin_src toml
+psk_command = "security find-generic-password -s mae-collab-psk -a mae -w"
 #+end_src
 
 The server also needs the PSK in its config (=~/.config/mae/daemon.toml=):

@@ -38,6 +38,15 @@ api_key = "sk-ant-..."
 #+begin_src toml
 api_key_command = "pass show anthropic/api-key"
 #+end_src
+4. *macOS Keychain* (recommended on macOS):
+#+begin_src bash
+# Store the key:
+security add-generic-password -s mae-ai -a mae -w "sk-ant-..."
+#+end_src
+#+begin_src toml
+api_key_command = "security find-generic-password -s mae-ai -w"
+#+end_src
+5. Or configure via =:setup-ai= (interactive, writes to =init.scm=)
 
 *** OpenAI
 1. Get an API key: https://platform.openai.com/api-keys
