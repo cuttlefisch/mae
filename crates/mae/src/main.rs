@@ -581,55 +581,78 @@ fn main() -> io::Result<()> {
             .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
             .join("mae");
 
-        // Try to load manual KB from pre-built CozoDB file.
-        // If found, its nodes are loaded into the in-memory KB (replacing
-        // the seed-generated nodes which are identical but slower to produce).
-        if let Some(result) = manual_kb::locate_and_validate(&data_dir, None) {
-            match &result.validation {
-                manual_kb::ManualValidation::Valid => {
-                    debug!(path = %result.path.display(), "manual KB checksum valid");
-                }
-                manual_kb::ManualValidation::Historical { matched_version } => {
-                    warn!(
-                        path = %result.path.display(),
-                        matched = %matched_version,
-                        current = env!("CARGO_PKG_VERSION"),
-                        "manual KB is from an older mae version"
-                    );
-                }
-                manual_kb::ManualValidation::Unknown => {
-                    warn!(
-                        path = %result.path.display(),
-                        "manual KB checksum does not match any known release"
-                    );
-                }
-                manual_kb::ManualValidation::Custom => {
-                    info!(path = %result.path.display(), "using custom manual KB");
-                }
-            }
-
-            // Open the manual KB CozoDB store and retain the handle for runtime queries.
-            match mae_kb::CozoKbStore::open(&result.path) {
-                Ok(manual_store) => {
-                    // Load manual nodes into in-memory KB (fallback for tests/Phase 4).
-                    match manual_store.load_all() {
-                        Ok(nodes) => {
-                            let count = nodes.len();
-                            for node in nodes {
-                                editor.kb.primary.insert(node);
-                            }
-                            info!(count, path = %result.path.display(), "loaded manual KB nodes");
+        // Build an in-memory manual KB so the help system's cozo-backed
+        // `KbQueryLayer` can resolve built-in nodes (`index`, command/option
+        // help, etc.). It is sourced from the pre-built CozoDB file when found
+        // (read-only — we never open the on-disk asset read-write, since sled
+        // would write recovery snapshots and dirty a git-tracked asset or drift
+        // an install's checksum), otherwise from the code-generated seed nodes
+        // already in `editor.kb.primary`. Without a manual cozo, `SPC h h` fails
+        // with "no such KB node: index".
+        match mae_kb::CozoKbStore::open_mem() {
+            Ok(mem_store) => {
+                let mut sourced_from_prebuilt = false;
+                if let Some(result) = manual_kb::locate_and_validate(&data_dir, None) {
+                    match &result.validation {
+                        manual_kb::ManualValidation::Valid => {
+                            debug!(path = %result.path.display(), "manual KB checksum valid");
                         }
-                        Err(e) => {
-                            warn!(error = %e, "failed to load nodes from manual KB (in-memory fallback)");
+                        manual_kb::ManualValidation::Historical { matched_version } => {
+                            warn!(
+                                path = %result.path.display(),
+                                matched = %matched_version,
+                                current = env!("CARGO_PKG_VERSION"),
+                                "manual KB is from an older mae version"
+                            );
+                        }
+                        manual_kb::ManualValidation::Unknown => {
+                            warn!(
+                                path = %result.path.display(),
+                                "manual KB checksum does not match any known release"
+                            );
+                        }
+                        manual_kb::ManualValidation::Custom => {
+                            info!(path = %result.path.display(), "using custom manual KB");
                         }
                     }
-                    // Retain the CozoDB handle so the query layer can query it directly.
-                    editor.kb.manual_cozo = Some(std::sync::Arc::new(manual_store));
+                    match manual_kb::load_nodes_readonly(&result.path) {
+                        Ok(nodes) => {
+                            let count = nodes.len();
+                            for node in &nodes {
+                                editor.kb.primary.insert(node.clone());
+                                if let Err(e) = mem_store.insert_node(node) {
+                                    warn!(error = %e, id = %node.id, "failed to load manual node");
+                                }
+                            }
+                            info!(count, path = %result.path.display(), "loaded manual KB nodes (read-only)");
+                            sourced_from_prebuilt = true;
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "failed to read pre-built manual KB; falling back to seed");
+                        }
+                    }
                 }
-                Err(e) => {
-                    warn!(error = %e, path = %result.path.display(), "failed to open manual KB store");
+
+                if !sourced_from_prebuilt {
+                    // No usable pre-built KB: seed the in-memory manual cozo from
+                    // the code-generated nodes already present in `kb.primary`.
+                    match mem_store.persist_nodes(&editor.kb.primary) {
+                        Ok(count) => {
+                            info!(count, "built in-memory manual KB from seed (no pre-built KB found)");
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "failed to persist seed nodes to in-memory manual KB");
+                        }
+                    }
                 }
+
+                let _ = mem_store.seed_type_system();
+                let _ = mem_store.seed_typed_relationships();
+                let _ = mem_store.seed_views();
+                editor.kb.manual_cozo = Some(std::sync::Arc::new(mem_store));
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to open in-memory manual KB store");
             }
         }
 

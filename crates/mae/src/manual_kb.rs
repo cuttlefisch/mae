@@ -10,6 +10,7 @@
 //! 3. Well-known paths: `{exe_dir}/mae-manual.cozo`, `{data_dir}/mae-manual.cozo`
 //! 4. Fallback: build from seed at runtime (current behavior, slower)
 
+use mae_kb::KbStore;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
@@ -95,6 +96,39 @@ pub fn locate_and_validate(
     None
 }
 
+/// Recursively copy a directory tree (used to stage a throwaway manual-KB copy).
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Read all nodes from a pre-built manual KB **without mutating the source**.
+///
+/// sled (CozoDB's backend) always opens read-write and writes recovery
+/// snapshots on open, which would dirty a git-tracked asset or drift an
+/// installed file's checksum. We copy the store into a throwaway temp dir,
+/// read from the copy, then discard it — leaving the original untouched.
+pub fn load_nodes_readonly(path: &Path) -> Result<Vec<mae_kb::Node>, String> {
+    let tmp = std::env::temp_dir().join(format!("mae-manual-ro-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    copy_dir_all(path, &tmp).map_err(|e| format!("staging manual KB copy: {e}"))?;
+    let result = (|| {
+        let store = mae_kb::CozoKbStore::open(&tmp).map_err(|e| e.to_string())?;
+        store.load_all().map_err(|e| e.to_string())
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
 /// Well-known paths where the manual KB might be found.
 fn well_known_paths(data_dir: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
@@ -103,6 +137,12 @@ fn well_known_paths(data_dir: &Path) -> Vec<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             paths.push(exe_dir.join("mae-manual.cozo"));
+        }
+        // Source/dev builds: the prebuilt KB lives at `<workspace>/assets/mae-manual.cozo`.
+        // Walk up from the binary (e.g. `target/release/mae`) and probe each ancestor's
+        // `assets/` dir so `cargo build` / `make build` runs find it without `make install`.
+        for ancestor in exe.ancestors() {
+            paths.push(ancestor.join("assets/mae-manual.cozo"));
         }
     }
 
