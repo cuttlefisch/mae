@@ -192,8 +192,8 @@ impl SkiaCanvas {
 
         // Warn only if we'll truly fall back to a system font — i.e. neither a
         // preferred (installed) font nor the bundled font is available.
-        let bundled_ok =
-            bundled.is_some_and(|d| load_bundled_typeface(&font_mgr, d, FontStyle::normal()).is_some());
+        let bundled_ok = bundled
+            .is_some_and(|d| load_bundled_typeface(&font_mgr, d, FontStyle::normal()).is_some());
         if !preferred_font_available(&font_mgr, &preferred) && !bundled_ok {
             warn!(
                 "no preferred monospace font found (JetBrains Mono / Fira Code / \
@@ -226,7 +226,9 @@ impl SkiaCanvas {
             // Fall back to the bundled patched JetBrains Mono Nerd Font, which
             // carries the icon glyphs — so icons render without a system Nerd
             // Font install (e.g. inside MAE.app).
-            .or_else(|| bundled.and_then(|d| load_bundled_typeface(&font_mgr, d, FontStyle::normal())));
+            .or_else(|| {
+                bundled.and_then(|d| load_bundled_typeface(&font_mgr, d, FontStyle::normal()))
+            });
 
         let font_size = font_size_override.unwrap_or(14.0);
         let font = Font::from_typeface(typeface, font_size);
@@ -1524,9 +1526,18 @@ mod tests {
 
     #[test]
     fn bundled_font_filename_matches_style() {
-        assert_eq!(bundled_font_file(FontStyle::normal()), "JetBrainsMono-Regular.ttf");
-        assert_eq!(bundled_font_file(FontStyle::bold()), "JetBrainsMono-Bold.ttf");
-        assert_eq!(bundled_font_file(FontStyle::italic()), "JetBrainsMono-Italic.ttf");
+        assert_eq!(
+            bundled_font_file(FontStyle::normal()),
+            "JetBrainsMono-Regular.ttf"
+        );
+        assert_eq!(
+            bundled_font_file(FontStyle::bold()),
+            "JetBrainsMono-Bold.ttf"
+        );
+        assert_eq!(
+            bundled_font_file(FontStyle::italic()),
+            "JetBrainsMono-Italic.ttf"
+        );
         assert_eq!(
             bundled_font_file(FontStyle::bold_italic()),
             "JetBrainsMono-BoldItalic.ttf"

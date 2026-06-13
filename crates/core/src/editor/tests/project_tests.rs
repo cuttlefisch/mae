@@ -163,12 +163,7 @@ fn open_file_from_different_project_does_not_switch_global() {
     // symlink to `/private/var`, so comparing the app's raw path against a
     // canonicalized expected path diverges. Compare resolved real paths.
     assert_eq!(
-        buf_b
-            .project_root
-            .as_ref()
-            .unwrap()
-            .canonicalize()
-            .unwrap(),
+        buf_b.project_root.as_ref().unwrap().canonicalize().unwrap(),
         dir_b.path().canonicalize().unwrap()
     );
 }
