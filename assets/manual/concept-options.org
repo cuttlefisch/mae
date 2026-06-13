@@ -18,6 +18,8 @@ MAE's editor options can be configured from Scheme using `(set-option! KEY VALUE
 | `theme` | theme name | Set the color theme |
 | `show-fps` | `true`/`false` | Show FPS overlay in status bar |
 | `font-size` | float (6-72) | GUI font size in points |
+| `font-family` | string | GUI monospace font family (empty = built-in search order). See [[concept:fonts]] |
+| `icon-font-family` | string | GUI icon/symbol (Nerd Font) family (empty = search order). See [[concept:fonts]] |
 
 ** Usage from Scheme
 ```scheme
@@ -36,4 +38,7 @@ Options can also be toggled interactively via `SPC t`:
 - `SPC t w` — [[cmd:toggle-word-wrap]]
 - `SPC t t` — [[cmd:cycle-theme]]
 
-See also: [[concept:hooks]], [[concept:command]], [[index]]
+`init.scm` is the primary config surface; `config.toml` is legacy bootstrap
+(AI provider + theme for pre-Scheme loading). `:set-save` persists to `init.scm`.
+
+See also: [[concept:fonts]], [[concept:gui]], [[concept:hooks]], [[concept:command]], [[index]]

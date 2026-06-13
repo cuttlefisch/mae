@@ -8,20 +8,28 @@
 MAE has a **dual rendering backend** — terminal (ratatui/crossterm) and GUI (winit + Skia 2D). Both backends share the same editor core, commands, and AI integration.
 
 ** Launching
-- `mae --gui file.rs` — hardware-accelerated GUI window.
-- `mae file.rs` — terminal mode (default).
+GUI is the default when a graphical display is available (like Emacs):
+- `mae file.rs` — opens the GUI on a desktop session; transparently falls back
+  to the terminal UI when there is no graphics frontend (over SSH, on a bare
+  tty, or on a headless server).
+- `mae --gui file.rs` — force the GUI backend (overrides display detection;
+  this is what the MAE.app launcher uses).
+- `mae --no-gui file.rs` (also `--tui` / `-nw`) — force terminal mode.
+- A TUI-only build always runs in the terminal.
 - Desktop launcher: installed via `make install` to `~/.local/share/applications/mae.desktop`.
 
 ** GUI features
 - **Mouse support:** click to place cursor, wheel scroll.
-- **Font configuration:** `config.toml` `[editor] font_size = 14.0` or `:set font_size 16`.
+- **Font & icon configuration:** `font_family`, `font_size`, `icon_font_family`.
+  A patched JetBrains Mono Nerd Font is bundled, so text *and* icons render out
+  of the box, and a missing font never blocks launch. See [[concept:fonts]].
 - **Dirty-flag rendering:** GPU idle when nothing changes (~0% CPU).
 - **Shell colors:** terminal emulator respects editor theme.
 - **Shell scrollback:** Shift-PageUp/PageDown.
 - **FPS overlay:** `SPC t F` or `:set show_fps true`.
 
 ** Architecture
-The `Renderer` trait (in `mae-renderer`) defines the backend-agnostic HAL. The `mae-gui` crate implements it using winit for windowing and skia-safe for 2D rendering. The terminal backend uses ratatui/crossterm. The binary selects the backend at startup based on `--gui`.
+The `Renderer` trait (in `mae-renderer`) defines the backend-agnostic HAL. The `mae-gui` crate implements it using winit for windowing and skia-safe for 2D rendering. The terminal backend uses ratatui/crossterm. The binary selects the backend at startup: the GUI is used when compiled in and a display is available (unless `--no-gui`), or when `--gui` is passed explicitly.
 
 ** Event loop
 - **Terminal:** `crossterm::EventStream` + tokio `select!`.

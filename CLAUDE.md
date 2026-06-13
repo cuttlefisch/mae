@@ -116,7 +116,7 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
    - **Bug risk**: What existing behavior could break? What edge cases does this touch?
    - **Performance impact**: Does this add work to a hot path? Is it O(1), O(n), or O(n²)?
    - **Type safety at boundaries**: When extracting shared code, verify that type conversions (e.g., `usize` ↔ `u16`) don't silently truncate.
-   - **Regression guard**: If the change touches rendering or input handling, verify both TUI and GUI backends. If it touches options, verify the Scheme API + config.toml round-trip + `:set-save` persistence all work.
+   - **Regression guard**: If the change touches rendering or input handling, verify both TUI and GUI backends. If it touches options, verify the Scheme API + `:set` + `:set-save` persistence (which writes `init.scm` — the primary config surface; `config.toml` is legacy bootstrap for AI provider + theme only) all work.
 
 10. **Multi-client safety by design.** Any state mutation must be safe for concurrent observation. The MCP server may have N connected clients. Editor state changes emit events to a broadcast channel. Clients that can't keep up are dropped (bounded queues, write timeouts). File writes use content-hash verification + advisory locks. No operation assumes single-client.
 

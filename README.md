@@ -130,9 +130,10 @@ git clone git@github.com:cuttlefisch/mae.git && cd mae
 make doctor                     # check prerequisites
 make build                      # GUI build (default)
 make install                    # install to ~/.local/bin + desktop launcher
-mae --init-config               # generate config.toml + init.scm + wizard
-mae --gui file.rs               # launch GUI
-mae file.rs                     # terminal mode
+mae --init-config               # generate init.scm (+ config.toml bootstrap) + wizard
+mae file.rs                     # GUI by default; falls back to terminal over SSH/tty/headless
+mae --no-gui file.rs            # force terminal mode (also --tui / -nw)
+mae --gui file.rs               # force the GUI backend
 make build-tui                  # terminal-only (no clang/skia dependency)
 ```
 
