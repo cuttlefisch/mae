@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use mae_core::Theme;
+use skia_safe::font_style::{Slant, Weight};
 use skia_safe::{surfaces, Color4f, Font, FontMgr, FontStyle, Paint, Surface, Typeface};
+use tracing::warn;
 use winit::window::Window;
 
 use crate::text::StyledLine;
@@ -65,6 +67,100 @@ pub struct SkiaCanvas {
     image_cache: HashMap<PathBuf, Option<CachedImage>>,
 }
 
+/// System monospace families to fall back to when no preferred font is found.
+/// At least one ships with every supported OS (macOS: Menlo/Monaco; Linux:
+/// DejaVu/Liberation/Noto; Windows: Consolas), so the GUI always has a usable
+/// monospace font and never refuses to launch over a missing font.
+const SYSTEM_MONO: &[&str] = &[
+    "Menlo",
+    "SF Mono",
+    "Monaco",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Noto Sans Mono",
+    "Consolas",
+    "Courier New",
+    "monospace",
+];
+
+/// Build the ordered list of *preferred* monospace families: the configured
+/// override first (if any), then Nerd Font variants (for icon glyphs), then
+/// popular coding fonts. System fallbacks (`SYSTEM_MONO`) are appended at
+/// resolution time, not here.
+fn monospace_preferred(font_family: Option<&str>) -> Vec<String> {
+    font_family
+        .into_iter()
+        .map(|s| s.to_string())
+        .chain(
+            [
+                "JetBrainsMono Nerd Font Mono",
+                "JetBrainsMono Nerd Font",
+                "JetBrains Mono",
+                "Fira Code",
+                "Cascadia Code",
+            ]
+            .into_iter()
+            .map(|s| s.to_string()),
+        )
+        .collect()
+}
+
+/// True if any of the `preferred` families is installed. Used to decide
+/// whether to warn about falling back to a system font.
+fn preferred_font_available(font_mgr: &FontMgr, preferred: &[String]) -> bool {
+    preferred.iter().any(|fam| {
+        font_mgr
+            .match_family_style(fam, FontStyle::normal())
+            .is_some()
+    })
+}
+
+/// The bundled JetBrains Mono static TTF filename for a given style. The
+/// `MAE.app` bundle (and any install that sets `MAE_FONT_DIR`) ships these so
+/// the intended font renders without a system install.
+fn bundled_font_file(style: FontStyle) -> &'static str {
+    let bold = style.weight() >= Weight::BOLD;
+    let italic = style.slant() != Slant::Upright;
+    match (bold, italic) {
+        (true, true) => "JetBrainsMono-BoldItalic.ttf",
+        (true, false) => "JetBrainsMono-Bold.ttf",
+        (false, true) => "JetBrainsMono-Italic.ttf",
+        (false, false) => "JetBrainsMono-Regular.ttf",
+    }
+}
+
+/// Load the bundled JetBrains Mono typeface for `style` from `dir`, if present.
+fn load_bundled_typeface(font_mgr: &FontMgr, dir: &Path, style: FontStyle) -> Option<Typeface> {
+    let bytes = std::fs::read(dir.join(bundled_font_file(style))).ok()?;
+    font_mgr.new_from_data(&bytes, None)
+}
+
+/// Resolve a typeface for `style`, never failing on a present font manager:
+/// preferred families (installed) → bundled JetBrains Mono (if `bundled_dir` is
+/// set, e.g. inside `MAE.app`) → system monospace families → the platform's
+/// default typeface (`legacy_make_typeface` returns a usable default for any
+/// input). The bundled font sits *after* the preferred families so a
+/// user-installed Nerd Font (with icon glyphs) still wins.
+fn resolve_monospace_typeface(
+    font_mgr: &FontMgr,
+    preferred: &[String],
+    bundled_dir: Option<&Path>,
+    style: FontStyle,
+) -> Option<Typeface> {
+    preferred
+        .iter()
+        .map(String::as_str)
+        .find_map(|fam| font_mgr.match_family_style(fam, style))
+        .or_else(|| bundled_dir.and_then(|dir| load_bundled_typeface(font_mgr, dir, style)))
+        .or_else(|| {
+            SYSTEM_MONO
+                .iter()
+                .copied()
+                .find_map(|fam| font_mgr.match_family_style(fam, style))
+        })
+        .or_else(|| font_mgr.legacy_make_typeface(None, style))
+}
+
 impl SkiaCanvas {
     /// Create a new Skia raster surface with monospace font metrics.
     ///
@@ -81,60 +177,43 @@ impl SkiaCanvas {
         let surface = surfaces::raster_n32_premul((width as i32, height as i32))
             .ok_or_else(|| io::Error::other("failed to create Skia surface"))?;
 
-        // Load a monospace font. If a family is configured, try it first.
-        // The default chain prefers Nerd Font variants (icon/glyph support).
+        // Load a monospace font. Try preferred families first (configured
+        // override, then Nerd Font variants for icon glyphs, then popular
+        // coding fonts), then a chain of system monospace families, then the
+        // platform's default typeface. A missing "fancy" font must NEVER block
+        // GUI launch — we fall back to a system monospace font and warn.
         let font_mgr = FontMgr::default();
+        let preferred = monospace_preferred(font_family);
+        // Fonts bundled alongside the binary (e.g. inside `MAE.app`), pointed to
+        // by the launcher via `MAE_FONT_DIR`. Lets the intended font render
+        // without a system install, while a user-installed Nerd Font still wins.
+        let bundled_dir = std::env::var_os("MAE_FONT_DIR").map(PathBuf::from);
+        let bundled = bundled_dir.as_deref();
 
-        let typeface = font_family
-            .and_then(|fam| font_mgr.match_family_style(fam, FontStyle::normal()))
-            .or_else(|| {
-                font_mgr.match_family_style("JetBrainsMono Nerd Font Mono", FontStyle::normal())
-            })
-            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", FontStyle::normal()))
-            .or_else(|| font_mgr.match_family_style("JetBrains Mono", FontStyle::normal()))
-            .or_else(|| font_mgr.match_family_style("Fira Code", FontStyle::normal()))
-            .or_else(|| font_mgr.match_family_style("Cascadia Code", FontStyle::normal()))
-            .or_else(|| font_mgr.match_family_style("monospace", FontStyle::normal()))
-            .ok_or_else(|| {
-                io::Error::other(
-                    "no monospace font found on the system — install JetBrains Mono, \
-                     Fira Code, or Cascadia Code",
-                )
-            })?;
+        // Warn only if we'll truly fall back to a system font — i.e. neither a
+        // preferred (installed) font nor the bundled font is available.
+        let bundled_ok = bundled
+            .is_some_and(|d| load_bundled_typeface(&font_mgr, d, FontStyle::normal()).is_some());
+        if !preferred_font_available(&font_mgr, &preferred) && !bundled_ok {
+            warn!(
+                "no preferred monospace font found (JetBrains Mono / Fira Code / \
+                 Cascadia Code) — falling back to a system monospace font; install \
+                 one of these or set the `font_family` option for best results"
+            );
+        }
 
-        let bold_typeface = font_family
-            .and_then(|fam| font_mgr.match_family_style(fam, FontStyle::bold()))
-            .or_else(|| {
-                font_mgr.match_family_style("JetBrainsMono Nerd Font Mono", FontStyle::bold())
-            })
-            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", FontStyle::bold()))
-            .or_else(|| font_mgr.match_family_style("JetBrains Mono", FontStyle::bold()))
-            .or_else(|| font_mgr.match_family_style("Fira Code", FontStyle::bold()))
-            .or_else(|| font_mgr.match_family_style("Cascadia Code", FontStyle::bold()))
-            .or_else(|| font_mgr.match_family_style("monospace", FontStyle::bold()))
-            .unwrap_or_else(|| typeface.clone());
-
-        let italic_style = FontStyle::italic();
-        let italic_typeface = font_family
-            .and_then(|fam| font_mgr.match_family_style(fam, italic_style))
-            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font Mono", italic_style))
-            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", italic_style))
-            .or_else(|| font_mgr.match_family_style("JetBrains Mono", italic_style))
-            .or_else(|| font_mgr.match_family_style("Fira Code", italic_style))
-            .or_else(|| font_mgr.match_family_style("Cascadia Code", italic_style))
-            .or_else(|| font_mgr.match_family_style("monospace", italic_style));
-
-        let bold_italic_style = FontStyle::bold_italic();
-        let italic_bold_typeface = font_family
-            .and_then(|fam| font_mgr.match_family_style(fam, bold_italic_style))
-            .or_else(|| {
-                font_mgr.match_family_style("JetBrainsMono Nerd Font Mono", bold_italic_style)
-            })
-            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", bold_italic_style))
-            .or_else(|| font_mgr.match_family_style("JetBrains Mono", bold_italic_style))
-            .or_else(|| font_mgr.match_family_style("Fira Code", bold_italic_style))
-            .or_else(|| font_mgr.match_family_style("Cascadia Code", bold_italic_style))
-            .or_else(|| font_mgr.match_family_style("monospace", bold_italic_style));
+        let typeface =
+            resolve_monospace_typeface(&font_mgr, &preferred, bundled, FontStyle::normal())
+                .ok_or_else(|| {
+                    io::Error::other("no monospace or system font available on this system")
+                })?;
+        let bold_typeface =
+            resolve_monospace_typeface(&font_mgr, &preferred, bundled, FontStyle::bold())
+                .unwrap_or_else(|| typeface.clone());
+        let italic_typeface =
+            resolve_monospace_typeface(&font_mgr, &preferred, bundled, FontStyle::italic());
+        let italic_bold_typeface =
+            resolve_monospace_typeface(&font_mgr, &preferred, bundled, FontStyle::bold_italic());
 
         let icon_typeface = icon_font_family
             .and_then(|fam| font_mgr.match_family_style(fam, FontStyle::normal()))
@@ -143,7 +222,13 @@ impl SkiaCanvas {
             })
             .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", FontStyle::normal()))
             .or_else(|| font_mgr.match_family_style("Symbols Nerd Font Mono", FontStyle::normal()))
-            .or_else(|| font_mgr.match_family_style("Symbols Nerd Font", FontStyle::normal()));
+            .or_else(|| font_mgr.match_family_style("Symbols Nerd Font", FontStyle::normal()))
+            // Fall back to the bundled patched JetBrains Mono Nerd Font, which
+            // carries the icon glyphs — so icons render without a system Nerd
+            // Font install (e.g. inside MAE.app).
+            .or_else(|| {
+                bundled.and_then(|d| load_bundled_typeface(&font_mgr, d, FontStyle::normal()))
+            });
 
         let font_size = font_size_override.unwrap_or(14.0);
         let font = Font::from_typeface(typeface, font_size);
@@ -1392,6 +1477,73 @@ mod tests {
         assert_eq!(inner.height, 0);
     }
 
+    // --- monospace font fallback ------------------------------------------
+
+    #[test]
+    fn preferred_list_uses_configured_font_first() {
+        let p = monospace_preferred(Some("My Special Mono"));
+        assert_eq!(p.first().map(String::as_str), Some("My Special Mono"));
+        // Built-in preferred fonts still follow the override.
+        assert!(p.iter().any(|f| f == "JetBrains Mono"));
+    }
+
+    #[test]
+    fn preferred_list_defaults_to_nerd_and_coding_fonts() {
+        let p = monospace_preferred(None);
+        assert_eq!(
+            p.first().map(String::as_str),
+            Some("JetBrainsMono Nerd Font Mono")
+        );
+        assert!(p.iter().any(|f| f == "Fira Code"));
+        assert!(p.iter().any(|f| f == "Cascadia Code"));
+    }
+
+    #[test]
+    fn bogus_preferred_font_is_not_reported_available() {
+        let font_mgr = FontMgr::default();
+        let bogus = vec!["NoSuchFont-zzz-000".to_string()];
+        assert!(!preferred_font_available(&font_mgr, &bogus));
+    }
+
+    #[test]
+    fn resolve_never_fails_over_a_missing_font() {
+        // The core guarantee: a missing "fancy" font must never block GUI
+        // launch. Even with NO preferred families and no bundled dir, resolution
+        // falls through to a system monospace family or the platform default
+        // typeface. (CI installs fontconfig/freetype; macOS ships Menlo.)
+        let font_mgr = FontMgr::default();
+        assert!(resolve_monospace_typeface(&font_mgr, &[], None, FontStyle::normal()).is_some());
+
+        // A bogus configured font + nonexistent bundled dir must not change the
+        // outcome — the fallback chain still resolves a font.
+        let bogus = vec!["NoSuchFont-zzz-000".to_string()];
+        let missing = std::path::Path::new("/nonexistent/mae-fonts");
+        assert!(
+            resolve_monospace_typeface(&font_mgr, &bogus, Some(missing), FontStyle::normal())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn bundled_font_filename_matches_style() {
+        assert_eq!(
+            bundled_font_file(FontStyle::normal()),
+            "JetBrainsMono-Regular.ttf"
+        );
+        assert_eq!(
+            bundled_font_file(FontStyle::bold()),
+            "JetBrainsMono-Bold.ttf"
+        );
+        assert_eq!(
+            bundled_font_file(FontStyle::italic()),
+            "JetBrainsMono-Italic.ttf"
+        );
+        assert_eq!(
+            bundled_font_file(FontStyle::bold_italic()),
+            "JetBrainsMono-BoldItalic.ttf"
+        );
+    }
+
     #[test]
     fn styled_cell_draw_basic() {
         // Just verify StyledCell/StyledLine types work with canvas API.
@@ -1444,13 +1596,14 @@ mod tests {
     /// the measured advance).
     #[test]
     fn bold_and_regular_advances_match() {
-        let fm = FontMgr::new();
-        let tf_regular = fm
-            .match_family_style("monospace", FontStyle::normal())
-            .expect("must have monospace regular");
-        let tf_bold = fm
-            .match_family_style("monospace", FontStyle::bold())
-            .expect("must have monospace bold");
+        let fm = FontMgr::default();
+        // Resolve through the same fallback the renderer uses so the test works
+        // cross-platform — the "monospace" generic family does not resolve on
+        // macOS (CoreText), only via fontconfig on Linux.
+        let tf_regular = resolve_monospace_typeface(&fm, &[], None, FontStyle::normal())
+            .expect("a monospace/system font must resolve");
+        let tf_bold = resolve_monospace_typeface(&fm, &[], None, FontStyle::bold())
+            .expect("a monospace/system font must resolve");
 
         let base_size = 14.0;
         for &scale in &[1.0_f32, 1.15, 1.3, 1.5] {
@@ -1482,10 +1635,9 @@ mod tests {
     fn cursor_pixel_x_matches_skia_string_advance() {
         use crate::layout::FrameLayout;
 
-        let fm = FontMgr::new();
-        let tf = fm
-            .match_family_style("monospace", FontStyle::normal())
-            .expect("must have a monospace font");
+        let fm = FontMgr::default();
+        let tf = resolve_monospace_typeface(&fm, &[], None, FontStyle::normal())
+            .expect("a monospace/system font must resolve");
 
         let base_size = 14.0;
         let base_font = Font::from_typeface(&tf, base_size);
@@ -1527,10 +1679,9 @@ mod tests {
     /// This test proves our old `char_width * scale * cell_width` model was wrong.
     #[test]
     fn font_advance_scaling_is_nonlinear() {
-        let fm = FontMgr::new();
-        let tf = fm
-            .match_family_style("monospace", FontStyle::normal())
-            .expect("must have a monospace font");
+        let fm = FontMgr::default();
+        let tf = resolve_monospace_typeface(&fm, &[], None, FontStyle::normal())
+            .expect("a monospace/system font must resolve");
 
         let base_size = 14.0;
         let base_font = Font::from_typeface(&tf, base_size);

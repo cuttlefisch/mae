@@ -541,9 +541,13 @@ See [[teaches:concept:scheme-api#hooks]] for hooks.
 /// scheme_api) plus focused org fixture files that exercise all extended syntax
 /// features (typed links, fragments, verbatim blocks, multi-node files).
 fn make_seeded_store() -> (tempfile::TempDir, CozoKbStore) {
+    // In-memory CozoDB: these tests validate graph/Datalog logic, not on-disk
+    // persistence. The sled (on-disk) backend's per-write fsync is pathologically
+    // slow on macOS/APFS (~39s per test, 18min total), whereas the mem engine
+    // runs the same queries in milliseconds. The temp dir is still used for the
+    // org fixture files imported below.
     let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("validation.cozo");
-    let store = CozoKbStore::open(&path).unwrap();
+    let store = CozoKbStore::open_mem().unwrap();
 
     // Build the in-memory KB with all seed nodes (commands, options, etc.)
     let registry = CommandRegistry::with_builtins();

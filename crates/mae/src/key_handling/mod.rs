@@ -323,17 +323,22 @@ pub fn handle_key(
     // the actual evaluation needs the SchemeRuntime which lives in
     // the binary, not in mae-core.
     if !editor.pending_scheme_eval.is_empty() {
-        let exprs: Vec<String> = editor.pending_scheme_eval.drain(..).collect();
-        for code in &exprs {
-            let output = scheme.eval_for_repl(code, editor);
-            // Short result → status bar; always append to *Scheme* buffer.
-            let lines: Vec<&str> = output.lines().collect();
-            if let Some(result_line) = lines.iter().find(|l| l.starts_with("; =>")) {
-                editor.set_status(result_line.trim_start_matches("; => "));
-            } else if let Some(err_line) = lines.iter().find(|l| l.starts_with("; error")) {
-                editor.set_status(*err_line);
+        // Unified Scheme-eval path (core rule: the human, MCP clients, and the
+        // AI peer all call the SAME primitives). Interactive eval (SPC e b /
+        // eval-line / eval-region) routes through the exact same drain the
+        // MCP/AI peer uses, so yield/hook handling is identical. The previous
+        // interactive-only `eval_for_repl` used the non-yielding `vm.eval`,
+        // which could not drain hooks fired mid-eval (e.g. `option-change` from
+        // `set-option!`) and failed with "expected procedure, got void".
+        if let Some(output) = crate::ai_event_handler::drain_pending_scheme_evals(editor, scheme) {
+            // Surface the last result/error to the status bar for interactive use.
+            if let Some(line) = output
+                .lines()
+                .rev()
+                .find(|l| l.starts_with("; =>") || l.starts_with("; error"))
+            {
+                editor.set_status(line.trim_start_matches("; => "));
             }
-            editor.append_to_scheme_repl(&output);
         }
     }
 
@@ -366,8 +371,16 @@ pub(crate) fn drain_hook_evals(editor: &mut Editor, scheme: &mut SchemeRuntime) 
         match scheme.call_function(&fn_name) {
             Ok(_) => scheme.apply_to_editor(editor),
             Err(e) => {
-                warn!(hook = %hook_name, fn_name = %fn_name, error = %e, "hook error");
-                editor.set_status(format!("Hook error ({}): {}", hook_name, e));
+                // A hook target may name an editor command rather than a Scheme
+                // function — either a registered command or a builtin dispatch
+                // arm such as `format-before-save`. Fall back to command
+                // dispatch; only surface the Scheme error if that doesn't handle
+                // it either. This is what lets `(add-hook! "before-save"
+                // "format-before-save")` work.
+                if !editor.dispatch_with_multicursor(&fn_name) {
+                    warn!(hook = %hook_name, fn_name = %fn_name, error = %e, "hook error");
+                    editor.set_status(format!("Hook error ({}): {}", hook_name, e));
+                }
             }
         }
     }

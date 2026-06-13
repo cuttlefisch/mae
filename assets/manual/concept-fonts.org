@@ -1,0 +1,88 @@
+:PROPERTIES:
+:ID: concept:fonts
+:KIND: concept
+:END:
+#+title: Font & Icon Configuration
+#+filetags: :gui:fonts:icons:config:
+
+How the GUI backend chooses fonts, how to configure them, and how icon
+(Nerd Font) glyphs work. Terminal mode uses the terminal emulator's font, so
+these settings apply to the GUI backend only.
+
+** Options
+These are regular options. The primary config surface is **`init.scm`** via
+`(set-option! ...)`; you can also set them at runtime with `:set` and persist
+with `:set-save` (which writes to `init.scm`). See [[concept:options]].
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `font_family` | (empty) | Primary monospace family. Empty = use the built-in search order below. |
+| `font_size` | `14.0` | Font size in points (6.0–72.0). Takes effect immediately. |
+| `icon_font_family` | (empty) | Family used for icon/symbol (Nerd Font) glyphs. Empty = use the search order. |
+
+In `init.scm`:
+#+begin_src scheme
+(set-option! "font_family" "Fira Code")
+(set-option! "font_size" "15")
+(set-option! "icon_font_family" "Symbols Nerd Font")
+#+end_src
+
+At runtime: `:set font_size 16` (then `:set-save` to persist). (`config.toml`
+`[editor] font_size = …` is still honored as legacy bootstrap, but `init.scm`
+is the canonical surface.)
+
+** Resolution order (the GUI never fails to launch over a missing font)
+For each style (regular/bold/italic/bold-italic) MAE resolves a typeface in
+this order, stopping at the first match:
+
+1. `font_family` (if set and installed)
+2. Built-in preferred families: JetBrainsMono Nerd Font (Mono), JetBrains Mono,
+   Fira Code, Cascadia Code
+3. The **bundled** JetBrains Mono Nerd Font (shipped inside MAE.app / the Linux
+   AppImage; see Bundled font below) — so the intended font renders even with no
+   system install
+4. A system monospace family (Menlo / SF Mono / Monaco on macOS;
+   DejaVu / Liberation / Noto on Linux; Consolas on Windows)
+5. The platform's default typeface
+
+A missing "fancy" font is therefore never fatal: MAE falls back to a system
+monospace font (logging a warning) rather than refusing to start.
+
+** Icons (Nerd Font glyphs)
+Icon glyphs (file-tree icons, statusline symbols, etc.) come from a Nerd Font.
+The icon typeface is resolved as: `icon_font_family` → a system Nerd Font
+("JetBrainsMono Nerd Font", "Symbols Nerd Font", …) → the **bundled** Nerd Font.
+
+Because MAE bundles a patched JetBrains Mono Nerd Font, **icons render out of the
+box** in MAE.app / the AppImage with no extra install. To use a different icon
+font, install a Nerd Font and set `icon_font_family` in `init.scm`:
+#+begin_src scheme
+(set-option! "icon_font_family" "Symbols Nerd Font Mono")
+#+end_src
+
+If you run a build that has no bundled font and no Nerd Font is installed, text
+still renders (via the system-font fallback) but icon glyphs show as
+placeholder/▯ boxes — install any Nerd Font to fix.
+
+** Bundled font
+MAE.app and the Linux AppImage ship a patched **JetBrains Mono Nerd Font**
+(JetBrains Mono + Nerd Font icon glyphs). Every component is permissively
+licensed (JetBrains Mono OFL-1.1; glyph sets MIT / Apache-2.0 / OFL-1.1 /
+CC-BY-4.0); the "Font Logos" set is intentionally excluded (unlicensed brand
+logos). See `assets/fonts/LICENSES.md` in the source tree for full attribution
+and the reproducible patch recipe.
+
+The launcher points MAE at the bundle via the `MAE_FONT_DIR` environment
+variable. You can set `MAE_FONT_DIR` yourself (to a directory containing
+`JetBrainsMono-{Regular,Bold,Italic,BoldItalic}.ttf`) to bundle your own fonts
+with a non-app install.
+
+** Troubleshooting
+- *Text renders but looks like a plain system font* — your preferred fonts
+  aren't installed and no bundle was found; set `font_family` to an installed
+  font, or run MAE.app (which bundles one).
+- *Icons show as boxes* — no Nerd Font available; install one and/or set
+  `icon_font_family`, or run a build that bundles the font.
+- *Wrong size* — `:set font_size 15` (immediate) and `:set-save` to persist.
+
+See also: [[concept:gui]], [[concept:options]], [[index]]

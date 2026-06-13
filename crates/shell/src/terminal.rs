@@ -92,14 +92,94 @@ pub struct ShellTerminal {
     selection: Option<ShellSelection>,
 }
 
-/// Ensure common user binary directories are in PATH.
+/// Resolve the user's interactive login-shell `PATH`, caching the result for
+/// the process lifetime.
 ///
-/// When MAE is launched from a desktop file (GNOME, sway, etc.), the parent
-/// process has a minimal PATH that omits `~/.local/bin`, `~/.cargo/bin`, etc.
-/// Terminal emulators (Alacritty, kitty, wezterm) all solve this by sourcing
-/// the user's shell profile. We take a simpler approach: prepend the standard
-/// directories if they exist and aren't already in PATH.
+/// GUI apps launched from Finder/Dock (or a desktop file on Linux) inherit a
+/// minimal `PATH` that omits `/usr/local/bin`, `/opt/homebrew/bin`, and
+/// version-manager shims (nvm, asdf, pyenv, rbenv). Like Emacs's
+/// `exec-path-from-shell` and VS Code, we ask the user's login+interactive
+/// shell for its `PATH` and use that as the base for spawned agent/shell
+/// processes. Probed at most once; protected by a timeout so a slow or
+/// misbehaving shell rc cannot hang editor startup.
+fn login_shell_path() -> Option<&'static str> {
+    static CACHE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(probe_login_shell_path).as_deref()
+}
+
+fn probe_login_shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| {
+        if cfg!(target_os = "macos") {
+            "/bin/zsh".to_string()
+        } else {
+            "/bin/sh".to_string()
+        }
+    });
+    // Sentinels let us extract PATH cleanly even when the shell rc prints a
+    // banner/MOTD or warnings to stdout.
+    const START: &str = "__MAE_PATH_START__";
+    const END: &str = "__MAE_PATH_END__";
+    let script = format!("printf '%s%s%s' '{START}' \"$PATH\" '{END}'");
+
+    // Run on a worker thread with a timeout: a login+interactive shell sources
+    // both profile (.zprofile/.profile — Homebrew) and rc (.zshrc — nvm/asdf),
+    // but a pathological rc shouldn't block us for more than a few seconds.
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let out = std::process::Command::new(&shell)
+            .args(["-l", "-i", "-c", &script])
+            .output();
+        let _ = tx.send(out);
+    });
+    let output = match rx.recv_timeout(std::time::Duration::from_secs(3)) {
+        Ok(Ok(o)) => o,
+        _ => return None,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let start = stdout.find(START)? + START.len();
+    let rel_end = stdout[start..].find(END)?;
+    let path = stdout[start..start + rel_end].trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
+}
+
+/// Merge two `PATH` strings, preserving order and dropping duplicates/empties.
+/// Entries from `primary` take precedence; `secondary` entries not already
+/// present are appended.
+fn merge_paths(primary: &str, secondary: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<&str> = Vec::new();
+    for entry in primary.split(':').chain(secondary.split(':')) {
+        if entry.is_empty() {
+            continue;
+        }
+        if seen.insert(entry) {
+            out.push(entry);
+        }
+    }
+    out.join(":")
+}
+
+/// Ensure spawned processes get a usable `PATH`.
+///
+/// Primary mechanism: merge in the user's login-shell `PATH` (covers Homebrew,
+/// `/usr/local/bin`, and version-manager shims). Fallback/defense-in-depth:
+/// prepend the standard user bin dirs if they exist and the shell probe failed
+/// or omitted them. This is what lets `claude` (and other user-installed tools)
+/// resolve when MAE is launched from a GUI rather than a terminal.
 fn augment_path(env: &mut std::collections::HashMap<String, String>) {
+    let current_path = env.get("PATH").cloned().unwrap_or_default();
+
+    // 1. Login-shell PATH as the base.
+    if let Some(login_path) = login_shell_path() {
+        let merged = merge_paths(login_path, &current_path);
+        env.insert("PATH".to_string(), merged);
+    }
+
+    // 2. Static fallback for standard user bin dirs.
     let home = match env
         .get("HOME")
         .cloned()

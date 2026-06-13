@@ -2397,7 +2397,7 @@ impl Compiler {
                 let rest = pairs.pop().unwrap();
                 let mut result = rest;
                 for p in pairs.into_iter().rev() {
-                    result = Value::Pair(std::rc::Rc::new((p, result)));
+                    result = Value::cons(p, result);
                 }
                 result
             } else if *variadic {

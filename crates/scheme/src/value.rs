@@ -436,7 +436,7 @@ pub enum Value {
     /// Interned symbol.
     Symbol(InternedSymbol),
     /// Cons cell (pair).
-    Pair(Rc<(Value, Value)>),
+    Pair(Rc<ConsCell>),
     /// Mutable vector.
     Vector(Rc<RefCell<Vec<Value>>>),
     /// Mutable bytevector.
@@ -457,6 +457,37 @@ pub enum Value {
     Null,
 }
 
+/// Heap-allocated cons cell backing [`Value::Pair`]. A tuple struct, so the
+/// existing `.0` (car) / `.1` (cdr) field access on the `Rc` is unchanged.
+///
+/// The custom [`Drop`] dismantles long cdr chains iteratively. The derived
+/// recursive drop of an N-element list needs N native stack frames and
+/// overflows the stack on long lists (sooner on small stacks such as macOS
+/// threads). Proper tail calls let the VM *build* huge lists; this makes
+/// *dropping* them safe too.
+#[derive(Clone, Debug)]
+pub struct ConsCell(pub Value, pub Value);
+
+impl Drop for ConsCell {
+    fn drop(&mut self) {
+        // Walk the cdr (`.1`) chain, unlinking each solely-owned node so its own
+        // drop is O(1) instead of recursing. Shared nodes (refcount > 1) are
+        // left intact — their last owner dismantles them the same way.
+        let mut cdr = std::mem::replace(&mut self.1, Value::Null);
+        while let Value::Pair(rc) = cdr {
+            match Rc::try_unwrap(rc) {
+                Ok(mut cell) => {
+                    // Take this node's cdr to continue; it now drops with
+                    // cdr = Null, so its Drop loop runs zero iterations.
+                    cdr = std::mem::replace(&mut cell.1, Value::Null);
+                }
+                // Shared elsewhere: stop; `rc` just decrements its refcount.
+                Err(_) => break,
+            }
+        }
+    }
+}
+
 impl Value {
     // -----------------------------------------------------------------------
     // Constructors
@@ -471,7 +502,7 @@ impl Value {
     }
 
     pub fn cons(car: Value, cdr: Value) -> Self {
-        Value::Pair(Rc::new((car, cdr)))
+        Value::Pair(Rc::new(ConsCell(car, cdr)))
     }
 
     /// Build a proper list from an iterator of values.
@@ -993,6 +1024,33 @@ impl Trace for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropping_long_list_does_not_overflow() {
+        // Build a deep cons chain and drop it. ConsCell's Drop must dismantle
+        // it iteratively — the derived recursive drop would need one native
+        // stack frame per element and overflow on long lists (this count far
+        // exceeds any thread stack). Regression test for the macOS-surfaced
+        // bench_list_operations stack overflow.
+        let mut list = Value::Null;
+        for i in 0..1_000_000 {
+            list = Value::cons(Value::Int(i), list);
+        }
+        drop(list); // must not stack overflow
+    }
+
+    #[test]
+    fn dropping_shared_list_is_safe() {
+        // A shared long list (refcount > 1) must also drop without overflow:
+        // the last owner dismantles it iteratively.
+        let mut list = Value::Null;
+        for i in 0..500_000 {
+            list = Value::cons(Value::Int(i), list);
+        }
+        let clone = list.clone(); // bump refcount on the head
+        drop(list);
+        drop(clone); // last owner — must not overflow
+    }
 
     #[test]
     fn test_symbol_interning() {

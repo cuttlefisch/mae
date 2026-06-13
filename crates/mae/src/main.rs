@@ -41,6 +41,58 @@ use tracing::{debug, error, info, warn};
 use bootstrap::{init_logging, load_history, load_init_file, setup_ai, setup_dap, setup_lsp};
 use terminal_loop::{cleanup_stale_mcp_sockets, run_headless_self_test, run_terminal_loop};
 
+/// Pure policy: given environment signals, is a graphical display available?
+///
+/// Extracted from [`gui_display_available`] so the decision is unit-testable
+/// without touching process-global environment variables (see `mod tests`).
+fn display_available_from_env(ssh_session: bool, x11: bool, wayland: bool, is_macos: bool) -> bool {
+    if ssh_session {
+        // A remote shell has no local GUI session, regardless of platform.
+        return false;
+    }
+    if is_macos {
+        // Local macOS sessions run the Aqua window server (SSH ruled out above).
+        return true;
+    }
+    // X11 or Wayland must be present (Linux / other unix).
+    x11 || wayland
+}
+
+/// Heuristic: is a graphical display available for the GUI backend?
+///
+/// `mae` defaults to the GUI on a desktop session but must fall back to the
+/// terminal UI when there is no graphics frontend — over SSH, on a bare tty,
+/// or on a headless server. Explicit `--gui` overrides this (e.g. the MAE.app
+/// launcher); `--no-gui`/`--tui`/`-nw` force the terminal UI.
+fn gui_display_available() -> bool {
+    #[cfg(not(unix))]
+    {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        let ssh =
+            std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
+        let x11 = std::env::var_os("DISPLAY").is_some();
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+        display_available_from_env(ssh, x11, wayland, cfg!(target_os = "macos"))
+    }
+}
+
+/// Pure policy: should the GUI backend be launched, given all signals?
+///
+/// `--no-gui`/`-nw` (force_tui) always wins; `--gui` (force_gui) overrides
+/// display detection (e.g. the MAE.app launcher); otherwise the GUI launches
+/// only when compiled in and a display is available.
+fn should_use_gui(
+    gui_compiled: bool,
+    force_tui: bool,
+    force_gui: bool,
+    display_available: bool,
+) -> bool {
+    gui_compiled && !force_tui && (force_gui || display_available)
+}
+
 /// Entry point for the MAE editor.
 ///
 /// Plain `fn main()` — the tokio runtime is constructed manually so that
@@ -101,7 +153,7 @@ fn main() -> io::Result<()> {
         println!("  --init-config [--force] Write a commented template and run wizard");
         println!("  --print-config-path     Print the config file path and exit");
         println!("  --print-config-template Print the default commented template to stdout");
-        println!("  --gui                   Launch with GUI backend (default when available)");
+        println!("  --gui                   Force GUI backend (default on a desktop session; auto-off over SSH/tty)");
         println!("  --no-gui, --tui, -nw    Force terminal mode (like emacs -nw)");
         println!("  --connect [ADDR]        Connect to daemon (like emacsclient -c)");
         println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
@@ -581,55 +633,81 @@ fn main() -> io::Result<()> {
             .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
             .join("mae");
 
-        // Try to load manual KB from pre-built CozoDB file.
-        // If found, its nodes are loaded into the in-memory KB (replacing
-        // the seed-generated nodes which are identical but slower to produce).
-        if let Some(result) = manual_kb::locate_and_validate(&data_dir, None) {
-            match &result.validation {
-                manual_kb::ManualValidation::Valid => {
-                    debug!(path = %result.path.display(), "manual KB checksum valid");
-                }
-                manual_kb::ManualValidation::Historical { matched_version } => {
-                    warn!(
-                        path = %result.path.display(),
-                        matched = %matched_version,
-                        current = env!("CARGO_PKG_VERSION"),
-                        "manual KB is from an older mae version"
-                    );
-                }
-                manual_kb::ManualValidation::Unknown => {
-                    warn!(
-                        path = %result.path.display(),
-                        "manual KB checksum does not match any known release"
-                    );
-                }
-                manual_kb::ManualValidation::Custom => {
-                    info!(path = %result.path.display(), "using custom manual KB");
-                }
-            }
-
-            // Open the manual KB CozoDB store and retain the handle for runtime queries.
-            match mae_kb::CozoKbStore::open(&result.path) {
-                Ok(manual_store) => {
-                    // Load manual nodes into in-memory KB (fallback for tests/Phase 4).
-                    match manual_store.load_all() {
-                        Ok(nodes) => {
-                            let count = nodes.len();
-                            for node in nodes {
-                                editor.kb.primary.insert(node);
-                            }
-                            info!(count, path = %result.path.display(), "loaded manual KB nodes");
+        // Build an in-memory manual KB so the help system's cozo-backed
+        // `KbQueryLayer` can resolve built-in nodes (`index`, command/option
+        // help, etc.). It is sourced from the pre-built CozoDB file when found
+        // (read-only — we never open the on-disk asset read-write, since sled
+        // would write recovery snapshots and dirty a git-tracked asset or drift
+        // an install's checksum), otherwise from the code-generated seed nodes
+        // already in `editor.kb.primary`. Without a manual cozo, `SPC h h` fails
+        // with "no such KB node: index".
+        match mae_kb::CozoKbStore::open_mem() {
+            Ok(mem_store) => {
+                let mut sourced_from_prebuilt = false;
+                if let Some(result) = manual_kb::locate_and_validate(&data_dir, None) {
+                    match &result.validation {
+                        manual_kb::ManualValidation::Valid => {
+                            debug!(path = %result.path.display(), "manual KB checksum valid");
                         }
-                        Err(e) => {
-                            warn!(error = %e, "failed to load nodes from manual KB (in-memory fallback)");
+                        manual_kb::ManualValidation::Historical { matched_version } => {
+                            warn!(
+                                path = %result.path.display(),
+                                matched = %matched_version,
+                                current = env!("CARGO_PKG_VERSION"),
+                                "manual KB is from an older mae version"
+                            );
+                        }
+                        manual_kb::ManualValidation::Unknown => {
+                            warn!(
+                                path = %result.path.display(),
+                                "manual KB checksum does not match any known release"
+                            );
+                        }
+                        manual_kb::ManualValidation::Custom => {
+                            info!(path = %result.path.display(), "using custom manual KB");
                         }
                     }
-                    // Retain the CozoDB handle so the query layer can query it directly.
-                    editor.kb.manual_cozo = Some(std::sync::Arc::new(manual_store));
+                    match manual_kb::load_nodes_readonly(&result.path) {
+                        Ok(nodes) => {
+                            let count = nodes.len();
+                            for node in &nodes {
+                                editor.kb.primary.insert(node.clone());
+                                if let Err(e) = mem_store.insert_node(node) {
+                                    warn!(error = %e, id = %node.id, "failed to load manual node");
+                                }
+                            }
+                            info!(count, path = %result.path.display(), "loaded manual KB nodes (read-only)");
+                            sourced_from_prebuilt = true;
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "failed to read pre-built manual KB; falling back to seed");
+                        }
+                    }
                 }
-                Err(e) => {
-                    warn!(error = %e, path = %result.path.display(), "failed to open manual KB store");
+
+                if !sourced_from_prebuilt {
+                    // No usable pre-built KB: seed the in-memory manual cozo from
+                    // the code-generated nodes already present in `kb.primary`.
+                    match mem_store.persist_nodes(&editor.kb.primary) {
+                        Ok(count) => {
+                            info!(
+                                count,
+                                "built in-memory manual KB from seed (no pre-built KB found)"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "failed to persist seed nodes to in-memory manual KB");
+                        }
+                    }
                 }
+
+                let _ = mem_store.seed_type_system();
+                let _ = mem_store.seed_typed_relationships();
+                let _ = mem_store.seed_views();
+                editor.kb.manual_cozo = Some(std::sync::Arc::new(mem_store));
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to open in-memory manual KB store");
             }
         }
 
@@ -812,12 +890,26 @@ fn main() -> io::Result<()> {
         info!("debug-init mode enabled");
     }
 
-    // GUI is the default when compiled with the gui feature (like emacs).
-    // --no-gui / --tui / -nw forces terminal mode (like emacs -nw).
+    // GUI is the default when compiled with the gui feature (like emacs), but
+    // only when a graphical display is actually available. `--no-gui`/`--tui`/
+    // `-nw` force terminal mode; `--gui` forces the GUI backend, overriding
+    // display detection (used by the MAE.app launcher). With no flags, `mae`
+    // opens the GUI on a desktop session and transparently falls back to the
+    // terminal UI over SSH, on a tty, or on a headless server.
     let force_tui = args
         .iter()
         .any(|a| a == "--no-gui" || a == "--tui" || a == "-nw");
-    let use_gui = cfg!(feature = "gui") && !force_tui;
+    let force_gui = args.iter().any(|a| a == "--gui");
+    let display_available = gui_display_available();
+    let use_gui = should_use_gui(
+        cfg!(feature = "gui"),
+        force_tui,
+        force_gui,
+        display_available,
+    );
+    if cfg!(feature = "gui") && !force_tui && !force_gui && !display_available {
+        info!("no graphical display detected (SSH/tty/headless) — using terminal UI; pass --gui to force GUI");
+    }
 
     debug!("building tokio runtime");
     // Build the tokio runtime manually. The GUI path needs the event loop
@@ -2306,5 +2398,63 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             // Not dirty — sleep until next event (no busy-loop).
             event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{display_available_from_env, should_use_gui};
+
+    // --- gui_display_available policy -------------------------------------
+
+    #[test]
+    fn ssh_session_has_no_display_regardless_of_platform() {
+        // A remote shell never gets the GUI, even on macOS or with X11/Wayland.
+        assert!(!display_available_from_env(true, false, false, true));
+        assert!(!display_available_from_env(true, true, true, false));
+    }
+
+    #[test]
+    fn local_macos_session_has_a_display() {
+        assert!(display_available_from_env(false, false, false, true));
+    }
+
+    #[test]
+    fn linux_needs_x11_or_wayland() {
+        // Headless (no DISPLAY/WAYLAND_DISPLAY) → no display.
+        assert!(!display_available_from_env(false, false, false, false));
+        // X11 present.
+        assert!(display_available_from_env(false, true, false, false));
+        // Wayland present.
+        assert!(display_available_from_env(false, false, true, false));
+    }
+
+    // --- should_use_gui decision ------------------------------------------
+
+    #[test]
+    fn never_gui_when_not_compiled_in() {
+        assert!(!should_use_gui(false, false, false, true));
+        assert!(!should_use_gui(false, false, true, true));
+    }
+
+    #[test]
+    fn force_tui_always_wins() {
+        // -nw / --no-gui / --tui beats both --gui and an available display.
+        assert!(!should_use_gui(true, true, false, true));
+        assert!(!should_use_gui(true, true, true, true));
+    }
+
+    #[test]
+    fn force_gui_overrides_missing_display() {
+        // The MAE.app launcher passes --gui; honor it even if detection is
+        // conservative.
+        assert!(should_use_gui(true, false, true, false));
+    }
+
+    #[test]
+    fn default_follows_display_availability() {
+        // No flags: GUI iff a display is available.
+        assert!(should_use_gui(true, false, false, true));
+        assert!(!should_use_gui(true, false, false, false));
     }
 }

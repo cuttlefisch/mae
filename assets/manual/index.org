@@ -23,7 +23,8 @@ Welcome to MAE's built-in help. This knowledge base is the same data surface the
 - [[concept:event-recording][Event Recording]] -- session capture and JSON export
 - [[concept:dap-attach][DAP Attach]] -- cross-instance debugging with PID
 - [[concept:introspect][Introspect]] -- AI diagnostic snapshot (threads/perf/locks/buffers)
-- [[concept:gui][GUI Backend]] -- dual rendering (terminal + GUI), mouse, font config
+- [[concept:gui][GUI Backend]] -- dual rendering (terminal + GUI), GUI-by-default, mouse
+- [[concept:fonts][Font & Icon Configuration]] -- font_family/size, bundled Nerd Font, icon config
 - [[concept:git-status][Git Status]] -- Magit-lite porcelain UI
 - [[concept:org-mode][Org-mode]] -- Structural editing, folding, narrowing, and task management
 - [[concept:markdown][Markdown]] -- Structural editing parity with org-mode for `#` headings

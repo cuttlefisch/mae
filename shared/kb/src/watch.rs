@@ -87,7 +87,9 @@ impl OrgDirWatcher {
     /// has seen the initial create.
     pub fn seed(&self, mappings: impl IntoIterator<Item = (PathBuf, Vec<String>)>) {
         let mut map = self.path_to_ids.lock().unwrap();
-        map.extend(mappings);
+        for (p, ids) in mappings {
+            map.insert(normalize_path(&p), ids);
+        }
     }
 
     /// Record the ids a caller ingested for a given path. This keeps the
@@ -97,7 +99,7 @@ impl OrgDirWatcher {
     /// these ids. Empty id lists still clear any stale mapping so the
     /// next removal event reports no phantom ids.
     pub fn record_ids(&self, path: impl Into<PathBuf>, ids: Vec<String>) {
-        let path = path.into();
+        let path = normalize_path(&path.into());
         let mut map = self.path_to_ids.lock().unwrap();
         if ids.is_empty() {
             map.remove(&path);
@@ -127,6 +129,7 @@ impl OrgDirWatcher {
                         if !is_org(&p) {
                             continue;
                         }
+                        let p = normalize_path(&p);
                         if !seen_upsert.insert(p.clone()) {
                             continue;
                         }
@@ -138,7 +141,7 @@ impl OrgDirWatcher {
                         if !is_org(&p) {
                             continue;
                         }
-                        let ids = self.path_to_ids.lock().unwrap().remove(&p);
+                        let ids = self.path_to_ids.lock().unwrap().remove(&normalize_path(&p));
                         if let Some(ids) = ids {
                             if !ids.is_empty() {
                                 changes.push(OrgChange::Removed(ids));
@@ -155,6 +158,19 @@ impl OrgDirWatcher {
 
 fn is_org(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()) == Some("org")
+}
+
+/// Normalize a path so map keys and event paths compare equal across platforms.
+///
+/// macOS FSEvents reports canonical paths (e.g. `/private/var/...`) while
+/// callers usually hold the symlinked form (`/var/...`, `/tmp/...`). Without
+/// normalizing, a removal event's path never matches the seeded key, so the
+/// removed node ids are lost and stale KB nodes linger. Canonicalize when the
+/// file still exists; fall back to the original path otherwise (e.g. a removal,
+/// where `canonicalize()` would fail because the file is already gone — by then
+/// FSEvents has already reported the canonical form anyway).
+fn normalize_path(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
 }
 
 #[cfg(test)]
@@ -183,11 +199,14 @@ mod tests {
 
         let path = tmp.path().join("a.org");
         std::fs::write(&path, SAMPLE).unwrap();
+        // The watcher emits normalized (canonical) paths so they match across
+        // the /var → /private/var symlink on macOS; compare against canonical.
+        let expected = path.canonicalize().unwrap();
 
         let got = wait_for(|| {
             w.drain()
                 .iter()
-                .any(|c| matches!(c, OrgChange::Upserted(p) if p == &path))
+                .any(|c| matches!(c, OrgChange::Upserted(p) if p == &expected))
         });
         assert!(got, "did not observe upsert for newly-created file");
     }
