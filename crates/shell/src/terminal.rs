@@ -193,6 +193,9 @@ fn augment_path(env: &mut std::collections::HashMap<String, String>) {
         format!("{home}/.cargo/bin"),
         format!("{home}/bin"),
         format!("{home}/.npm-global/bin"),
+        // macOS: Homebrew (Apple Silicon + Intel) and system paths
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
     ];
     let current_path = env.get("PATH").cloned().unwrap_or_default();
     let path_entries: std::collections::HashSet<&str> = current_path.split(':').collect();
@@ -257,6 +260,11 @@ impl ShellTerminal {
 
         let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
         env.insert("MAE_TERMINAL".to_string(), "1".to_string());
+        // alacritty_terminal's setup_env() sets TERM=alacritty in the process
+        // environment, which leaks to child processes. The `alacritty` terminfo
+        // entry is missing on stock macOS, causing TUI programs (including
+        // Claude Code) to render nothing. Force a safe, universal value.
+        env.insert("TERM".to_string(), "xterm-256color".to_string());
         env.extend(extra_env);
         augment_path(&mut env);
         let pty_opts = tty::Options {
@@ -323,6 +331,8 @@ impl ShellTerminal {
         // PTY options.
         let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
         env.insert("MAE_TERMINAL".to_string(), "1".to_string());
+        // Force safe TERM — see spawn_command() comment for rationale.
+        env.insert("TERM".to_string(), "xterm-256color".to_string());
         env.extend(extra_env);
         augment_path(&mut env);
         let pty_opts = tty::Options {

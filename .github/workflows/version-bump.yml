@@ -109,8 +109,8 @@ jobs:
           SHA=$(git rev-parse HEAD)
           echo "Waiting for CI on commit $SHA..."
 
-          # Poll for up to 20 minutes (CI typically takes ~10-15 min)
-          for i in $(seq 1 40); do
+          # Poll for up to 35 minutes (CI typically takes ~20-25 min)
+          for i in $(seq 1 70); do
             # Check if the CI workflow has completed on this commit
             STATUS=$(gh api "repos/${{ github.repository }}/commits/${SHA}/status" --jq '.state' 2>/dev/null || echo "pending")
 
@@ -132,7 +132,7 @@ jobs:
           done
 
           if [ "$CONCLUSION" != "success" ]; then
-            echo "::error::CI did not complete within 20 minutes — skipping tag"
+            echo "::error::CI did not complete within 35 minutes — skipping tag"
             exit 1
           fi
 
