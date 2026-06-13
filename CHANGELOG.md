@@ -4,9 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Style
+
+- Rustfmt the macOS doc/test/font changes (+ Cargo.lock version sync) ([d0a81b1](https://github.com/cuttlefisch/mae/commit/d0a81b1bb9360ab906344b48fd0c9d4894ecd67b))
+
+## [0.13.6] - 2026-06-12
+
 ### Bug Fixes
 
+- *(gui)* PATH resolution, manual KB loading, and unified Scheme eval ([8c39a76](https://github.com/cuttlefisch/mae/commit/8c39a76471c35144ff94c7d0cb89e3d6a6bedc19))
+- *(gui)* Fall back to system monospace font instead of failing to launch ([68ea980](https://github.com/cuttlefisch/mae/commit/68ea980c67448205332f2f51f6a17fbe969614ef))
+- *(scheme)* Dismantle long cons chains iteratively to avoid stack overflow ([236ecf9](https://github.com/cuttlefisch/mae/commit/236ecf9321cdd9c44bb8da95292951448f2ce04c))
+- *(kb)* Normalize watcher paths so macOS FSEvents events match seeded keys ([48178db](https://github.com/cuttlefisch/mae/commit/48178db7f7afa0116e58dbc29cb1e9ad3d9022fd))
 - *(macos)* App bundle case collision, TERM leak, PATH gaps ([c4e387d](https://github.com/cuttlefisch/mae/commit/c4e387d2739c36fd8bb13e2fd13ccb19060de1fd))
+
+### Documentation
+
+- GUI-by-default launch, font/icon config, init.scm-primary config surface ([7a0ec90](https://github.com/cuttlefisch/mae/commit/7a0ec90b5b98d531392ee81c4c0c67885252ba7c))
+
+### Features
+
+- *(gui)* Launch GUI by default when a display is available, else TUI ([6d5458c](https://github.com/cuttlefisch/mae/commit/6d5458cc38e4370d97a1d5d9525d7961668bb9eb))
+- *(gui)* Load a bundled font from MAE_FONT_DIR (font-agnostic) ([972fd07](https://github.com/cuttlefisch/mae/commit/972fd07caaefd6fd626abfe2cc5c2a6a12e9a2bf))
+- *(gui)* Bundle a license-clean JetBrains Mono Nerd Font in MAE.app ([905879f](https://github.com/cuttlefisch/mae/commit/905879f817ad5ddd7bda25cdbbcef5129950ba2d))
+
+### Miscellaneous
+
+- Bump version to 0.13.6 ([420ab09](https://github.com/cuttlefisch/mae/commit/420ab0919afb03324813c9e9867ccabf6c8fd1f2))
+
+### Testing
+
+- Harden + speed up the suite on macOS (first macOS test run) ([383a952](https://github.com/cuttlefisch/mae/commit/383a95244929abde088ea3a0e244a350eb623b8a))
+
+### Build
+
+- *(release)* Ship the GUI-capable binary as the macOS formula `mae` ([060f7dc](https://github.com/cuttlefisch/mae/commit/060f7dc3ad344b08ee7ca7f4ffd4ffae745dd73e))
 
 ## [0.13.5] - 2026-06-12
 
