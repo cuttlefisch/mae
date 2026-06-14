@@ -49,6 +49,7 @@ fn print_help() {
         "  sync              Materialize declared state (clone/update packages, write lockfile)"
     );
     println!("  upgrade           Fetch latest for all packages, update lockfile SHAs");
+    println!("                    (to upgrade MAE itself, use top-level `mae upgrade`)");
     println!("  purge             Remove packages not declared in init.scm");
     println!("  list              List discovered modules and their status");
     println!("  info <NAME>       Show detailed information about a module");
@@ -279,7 +280,7 @@ fn cmd_sync() -> i32 {
 
 // ── upgrade ───────────────────────────────────────────────────────
 
-fn cmd_upgrade() -> i32 {
+pub(crate) fn cmd_upgrade() -> i32 {
     println!("mae upgrade — fetching latest for all packages...");
 
     let packages = parse_declared_packages();
