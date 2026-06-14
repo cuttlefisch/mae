@@ -91,13 +91,54 @@ pub fn record_kb_visit(editor: &mut Editor, id: &str) {
 
 pub fn execute_kb_search(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-    // Use kb_federated_search which respects kb_search_sort option
-    let results = editor.kb_federated_search(query);
-    let ids: Vec<String> = results
+    // Optional `scope` ("all" | "local" | "remote" | "<instance-name>") selects
+    // which federated layers participate; defaults to All. (The config-driven
+    // default `kb_search_scope` option lands in Phase 5.) Optional `limit` caps
+    // the returned objects.
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(mae_kb::KbScope::parse)
+        .unwrap_or_default();
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(editor.kb.search_max_results);
+
+    // Use the scoped federated search (respects kb_search_sort). Return enriched
+    // objects (id/title/kind/instance/excerpt) so the agent can choose a node
+    // without a follow-up kb_get round-trip.
+    let results = editor.kb_federated_search_scoped(query, &scope);
+    let objs: Vec<serde_json::Value> = results
         .into_iter()
-        .map(|(_, node)| node.id.clone())
+        .take(limit)
+        .map(|(instance, node)| {
+            serde_json::json!({
+                "id": node.id,
+                "title": node.title,
+                "kind": node.kind.as_str(),
+                "instance": instance,
+                "excerpt": kb_excerpt(&node.body, 160),
+            })
+        })
         .collect();
-    serde_json::to_string_pretty(&ids).map_err(|e| e.to_string())
+    serde_json::to_string_pretty(&objs).map_err(|e| e.to_string())
+}
+
+/// First non-empty line of `body`, trimmed and truncated to `max` chars (on a
+/// char boundary) with an ellipsis. Used for compact search-result previews.
+fn kb_excerpt(body: &str, max: usize) -> String {
+    let line = body
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    if line.chars().count() <= max {
+        return line.to_string();
+    }
+    let truncated: String = line.chars().take(max).collect();
+    format!("{}…", truncated.trim_end())
 }
 
 pub fn execute_kb_list(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -1125,20 +1166,60 @@ mod tests {
         assert_eq!(unquote_dv("plain"), "plain");
     }
 
+    /// Pull the `id` field out of each kb_search result object.
+    fn kb_search_ids(result: &str) -> Vec<String> {
+        let objs: Vec<serde_json::Value> = serde_json::from_str(result).unwrap();
+        objs.into_iter()
+            .map(|o| o["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
     #[test]
     fn kb_search_finds_by_title() {
         let editor = Editor::new();
         let result = execute_kb_search(&editor, &serde_json::json!({"query": "buffer"})).unwrap();
-        let ids: Vec<String> = serde_json::from_str(&result).unwrap();
-        assert!(ids.contains(&"concept:buffer".to_string()));
+        let ids = kb_search_ids(&result);
+        // Enriched results now rank the canonical concept node first.
+        assert_eq!(ids.first().map(String::as_str), Some("concept:buffer"));
+        // Each result object carries the enriched fields.
+        let objs: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(objs.iter().all(|o| o.get("title").is_some()
+            && o.get("kind").is_some()
+            && o.get("excerpt").is_some()));
     }
 
     #[test]
-    fn kb_search_empty_query_returns_all() {
+    fn kb_search_empty_query_returns_bounded() {
         let editor = Editor::new();
         let result = execute_kb_search(&editor, &serde_json::json!({"query": ""})).unwrap();
-        let ids: Vec<String> = serde_json::from_str(&result).unwrap();
-        assert_eq!(ids.len(), editor.kb.primary.len());
+        let ids = kb_search_ids(&result);
+        // Empty query lists nodes but is bounded by the result cap (kb_list is
+        // the unbounded enumeration tool).
+        assert!(!ids.is_empty());
+        assert!(ids.len() <= editor.kb.search_max_results);
+    }
+
+    #[test]
+    fn kb_search_respects_explicit_limit() {
+        let editor = Editor::new();
+        let result =
+            execute_kb_search(&editor, &serde_json::json!({"query": "buffer", "limit": 3}))
+                .unwrap();
+        let ids = kb_search_ids(&result);
+        assert!(ids.len() <= 3);
+    }
+
+    #[test]
+    fn kb_search_local_scope_excludes_federated() {
+        // With no federated instances, local scope behaves like all.
+        let editor = Editor::new();
+        let all = execute_kb_search(&editor, &serde_json::json!({"query": "buffer"})).unwrap();
+        let local = execute_kb_search(
+            &editor,
+            &serde_json::json!({"query": "buffer", "scope": "local"}),
+        )
+        .unwrap();
+        assert_eq!(kb_search_ids(&all), kb_search_ids(&local));
     }
 
     #[test]

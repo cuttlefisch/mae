@@ -772,6 +772,19 @@ impl Editor {
     /// Local results take priority over federated.
     /// Respects `kb_search_sort` option: "relevance" (default), "activity", "alphabetical".
     pub fn kb_federated_search(&self, query: &str) -> Vec<(Option<String>, &mae_kb::Node)> {
+        self.kb_federated_search_scoped(query, &mae_kb::KbScope::All)
+    }
+
+    /// Search across the primary KB and federated instances, restricted to the
+    /// given `scope` (plan decision D4). `KbScope::All` reproduces
+    /// `kb_federated_search` exactly. Local results always win on duplicates.
+    /// Respects `kb_search_sort` ("relevance" default / "activity" / "alphabetical").
+    pub fn kb_federated_search_scoped(
+        &self,
+        query: &str,
+        scope: &mae_kb::KbScope,
+    ) -> Vec<(Option<String>, &mae_kb::Node)> {
+        use mae_kb::KbScope;
         let use_activity = self.kb.search_sort == "activity";
         let use_alpha = self.kb.search_sort == "alphabetical";
         let weights = mae_kb::activity::ActivityWeights {
@@ -780,39 +793,9 @@ impl Editor {
         };
         let today = if use_activity { today_ymd() } else { (0, 0, 0) };
 
-        let mut results: Vec<(Option<String>, &mae_kb::Node)> = Vec::new();
-        let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
-
-        // Local KB first (always wins on duplicates).
-        // Default ("relevance") uses the enriched orderless, field-weighted
-        // ranker (search_ranked) — multi-word queries work and results are
-        // ranked, not alphabetical. "activity"/"alphabetical" are explicit opt-ins.
-        let local_ids = if use_activity {
-            self.kb
-                .primary
-                .search_sorted_by_activity(query, &weights, today)
-        } else if use_alpha {
-            self.kb.primary.search(query)
-        } else {
-            self.kb
-                .primary
-                .search_ranked(query, self.kb.search_max_results)
-                .into_iter()
-                .map(|(id, _)| id)
-                .collect()
-        };
-        for id in local_ids {
-            if let Some(node) = self.kb.primary.get(&id) {
-                if seen_ids.insert(&node.id) {
-                    results.push((None, node));
-                }
-            }
-        }
-
-        // Then each federated instance (skip if already seen)
-        for (uuid, kb) in &self.kb.instances {
-            let inst_name = self.kb.registry.find_by_uuid(uuid).map(|i| i.name.clone());
-            let fed_ids = if use_activity {
+        // Per-instance ranking, shared by primary + federated members.
+        let rank = |kb: &mae_kb::KnowledgeBase| -> Vec<String> {
+            if use_activity {
                 kb.search_sorted_by_activity(query, &weights, today)
             } else if use_alpha {
                 kb.search(query)
@@ -821,8 +804,51 @@ impl Editor {
                     .into_iter()
                     .map(|(id, _)| id)
                     .collect()
+            }
+        };
+
+        let mut results: Vec<(Option<String>, &mae_kb::Node)> = Vec::new();
+        let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+        // Does the primary participate under this scope? The primary's registry
+        // name is matched for the Named case.
+        let primary_name = self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| i.primary)
+            .map(|i| i.name.as_str());
+        let include_primary = match scope {
+            KbScope::All | KbScope::LocalOnly => true,
+            KbScope::RemoteOnly => false,
+            KbScope::Named(n) => primary_name == Some(n.as_str()),
+        };
+
+        if include_primary {
+            for id in rank(&self.kb.primary) {
+                if let Some(node) = self.kb.primary.get(&id) {
+                    if seen_ids.insert(&node.id) {
+                        results.push((None, node));
+                    }
+                }
+            }
+        }
+
+        // Then each federated instance permitted by the scope (skip if seen).
+        for (uuid, kb) in &self.kb.instances {
+            let inst = self.kb.registry.find_by_uuid(uuid);
+            let include = match scope {
+                KbScope::All => true,
+                KbScope::LocalOnly => false,
+                KbScope::RemoteOnly => inst.is_some_and(|i| i.is_remote()),
+                KbScope::Named(n) => inst.is_some_and(|i| &i.name == n),
             };
-            for id in fed_ids {
+            if !include {
+                continue;
+            }
+            let inst_name = inst.map(|i| i.name.clone());
+            for id in rank(kb) {
                 if let Some(node) = kb.get(&id) {
                     if seen_ids.insert(&node.id) {
                         results.push((inst_name.clone(), node));
@@ -2136,6 +2162,45 @@ mod tests {
         let results = editor.kb_federated_search("Note");
         let federated: Vec<_> = results.iter().filter(|(name, _)| name.is_some()).collect();
         assert!(!federated.is_empty());
+    }
+
+    #[test]
+    fn kb_federated_search_scope_filters_instances() {
+        use mae_kb::KbScope;
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor.kb_register("TestNotes", dir.path());
+
+        let count_federated = |r: &[(Option<String>, &mae_kb::Node)]| {
+            r.iter().filter(|(name, _)| name.is_some()).count()
+        };
+
+        // All: includes the federated TestNotes instance.
+        let all = editor.kb_federated_search_scoped("Note", &KbScope::All);
+        assert!(count_federated(&all) > 0, "All should include federated");
+
+        // LocalOnly: drops every federated result.
+        let local = editor.kb_federated_search_scoped("Note", &KbScope::LocalOnly);
+        assert_eq!(count_federated(&local), 0, "LocalOnly excludes federated");
+
+        // Named: selects exactly the named instance's results.
+        let named = editor.kb_federated_search_scoped("Note", &KbScope::Named("TestNotes".into()));
+        assert!(count_federated(&named) > 0, "Named selects the instance");
+        assert!(
+            named
+                .iter()
+                .all(|(name, _)| name.is_none() || name.as_deref() == Some("TestNotes")),
+            "Named yields only that instance (+ local)"
+        );
+
+        // RemoteOnly: TestNotes is a local import (not shared), so no results.
+        let remote = editor.kb_federated_search_scoped("Note", &KbScope::RemoteOnly);
+        assert_eq!(
+            count_federated(&remote),
+            0,
+            "RemoteOnly excludes non-shared local imports"
+        );
     }
 
     #[test]

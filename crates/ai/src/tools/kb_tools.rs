@@ -29,17 +29,35 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "kb_search".into(),
-            description: "Search all knowledge base nodes (MAE manual + user + federated). Case-insensitive over titles, ids, bodies, tags, and aliases. Returns ids in relevance order. Falls back to fuzzy scoring when no substring matches are found. Empty query returns all ids.".into(),
+            description: "Search all knowledge base nodes (MAE manual + user + federated). Orderless, field-weighted relevance ranking over titles, ids, bodies, tags, and aliases (multi-word queries are AND-matched, order-independent). Returns an array of objects {id, title, kind, instance, excerpt} in relevance order; `instance` is null for local nodes. Returns up to `limit` results (default kb_search_max_results); use kb_list to enumerate every node id.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
-                properties: HashMap::from([(
-                    "query".into(),
-                    ToolProperty {
-                        prop_type: "string".into(),
-                        description: "Substring to search for (case-insensitive)".into(),
-                        enum_values: None,
-                    },
-                )]),
+                properties: HashMap::from([
+                    (
+                        "query".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Search terms (case-insensitive, order-independent)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "scope".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Which KBs to search: 'all' (default), 'local' (primary only), 'remote' (shared/collaborative instances only), or a specific instance name.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Max results to return (default: kb_search_max_results).".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
                 required: vec![],
             },
             permission: Some(PermissionTier::ReadOnly),

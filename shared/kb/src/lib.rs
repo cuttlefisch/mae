@@ -47,6 +47,7 @@ pub use cache::{CachedQueryLayer, NodeCache};
 pub use cozo_store::CozoKbStore;
 pub use federation::{
     import_org_dir_to_store, ImportHealth, ImportReport as FederationImportReport, IngestMode,
+    KbScope,
 };
 pub use org::{IngestReport, OrgParseResult, ParsedLink};
 pub use query::{CozoQueryLayer, FederatedQuery, InMemoryQueryLayer, KbQueryLayer};
