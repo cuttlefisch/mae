@@ -18,6 +18,7 @@ pub mod git;
 pub mod loader;
 pub mod lockfile;
 pub mod manifest;
+pub mod paths;
 pub mod resolver;
 
 pub use loader::ModuleRegistry;
