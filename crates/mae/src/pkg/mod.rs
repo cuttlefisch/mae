@@ -14,6 +14,7 @@
 //! - `ModuleRegistry` — tracks all discovered and loaded modules
 
 pub mod cli;
+pub mod embedded;
 pub mod git;
 pub mod loader;
 pub mod lockfile;
@@ -21,6 +22,7 @@ pub mod manifest;
 pub mod paths;
 pub mod resolver;
 
+pub use embedded::{merge_modules, DiscoveredModule, ModuleSource};
 pub use loader::ModuleRegistry;
 pub use manifest::ModuleManifest;
 pub use resolver::resolve_load_order;

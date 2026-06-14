@@ -3,15 +3,16 @@
 //! Takes a set of module manifests and produces a load order that respects
 //! dependency constraints. Detects circular dependencies and version conflicts.
 
+use super::embedded::{DiscoveredModule, ModuleSource};
 use super::manifest::ModuleManifest;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 
 /// A module that's been resolved and is ready to load.
 #[derive(Debug, Clone)]
 pub struct ResolvedModule {
     pub name: String,
-    pub path: PathBuf,
+    /// Where the module's files are read from (embedded or on disk).
+    pub source: ModuleSource,
     pub manifest: ModuleManifest,
     /// Flags enabled for this module (from user's mae! declaration).
     pub enabled_flags: Vec<String>,
@@ -21,21 +22,21 @@ pub struct ResolvedModule {
 ///
 /// Errors on circular dependencies or missing required dependencies.
 pub fn resolve_load_order(
-    modules: &[(PathBuf, ModuleManifest)],
+    modules: &[DiscoveredModule],
     enabled: &HashMap<String, Vec<String>>, // name -> enabled flags
 ) -> Result<Vec<ResolvedModule>, String> {
     // Build name -> index map
     let name_map: HashMap<&str, usize> = modules
         .iter()
         .enumerate()
-        .map(|(i, (_, m))| (m.name(), i))
+        .map(|(i, d)| (d.manifest.name(), i))
         .collect();
 
     // Filter to only enabled modules
     let active: Vec<usize> = modules
         .iter()
         .enumerate()
-        .filter(|(_, (_, m))| enabled.contains_key(m.name()))
+        .filter(|(_, d)| enabled.contains_key(d.manifest.name()))
         .map(|(i, _)| i)
         .collect();
 
@@ -45,7 +46,7 @@ pub fn resolve_load_order(
 
     for &idx in &active {
         in_degree.entry(idx).or_insert(0);
-        for dep_name in modules[idx].1.dependencies.keys() {
+        for dep_name in modules[idx].manifest.dependencies.keys() {
             if let Some(&dep_idx) = name_map.get(dep_name.as_str()) {
                 if active.contains(&dep_idx) {
                     adj.entry(dep_idx).or_default().push(idx);
@@ -53,14 +54,14 @@ pub fn resolve_load_order(
                 } else {
                     return Err(format!(
                         "Module '{}' depends on '{}' which is not enabled",
-                        modules[idx].1.name(),
+                        modules[idx].manifest.name(),
                         dep_name
                     ));
                 }
             } else {
                 return Err(format!(
                     "Module '{}' depends on '{}' which is not available",
-                    modules[idx].1.name(),
+                    modules[idx].manifest.name(),
                     dep_name
                 ));
             }
@@ -94,7 +95,7 @@ pub fn resolve_load_order(
         let cycle_members: Vec<&str> = active
             .iter()
             .filter(|i| !sorted.contains(i))
-            .map(|&i| modules[i].1.name())
+            .map(|&i| modules[i].manifest.name())
             .collect();
         return Err(format!(
             "Circular dependency among: {}",
@@ -105,12 +106,12 @@ pub fn resolve_load_order(
     Ok(order
         .into_iter()
         .map(|idx| {
-            let (path, manifest) = &modules[idx];
-            let flags = enabled.get(manifest.name()).cloned().unwrap_or_default();
+            let d = &modules[idx];
+            let flags = enabled.get(d.manifest.name()).cloned().unwrap_or_default();
             ResolvedModule {
-                name: manifest.name().to_string(),
-                path: path.clone(),
-                manifest: manifest.clone(),
+                name: d.manifest.name().to_string(),
+                source: d.source.clone(),
+                manifest: d.manifest.clone(),
                 enabled_flags: flags,
             }
         })
@@ -121,9 +122,9 @@ pub fn resolve_load_order(
 mod tests {
     use super::*;
     use crate::pkg::manifest::ModuleManifest;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
-    fn make_module(name: &str, deps: &[(&str, &str)]) -> (PathBuf, ModuleManifest) {
+    fn make_module(name: &str, deps: &[(&str, &str)]) -> DiscoveredModule {
         let deps_str = deps
             .iter()
             .map(|(k, v)| format!("{} = \"{}\"", k, v))
@@ -134,7 +135,10 @@ mod tests {
             name, deps_str
         );
         let manifest = ModuleManifest::from_str(&toml, Path::new("test")).unwrap();
-        (PathBuf::from(format!("modules/{}", name)), manifest)
+        DiscoveredModule {
+            source: ModuleSource::Disk(PathBuf::from(format!("modules/{}", name))),
+            manifest,
+        }
     }
 
     #[test]
@@ -146,7 +150,7 @@ mod tests {
         ];
         let enabled: HashMap<String, Vec<String>> = modules
             .iter()
-            .map(|(_, m)| (m.name().to_string(), vec![]))
+            .map(|d| (d.manifest.name().to_string(), vec![]))
             .collect();
         let order = resolve_load_order(&modules, &enabled).unwrap();
         // All should be present (order is deterministic but may vary)
@@ -161,7 +165,7 @@ mod tests {
         ];
         let enabled: HashMap<String, Vec<String>> = modules
             .iter()
-            .map(|(_, m)| (m.name().to_string(), vec![]))
+            .map(|d| (d.manifest.name().to_string(), vec![]))
             .collect();
         let order = resolve_load_order(&modules, &enabled).unwrap();
         let names: Vec<&str> = order.iter().map(|r| r.name.as_str()).collect();
@@ -178,7 +182,7 @@ mod tests {
         ];
         let enabled: HashMap<String, Vec<String>> = modules
             .iter()
-            .map(|(_, m)| (m.name().to_string(), vec![]))
+            .map(|d| (d.manifest.name().to_string(), vec![]))
             .collect();
         let result = resolve_load_order(&modules, &enabled);
         assert!(result.is_err());
@@ -190,7 +194,7 @@ mod tests {
         let modules = vec![make_module("org", &[("tables", ">=0.1.0")])];
         let enabled: HashMap<String, Vec<String>> = modules
             .iter()
-            .map(|(_, m)| (m.name().to_string(), vec![]))
+            .map(|d| (d.manifest.name().to_string(), vec![]))
             .collect();
         let result = resolve_load_order(&modules, &enabled);
         assert!(result.is_err());

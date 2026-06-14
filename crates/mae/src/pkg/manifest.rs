@@ -6,9 +6,10 @@
 //! Does NOT depend on SchemeRuntime — manifest parsing is pre-Scheme,
 //! enabling `mae pkg list` without starting the editor.
 
+use super::embedded::{DiscoveredModule, ModuleSource};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// A parsed `module.toml` manifest.
 #[derive(Debug, Clone, Deserialize)]
@@ -123,8 +124,11 @@ impl ModuleManifest {
     }
 }
 
-/// Discover all modules in a directory (each subdirectory with a module.toml).
-pub fn discover_modules(dir: &Path) -> Vec<(PathBuf, ModuleManifest)> {
+/// Discover all on-disk modules in a directory (each subdirectory with a
+/// `module.toml`). Returns [`DiscoveredModule`]s with `ModuleSource::Disk`;
+/// embedded modules are discovered separately (see [`super::embedded`]) and
+/// merged via [`super::embedded::merge_modules`].
+pub fn discover_modules(dir: &Path) -> Vec<DiscoveredModule> {
     let mut modules = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
         return modules;
@@ -135,7 +139,10 @@ pub fn discover_modules(dir: &Path) -> Vec<(PathBuf, ModuleManifest)> {
             let manifest_path = path.join("module.toml");
             if manifest_path.exists() {
                 match ModuleManifest::from_path(&manifest_path) {
-                    Ok(manifest) => modules.push((path, manifest)),
+                    Ok(manifest) => modules.push(DiscoveredModule {
+                        source: ModuleSource::Disk(path),
+                        manifest,
+                    }),
                     Err(e) => eprintln!("[warn] Skipping {}: {}", manifest_path.display(), e),
                 }
             }

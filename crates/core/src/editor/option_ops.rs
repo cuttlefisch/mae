@@ -64,6 +64,7 @@ impl super::Editor {
             "font_family" => self.gui_font_family.clone(),
             "icon_font_family" => self.gui_icon_font_family.clone(),
             "theme" => self.theme.name.clone(),
+            "keymap_flavor" => self.keymap_flavor.clone(),
             "splash_art" => self.splash_art.clone().unwrap_or_default(),
             "splash_image_width" => self.splash_image_width.to_string(),
             "splash_image_height" => self.splash_image_height.to_string(),
@@ -234,6 +235,12 @@ impl super::Editor {
             }
             "theme" => {
                 self.set_theme_by_name(value);
+            }
+            "keymap_flavor" => {
+                // Selects the `keymap-<flavor>` module loaded at startup. Set in
+                // init.scm/the mae! block — module loading reads this before
+                // autoloads run, so changing it at runtime requires :reload-modules.
+                self.keymap_flavor = value.to_string();
             }
             "splash_art" => {
                 self.splash_art = Some(value.to_string());

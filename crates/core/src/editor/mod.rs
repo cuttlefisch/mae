@@ -838,6 +838,11 @@ pub struct Editor {
     /// Clipboard integration mode: "unnamedplus" (system clipboard for paste),
     /// "unnamed" (yank syncs out, paste reads internal), "internal" (no sync).
     pub clipboard: String,
+    /// Keymap flavor (default "doom"): module loading auto-enables the
+    /// `keymap-<flavor>` module unless the user declared a different keymap-*
+    /// module. Read before autoloads run, so it belongs in init.scm/the mae!
+    /// block (config.scm is too late); change at runtime via :reload-modules.
+    pub keymap_flavor: String,
     /// Whether to restore sessions on startup. Default false.
     pub restore_session: bool,
     /// Insert-mode C-d behavior: "dedent" (vim) or "delete-forward" (Emacs).
@@ -1116,6 +1121,7 @@ impl Editor {
             clean_mode: false,
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
+            keymap_flavor: "doom".to_string(),
             restore_session: false,
             insert_ctrl_d: "dedent".to_string(),
             heading_scale: true,

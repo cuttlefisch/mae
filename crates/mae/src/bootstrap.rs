@@ -949,38 +949,38 @@ pub fn load_modules(
     editor: &mut Editor,
 ) -> crate::pkg::loader::ModuleRegistry {
     use crate::pkg::{
+        embedded::merge_modules,
         loader::{load_module_autoloads, ModuleRegistry},
         manifest::discover_modules,
         resolver::resolve_load_order,
     };
 
-    let mut all_modules = Vec::new();
-
-    // Built-in module search path — shared with the `mae` package CLI via
-    // `builtin_module_dirs()` so `mae list`/`doctor` report exactly what the
-    // editor would discover/load (no divergent second copy). First existing
-    // dir that yields modules wins.
+    // On-disk modules: built-in search path (first existing dir that yields
+    // modules wins) plus user-installed packages. These OVERRIDE the embedded
+    // baseline by name (dev loop + user customization).
+    let mut disk_modules = Vec::new();
     let builtin_dirs = builtin_module_dirs();
     for dir in &builtin_dirs {
-        if dir.exists() && all_modules.is_empty() {
-            all_modules.extend(discover_modules(dir));
+        if dir.exists() && disk_modules.is_empty() {
+            disk_modules.extend(discover_modules(dir));
         }
     }
-
-    // User-installed modules
     if let Some(user_pkg) = dirs_candidate("mae/packages") {
         if user_pkg.exists() {
-            all_modules.extend(discover_modules(&user_pkg));
+            disk_modules.extend(discover_modules(&user_pkg));
         }
     }
 
+    // Embedded built-ins are the always-present baseline; on-disk modules
+    // override by name. This is the single source of truth shared with the
+    // `mae` package CLI. With built-ins embedded, this is essentially never
+    // empty — keymap-doom is guaranteed present regardless of install layout.
+    let all_modules = merge_modules(disk_modules);
     if all_modules.is_empty() {
         warn!(
-            "no modules discovered in any of the {} search paths — leader-key (SPC) \
-             bindings are limited to built-in kernel defaults (collaboration, KB sharing, \
-             and other module-only bindings will be missing). Set MAE_MODULES_PATH or \
-             install modules under <prefix>/share/mae/modules. Searched: {:?}",
-            builtin_dirs.len(),
+            "no modules discovered (embedded baseline missing?!) — leader-key (SPC) \
+             bindings are limited to built-in kernel defaults. This should not happen; \
+             please report it. On-disk search paths: {:?}",
             builtin_dirs
         );
         return ModuleRegistry::new();
@@ -993,27 +993,34 @@ pub fn load_modules(
         // No mae! block — enable all discovered modules (backward compat).
         all_modules
             .iter()
-            .map(|(_, m)| (m.name().to_string(), vec![]))
+            .map(|d| (d.manifest.name().to_string(), vec![]))
             .collect()
     } else {
         declared
     };
 
-    // keymap-doom is the default keymap and must always load unless the user
-    // explicitly declared a different keymap-* module.
+    // The keymap flavor is a module named `keymap-<flavor>` (default "doom",
+    // set via the `keymap_flavor` option in init.scm before this runs). Auto-
+    // enable it unless the user explicitly declared a different keymap-* module.
+    // keymap-doom is embedded, so the default always resolves.
     let has_keymap_module = enabled.keys().any(|k| k.starts_with("keymap-"));
     if !has_keymap_module {
-        let doom_available = all_modules.iter().any(|(_, m)| m.name() == "keymap-doom");
-        if doom_available {
-            info!("auto-enabling keymap-doom (default keymap — add to mae! block to suppress)");
-            enabled.insert("keymap-doom".to_string(), vec![]);
+        let flavor = editor.keymap_flavor.clone();
+        let target = format!("keymap-{flavor}");
+        if all_modules.iter().any(|d| d.manifest.name() == target) {
+            info!("auto-enabling {target} (keymap_flavor = {flavor})");
+            enabled.insert(target, vec![]);
         } else {
             warn!(
-                "keymap-doom (default keymap flavor) was not found among the {} discovered \
-                 modules — SPC leader bindings beyond the kernel defaults (e.g. SPC C \
-                 collaboration, SPC C K KB sharing) will be unavailable",
-                all_modules.len()
+                "keymap flavor '{flavor}' ({target}) not found among discovered modules; \
+                 falling back to embedded keymap-doom"
             );
+            if all_modules
+                .iter()
+                .any(|d| d.manifest.name() == "keymap-doom")
+            {
+                enabled.insert("keymap-doom".to_string(), vec![]);
+            }
         }
     }
 
@@ -1021,7 +1028,8 @@ pub fn load_modules(
     // Language modules provide keymaps and hooks for file types — without them,
     // file-type features silently fail (Emacs auto-mode-alist equivalent).
     if has_mae_block {
-        for (_, module) in &all_modules {
+        for d in &all_modules {
+            let module = &d.manifest;
             if module.module.category == "lang" && !enabled.contains_key(module.name()) {
                 info!(
                     "auto-enabling {} (language module — add to mae! block to customize)",
@@ -1120,7 +1128,7 @@ pub fn load_modules(
                     .iter()
                     .map(|(k, v)| (k.clone(), v.doc.clone()))
                     .collect(),
-                path: m.path.display().to_string(),
+                path: m.source.label(""),
                 depends: m.manifest.dependencies.keys().cloned().collect(),
                 enabled_flags: m.enabled_flags.clone(),
             }
@@ -1152,7 +1160,7 @@ pub fn load_modules(
                     .collect(),
                 commands: m.commands.clone(),
                 options: m.options.clone(),
-                path: m.path.display().to_string(),
+                path: m.source.label(""),
             })
             .collect();
         install_module_nodes(&mut editor.kb.primary, &module_data);
@@ -1207,47 +1215,39 @@ pub fn load_modules(
 /// and applies the result to the editor. This is a hot-reload path for
 /// module development — no restart needed.
 pub fn reload_module(name: &str, scheme: &mut SchemeRuntime, editor: &mut Editor) {
+    use crate::pkg::embedded::merge_modules;
     use crate::pkg::loader::load_module_autoloads;
     use crate::pkg::manifest::discover_modules;
     use crate::pkg::resolver::ResolvedModule;
 
-    // Find the module in known locations
-    let mut found = None;
-    let manifest_modules = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|repo| repo.join("modules"))
-        .unwrap_or_default();
-    let search_dirs = [
-        std::path::PathBuf::from("modules"),
-        dirs_candidate("mae/modules").unwrap_or_default(),
-        dirs_candidate("mae/packages").unwrap_or_default(),
-        manifest_modules,
-    ];
-    for dir in &search_dirs {
-        if !dir.exists() {
-            continue;
-        }
-        for (path, manifest) in discover_modules(dir) {
-            if manifest.name() == name {
-                found = Some((path, manifest));
-                break;
-            }
-        }
-        if found.is_some() {
-            break;
+    // Find the module across the merged view (embedded baseline + on-disk
+    // overrides), so reload works for embedded modules AND picks up an on-disk
+    // edit of a built-in (disk overrides embedded) — the dev hot-reload loop.
+    let mut disk = Vec::new();
+    let builtin_dirs = builtin_module_dirs();
+    for dir in &builtin_dirs {
+        if dir.exists() && disk.is_empty() {
+            disk.extend(discover_modules(dir));
         }
     }
+    if let Some(user_pkg) = dirs_candidate("mae/packages") {
+        if user_pkg.exists() {
+            disk.extend(discover_modules(&user_pkg));
+        }
+    }
+    let found = merge_modules(disk)
+        .into_iter()
+        .find(|d| d.manifest.name() == name);
 
-    let Some((path, manifest)) = found else {
+    let Some(d) = found else {
         editor.set_status(format!("Module '{}' not found", name));
         return;
     };
 
     let resolved = ResolvedModule {
         name: name.to_string(),
-        path,
-        manifest,
+        source: d.source,
+        manifest: d.manifest,
         enabled_flags: vec![],
     };
 

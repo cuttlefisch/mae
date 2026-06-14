@@ -2663,6 +2663,21 @@ impl SchemeRuntime {
         Ok(())
     }
 
+    /// Evaluate Scheme source already in memory, using `virtual_name` as the
+    /// file label for error messages / stack frames (e.g.
+    /// `"embedded:keymap-doom/autoloads.scm"`). This is the in-memory twin of
+    /// [`load_file`](Self::load_file) — used to load modules embedded in the
+    /// binary without touching the filesystem.
+    pub fn load_source(&mut self, content: &str, virtual_name: &str) -> Result<(), SchemeError> {
+        info!(file = %virtual_name, "loading scheme source");
+        self.vm.eval_with_file(content, virtual_name).map_err(|e| {
+            let err = SchemeError::from(e);
+            error!(file = %virtual_name, error = %err.message, "scheme source evaluation failed");
+            err
+        })?;
+        Ok(())
+    }
+
     /// Evaluate Scheme code, returning yield requests to the caller
     /// instead of blocking. The caller handles the yield (sleep, wait-for-file)
     /// and calls `resume_yield(value)` to continue.
