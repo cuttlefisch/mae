@@ -40,6 +40,12 @@ pub struct KbContext {
     pub capture_state: Option<CaptureState>,
     /// KB node IDs visited via AI tools (kb_get/links_from/links_to) this session.
     pub ai_visited_ids: HashSet<String>,
+    /// Per-node last-visit ordinal (monotonic; higher = more recently visited).
+    /// Drives `KbSort::Recency`. Ordering-only, so a sequence counter rather
+    /// than wall-clock — deterministic and free of `SystemTime` skew.
+    pub visit_log: HashMap<String, u64>,
+    /// Monotonic counter backing `visit_log`; bumped on every recorded visit.
+    pub visit_seq: u64,
     /// Paths currently being written by MAE itself (activity tracking, chain-fill).
     pub write_guard: HashSet<PathBuf>,
     /// CozoDB-first query layer (federated across primary + instances).
@@ -74,8 +80,10 @@ pub struct KbContext {
     pub activity_tracking: bool,
     /// KB option: decay rate for activity scoring.
     pub activity_decay: f64,
-    /// KB option: search result ordering ("relevance", "activity", "alphabetical").
+    /// KB option: search result ordering ("relevance", "activity", "alphabetical", "recency").
     pub search_sort: String,
+    /// KB option: default search scope ("all", "local", "remote", or instance name).
+    pub search_scope: String,
     /// KB option: dailies directory (explicit setting or derived from notes_dir/daily).
     pub dailies_dir: Option<PathBuf>,
     /// KB option: max days to walk backwards when chain-filling dailies (default 90).
@@ -89,6 +97,19 @@ impl KbContext {
     /// default to "default" which maps to `self.primary`).
     pub fn active_instance_name(&self) -> Option<String> {
         self.registry.instances.first().map(|e| e.name.clone())
+    }
+
+    /// Record that node `id` was just visited (by the user via `:help` or the
+    /// AI via kb tools). Bumps the monotonic counter so later visits sort ahead
+    /// of earlier ones under `KbSort::Recency`.
+    pub fn record_visit(&mut self, id: &str) {
+        self.visit_seq += 1;
+        self.visit_log.insert(id.to_string(), self.visit_seq);
+    }
+
+    /// Last-visit ordinal for `id` (0 if never visited this session).
+    pub fn visit_rank(&self, id: &str) -> u64 {
+        self.visit_log.get(id).copied().unwrap_or(0)
     }
 
     /// Return the effective query layer: daemon LRU if connected, else local.
@@ -172,6 +193,8 @@ impl KbContext {
             watcher_stats: KbWatcherStats::default(),
             capture_state: None,
             ai_visited_ids: HashSet::new(),
+            visit_log: HashMap::new(),
+            visit_seq: 0,
             write_guard: HashSet::new(),
             query: None,
             daemon_query: None,
@@ -188,6 +211,7 @@ impl KbContext {
             activity_tracking: true,
             activity_decay: 0.01,
             search_sort: "relevance".to_string(),
+            search_scope: "all".to_string(),
             dailies_dir: None,
             daily_chain_gap_max: 90,
         }

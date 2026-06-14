@@ -3239,6 +3239,10 @@
       "doc": "Open the guided keybindings picker (modal vs non-modal, with descriptions)"
     },
     {
+      "name": "kb-set-search-scope",
+      "doc": "Choose the default KB search scope (all / local / remote / instance)"
+    },
+    {
       "name": "set-save",
       "doc": "Set an option and persist to config.toml (:set-save <key> [value])"
     },

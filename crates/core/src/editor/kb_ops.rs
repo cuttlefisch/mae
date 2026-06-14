@@ -128,6 +128,13 @@ impl KbImportResult {
 }
 
 impl Editor {
+    /// Above this loaded-node count, kb-find switches from eager all-load +
+    /// client-filter to a bounded, query-driven ranked window (lazy at scale).
+    /// Sits above the bundled manual (~870) so the default UX is unchanged.
+    pub const KB_FIND_LAZY_THRESHOLD: usize = 2000;
+    /// Size of the lazy ranked window fetched per query for large KBs.
+    pub const KB_FIND_LAZY_LIMIT: usize = 200;
+
     /// Resolve the MAE config directory (~/.config/mae).
     /// Checks `config_dir_override` first (for test isolation).
     #[allow(dead_code)]
@@ -715,6 +722,58 @@ impl Editor {
         triples
     }
 
+    /// Node-count signal for deciding the kb-find completion strategy. Uses the
+    /// in-memory `primary` (+ instances) length — O(1), no allocation, safe to
+    /// call per keystroke. (A Cozo-backed large KB with an empty `primary` falls
+    /// back to the eager all-load path; the lazy window targets large in-memory
+    /// KBs, which is the common at-scale case.)
+    pub fn kb_loaded_node_count(&self) -> usize {
+        self.kb.primary.len() + self.kb.instances.values().map(|k| k.len()).sum::<usize>()
+    }
+
+    /// Candidate triples (id, title, body≤500) for the kb-find/create palette.
+    ///
+    /// Small KBs (≤ `KB_FIND_LAZY_THRESHOLD`): return *all* nodes so the palette
+    /// filters client-side (instant, no re-search). Large KBs: return a bounded,
+    /// query-driven ranked window via `search_ranked` — full-KB-reachable (the
+    /// ranker scans every node) yet capped, so per-keystroke work stays bounded
+    /// instead of materializing every node. This is the lazy-at-scale path.
+    pub fn kb_find_candidates(&self, query: &str) -> Vec<(String, String, String)> {
+        if self.kb_loaded_node_count() <= Self::KB_FIND_LAZY_THRESHOLD {
+            return self.kb_all_node_triples();
+        }
+        self.kb
+            .primary
+            .search_ranked(query, Self::KB_FIND_LAZY_LIMIT)
+            .into_iter()
+            .filter_map(|(id, _)| {
+                self.kb.primary.get(&id).map(|n| {
+                    let body: String = n.body.chars().take(500).collect();
+                    (n.id.clone(), n.title.clone(), body)
+                })
+            })
+            .collect()
+    }
+
+    /// Re-derive the kb-find palette after its query changed: re-search a bounded
+    /// ranked window for large KBs (lazy), else the standard client-side filter.
+    /// A no-op for non-kb-find palettes beyond their usual `update_filter`.
+    pub fn kb_find_palette_query_changed(&mut self) {
+        use crate::command_palette::PalettePurpose;
+        let (is_kb_find, query) = match self.command_palette.as_ref() {
+            Some(p) => (p.purpose == PalettePurpose::KbFindOrCreate, p.query.clone()),
+            None => return,
+        };
+        if is_kb_find && self.kb_loaded_node_count() > Self::KB_FIND_LAZY_THRESHOLD {
+            let cands = self.kb_find_candidates(&query);
+            if let Some(p) = self.command_palette.as_mut() {
+                p.set_kb_find_entries(&cands);
+            }
+        } else if let Some(p) = self.command_palette.as_mut() {
+            p.update_filter();
+        }
+    }
+
     /// Get activity score for a node by ID, searching local then federated KBs.
     pub fn kb_activity_score_for_id(
         &self,
@@ -772,42 +831,87 @@ impl Editor {
     /// Local results take priority over federated.
     /// Respects `kb_search_sort` option: "relevance" (default), "activity", "alphabetical".
     pub fn kb_federated_search(&self, query: &str) -> Vec<(Option<String>, &mae_kb::Node)> {
+        self.kb_federated_search_scoped(query, &mae_kb::KbScope::All)
+    }
+
+    /// Search across the primary KB and federated instances, restricted to the
+    /// given `scope` (plan decision D4). `KbScope::All` reproduces
+    /// `kb_federated_search` exactly. Local results always win on duplicates.
+    /// Respects `kb_search_sort` ("relevance" default / "activity" /
+    /// "alphabetical" / "recency"). "recency" ranks by relevance first, then
+    /// stably re-sorts so session-visited nodes float to the top (most-recent
+    /// first; unvisited nodes keep their relevance order below them).
+    pub fn kb_federated_search_scoped(
+        &self,
+        query: &str,
+        scope: &mae_kb::KbScope,
+    ) -> Vec<(Option<String>, &mae_kb::Node)> {
+        use mae_kb::KbScope;
         let use_activity = self.kb.search_sort == "activity";
         let use_alpha = self.kb.search_sort == "alphabetical";
+        let use_recency = self.kb.search_sort == "recency";
         let weights = mae_kb::activity::ActivityWeights {
             decay: self.kb.activity_decay,
             ..Default::default()
         };
         let today = if use_activity { today_ymd() } else { (0, 0, 0) };
 
+        // Per-instance ranking, shared by primary + federated members.
+        let rank = |kb: &mae_kb::KnowledgeBase| -> Vec<String> {
+            if use_activity {
+                kb.search_sorted_by_activity(query, &weights, today)
+            } else if use_alpha {
+                kb.search(query)
+            } else {
+                kb.search_ranked(query, self.kb.search_max_results)
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect()
+            }
+        };
+
         let mut results: Vec<(Option<String>, &mae_kb::Node)> = Vec::new();
         let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
-        // Local KB first (always wins on duplicates)
-        let local_ids = if use_activity {
-            self.kb
-                .primary
-                .search_sorted_by_activity(query, &weights, today)
-        } else {
-            self.kb.primary.search(query)
+        // Does the primary participate under this scope? The primary's registry
+        // name is matched for the Named case.
+        let primary_name = self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| i.primary)
+            .map(|i| i.name.as_str());
+        let include_primary = match scope {
+            KbScope::All | KbScope::LocalOnly => true,
+            KbScope::RemoteOnly => false,
+            KbScope::Named(n) => primary_name == Some(n.as_str()),
         };
-        for id in local_ids {
-            if let Some(node) = self.kb.primary.get(&id) {
-                if seen_ids.insert(&node.id) {
-                    results.push((None, node));
+
+        if include_primary {
+            for id in rank(&self.kb.primary) {
+                if let Some(node) = self.kb.primary.get(&id) {
+                    if seen_ids.insert(&node.id) {
+                        results.push((None, node));
+                    }
                 }
             }
         }
 
-        // Then each federated instance (skip if already seen)
+        // Then each federated instance permitted by the scope (skip if seen).
         for (uuid, kb) in &self.kb.instances {
-            let inst_name = self.kb.registry.find_by_uuid(uuid).map(|i| i.name.clone());
-            let fed_ids = if use_activity {
-                kb.search_sorted_by_activity(query, &weights, today)
-            } else {
-                kb.search(query)
+            let inst = self.kb.registry.find_by_uuid(uuid);
+            let include = match scope {
+                KbScope::All => true,
+                KbScope::LocalOnly => false,
+                KbScope::RemoteOnly => inst.is_some_and(|i| i.is_remote()),
+                KbScope::Named(n) => inst.is_some_and(|i| &i.name == n),
             };
-            for id in fed_ids {
+            if !include {
+                continue;
+            }
+            let inst_name = inst.map(|i| i.name.clone());
+            for id in rank(kb) {
                 if let Some(node) = kb.get(&id) {
                     if seen_ids.insert(&node.id) {
                         results.push((inst_name.clone(), node));
@@ -818,6 +922,14 @@ impl Editor {
 
         if use_alpha {
             results.sort_by(|a, b| a.1.id.cmp(&b.1.id));
+        } else if use_recency {
+            // Stable sort by descending visit ordinal: most-recently-visited
+            // first; ties (incl. all unvisited at rank 0) keep relevance order.
+            results.sort_by(|a, b| {
+                self.kb
+                    .visit_rank(&b.1.id)
+                    .cmp(&self.kb.visit_rank(&a.1.id))
+            });
         }
 
         results
@@ -2121,6 +2233,229 @@ mod tests {
         let results = editor.kb_federated_search("Note");
         let federated: Vec<_> = results.iter().filter(|(name, _)| name.is_some()).collect();
         assert!(!federated.is_empty());
+    }
+
+    #[test]
+    fn kb_federated_search_scope_filters_instances() {
+        use mae_kb::KbScope;
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor.kb_register("TestNotes", dir.path());
+
+        let count_federated = |r: &[(Option<String>, &mae_kb::Node)]| {
+            r.iter().filter(|(name, _)| name.is_some()).count()
+        };
+
+        // All: includes the federated TestNotes instance.
+        let all = editor.kb_federated_search_scoped("Note", &KbScope::All);
+        assert!(count_federated(&all) > 0, "All should include federated");
+
+        // LocalOnly: drops every federated result.
+        let local = editor.kb_federated_search_scoped("Note", &KbScope::LocalOnly);
+        assert_eq!(count_federated(&local), 0, "LocalOnly excludes federated");
+
+        // Named: selects exactly the named instance's results.
+        let named = editor.kb_federated_search_scoped("Note", &KbScope::Named("TestNotes".into()));
+        assert!(count_federated(&named) > 0, "Named selects the instance");
+        assert!(
+            named
+                .iter()
+                .all(|(name, _)| name.is_none() || name.as_deref() == Some("TestNotes")),
+            "Named yields only that instance (+ local)"
+        );
+
+        // RemoteOnly: TestNotes is a local import (not shared), so no results.
+        let remote = editor.kb_federated_search_scoped("Note", &KbScope::RemoteOnly);
+        assert_eq!(
+            count_federated(&remote),
+            0,
+            "RemoteOnly excludes non-shared local imports"
+        );
+    }
+
+    #[test]
+    fn kb_search_recency_floats_visited_to_top() {
+        let mut editor = Editor::new();
+        editor.kb.search_sort = "recency".to_string();
+
+        // Pick two nodes that both match a common query but aren't the top
+        // relevance hit, then visit the second one and confirm it leads.
+        let baseline = editor.kb_federated_search("buffer");
+        assert!(baseline.len() >= 2, "need ≥2 matches for the query");
+        // A match that is NOT already first under relevance.
+        let promote = baseline[1].1.id.clone();
+
+        // No visits yet → recency order == relevance order (stable).
+        let ids_before: Vec<String> = editor
+            .kb_federated_search("buffer")
+            .iter()
+            .map(|(_, n)| n.id.clone())
+            .collect();
+        assert_eq!(ids_before.first(), Some(&baseline[0].1.id.clone()));
+
+        // Visit the promoted node; it should now sort first.
+        editor.kb.record_visit(&promote);
+        let ids_after: Vec<String> = editor
+            .kb_federated_search("buffer")
+            .iter()
+            .map(|(_, n)| n.id.clone())
+            .collect();
+        assert_eq!(
+            ids_after.first(),
+            Some(&promote),
+            "visited node should float to the top under recency sort"
+        );
+    }
+
+    #[test]
+    fn kb_search_sort_option_accepts_recency() {
+        let mut editor = Editor::new();
+        assert!(editor.set_option("kb_search_sort", "recency").is_ok());
+        assert_eq!(editor.kb.search_sort, "recency");
+        assert_eq!(
+            editor.get_option("kb_search_sort").map(|(v, _)| v),
+            Some("recency".to_string())
+        );
+        // Invalid value is rejected and leaves the setting unchanged.
+        assert!(editor.set_option("kb_search_sort", "bogus").is_err());
+        assert_eq!(editor.kb.search_sort, "recency");
+    }
+
+    #[test]
+    fn kb_search_scope_option_round_trip() {
+        let mut editor = Editor::new();
+        // Keywords always validate.
+        for kw in ["all", "local", "remote"] {
+            assert!(editor.set_option("kb_search_scope", kw).is_ok());
+            assert_eq!(editor.kb.search_scope, kw);
+        }
+        // An unknown instance name is rejected (no instance registered).
+        assert!(editor.set_option("kb_search_scope", "NoSuchKB").is_err());
+        // A registered instance name validates.
+        let dir = create_test_org_dir();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor.kb_register("TestNotes", dir.path());
+        assert!(editor.set_option("kb_search_scope", "TestNotes").is_ok());
+        assert_eq!(
+            editor.get_option("kb_search_scope").map(|(v, _)| v),
+            Some("TestNotes".to_string())
+        );
+    }
+
+    #[test]
+    fn kb_find_candidates_small_kb_returns_all() {
+        let editor = Editor::new();
+        // The seed manual is well under the lazy threshold.
+        assert!(editor.kb_loaded_node_count() <= Editor::KB_FIND_LAZY_THRESHOLD);
+        let all = editor.kb_all_node_triples();
+        let cands = editor.kb_find_candidates("");
+        assert_eq!(cands.len(), all.len(), "small KB should return every node");
+    }
+
+    #[test]
+    fn kb_find_candidates_large_kb_is_bounded_but_query_reachable() {
+        let mut editor = Editor::new();
+        // Push past the lazy threshold with synthetic nodes, including one
+        // distinctive node far beyond the empty-query window.
+        for i in 0..(Editor::KB_FIND_LAZY_THRESHOLD + 500) {
+            editor.kb.primary.insert(mae_kb::Node::new(
+                format!("note:bulk{i}"),
+                format!("Bulk Note {i}"),
+                mae_kb::NodeKind::Note,
+                "filler body",
+            ));
+        }
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "note:zebra-marker",
+            "Zebra Marker",
+            mae_kb::NodeKind::Note,
+            "uniquely findable",
+        ));
+        assert!(editor.kb_loaded_node_count() > Editor::KB_FIND_LAZY_THRESHOLD);
+
+        // Empty query: bounded window, not the whole KB.
+        let empty = editor.kb_find_candidates("");
+        assert!(
+            empty.len() <= Editor::KB_FIND_LAZY_LIMIT,
+            "large-KB window should be bounded, got {}",
+            empty.len()
+        );
+
+        // A targeted query still reaches a node outside the empty window — the
+        // ranker scans the whole KB, so lazy completion stays full-KB-reachable.
+        let hits = editor.kb_find_candidates("zebra marker");
+        assert!(
+            hits.iter().any(|(id, _, _)| id == "note:zebra-marker"),
+            "targeted query must find the distinctive node at scale"
+        );
+    }
+
+    #[test]
+    fn kb_find_palette_lazy_refresh_repopulates_on_query() {
+        let mut editor = Editor::new();
+        for i in 0..(Editor::KB_FIND_LAZY_THRESHOLD + 100) {
+            editor.kb.primary.insert(mae_kb::Node::new(
+                format!("note:bulk{i}"),
+                format!("Bulk Note {i}"),
+                mae_kb::NodeKind::Note,
+                "filler",
+            ));
+        }
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "note:platypus",
+            "Platypus",
+            mae_kb::NodeKind::Note,
+            "distinctive",
+        ));
+
+        // Open kb-find: bounded initial window.
+        assert!(editor.dispatch_builtin("kb-find"));
+        let initial = editor.command_palette.as_ref().unwrap().entries.len();
+        assert!(initial <= Editor::KB_FIND_LAZY_LIMIT);
+
+        // Type a query, then refresh: the distinctive node is now reachable.
+        if let Some(p) = editor.command_palette.as_mut() {
+            p.query = "platypus".to_string();
+        }
+        editor.kb_find_palette_query_changed();
+        let entries: Vec<String> = editor
+            .command_palette
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert!(
+            entries.iter().any(|id| id == "note:platypus"),
+            "lazy refresh should surface the queried node"
+        );
+    }
+
+    #[test]
+    fn kb_set_search_scope_command_opens_picker() {
+        let mut editor = Editor::new();
+        assert!(editor.command_palette.is_none());
+        assert!(editor.dispatch_builtin("kb-set-search-scope"));
+        let palette = editor.command_palette.as_ref().expect("picker should open");
+        assert_eq!(
+            palette.purpose,
+            crate::command_palette::PalettePurpose::SetKbSearchScope
+        );
+        // Keyword scopes are always present (no instances registered here).
+        let names: Vec<&str> = palette.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["all", "local", "remote"]);
+    }
+
+    #[test]
+    fn kb_visit_log_is_monotonic() {
+        let mut editor = Editor::new();
+        editor.kb.record_visit("concept:buffer");
+        editor.kb.record_visit("concept:window");
+        editor.kb.record_visit("concept:buffer"); // re-visit bumps ahead
+        assert!(editor.kb.visit_rank("concept:buffer") > editor.kb.visit_rank("concept:window"));
+        assert_eq!(editor.kb.visit_rank("never-visited"), 0);
     }
 
     #[test]

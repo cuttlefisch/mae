@@ -84,20 +84,62 @@ pub fn execute_kb_get(editor: &Editor, args: &serde_json::Value) -> Result<Strin
     }
 }
 
-/// Record a KB node ID as visited by the AI agent (for cycle detection).
+/// Record a KB node ID as visited by the AI agent (for cycle detection and
+/// recency ordering).
 pub fn record_kb_visit(editor: &mut Editor, id: &str) {
     editor.kb.ai_visited_ids.insert(id.to_string());
+    editor.kb.record_visit(id);
 }
 
 pub fn execute_kb_search(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-    // Use kb_federated_search which respects kb_search_sort option
-    let results = editor.kb_federated_search(query);
-    let ids: Vec<String> = results
+    // Optional `scope` ("all" | "local" | "remote" | "<instance-name>") selects
+    // which federated layers participate; an explicit arg wins, else the
+    // `kb_search_scope` option default. Optional `limit` caps the returned objects.
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(mae_kb::KbScope::parse)
+        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(editor.kb.search_max_results);
+
+    // Use the scoped federated search (respects kb_search_sort). Return enriched
+    // objects (id/title/kind/instance/excerpt) so the agent can choose a node
+    // without a follow-up kb_get round-trip.
+    let results = editor.kb_federated_search_scoped(query, &scope);
+    let objs: Vec<serde_json::Value> = results
         .into_iter()
-        .map(|(_, node)| node.id.clone())
+        .take(limit)
+        .map(|(instance, node)| {
+            serde_json::json!({
+                "id": node.id,
+                "title": node.title,
+                "kind": node.kind.as_str(),
+                "instance": instance,
+                "excerpt": kb_excerpt(&node.body, 160),
+            })
+        })
         .collect();
-    serde_json::to_string_pretty(&ids).map_err(|e| e.to_string())
+    serde_json::to_string_pretty(&objs).map_err(|e| e.to_string())
+}
+
+/// First non-empty line of `body`, trimmed and truncated to `max` chars (on a
+/// char boundary) with an ellipsis. Used for compact search-result previews.
+fn kb_excerpt(body: &str, max: usize) -> String {
+    let line = body
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    if line.chars().count() <= max {
+        return line.to_string();
+    }
+    let truncated: String = line.chars().take(max).collect();
+    format!("{}…", truncated.trim_end())
 }
 
 pub fn execute_kb_list(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -164,6 +206,65 @@ pub fn execute_kb_links_to(editor: &Editor, args: &serde_json::Value) -> Result<
     }
     links.sort();
     serde_json::to_string_pretty(&links).map_err(|e| e.to_string())
+}
+
+/// Graph-relatedness: nodes structurally related to `id` (co-citation /
+/// bibliographic coupling / shared tags), distinct from lexical `kb_search`.
+/// Prefers the query layer (Cozo Datalog) and falls back to the in-memory KB.
+/// Returns `[{id, title, kind, score}]` sorted by relatedness, capped to
+/// `limit` (default 10). Relatedness is per-instance (graph edges don't cross
+/// federated instances), matching `kb_graph`/`kb_links_from`.
+pub fn execute_kb_related(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: id".to_string())?;
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(10);
+
+    // In-memory fallback: the owning instance computes relatedness (primary
+    // wins, else whichever federated instance contains the node).
+    let related_in_memory = |id: &str| -> Vec<(String, f64)> {
+        if editor.kb.primary.contains(id) {
+            return editor.kb.primary.related(id, limit);
+        }
+        for kb in editor.kb.instances.values() {
+            if kb.contains(id) {
+                return kb.related(id, limit);
+            }
+        }
+        Vec::new()
+    };
+
+    let scored: Vec<(String, f64)> = match editor.kb.query_layer() {
+        Some(q) if q.contains(id) => q.related(id, limit),
+        _ => related_in_memory(id),
+    };
+
+    // Resolve title/kind for each result without an extra round-trip.
+    let lookup = |rid: &str| -> (String, String) {
+        if let Some(n) = editor.kb.primary.get(rid) {
+            return (n.title.clone(), n.kind.as_str().to_string());
+        }
+        for kb in editor.kb.instances.values() {
+            if let Some(n) = kb.get(rid) {
+                return (n.title.clone(), n.kind.as_str().to_string());
+            }
+        }
+        (String::new(), String::new())
+    };
+
+    let objs: Vec<serde_json::Value> = scored
+        .into_iter()
+        .map(|(rid, score)| {
+            let (title, kind) = lookup(&rid);
+            serde_json::json!({ "id": rid, "title": title, "kind": kind, "score": score })
+        })
+        .collect();
+    serde_json::to_string_pretty(&objs).map_err(|e| e.to_string())
 }
 
 /// BFS neighborhood around a seed node, up to `depth` hops (default 1, max 3).
@@ -1069,16 +1170,31 @@ pub fn execute_kb_view_query(editor: &Editor, args: &serde_json::Value) -> Resul
 }
 
 pub fn execute_kb_vector_search(
-    _editor: &Editor,
-    _args: &serde_json::Value,
+    editor: &Editor,
+    args: &serde_json::Value,
 ) -> Result<String, String> {
-    // Embedding generation is not yet available (v0.13.0).
-    // The HNSW index and store/search APIs are ready but no embedding
-    // provider is configured yet.
+    // Semantic/vector search is the third search modality (alongside lexical
+    // `kb_search` and graph `kb_related`). It shares their contract — `scope`
+    // and `limit` are accepted and validated here so the API shape is stable —
+    // but the ranked path is stubbed: the HNSW index + store/search APIs and
+    // the 0..1 score band are ready, yet no embedding provider is wired, so we
+    // can't embed the query. Fail gracefully and steer to the modalities that
+    // DO work rather than erroring opaquely.
+    let _scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(mae_kb::KbScope::parse)
+        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
+    let _limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(editor.kb.search_max_results);
     Err(
-        "Vector search requires an embedding provider (planned for v0.13.0). \
-         The HNSW index schema is ready — use kb_raw_query to inspect the \
-         embeddings relation directly."
+        "Semantic (vector) search is unavailable: no embedding provider is \
+         configured, so the query can't be embedded. The HNSW index and 0..1 \
+         score contract are ready for when one is wired. For now use kb_search \
+         (lexical relevance) or kb_related (graph relatedness) instead."
             .to_string(),
     )
 }
@@ -1125,20 +1241,112 @@ mod tests {
         assert_eq!(unquote_dv("plain"), "plain");
     }
 
+    /// Pull the `id` field out of each kb_search result object.
+    fn kb_search_ids(result: &str) -> Vec<String> {
+        let objs: Vec<serde_json::Value> = serde_json::from_str(result).unwrap();
+        objs.into_iter()
+            .map(|o| o["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
     #[test]
     fn kb_search_finds_by_title() {
         let editor = Editor::new();
         let result = execute_kb_search(&editor, &serde_json::json!({"query": "buffer"})).unwrap();
-        let ids: Vec<String> = serde_json::from_str(&result).unwrap();
-        assert!(ids.contains(&"concept:buffer".to_string()));
+        let ids = kb_search_ids(&result);
+        // Enriched results now rank the canonical concept node first.
+        assert_eq!(ids.first().map(String::as_str), Some("concept:buffer"));
+        // Each result object carries the enriched fields.
+        let objs: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(objs.iter().all(|o| o.get("title").is_some()
+            && o.get("kind").is_some()
+            && o.get("excerpt").is_some()));
     }
 
     #[test]
-    fn kb_search_empty_query_returns_all() {
+    fn kb_search_empty_query_returns_bounded() {
         let editor = Editor::new();
         let result = execute_kb_search(&editor, &serde_json::json!({"query": ""})).unwrap();
-        let ids: Vec<String> = serde_json::from_str(&result).unwrap();
-        assert_eq!(ids.len(), editor.kb.primary.len());
+        let ids = kb_search_ids(&result);
+        // Empty query lists nodes but is bounded by the result cap (kb_list is
+        // the unbounded enumeration tool).
+        assert!(!ids.is_empty());
+        assert!(ids.len() <= editor.kb.search_max_results);
+    }
+
+    #[test]
+    fn kb_search_respects_explicit_limit() {
+        let editor = Editor::new();
+        let result =
+            execute_kb_search(&editor, &serde_json::json!({"query": "buffer", "limit": 3}))
+                .unwrap();
+        let ids = kb_search_ids(&result);
+        assert!(ids.len() <= 3);
+    }
+
+    #[test]
+    fn kb_search_local_scope_excludes_federated() {
+        // With no federated instances, local scope behaves like all.
+        let editor = Editor::new();
+        let all = execute_kb_search(&editor, &serde_json::json!({"query": "buffer"})).unwrap();
+        let local = execute_kb_search(
+            &editor,
+            &serde_json::json!({"query": "buffer", "scope": "local"}),
+        )
+        .unwrap();
+        assert_eq!(kb_search_ids(&all), kb_search_ids(&local));
+    }
+
+    #[test]
+    fn kb_related_returns_scored_objects() {
+        let editor = Editor::new();
+        // concept:buffer is a well-connected manual node; it should have
+        // related neighbors via the seeded link graph.
+        let result =
+            execute_kb_related(&editor, &serde_json::json!({"id": "concept:buffer"})).unwrap();
+        let objs: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            !objs.is_empty(),
+            "expected related nodes for concept:buffer"
+        );
+        // Each object carries id/title/kind/score and excludes the seed itself.
+        for o in &objs {
+            assert!(o.get("id").and_then(|v| v.as_str()).is_some());
+            assert!(o.get("score").and_then(|v| v.as_f64()).is_some());
+            assert_ne!(o["id"].as_str(), Some("concept:buffer"));
+        }
+        // Scores are sorted descending.
+        let scores: Vec<f64> = objs.iter().map(|o| o["score"].as_f64().unwrap()).collect();
+        assert!(scores.windows(2).all(|w| w[0] >= w[1]), "scores not sorted");
+    }
+
+    #[test]
+    fn kb_vector_search_fails_gracefully_and_points_to_alternatives() {
+        let editor = Editor::new();
+        // Accepts the shared scope/limit contract without panicking, and the
+        // error steers to the working modalities rather than failing opaquely.
+        let err = execute_kb_vector_search(
+            &editor,
+            &serde_json::json!({"query": "buffers", "scope": "local", "limit": 5}),
+        )
+        .unwrap_err();
+        assert!(err.contains("kb_search"), "should suggest lexical search");
+        assert!(
+            err.contains("kb_related"),
+            "should suggest graph relatedness"
+        );
+    }
+
+    #[test]
+    fn kb_related_respects_limit() {
+        let editor = Editor::new();
+        let result = execute_kb_related(
+            &editor,
+            &serde_json::json!({"id": "concept:buffer", "limit": 2}),
+        )
+        .unwrap();
+        let objs: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(objs.len() <= 2);
     }
 
     #[test]

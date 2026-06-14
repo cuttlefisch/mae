@@ -403,6 +403,22 @@ impl Editor {
                     Some(crate::command_palette::CommandPalette::for_keymap_flavor());
                 self.set_mode(Mode::CommandPalette);
             }
+            "kb-set-search-scope" => {
+                // Guided picker for the default KB search scope; lists keyword
+                // scopes plus each registered instance.
+                let names: Vec<&str> = self
+                    .kb
+                    .registry
+                    .instances
+                    .iter()
+                    .filter(|i| !i.primary)
+                    .map(|i| i.name.as_str())
+                    .collect();
+                self.command_palette = Some(
+                    crate::command_palette::CommandPalette::for_kb_search_scope(&names),
+                );
+                self.set_mode(Mode::CommandPalette);
+            }
             "keymap-set-flavor" => {
                 let arg = self.vi.command_line.trim().to_string();
                 let target = if !arg.is_empty() {

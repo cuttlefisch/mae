@@ -579,6 +579,84 @@ impl CozoKbStore {
         Ok(SubGraph { nodes, edges })
     }
 
+    /// Graph-relatedness over the typed link graph + tags — the Cozo-backed
+    /// twin of [`crate::KnowledgeBase::related`]. Same four signals (direct
+    /// link, bibliographic coupling, co-citation, shared tags), same weights,
+    /// so results match the in-memory path. Built from the Datalog-backed
+    /// `links_from`/`links_to` primitives (mirrors `neighborhood`'s approach,
+    /// which avoids fragile recursive/self-join Datalog).
+    pub fn related(&self, id: &str, limit: usize) -> Result<Vec<(String, f64)>, KbStoreError> {
+        let Some(node) = self.get_node(id)? else {
+            return Ok(Vec::new());
+        };
+        const W_DIRECT: f64 = 2.0;
+        const W_COUPLING: f64 = 1.0;
+        const W_COCITATION: f64 = 1.0;
+        const W_TAG: f64 = 0.5;
+
+        let out: Vec<String> = self.links_from(id)?.into_iter().map(|l| l.dst).collect();
+        let inn: Vec<String> = self.links_to(id)?.into_iter().map(|l| l.src).collect();
+        let tags: std::collections::HashSet<String> = node.tags.into_iter().collect();
+
+        let mut score: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+
+        // Bibliographic coupling: other nodes that link to the same targets.
+        for target in &out {
+            for l in self.links_to(target)? {
+                if l.src != id {
+                    *score.entry(l.src).or_default() += W_COUPLING;
+                }
+            }
+        }
+        // Co-citation: other nodes cited by the same sources.
+        for src in &inn {
+            for l in self.links_from(src)? {
+                if l.dst != id {
+                    *score.entry(l.dst).or_default() += W_COCITATION;
+                }
+            }
+        }
+        // Direct adjacency (either direction) is the strongest signal.
+        for c in out.iter().chain(inn.iter()) {
+            if c != id {
+                *score.entry(c.clone()).or_default() += W_DIRECT;
+            }
+        }
+        // Shared tags — one bulk query over `tags_json`, parsed in Rust (tags
+        // aren't a relation, so this can't be a pure Datalog join).
+        if !tags.is_empty() {
+            let rows = self
+                .run_immut("?[id, tags_json] := *nodes{id, tags_json}")
+                .map_err(cozo_err)?;
+            for row in &rows.rows {
+                let Some(cid) = row.first().and_then(|v| v.get_str()) else {
+                    continue;
+                };
+                if cid == id {
+                    continue;
+                }
+                let ctags: Vec<String> = row
+                    .get(1)
+                    .and_then(|v| v.get_str())
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_default();
+                let shared = ctags.iter().filter(|t| tags.contains(*t)).count();
+                if shared > 0 {
+                    *score.entry(cid.to_string()).or_default() += W_TAG * shared as f64;
+                }
+            }
+        }
+
+        let mut scored: Vec<(String, f64)> = score.into_iter().collect();
+        scored.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        scored.truncate(limit);
+        Ok(scored)
+    }
+
     /// Persist all nodes from an in-memory `KnowledgeBase` into this CozoDB store.
     ///
     /// Used by `build-manual-kb` to create the pre-built manual KB file.
@@ -2707,6 +2785,40 @@ mod tests {
         // Depth 2: should include far1 too
         let sg2 = store.neighborhood("center", 2).unwrap();
         assert!(sg2.nodes.len() >= 4);
+    }
+
+    #[test]
+    fn related_matches_graph_and_tag_signals() {
+        let (_tmp, store) = make_store();
+        let mut seed = Node::new("seed", "Seed", NodeKind::Note, "");
+        seed.tags = vec!["topic".into()];
+        let mut tagmate = Node::new("tagmate", "Tagmate", NodeKind::Note, "");
+        tagmate.tags = vec!["topic".into()];
+        for n in [
+            &seed,
+            &Node::new("coupled", "Coupled", NodeKind::Note, ""),
+            &Node::new("hub", "Hub", NodeKind::Note, ""),
+            &Node::new("direct", "Direct", NodeKind::Note, ""),
+            &tagmate,
+            &Node::new("unrelated", "Unrelated", NodeKind::Note, ""),
+        ] {
+            store.insert_node(n).unwrap();
+        }
+        // seed -> hub ; coupled -> hub (coupling) ; direct -> seed (adjacency).
+        store.add_link("seed", "hub", None).unwrap();
+        store.add_link("coupled", "hub", None).unwrap();
+        store.add_link("direct", "seed", None).unwrap();
+
+        let related = store.related("seed", 10).unwrap();
+        let score = |id: &str| related.iter().find(|(i, _)| i == id).map(|(_, s)| *s);
+
+        // Same ordering guarantees as the in-memory KnowledgeBase::related.
+        assert!(score("hub").unwrap() > score("coupled").unwrap());
+        assert!(score("direct").unwrap() > score("coupled").unwrap());
+        assert!(score("coupled").unwrap() > score("tagmate").unwrap());
+        assert!(score("tagmate").is_some(), "tag-only relatedness surfaces");
+        assert!(score("unrelated").is_none());
+        assert!(score("seed").is_none());
     }
 
     #[test]

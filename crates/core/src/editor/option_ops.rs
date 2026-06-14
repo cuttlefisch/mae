@@ -138,6 +138,7 @@ impl super::Editor {
             "kb_activity_tracking" => self.kb.activity_tracking.to_string(),
             "kb_activity_decay" => self.kb.activity_decay.to_string(),
             "kb_search_sort" => self.kb.search_sort.clone(),
+            "kb_search_scope" => self.kb.search_scope.clone(),
             "kb_dailies_dir" => self
                 .kb
                 .dailies_dir
@@ -574,16 +575,36 @@ impl super::Editor {
                 self.kb.activity_decay = v.clamp(0.0001, 1.0);
             }
             "kb_search_sort" => match value {
-                "relevance" | "activity" | "alphabetical" => {
+                "relevance" | "activity" | "alphabetical" | "recency" => {
                     self.kb.search_sort = value.to_string();
                 }
                 _ => {
                     return Err(format!(
-                    "Invalid kb_search_sort: '{}' (expected: relevance, activity, alphabetical)",
+                    "Invalid kb_search_sort: '{}' (expected: relevance, activity, alphabetical, recency)",
                     value
                 ))
                 }
             },
+            "kb_search_scope" => {
+                // Freeform: "all" / "local" / "remote" / "<instance-name>".
+                // A named instance must exist; the keywords always validate.
+                let trimmed = value.trim();
+                let keyword = matches!(
+                    trimmed.to_ascii_lowercase().as_str(),
+                    "" | "all" | "local" | "local-only" | "remote" | "remote-only"
+                );
+                if !keyword && self.kb.registry.find(trimmed).is_none() {
+                    return Err(format!(
+                        "Invalid kb_search_scope: no KB instance named '{}' (expected: all, local, remote, or a registered instance name)",
+                        trimmed
+                    ));
+                }
+                self.kb.search_scope = if trimmed.is_empty() {
+                    "all".to_string()
+                } else {
+                    trimmed.to_string()
+                };
+            }
             "kb_dailies_dir" => {
                 if value.is_empty() {
                     self.kb.dailies_dir = None;

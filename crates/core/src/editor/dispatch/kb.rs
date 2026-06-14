@@ -10,7 +10,9 @@ impl Editor {
     pub(super) fn dispatch_kb(&mut self, name: &str) -> Option<bool> {
         match name {
             "kb-find" | "kb-create" => {
-                let nodes = self.kb_all_node_triples();
+                // Bounded candidate set: all nodes for small KBs (client-filter),
+                // or a ranked window for large KBs (lazy, re-queried as you type).
+                let nodes = self.kb_find_candidates("");
                 self.command_palette =
                     Some(crate::command_palette::CommandPalette::for_kb_find_or_create(&nodes));
                 self.set_mode(Mode::CommandPalette);

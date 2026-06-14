@@ -38,6 +38,56 @@ pub struct KbInstance {
     pub last_sync: Option<String>,
 }
 
+impl KbInstance {
+    /// Whether this instance is shared/remote (collaborative). Used by
+    /// `KbScope::RemoteOnly` to select only network-backed instances.
+    pub fn is_remote(&self) -> bool {
+        self.shared || self.collab_id.is_some() || !self.remote_peers.is_empty()
+    }
+}
+
+/// Which federated KB instances participate in a search/traversal query.
+///
+/// This is a query-time selector, not new plumbing (plan decision D4): it
+/// filters which of the primary + registered instances contribute results.
+/// Parsed from the `kb_search_scope` option / AI-tool `scope` argument.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum KbScope {
+    /// Primary (local) KB + all enabled instances. Default.
+    #[default]
+    All,
+    /// Only the primary (local) KB.
+    LocalOnly,
+    /// Only shared/remote (collaborative) instances; skip the primary.
+    RemoteOnly,
+    /// A single instance addressed by name (matches the primary's name too).
+    Named(String),
+}
+
+impl KbScope {
+    /// Parse a scope token from config / AI-tool input.
+    /// `"" | "all"` → All, `"local"` → LocalOnly, `"remote"` → RemoteOnly,
+    /// anything else → `Named(<trimmed>)`.
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" | "all" => KbScope::All,
+            "local" | "local-only" | "localonly" => KbScope::LocalOnly,
+            "remote" | "remote-only" | "remoteonly" => KbScope::RemoteOnly,
+            _ => KbScope::Named(s.trim().to_string()),
+        }
+    }
+
+    /// Canonical token for persistence / display.
+    pub fn as_token(&self) -> String {
+        match self {
+            KbScope::All => "all".to_string(),
+            KbScope::LocalOnly => "local".to_string(),
+            KbScope::RemoteOnly => "remote".to_string(),
+            KbScope::Named(n) => n.clone(),
+        }
+    }
+}
+
 /// Registry of all known KB instances. Persisted as TOML.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KbRegistry {
@@ -594,6 +644,49 @@ pub fn parse_eor_link(link: &str) -> (Option<&str>, &str) {
 mod tests {
     use super::*;
     use crate::NodeKind;
+
+    #[test]
+    fn kb_scope_parse_tokens() {
+        assert_eq!(KbScope::parse(""), KbScope::All);
+        assert_eq!(KbScope::parse("all"), KbScope::All);
+        assert_eq!(KbScope::parse("ALL"), KbScope::All);
+        assert_eq!(KbScope::parse("local"), KbScope::LocalOnly);
+        assert_eq!(KbScope::parse("local-only"), KbScope::LocalOnly);
+        assert_eq!(KbScope::parse("remote"), KbScope::RemoteOnly);
+        assert_eq!(KbScope::parse("MyNotes"), KbScope::Named("MyNotes".into()));
+        // Round-trip through the canonical token.
+        assert_eq!(
+            KbScope::parse(&KbScope::RemoteOnly.as_token()),
+            KbScope::RemoteOnly
+        );
+        assert_eq!(
+            KbScope::parse(&KbScope::Named("Work".into()).as_token()),
+            KbScope::Named("Work".into())
+        );
+    }
+
+    #[test]
+    fn kb_instance_is_remote() {
+        let mut inst = KbInstance {
+            uuid: "u".into(),
+            name: "n".into(),
+            org_dir: PathBuf::from("/tmp/n"),
+            db_path: PathBuf::from("/tmp/n.db"),
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+        };
+        assert!(!inst.is_remote(), "plain local import is not remote");
+        inst.shared = true;
+        assert!(inst.is_remote(), "shared instance is remote");
+        inst.shared = false;
+        inst.remote_peers.push("peer1".into());
+        assert!(inst.is_remote(), "instance with peers is remote");
+    }
 
     #[test]
     fn registry_register_and_find() {

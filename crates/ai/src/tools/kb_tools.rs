@@ -29,17 +29,35 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "kb_search".into(),
-            description: "Search all knowledge base nodes (MAE manual + user + federated). Case-insensitive over titles, ids, bodies, tags, and aliases. Returns ids in relevance order. Falls back to fuzzy scoring when no substring matches are found. Empty query returns all ids.".into(),
+            description: "Search all knowledge base nodes (MAE manual + user + federated). Orderless, field-weighted relevance ranking over titles, ids, bodies, tags, and aliases (multi-word queries are AND-matched, order-independent). Returns an array of objects {id, title, kind, instance, excerpt} in relevance order; `instance` is null for local nodes. Returns up to `limit` results (default kb_search_max_results); use kb_list to enumerate every node id.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
-                properties: HashMap::from([(
-                    "query".into(),
-                    ToolProperty {
-                        prop_type: "string".into(),
-                        description: "Substring to search for (case-insensitive)".into(),
-                        enum_values: None,
-                    },
-                )]),
+                properties: HashMap::from([
+                    (
+                        "query".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Search terms (case-insensitive, order-independent)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "scope".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Which KBs to search: 'all' (default), 'local' (primary only), 'remote' (shared/collaborative instances only), or a specific instance name.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Max results to return (default: kb_search_max_results).".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
                 required: vec![],
             },
             permission: Some(PermissionTier::ReadOnly),
@@ -114,6 +132,33 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
                         ToolProperty {
                             prop_type: "integer".into(),
                             description: "Hop radius (default 1, clamped to 3)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["id".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_related".into(),
+            description: "Find nodes structurally related to a seed node — distinct from kb_search (which matches text). Combines graph signals (direct links, co-citation, bibliographic coupling) and shared tags. Returns [{id, title, kind, score}] sorted by relatedness. Use this to suggest \"see also\" topics or discover adjacent concepts the text search wouldn't surface. Relatedness is computed within the node's own KB instance.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Seed node id".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Max related nodes to return (default 10)".into(),
                             enum_values: None,
                         },
                     ),
@@ -677,7 +722,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "kb_vector_search".into(),
-            description: "Search KB by vector similarity (HNSW). Requires embeddings to be populated (v0.13.0+). Returns nearest neighbors with cosine distance scores.".into(),
+            description: "Semantic (vector) KB search — the similarity-by-meaning modality alongside kb_search (lexical) and kb_related (graph). Currently UNAVAILABLE: no embedding provider is configured, so it returns a clear error pointing you to kb_search / kb_related. Shares their scope/limit contract for when embeddings are wired.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -685,15 +730,23 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
                         "query".into(),
                         ToolProperty {
                             prop_type: "string".into(),
-                            description: "Text query (will be embedded when embedding provider is configured)".into(),
+                            description: "Text query (will be embedded when an embedding provider is configured)".into(),
                             enum_values: None,
                         },
                     ),
                     (
-                        "k".into(),
+                        "scope".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Which KBs to search: 'all' (default), 'local', 'remote', or an instance name (same as kb_search)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
                         ToolProperty {
                             prop_type: "integer".into(),
-                            description: "Number of results (default 5)".into(),
+                            description: "Max results (default: kb_search_max_results)".into(),
                             enum_values: None,
                         },
                     ),

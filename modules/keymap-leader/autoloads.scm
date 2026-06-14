@@ -176,6 +176,7 @@
 (define-key "leader" "n h" "kb-health")
 (define-key "leader" "n N" "kb-narrow")
 (define-key "leader" "n W" "kb-widen")
+(define-key "leader" "n S" "kb-set-search-scope")
 
 ;; +code (LSP)
 (define-key "leader" "c d" "lsp-goto-definition")
