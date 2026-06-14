@@ -141,6 +141,33 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             permission: Some(PermissionTier::ReadOnly),
         },
         ToolDefinition {
+            name: "kb_related".into(),
+            description: "Find nodes structurally related to a seed node — distinct from kb_search (which matches text). Combines graph signals (direct links, co-citation, bibliographic coupling) and shared tags. Returns [{id, title, kind, score}] sorted by relatedness. Use this to suggest \"see also\" topics or discover adjacent concepts the text search wouldn't surface. Relatedness is computed within the node's own KB instance.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Seed node id".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Max related nodes to return (default 10)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["id".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "help_open".into(),
             description: "Look up MAE manual content for your own reasoning (searches builtin nodes first, falls back to user KB). Does not open a visible buffer. To show help to the user, suggest `:help <topic>`. Falls back to the `index` node if the id isn't found.".into(),
             parameters: ToolParameters {

@@ -63,6 +63,14 @@ pub trait KbQueryLayer: Send + Sync {
     /// BFS neighborhood subgraph around a node.
     fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph>;
 
+    /// Graph-relatedness: `(id, score)` for nodes structurally related to
+    /// `id` (co-citation / bibliographic coupling / shared tags), distinct
+    /// from lexical `search`. Default returns empty so RPC/daemon layers that
+    /// don't implement it degrade gracefully; `CozoQueryLayer` overrides.
+    fn related(&self, _id: &str, _limit: usize) -> Vec<(String, f64)> {
+        Vec::new()
+    }
+
     /// Return all known namespace prefixes (e.g., "cmd:", "concept:").
     fn namespace_prefixes(&self) -> Vec<String> {
         let mut prefixes = std::collections::HashSet::new();
@@ -139,6 +147,10 @@ impl KbQueryLayer for CozoQueryLayer {
 
     fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
         self.store.neighborhood(id, depth).ok()
+    }
+
+    fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
+        self.store.related(id, limit).unwrap_or_default()
     }
 }
 
@@ -281,6 +293,20 @@ impl KbQueryLayer for FederatedQuery {
         }
         None
     }
+
+    fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
+        // Per-instance, like `neighborhood`: relatedness is computed within the
+        // instance that owns the node (graph edges don't cross instances).
+        if self.primary.contains(id) {
+            return self.primary.related(id, limit);
+        }
+        for (_, inst) in &self.instances {
+            if inst.contains(id) {
+                return inst.related(id, limit);
+            }
+        }
+        Vec::new()
+    }
 }
 
 /// Fallback query layer wrapping an in-memory `KnowledgeBase`.
@@ -392,6 +418,10 @@ impl KbQueryLayer for InMemoryQueryLayer {
 
     fn neighborhood(&self, _id: &str, _depth: u32) -> Option<SubGraph> {
         None
+    }
+
+    fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
+        self.kb.lock().unwrap().related(id, limit)
     }
 }
 

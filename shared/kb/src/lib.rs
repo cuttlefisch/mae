@@ -1111,6 +1111,84 @@ impl KnowledgeBase {
         self.nodes.values()
     }
 
+    /// Graph-relatedness: nodes most related to `id`, distinct from lexical
+    /// search (it ignores titles/bodies entirely). Combines four structural
+    /// signals over the typed link graph + tags, summed and ranked:
+    ///
+    /// - **direct link** (either direction) — strongest, the node is adjacent;
+    /// - **bibliographic coupling** — shares an outbound target with `id`
+    ///   (both cite the same node) — the org-roam "co-citation" intuition;
+    /// - **co-citation** — shares an inbound source with `id` (both cited by
+    ///   the same node);
+    /// - **shared tags** — topical relatedness without a graph edge.
+    ///
+    /// Returns `(id, score)` sorted by score desc then id asc, capped to
+    /// `limit`. Stays within a 2-hop graph walk (+ a tag scan); cross-instance
+    /// merging is the caller's job (per-instance, like `neighborhood`).
+    pub fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
+        let Some(node) = self.nodes.get(id) else {
+            return Vec::new();
+        };
+        const W_DIRECT: f64 = 2.0;
+        const W_COUPLING: f64 = 1.0;
+        const W_COCITATION: f64 = 1.0;
+        const W_TAG: f64 = 0.5;
+
+        let out = self.links_from(id);
+        let inn = self.links_to(id);
+        let tags: HashSet<&str> = node.tags.iter().map(|s| s.as_str()).collect();
+
+        let mut score: HashMap<String, f64> = HashMap::new();
+
+        // Bibliographic coupling: other nodes that link to the same targets.
+        for target in &out {
+            for c in self.links_to(target) {
+                if c != id {
+                    *score.entry(c).or_default() += W_COUPLING;
+                }
+            }
+        }
+        // Co-citation: other nodes cited by the same sources.
+        for src in &inn {
+            for c in self.links_from(src) {
+                if c != id {
+                    *score.entry(c).or_default() += W_COCITATION;
+                }
+            }
+        }
+        // Direct adjacency (either direction) is the strongest signal.
+        for c in out.iter().chain(inn.iter()) {
+            if c != id {
+                *score.entry(c.clone()).or_default() += W_DIRECT;
+            }
+        }
+        // Shared tags — topical relatedness even without a graph edge.
+        if !tags.is_empty() {
+            for (cid, cnode) in &self.nodes {
+                if cid == id {
+                    continue;
+                }
+                let shared = cnode
+                    .tags
+                    .iter()
+                    .filter(|t| tags.contains(t.as_str()))
+                    .count();
+                if shared > 0 {
+                    *score.entry(cid.clone()).or_default() += W_TAG * shared as f64;
+                }
+            }
+        }
+
+        let mut scored: Vec<(String, f64)> = score.into_iter().collect();
+        scored.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        scored.truncate(limit);
+        scored
+    }
+
     /// Stamp all nodes that have no source with the given source and version.
     pub fn stamp_source(&mut self, source: NodeSource, version: u32) {
         for node in self.nodes.values_mut() {
@@ -1543,6 +1621,47 @@ mod tests {
     fn links_from_missing_node() {
         let kb = KnowledgeBase::new();
         assert!(kb.links_from("nope").is_empty());
+    }
+
+    #[test]
+    fn related_ranks_by_graph_and_tag_signals() {
+        let mut seed = Node::new("seed", "Seed", NodeKind::Note, "links [[hub]]");
+        seed.tags = vec!["topic".into()];
+        let mut tagmate = Node::new("tagmate", "Tagmate", NodeKind::Note, "no graph edge");
+        tagmate.tags = vec!["topic".into()];
+        let kb = kb_with(vec![
+            seed,
+            // Shares the outbound target `hub` with seed -> bibliographic coupling.
+            Node::new("coupled", "Coupled", NodeKind::Note, "also [[hub]]"),
+            Node::new("hub", "Hub", NodeKind::Note, ""),
+            // Links *to* seed -> direct adjacency (strongest).
+            Node::new("direct", "Direct", NodeKind::Note, "see [[seed]]"),
+            // Topical only: shares a tag, no graph edge.
+            tagmate,
+            Node::new("unrelated", "Unrelated", NodeKind::Note, "nothing"),
+        ]);
+
+        let related = kb.related("seed", 10);
+        let ids: Vec<&str> = related.iter().map(|(id, _)| id.as_str()).collect();
+        let score = |id: &str| related.iter().find(|(i, _)| i == id).map(|(_, s)| *s);
+
+        // Directly-linked nodes (hub outbound, direct inbound) outrank the
+        // merely-coupled node, which outranks the tag-only node.
+        assert!(score("hub").unwrap() > score("coupled").unwrap());
+        assert!(score("direct").unwrap() > score("coupled").unwrap());
+        assert!(score("coupled").unwrap() > score("tagmate").unwrap());
+        // Tag-only relatedness still surfaces a node with no graph edge.
+        assert!(score("tagmate").is_some());
+        // A node with neither a graph edge nor a shared tag is absent.
+        assert!(!ids.contains(&"unrelated"));
+        // The seed never appears in its own related set.
+        assert!(!ids.contains(&"seed"));
+    }
+
+    #[test]
+    fn related_missing_node_is_empty() {
+        let kb = KnowledgeBase::new();
+        assert!(kb.related("nope", 10).is_empty());
     }
 
     #[test]

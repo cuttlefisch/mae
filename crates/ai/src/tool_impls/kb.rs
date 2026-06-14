@@ -209,6 +209,65 @@ pub fn execute_kb_links_to(editor: &Editor, args: &serde_json::Value) -> Result<
     serde_json::to_string_pretty(&links).map_err(|e| e.to_string())
 }
 
+/// Graph-relatedness: nodes structurally related to `id` (co-citation /
+/// bibliographic coupling / shared tags), distinct from lexical `kb_search`.
+/// Prefers the query layer (Cozo Datalog) and falls back to the in-memory KB.
+/// Returns `[{id, title, kind, score}]` sorted by relatedness, capped to
+/// `limit` (default 10). Relatedness is per-instance (graph edges don't cross
+/// federated instances), matching `kb_graph`/`kb_links_from`.
+pub fn execute_kb_related(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: id".to_string())?;
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(10);
+
+    // In-memory fallback: the owning instance computes relatedness (primary
+    // wins, else whichever federated instance contains the node).
+    let related_in_memory = |id: &str| -> Vec<(String, f64)> {
+        if editor.kb.primary.contains(id) {
+            return editor.kb.primary.related(id, limit);
+        }
+        for kb in editor.kb.instances.values() {
+            if kb.contains(id) {
+                return kb.related(id, limit);
+            }
+        }
+        Vec::new()
+    };
+
+    let scored: Vec<(String, f64)> = match editor.kb.query_layer() {
+        Some(q) if q.contains(id) => q.related(id, limit),
+        _ => related_in_memory(id),
+    };
+
+    // Resolve title/kind for each result without an extra round-trip.
+    let lookup = |rid: &str| -> (String, String) {
+        if let Some(n) = editor.kb.primary.get(rid) {
+            return (n.title.clone(), n.kind.as_str().to_string());
+        }
+        for kb in editor.kb.instances.values() {
+            if let Some(n) = kb.get(rid) {
+                return (n.title.clone(), n.kind.as_str().to_string());
+            }
+        }
+        (String::new(), String::new())
+    };
+
+    let objs: Vec<serde_json::Value> = scored
+        .into_iter()
+        .map(|(rid, score)| {
+            let (title, kind) = lookup(&rid);
+            serde_json::json!({ "id": rid, "title": title, "kind": kind, "score": score })
+        })
+        .collect();
+    serde_json::to_string_pretty(&objs).map_err(|e| e.to_string())
+}
+
 /// BFS neighborhood around a seed node, up to `depth` hops (default 1, max 3).
 /// Returns `{ root, nodes: [{id, title, kind, hop}], edges: [{src, dst}] }`.
 /// Edges are deduplicated and include both outgoing and incoming links
@@ -1222,6 +1281,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(kb_search_ids(&all), kb_search_ids(&local));
+    }
+
+    #[test]
+    fn kb_related_returns_scored_objects() {
+        let editor = Editor::new();
+        // concept:buffer is a well-connected manual node; it should have
+        // related neighbors via the seeded link graph.
+        let result =
+            execute_kb_related(&editor, &serde_json::json!({"id": "concept:buffer"})).unwrap();
+        let objs: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            !objs.is_empty(),
+            "expected related nodes for concept:buffer"
+        );
+        // Each object carries id/title/kind/score and excludes the seed itself.
+        for o in &objs {
+            assert!(o.get("id").and_then(|v| v.as_str()).is_some());
+            assert!(o.get("score").and_then(|v| v.as_f64()).is_some());
+            assert_ne!(o["id"].as_str(), Some("concept:buffer"));
+        }
+        // Scores are sorted descending.
+        let scores: Vec<f64> = objs.iter().map(|o| o["score"].as_f64().unwrap()).collect();
+        assert!(scores.windows(2).all(|w| w[0] >= w[1]), "scores not sorted");
+    }
+
+    #[test]
+    fn kb_related_respects_limit() {
+        let editor = Editor::new();
+        let result = execute_kb_related(
+            &editor,
+            &serde_json::json!({"id": "concept:buffer", "limit": 2}),
+        )
+        .unwrap();
+        let objs: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(objs.len() <= 2);
     }
 
     #[test]
