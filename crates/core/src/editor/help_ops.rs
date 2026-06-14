@@ -37,6 +37,46 @@ fn node_kind_label(kind: mae_kb::NodeKind) -> &'static str {
 /// Uses the `KbQueryLayer` for node lookup, typed links, and title resolution.
 /// The query layer already returns typed `Link` with `rel_type`, so no separate
 /// store parameter is needed.
+/// Render a "Related" subsection: graph-related nodes (co-citation /
+/// bibliographic coupling / shared tags) that are NOT already shown as direct
+/// links. This surfaces adjacent topics the Neighborhood section misses — the
+/// human-facing twin of the AI's `kb_related` tool (peer parity). Returns the
+/// number of related items rendered. `shown` is the set of already-rendered
+/// direct-link ids; `resolve_title` maps an id to its display title.
+fn render_related_block(
+    out: &mut String,
+    links: &mut Vec<KbLinkSpan>,
+    related: &[(String, f64)],
+    shown: &std::collections::HashSet<String>,
+    resolve_title: impl Fn(&str) -> String,
+) -> usize {
+    const MAX_RELATED: usize = 8;
+    let items: Vec<&String> = related
+        .iter()
+        .map(|(id, _)| id)
+        .filter(|id| !shown.contains(*id))
+        .take(MAX_RELATED)
+        .collect();
+    if items.is_empty() {
+        return 0;
+    }
+    out.push_str("Related:\n");
+    for id in &items {
+        let title = resolve_title(id);
+        out.push_str("  ~ ");
+        let link_start = out.len();
+        out.push_str(id);
+        let link_end = out.len();
+        links.push(KbLinkSpan {
+            byte_start: link_start,
+            byte_end: link_end,
+            target: (*id).clone(),
+        });
+        out.push_str(&format!("  {}\n", title));
+    }
+    items.len()
+}
+
 fn render_kb_node_for_query(
     query: &dyn mae_kb::KbQueryLayer,
     node_id: &str,
@@ -96,7 +136,16 @@ fn render_kb_node_for_query(
     let outgoing = query.links_from(node_id);
     let incoming = query.links_to(node_id);
 
-    if !outgoing.is_empty() || !incoming.is_empty() {
+    // Graph-related nodes that aren't already direct links (Phase 4).
+    let shown: std::collections::HashSet<String> = outgoing
+        .iter()
+        .map(|l| l.dst.clone())
+        .chain(incoming.iter().map(|l| l.src.clone()))
+        .collect();
+    let related = query.related(node_id, 24);
+    let has_related = related.iter().any(|(id, _)| !shown.contains(id));
+
+    if !outgoing.is_empty() || !incoming.is_empty() || has_related {
         out.push('\n');
         out.push_str("** Neighborhood\n");
     }
@@ -150,6 +199,12 @@ fn render_kb_node_for_query(
             out.push_str(&format!("  {}\n", title_text));
         }
     }
+    render_related_block(&mut out, &mut links, &related, &shown, |id| {
+        query
+            .get(id)
+            .map(|n| n.title)
+            .unwrap_or_else(|| "(missing)".to_string())
+    });
 
     out.push('\n');
     out.push_str(
@@ -226,7 +281,16 @@ fn render_kb_node_with_store(
     let outgoing_ids = kb.links_from(node_id);
     let incoming_ids = kb.links_to(node_id);
 
-    if !outgoing_ids.is_empty() || !incoming_ids.is_empty() {
+    // Graph-related nodes that aren't already direct links (Phase 4).
+    let shown: std::collections::HashSet<String> = outgoing_ids
+        .iter()
+        .chain(incoming_ids.iter())
+        .cloned()
+        .collect();
+    let related = kb.related(node_id, 24);
+    let has_related = related.iter().any(|(id, _)| !shown.contains(id));
+
+    if !outgoing_ids.is_empty() || !incoming_ids.is_empty() || has_related {
         out.push('\n');
         out.push_str("** Neighborhood\n");
     }
@@ -292,6 +356,9 @@ fn render_kb_node_with_store(
             out.push_str(&format!("  {}\n", title_text));
         }
     }
+    render_related_block(&mut out, &mut links, &related, &shown, |id| {
+        resolve_title(id).unwrap_or_else(|| "(missing)".to_string())
+    });
 
     out.push('\n');
     out.push_str(
@@ -553,7 +620,19 @@ impl Editor {
                         })
                         .collect()
                 };
-                if !outgoing_links.is_empty() || !incoming_links.is_empty() {
+                // Graph-related nodes that aren't already direct links (Phase 4).
+                let shown: std::collections::HashSet<String> = outgoing_links
+                    .iter()
+                    .map(|l| l.dst.clone())
+                    .chain(incoming_links.iter().map(|l| l.src.clone()))
+                    .collect();
+                let related = if let Some(q) = self.kb.query_layer() {
+                    q.related(&node_id, 24)
+                } else {
+                    self.kb.primary.related(&node_id, 24)
+                };
+                let has_related = related.iter().any(|(id, _)| !shown.contains(id));
+                if !outgoing_links.is_empty() || !incoming_links.is_empty() || has_related {
                     out.push('\n');
                     out.push_str("** Neighborhood\n");
                 }
@@ -605,6 +684,10 @@ impl Editor {
                         out.push_str(&format!("  {}\n", title_text));
                     }
                 }
+                render_related_block(&mut out, &mut links, &related, &shown, |id| {
+                    self.kb_resolve_title(id)
+                        .unwrap_or_else(|| "(missing)".to_string())
+                });
                 out.push('\n');
                 out.push_str(
                     "Tab: fold · n/p: links · Enter: follow · e: edit · C-o/C-i: back/fwd · q: close\n",
@@ -1512,6 +1595,42 @@ mod tests {
         assert!(
             text.contains("** Neighborhood"),
             "neighborhood should use ## heading"
+        );
+    }
+
+    #[test]
+    fn help_renders_related_section_for_coupled_node() {
+        // seed -> hub and coupled -> hub: `coupled` is bibliographically
+        // coupled to `seed` but NOT a direct link, so it should appear under
+        // "Related:" rather than the direct-link lists (Phase 2/4 peer parity).
+        let mut e = Editor::new();
+        e.kb.primary.insert(mae_kb::Node::new(
+            "user:seed",
+            "Seed",
+            mae_kb::NodeKind::Note,
+            "points to [[user:hub]]",
+        ));
+        e.kb.primary.insert(mae_kb::Node::new(
+            "user:coupled",
+            "Coupled",
+            mae_kb::NodeKind::Note,
+            "also points to [[user:hub]]",
+        ));
+        e.kb.primary.insert(mae_kb::Node::new(
+            "user:hub",
+            "Hub",
+            mae_kb::NodeKind::Note,
+            "",
+        ));
+
+        e.open_help_at("user:seed");
+        let text: String = e.buffers[e.active_buffer_idx()].rope().chars().collect();
+        assert!(text.contains("Related:"), "should render a Related section");
+        let related_section = text.split("Related:").nth(1).unwrap_or("");
+        assert!(
+            related_section.contains("user:coupled"),
+            "coupled node should appear under Related, got:\n{}",
+            text
         );
     }
 
