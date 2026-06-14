@@ -60,6 +60,14 @@ pub(super) fn handle_command_palette_mode(
                         "Keybindings: {flavor} — add (set-option! \"keymap_flavor\" \"{flavor}\") to init.scm to persist"
                     ));
                 }
+                (Some(scope), PalettePurpose::SetKbSearchScope) => {
+                    match editor.set_option("kb_search_scope", &scope) {
+                        Ok(_) => editor.set_status(format!(
+                            "KB search scope: {scope} — add (set-option! \"kb_search_scope\" \"{scope}\") to init.scm to persist"
+                        )),
+                        Err(e) => editor.set_status(e),
+                    }
+                }
                 (Some(node_id), PalettePurpose::KbSearch)
                 | (Some(node_id), PalettePurpose::KbFindOrCreate) => {
                     editor.open_help_at(&node_id);

@@ -46,6 +46,7 @@ pub enum PalettePurpose {
     SetupAiProvider,
     SetupCollabMode,
     SetKeymapFlavor,
+    SetKbSearchScope,
 }
 
 impl PalettePurpose {
@@ -71,6 +72,7 @@ impl PalettePurpose {
             Self::SetupAiProvider => "AI Provider",
             Self::SetupCollabMode => "Collaboration Mode",
             Self::SetKeymapFlavor => "Choose Keybindings",
+            Self::SetKbSearchScope => "KB Search Scope",
         }
     }
 }
@@ -448,6 +450,46 @@ impl CommandPalette {
         }
     }
 
+    /// Guided picker for the default KB search scope (`kb_search_scope`).
+    /// Always offers the three keyword scopes, then one entry per registered
+    /// federated instance (so the user can scope searches to a single KB).
+    /// Selection dispatches a `set-option!` on `kb_search_scope`.
+    pub fn for_kb_search_scope(instances: &[&str]) -> Self {
+        let mut entries = vec![
+            PaletteEntry {
+                name: "all".to_string(),
+                doc: "Search the primary KB plus every federated instance (default).".to_string(),
+                searchable_extra: Some("everything federated".to_string()),
+            },
+            PaletteEntry {
+                name: "local".to_string(),
+                doc: "Search only the primary (local) KB.".to_string(),
+                searchable_extra: Some("primary only".to_string()),
+            },
+            PaletteEntry {
+                name: "remote".to_string(),
+                doc: "Search only shared/collaborative instances.".to_string(),
+                searchable_extra: Some("shared collaborative federated".to_string()),
+            },
+        ];
+        for inst in instances {
+            entries.push(PaletteEntry {
+                name: (*inst).to_string(),
+                doc: format!("Search only the '{inst}' instance."),
+                searchable_extra: Some("instance kb".to_string()),
+            });
+        }
+        let filtered = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose: PalettePurpose::SetKbSearchScope,
+            query_selected: false,
+        }
+    }
+
     /// Build a palette from a simple name list with the given purpose.
     pub fn with_name_list(names: &[&str], purpose: PalettePurpose) -> Self {
         let entries: Vec<PaletteEntry> = names
@@ -607,6 +649,8 @@ mod tests {
             PalettePurpose::CollabJoin,
             PalettePurpose::SetupAiProvider,
             PalettePurpose::SetupCollabMode,
+            PalettePurpose::SetKeymapFlavor,
+            PalettePurpose::SetKbSearchScope,
         ];
         for p in &purposes {
             assert!(!p.label().is_empty(), "{:?} has empty label", p);
@@ -614,6 +658,17 @@ mod tests {
         assert_eq!(PalettePurpose::Execute.label(), "Commands");
         assert_eq!(PalettePurpose::GitBranch.label(), "Git Branch");
         assert_eq!(PalettePurpose::ForgetProject.label(), "Forget Project");
+    }
+
+    #[test]
+    fn kb_search_scope_picker_lists_keywords_and_instances() {
+        let palette = CommandPalette::for_kb_search_scope(&["Work", "Research"]);
+        assert_eq!(palette.purpose, PalettePurpose::SetKbSearchScope);
+        let names: Vec<&str> = palette.entries.iter().map(|e| e.name.as_str()).collect();
+        // Three keyword scopes first, then each registered instance.
+        assert_eq!(names, vec!["all", "local", "remote", "Work", "Research"]);
+        // Every entry is searchable in the empty-query filter.
+        assert_eq!(palette.filtered.len(), 5);
     }
 
     #[test]

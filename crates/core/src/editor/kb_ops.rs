@@ -2285,6 +2285,21 @@ mod tests {
     }
 
     #[test]
+    fn kb_set_search_scope_command_opens_picker() {
+        let mut editor = Editor::new();
+        assert!(editor.command_palette.is_none());
+        assert!(editor.dispatch_builtin("kb-set-search-scope"));
+        let palette = editor.command_palette.as_ref().expect("picker should open");
+        assert_eq!(
+            palette.purpose,
+            crate::command_palette::PalettePurpose::SetKbSearchScope
+        );
+        // Keyword scopes are always present (no instances registered here).
+        let names: Vec<&str> = palette.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["all", "local", "remote"]);
+    }
+
+    #[test]
     fn kb_visit_log_is_monotonic() {
         let mut editor = Editor::new();
         editor.kb.record_visit("concept:buffer");

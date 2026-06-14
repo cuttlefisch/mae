@@ -1038,6 +1038,10 @@ impl CommandRegistry {
             "Open the guided keybindings picker (modal vs non-modal, with descriptions)",
         );
         reg.register_builtin(
+            "kb-set-search-scope",
+            "Choose the default KB search scope (all / local / remote / instance)",
+        );
+        reg.register_builtin(
             "set-save",
             "Set an option and persist to config.toml (:set-save <key> [value])",
         );
