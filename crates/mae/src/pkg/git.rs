@@ -142,6 +142,39 @@ pub fn head_sha(repo: &Path) -> Result<String, String> {
     }
 }
 
+/// Whether the working tree is clean (no staged, unstaged, or untracked
+/// changes). Used as a self-upgrade preflight gate for source-checkout
+/// installs — refuse to `git pull`/rebuild over local modifications.
+pub fn is_clean(repo: &Path) -> Result<bool, String> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(repo)
+        .output()
+        .map_err(|e| format!("Failed to run git status: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git status failed: {}", stderr.trim()));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().is_empty())
+}
+
+/// Fast-forward-only pull on the current branch. Refuses (errors) if the local
+/// branch has diverged from upstream, so a source-checkout self-upgrade never
+/// silently creates a merge commit or clobbers local work.
+pub fn pull_ff_only(repo: &Path) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["pull", "--ff-only"])
+        .current_dir(repo)
+        .output()
+        .map_err(|e| format!("Failed to run git pull: {}", e))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("git pull --ff-only failed: {}", stderr.trim()))
+    }
+}
+
 /// Checkout a specific SHA in a repository.
 pub fn checkout_sha(repo: &Path, sha: &str) -> Result<(), String> {
     let output = Command::new("git")

@@ -388,6 +388,23 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [ ] Free AI-assisted setup (Gemini free tier for first-run guidance)
 - [ ] Step-through command execution (inspect AI tool call stdin/stdout)
 
+### Self-upgrade (`mae upgrade`)
+
+> Shipped: channel-aware orchestrator (Homebrew / tarball / source) with version
+> check, compatibility gate, and preflight checks. Deferred:
+
+- [ ] **Breaking-change migrations** — `mae upgrade --migrate`: version-specific
+      guided steps for config/protocol/KB-schema changes. The current feature only
+      *gates* breaking jumps (refuse + route to manual); it does not migrate.
+- [ ] **In-editor / AI-tool parity** — a `:upgrade` command + MCP tool mirroring the
+      CLI, plus an "update available" notice in the GUI/dashboard (peer parity).
+- [ ] **Auto-check on startup** — opt-in, cached, config-gated background check
+      (`[upgrade] check_on_startup`) with a non-blocking notice; offline/privacy aware.
+- [ ] **Rollback** — `mae upgrade --rollback` using the `.bak` binaries that
+      install.sh / `make install-upgrade` already create.
+- [ ] **Channel expansion** — linux-aarch64 + macos-x86_64 prebuilt assets;
+      AppImage self-replace; cargo-channel auto-upgrade.
+
 ### Keymap Architecture Migration
 
 > **Goal**: Kernel provides only vi-modal primitives. All leader-key (SPC) bindings move to keymap flavor modules.

@@ -1015,18 +1015,32 @@ enum ServiceManager {
     None,
 }
 
+/// Return Homebrew's prefix (`brew --prefix`) if brew is installed, else None.
+/// Used both for service-manager detection and by the self-upgrade channel
+/// classifier (`crate::upgrade`) to tell a brew-installed binary apart from a
+/// tarball/source install.
+pub(crate) fn brew_prefix() -> Option<std::path::PathBuf> {
+    let output = std::process::Command::new("brew")
+        .args(["--prefix"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(path))
+    }
+}
+
 /// Detect which service manager is available.
 fn detect_platform_service_manager() -> ServiceManager {
     if cfg!(target_os = "macos") {
         // Check Homebrew first
-        if std::process::Command::new("brew")
-            .args(["--prefix"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
+        if brew_prefix().is_some() {
             return ServiceManager::Homebrew;
         }
         ServiceManager::Launchd

@@ -19,6 +19,7 @@ mod shell_lifecycle;
 mod sync_broadcast;
 mod terminal_loop;
 mod test_runner;
+mod upgrade;
 mod watchdog;
 
 use std::io;
@@ -141,6 +142,12 @@ fn main() -> io::Result<()> {
         println!("mae {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    // `mae upgrade` owns its own flags (incl. `--help`), so route it before the
+    // greedy global `--help` check below — otherwise `mae upgrade --help` would
+    // print the global help instead of the upgrade-specific usage.
+    if args.get(1).is_some_and(|a| a == "upgrade") {
+        std::process::exit(upgrade::run_upgrade_cli(&args[2..]));
+    }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("mae {} — Modern AI Editor", env!("CARGO_PKG_VERSION"));
         println!();
@@ -167,7 +174,7 @@ fn main() -> io::Result<()> {
         println!("  --test-filter PATTERN   Filter tests by name pattern");
         println!("  --test-output FORMAT    Output format: tap (default) | human");
         println!("  sync                    Materialize declared state (clone/update packages)");
-        println!("  upgrade                 Fetch latest for all packages");
+        println!("  upgrade                 Upgrade MAE itself (channel-aware) [--check|--yes|--packages]");
         println!("  purge                   Remove packages not declared in init.scm");
         println!("  list                    List all discovered modules");
         println!("  info <NAME>             Show module details");
@@ -196,10 +203,11 @@ fn main() -> io::Result<()> {
         let code = pkg::cli::run_pkg_cli(&args[2..]);
         std::process::exit(code);
     }
-    // Flat top-level subcommands (Doom-style): mae sync, mae upgrade, mae purge, etc.
+    // Flat top-level subcommands (Doom-style): mae sync, mae purge, etc.
+    // (`upgrade` is handled earlier so it owns its own `--help`.)
     if let Some(subcmd) = args.get(1).map(|s| s.as_str()) {
         match subcmd {
-            "sync" | "upgrade" | "purge" | "list" | "info" | "create" => {
+            "sync" | "purge" | "list" | "info" | "create" => {
                 let rest: Vec<String> = args[2..].to_vec();
                 let code = pkg::cli::dispatch_subcmd(subcmd, &rest);
                 std::process::exit(code);
