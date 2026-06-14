@@ -11,7 +11,7 @@ use mae_core::Editor;
 use mae_dap::{run_dap_task, DapCommand, DapTaskEvent};
 use mae_lsp::{run_lsp_task, LspCommand, LspServerConfig, LspTaskEvent};
 use mae_scheme::SchemeRuntime;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -930,10 +930,65 @@ pub fn load_init_files(scheme: &mut SchemeRuntime, editor: &mut Editor) -> usize
     loaded
 }
 
+/// Ordered list of directories searched for built-in modules.
+///
+/// This is the single source of truth for module discovery, shared by the
+/// editor's [`load_modules`] (first existing dir that yields modules wins) and
+/// the `mae` package CLI (`list`/`doctor`/…) so the CLI reports exactly what
+/// the editor would load — no divergent second copy. Order is explicit/most-
+/// specific first:
+///
+/// 0. `$MAE_MODULES_PATH` — explicit override (AppImage, custom installs).
+/// 1. `./modules` — dev: `cargo run` from repo root.
+/// 2. `<exe>/modules` and `<exe>/../share/mae/modules` — tarball + FHS/Homebrew
+///    (a `bin/mae` install keeps modules at `share/mae/modules`).
+/// 3. `$XDG_DATA_HOME/mae/modules` (or `~/.local/share/...`) **and** the
+///    platform-native data dir (`~/Library/Application Support/mae/modules` on
+///    macOS) — `make install` / user installs, regardless of convention.
+/// 4. compile-time `CARGO_MANIFEST_DIR` repo `modules` — dev builds only.
+pub fn builtin_module_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    // 0. explicit override
+    if let Ok(path) = std::env::var("MAE_MODULES_PATH") {
+        dirs.push(PathBuf::from(path));
+    }
+    // 1. CWD/modules (dev)
+    dirs.push(PathBuf::from("modules"));
+    // 2. next to the executable + FHS/Homebrew share layout
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            dirs.push(exe_dir.join("modules"));
+            if let Some(prefix) = exe_dir.parent() {
+                dirs.push(prefix.join("share/mae/modules"));
+            }
+        }
+    }
+    // 3. data dir(s): XDG (honoring XDG_DATA_HOME) AND the platform-native data
+    //    dir (macOS ~/Library/Application Support), so an install works whether
+    //    the installer followed XDG or the macOS convention.
+    if let Some(data) = data_dir_candidate("mae/modules") {
+        dirs.push(data);
+    }
+    if let Some(platform) = dirs::data_dir().map(|d| d.join("mae/modules")) {
+        if !dirs.contains(&platform) {
+            dirs.push(platform);
+        }
+    }
+    // 4. compile-time repo modules (dev builds only)
+    if let Some(repo_modules) = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|repo| repo.join("modules"))
+    {
+        dirs.push(repo_modules);
+    }
+    dirs
+}
+
 /// Discover, resolve, and load module autoloads.
 ///
 /// Module loading happens between init.scm and config.scm:
-///   1. Discover modules in built-in `modules/` dir and user `~/.config/mae/packages/`
+///   1. Discover modules via [`builtin_module_dirs`] + user `~/.local/share/mae/packages/`
 ///   2. Resolve dependencies (topological sort)
 ///   3. Load each module's autoloads.scm (registers commands, keys, options, hooks)
 ///   4. config.scm runs AFTER this, so users can override any module setting
@@ -951,38 +1006,11 @@ pub fn load_modules(
 
     let mut all_modules = Vec::new();
 
-    // Built-in modules — search multiple locations so both dev builds
-    // (run from repo root) and installed binaries work.
-    let mut builtin_dirs = Vec::new();
-    // 0. MAE_MODULES_PATH env var (AppImage, custom installs)
-    if let Ok(path) = std::env::var("MAE_MODULES_PATH") {
-        builtin_dirs.push(PathBuf::from(path));
-    }
-    // 1. CWD/modules (dev: `cargo run` from repo root)
-    builtin_dirs.push(PathBuf::from("modules"));
-    // 2. Next to the executable (tarball installs) + FHS/Homebrew layout.
-    //    A `bin/mae` install keeps modules at `../share/mae/modules`
-    //    (e.g. Homebrew: /opt/homebrew/opt/mae/share/mae/modules), which the
-    //    bare `exe_dir/modules` check misses.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            builtin_dirs.push(exe_dir.join("modules"));
-            if let Some(prefix) = exe_dir.parent() {
-                builtin_dirs.push(prefix.join("share/mae/modules"));
-            }
-        }
-    }
-    // 3. XDG data dir: ~/.local/share/mae/modules (make install)
-    if let Some(data) = data_dir_candidate("mae/modules") {
-        builtin_dirs.push(data);
-    }
-    // 4. Compile-time CARGO_MANIFEST_DIR (dev builds only)
-    let manifest_modules = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|repo| repo.join("modules"))
-        .unwrap_or_default();
-    builtin_dirs.push(manifest_modules);
+    // Built-in module search path — shared with the `mae` package CLI via
+    // `builtin_module_dirs()` so `mae list`/`doctor` report exactly what the
+    // editor would discover/load (no divergent second copy). First existing
+    // dir that yields modules wins.
+    let builtin_dirs = builtin_module_dirs();
     for dir in &builtin_dirs {
         if dir.exists() && all_modules.is_empty() {
             all_modules.extend(discover_modules(dir));
@@ -997,7 +1025,14 @@ pub fn load_modules(
     }
 
     if all_modules.is_empty() {
-        debug!("no modules discovered");
+        warn!(
+            "no modules discovered in any of the {} search paths — leader-key (SPC) \
+             bindings are limited to built-in kernel defaults (collaboration, KB sharing, \
+             and other module-only bindings will be missing). Set MAE_MODULES_PATH or \
+             install modules under <prefix>/share/mae/modules. Searched: {:?}",
+            builtin_dirs.len(),
+            builtin_dirs
+        );
         return ModuleRegistry::new();
     }
 
@@ -1022,6 +1057,13 @@ pub fn load_modules(
         if doom_available {
             info!("auto-enabling keymap-doom (default keymap — add to mae! block to suppress)");
             enabled.insert("keymap-doom".to_string(), vec![]);
+        } else {
+            warn!(
+                "keymap-doom (default keymap flavor) was not found among the {} discovered \
+                 modules — SPC leader bindings beyond the kernel defaults (e.g. SPC C \
+                 collaboration, SPC C K KB sharing) will be unavailable",
+                all_modules.len()
+            );
         }
     }
 
@@ -1527,6 +1569,42 @@ mod tests {
         let mut editor = Editor::new();
         // load_init_files returns a usize count
         let _count: usize = load_init_files(&mut scheme, &mut editor);
+    }
+
+    #[test]
+    fn builtin_module_dirs_honors_env_override_first() {
+        // MAE_MODULES_PATH must take precedence so AppImage/custom installs win.
+        // SAFETY: single-threaded test; restore afterwards.
+        let prev = std::env::var("MAE_MODULES_PATH").ok();
+        std::env::set_var("MAE_MODULES_PATH", "/custom/mae/modules");
+        let dirs = builtin_module_dirs();
+        assert_eq!(
+            dirs.first(),
+            Some(&PathBuf::from("/custom/mae/modules")),
+            "MAE_MODULES_PATH should be searched first"
+        );
+        // Always includes the dev `./modules` and at least one data-dir candidate.
+        assert!(dirs.contains(&PathBuf::from("modules")));
+        assert!(
+            dirs.len() >= 3,
+            "expected env + cwd + install paths, got {dirs:?}"
+        );
+        match prev {
+            Some(v) => std::env::set_var("MAE_MODULES_PATH", v),
+            None => std::env::remove_var("MAE_MODULES_PATH"),
+        }
+    }
+
+    #[test]
+    fn builtin_module_dirs_has_no_duplicates() {
+        // The XDG and platform-native data dirs collapse to one entry on Linux;
+        // the helper must not emit the same path twice (wasted stat + confusing
+        // diagnostics in the "searched: {:?}" warning).
+        let dirs = builtin_module_dirs();
+        let mut seen = std::collections::HashSet::new();
+        for d in &dirs {
+            assert!(seen.insert(d.clone()), "duplicate search dir: {d:?}");
+        }
     }
 
     #[test]

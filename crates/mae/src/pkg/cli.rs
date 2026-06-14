@@ -57,9 +57,16 @@ fn print_help() {
 }
 
 fn module_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![PathBuf::from("modules")];
+    // Reuse the editor's canonical module search path so `mae list`/`doctor`/…
+    // report exactly what the editor would discover and load — previously this
+    // checked only `./modules` + the user packages dir, so the CLI was blind to
+    // tarball/Homebrew/data-dir installs and reported "No modules found" even
+    // when the editor loaded them fine.
+    let mut dirs = crate::bootstrap::builtin_module_dirs();
     if let Some(user_pkg) = crate::bootstrap::dirs_candidate("mae/packages") {
-        dirs.push(user_pkg);
+        if !dirs.contains(&user_pkg) {
+            dirs.push(user_pkg);
+        }
     }
     dirs
 }
