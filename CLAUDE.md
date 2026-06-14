@@ -247,8 +247,10 @@ make test-scheme-all                # All local tests
 - **One pending op per test step.** Each `it-test` is one eval→apply cycle. `buffer-insert` + `goto-char` in the same step may execute in unexpected order. Split into separate steps.
 - **SharedState pattern for cross-test reads.** Functions like `buffer-string`, `buffer-sync-enabled?`, `current-mode`, and `get-buffer-by-name` read from `Arc<Mutex<SharedState>>` (not closure-captured snapshots) so they see fresh state after `sync_scheme_state`.
 - **Assertions signal errors.** `should`/`should-equal`/`should-contain` signal Scheme errors caught by the runner. Use `should-mode` for mode checks.
+- **File-boundary state isolation.** The runner snapshots global editor state (mode, keymap_flavor, default_mode, line_numbers, word_wrap) before each test file and auto-restores after. Cross-file pollution is caught and warned: `# warning: test_foo.scm leaked global state (auto-restored): mode: Normal → Insert`. Tests that change flavor/mode/options should still restore them (the snapshot is a safety net, not a substitute for proper cleanup).
 - **TAP v14 output.** Machine-parseable, CI-friendly.
 - **Rust-side iteration preferred.** Don't add `(run-tests)` at end of test files. The runner calls `run-nth-test` with `apply_to_editor` + `sync_scheme_state` between each step.
+- **Clean environment for e2e tests.** The e2e tests run in CI with no user config (`init.scm`, `config.toml`) and no on-disk modules. When testing locally, use a clean HOME: `HOME=/tmp/mae-test XDG_CONFIG_HOME=/tmp/mae-test/.config XDG_DATA_HOME=/tmp/mae-test/.local/share ./target/release/mae --test tests/editor/`
 
 ### Adding New Test Primitives
 - **Read-only state**: Add to `SharedState`, register Rust function in `new()` that reads from SharedState, update SharedState in `inject_editor_state`.
