@@ -66,17 +66,35 @@ fn reciprocal_rank(results: &[String], expected: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// nDCG with a single binary-relevant document at `expected`. With one
+/// relevant doc the ideal DCG is 1.0, so nDCG = 1/log2(rank+1) (rank 1-based),
+/// 0 if absent. Reported alongside MRR because nDCG discounts deep hits more
+/// sharply — a useful second lens on ranking quality.
+fn ndcg(results: &[String], expected: &str) -> f64 {
+    results
+        .iter()
+        .position(|id| id == expected)
+        .map(|p| 1.0 / ((p as f64 + 2.0).log2()))
+        .unwrap_or(0.0)
+}
+
 struct Metrics {
     top1: f64,
     recall_at_3: f64,
+    recall_at_5: f64,
+    recall_at_10: f64,
     mrr: f64,
+    ndcg: f64,
 }
 
 fn grade<F: Fn(&str) -> Vec<String>>(search: F) -> Metrics {
     let n = GRADED.len() as f64;
     let mut top1 = 0.0;
     let mut recall3 = 0.0;
+    let mut recall5 = 0.0;
+    let mut recall10 = 0.0;
     let mut mrr = 0.0;
+    let mut ndcg_sum = 0.0;
     for (q, expected) in GRADED {
         let results = search(q);
         if results.first().map(|s| s.as_str()) == Some(*expected) {
@@ -85,12 +103,22 @@ fn grade<F: Fn(&str) -> Vec<String>>(search: F) -> Metrics {
         if results.iter().take(3).any(|id| id == expected) {
             recall3 += 1.0;
         }
+        if results.iter().take(5).any(|id| id == expected) {
+            recall5 += 1.0;
+        }
+        if results.iter().take(10).any(|id| id == expected) {
+            recall10 += 1.0;
+        }
         mrr += reciprocal_rank(&results, expected);
+        ndcg_sum += ndcg(&results, expected);
     }
     Metrics {
         top1: top1 / n,
         recall_at_3: recall3 / n,
+        recall_at_5: recall5 / n,
+        recall_at_10: recall10 / n,
         mrr: mrr / n,
+        ndcg: ndcg_sum / n,
     }
 }
 
@@ -118,14 +146,19 @@ fn search_grading_dipstick() {
         "\n=== KB search grading ({} queries, seed corpus) ===",
         GRADED.len()
     );
-    println!("                     top-1   recall@3   MRR");
+    println!("                     top-1   r@3    r@5    r@10   MRR     nDCG");
     println!(
-        "in-memory ranked     {:>5.2}   {:>6.2}   {:>5.3}",
-        ranked.top1, ranked.recall_at_3, ranked.mrr
+        "in-memory ranked     {:>5.2}  {:>5.2}  {:>5.2}  {:>5.2}  {:>5.3}  {:>5.3}",
+        ranked.top1,
+        ranked.recall_at_3,
+        ranked.recall_at_5,
+        ranked.recall_at_10,
+        ranked.mrr,
+        ranked.ndcg
     );
     println!(
-        "cozodb FTS (BM25)    {:>5.2}   {:>6.2}   {:>5.3}",
-        fts.top1, fts.recall_at_3, fts.mrr
+        "cozodb FTS (BM25)    {:>5.2}  {:>5.2}  {:>5.2}  {:>5.2}  {:>5.3}  {:>5.3}",
+        fts.top1, fts.recall_at_3, fts.recall_at_5, fts.recall_at_10, fts.mrr, fts.ndcg
     );
     // Per-query breakdown for the ranker (diagnostics).
     for (q, expected) in GRADED {
@@ -180,6 +213,11 @@ fn search_grading_dipstick() {
         ranked.mrr >= 0.9,
         "in-memory ranker MRR regressed: {:.3}",
         ranked.mrr
+    );
+    assert!(
+        ranked.ndcg >= 0.9,
+        "in-memory ranker nDCG regressed: {:.3}",
+        ranked.ndcg
     );
     // FTS is decisively worse for canonical lookup here — assert the contrast so
     // the routing decision (ranker, not FTS) stays justified by data.
