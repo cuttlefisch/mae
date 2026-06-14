@@ -506,6 +506,9 @@ Source: `shared/sync/src/lib.rs`
 | `write-file` | `crates/scheme/src/runtime.rs` |
 | `goto-char` | `crates/scheme/src/runtime.rs` |
 | `current-mode` | `crates/scheme/src/runtime.rs` |
+| `feed-keys` | `crates/scheme/src/runtime.rs` |
+| `which-key-open?` | `crates/scheme/src/runtime.rs` |
+| `which-key-entry-count` | `crates/scheme/src/runtime.rs` |
 | `test-buffer-string` | `crates/scheme/src/runtime.rs` |
 | `test-buffer-text` | `crates/scheme/src/runtime.rs` |
 | `messages-buffer-text` | `crates/scheme/src/runtime.rs` |
@@ -566,7 +569,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (516 built-in)
+## Commands (521 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -965,6 +968,11 @@ Source: `shared/sync/src/lib.rs`
 | `describe-module-at-cursor` | Open detail view for module name under cursor |
 | `describe-mode` | Show current buffer's mode, keymap, and active options |
 | `module-reload` | Reload a module's autoloads (:module-reload <name>) |
+| `reload-modules` | Re-discover and reload ALL modules' autoloads (live reload, no restart) |
+| `mae-reload` | Alias for reload-modules — live-reload all modules without a restart |
+| `leader-dispatch` | Open the transient leader keypad (which-key dispatch); resolves one command then returns |
+| `keymap-set-flavor` | Switch keymap flavor live (:keymap-set-flavor <name>; no arg toggles doom/nonmodal) |
+| `choose-keymap-flavor` | Open the guided keybindings picker (modal vs non-modal, with descriptions) |
 | `set-save` | Set an option and persist to config.toml (:set-save <key> [value]) |
 | `kill-other-buffers` | Close all buffers except current (SPC b o) |
 | `save-all-buffers` | Save all modified buffers (SPC b S) |

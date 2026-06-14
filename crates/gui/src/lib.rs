@@ -562,7 +562,10 @@ impl Renderer for GuiRenderer {
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
             popup_render::render_command_palette(canvas, editor, cols, rows);
-        } else if !editor.which_key_prefix.is_empty() || editor.buffer_keys_popup {
+        } else if !editor.which_key_prefix.is_empty()
+            || editor.buffer_keys_popup
+            || editor.leader_active
+        {
             debug!("render: which_key popup");
             let (entries, title_override) = if editor.buffer_keys_popup {
                 let kind = editor.active_buffer().kind;

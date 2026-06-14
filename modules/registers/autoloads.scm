@@ -11,7 +11,7 @@
 (define-key "visual" "\"" "prompt-register")
 
 ;; Leader register group
-(define-key "normal" "SPC r r" "show-registers")
-(define-key "normal" "SPC r y" "paste-from-yank")
+(define-key "leader" "r r" "show-registers")
+(define-key "leader" "r y" "paste-from-yank")
 
 (provide-feature "registers-autoloads")

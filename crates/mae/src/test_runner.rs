@@ -21,6 +21,24 @@ use tracing::{debug, info, warn};
 use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
 
 use crate::collab_bridge::{CollabCommand, CollabEvent};
+use std::path::PathBuf;
+
+/// A test file and the range of test indices it registered.
+struct FileBoundary {
+    file: PathBuf,
+    start_idx: usize,
+    end_idx: usize,
+}
+
+/// Snapshot of global editor state that should be consistent across test files.
+/// Restored at file boundaries to prevent cross-file pollution.
+struct EditorStateSnapshot {
+    mode: mae_core::Mode,
+    keymap_flavor: String,
+    default_mode: String,
+    option_line_numbers: String,
+    option_word_wrap: String,
+}
 
 /// Run the Scheme test runner in headless mode.
 ///
@@ -85,7 +103,11 @@ pub(crate) async fn run_scheme_tests(
         let _ = scheme.eval(&filter_code);
     }
 
-    // Load and evaluate each test file.
+    // Load and evaluate each test file, tracking file→test-index boundaries
+    // so the runner can isolate state between files.
+    let mut file_boundaries: Vec<FileBoundary> = Vec::new();
+    let mut prev_count: usize = 0;
+
     for file in &test_files {
         info!(file = %file.display(), "loading test file");
         scheme.inject_editor_state(editor);
@@ -106,6 +128,21 @@ pub(crate) async fn run_scheme_tests(
         )
         .await;
 
+        // Record how many tests this file registered.
+        let cur_count: usize = scheme
+            .eval("(test-count)")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(prev_count);
+        if cur_count > prev_count {
+            file_boundaries.push(FileBoundary {
+                file: file.clone(),
+                start_idx: prev_count,
+                end_idx: cur_count,
+            });
+        }
+        prev_count = cur_count;
+
         // Check for exit request.
         if let Some(code) = scheme.take_exit_code() {
             return code;
@@ -125,20 +162,84 @@ pub(crate) async fn run_scheme_tests(
         collab_event_rx,
         collab_command_tx,
         &broadcaster,
+        &file_boundaries,
     )
     .await
+}
+
+impl EditorStateSnapshot {
+    fn capture(editor: &Editor) -> Self {
+        Self {
+            mode: editor.mode,
+            keymap_flavor: editor.keymap_flavor.clone(),
+            default_mode: editor.default_mode.clone(),
+            option_line_numbers: editor
+                .get_option("line_numbers")
+                .map(|(v, _)| v)
+                .unwrap_or_default(),
+            option_word_wrap: editor
+                .get_option("word_wrap")
+                .map(|(v, _)| v)
+                .unwrap_or_default(),
+        }
+    }
+
+    fn restore(&self, editor: &mut Editor, scheme: &mut SchemeRuntime) -> Vec<String> {
+        let mut dirty = Vec::new();
+
+        if editor.mode != self.mode {
+            dirty.push(format!("mode: {:?} → {:?}", self.mode, editor.mode));
+            editor.set_mode(self.mode);
+        }
+        if editor.keymap_flavor != self.keymap_flavor {
+            dirty.push(format!(
+                "keymap_flavor: {} → {}",
+                self.keymap_flavor, editor.keymap_flavor
+            ));
+            crate::bootstrap::switch_keymap_flavor(scheme, editor, &self.keymap_flavor);
+        }
+        if editor.default_mode != self.default_mode {
+            dirty.push(format!(
+                "default_mode: {} → {}",
+                self.default_mode, editor.default_mode
+            ));
+            let _ = editor.set_option("default_mode", &self.default_mode);
+        }
+        if let Some((cur, _)) = editor.get_option("line_numbers") {
+            if cur != self.option_line_numbers {
+                dirty.push(format!(
+                    "line_numbers: {} → {}",
+                    self.option_line_numbers, cur
+                ));
+                let _ = editor.set_option("line_numbers", &self.option_line_numbers);
+            }
+        }
+        if let Some((cur, _)) = editor.get_option("word_wrap") {
+            if cur != self.option_word_wrap {
+                dirty.push(format!("word_wrap: {} → {}", self.option_word_wrap, cur));
+                let _ = editor.set_option("word_wrap", &self.option_word_wrap);
+            }
+        }
+
+        dirty
+    }
 }
 
 /// Run all registered tests one-by-one from the Rust side.
 ///
 /// Between each test, we call inject_editor_state + apply_to_editor + process_side_effects
 /// so that buffer mutations from one test are visible in subsequent tests.
+///
+/// At file boundaries (tracked by `file_boundaries`), global editor state is
+/// snapshot before the first test and restored after the last — preventing
+/// cross-file pollution from mode, flavor, or option changes.
 async fn run_tests_iteratively(
     editor: &mut Editor,
     scheme: &mut SchemeRuntime,
     collab_event_rx: &mut mpsc::Receiver<CollabEvent>,
     collab_command_tx: &mpsc::Sender<CollabCommand>,
     broadcaster: &SharedBroadcaster,
+    file_boundaries: &[FileBoundary],
 ) -> i32 {
     // Query test count.
     let count_str = match scheme.eval("(test-count)") {
@@ -163,8 +264,48 @@ async fn run_tests_iteratively(
 
     let mut pass_count = 0usize;
     let mut fail_count = 0usize;
+    let mut file_snapshot: Option<EditorStateSnapshot> = None;
+    let mut current_file_idx: Option<usize> = None;
 
     for i in 0..count {
+        // File boundary: snapshot state at the start of a new file's tests,
+        // restore at the end of the previous file's tests.
+        let new_file_idx = file_boundaries
+            .iter()
+            .position(|fb| i >= fb.start_idx && i < fb.end_idx);
+        if new_file_idx != current_file_idx {
+            // Restore state from the file that just ended.
+            if let Some(snapshot) = file_snapshot.take() {
+                if let Some(prev_idx) = current_file_idx {
+                    let prev_file = file_boundaries[prev_idx]
+                        .file
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("?");
+                    let dirty = snapshot.restore(editor, scheme);
+                    if !dirty.is_empty() {
+                        eprintln!(
+                            "# warning: {} leaked global state (auto-restored): {}",
+                            prev_file,
+                            dirty.join(", ")
+                        );
+                    }
+                    scheme.inject_editor_state(editor);
+                }
+            }
+            // Snapshot state for the new file.
+            file_snapshot = Some(EditorStateSnapshot::capture(editor));
+            current_file_idx = new_file_idx;
+            if let Some(idx) = new_file_idx {
+                let file_name = file_boundaries[idx]
+                    .file
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?");
+                debug!(file = file_name, test_idx = i, "entering test file");
+            }
+        }
+
         // Get test name.
         let name = scheme
             .eval(&format!("(test-name {})", i))
@@ -194,6 +335,17 @@ async fn run_tests_iteratively(
             broadcaster,
         )
         .await;
+
+        // E2E key injection: process any `(feed-keys ...)` queued this step
+        // through the REAL handle_key pipeline (real loaded keymaps + routing +
+        // which-key + dispatch), then drain hooks it fired.
+        drain_feed_keys(editor, scheme);
+
+        // Process module reloads / flavor switches queued this step — by commands
+        // (`:reload-modules`, `:keymap-set-flavor`) OR by a fed keypress (e.g. the
+        // flavor picker's palette selection). Runs AFTER feed-keys so picker-
+        // triggered switches apply in the same step. Mirrors the real event loops.
+        drain_module_reloads(editor, scheme);
 
         // Refresh editor state so the next test sees updated globals.
         scheme.inject_editor_state(editor);
@@ -236,6 +388,25 @@ async fn run_tests_iteratively(
                 );
             }
             println!("  ...");
+        }
+    }
+
+    // Restore state from the last file.
+    if let Some(snapshot) = file_snapshot.take() {
+        if let Some(prev_idx) = current_file_idx {
+            let prev_file = file_boundaries
+                .get(prev_idx)
+                .and_then(|fb| fb.file.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("?");
+            let dirty = snapshot.restore(editor, scheme);
+            if !dirty.is_empty() {
+                eprintln!(
+                    "# warning: {} leaked global state (auto-restored): {}",
+                    prev_file,
+                    dirty.join(", ")
+                );
+            }
         }
     }
 
@@ -449,6 +620,96 @@ async fn process_side_effects(
 
     // Final sync update drain.
     crate::sync_broadcast::drain_and_broadcast(editor, broadcaster, Some(collab_command_tx));
+}
+
+/// Convert an abstract `KeyPress` back into a crossterm `KeyEvent` for E2E key
+/// injection. Inverse of `key_handling::crossterm_to_keypress`.
+fn keypress_to_keyevent(kp: &mae_core::KeyPress) -> crossterm::event::KeyEvent {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use mae_core::keymap::Key;
+    let code = match &kp.key {
+        Key::Char(c) => KeyCode::Char(*c),
+        Key::Escape => KeyCode::Esc,
+        Key::Enter => KeyCode::Enter,
+        Key::Backspace => KeyCode::Backspace,
+        Key::Tab => KeyCode::Tab,
+        Key::BackTab => KeyCode::BackTab,
+        Key::Up => KeyCode::Up,
+        Key::Down => KeyCode::Down,
+        Key::Left => KeyCode::Left,
+        Key::Right => KeyCode::Right,
+        Key::Home => KeyCode::Home,
+        Key::End => KeyCode::End,
+        Key::PageUp => KeyCode::PageUp,
+        Key::PageDown => KeyCode::PageDown,
+        Key::Delete => KeyCode::Delete,
+        Key::F(n) => KeyCode::F(*n),
+    };
+    let mut mods = KeyModifiers::NONE;
+    if kp.ctrl {
+        mods |= KeyModifiers::CONTROL;
+    }
+    if kp.alt {
+        mods |= KeyModifiers::ALT;
+    }
+    if kp.shift {
+        mods |= KeyModifiers::SHIFT;
+    }
+    KeyEvent::new(code, mods)
+}
+
+/// Drain `editor.pending_module_reloads` (mirrors the terminal/GUI event loops)
+/// so module-reload + keymap-flavor-switch commands take effect in the test
+/// harness — exercising the real `switch_keymap_flavor`/`reload_all_modules`.
+fn drain_module_reloads(editor: &mut Editor, scheme: &mut SchemeRuntime) {
+    let reloads = std::mem::take(&mut editor.pending_module_reloads);
+    if reloads.is_empty() {
+        return;
+    }
+    for r in reloads {
+        if r == "__all__" {
+            crate::bootstrap::reload_all_modules(scheme, editor);
+        } else if let Some(flavor) = r.strip_prefix("__flavor:") {
+            crate::bootstrap::switch_keymap_flavor(scheme, editor, flavor);
+        } else {
+            crate::bootstrap::reload_module(&r, scheme, editor);
+        }
+    }
+    // Drain hooks fired by the reload/switch (e.g. keymap-flavor-changed).
+    scheme.apply_to_editor(editor);
+    crate::key_handling::drain_hook_evals(editor, scheme);
+}
+
+/// Drain `(feed-keys ...)` queues and dispatch each parsed key through the real
+/// `handle_key` pipeline — the E2E key-injection harness. Each queued string
+/// (e.g. `"C-; b s"`) is parsed into a key sequence that shares one
+/// `pending_keys` accumulator, so multi-key bindings resolve exactly as they
+/// would from a live keyboard. Hooks fired by the dispatched commands are drained.
+fn drain_feed_keys(editor: &mut Editor, scheme: &mut SchemeRuntime) {
+    let seqs = scheme.take_pending_feed_keys();
+    if seqs.is_empty() {
+        return;
+    }
+    let ai_tx: Option<tokio::sync::mpsc::Sender<mae_ai::AiCommand>> = None;
+    for seq_str in seqs {
+        let mut pending_keys: Vec<mae_core::KeyPress> = Vec::new();
+        let mut pending_interactive: Option<crate::ai_event_handler::PendingInteractiveEvent> =
+            None;
+        for kp in mae_core::keymap::parse_key_seq_spaced(&seq_str) {
+            let key = keypress_to_keyevent(&kp);
+            crate::key_handling::handle_key(
+                editor,
+                scheme,
+                key,
+                &mut pending_keys,
+                &ai_tx,
+                &mut pending_interactive,
+            );
+        }
+    }
+    // Apply any state the dispatched commands queued, and run hooks they fired.
+    scheme.apply_to_editor(editor);
+    crate::key_handling::drain_hook_evals(editor, scheme);
 }
 
 /// Sleep for the given duration while draining collab events at 100Hz.

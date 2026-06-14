@@ -643,6 +643,12 @@ pub struct Editor {
         crate::window::WindowId,
     )>,
     pub mode: Mode,
+    /// Transient keypad/leader layer (God-Mode / Meow-Keypad model). When true,
+    /// key input resolves against the shared `leader` keymap (the mae which-key
+    /// tree) regardless of `mode`, and clears after one command (or on cancel).
+    /// Entered via the `leader-dispatch` command — `SPC` in the doom flavor,
+    /// `C-;` in the non-modal flavor — so both flavors share one leader tree.
+    pub leader_active: bool,
     pub running: bool,
     pub status_msg: String,
     /// Name of the command currently being dispatched (Emacs `this-command`).
@@ -838,6 +844,15 @@ pub struct Editor {
     /// Clipboard integration mode: "unnamedplus" (system clipboard for paste),
     /// "unnamed" (yank syncs out, paste reads internal), "internal" (no sync).
     pub clipboard: String,
+    /// Keymap flavor (default "doom"): module loading auto-enables the
+    /// `keymap-<flavor>` module unless the user declared a different keymap-*
+    /// module. Read before autoloads run, so it belongs in init.scm/the mae!
+    /// block (config.scm is too late); change at runtime via :reload-modules.
+    pub keymap_flavor: String,
+    /// Startup editor mode ("normal" | "insert"), set by the keymap flavor
+    /// (non-modal flavors use "insert"). Applied by bootstrap after modules +
+    /// config load. See [`leader_active`](Self::leader_active) for the keypad.
+    pub default_mode: String,
     /// Whether to restore sessions on startup. Default false.
     pub restore_session: bool,
     /// Insert-mode C-d behavior: "dedent" (vim) or "delete-forward" (Emacs).
@@ -1028,6 +1043,7 @@ impl Editor {
             window_mgr: WindowManager::new(0),
             saved_maximize_layout: None,
             mode: Mode::Normal,
+            leader_active: false,
             running: true,
             status_msg: String::new(),
             current_command: String::new(),
@@ -1116,6 +1132,8 @@ impl Editor {
             clean_mode: false,
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
+            keymap_flavor: "doom".to_string(),
+            default_mode: "normal".to_string(),
             restore_session: false,
             insert_ctrl_d: "dedent".to_string(),
             heading_scale: true,
@@ -1230,6 +1248,14 @@ impl Editor {
     /// overlays (org, markdown) sit on top of "normal" — if the overlay has no
     /// match, the caller should retry with the fallback.
     pub fn current_keymap_names(&self) -> Option<(&'static str, Option<&'static str>)> {
+        // Transient keypad/leader layer overrides mode-based keymap selection:
+        // while active, keys resolve against the shared `leader` keymap (the mae
+        // which-key tree), regardless of the underlying mode (Normal for the doom
+        // flavor, Insert for the non-modal flavor). See `Editor::leader_active`.
+        if self.leader_active {
+            return Some(("leader", None));
+        }
+
         let idx = self.active_buffer_idx();
         let kind = self.buffers[idx].kind;
         let lang = self.syntax.language_of(idx);
@@ -1265,6 +1291,16 @@ impl Editor {
     pub fn current_keymap(&self) -> Option<&Keymap> {
         let (name, _) = self.current_keymap_names()?;
         self.keymaps.get(name)
+    }
+
+    /// Reset all keymaps to the fresh kernel defaults (vi-modal primitives only,
+    /// no leader tree). Used by runtime keymap-flavor switching: reset to a clean
+    /// slate, then re-run module loading to apply the new flavor — avoids stale
+    /// bindings from the previous flavor (the `leader`/`insert` entries differ).
+    pub fn reset_keymaps_to_kernel(&mut self) {
+        self.keymaps = Self::default_keymaps();
+        self.leader_active = false;
+        self.clear_which_key_prefix();
     }
 
     /// Look up a key binding by key string (e.g. "SPC n d t").

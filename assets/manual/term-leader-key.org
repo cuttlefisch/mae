@@ -5,4 +5,12 @@
 #+title: Leader Key
 #+filetags: :terminology:
 
-SPC in normal mode -- the prefix key for command sequences. Inspired by Doom Emacs. SPC f f = find file, SPC b s = switch buffer, SPC h = help, SPC a = AI agent, etc.
+The key that opens MAE's which-key command menu (the **leader keypad**). In the
+`doom` flavor it's ~SPC~ from Normal mode; in the `nonmodal` flavor it's ~C-;~
+from Insert. Inspired by Doom Emacs / Meow's keypad. The menu itself is the same
+shared tree in either flavor: ~f f~ = find file, ~b s~ = save buffer, ~h~ = help,
+~a~ = AI agent, etc. The bindings live in the shared ~leader~ keymap (not under an
+~SPC~ prefix); the leader key just enters a transient keypad layer that resolves
+one command and returns you to editing.
+
+See also: [[concept:keymap-flavors]].

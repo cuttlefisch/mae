@@ -8,9 +8,9 @@
 ;;; @stability: experimental
 ;;; @provides: make-autoloads
 
-(define-key "normal" "SPC c b" "run-build")
-(define-key "normal" "SPC c t" "run-test")
-(define-key "normal" "SPC c n" "next-error")
-(define-key "normal" "SPC c p" "prev-error")
+(define-key "leader" "c b" "run-build")
+(define-key "leader" "c t" "run-test")
+(define-key "leader" "c n" "next-error")
+(define-key "leader" "c p" "prev-error")
 
 (provide-feature "make-autoloads")

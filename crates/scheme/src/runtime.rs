@@ -152,6 +152,15 @@ struct SharedState {
     /// Ex-commands to dispatch via `(execute-ex CMD-STRING)`.
     /// Routes through `execute_command()` which handles argument parsing.
     pending_ex_commands: Vec<String>,
+    /// Raw key sequences to feed through the real `handle_key` pipeline via
+    /// `(feed-keys "C-; b s")` — the E2E key-injection test primitive. Drained
+    /// by the test runner (which owns `handle_key`); each string is parsed and
+    /// each key dispatched against the real loaded keymaps + event loop.
+    pending_feed_keys: Vec<String>,
+    /// Whether the transient leader keypad is active (from inject_editor_state).
+    leader_active: bool,
+    /// Count of which-key entries for the current keymap (from inject_editor_state).
+    which_key_count: usize,
 
     // --- CRDT/sync test primitives ---
     /// Pending enable-sync: client_id for active buffer.
@@ -2124,6 +2133,35 @@ impl SchemeRuntime {
             move |_args: &[Value]| Ok(Value::string(s.lock().unwrap().current_mode.clone())),
         );
 
+        // --- E2E key-injection (test harness) ---
+        let s = shared.clone();
+        vm.register_fn(
+            "feed-keys",
+            "E2E test: feed a raw key sequence (e.g. \"C-; b s\") through the real key handler",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let keys = arg_string(args, 0, "feed-keys")?;
+                s.lock().unwrap().pending_feed_keys.push(keys);
+                Ok(Value::Void)
+            },
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "which-key-open?",
+            "E2E test: is the transient leader keypad / which-key popup active?",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Bool(s.lock().unwrap().leader_active)),
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "which-key-entry-count",
+            "E2E test: number of which-key entries for the current keymap",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().which_key_count as i64)),
+        );
+
         let s = shared.clone();
         vm.register_fn(
             "test-buffer-string",
@@ -2658,6 +2696,21 @@ impl SchemeRuntime {
         self.vm.eval_with_file(&content, &file).map_err(|e| {
             let err = SchemeError::from(e);
             error!(path = %path.display(), error = %err.message, "scheme file evaluation failed");
+            err
+        })?;
+        Ok(())
+    }
+
+    /// Evaluate Scheme source already in memory, using `virtual_name` as the
+    /// file label for error messages / stack frames (e.g.
+    /// `"embedded:keymap-doom/autoloads.scm"`). This is the in-memory twin of
+    /// [`load_file`](Self::load_file) — used to load modules embedded in the
+    /// binary without touching the filesystem.
+    pub fn load_source(&mut self, content: &str, virtual_name: &str) -> Result<(), SchemeError> {
+        info!(file = %virtual_name, "loading scheme source");
+        self.vm.eval_with_file(content, virtual_name).map_err(|e| {
+            let err = SchemeError::from(e);
+            error!(file = %virtual_name, error = %err.message, "scheme source evaluation failed");
             err
         })?;
         Ok(())
@@ -3458,6 +3511,8 @@ impl SchemeRuntime {
             let mut state = self.shared.lock().unwrap();
             state.current_buffer_text = text;
             state.current_mode = mode_str.to_string();
+            state.leader_active = editor.leader_active;
+            state.which_key_count = editor.which_key_entries_for_current_keymap().len();
             state.cursor_row = win.cursor_row;
             state.cursor_col = win.cursor_col;
             state.last_status_message = editor.status_msg.clone();
@@ -4292,6 +4347,13 @@ impl SchemeRuntime {
         errors
     }
 
+    /// Drain key sequences queued by `(feed-keys ...)`. The test runner owns the
+    /// real `handle_key` pipeline, so it pulls these and dispatches each parsed
+    /// key against the live editor + loaded keymaps (true E2E key injection).
+    pub fn take_pending_feed_keys(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.shared.lock().unwrap().pending_feed_keys)
+    }
+
     // --- Debugger introspection methods ---
 
     /// List all Scheme-defined commands accumulated via `(define-command ...)`.
@@ -4355,6 +4417,27 @@ mod tests {
     fn new_runtime_creates_successfully() {
         let rt = SchemeRuntime::new();
         assert!(rt.is_ok());
+    }
+
+    #[test]
+    fn load_source_evaluates_in_memory_content() {
+        // load_source is how embedded modules are loaded (no filesystem).
+        let mut rt = new_runtime();
+        rt.load_source(
+            "(define embedded-test-var 42)",
+            "embedded:test/autoloads.scm",
+        )
+        .expect("valid in-memory source should evaluate");
+        let out = rt.eval("embedded-test-var").unwrap();
+        assert!(
+            out.contains("42"),
+            "define from load_source should take effect: {out}"
+        );
+        // Malformed source surfaces an error rather than silently succeeding.
+        assert!(
+            rt.load_source("(((", "embedded:test/bad.scm").is_err(),
+            "malformed in-memory source should error"
+        );
     }
 
     #[test]

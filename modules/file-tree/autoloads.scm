@@ -10,7 +10,7 @@
 (define-keymap "file-tree" "normal")
 
 ;; Normal mode: toggle binding
-(define-key "normal" "SPC f t" "file-tree-toggle")
+(define-key "leader" "f t" "file-tree-toggle")
 
 ;; Navigation
 (define-key "file-tree" "j" "file-tree-down")

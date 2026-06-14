@@ -19,7 +19,7 @@
 (define-key "agenda" "?" "show-buffer-keys")
 
 ;; SPC o a/A — open/add agenda from normal mode
-(define-key "normal" "SPC o a" "open-agenda")
-(define-key "normal" "SPC o A" "agenda-add")
+(define-key "leader" "o a" "open-agenda")
+(define-key "leader" "o A" "agenda-add")
 
 (provide-feature "agenda-autoloads")

@@ -1,6 +1,11 @@
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
+
+// Path resolution lives in `pkg::paths`; re-exported here so existing
+// `crate::bootstrap::{dirs_candidate, builtin_module_dirs}` call sites are
+// unchanged. (`data_dir_candidate` is used only inside `pkg::paths`.)
+pub use crate::pkg::paths::{builtin_module_dirs, dirs_candidate};
 use std::sync::Mutex;
 
 use mae_ai::{
@@ -839,7 +844,28 @@ pub fn load_init_file(
     load_init_files(scheme, editor);
     let registry = load_modules(scheme, editor);
     load_config_scm(scheme, editor);
+    apply_default_mode(editor);
     registry
+}
+
+/// Apply the `default_mode` option (set by the keymap flavor — non-modal flavors
+/// use "insert") after modules + config have loaded, so a user `config.scm`
+/// `(set-option!)` can still override it. The editor boots in Normal; this flips
+/// it to Insert for non-modal flavors. `set_mode` is a no-op for buffers that
+/// only allow Normal (e.g. the dashboard), which is fine.
+pub fn apply_default_mode(editor: &mut Editor) {
+    match editor.default_mode.as_str() {
+        "insert" => {
+            editor.set_mode(mae_core::Mode::Insert);
+        }
+        // Actively set Normal (not a no-op): a runtime flavor switch from a
+        // non-modal flavor leaves the editor in Insert, and switching to a modal
+        // flavor must return it to Normal.
+        "normal" => {
+            editor.set_mode(mae_core::Mode::Normal);
+        }
+        other => warn!("unknown default_mode '{other}' — staying in normal"),
+    }
 }
 
 /// Layered init loading — returns the number of files loaded.
@@ -930,61 +956,6 @@ pub fn load_init_files(scheme: &mut SchemeRuntime, editor: &mut Editor) -> usize
     loaded
 }
 
-/// Ordered list of directories searched for built-in modules.
-///
-/// This is the single source of truth for module discovery, shared by the
-/// editor's [`load_modules`] (first existing dir that yields modules wins) and
-/// the `mae` package CLI (`list`/`doctor`/…) so the CLI reports exactly what
-/// the editor would load — no divergent second copy. Order is explicit/most-
-/// specific first:
-///
-/// 0. `$MAE_MODULES_PATH` — explicit override (AppImage, custom installs).
-/// 1. `./modules` — dev: `cargo run` from repo root.
-/// 2. `<exe>/modules` and `<exe>/../share/mae/modules` — tarball + FHS/Homebrew
-///    (a `bin/mae` install keeps modules at `share/mae/modules`).
-/// 3. `$XDG_DATA_HOME/mae/modules` (or `~/.local/share/...`) **and** the
-///    platform-native data dir (`~/Library/Application Support/mae/modules` on
-///    macOS) — `make install` / user installs, regardless of convention.
-/// 4. compile-time `CARGO_MANIFEST_DIR` repo `modules` — dev builds only.
-pub fn builtin_module_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    // 0. explicit override
-    if let Ok(path) = std::env::var("MAE_MODULES_PATH") {
-        dirs.push(PathBuf::from(path));
-    }
-    // 1. CWD/modules (dev)
-    dirs.push(PathBuf::from("modules"));
-    // 2. next to the executable + FHS/Homebrew share layout
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            dirs.push(exe_dir.join("modules"));
-            if let Some(prefix) = exe_dir.parent() {
-                dirs.push(prefix.join("share/mae/modules"));
-            }
-        }
-    }
-    // 3. data dir(s): XDG (honoring XDG_DATA_HOME) AND the platform-native data
-    //    dir (macOS ~/Library/Application Support), so an install works whether
-    //    the installer followed XDG or the macOS convention.
-    if let Some(data) = data_dir_candidate("mae/modules") {
-        dirs.push(data);
-    }
-    if let Some(platform) = dirs::data_dir().map(|d| d.join("mae/modules")) {
-        if !dirs.contains(&platform) {
-            dirs.push(platform);
-        }
-    }
-    // 4. compile-time repo modules (dev builds only)
-    if let Some(repo_modules) = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|repo| repo.join("modules"))
-    {
-        dirs.push(repo_modules);
-    }
-    dirs
-}
-
 /// Discover, resolve, and load module autoloads.
 ///
 /// Module loading happens between init.scm and config.scm:
@@ -993,44 +964,70 @@ pub fn builtin_module_dirs() -> Vec<PathBuf> {
 ///   3. Load each module's autoloads.scm (registers commands, keys, options, hooks)
 ///   4. config.scm runs AFTER this, so users can override any module setting
 ///
+/// Enable `name` plus its transitive `[dependencies]` in the `enabled` set.
+/// Used for auto-enabled keymap flavors (which bypass the `(mae!)` declaration)
+/// so their deps — e.g. the shared `keymap-leader` — load too. Iterative
+/// worklist; ignores deps not present among discovered modules (the resolver
+/// reports those).
+fn enable_with_deps(
+    name: &str,
+    all_modules: &[crate::pkg::embedded::DiscoveredModule],
+    enabled: &mut HashMap<String, Vec<String>>,
+) {
+    let mut stack = vec![name.to_string()];
+    while let Some(n) = stack.pop() {
+        if enabled.contains_key(&n) {
+            continue;
+        }
+        enabled.insert(n.clone(), vec![]);
+        if let Some(d) = all_modules.iter().find(|d| d.manifest.name() == n) {
+            for dep in d.manifest.dependencies.keys() {
+                if !enabled.contains_key(dep) {
+                    stack.push(dep.clone());
+                }
+            }
+        }
+    }
+}
+
 /// Returns the populated ModuleRegistry.
 pub fn load_modules(
     scheme: &mut SchemeRuntime,
     editor: &mut Editor,
 ) -> crate::pkg::loader::ModuleRegistry {
     use crate::pkg::{
+        embedded::merge_modules,
         loader::{load_module_autoloads, ModuleRegistry},
         manifest::discover_modules,
         resolver::resolve_load_order,
     };
 
-    let mut all_modules = Vec::new();
-
-    // Built-in module search path — shared with the `mae` package CLI via
-    // `builtin_module_dirs()` so `mae list`/`doctor` report exactly what the
-    // editor would discover/load (no divergent second copy). First existing
-    // dir that yields modules wins.
+    // On-disk modules: built-in search path (first existing dir that yields
+    // modules wins) plus user-installed packages. These OVERRIDE the embedded
+    // baseline by name (dev loop + user customization).
+    let mut disk_modules = Vec::new();
     let builtin_dirs = builtin_module_dirs();
     for dir in &builtin_dirs {
-        if dir.exists() && all_modules.is_empty() {
-            all_modules.extend(discover_modules(dir));
+        if dir.exists() && disk_modules.is_empty() {
+            disk_modules.extend(discover_modules(dir));
         }
     }
-
-    // User-installed modules
     if let Some(user_pkg) = dirs_candidate("mae/packages") {
         if user_pkg.exists() {
-            all_modules.extend(discover_modules(&user_pkg));
+            disk_modules.extend(discover_modules(&user_pkg));
         }
     }
 
+    // Embedded built-ins are the always-present baseline; on-disk modules
+    // override by name. This is the single source of truth shared with the
+    // `mae` package CLI. With built-ins embedded, this is essentially never
+    // empty — keymap-doom is guaranteed present regardless of install layout.
+    let all_modules = merge_modules(disk_modules);
     if all_modules.is_empty() {
         warn!(
-            "no modules discovered in any of the {} search paths — leader-key (SPC) \
-             bindings are limited to built-in kernel defaults (collaboration, KB sharing, \
-             and other module-only bindings will be missing). Set MAE_MODULES_PATH or \
-             install modules under <prefix>/share/mae/modules. Searched: {:?}",
-            builtin_dirs.len(),
+            "no modules discovered (embedded baseline missing?!) — leader-key (SPC) \
+             bindings are limited to built-in kernel defaults. This should not happen; \
+             please report it. On-disk search paths: {:?}",
             builtin_dirs
         );
         return ModuleRegistry::new();
@@ -1040,30 +1037,47 @@ pub fn load_modules(
     let declared = scheme.declared_modules();
     let has_mae_block = !declared.is_empty();
     let mut enabled: HashMap<String, Vec<String>> = if declared.is_empty() {
-        // No mae! block — enable all discovered modules (backward compat).
+        // No mae! block — enable all discovered modules (backward compat),
+        // EXCEPT keymap flavor modules (`keymap-*`): only the selected
+        // `keymap_flavor` should load, since multiple flavors would clash on
+        // bindings + `default_mode`. The chosen flavor + its deps (the shared
+        // `keymap-leader`) are added by the flavor block below.
         all_modules
             .iter()
-            .map(|(_, m)| (m.name().to_string(), vec![]))
+            .filter(|d| !d.manifest.name().starts_with("keymap-"))
+            .map(|d| (d.manifest.name().to_string(), vec![]))
             .collect()
     } else {
         declared
     };
 
-    // keymap-doom is the default keymap and must always load unless the user
-    // explicitly declared a different keymap-* module.
+    // The keymap flavor is a module named `keymap-<flavor>` (default "doom",
+    // set via the `keymap_flavor` option in init.scm before this runs). Auto-
+    // enable it unless the user explicitly declared a different keymap-* module.
+    // keymap-doom is embedded, so the default always resolves.
     let has_keymap_module = enabled.keys().any(|k| k.starts_with("keymap-"));
     if !has_keymap_module {
-        let doom_available = all_modules.iter().any(|(_, m)| m.name() == "keymap-doom");
-        if doom_available {
-            info!("auto-enabling keymap-doom (default keymap — add to mae! block to suppress)");
-            enabled.insert("keymap-doom".to_string(), vec![]);
+        let flavor = editor.keymap_flavor.clone();
+        let target = format!("keymap-{flavor}");
+        let chosen = if all_modules.iter().any(|d| d.manifest.name() == target) {
+            info!("auto-enabling {target} (keymap_flavor = {flavor})");
+            Some(target)
         } else {
             warn!(
-                "keymap-doom (default keymap flavor) was not found among the {} discovered \
-                 modules — SPC leader bindings beyond the kernel defaults (e.g. SPC C \
-                 collaboration, SPC C K KB sharing) will be unavailable",
-                all_modules.len()
+                "keymap flavor '{flavor}' ({target}) not found among discovered modules; \
+                 falling back to embedded keymap-doom"
             );
+            all_modules
+                .iter()
+                .any(|d| d.manifest.name() == "keymap-doom")
+                .then(|| "keymap-doom".to_string())
+        };
+        // Enable the flavor AND its dependency closure (e.g. keymap-leader holds
+        // the shared leader tree). Auto-enabled flavors bypass the (mae!)
+        // declaration, so their deps must be pulled in here or the resolver
+        // would error "depends on keymap-leader which is not enabled".
+        if let Some(name) = chosen {
+            enable_with_deps(&name, &all_modules, &mut enabled);
         }
     }
 
@@ -1071,7 +1085,8 @@ pub fn load_modules(
     // Language modules provide keymaps and hooks for file types — without them,
     // file-type features silently fail (Emacs auto-mode-alist equivalent).
     if has_mae_block {
-        for (_, module) in &all_modules {
+        for d in &all_modules {
+            let module = &d.manifest;
             if module.module.category == "lang" && !enabled.contains_key(module.name()) {
                 info!(
                     "auto-enabling {} (language module — add to mae! block to customize)",
@@ -1080,6 +1095,13 @@ pub fn load_modules(
                 enabled.insert(module.name().to_string(), vec![]);
             }
         }
+    }
+
+    // Expand the dependency closure of every enabled module (e.g. a declared or
+    // auto-enabled keymap flavor pulls in the shared `keymap-leader`) so the
+    // resolver never fails on an unlisted-but-required dependency.
+    for name in enabled.keys().cloned().collect::<Vec<_>>() {
+        enable_with_deps(&name, &all_modules, &mut enabled);
     }
 
     let resolved = match resolve_load_order(&all_modules, &enabled) {
@@ -1170,7 +1192,7 @@ pub fn load_modules(
                     .iter()
                     .map(|(k, v)| (k.clone(), v.doc.clone()))
                     .collect(),
-                path: m.path.display().to_string(),
+                path: m.source.label(""),
                 depends: m.manifest.dependencies.keys().cloned().collect(),
                 enabled_flags: m.enabled_flags.clone(),
             }
@@ -1202,7 +1224,7 @@ pub fn load_modules(
                     .collect(),
                 commands: m.commands.clone(),
                 options: m.options.clone(),
-                path: m.path.display().to_string(),
+                path: m.source.label(""),
             })
             .collect();
         install_module_nodes(&mut editor.kb.primary, &module_data);
@@ -1257,47 +1279,39 @@ pub fn load_modules(
 /// and applies the result to the editor. This is a hot-reload path for
 /// module development — no restart needed.
 pub fn reload_module(name: &str, scheme: &mut SchemeRuntime, editor: &mut Editor) {
+    use crate::pkg::embedded::merge_modules;
     use crate::pkg::loader::load_module_autoloads;
     use crate::pkg::manifest::discover_modules;
     use crate::pkg::resolver::ResolvedModule;
 
-    // Find the module in known locations
-    let mut found = None;
-    let manifest_modules = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|repo| repo.join("modules"))
-        .unwrap_or_default();
-    let search_dirs = [
-        std::path::PathBuf::from("modules"),
-        dirs_candidate("mae/modules").unwrap_or_default(),
-        dirs_candidate("mae/packages").unwrap_or_default(),
-        manifest_modules,
-    ];
-    for dir in &search_dirs {
-        if !dir.exists() {
-            continue;
-        }
-        for (path, manifest) in discover_modules(dir) {
-            if manifest.name() == name {
-                found = Some((path, manifest));
-                break;
-            }
-        }
-        if found.is_some() {
-            break;
+    // Find the module across the merged view (embedded baseline + on-disk
+    // overrides), so reload works for embedded modules AND picks up an on-disk
+    // edit of a built-in (disk overrides embedded) — the dev hot-reload loop.
+    let mut disk = Vec::new();
+    let builtin_dirs = builtin_module_dirs();
+    for dir in &builtin_dirs {
+        if dir.exists() && disk.is_empty() {
+            disk.extend(discover_modules(dir));
         }
     }
+    if let Some(user_pkg) = dirs_candidate("mae/packages") {
+        if user_pkg.exists() {
+            disk.extend(discover_modules(&user_pkg));
+        }
+    }
+    let found = merge_modules(disk)
+        .into_iter()
+        .find(|d| d.manifest.name() == name);
 
-    let Some((path, manifest)) = found else {
+    let Some(d) = found else {
         editor.set_status(format!("Module '{}' not found", name));
         return;
     };
 
     let resolved = ResolvedModule {
         name: name.to_string(),
-        path,
-        manifest,
+        source: d.source,
+        manifest: d.manifest,
         enabled_flags: vec![],
     };
 
@@ -1312,6 +1326,50 @@ pub fn reload_module(name: &str, scheme: &mut SchemeRuntime, editor: &mut Editor
             editor.set_status(format!("Module '{}' reload failed: {}", name, e));
         }
     }
+}
+
+/// Reload ALL modules at runtime: re-discover (embedded baseline + on-disk
+/// overrides) and re-run every enabled module's autoloads, exactly as startup
+/// does. Registration is idempotent (define-key / register-command / options
+/// overwrite; hooks dedupe), so this safely picks up on-disk edits and — after
+/// `:reload-config` re-evaluates init.scm — changes to the `(mae!)` block.
+///
+/// This is the live counterpart to startup module loading (it reuses
+/// [`load_modules`], so there is no second copy of the load logic to drift) and
+/// the missing piece that previously forced a full restart to apply config.
+pub fn reload_all_modules(scheme: &mut SchemeRuntime, editor: &mut Editor) {
+    // Per-load keymap-conflict warnings would otherwise accumulate across reloads.
+    editor.module_binding_warnings.clear();
+    let registry = load_modules(scheme, editor);
+    let loaded = registry
+        .list()
+        .iter()
+        .filter(|m| matches!(m.status, crate::pkg::loader::ModuleStatus::Loaded))
+        .count();
+    info!(modules = loaded, "reloaded all modules");
+    editor.set_status(format!("Reloaded {loaded} module(s)"));
+}
+
+/// Switch the keymap flavor at runtime (e.g. doom ↔ nonmodal). Resets keymaps to
+/// the kernel baseline (dropping the previous flavor's `SPC`/`C-;`/CUA entries —
+/// there is no bulk keymap-clear, so a clean rebuild is the robust path), then
+/// re-runs module loading with the new flavor + re-applies user config + the
+/// flavor's `default_mode`. The shared `leader` tree is flavor-independent, so
+/// only the thin entry bindings and the startup mode actually change.
+pub fn switch_keymap_flavor(scheme: &mut SchemeRuntime, editor: &mut Editor, flavor: &str) {
+    let _ = editor.set_option("keymap_flavor", flavor);
+    // Baseline; the new flavor's autoloads re-set this (non-modal → "insert").
+    let _ = editor.set_option("default_mode", "normal");
+    editor.reset_keymaps_to_kernel();
+    reload_all_modules(scheme, editor);
+    // Re-apply user config.scm so personal bindings/options survive the switch.
+    load_config_scm(scheme, editor);
+    apply_default_mode(editor);
+    info!(flavor, "switched keymap flavor");
+    editor.set_status(format!("Keymap flavor: {flavor}"));
+    // Hook so user config can react to a live flavor change (e.g. per-flavor
+    // theme, extra bindings). Fired after keymaps + config + mode are settled.
+    editor.fire_hook("keymap-flavor-changed");
 }
 
 /// Load user config.scm — runs AFTER module autoloads so users can override.
@@ -1517,30 +1575,6 @@ pub fn setup_dap() -> (
     (evt_rx, cmd_tx)
 }
 
-pub fn dirs_candidate(rel: &str) -> Option<PathBuf> {
-    std::env::var("XDG_CONFIG_HOME")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| PathBuf::from(h).join(".config"))
-        })
-        .map(|base| base.join(rel))
-}
-
-pub fn data_dir_candidate(rel: &str) -> Option<PathBuf> {
-    std::env::var("XDG_DATA_HOME")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| PathBuf::from(h).join(".local/share"))
-        })
-        .map(|base| base.join(rel))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1572,42 +1606,6 @@ mod tests {
     }
 
     #[test]
-    fn builtin_module_dirs_honors_env_override_first() {
-        // MAE_MODULES_PATH must take precedence so AppImage/custom installs win.
-        // SAFETY: single-threaded test; restore afterwards.
-        let prev = std::env::var("MAE_MODULES_PATH").ok();
-        std::env::set_var("MAE_MODULES_PATH", "/custom/mae/modules");
-        let dirs = builtin_module_dirs();
-        assert_eq!(
-            dirs.first(),
-            Some(&PathBuf::from("/custom/mae/modules")),
-            "MAE_MODULES_PATH should be searched first"
-        );
-        // Always includes the dev `./modules` and at least one data-dir candidate.
-        assert!(dirs.contains(&PathBuf::from("modules")));
-        assert!(
-            dirs.len() >= 3,
-            "expected env + cwd + install paths, got {dirs:?}"
-        );
-        match prev {
-            Some(v) => std::env::set_var("MAE_MODULES_PATH", v),
-            None => std::env::remove_var("MAE_MODULES_PATH"),
-        }
-    }
-
-    #[test]
-    fn builtin_module_dirs_has_no_duplicates() {
-        // The XDG and platform-native data dirs collapse to one entry on Linux;
-        // the helper must not emit the same path twice (wasted stat + confusing
-        // diagnostics in the "searched: {:?}" warning).
-        let dirs = builtin_module_dirs();
-        let mut seen = std::collections::HashSet::new();
-        for d in &dirs {
-            assert!(seen.insert(d.clone()), "duplicate search dir: {d:?}");
-        }
-    }
-
-    #[test]
     fn load_init_files_returns_zero_when_no_files() {
         let mut scheme = require_scheme!();
         // In a temp dir with no init.scm, should return 0
@@ -1619,6 +1617,105 @@ mod tests {
         let count = load_init_files(&mut scheme, &mut editor);
         // Count depends on whether user has an init.scm, so just verify no panic
         let _ = count;
+    }
+
+    #[test]
+    fn reload_all_modules_loads_embedded_and_is_idempotent() {
+        // Embedded keymap-doom must load even with no on-disk modules, and a
+        // second reload must not change binding/module counts (idempotent
+        // registration). This is the core regression guard for the whole
+        // overhaul: it proves the embedded baseline populates the leader tree,
+        // so removing the kernel's duplicated SPC bindings is safe.
+        let mut scheme = require_scheme!();
+        let mut editor = Editor::new();
+
+        let total_normal = |e: &Editor| -> usize {
+            e.keymaps
+                .get("normal")
+                .map(|k| k.bindings().count())
+                .unwrap_or(0)
+        };
+        let has_collab = |e: &Editor| -> bool {
+            // collab-start lives in the `leader` keymap (via keymap-leader).
+            // Check all keymaps to be resilient to on-disk module overrides
+            // during development (stale ~/.local/share/mae/modules may put
+            // it in `normal` instead).
+            e.keymaps
+                .values()
+                .any(|k| k.bindings().any(|(_, cmd)| cmd == "collab-start"))
+        };
+
+        reload_all_modules(&mut scheme, &mut editor);
+        let mods1 = editor.active_modules.len();
+        let binds1 = total_normal(&editor);
+        assert!(
+            mods1 >= 20,
+            "embedded modules should load with no on-disk modules, got {mods1}"
+        );
+        assert!(
+            editor
+                .active_modules
+                .iter()
+                .any(|m| m.name == "keymap-doom" && m.status == "loaded"),
+            "embedded keymap-doom must load"
+        );
+        // The collab leader binding must be present in some keymap after
+        // module loading (in the `leader` keymap via keymap-leader).
+        assert!(
+            has_collab(&editor),
+            "collab-start (SPC C s) should be bound after keymap modules load"
+        );
+
+        reload_all_modules(&mut scheme, &mut editor);
+        assert_eq!(
+            mods1,
+            editor.active_modules.len(),
+            "module count stable across reload"
+        );
+        assert_eq!(
+            binds1,
+            total_normal(&editor),
+            "binding count stable (idempotent reload)"
+        );
+    }
+
+    #[test]
+    fn unknown_keymap_flavor_falls_back_to_doom() {
+        // A bogus keymap_flavor must not leave the user with no leader tree —
+        // load_modules falls back to the embedded keymap-doom.
+        let mut scheme = require_scheme!();
+        let mut editor = Editor::new();
+        editor.keymap_flavor = "nonexistent-flavor".to_string();
+        reload_all_modules(&mut scheme, &mut editor);
+        assert!(
+            editor
+                .active_modules
+                .iter()
+                .any(|m| m.name == "keymap-doom" && m.status == "loaded"),
+            "unknown flavor should fall back to keymap-doom"
+        );
+    }
+
+    #[test]
+    fn keymap_flavor_option_roundtrips() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("keymap_flavor")
+                .map(|(v, _)| v)
+                .as_deref(),
+            Some("doom"),
+            "default keymap_flavor should be doom"
+        );
+        editor.set_option("keymap_flavor", "emacs").unwrap();
+        assert_eq!(editor.keymap_flavor, "emacs");
+        assert_eq!(
+            editor
+                .get_option("keymap_flavor")
+                .map(|(v, _)| v)
+                .as_deref(),
+            Some("emacs")
+        );
     }
 
     #[test]

@@ -80,6 +80,7 @@ pub const QUICK_ACTIONS: &[(&str, &str, &str)] = &[
     ("SPC a p", "AI Chat (built-in)", "ai-prompt"),
     ("SPC h h", "Help", "help"),
     ("SPC h t", "Tutorial", "tutor"),
+    ("", "Choose keybindings", "choose-keymap-flavor"),
     ("SPC t s", "Set theme", "theme-picker"),
     ("SPC x", "Scratch buffer", "toggle-scratch-buffer"),
     ("SPC C c", "Connect to server", "collab-connect"),

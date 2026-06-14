@@ -1,0 +1,76 @@
+:PROPERTIES:
+:ID: concept:keymap-flavors
+:KIND: concept
+:END:
+#+title: Keymap Flavors & the Leader Keypad
+#+filetags: :keybindings:modal-editing:non-modal:extensibility:onboarding:
+
+**Keymap flavors** let MAE offer two canonical editing styles over one shared,
+mae-tailored which-key menu. Pick the one that matches your muscle memory — you
+never lose access to any command, only change *how* you reach it.
+
+** The two shipped flavors
+
+| Flavor | Style | Default mode | Open the menu | For |
+|--------|-------|--------------|---------------|-----|
+| `doom` (default) | Modal (vi / evil) | Normal | `SPC` | vim/Emacs users |
+| `nonmodal` | Non-modal (CUA) | Insert | `C-;` | VSCode/TextEdit users |
+
+Both are **embedded in the binary** and share the exact same leader menu — only
+the *entry* (and whether you edit in Normal or Insert) differs.
+
+** The leader keypad (God-Mode / Meow-Keypad model)
+
+Pressing the trigger opens a **transient keypad**: the which-key popup appears,
+you traverse it (any number of levels deep, e.g. ~SPC n d t~), one command runs,
+and you return to exactly where you were. ~Esc~ / ~C-g~ cancels with nothing run.
+
+- In `doom`, ~SPC~ from Normal opens it; you return to Normal.
+- In `nonmodal`, ~C-;~ from Insert opens it; you return to Insert. Typing always
+  inserts — there is no Normal mode to learn. (~C-;~ is used because ~C-SPC~
+  collides with macOS Spotlight and ~M-SPC~ with the macOS Character Viewer.)
+
+The keypad is a transient *layer*, not a mode: traversal is identical across
+flavors; only the restoration target (Normal vs Insert) differs.
+
+`nonmodal` also adds CUA chords in Insert: ~C-s~ save, ~C-z~ undo, ~C-y~ redo,
+~C-f~ find, ~C-v~ paste.
+
+** Selecting & switching
+
+- Guided: the dashboard's **Choose keybindings** quick-action (command
+  ~choose-keymap-flavor~) opens a picker that explains each flavor — the
+  recommended path for newcomers.
+- Persistent: set ~(set-option! "keymap_flavor" "nonmodal")~ in `init.scm`
+  (read before modules load; `config.scm` is too late).
+- Live: ~:keymap-set-flavor nonmodal~ (or no arg to toggle doom↔nonmodal). This
+  resets keymaps to the kernel baseline and reloads, so no stale bindings remain.
+- ~default_mode~ (`normal` | `insert`) is set by the flavor and applied after
+  modules + config load; a user `config.scm` can override it.
+
+** Extending (no kernel patches)
+
+- *New leader command* — appears in EVERY flavor's keypad, survives flavor
+  switches:
+  #+begin_src scheme
+  (define-key "leader" "x y" "my-command")
+  (set-group-name "leader" "x" "+mine")
+  #+end_src
+- *New flavor* — drop a `keymap-<name>` module depending on `keymap-leader`, set
+  ~default_mode~ + an entry binding to ~leader-dispatch~. Ships embedded if under
+  the repo `modules/`; users add their own via `~/.local/share/mae/modules` or
+  `$MAE_MODULES_PATH`.
+- *React to the keypad / flavor* — hooks: ~leader-open~, ~leader-execute~
+  (keypad-resolved command), ~leader-cancel~, ~keymap-flavor-changed~ (plus the
+  generic ~command-post~ + per-command ~:after~ advice). See [[concept:hooks]].
+
+** Architecture
+
+The mae leader tree lives once in the kernel-created ~leader~ keymap (populated
+by the embedded `keymap-leader` module + feature modules), bound WITHOUT an
+~SPC~ prefix. Each flavor only wires its entry into the transient `leader_active`
+overlay, which never mutates the base mode — so one menu serves every flavor and
+restoration is automatically correct. This is MAE's single-source-of-truth answer
+to the Emacs C-vs-elisp keymap-duplication trap.
+
+See also: [[concept:hooks]], [[concept:keymap-inheritance]], [[concept:mode]], [[concept:modules]], [[term:leader-key]], [[index]]

@@ -1118,7 +1118,12 @@ impl Editor {
                 // Final fallback: dispatch any registered builtin command by
                 // name. This lets `:debug-stop`, `:debug-continue`, etc. work
                 // without explicit `:`-arms, and is the foundation for making
-                // every command also invokable from `:`.
+                // every command also invokable from `:`. Propagate the argument
+                // into `command_line` so arg-reading commands (e.g.
+                // `:keymap-set-flavor nonmodal`, `:module-reload <name>`) see it.
+                if let Some(a) = args {
+                    self.vi.command_line = a.to_string();
+                }
                 if self.dispatch_builtin(command) {
                     return true;
                 }

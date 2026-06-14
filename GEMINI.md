@@ -90,12 +90,14 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 ## Keybinding Architecture
 
-- **Kernel keymaps** (`keymaps.rs`): vi-modal primitives (hjkl, operators, text objects, Escape, `:`). Currently also has SPC leader bindings as a transitional default — migrating to keymap flavor modules.
-- **Keymap flavor modules** (`modules/keymap-doom/`, future `keymap-emacs/`, `keymap-minimal/`): define the full SPC leader tree. Selected via `keymap_flavor` option (default: "doom").
-- **Feature modules** (dailies, git-status, etc.): add bindings ONLY for module-specific commands not covered by the keymap flavor.
-- **Scheme API**: `(define-key MAP KEY CMD)` and `(set-group-name MAP PREFIX LABEL)` are the canonical binding APIs. Both work at init time and REPL time.
-- **`(mae!)` block**: Declarative module selection in `init.scm`. Only declared modules load.
-- **Never duplicate** bindings between kernel and modules without a documented migration path.
+- **Kernel keymaps** (`keymaps.rs`): vi-modal primitives ONLY (hjkl, operators, text objects, Escape, `:`, `C-w`, `C-c`) + empty `leader`/`command` keymaps. No SPC leader bindings (enforced by `kernel_keymap_has_no_leader_bindings`).
+- **Shared leader tree** (`modules/keymap-leader/`, embedded): the single mae which-key menu, bound into the kernel `leader` keymap WITHOUT an `SPC` prefix. Every flavor depends on it.
+- **Two embedded flavors**: `keymap-doom` (modal default; `SPC`/normal → keypad; Normal mode) and `keymap-nonmodal` (CUA; `C-;`/insert → keypad; `default_mode=insert`; CUA chords). Selected via `keymap_flavor` (default "doom"); live switch via `:keymap-set-flavor <name>` (resets keymaps + reloads — no stale bindings).
+- **Transient keypad** (`leader_active` overlay + `leader-dispatch`): God-Mode/Meow-Keypad layer that does NOT mutate the base mode. Keys resolve against the shared `leader` keymap (which-key, N-deep); resolve/cancel pops the overlay, restoring the base mode (Normal for doom, Insert for nonmodal). Traversal flavor-independent; restoration flavor-specific.
+- **Hooks**: `leader-open`/`leader-execute`/`leader-cancel`/`keymap-flavor-changed` (+ generic `command-post` + per-command `:after` advice).
+- **Extensibility**: add a leader command with `(define-key "leader" "x y" "cmd")` (appears in every flavor); add a flavor by dropping a `keymap-<name>` module depending on `keymap-leader`. Feature modules bind into `leader`, not `normal`/`SPC`.
+- **Scheme API**: `(define-key MAP KEY CMD)`, `(set-group-name …)`, `(define-keymap NAME PARENT)`, `(undefine-key! …)`; `:reload-modules` (alias `mae-reload`) reloads live. `(mae!)` in `init.scm` selects modules (flavor + dep closure + lang modules auto-enable).
+- **Never duplicate** leader bindings between kernel and modules — the `leader` keymap is the sole owner; new bindings go in `keymap-leader`/a feature module/user config, never `keymaps.rs`.
 
 ## Sync Engine (yrs/YATA)
 

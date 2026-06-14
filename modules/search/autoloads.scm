@@ -26,9 +26,9 @@
 (define-key "normal" "ygN" "yank-prev-match")
 
 ;; Leader search group
-(define-key "normal" "SPC s s" "search-buffer")
-(define-key "normal" "SPC s p" "project-search")
-(define-key "normal" "SPC s h" "clear-search-highlight")
-(define-key "normal" "SPC /" "project-search")
+(define-key "leader" "s s" "search-buffer")
+(define-key "leader" "s p" "project-search")
+(define-key "leader" "s h" "clear-search-highlight")
+(define-key "leader" "/" "project-search")
 
 (provide-feature "search-autoloads")
