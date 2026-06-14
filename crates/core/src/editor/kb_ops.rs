@@ -783,13 +783,23 @@ impl Editor {
         let mut results: Vec<(Option<String>, &mae_kb::Node)> = Vec::new();
         let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
-        // Local KB first (always wins on duplicates)
+        // Local KB first (always wins on duplicates).
+        // Default ("relevance") uses the enriched orderless, field-weighted
+        // ranker (search_ranked) — multi-word queries work and results are
+        // ranked, not alphabetical. "activity"/"alphabetical" are explicit opt-ins.
         let local_ids = if use_activity {
             self.kb
                 .primary
                 .search_sorted_by_activity(query, &weights, today)
-        } else {
+        } else if use_alpha {
             self.kb.primary.search(query)
+        } else {
+            self.kb
+                .primary
+                .search_ranked(query, self.kb.search_max_results)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect()
         };
         for id in local_ids {
             if let Some(node) = self.kb.primary.get(&id) {
@@ -804,8 +814,13 @@ impl Editor {
             let inst_name = self.kb.registry.find_by_uuid(uuid).map(|i| i.name.clone());
             let fed_ids = if use_activity {
                 kb.search_sorted_by_activity(query, &weights, today)
-            } else {
+            } else if use_alpha {
                 kb.search(query)
+            } else {
+                kb.search_ranked(query, self.kb.search_max_results)
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect()
             };
             for id in fed_ids {
                 if let Some(node) = kb.get(&id) {
