@@ -182,42 +182,12 @@ fn split_and_focus() {
     assert_eq!(editor.active_buffer_idx(), 0);
 }
 
-#[test]
-fn leader_bindings_exist() {
-    let editor = Editor::new();
-    let normal = editor.keymaps.get("normal").unwrap();
-    use crate::keymap::{parse_key_seq_spaced, LookupResult};
-    // SPC should be a prefix
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC")),
-        LookupResult::Prefix
-    );
-    // SPC b should be a prefix
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC b")),
-        LookupResult::Prefix
-    );
-    // SPC b s should be save
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC b s")),
-        LookupResult::Exact("save")
-    );
-    // SPC w v should be split-vertical
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC w v")),
-        LookupResult::Exact("split-vertical")
-    );
-    // SPC a a should be open-ai-agent
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC a a")),
-        LookupResult::Exact("open-ai-agent")
-    );
-    // SPC a p should be ai-prompt
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC a p")),
-        LookupResult::Exact("ai-prompt")
-    );
-}
+// leader_bindings_exist removed: the SPC leader tree moved from the kernel to
+// the keymap-doom module (embedded, loaded at startup), which mae-core cannot
+// load without a SchemeRuntime. Leader-tree presence is now verified at the
+// binary level (crates/mae bootstrap: reload_all_modules_loads_embedded_*),
+// and the kernel's primitives-only invariant by keymaps.rs
+// kernel_keymap_has_no_leader_bindings.
 
 #[test]
 fn which_key_prefix_initialized_empty() {

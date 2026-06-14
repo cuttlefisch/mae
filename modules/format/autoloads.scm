@@ -5,7 +5,7 @@
 ;;; @stability: experimental
 ;;; @provides: format-autoloads
 
-(define-key "normal" "SPC c f" "format-buffer")
+(define-key "leader" "c f" "format-buffer")
 
 ;; When +onsave flag is set, register the before-save hook
 (when-flag "format" "onsave"

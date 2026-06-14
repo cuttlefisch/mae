@@ -37,6 +37,7 @@ Welcome to MAE's built-in help. This knowledge base is the same data surface the
 - [[concept:conceal][Link & Markup Rendering]] -- Descriptive links and inline styling
 - [[concept:buffer-mode][BufferMode Trait]] -- the contract every buffer kind implements
 - [[concept:buffer-view][BufferView Enum]] -- mode-specific state on Buffer
+- [[concept:keymap-flavors][Keymap Flavors & the Leader Keypad]] -- modal (doom) vs non-modal (CUA), the transient which-key keypad, switching, extending
 - [[concept:keymap-inheritance][Keymap Inheritance]] -- overlay keymaps with parent fallback
 - [[concept:package-system][Package System]] -- require/provide for Scheme extensions
 - [[concept:modules][Module System]] -- structured packages with manifests, flags, and CLI

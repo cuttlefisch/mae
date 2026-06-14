@@ -1,0 +1,7 @@
+[module]
+name = "keymap-leader"
+version = "0.1.0"
+description = "Shared mae which-key leader tree (the `leader` keymap), used by every keymap flavor"
+category = "keymap"
+authors = ["MAE"]
+license = "GPL-3.0-or-later"

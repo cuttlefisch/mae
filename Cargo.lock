@@ -1976,6 +1976,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
 
 [[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2384,13 +2403,14 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "base64 0.22.1",
  "crossterm",
  "dirs",
  "futures",
  "hostname",
+ "include_dir",
  "libc",
  "mae-ai",
  "mae-core",
@@ -2418,7 +2438,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2436,11 +2456,11 @@ dependencies = [
 
 [[package]]
 name = "mae-babel"
-version = "0.13.7"
+version = "0.13.8"
 
 [[package]]
 name = "mae-canvas"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -2448,7 +2468,7 @@ dependencies = [
 
 [[package]]
 name = "mae-core"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "criterion",
  "hostname",
@@ -2492,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "mae-dap"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "mae-core",
  "serde",
@@ -2503,18 +2523,18 @@ dependencies = [
 
 [[package]]
 name = "mae-export"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "mae-babel",
 ]
 
 [[package]]
 name = "mae-format"
-version = "0.13.7"
+version = "0.13.8"
 
 [[package]]
 name = "mae-gui"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -2528,7 +2548,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "cozo",
  "lru",
@@ -2547,14 +2567,14 @@ dependencies = [
 
 [[package]]
 name = "mae-lookup"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-lsp"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -2564,14 +2584,14 @@ dependencies = [
 
 [[package]]
 name = "mae-make"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-mcp"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "async-trait",
  "hmac",
@@ -2586,7 +2606,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -2598,7 +2618,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "base64 0.22.1",
  "libc",
@@ -2610,7 +2630,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
@@ -2619,15 +2639,15 @@ dependencies = [
 
 [[package]]
 name = "mae-snippets"
-version = "0.13.7"
+version = "0.13.8"
 
 [[package]]
 name = "mae-spell"
-version = "0.13.7"
+version = "0.13.8"
 
 [[package]]
 name = "mae-sync"
-version = "0.13.7"
+version = "0.13.8"
 dependencies = [
  "base64 0.22.1",
  "criterion",

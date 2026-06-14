@@ -163,12 +163,18 @@ All phases below are COMPLETE. See ROADMAP.md for granular milestone details.
 
 ## Keybinding Architecture
 
-- **Kernel keymaps** (`keymaps.rs`): vi-modal primitives only (hjkl, operators, text objects, Escape, `:`). Currently also has SPC leader bindings as a transitional default — these are migrating to keymap flavor modules.
-- **Keymap flavor modules** (`modules/keymap-doom/`, future `keymap-emacs/`, `keymap-minimal/`): define the full SPC leader tree. Selected via `keymap_flavor` option (default: "doom").
-- **Feature modules** (dailies, git-status, etc.): add bindings ONLY for module-specific commands not covered by the keymap flavor.
-- **Scheme API**: `(define-key MAP KEY CMD)` and `(set-group-name MAP PREFIX LABEL)` are the canonical binding APIs. Both work at init time and REPL time (runtime redefinable).
-- **`(mae!)` block**: Declarative module selection in `init.scm`. Only declared modules load. If a kernel command's binding is in a module, the user MUST declare that module or the binding won't exist.
-- **Never duplicate** bindings between kernel and modules without a documented migration path. The current duplication between `keymaps.rs` and `keymap-doom` is acknowledged tech debt with a ROADMAP entry.
+- **Kernel keymaps** (`keymaps.rs`): vi-modal primitives ONLY (hjkl, operators, text objects, Escape, `:`, `C-w` window + resize, `C-c` capture) + the empty `leader`/`command`/etc. keymaps. The kernel defines **no** SPC leader bindings — enforced by `kernel_keymap_has_no_leader_bindings`.
+- **Shared leader tree** (`modules/keymap-leader/`, embedded): the single source of truth for the mae which-key menu, bound into the kernel-created **`leader` keymap** WITHOUT an `SPC` prefix (`(define-key "leader" "b s" "save")`). Every flavor depends on it.
+- **Keymap flavor modules** (`modules/keymap-doom/` = modal default, `modules/keymap-nonmodal/` = non-modal/CUA; both embedded). A flavor depends on `keymap-leader` and only wires its ENTRY into the transient keypad + its default mode: doom binds `SPC` (normal/visual) → `leader-dispatch` (Normal default); nonmodal sets `default_mode=insert`, binds `C-;` (insert) → `leader-dispatch`, + CUA chords. Selected via `keymap_flavor` option (default "doom"); switch live with `:keymap-set-flavor <name>` (resets keymaps to kernel + reloads — no stale bindings).
+- **Transient keypad** (`leader_active` overlay, `leader-dispatch` command): a God-Mode/Meow-Keypad layer that does NOT mutate the base mode. While active, keys resolve against the shared `leader` keymap (which-key renders, N levels deep via pending-key accumulation); resolving one command or cancelling (`Esc`/`C-g`/unbound) pops the overlay, restoring the base mode (Normal for doom, Insert for nonmodal). Traversal is flavor-independent; restoration is flavor-specific by construction.
+- **Extensibility** (user-facing, no kernel patches):
+  - *New flavor*: drop `modules/keymap-<name>/` (`[dependencies] keymap-leader = "*"`), set `default_mode` + an entry binding to `leader-dispatch`. Ships embedded if in repo `modules/`; users add flavors via `~/.local/share/mae/modules` or `MAE_MODULES_PATH`.
+  - *New which-key command*: `(define-key "leader" "x y" "cmd")` + `(set-group-name "leader" "x" "+label")` in any module or `config.scm` — appears in EVERY flavor's keypad and survives flavor switches.
+  - *Hooks*: `leader-open` / `leader-execute` (keypad-resolved command) / `leader-cancel`, `keymap-flavor-changed`, plus generic `command-pre`/`command-post` + per-command `:before`/`:after` advice.
+- **Feature modules** (dailies, git-status, etc.): bind leader entries into the `leader` keymap (not `normal`/`SPC`), so they appear in the keypad regardless of flavor.
+- **Scheme API**: `(define-key MAP KEY CMD)`, `(set-group-name MAP PREFIX LABEL)`, `(define-keymap NAME PARENT)`, `(undefine-key! MAP KEY)` — work at init + REPL (runtime redefinable). `:reload-modules` (alias `mae-reload`) re-runs module loading live.
+- **`(mae!)` block**: Declarative module selection in `init.scm`. Keymap flavor + its dep closure + language modules auto-enable. Belongs in `init.scm` (read before module loading; `config.scm` is too late for `keymap_flavor`/`default_mode`).
+- **Never duplicate** leader bindings between kernel and modules. The `leader` keymap is the sole owner. New leader bindings go in `keymap-leader` (or a feature module / user config), never `keymaps.rs`.
 - **Never add ad-hoc solutions**: Prefer proper architectural solutions over hardcoded workarounds. When you find yourself duplicating logic between TUI and GUI renderers, extract shared code.
 - **Every option must be Scheme-accessible**: If a behavior is configurable, it goes through OptionRegistry. No config.toml-only settings, no env-var-only settings, no compile-time-only flags for user-facing behavior.
 
@@ -241,8 +247,10 @@ make test-scheme-all                # All local tests
 - **One pending op per test step.** Each `it-test` is one eval→apply cycle. `buffer-insert` + `goto-char` in the same step may execute in unexpected order. Split into separate steps.
 - **SharedState pattern for cross-test reads.** Functions like `buffer-string`, `buffer-sync-enabled?`, `current-mode`, and `get-buffer-by-name` read from `Arc<Mutex<SharedState>>` (not closure-captured snapshots) so they see fresh state after `sync_scheme_state`.
 - **Assertions signal errors.** `should`/`should-equal`/`should-contain` signal Scheme errors caught by the runner. Use `should-mode` for mode checks.
+- **File-boundary state isolation.** The runner snapshots global editor state (mode, keymap_flavor, default_mode, line_numbers, word_wrap) before each test file and auto-restores after. Cross-file pollution is caught and warned: `# warning: test_foo.scm leaked global state (auto-restored): mode: Normal → Insert`. Tests that change flavor/mode/options should still restore them (the snapshot is a safety net, not a substitute for proper cleanup).
 - **TAP v14 output.** Machine-parseable, CI-friendly.
 - **Rust-side iteration preferred.** Don't add `(run-tests)` at end of test files. The runner calls `run-nth-test` with `apply_to_editor` + `sync_scheme_state` between each step.
+- **Clean environment for e2e tests.** The e2e tests run in CI with no user config (`init.scm`, `config.toml`) and no on-disk modules. When testing locally, use a clean HOME: `HOME=/tmp/mae-test XDG_CONFIG_HOME=/tmp/mae-test/.config XDG_DATA_HOME=/tmp/mae-test/.local/share ./target/release/mae --test tests/editor/`
 
 ### Adding New Test Primitives
 - **Read-only state**: Add to `SharedState`, register Rust function in `new()` that reads from SharedState, update SharedState in `inject_editor_state`.

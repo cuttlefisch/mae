@@ -1,6 +1,5 @@
 use super::*;
-use crate::keymap::parse_key_seq_spaced;
-use crate::{LookupResult, Mode};
+use crate::Mode;
 
 #[test]
 fn operator_pending_d_with_move_to_last_line() {
@@ -212,29 +211,9 @@ fn is_linewise_motion_correct() {
     assert!(!Editor::is_linewise_motion("move-to-line-end"));
 }
 
-#[test]
-fn spc_c_group_has_code_bindings() {
-    let editor = Editor::new();
-    let normal = editor.keymaps.get("normal").unwrap();
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC c d")),
-        LookupResult::Exact("lsp-goto-definition")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC c a")),
-        LookupResult::Exact("lsp-code-action")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC c R")),
-        LookupResult::Exact("lsp-rename")
-    );
-    // SPC c f is owned by the format module (format-buffer), not the kernel.
-    // Verify it's not bound in the kernel keymap.
-    assert!(
-        normal.lookup(&parse_key_seq_spaced("SPC c f")) != LookupResult::Exact("lsp-format"),
-        "SPC c f should not be bound to lsp-format in kernel (owned by format module)"
-    );
-}
+// spc_c_group_has_code_bindings removed: SPC c (LSP) leader bindings moved to
+// the keymap-doom module (verified at the binary level). The kernel keeps only
+// vi-modal primitives — see keymaps.rs kernel_keymap_has_no_leader_bindings.
 
 #[test]
 fn lsp_code_action_no_file_shows_status() {

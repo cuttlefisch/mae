@@ -8,6 +8,6 @@
 
 ;; SPC n d — dailies prefix group
 ;; Keybindings live in keymap-doom; this module only adds the group label.
-(set-group-name "normal" "SPC n d" "+dailies")
+(set-group-name "leader" "n d" "+dailies")
 
 (provide-feature "dailies-autoloads")

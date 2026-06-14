@@ -23,6 +23,12 @@
 | `debug` | `normal` | Debug |
 | `file-tree` | `normal` | FileTree |
 
+** The `leader` keymap
+The kernel also creates an empty `leader` keymap, populated by the embedded
+`keymap-leader` module + feature modules. It holds the entire mae which-key menu
+(bound WITHOUT an `SPC` prefix) and is consulted by the transient leader keypad
+regardless of which keymap flavor is active. See [[concept:keymap-flavors]].
+
 [[part_of:concept:mode][Part of Mode]].
 
 See also: [[references:concept:mode][Mode]], [[references:concept:buffer-mode][BufferMode Trait]]

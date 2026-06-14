@@ -4,6 +4,7 @@
 //! subcommands: `mae sync`, `mae upgrade`, `mae purge`, `mae list`,
 //! `mae info`, `mae create`, `mae doctor`.
 
+use super::embedded::DiscoveredModule;
 use super::git::PackageSource;
 use super::lockfile::{sha256_hex, Lockfile};
 use super::manifest::discover_modules;
@@ -69,6 +70,20 @@ fn module_search_dirs() -> Vec<PathBuf> {
         }
     }
     dirs
+}
+
+/// Discover every module the editor would see: embedded built-in baseline plus
+/// on-disk overrides (by name), deduplicated. Used by `list`/`info`/`doctor` so
+/// the CLI reflects exactly what the editor loads — including embedded-only
+/// installs (where the on-disk search would otherwise find nothing).
+fn discover_all_modules() -> Vec<DiscoveredModule> {
+    let mut disk = Vec::new();
+    for dir in module_search_dirs() {
+        if dir.exists() {
+            disk.extend(discover_modules(&dir));
+        }
+    }
+    crate::pkg::embedded::merge_modules(disk)
 }
 
 fn packages_dir() -> PathBuf {
@@ -240,12 +255,7 @@ fn cmd_sync() -> i32 {
     }
 
     // Also run doctor validation
-    let mut all_modules = Vec::new();
-    for dir in module_search_dirs() {
-        if dir.exists() {
-            all_modules.extend(discover_modules(&dir));
-        }
-    }
+    let all_modules = discover_all_modules();
 
     // Write lockfile
     if let Err(e) = lockfile.save(&lockfile_path) {
@@ -392,12 +402,7 @@ fn cmd_purge() -> i32 {
 // ── list ──────────────────────────────────────────────────────────
 
 fn cmd_list() -> i32 {
-    let mut all_modules = Vec::new();
-    for dir in module_search_dirs() {
-        if dir.exists() {
-            all_modules.extend(discover_modules(&dir));
-        }
-    }
+    let all_modules = discover_all_modules();
 
     if all_modules.is_empty() {
         println!("No modules found.");
@@ -407,7 +412,8 @@ fn cmd_list() -> i32 {
     println!("{:<20} {:<10} {:<12} Path", "Module", "Version", "Category");
     println!("{:<20} {:<10} {:<12} ----", "------", "-------", "--------");
 
-    for (path, manifest) in &all_modules {
+    for d in &all_modules {
+        let manifest = &d.manifest;
         println!(
             "{:<20} {:<10} {:<12} {}",
             manifest.name(),
@@ -417,7 +423,7 @@ fn cmd_list() -> i32 {
             } else {
                 &manifest.module.category
             },
-            path.display()
+            d.source.label("")
         );
     }
     println!();
@@ -527,17 +533,13 @@ fn cmd_info(name: Option<&str>) -> i32 {
         return 1;
     };
 
-    let mut all_modules = Vec::new();
-    for dir in module_search_dirs() {
-        if dir.exists() {
-            all_modules.extend(discover_modules(&dir));
-        }
-    }
+    let all_modules = discover_all_modules();
 
-    let Some((path, manifest)) = all_modules.iter().find(|(_, m)| m.name() == name) else {
+    let Some(d) = all_modules.iter().find(|d| d.manifest.name() == name) else {
         eprintln!("Module '{}' not found", name);
         return 1;
     };
+    let manifest = &d.manifest;
 
     println!("Module: {} v{}", manifest.name(), manifest.module.version);
     if !manifest.module.category.is_empty() {
@@ -564,7 +566,7 @@ fn cmd_info(name: Option<&str>) -> i32 {
     if !manifest.module.keywords.is_empty() {
         println!("Keywords: {}", manifest.module.keywords.join(", "));
     }
-    println!("Path: {}", path.display());
+    println!("Path: {}", d.source.label(""));
     println!(
         "Entry: {} / {}",
         manifest.entry.autoloads, manifest.entry.init
@@ -586,9 +588,8 @@ fn cmd_info(name: Option<&str>) -> i32 {
         }
     }
 
-    let autoloads_path = path.join(&manifest.entry.autoloads);
-    if autoloads_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&autoloads_path) {
+    if let Some(content) = d.source.read_relative(&manifest.entry.autoloads) {
+        {
             let key_count = content.matches("define-key").count();
             let cmd_count = content.matches("define-command").count();
             let opt_count = content.matches("define-option!").count();
@@ -618,12 +619,7 @@ fn cmd_info(name: Option<&str>) -> i32 {
 // ── doctor ────────────────────────────────────────────────────────
 
 fn cmd_doctor(name_filter: Option<&str>) -> i32 {
-    let mut all_modules = Vec::new();
-    for dir in module_search_dirs() {
-        if dir.exists() {
-            all_modules.extend(discover_modules(&dir));
-        }
-    }
+    let all_modules = discover_all_modules();
 
     if all_modules.is_empty() {
         println!("No modules found.");
@@ -633,7 +629,8 @@ fn cmd_doctor(name_filter: Option<&str>) -> i32 {
     let current_version = env!("CARGO_PKG_VERSION");
     let mut errors = 0;
 
-    for (path, manifest) in &all_modules {
+    for d in &all_modules {
+        let manifest = &d.manifest;
         let name = manifest.name();
         if let Some(filter) = name_filter {
             if name != filter {
@@ -641,23 +638,21 @@ fn cmd_doctor(name_filter: Option<&str>) -> i32 {
             }
         }
 
-        println!("Checking {} ({})...", name, path.display());
+        println!("Checking {} ({})...", name, d.source.label(""));
 
         if let Err(e) = manifest.check_mae_version(current_version) {
             println!("  WARNING: {}", e);
             errors += 1;
         }
 
-        let autoloads = path.join(&manifest.entry.autoloads);
-        if !autoloads.exists() {
+        if !d.source.has_relative(&manifest.entry.autoloads) {
             println!(
                 "  WARNING: autoloads file '{}' not found",
                 manifest.entry.autoloads
             );
             errors += 1;
         }
-        let init = path.join(&manifest.entry.init);
-        if !init.exists() {
+        if !d.source.has_relative(&manifest.entry.init) {
             println!("  WARNING: init file '{}' not found", manifest.entry.init);
             errors += 1;
         }
@@ -676,7 +671,7 @@ fn cmd_doctor(name_filter: Option<&str>) -> i32 {
     }
 
     if let Some(filter) = name_filter {
-        if !all_modules.iter().any(|(_, m)| m.name() == filter) {
+        if !all_modules.iter().any(|d| d.manifest.name() == filter) {
             eprintln!("Module '{}' not found", filter);
             return 1;
         }

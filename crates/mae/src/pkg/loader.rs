@@ -3,17 +3,18 @@
 //! Integrates with SchemeRuntime and Editor to load module autoloads,
 //! track module state, and support reload/unload.
 
+use super::embedded::ModuleSource;
 use super::manifest::ModuleManifest;
 use super::resolver::ResolvedModule;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 /// Runtime state of a loaded module.
 #[derive(Debug, Clone)]
 pub struct ModuleState {
     pub name: String,
     pub version: String,
-    pub path: PathBuf,
+    /// Where the module's files are read from (embedded or on disk).
+    pub source: ModuleSource,
     pub manifest: ModuleManifest,
     pub enabled_flags: Vec<String>,
     pub status: ModuleStatus,
@@ -65,7 +66,7 @@ impl ModuleRegistry {
                 ModuleState {
                     name: r.name.clone(),
                     version: r.manifest.module.version.clone(),
-                    path: r.path.clone(),
+                    source: r.source.clone(),
                     manifest: r.manifest.clone(),
                     enabled_flags: r.enabled_flags.clone(),
                     status: ModuleStatus::Discovered,
@@ -162,8 +163,8 @@ pub fn load_module_autoloads(
     scheme: &mut mae_scheme::SchemeRuntime,
     editor: &mut mae_core::Editor,
 ) -> Result<(), String> {
-    let autoloads_path = module.path.join(&module.manifest.entry.autoloads);
-    if !autoloads_path.exists() {
+    let rel = module.manifest.entry.autoloads.clone();
+    if !module.source.has_relative(&rel) {
         // No autoloads file — that's fine, module may only have init.scm
         return Ok(());
     }
@@ -178,12 +179,23 @@ pub fn load_module_autoloads(
         }
     }
 
-    // Set module dir for relative path resolution in register-splash-art-image! etc.
-    scheme.set_module_dir(Some(&module.path));
+    // Set module dir for relative path resolution in register-splash-art-image!
+    // etc. Embedded modules have no on-disk dir (None) — verified none rely on it.
+    scheme.set_module_dir(module.source.disk_dir());
 
-    // Load the autoloads file
+    // Load the autoloads — from disk or from embedded bytes, uniformly.
     scheme.inject_editor_state(editor);
-    if let Err(e) = scheme.load_file(&autoloads_path) {
+    let label = module.source.label(&rel);
+    let load_result = match &module.source {
+        ModuleSource::Disk(dir) => scheme.load_file(&dir.join(&rel)),
+        ModuleSource::Embedded { .. } => {
+            let content = module.source.read_relative(&rel).ok_or_else(|| {
+                format!("embedded autoloads missing for module '{}'", module.name)
+            })?;
+            scheme.load_source(&content, &label)
+        }
+    };
+    if let Err(e) = load_result {
         return Err(format!(
             "Failed to load autoloads for '{}': {}",
             module.name, e
@@ -191,11 +203,7 @@ pub fn load_module_autoloads(
     }
 
     // Fire after-load hook for the module autoloads file
-    let autoload_name = autoloads_path
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_default();
-    editor.fire_hook(&format!("after-load:{}", autoload_name));
+    editor.fire_hook(&format!("after-load:{}", rel));
 
     // Register module in Scheme runtime's active modules
     let reg_expr = format!(
@@ -217,14 +225,14 @@ pub fn load_module_autoloads(
 mod tests {
     use super::*;
     use crate::pkg::manifest::ModuleManifest;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     fn make_resolved(name: &str, flags: &[&str]) -> ResolvedModule {
         let toml = format!("[module]\nname = \"{}\"", name);
         let manifest = ModuleManifest::from_str(&toml, Path::new("test")).unwrap();
         ResolvedModule {
             name: name.to_string(),
-            path: PathBuf::from(format!("modules/{}", name)),
+            source: ModuleSource::Disk(PathBuf::from(format!("modules/{}", name))),
             manifest,
             enabled_flags: flags.iter().map(|s| s.to_string()).collect(),
         }

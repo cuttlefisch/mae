@@ -674,16 +674,8 @@ fn dispatch_file_browser_opens_overlay() {
     assert_eq!(editor.mode, Mode::FileBrowser);
 }
 
-#[test]
-fn file_browser_keybinding_registered() {
-    let editor = Editor::new();
-    let normal = editor.keymaps.get("normal").unwrap();
-    use crate::keymap::LookupResult;
-    assert_eq!(
-        normal.lookup(&crate::parse_key_seq_spaced("SPC f d")),
-        LookupResult::Exact("file-browser")
-    );
-}
+// file_browser_keybinding_registered removed: SPC f d moved to the keymap-doom
+// module. The command itself remains a kernel builtin (asserted below).
 
 #[test]
 fn file_browser_command_registered() {
