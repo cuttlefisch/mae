@@ -931,8 +931,8 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
     let collab_configured =
         collab_auto || !matches!(editor.collab.status, mae_core::CollabStatus::Off);
     let collab_status_str = editor.collab.status.as_str();
-    let state_server_found = on_path("mae-daemon");
-    if collab_auto && !state_server_found {
+    let daemon_found = on_path("mae-daemon");
+    if collab_auto && !daemon_found {
         issues.push(
             "collab_auto_connect is true but mae-daemon binary not found on PATH".to_string(),
         );
@@ -995,7 +995,7 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
             "auto_connect": collab_auto,
             "status": collab_status_str,
             "synced_docs": editor.collab.synced_docs,
-            "state_server_binary_found": state_server_found,
+            "daemon_binary_found": daemon_found,
         },
         "init_files": init_files,
         "modules": modules_json,

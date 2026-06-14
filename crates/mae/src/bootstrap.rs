@@ -960,10 +960,16 @@ pub fn load_modules(
     }
     // 1. CWD/modules (dev: `cargo run` from repo root)
     builtin_dirs.push(PathBuf::from("modules"));
-    // 2. Next to the executable (tarball installs)
+    // 2. Next to the executable (tarball installs) + FHS/Homebrew layout.
+    //    A `bin/mae` install keeps modules at `../share/mae/modules`
+    //    (e.g. Homebrew: /opt/homebrew/opt/mae/share/mae/modules), which the
+    //    bare `exe_dir/modules` check misses.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             builtin_dirs.push(exe_dir.join("modules"));
+            if let Some(prefix) = exe_dir.parent() {
+                builtin_dirs.push(prefix.join("share/mae/modules"));
+            }
         }
     }
     // 3. XDG data dir: ~/.local/share/mae/modules (make install)

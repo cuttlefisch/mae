@@ -998,6 +998,24 @@ pub fn execute_kb_restore(editor: &Editor, args: &serde_json::Value) -> Result<S
     .to_string())
 }
 
+/// `CozoKbStore::raw_query` returns Debug-formatted `DataValue`s — string cells
+/// come back quoted and escaped (e.g. `"?[...] kind = \"task\""`, or the
+/// `Str("...")` variant). Recover the underlying string for cells we use as-is,
+/// notably a stored Datalog query (running the quoted form fails at position 0
+/// on the leading quote). Non-string cells pass through unchanged.
+fn unquote_dv(s: &str) -> String {
+    let s = s.trim();
+    if let Some(inner) = s.strip_prefix("Str(\"").and_then(|x| x.strip_suffix("\")")) {
+        return inner.replace("\\\"", "\"").replace("\\\\", "\\");
+    }
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        return s[1..s.len() - 1]
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\");
+    }
+    s.to_string()
+}
+
 pub fn execute_kb_view_query(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let view_id = args
         .get("view_id")
@@ -1021,10 +1039,19 @@ pub fn execute_kb_view_query(editor: &Editor, args: &serde_json::Value) -> Resul
         return Err(format!("View not found: {view_id}"));
     }
 
-    let title = rows[0].first().cloned().unwrap_or_default();
-    let kind = rows[0].get(1).cloned().unwrap_or_default();
-    let query = rows[0].get(2).cloned().unwrap_or_default();
-    let config = rows[0].get(3).cloned().unwrap_or_default();
+    // raw_query Debug-formats cells, so these come back quoted/escaped. Recover
+    // the clean strings — the query in particular must be unquoted or executing
+    // it fails at position 0 on the leading quote.
+    let title = unquote_dv(&rows[0].first().cloned().unwrap_or_default());
+    let kind = unquote_dv(&rows[0].get(1).cloned().unwrap_or_default());
+    let query = unquote_dv(&rows[0].get(2).cloned().unwrap_or_default());
+    let config = unquote_dv(&rows[0].get(3).cloned().unwrap_or_default());
+
+    if query.trim().is_empty() {
+        return Err(format!(
+            "View '{view_id}' has no query defined (stale or unseeded KB store; try :kb-rebuild)"
+        ));
+    }
 
     // Execute the view's query
     let (result_headers, result_rows) = store.raw_query(&query).map_err(|e| e.to_string())?;
@@ -1083,6 +1110,19 @@ mod tests {
         let editor = Editor::new();
         let err = execute_kb_get(&editor, &serde_json::json!({})).unwrap_err();
         assert!(err.contains("id"));
+    }
+
+    #[test]
+    fn unquote_dv_recovers_clean_strings() {
+        // Debug-quoted string with escaped inner quotes — the shape a stored
+        // view query comes back as from raw_query (this is what broke
+        // kb_view_query: the leading quote made the Datalog parser fail at 0).
+        assert_eq!(unquote_dv("\"a \\\"b\\\" c\""), "a \"b\" c");
+        // Str("...") DataValue Debug variant.
+        assert_eq!(unquote_dv("Str(\"hello\")"), "hello");
+        // Already-clean / non-string values pass through unchanged.
+        assert_eq!(unquote_dv("42"), "42");
+        assert_eq!(unquote_dv("plain"), "plain");
     }
 
     #[test]

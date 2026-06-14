@@ -1489,7 +1489,7 @@ Every collaborative document is identified by a URI with one of three namespaces
 Local editor\n\
   └─ user/AI edit → yrs transaction (YText insert/delete)\n\
        └─ mae-sync encodes update bytes\n\
-            └─ TCP framed write → state server (sync/update)\n\
+            └─ TCP framed write → mae-daemon (sync/update)\n\
                  └─ server applies to doc store, WAL flush\n\
                       └─ broadcast diff → connected peers\n\
                            └─ peer decodes → ropey mirror rebuild → redraw\n\
@@ -1526,7 +1526,7 @@ pub(super) const CONCEPT_COLLAB_WORKFLOWS: &str = "\
 **Collaborative Editing Workflows** — practical recipes for the three tiers \
 of MAE collaboration.\n\n\
 ** Solo Mode\n\
-No state server is required. MAE operates entirely locally. All edits are \
+No mae-daemon is required. MAE operates entirely locally. All edits are \
 still yrs transactions, which means:\n\
 - Full undo/redo with per-user attribution\n\
 - Zero configuration changes needed\n\
@@ -1557,7 +1557,7 @@ mae-daemon --bind 0.0.0.0:9473\n\
 ** Commands\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
-| `SPC C s` | `:collab-start-server` | Start a local state server |\n\
+| `SPC C s` | `:collab-start-server` | Start a local mae-daemon |\n\
 | `SPC C c` | `:collab-connect` | Connect to configured server |\n\
 | `SPC C d` | `:collab-disconnect` | Disconnect from server |\n\
 | `SPC C S` | `:collab-share-buffer` | Share current buffer with peers |\n\
@@ -1570,7 +1570,7 @@ mae-daemon --bind 0.0.0.0:9473\n\
 ** Diagnostics\n\
 - `:collab-doctor` — comprehensive diagnostic: server reachability, WAL health, peer list\n\
 - `:collab-status` — live connection state, document list, peer cursors\n\
-- `mae doctor` (CLI) — checks state-server process, port binding, WAL integrity\n\n\
+- `mae doctor` (CLI) — checks mae-daemon process, port binding, WAL integrity\n\n\
 See also: [[concept:collab-architecture]], [[lesson:collab-setup]], \
 [[concept:sync-engine]], [[index]]\n";
 
@@ -1641,11 +1641,11 @@ See also: [[concept:scheme-testing]], [[concept:scheme-api]], [[index]]\n";
 
 pub(super) const CONCEPT_KB_SHARING: &str = "\
 **KB Sharing** enables collaborative editing of knowledge bases across MAE \
-instances connected via the state server.\n\n\
+instances connected via the mae-daemon.\n\n\
 ** How It Works\n\
 Each KB node is a yrs CRDT document (see [[concept:adr-kb-crdt]]). When you \
 share a KB, all its nodes are registered as collaborative documents on the \
-state server. Other clients can join the shared KB and receive real-time \
+mae-daemon. Other clients can join the shared KB and receive real-time \
 updates as nodes are edited.\n\n\
 ** Commands\n\
 | Key | Command | Description |\n\
