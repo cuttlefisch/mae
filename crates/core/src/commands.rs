@@ -1034,6 +1034,10 @@ impl CommandRegistry {
             "Switch keymap flavor live (:keymap-set-flavor <name>; no arg toggles doom/nonmodal)",
         );
         reg.register_builtin(
+            "choose-keymap-flavor",
+            "Open the guided keybindings picker (modal vs non-modal, with descriptions)",
+        );
+        reg.register_builtin(
             "set-save",
             "Set an option and persist to config.toml (:set-save <key> [value])",
         );

@@ -45,6 +45,7 @@ pub enum PalettePurpose {
     CollabJoin,
     SetupAiProvider,
     SetupCollabMode,
+    SetKeymapFlavor,
 }
 
 impl PalettePurpose {
@@ -69,6 +70,7 @@ impl PalettePurpose {
             Self::CollabJoin => "Join Document",
             Self::SetupAiProvider => "AI Provider",
             Self::SetupCollabMode => "Collaboration Mode",
+            Self::SetKeymapFlavor => "Choose Keybindings",
         }
     }
 }
@@ -417,6 +419,33 @@ impl CommandPalette {
             &["solo", "loopback", "network", "skip"],
             PalettePurpose::SetupCollabMode,
         )
+    }
+
+    /// Choose-keybindings picker (dashboard quick-action / `:choose-keymap-flavor`).
+    /// Each entry explains the flavor so a newcomer can pick with context; the
+    /// selection dispatches `keymap-set-flavor <name>` (live switch).
+    pub fn for_keymap_flavor() -> Self {
+        let entries = vec![
+            PaletteEntry {
+                name: "doom".to_string(),
+                doc: "Modal (vim/evil): edit in Normal mode, SPC opens the command menu. For vim/Emacs users.".to_string(),
+                searchable_extra: Some("modal vim evil normal".to_string()),
+            },
+            PaletteEntry {
+                name: "nonmodal".to_string(),
+                doc: "Non-modal (CUA): type normally like VSCode/TextEdit, C-; opens the command menu. For most newcomers.".to_string(),
+                searchable_extra: Some("cua vscode textedit insert beginner".to_string()),
+            },
+        ];
+        let filtered = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose: PalettePurpose::SetKeymapFlavor,
+            query_selected: false,
+        }
     }
 
     /// Build a palette from a simple name list with the given purpose.

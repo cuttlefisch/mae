@@ -38,6 +38,9 @@ flavors; only the restoration target (Normal vs Insert) differs.
 
 ** Selecting & switching
 
+- Guided: the dashboard's **Choose keybindings** quick-action (command
+  ~choose-keymap-flavor~) opens a picker that explains each flavor — the
+  recommended path for newcomers.
 - Persistent: set ~(set-option! "keymap_flavor" "nonmodal")~ in `init.scm`
   (read before modules load; `config.scm` is too late).
 - Live: ~:keymap-set-flavor nonmodal~ (or no arg to toggle doom↔nonmodal). This

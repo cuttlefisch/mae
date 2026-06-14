@@ -50,6 +50,16 @@ pub(super) fn handle_command_palette_mode(
                     editor.set_theme_by_name(&theme);
                     crate::config::persist_editor_preference("theme", &theme);
                 }
+                (Some(flavor), PalettePurpose::SetKeymapFlavor) => {
+                    // Live flavor switch (the "__flavor:" sentinel is applied in
+                    // the event loop, which has the SchemeRuntime to reload).
+                    editor
+                        .pending_module_reloads
+                        .push(format!("__flavor:{flavor}"));
+                    editor.set_status(format!(
+                        "Keybindings: {flavor} — add (set-option! \"keymap_flavor\" \"{flavor}\") to init.scm to persist"
+                    ));
+                }
                 (Some(node_id), PalettePurpose::KbSearch)
                 | (Some(node_id), PalettePurpose::KbFindOrCreate) => {
                     editor.open_help_at(&node_id);

@@ -195,15 +195,16 @@ async fn run_tests_iteratively(
         )
         .await;
 
-        // Process module reloads / flavor switches queued by commands this step
-        // (mirrors the real event loops) so `:reload-modules` and
-        // `:keymap-set-flavor <name>` work end-to-end in tests.
-        drain_module_reloads(editor, scheme);
-
         // E2E key injection: process any `(feed-keys ...)` queued this step
         // through the REAL handle_key pipeline (real loaded keymaps + routing +
         // which-key + dispatch), then drain hooks it fired.
         drain_feed_keys(editor, scheme);
+
+        // Process module reloads / flavor switches queued this step — by commands
+        // (`:reload-modules`, `:keymap-set-flavor`) OR by a fed keypress (e.g. the
+        // flavor picker's palette selection). Runs AFTER feed-keys so picker-
+        // triggered switches apply in the same step. Mirrors the real event loops.
+        drain_module_reloads(editor, scheme);
 
         // Refresh editor state so the next test sees updated globals.
         scheme.inject_editor_state(editor);
