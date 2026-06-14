@@ -333,7 +333,24 @@ impl CommandPalette {
     /// (truncated to 500 chars) so fuzzy search matches body content.
     /// The caller is responsible for sorting (alphabetical, activity, etc.).
     pub fn for_kb_find_or_create(nodes: &[(String, String, String)]) -> Self {
-        let entries: Vec<PaletteEntry> = nodes
+        let mut palette = CommandPalette {
+            query: String::new(),
+            entries: Vec::new(),
+            filtered: Vec::new(),
+            selected: 0,
+            purpose: PalettePurpose::KbFindOrCreate,
+            query_selected: false,
+        };
+        palette.set_kb_find_entries(nodes);
+        palette
+    }
+
+    /// Replace the kb-find entries from `(id, title, body)` triples, keeping the
+    /// current `query`. Used both for initial population and for the lazy
+    /// re-search refresh on large KBs (where the server already ranked the
+    /// window, so `filtered` is the full set in order — no client re-filter).
+    pub fn set_kb_find_entries(&mut self, nodes: &[(String, String, String)]) {
+        self.entries = nodes
             .iter()
             .map(|(id, title, body)| PaletteEntry {
                 name: id.clone(),
@@ -341,20 +358,15 @@ impl CommandPalette {
                 searchable_extra: if body.is_empty() {
                     None
                 } else {
-                    // Truncate to 500 chars to avoid 73KB outlier dominating memory
-                    let truncated: String = body.chars().take(500).collect();
-                    Some(truncated)
+                    // Truncate to 500 chars to avoid a 73KB outlier dominating memory.
+                    Some(body.chars().take(500).collect())
                 },
             })
             .collect();
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-        CommandPalette {
-            query: String::new(),
-            entries,
-            filtered,
-            selected: 0,
-            purpose: PalettePurpose::KbFindOrCreate,
-            query_selected: false,
+        self.filtered = (0..self.entries.len()).collect();
+        self.selected = 0;
+        if self.has_create_from_query() {
+            self.query_selected = !self.query.is_empty() && self.filtered.is_empty();
         }
     }
 

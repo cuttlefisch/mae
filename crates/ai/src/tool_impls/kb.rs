@@ -1170,16 +1170,31 @@ pub fn execute_kb_view_query(editor: &Editor, args: &serde_json::Value) -> Resul
 }
 
 pub fn execute_kb_vector_search(
-    _editor: &Editor,
-    _args: &serde_json::Value,
+    editor: &Editor,
+    args: &serde_json::Value,
 ) -> Result<String, String> {
-    // Embedding generation is not yet available (v0.13.0).
-    // The HNSW index and store/search APIs are ready but no embedding
-    // provider is configured yet.
+    // Semantic/vector search is the third search modality (alongside lexical
+    // `kb_search` and graph `kb_related`). It shares their contract — `scope`
+    // and `limit` are accepted and validated here so the API shape is stable —
+    // but the ranked path is stubbed: the HNSW index + store/search APIs and
+    // the 0..1 score band are ready, yet no embedding provider is wired, so we
+    // can't embed the query. Fail gracefully and steer to the modalities that
+    // DO work rather than erroring opaquely.
+    let _scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(mae_kb::KbScope::parse)
+        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
+    let _limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(editor.kb.search_max_results);
     Err(
-        "Vector search requires an embedding provider (planned for v0.13.0). \
-         The HNSW index schema is ready — use kb_raw_query to inspect the \
-         embeddings relation directly."
+        "Semantic (vector) search is unavailable: no embedding provider is \
+         configured, so the query can't be embedded. The HNSW index and 0..1 \
+         score contract are ready for when one is wired. For now use kb_search \
+         (lexical relevance) or kb_related (graph relatedness) instead."
             .to_string(),
     )
 }
@@ -1303,6 +1318,23 @@ mod tests {
         // Scores are sorted descending.
         let scores: Vec<f64> = objs.iter().map(|o| o["score"].as_f64().unwrap()).collect();
         assert!(scores.windows(2).all(|w| w[0] >= w[1]), "scores not sorted");
+    }
+
+    #[test]
+    fn kb_vector_search_fails_gracefully_and_points_to_alternatives() {
+        let editor = Editor::new();
+        // Accepts the shared scope/limit contract without panicking, and the
+        // error steers to the working modalities rather than failing opaquely.
+        let err = execute_kb_vector_search(
+            &editor,
+            &serde_json::json!({"query": "buffers", "scope": "local", "limit": 5}),
+        )
+        .unwrap_err();
+        assert!(err.contains("kb_search"), "should suggest lexical search");
+        assert!(
+            err.contains("kb_related"),
+            "should suggest graph relatedness"
+        );
     }
 
     #[test]

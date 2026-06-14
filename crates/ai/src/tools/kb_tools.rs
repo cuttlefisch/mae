@@ -722,7 +722,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "kb_vector_search".into(),
-            description: "Search KB by vector similarity (HNSW). Requires embeddings to be populated (v0.13.0+). Returns nearest neighbors with cosine distance scores.".into(),
+            description: "Semantic (vector) KB search — the similarity-by-meaning modality alongside kb_search (lexical) and kb_related (graph). Currently UNAVAILABLE: no embedding provider is configured, so it returns a clear error pointing you to kb_search / kb_related. Shares their scope/limit contract for when embeddings are wired.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -730,15 +730,23 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
                         "query".into(),
                         ToolProperty {
                             prop_type: "string".into(),
-                            description: "Text query (will be embedded when embedding provider is configured)".into(),
+                            description: "Text query (will be embedded when an embedding provider is configured)".into(),
                             enum_values: None,
                         },
                     ),
                     (
-                        "k".into(),
+                        "scope".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Which KBs to search: 'all' (default), 'local', 'remote', or an instance name (same as kb_search)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
                         ToolProperty {
                             prop_type: "integer".into(),
-                            description: "Number of results (default 5)".into(),
+                            description: "Max results (default: kb_search_max_results)".into(),
                             enum_values: None,
                         },
                     ),

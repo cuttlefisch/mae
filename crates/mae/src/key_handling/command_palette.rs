@@ -247,7 +247,8 @@ pub(super) fn handle_command_palette_mode(
                 editor.set_mode(Mode::Normal);
             } else {
                 palette.query.pop();
-                palette.update_filter();
+                // Lazy re-query for large KB-find palettes; client-filter otherwise.
+                editor.kb_find_palette_query_changed();
             }
         }
         KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -262,7 +263,8 @@ pub(super) fn handle_command_palette_mode(
         }
         KeyCode::Char(ch) => {
             palette.query.push(ch);
-            palette.update_filter();
+            // Lazy re-query for large KB-find palettes; client-filter otherwise.
+            editor.kb_find_palette_query_changed();
         }
         _ => {}
     }

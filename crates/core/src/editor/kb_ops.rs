@@ -128,6 +128,13 @@ impl KbImportResult {
 }
 
 impl Editor {
+    /// Above this loaded-node count, kb-find switches from eager all-load +
+    /// client-filter to a bounded, query-driven ranked window (lazy at scale).
+    /// Sits above the bundled manual (~870) so the default UX is unchanged.
+    pub const KB_FIND_LAZY_THRESHOLD: usize = 2000;
+    /// Size of the lazy ranked window fetched per query for large KBs.
+    pub const KB_FIND_LAZY_LIMIT: usize = 200;
+
     /// Resolve the MAE config directory (~/.config/mae).
     /// Checks `config_dir_override` first (for test isolation).
     #[allow(dead_code)]
@@ -713,6 +720,58 @@ impl Editor {
             triples.sort_by(|a, b| a.0.cmp(&b.0));
         }
         triples
+    }
+
+    /// Node-count signal for deciding the kb-find completion strategy. Uses the
+    /// in-memory `primary` (+ instances) length — O(1), no allocation, safe to
+    /// call per keystroke. (A Cozo-backed large KB with an empty `primary` falls
+    /// back to the eager all-load path; the lazy window targets large in-memory
+    /// KBs, which is the common at-scale case.)
+    pub fn kb_loaded_node_count(&self) -> usize {
+        self.kb.primary.len() + self.kb.instances.values().map(|k| k.len()).sum::<usize>()
+    }
+
+    /// Candidate triples (id, title, body≤500) for the kb-find/create palette.
+    ///
+    /// Small KBs (≤ `KB_FIND_LAZY_THRESHOLD`): return *all* nodes so the palette
+    /// filters client-side (instant, no re-search). Large KBs: return a bounded,
+    /// query-driven ranked window via `search_ranked` — full-KB-reachable (the
+    /// ranker scans every node) yet capped, so per-keystroke work stays bounded
+    /// instead of materializing every node. This is the lazy-at-scale path.
+    pub fn kb_find_candidates(&self, query: &str) -> Vec<(String, String, String)> {
+        if self.kb_loaded_node_count() <= Self::KB_FIND_LAZY_THRESHOLD {
+            return self.kb_all_node_triples();
+        }
+        self.kb
+            .primary
+            .search_ranked(query, Self::KB_FIND_LAZY_LIMIT)
+            .into_iter()
+            .filter_map(|(id, _)| {
+                self.kb.primary.get(&id).map(|n| {
+                    let body: String = n.body.chars().take(500).collect();
+                    (n.id.clone(), n.title.clone(), body)
+                })
+            })
+            .collect()
+    }
+
+    /// Re-derive the kb-find palette after its query changed: re-search a bounded
+    /// ranked window for large KBs (lazy), else the standard client-side filter.
+    /// A no-op for non-kb-find palettes beyond their usual `update_filter`.
+    pub fn kb_find_palette_query_changed(&mut self) {
+        use crate::command_palette::PalettePurpose;
+        let (is_kb_find, query) = match self.command_palette.as_ref() {
+            Some(p) => (p.purpose == PalettePurpose::KbFindOrCreate, p.query.clone()),
+            None => return,
+        };
+        if is_kb_find && self.kb_loaded_node_count() > Self::KB_FIND_LAZY_THRESHOLD {
+            let cands = self.kb_find_candidates(&query);
+            if let Some(p) = self.command_palette.as_mut() {
+                p.set_kb_find_entries(&cands);
+            }
+        } else if let Some(p) = self.command_palette.as_mut() {
+            p.update_filter();
+        }
     }
 
     /// Get activity score for a node by ID, searching local then federated KBs.
@@ -2281,6 +2340,96 @@ mod tests {
         assert_eq!(
             editor.get_option("kb_search_scope").map(|(v, _)| v),
             Some("TestNotes".to_string())
+        );
+    }
+
+    #[test]
+    fn kb_find_candidates_small_kb_returns_all() {
+        let editor = Editor::new();
+        // The seed manual is well under the lazy threshold.
+        assert!(editor.kb_loaded_node_count() <= Editor::KB_FIND_LAZY_THRESHOLD);
+        let all = editor.kb_all_node_triples();
+        let cands = editor.kb_find_candidates("");
+        assert_eq!(cands.len(), all.len(), "small KB should return every node");
+    }
+
+    #[test]
+    fn kb_find_candidates_large_kb_is_bounded_but_query_reachable() {
+        let mut editor = Editor::new();
+        // Push past the lazy threshold with synthetic nodes, including one
+        // distinctive node far beyond the empty-query window.
+        for i in 0..(Editor::KB_FIND_LAZY_THRESHOLD + 500) {
+            editor.kb.primary.insert(mae_kb::Node::new(
+                &format!("note:bulk{i}"),
+                &format!("Bulk Note {i}"),
+                mae_kb::NodeKind::Note,
+                "filler body",
+            ));
+        }
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "note:zebra-marker",
+            "Zebra Marker",
+            mae_kb::NodeKind::Note,
+            "uniquely findable",
+        ));
+        assert!(editor.kb_loaded_node_count() > Editor::KB_FIND_LAZY_THRESHOLD);
+
+        // Empty query: bounded window, not the whole KB.
+        let empty = editor.kb_find_candidates("");
+        assert!(
+            empty.len() <= Editor::KB_FIND_LAZY_LIMIT,
+            "large-KB window should be bounded, got {}",
+            empty.len()
+        );
+
+        // A targeted query still reaches a node outside the empty window — the
+        // ranker scans the whole KB, so lazy completion stays full-KB-reachable.
+        let hits = editor.kb_find_candidates("zebra marker");
+        assert!(
+            hits.iter().any(|(id, _, _)| id == "note:zebra-marker"),
+            "targeted query must find the distinctive node at scale"
+        );
+    }
+
+    #[test]
+    fn kb_find_palette_lazy_refresh_repopulates_on_query() {
+        let mut editor = Editor::new();
+        for i in 0..(Editor::KB_FIND_LAZY_THRESHOLD + 100) {
+            editor.kb.primary.insert(mae_kb::Node::new(
+                &format!("note:bulk{i}"),
+                &format!("Bulk Note {i}"),
+                mae_kb::NodeKind::Note,
+                "filler",
+            ));
+        }
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "note:platypus",
+            "Platypus",
+            mae_kb::NodeKind::Note,
+            "distinctive",
+        ));
+
+        // Open kb-find: bounded initial window.
+        assert!(editor.dispatch_builtin("kb-find"));
+        let initial = editor.command_palette.as_ref().unwrap().entries.len();
+        assert!(initial <= Editor::KB_FIND_LAZY_LIMIT);
+
+        // Type a query, then refresh: the distinctive node is now reachable.
+        if let Some(p) = editor.command_palette.as_mut() {
+            p.query = "platypus".to_string();
+        }
+        editor.kb_find_palette_query_changed();
+        let entries: Vec<String> = editor
+            .command_palette
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert!(
+            entries.iter().any(|id| id == "note:platypus"),
+            "lazy refresh should surface the queried node"
         );
     }
 
