@@ -4,13 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Miscellaneous
+
+- Sync Cargo.lock to 0.13.10 after backmerging main ([c62ad34](https://github.com/cuttlefisch/mae/commit/c62ad348644c8d1619ffd8deff4590b9b5260191))
+
+## [0.13.10] - 2026-06-14
+
 ### Bug Fixes
 
 - *(kb)* Clippy needless-borrow in tests + regenerate code map ([4e7b333](https://github.com/cuttlefisch/mae/commit/4e7b33398dab70e2dc31a47ae5162433a247b169))
 
+### Features
+
+- *(cli)* Channel-aware `mae upgrade` self-upgrade (Doom-style) ([3f05d8c](https://github.com/cuttlefisch/mae/commit/3f05d8cd0ab6061274b4ba45270f9aad9bcf56d5))
+
 ### Miscellaneous
 
 - Sync Cargo.lock to 0.13.9 after merging release bump ([c0c51f7](https://github.com/cuttlefisch/mae/commit/c0c51f7ecf6d9a5ba414f734db573c40d955a178))
+- Bump version to 0.13.10 ([4954c45](https://github.com/cuttlefisch/mae/commit/4954c45f07340df0a67884e4396c7ad390fefbb9))
 
 ## [0.13.9] - 2026-06-14
 
