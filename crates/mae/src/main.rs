@@ -1547,6 +1547,8 @@ impl GuiApp {
         for module_name in reloads {
             if module_name == "__all__" {
                 bootstrap::reload_all_modules(&mut self.scheme, &mut self.editor);
+            } else if let Some(flavor) = module_name.strip_prefix("__flavor:") {
+                bootstrap::switch_keymap_flavor(&mut self.scheme, &mut self.editor, flavor);
             } else {
                 bootstrap::reload_module(&module_name, &mut self.scheme, &mut self.editor);
             }

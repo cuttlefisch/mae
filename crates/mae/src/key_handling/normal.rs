@@ -68,6 +68,11 @@ pub(super) fn handle_keymap_mode(
             let cmd = cmd.to_string();
             pending_keys.clear();
             editor.clear_which_key_prefix();
+            // Capture before dispatch: if we resolved a command *from* the
+            // transient leader layer, pop the layer afterwards (one command then
+            // return). `false` when the command is `leader-dispatch` itself
+            // (entering the layer), so entry doesn't immediately cancel.
+            let was_leader = editor.leader_active;
             let had_pending_op = editor.vi.pending_operator.is_some();
             // Multiply operator count with motion count (e.g. 2d3j → 6j)
             if had_pending_op && Editor::is_motion_command(&cmd) {
@@ -86,11 +91,31 @@ pub(super) fn handle_keymap_mode(
                 editor.vi.insert_mode_oneshot_normal = false;
                 editor.set_mode(Mode::Insert);
             }
+            // Transient leader: one command resolved from the leader keymap →
+            // pop the layer (base mode is untouched, so we return to Insert for
+            // the non-modal flavor or Normal for doom automatically). Fire the
+            // keypad-specific `leader-execute` hook (in addition to the generic
+            // command-post fired by dispatch_command) so users can hook ONLY
+            // keypad-resolved commands.
+            if was_leader && editor.leader_active {
+                editor.leader_active = false;
+                editor.fire_hook("leader-execute");
+            }
         }
         LookupResult::Prefix => {
             editor.set_which_key_prefix(pending_keys.clone());
         }
         LookupResult::None => {
+            // In the transient leader layer, an unbound key cancels the keypad
+            // (no stray command, no vi operator fallback).
+            if editor.leader_active {
+                editor.leader_active = false;
+                pending_keys.clear();
+                editor.clear_which_key_prefix();
+                editor.set_status("");
+                editor.fire_hook("leader-cancel");
+                return;
+            }
             // Operator fallback: try splitting the sequence at each position
             // to find the longest prefix that is an operator command.
             // E.g. `dgg` → split at 1: `d` (operator-delete) + `gg`

@@ -150,12 +150,35 @@ mod tests {
             .source
             .read_relative("autoloads.scm")
             .expect("keymap-doom autoloads.scm must be embedded");
+        // The doom flavor wires SPC -> the shared leader keypad; the leader TREE
+        // (collab etc.) lives in keymap-leader, asserted below.
         assert!(
-            autoloads.contains("collab-start"),
-            "embedded keymap-doom should define the collab leader bindings"
+            autoloads.contains("leader-dispatch"),
+            "embedded keymap-doom should enter the shared leader keypad via SPC"
         );
         assert!(doom.source.has_relative("module.toml"));
         assert!(doom.source.disk_dir().is_none());
+
+        // The shared leader tree is its own embedded module and owns the menu.
+        let leader = mods
+            .iter()
+            .find(|d| d.manifest.name() == "keymap-leader")
+            .expect("keymap-leader (shared leader tree) must be embedded");
+        let leader_autoloads = leader
+            .source
+            .read_relative("autoloads.scm")
+            .expect("keymap-leader autoloads.scm must be embedded");
+        assert!(
+            leader_autoloads.contains("collab-start")
+                && leader_autoloads.contains("(define-keymap \"leader\""),
+            "keymap-leader should define the `leader` keymap + the full mae tree"
+        );
+
+        // The non-modal flavor ships embedded too (the 2nd canonical flavor).
+        assert!(
+            mods.iter().any(|d| d.manifest.name() == "keymap-nonmodal"),
+            "keymap-nonmodal must be embedded"
+        );
     }
 
     #[test]

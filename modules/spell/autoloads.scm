@@ -11,6 +11,6 @@
 (define-key "normal" "z=" "spell-suggest")
 (define-key "normal" "]s" "spell-next")
 (define-key "normal" "[s" "spell-prev")
-(define-key "normal" "SPC t Z" "spell-toggle")
+(define-key "leader" "t Z" "spell-toggle")
 
 (provide-feature "spell-autoloads")

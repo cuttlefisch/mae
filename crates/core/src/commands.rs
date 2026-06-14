@@ -1026,6 +1026,14 @@ impl CommandRegistry {
             "Alias for reload-modules — live-reload all modules without a restart",
         );
         reg.register_builtin(
+            "leader-dispatch",
+            "Open the transient leader keypad (which-key dispatch); resolves one command then returns",
+        );
+        reg.register_builtin(
+            "keymap-set-flavor",
+            "Switch keymap flavor live (:keymap-set-flavor <name>; no arg toggles doom/nonmodal)",
+        );
+        reg.register_builtin(
             "set-save",
             "Set an option and persist to config.toml (:set-save <key> [value])",
         );

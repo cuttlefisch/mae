@@ -8,7 +8,7 @@
 ;;; @stability: experimental
 ;;; @provides: lookup-autoloads
 
-(define-key "normal" "SPC s o" "lookup-online")
-(define-key "normal" "SPC s m" "lookup-man")
+(define-key "leader" "s o" "lookup-online")
+(define-key "leader" "s m" "lookup-man")
 
 (provide-feature "lookup-autoloads")

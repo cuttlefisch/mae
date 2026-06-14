@@ -359,6 +359,8 @@ pub(crate) async fn run_terminal_loop(
         for module_name in reloads {
             if module_name == "__all__" {
                 crate::bootstrap::reload_all_modules(scheme, editor);
+            } else if let Some(flavor) = module_name.strip_prefix("__flavor:") {
+                crate::bootstrap::switch_keymap_flavor(scheme, editor, flavor);
             } else {
                 crate::bootstrap::reload_module(&module_name, scheme, editor);
             }

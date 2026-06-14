@@ -191,7 +191,11 @@ pub fn handle_key(
     // --- Splash screen navigation intercept ---
     // When the splash is visible, j/k/Up/Down navigate, Enter selects,
     // and any other key dismisses the splash (by inserting into scratch).
-    if editor.mode == Mode::Normal && is_splash_visible(editor) && pending_keys.is_empty() {
+    if editor.mode == Mode::Normal
+        && !editor.leader_active
+        && is_splash_visible(editor)
+        && pending_keys.is_empty()
+    {
         debug!(key_code = ?key.code, splash_selection = editor.splash_selection, "splash intercept");
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
@@ -282,35 +286,58 @@ pub fn handle_key(
         }
     }
 
-    match editor.mode {
-        Mode::Normal => normal::handle_normal_mode(editor, scheme, key, pending_keys),
-        Mode::Insert => insert::handle_insert_mode(editor, scheme, key, pending_keys),
-        Mode::Visual(_) => visual::handle_visual_mode(editor, scheme, key, pending_keys),
-        Mode::Command => {
-            command::handle_command_mode(
-                editor,
-                scheme,
-                key,
-                pending_keys,
-                ai_tx,
-                pending_interactive_event,
-            );
+    // Transient keypad/leader layer overrides the mode handler: keys resolve
+    // against the shared `leader` keymap (the mae which-key tree). Esc / C-g
+    // cancel without executing; otherwise route through the keymap handler
+    // (which sees `leader` via current_keymap_names and pops the layer after one
+    // command). Lets `C-;` (non-modal/Insert) and `SPC` (doom/Normal) share one
+    // leader tree without a dedicated mode. Falls through to the common tail
+    // below (mode-change hook + pending Scheme-eval drain).
+    if editor.leader_active {
+        let is_cancel = key.code == KeyCode::Esc
+            || (key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL));
+        if is_cancel {
+            editor.leader_active = false;
+            pending_keys.clear();
+            editor.clear_which_key_prefix();
+            editor.set_status("");
+            editor.fire_hook("leader-cancel");
+        } else {
+            normal::handle_keymap_mode(editor, scheme, key, pending_keys);
         }
-        Mode::ConversationInput => {
-            conversation::handle_conversation_input(
-                editor,
-                scheme,
-                key,
-                ai_tx,
-                pending_interactive_event,
-            );
+    } else {
+        match editor.mode {
+            Mode::Normal => normal::handle_normal_mode(editor, scheme, key, pending_keys),
+            Mode::Insert => insert::handle_insert_mode(editor, scheme, key, pending_keys),
+            Mode::Visual(_) => visual::handle_visual_mode(editor, scheme, key, pending_keys),
+            Mode::Command => {
+                command::handle_command_mode(
+                    editor,
+                    scheme,
+                    key,
+                    pending_keys,
+                    ai_tx,
+                    pending_interactive_event,
+                );
+            }
+            Mode::ConversationInput => {
+                conversation::handle_conversation_input(
+                    editor,
+                    scheme,
+                    key,
+                    ai_tx,
+                    pending_interactive_event,
+                );
+            }
+            Mode::Search => search::handle_search_mode(editor, key),
+            Mode::FilePicker => file_picker::handle_file_picker_mode(editor, key),
+            Mode::FileBrowser => file_picker::handle_file_browser_mode(editor, key),
+            Mode::CommandPalette => {
+                command_palette::handle_command_palette_mode(editor, scheme, key)
+            }
+            // GitStatus buffers use Mode::Normal + buffer-kind overlay keymap
+            Mode::ShellInsert => {} // Handled externally by main.rs (needs ShellTerminal access)
         }
-        Mode::Search => search::handle_search_mode(editor, key),
-        Mode::FilePicker => file_picker::handle_file_picker_mode(editor, key),
-        Mode::FileBrowser => file_picker::handle_file_browser_mode(editor, key),
-        Mode::CommandPalette => command_palette::handle_command_palette_mode(editor, scheme, key),
-        // GitStatus buffers use Mode::Normal + buffer-kind overlay keymap
-        Mode::ShellInsert => {} // Handled externally by main.rs (needs ShellTerminal access)
     }
 
     if editor.mode != mode_before {

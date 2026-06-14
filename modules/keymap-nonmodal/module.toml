@@ -1,7 +1,7 @@
 [module]
-name = "keymap-doom"
+name = "keymap-nonmodal"
 version = "0.1.0"
-description = "Doom Emacs-style keybindings — SPC leader key, vi motions, operator-pending"
+description = "Non-modal (CUA-style) keybind flavor — Insert by default, C-; opens the which-key keypad"
 mae_version = ">=0.9.0"
 category = "keymap"
 

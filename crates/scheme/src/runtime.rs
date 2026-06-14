@@ -152,6 +152,15 @@ struct SharedState {
     /// Ex-commands to dispatch via `(execute-ex CMD-STRING)`.
     /// Routes through `execute_command()` which handles argument parsing.
     pending_ex_commands: Vec<String>,
+    /// Raw key sequences to feed through the real `handle_key` pipeline via
+    /// `(feed-keys "C-; b s")` — the E2E key-injection test primitive. Drained
+    /// by the test runner (which owns `handle_key`); each string is parsed and
+    /// each key dispatched against the real loaded keymaps + event loop.
+    pending_feed_keys: Vec<String>,
+    /// Whether the transient leader keypad is active (from inject_editor_state).
+    leader_active: bool,
+    /// Count of which-key entries for the current keymap (from inject_editor_state).
+    which_key_count: usize,
 
     // --- CRDT/sync test primitives ---
     /// Pending enable-sync: client_id for active buffer.
@@ -2124,6 +2133,35 @@ impl SchemeRuntime {
             move |_args: &[Value]| Ok(Value::string(s.lock().unwrap().current_mode.clone())),
         );
 
+        // --- E2E key-injection (test harness) ---
+        let s = shared.clone();
+        vm.register_fn(
+            "feed-keys",
+            "E2E test: feed a raw key sequence (e.g. \"C-; b s\") through the real key handler",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let keys = arg_string(args, 0, "feed-keys")?;
+                s.lock().unwrap().pending_feed_keys.push(keys);
+                Ok(Value::Void)
+            },
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "which-key-open?",
+            "E2E test: is the transient leader keypad / which-key popup active?",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Bool(s.lock().unwrap().leader_active)),
+        );
+
+        let s = shared.clone();
+        vm.register_fn(
+            "which-key-entry-count",
+            "E2E test: number of which-key entries for the current keymap",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().which_key_count as i64)),
+        );
+
         let s = shared.clone();
         vm.register_fn(
             "test-buffer-string",
@@ -3473,6 +3511,8 @@ impl SchemeRuntime {
             let mut state = self.shared.lock().unwrap();
             state.current_buffer_text = text;
             state.current_mode = mode_str.to_string();
+            state.leader_active = editor.leader_active;
+            state.which_key_count = editor.which_key_entries_for_current_keymap().len();
             state.cursor_row = win.cursor_row;
             state.cursor_col = win.cursor_col;
             state.last_status_message = editor.status_msg.clone();
@@ -4305,6 +4345,13 @@ impl SchemeRuntime {
             }
         }
         errors
+    }
+
+    /// Drain key sequences queued by `(feed-keys ...)`. The test runner owns the
+    /// real `handle_key` pipeline, so it pulls these and dispatches each parsed
+    /// key against the live editor + loaded keymaps (true E2E key injection).
+    pub fn take_pending_feed_keys(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.shared.lock().unwrap().pending_feed_keys)
     }
 
     // --- Debugger introspection methods ---

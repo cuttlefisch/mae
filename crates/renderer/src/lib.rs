@@ -253,7 +253,10 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
         popup_render::render_command_palette(frame, area, editor);
-    } else if !editor.which_key_prefix.is_empty() || editor.buffer_keys_popup {
+    } else if !editor.which_key_prefix.is_empty()
+        || editor.buffer_keys_popup
+        || editor.leader_active
+    {
         let (entries, title_override) = if editor.buffer_keys_popup {
             let kind = editor.active_buffer().kind;
             use mae_core::buffer_mode::BufferMode;

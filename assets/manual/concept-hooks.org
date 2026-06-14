@@ -7,7 +7,7 @@
 
 **Hooks** are MAE's primary extensibility mechanism — they let Scheme code react to editor events without the core knowing anything about Scheme.
 
-** Available hooks (25)
+** Available hooks (29)
 
 *** Buffer lifecycle
 | Hook name | Fires when |
@@ -33,6 +33,14 @@
 |-----------|------------|
 | `command-pre` | Before a command is dispatched |
 | `command-post` | After a command completes |
+
+*** Keypad & keymap flavors
+| Hook name | Fires when |
+|-----------|------------|
+| `leader-open` | The transient leader keypad is opened (SPC in doom, C-; in non-modal) |
+| `leader-execute` | A command resolves FROM the keypad (keypad-specific; `command-post` also fires) |
+| `leader-cancel` | The keypad is dismissed without running a command (Esc / C-g / unbound key) |
+| `keymap-flavor-changed` | After a live keymap-flavor switch (`:keymap-set-flavor`) settles |
 
 *** Window & Focus
 | Hook name | Fires when |

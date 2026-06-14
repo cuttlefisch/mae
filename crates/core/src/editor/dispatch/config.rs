@@ -10,6 +10,20 @@ impl Editor {
     /// Returns `Some(true)` if handled.
     pub(super) fn dispatch_config(&mut self, name: &str) -> Option<bool> {
         match name {
+            "leader-dispatch" => {
+                // Enter the transient keypad/leader layer. Subsequent keys
+                // resolve against the shared `leader` keymap (which-key tree);
+                // the layer clears after one command or on Esc/C-g (handled in
+                // key routing). Base mode is untouched, so it returns to Insert
+                // (non-modal) or Normal (doom) automatically.
+                self.leader_active = true;
+                self.clear_which_key_prefix();
+                self.set_status("-- leader -- (Esc cancels)".to_string());
+                // Lifecycle hook: keypad opened (paired with leader-execute /
+                // leader-cancel). Lets users extend keypad behavior (hints,
+                // logging, transient UI) without patching the kernel.
+                self.fire_hook("leader-open");
+            }
             "edit-config" => {
                 let config_dir = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
                     std::path::PathBuf::from(xdg)
@@ -378,6 +392,23 @@ impl Editor {
             "reload-modules" | "mae-reload" => {
                 self.pending_module_reloads.push("__all__".to_string());
                 self.set_status("Reloading all modules...".to_string());
+            }
+            // Live keymap-flavor switch. With an arg (`:keymap-set-flavor
+            // nonmodal`) switch to it; with none (leader binding) toggle
+            // doom↔nonmodal. The "__flavor:<name>" sentinel is handled in the
+            // event loop (needs the SchemeRuntime to reload modules).
+            "keymap-set-flavor" => {
+                let arg = self.vi.command_line.trim().to_string();
+                let target = if !arg.is_empty() {
+                    arg
+                } else if self.keymap_flavor == "doom" {
+                    "nonmodal".to_string()
+                } else {
+                    "doom".to_string()
+                };
+                self.pending_module_reloads
+                    .push(format!("__flavor:{target}"));
+                self.set_status(format!("Switching to keymap flavor '{target}'..."));
             }
 
             _ => return None,

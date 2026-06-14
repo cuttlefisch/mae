@@ -844,7 +844,28 @@ pub fn load_init_file(
     load_init_files(scheme, editor);
     let registry = load_modules(scheme, editor);
     load_config_scm(scheme, editor);
+    apply_default_mode(editor);
     registry
+}
+
+/// Apply the `default_mode` option (set by the keymap flavor — non-modal flavors
+/// use "insert") after modules + config have loaded, so a user `config.scm`
+/// `(set-option!)` can still override it. The editor boots in Normal; this flips
+/// it to Insert for non-modal flavors. `set_mode` is a no-op for buffers that
+/// only allow Normal (e.g. the dashboard), which is fine.
+pub fn apply_default_mode(editor: &mut Editor) {
+    match editor.default_mode.as_str() {
+        "insert" => {
+            editor.set_mode(mae_core::Mode::Insert);
+        }
+        // Actively set Normal (not a no-op): a runtime flavor switch from a
+        // non-modal flavor leaves the editor in Insert, and switching to a modal
+        // flavor must return it to Normal.
+        "normal" => {
+            editor.set_mode(mae_core::Mode::Normal);
+        }
+        other => warn!("unknown default_mode '{other}' — staying in normal"),
+    }
 }
 
 /// Layered init loading — returns the number of files loaded.
@@ -943,6 +964,32 @@ pub fn load_init_files(scheme: &mut SchemeRuntime, editor: &mut Editor) -> usize
 ///   3. Load each module's autoloads.scm (registers commands, keys, options, hooks)
 ///   4. config.scm runs AFTER this, so users can override any module setting
 ///
+/// Enable `name` plus its transitive `[dependencies]` in the `enabled` set.
+/// Used for auto-enabled keymap flavors (which bypass the `(mae!)` declaration)
+/// so their deps — e.g. the shared `keymap-leader` — load too. Iterative
+/// worklist; ignores deps not present among discovered modules (the resolver
+/// reports those).
+fn enable_with_deps(
+    name: &str,
+    all_modules: &[crate::pkg::embedded::DiscoveredModule],
+    enabled: &mut HashMap<String, Vec<String>>,
+) {
+    let mut stack = vec![name.to_string()];
+    while let Some(n) = stack.pop() {
+        if enabled.contains_key(&n) {
+            continue;
+        }
+        enabled.insert(n.clone(), vec![]);
+        if let Some(d) = all_modules.iter().find(|d| d.manifest.name() == n) {
+            for dep in d.manifest.dependencies.keys() {
+                if !enabled.contains_key(dep) {
+                    stack.push(dep.clone());
+                }
+            }
+        }
+    }
+}
+
 /// Returns the populated ModuleRegistry.
 pub fn load_modules(
     scheme: &mut SchemeRuntime,
@@ -990,9 +1037,14 @@ pub fn load_modules(
     let declared = scheme.declared_modules();
     let has_mae_block = !declared.is_empty();
     let mut enabled: HashMap<String, Vec<String>> = if declared.is_empty() {
-        // No mae! block — enable all discovered modules (backward compat).
+        // No mae! block — enable all discovered modules (backward compat),
+        // EXCEPT keymap flavor modules (`keymap-*`): only the selected
+        // `keymap_flavor` should load, since multiple flavors would clash on
+        // bindings + `default_mode`. The chosen flavor + its deps (the shared
+        // `keymap-leader`) are added by the flavor block below.
         all_modules
             .iter()
+            .filter(|d| !d.manifest.name().starts_with("keymap-"))
             .map(|d| (d.manifest.name().to_string(), vec![]))
             .collect()
     } else {
@@ -1007,20 +1059,25 @@ pub fn load_modules(
     if !has_keymap_module {
         let flavor = editor.keymap_flavor.clone();
         let target = format!("keymap-{flavor}");
-        if all_modules.iter().any(|d| d.manifest.name() == target) {
+        let chosen = if all_modules.iter().any(|d| d.manifest.name() == target) {
             info!("auto-enabling {target} (keymap_flavor = {flavor})");
-            enabled.insert(target, vec![]);
+            Some(target)
         } else {
             warn!(
                 "keymap flavor '{flavor}' ({target}) not found among discovered modules; \
                  falling back to embedded keymap-doom"
             );
-            if all_modules
+            all_modules
                 .iter()
                 .any(|d| d.manifest.name() == "keymap-doom")
-            {
-                enabled.insert("keymap-doom".to_string(), vec![]);
-            }
+                .then(|| "keymap-doom".to_string())
+        };
+        // Enable the flavor AND its dependency closure (e.g. keymap-leader holds
+        // the shared leader tree). Auto-enabled flavors bypass the (mae!)
+        // declaration, so their deps must be pulled in here or the resolver
+        // would error "depends on keymap-leader which is not enabled".
+        if let Some(name) = chosen {
+            enable_with_deps(&name, &all_modules, &mut enabled);
         }
     }
 
@@ -1038,6 +1095,13 @@ pub fn load_modules(
                 enabled.insert(module.name().to_string(), vec![]);
             }
         }
+    }
+
+    // Expand the dependency closure of every enabled module (e.g. a declared or
+    // auto-enabled keymap flavor pulls in the shared `keymap-leader`) so the
+    // resolver never fails on an unlisted-but-required dependency.
+    for name in enabled.keys().cloned().collect::<Vec<_>>() {
+        enable_with_deps(&name, &all_modules, &mut enabled);
     }
 
     let resolved = match resolve_load_order(&all_modules, &enabled) {
@@ -1284,6 +1348,28 @@ pub fn reload_all_modules(scheme: &mut SchemeRuntime, editor: &mut Editor) {
         .count();
     info!(modules = loaded, "reloaded all modules");
     editor.set_status(format!("Reloaded {loaded} module(s)"));
+}
+
+/// Switch the keymap flavor at runtime (e.g. doom ↔ nonmodal). Resets keymaps to
+/// the kernel baseline (dropping the previous flavor's `SPC`/`C-;`/CUA entries —
+/// there is no bulk keymap-clear, so a clean rebuild is the robust path), then
+/// re-runs module loading with the new flavor + re-applies user config + the
+/// flavor's `default_mode`. The shared `leader` tree is flavor-independent, so
+/// only the thin entry bindings and the startup mode actually change.
+pub fn switch_keymap_flavor(scheme: &mut SchemeRuntime, editor: &mut Editor, flavor: &str) {
+    let _ = editor.set_option("keymap_flavor", flavor);
+    // Baseline; the new flavor's autoloads re-set this (non-modal → "insert").
+    let _ = editor.set_option("default_mode", "normal");
+    editor.reset_keymaps_to_kernel();
+    reload_all_modules(scheme, editor);
+    // Re-apply user config.scm so personal bindings/options survive the switch.
+    load_config_scm(scheme, editor);
+    apply_default_mode(editor);
+    info!(flavor, "switched keymap flavor");
+    editor.set_status(format!("Keymap flavor: {flavor}"));
+    // Hook so user config can react to a live flavor change (e.g. per-flavor
+    // theme, extra bindings). Fired after keymaps + config + mode are settled.
+    editor.fire_hook("keymap-flavor-changed");
 }
 
 /// Load user config.scm — runs AFTER module autoloads so users can override.

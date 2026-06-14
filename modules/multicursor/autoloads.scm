@@ -6,12 +6,12 @@
 ;;; @stability: stable
 ;;; @provides: multicursor-autoloads
 
-(define-key "normal" "SPC m j" "mc-add-cursor-below")
-(define-key "normal" "SPC m k" "mc-add-cursor-above")
-(define-key "normal" "SPC m d" "mc-add-at-next-word")
-(define-key "normal" "SPC m a" "mc-add-all-word")
-(define-key "normal" "SPC m s" "mc-skip-next")
-(define-key "normal" "SPC m c" "mc-clear")
-(define-key "normal" "SPC m l" "mc-align")
+(define-key "leader" "m j" "mc-add-cursor-below")
+(define-key "leader" "m k" "mc-add-cursor-above")
+(define-key "leader" "m d" "mc-add-at-next-word")
+(define-key "leader" "m a" "mc-add-all-word")
+(define-key "leader" "m s" "mc-skip-next")
+(define-key "leader" "m c" "mc-clear")
+(define-key "leader" "m l" "mc-align")
 
 (provide-feature "multicursor-autoloads")

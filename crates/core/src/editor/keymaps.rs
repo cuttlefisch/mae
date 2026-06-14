@@ -316,6 +316,11 @@ impl Editor {
         maps.insert("normal".to_string(), normal);
         maps.insert("insert".to_string(), insert);
         maps.insert("visual".to_string(), visual);
+        // The shared leader-key tree (populated by the keymap-leader module +
+        // feature modules; consulted by the transient keypad when leader_active).
+        // Created empty in the kernel so any module can bind into it regardless
+        // of load order, and so it survives reset_keymaps_to_kernel.
+        maps.insert("leader".to_string(), Keymap::new("leader"));
         maps.insert("command".to_string(), Keymap::new("command"));
         maps.insert("shell-insert".to_string(), shell_insert);
 
