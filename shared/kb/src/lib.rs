@@ -515,6 +515,22 @@ impl LowerCache {
 /// tight byte-scan with zero per-query allocation. At ~1500 nodes with
 /// typical 500-byte bodies this keeps search sub-millisecond; a proper
 /// FTS5 backend replaces this in Phase 5.
+/// Relevance prior by id namespace, used to break ties in `search_ranked`:
+/// primary content (concept/cmd/scheme/option/category) ranks above
+/// navigational/glossary nodes (term/lesson/tutorial/key/index) for the same
+/// match — the canonical concept page, not its glossary term, is the answer.
+/// Mild (0.9) so it only tips near-ties, never buries a strong match.
+fn namespace_prior(id: &str) -> f64 {
+    match id.split_once(':').map(|(ns, _)| ns) {
+        // Glossary terms, lessons/tutorials, and auto-generated category
+        // listings are secondary to the explanatory concept/command pages.
+        Some("term" | "lesson" | "tutorial" | "tutor" | "key" | "index" | "guide" | "category") => {
+            0.9
+        }
+        _ => 1.0,
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct KnowledgeBase {
     nodes: HashMap<String, Node>,
@@ -956,11 +972,35 @@ impl KnowledgeBase {
 
         let mut scored: Vec<(String, f64)> = Vec::new();
         'nodes: for (id, cache) in self.lower.iter() {
-            let mut total = 0.0_f64;
+            // The id's LOCAL part (after the last ':') is the node's canonical
+            // "name" — e.g. `concept:buffer` -> `buffer`. Matching it lets a
+            // query exact-match the node name even when the title is prefixed
+            // ("Concept: Buffer"), so the canonical node isn't buried under a
+            // glossary `term:` whose title happens to be the bare word.
+            let local_id = cache
+                .lowered_id
+                .rsplit(':')
+                .next()
+                .unwrap_or(&cache.lowered_id);
+            // Whole-query phrase bonus: reward a node whose name/title IS the
+            // query phrase. `fuzzy::score_match` normalizes spaces→hyphens, so
+            // "buffer mode" exact-matches local-id `buffer-mode` and "ai as
+            // peer" matches `ai-as-peer` — lifting the canonical multi-word node
+            // above one that merely exact-matches a single term.
+            let whole: Vec<char> = q.chars().collect();
+            let whole_bonus = [cache.lowered_id.as_str(), local_id, cache.title.as_str()]
+                .into_iter()
+                .chain(cache.aliases.iter().map(|s| s.as_str()))
+                .filter_map(|s| fuzzy::score_match(s, &whole))
+                .max()
+                .map(|s| s as f64 * W_TITLE)
+                .unwrap_or(0.0);
+
+            let mut total = whole_bonus;
             for term in &terms {
-                let title_alias = [&cache.lowered_id, &cache.title]
+                let title_alias = [cache.lowered_id.as_str(), local_id, cache.title.as_str()]
                     .into_iter()
-                    .chain(cache.aliases.iter())
+                    .chain(cache.aliases.iter().map(|s| s.as_str()))
                     .filter_map(|s| fuzzy::score_match(s, term))
                     .max()
                     .map(|s| s as f64 * W_TITLE);
@@ -984,7 +1024,13 @@ impl KnowledgeBase {
                     None => continue 'nodes,
                 }
             }
-            let norm = (total / (num_terms * MAX_TERM)).min(1.0);
+            // Namespace prior: primary content (concept/cmd/scheme/option/
+            // category) outranks navigational/glossary nodes (term/lesson/…) on
+            // a tie — matches the org-roam intuition that the concept page, not
+            // its one-line glossary term, is the canonical destination.
+            // Denominator includes the whole-query bonus slot (+1) so scores
+            // stay in 0..=1 without excessive clamping.
+            let norm = (total * namespace_prior(id) / ((num_terms + 1.0) * MAX_TERM)).min(1.0);
             scored.push((id.clone(), norm));
         }
         scored.sort_by(|a, b| {

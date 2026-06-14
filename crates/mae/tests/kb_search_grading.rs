@@ -33,6 +33,11 @@ const GRADED: &[(&str, &str)] = &[
     ("hooks", "concept:hooks"),
     ("modules", "concept:modules"),
     ("buffer mode", "concept:buffer-mode"),
+    // Broader coverage: scheme API, ex-command phrases, multi-word concepts.
+    ("save and quit", "cmd:save-and-quit"),
+    ("split vertical", "cmd:split-vertical"),
+    ("collab architecture", "concept:collab-architecture"),
+    ("display policy", "concept:display-policy"),
 ];
 
 fn build_kb() -> KnowledgeBase {
@@ -130,34 +135,58 @@ fn search_grading_dipstick() {
             .map(|(id, _)| id)
             .collect();
         let rr = reciprocal_rank(&r, expected);
-        println!("  {:<20} rr={:.2}  want={}  got={:?}", q, rr, expected, r);
+        let f: Vec<String> = store
+            .fts_search(q, 5)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|h| h.id)
+            .collect();
+        println!(
+            "  {:<20} rr={:.2}  want={}\n      ranked={:?}\n      fts   ={:?}",
+            q, rr, expected, r, f
+        );
     }
 
-    // Regression FLOORS for the in-memory ranker (the production fallback when
-    // no Cozo query layer is present). Set below observed (top1 0.67 / recall@3
-    // 1.00 / MRR 0.79) so quality can't silently regress but tuning has headroom.
-    // KNOWN tuning opportunity (tracked): bare-noun queries like "buffer" rank
-    // the glossary `term:` node above the `concept:` node on an id-length tie —
-    // a kind-aware prior (concept/cmd > term/lesson) would lift top-1; needs
-    // node kind in the ranker (follow-up, validated by this dipstick).
+    // Regression FLOORS for the in-memory ranker (the production lexical path;
+    // see kb_federated_search). After tuning (local-id matching + namespace
+    // prior + whole-query phrase bonus) the observed scores on this set are
+    // top1 1.00 / recall@3 1.00 / MRR 1.00. Floors are set with margin so the
+    // graded set can grow with genuinely-harder/ambiguous queries (which may
+    // legitimately lower the numbers) without false CI failures, while still
+    // catching real regressions.
     //
-    // FTS (BM25) is printed for comparison but NOT gated: an `open_mem` store's
-    // Tantivy index under-reports here (it isn't populated by insert_node alone
-    // without the seed/commit path); the live store ranks correctly in prod
-    // (kb_search_context). The federated routing test covers the live path.
+    // CAVEAT (honesty): this is a small, hand-authored set, so 1.00 reflects the
+    // ranker handling these canonical-lookup patterns — NOT a claim of perfect
+    // search. Grow GRADED with harder cases over time; the value here is the
+    // measurement framework + regression guard + the in-memory-vs-FTS contrast.
+    //
+    // FINDING (kept as a gated contrast, not a bug): CozoDB FTS/BM25 ranks by
+    // term frequency across title+body, which BURIES the canonical short-title
+    // node (e.g. "save" -> category/autosave, never cmd:save). The field-
+    // weighted ranker is decisively better for canonical lookup — which is why
+    // kb_federated_search routes to it, not FTS (revises plan assumption D1).
+    // FTS remains the right tool for body/RAG recall (kb_search_context).
     assert!(
-        ranked.top1 >= 0.6,
+        ranked.top1 >= 0.85,
         "in-memory ranker top-1 regressed: {:.2}",
         ranked.top1
     );
     assert!(
-        ranked.recall_at_3 >= 0.9,
+        ranked.recall_at_3 >= 0.95,
         "in-memory ranker recall@3 regressed: {:.2}",
         ranked.recall_at_3
     );
     assert!(
-        ranked.mrr >= 0.7,
+        ranked.mrr >= 0.9,
         "in-memory ranker MRR regressed: {:.3}",
         ranked.mrr
+    );
+    // FTS is decisively worse for canonical lookup here — assert the contrast so
+    // the routing decision (ranker, not FTS) stays justified by data.
+    assert!(
+        ranked.mrr > fts.mrr,
+        "field-weighted ranker should beat raw BM25 for canonical lookup (ranker {:.3} vs fts {:.3})",
+        ranked.mrr,
+        fts.mrr
     );
 }
