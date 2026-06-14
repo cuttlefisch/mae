@@ -80,8 +80,10 @@ pub struct KbContext {
     pub activity_tracking: bool,
     /// KB option: decay rate for activity scoring.
     pub activity_decay: f64,
-    /// KB option: search result ordering ("relevance", "activity", "alphabetical").
+    /// KB option: search result ordering ("relevance", "activity", "alphabetical", "recency").
     pub search_sort: String,
+    /// KB option: default search scope ("all", "local", "remote", or instance name).
+    pub search_scope: String,
     /// KB option: dailies directory (explicit setting or derived from notes_dir/daily).
     pub dailies_dir: Option<PathBuf>,
     /// KB option: max days to walk backwards when chain-filling dailies (default 90).
@@ -209,6 +211,7 @@ impl KbContext {
             activity_tracking: true,
             activity_decay: 0.01,
             search_sort: "relevance".to_string(),
+            search_scope: "all".to_string(),
             dailies_dir: None,
             daily_chain_gap_max: 90,
         }

@@ -2264,6 +2264,27 @@ mod tests {
     }
 
     #[test]
+    fn kb_search_scope_option_round_trip() {
+        let mut editor = Editor::new();
+        // Keywords always validate.
+        for kw in ["all", "local", "remote"] {
+            assert!(editor.set_option("kb_search_scope", kw).is_ok());
+            assert_eq!(editor.kb.search_scope, kw);
+        }
+        // An unknown instance name is rejected (no instance registered).
+        assert!(editor.set_option("kb_search_scope", "NoSuchKB").is_err());
+        // A registered instance name validates.
+        let dir = create_test_org_dir();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor.kb_register("TestNotes", dir.path());
+        assert!(editor.set_option("kb_search_scope", "TestNotes").is_ok());
+        assert_eq!(
+            editor.get_option("kb_search_scope").map(|(v, _)| v),
+            Some("TestNotes".to_string())
+        );
+    }
+
+    #[test]
     fn kb_visit_log_is_monotonic() {
         let mut editor = Editor::new();
         editor.kb.record_visit("concept:buffer");

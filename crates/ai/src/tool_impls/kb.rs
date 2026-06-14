@@ -94,14 +94,13 @@ pub fn record_kb_visit(editor: &mut Editor, id: &str) {
 pub fn execute_kb_search(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
     // Optional `scope` ("all" | "local" | "remote" | "<instance-name>") selects
-    // which federated layers participate; defaults to All. (The config-driven
-    // default `kb_search_scope` option lands in Phase 5.) Optional `limit` caps
-    // the returned objects.
+    // which federated layers participate; an explicit arg wins, else the
+    // `kb_search_scope` option default. Optional `limit` caps the returned objects.
     let scope = args
         .get("scope")
         .and_then(|v| v.as_str())
         .map(mae_kb::KbScope::parse)
-        .unwrap_or_default();
+        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
     let limit = args
         .get("limit")
         .and_then(|v| v.as_u64())
