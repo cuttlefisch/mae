@@ -3,10 +3,11 @@
 //! Numerical/statistical validation of search quality over a deterministic
 //! corpus (the code-generated seed KB — concept/term/cmd/scheme/option nodes;
 //! no filesystem/org dependence, so it's stable in CI). Reports top-1 accuracy,
-//! recall@3, and MRR for BOTH the in-memory relevance ranker
+//! recall@{3,5,10}, MRR, and nDCG@10 for BOTH the in-memory relevance ranker
 //! (`KnowledgeBase::search_ranked`) and the CozoDB Tantivy FTS
 //! (`KbStore::search`), and asserts regression FLOORS so quality can't silently
-//! degrade. Run the comparison table with:
+//! degrade. Companion `kb_search_perf.rs` covers latency/scale. Run the
+//! comparison table with:
 //!
 //!   cargo test -p mae --test kb_search_grading -- --nocapture
 
