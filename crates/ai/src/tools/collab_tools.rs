@@ -34,7 +34,7 @@ pub(super) fn collab_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "collab_share".into(),
-            description: "Share a buffer for collaborative editing via the connected state server. The buffer must exist.".into(),
+            description: "Share a buffer for collaborative editing via the connected mae-daemon. The buffer must exist.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -61,7 +61,7 @@ pub(super) fn collab_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "collab_list".into(),
-            description: "List all shared documents on the connected state server. Returns doc names, sizes, and peer counts.".into(),
+            description: "List all shared documents on the connected mae-daemon. Returns doc names, sizes, and peer counts.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::new(),
