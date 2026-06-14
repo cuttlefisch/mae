@@ -171,207 +171,31 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("C-w k"), "focus-up");
         normal.bind(parse_key_seq_spaced("C-w l"), "focus-right");
 
-        // Leader key (SPC) bindings — Doom Emacs style
-        normal.bind(parse_key_seq_spaced("SPC SPC"), "command-palette");
-        normal.bind(parse_key_seq_spaced("SPC :"), "enter-command-mode");
-        // +buffer (Doom parity)
-        normal.bind(parse_key_seq_spaced("SPC b s"), "save");
-        normal.bind(parse_key_seq_spaced("SPC b b"), "switch-buffer");
-        normal.bind(parse_key_seq_spaced("SPC b d"), "kill-buffer");
-        normal.bind(parse_key_seq_spaced("SPC b n"), "next-buffer");
-        normal.bind(parse_key_seq_spaced("SPC b p"), "prev-buffer");
-        normal.bind(parse_key_seq_spaced("SPC b l"), "alternate-file");
-        normal.bind(parse_key_seq_spaced("SPC b a"), "alternate-file");
-        normal.bind(parse_key_seq_spaced("SPC b m"), "view-messages");
-        normal.bind(parse_key_seq_spaced("SPC b N"), "new-buffer");
-        normal.bind(parse_key_seq_spaced("SPC b D"), "force-kill-buffer");
-        normal.bind(parse_key_seq_spaced("SPC b k"), "kill-buffer");
-        normal.bind(parse_key_seq_spaced("SPC b i"), "file-info");
-        // +file
-        normal.bind(parse_key_seq_spaced("SPC f f"), "find-file");
-        // Ranger/dired-style directory browser: spatial traversal
-        // complement to the fuzzy `SPC f f` picker. (`-` would be the
-        // vim/dirvish convention, but it's already bound to
-        // `move-line-prev-non-blank` — keep the motion primitive.)
-        normal.bind(parse_key_seq_spaced("SPC f d"), "file-browser");
-        // SPC f t (file-tree-toggle) — moved to modules/file-tree/autoloads.scm
-        normal.bind(parse_key_seq_spaced("SPC f s"), "save");
-        // +window
-        normal.bind(parse_key_seq_spaced("SPC w v"), "split-vertical");
-        normal.bind(parse_key_seq_spaced("SPC w s"), "split-horizontal");
-        normal.bind(parse_key_seq_spaced("SPC w q"), "close-window");
-        normal.bind(parse_key_seq_spaced("SPC w h"), "focus-left");
-        normal.bind(parse_key_seq_spaced("SPC w j"), "focus-down");
-        normal.bind(parse_key_seq_spaced("SPC w k"), "focus-up");
-        normal.bind(parse_key_seq_spaced("SPC w l"), "focus-right");
-        // Resize: +/-/= (Doom parity)
-        normal.bind(parse_key_seq_spaced("SPC w +"), "window-grow");
-        normal.bind(parse_key_seq_spaced("SPC w -"), "window-shrink");
-        normal.bind(parse_key_seq_spaced("SPC w ="), "window-balance");
-        normal.bind(parse_key_seq_spaced("SPC w m"), "window-maximize");
-        // Move: H/J/K/L (uppercase = move window, lowercase = focus)
-        normal.bind(parse_key_seq_spaced("SPC w H"), "window-move-left");
-        normal.bind(parse_key_seq_spaced("SPC w J"), "window-move-down");
-        normal.bind(parse_key_seq_spaced("SPC w K"), "window-move-up");
-        normal.bind(parse_key_seq_spaced("SPC w L"), "window-move-right");
-        normal.bind(parse_key_seq_spaced("SPC w w"), "focus-next-window");
-        normal.bind(parse_key_seq_spaced("SPC w d"), "close-window");
-        // Ctrl-W resize shortcuts
+        // ── Leader (SPC) tree: single source of truth in the keymap flavor ──
+        // The full SPC leader tree (buffer/file/window/ai/help/project/notes/
+        // code/eval/toggle/open/collab/…) lives in the keymap flavor module
+        // (modules/keymap-doom/autoloads.scm), embedded in the binary and loaded
+        // at startup (bootstrap::load_modules → builtin_module_dirs + embedded
+        // baseline). The kernel deliberately keeps ONLY vi-modal primitives so
+        // there is no second, drifting copy — the duplicated kernel tree had
+        // already fallen out of sync (e.g. SPC C collaboration was module-only).
+        // Override or extend any leader binding at runtime via (define-key ...)
+        // or :reload-modules; select a different flavor via the keymap_flavor
+        // option. See ADR / RENDERING-vs-keymap notes in CLAUDE.md.
+
+        // Ctrl-W window-resize primitives (vim-style), complementing the C-w
+        // split/focus bindings above. These are kernel primitives, not leader
+        // bindings.
         normal.bind(parse_key_seq_spaced("C-w +"), "window-grow");
         normal.bind(parse_key_seq_spaced("C-w -"), "window-shrink");
         normal.bind(parse_key_seq_spaced("C-w ="), "window-balance");
         normal.bind(parse_key_seq_spaced("C-w >"), "window-grow-width");
         normal.bind(parse_key_seq_spaced("C-w <"), "window-shrink-width");
-        // +ai
-        normal.bind(parse_key_seq_spaced("SPC a a"), "open-ai-agent");
-        normal.bind(parse_key_seq_spaced("SPC a p"), "ai-prompt");
-        normal.bind(parse_key_seq_spaced("SPC a c"), "ai-cancel");
-        normal.bind(parse_key_seq_spaced("SPC a m"), "ai-set-mode");
-        normal.bind(parse_key_seq_spaced("SPC a P"), "ai-set-profile");
-        normal.bind(parse_key_seq_spaced("SPC a n"), "ai-ping");
-        normal.bind(parse_key_seq_spaced("SPC a v"), "verify");
-        // +help
-        normal.bind(parse_key_seq_spaced("SPC h h"), "help");
-        normal.bind(parse_key_seq_spaced("SPC h k"), "describe-key");
-        normal.bind(parse_key_seq_spaced("SPC h c"), "describe-command");
-        normal.bind(parse_key_seq_spaced("SPC h o"), "describe-option");
-        normal.bind(parse_key_seq_spaced("SPC h t"), "tutor");
-        normal.bind(parse_key_seq_spaced("SPC h s"), "help-search");
-        normal.bind(parse_key_seq_spaced("SPC h b"), "help-back");
-        normal.bind(parse_key_seq_spaced("SPC h f"), "help-forward");
-        normal.bind(parse_key_seq_spaced("SPC h q"), "help-close");
-        normal.bind(parse_key_seq_spaced("SPC h l"), "help-reopen");
-        normal.bind(parse_key_seq_spaced("SPC h d"), "dashboard");
-        normal.bind(parse_key_seq_spaced("SPC h B"), "describe-bindings");
-        normal.bind(parse_key_seq_spaced("SPC h m"), "describe-mode");
-        normal.bind(parse_key_seq_spaced("SPC h D"), "describe-display-policy");
-        // +scratch
-        normal.bind(parse_key_seq_spaced("SPC x"), "toggle-scratch-buffer");
-        // +theme
-        normal.bind(parse_key_seq_spaced("SPC t t"), "cycle-theme");
-        normal.bind(parse_key_seq_spaced("SPC t S"), "set-theme");
-        // +debug — moved to modules/debug/autoloads.scm
-        // +quit
-        normal.bind(parse_key_seq_spaced("SPC q q"), "quit");
-        normal.bind(parse_key_seq_spaced("SPC q Q"), "force-quit");
-        normal.bind(parse_key_seq_spaced("SPC q s"), "save-and-quit");
-        normal.bind(parse_key_seq_spaced("SPC q S"), "save-all-and-quit");
-        // +search/syntax — search keys moved to modules/search/autoloads.scm
-        // Syntax selection stays in kernel (tree-sitter bridge)
-        normal.bind(parse_key_seq_spaced("SPC s n"), "syntax-select-node");
-        normal.bind(parse_key_seq_spaced("SPC s e"), "syntax-expand-selection");
-        normal.bind(parse_key_seq_spaced("SPC s c"), "syntax-contract-selection");
-        // +eval (Scheme REPL / lisp machine)
-        normal.bind(parse_key_seq_spaced("SPC e l"), "eval-line");
-        normal.bind(parse_key_seq_spaced("SPC e b"), "eval-buffer");
-        normal.bind(parse_key_seq_spaced("SPC e o"), "open-scheme-repl");
-        normal.bind(parse_key_seq_spaced("SPC e s"), "send-to-shell");
 
-        // +project
-        normal.bind(parse_key_seq_spaced("SPC p f"), "project-find-file");
-        normal.bind(parse_key_seq_spaced("SPC p s"), "project-search");
-        normal.bind(parse_key_seq_spaced("SPC p d"), "project-browse");
-        normal.bind(parse_key_seq_spaced("SPC p r"), "project-recent-files");
-        normal.bind(parse_key_seq_spaced("SPC p p"), "project-switch");
-        normal.bind(parse_key_seq_spaced("SPC p a"), "add-project");
-        normal.bind(parse_key_seq_spaced("SPC p D"), "project-forget");
-        normal.bind(parse_key_seq_spaced("SPC p c"), "project-clean");
-        // +file expansions
-        normal.bind(parse_key_seq_spaced("SPC f r"), "recent-files");
-        normal.bind(parse_key_seq_spaced("SPC f y"), "yank-file-path");
-        normal.bind(parse_key_seq_spaced("SPC f R"), "rename-file");
-        normal.bind(parse_key_seq_spaced("SPC f n"), "new-buffer");
-        normal.bind(parse_key_seq_spaced("SPC f c"), "edit-config");
-        normal.bind(parse_key_seq_spaced("SPC f C"), "copy-this-file");
-        normal.bind(parse_key_seq_spaced("SPC f P"), "edit-settings");
-        normal.bind(parse_key_seq_spaced("SPC f S"), "save-as");
-        normal.bind(parse_key_seq_spaced("SPC f D"), "delete-this-file");
-        // +buffer expansions
-        normal.bind(parse_key_seq_spaced("SPC b o"), "kill-other-buffers");
-        normal.bind(parse_key_seq_spaced("SPC b S"), "save-all-buffers");
-        normal.bind(parse_key_seq_spaced("SPC b r"), "revert-buffer");
-        // +toggle expansions
-        normal.bind(parse_key_seq_spaced("SPC t l"), "toggle-line-numbers");
-        normal.bind(
-            parse_key_seq_spaced("SPC t r"),
-            "toggle-relative-line-numbers",
-        );
-        normal.bind(parse_key_seq_spaced("SPC t w"), "toggle-word-wrap");
-        normal.bind(parse_key_seq_spaced("SPC t i"), "toggle-inline-images");
-        normal.bind(parse_key_seq_spaced("SPC t s"), "toggle-scrollbar");
-        normal.bind(parse_key_seq_spaced("SPC t F"), "toggle-fps");
-        normal.bind(parse_key_seq_spaced("SPC t D"), "debug-mode");
-        normal.bind(
-            parse_key_seq_spaced("SPC t d"),
-            "toggle-lsp-diagnostics-inline",
-        );
-        // +git — moved to modules/git-status/autoloads.scm
-        // +open
-        normal.bind(parse_key_seq_spaced("SPC o t"), "terminal");
-        normal.bind(parse_key_seq_spaced("SPC o T"), "terminal-here");
-        normal.bind(parse_key_seq_spaced("SPC o r"), "terminal-reset");
-        normal.bind(parse_key_seq_spaced("SPC o c"), "terminal-close");
-        // SPC o a / SPC o A — moved to modules/agenda/autoloads.scm
-        // +register — moved to modules/registers/autoloads.scm
-        // +notes (KB shortcuts)
-        // +dailies
-        normal.bind(parse_key_seq_spaced("SPC n d t"), "daily-goto-today");
-        normal.bind(parse_key_seq_spaced("SPC n d y"), "daily-goto-yesterday");
-        normal.bind(parse_key_seq_spaced("SPC n d d"), "daily-goto-date");
-        normal.bind(parse_key_seq_spaced("SPC n d p"), "daily-prev");
-        normal.bind(parse_key_seq_spaced("SPC n d n"), "daily-next");
-        normal.bind(parse_key_seq_spaced("SPC n f"), "kb-find");
-        normal.bind(parse_key_seq_spaced("SPC n v"), "kb-view");
-        normal.bind(parse_key_seq_spaced("SPC n e"), "kb-edit-source");
-        normal.bind(parse_key_seq_spaced("SPC n c"), "kb-create");
-        normal.bind(parse_key_seq_spaced("SPC n D"), "kb-delete");
-        normal.bind(parse_key_seq_spaced("SPC n r"), "kb-register");
-        normal.bind(parse_key_seq_spaced("SPC n R"), "kb-reimport");
-        normal.bind(parse_key_seq_spaced("SPC n i"), "kb-insert-link");
-        // Capture mode (org-roam parity) — leader alternatives for discoverability
+        // Capture (org-roam parity) — standalone Emacs-style chords, not part of
+        // the leader tree, so they stay in the kernel.
         normal.bind(parse_key_seq_spaced("C-c C-c"), "capture-finalize");
         normal.bind(parse_key_seq_spaced("C-c C-k"), "capture-abort");
-        normal.bind(parse_key_seq_spaced("SPC n s"), "capture-finalize");
-        normal.bind(parse_key_seq_spaced("SPC n k"), "capture-abort");
-        normal.bind(parse_key_seq_spaced("SPC n C"), "kb-cleanup-orphans");
-        normal.bind(parse_key_seq_spaced("SPC n I"), "kb-instances");
-        normal.bind(parse_key_seq_spaced("SPC n h"), "kb-health");
-        // +code (LSP shortcuts)
-        normal.bind(parse_key_seq_spaced("SPC c d"), "lsp-goto-definition");
-        normal.bind(parse_key_seq_spaced("SPC c r"), "lsp-find-references");
-        normal.bind(parse_key_seq_spaced("SPC c k"), "lsp-hover");
-        normal.bind(parse_key_seq_spaced("SPC c x"), "lsp-show-diagnostics");
-        normal.bind(parse_key_seq_spaced("SPC c a"), "lsp-code-action");
-        normal.bind(parse_key_seq_spaced("SPC c R"), "lsp-rename");
-        // SPC c f owned by format module (format-buffer) — do not bind here.
-        normal.bind(parse_key_seq_spaced("SPC c F"), "lsp-range-format");
-        normal.bind(parse_key_seq_spaced("SPC c s"), "lsp-status");
-        normal.bind(parse_key_seq_spaced("SPC c o"), "lsp-symbol-outline");
-        normal.bind(parse_key_seq_spaced("SPC l p"), "lsp-peek-definition");
-        normal.bind(parse_key_seq_spaced("SPC l r"), "lsp-peek-references");
-
-        // Group labels for which-key popup
-        normal.set_group_name(parse_key_seq_spaced("SPC b"), "+buffer");
-        normal.set_group_name(parse_key_seq_spaced("SPC f"), "+file");
-        normal.set_group_name(parse_key_seq_spaced("SPC w"), "+window");
-        normal.set_group_name(parse_key_seq_spaced("SPC a"), "+ai");
-        normal.set_group_name(parse_key_seq_spaced("SPC t"), "+toggle");
-        normal.set_group_name(parse_key_seq_spaced("SPC d"), "+debug");
-        normal.set_group_name(parse_key_seq_spaced("SPC h"), "+help");
-        normal.set_group_name(parse_key_seq_spaced("SPC q"), "+quit");
-        normal.set_group_name(parse_key_seq_spaced("SPC s"), "+search/syntax");
-        normal.set_group_name(parse_key_seq_spaced("SPC e"), "+eval");
-        normal.set_group_name(parse_key_seq_spaced("SPC c"), "+code");
-        normal.set_group_name(parse_key_seq_spaced("SPC p"), "+project");
-        normal.set_group_name(parse_key_seq_spaced("SPC g"), "+git");
-        normal.set_group_name(parse_key_seq_spaced("SPC n"), "+notes");
-        normal.set_group_name(parse_key_seq_spaced("SPC n d"), "+dailies");
-        normal.set_group_name(parse_key_seq_spaced("SPC o"), "+open");
-        normal.set_group_name(parse_key_seq_spaced("SPC l"), "+lsp");
-        normal.set_group_name(parse_key_seq_spaced("SPC r"), "+register");
-        normal.set_group_name(parse_key_seq_spaced("SPC m"), "+multicursor");
-
-        // Multi-cursor (SPC m) — moved to modules/multicursor/autoloads.scm
 
         let mut insert = Keymap::new("insert");
         insert.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
@@ -473,13 +297,10 @@ impl Editor {
         visual.bind(parse_key_seq("V"), "enter-visual-line");
         visual.bind(vec![KeyPress::ctrl('v')], "enter-visual-block");
         visual.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
-        // Tree-sitter structural expansion (Phase 4b M3)
-        visual.bind(parse_key_seq_spaced("SPC s n"), "syntax-select-node");
-        visual.bind(parse_key_seq_spaced("SPC s e"), "syntax-expand-selection");
-        visual.bind(parse_key_seq_spaced("SPC s c"), "syntax-contract-selection");
-        // Scheme eval region
-        visual.bind(parse_key_seq_spaced("SPC e r"), "eval-region");
-        visual.bind(parse_key_seq_spaced("SPC e S"), "send-region-to-shell");
+        // Visual-mode SPC leader bindings (tree-sitter structural expansion,
+        // Scheme eval-region, …) live in the keymap flavor module
+        // (modules/keymap-doom/autoloads.scm), alongside the normal-mode tree —
+        // single source of truth, no kernel duplication.
 
         // Shell-insert keymap: minimal — only the escape sequence is bound.
         // All other keys are forwarded to the PTY by the main loop.
@@ -573,52 +394,25 @@ mod tests {
     // md_keymap_spc_m_s_n_widens — moved to module tests (modules/markdown/)
 
     #[test]
-    fn all_spc_bindings_resolve_to_registered_commands() {
+    fn kernel_keymap_has_no_leader_bindings() {
+        // Migration invariant: the SPC leader tree lives entirely in the keymap
+        // flavor module (keymap-doom, embedded + loaded at startup), NOT the
+        // kernel — which keeps only vi-modal primitives. If this fails, a leader
+        // binding crept back into keymaps.rs; move it to keymap-doom's
+        // autoloads.scm instead (single source of truth — the old duplicated
+        // kernel tree had drifted out of sync, e.g. SPC C collaboration).
         let editor = Editor::new();
-        let normal = editor.keymaps.get("normal").unwrap();
         let spc = parse_key_seq("SPC");
-        let mut missing = Vec::new();
-        for (keys, cmd) in normal.bindings() {
-            // Only check SPC-prefixed bindings (leader key)
-            if keys.first() != spc.first() {
-                continue;
-            }
-            if !editor.commands.contains(cmd) {
-                missing.push(cmd.clone());
-            }
-        }
-        assert!(
-            missing.is_empty(),
-            "SPC bindings target unregistered commands: {:?}",
-            missing
-        );
-    }
-
-    #[test]
-    fn new_spc_bindings_resolve_correctly() {
-        let editor = Editor::new();
-        let normal = editor.keymaps.get("normal").unwrap();
-        // SPC g bindings moved to modules/git-status/
-        let cases = vec![
-            ("SPC w w", "focus-next-window"),
-            ("SPC w d", "close-window"),
-            ("SPC b k", "kill-buffer"),
-            ("SPC b i", "file-info"),
-            ("SPC f n", "new-buffer"),
-            ("SPC f C", "copy-this-file"),
-            ("SPC f P", "edit-settings"),
-            ("SPC p a", "add-project"),
-            ("SPC q s", "save-and-quit"),
-            ("SPC q S", "save-all-and-quit"),
-        ];
-        for (seq, expected) in cases {
-            let keys = parse_key_seq_spaced(seq);
-            assert_eq!(
-                normal.lookup(&keys),
-                crate::keymap::LookupResult::Exact(expected),
-                "{} should resolve to {}",
-                seq,
-                expected
+        for (map_name, km) in &editor.keymaps {
+            let leader: Vec<String> = km
+                .bindings()
+                .filter(|(keys, _)| keys.first() == spc.first())
+                .map(|(_, cmd)| cmd.clone())
+                .collect();
+            assert!(
+                leader.is_empty(),
+                "kernel keymap '{map_name}' still defines SPC leader bindings {leader:?}; \
+                 these belong in the keymap flavor module, not the kernel"
             );
         }
     }
@@ -692,38 +486,10 @@ mod tests {
         assert_eq!(names, Some(("help", Some("normal"))));
     }
 
-    #[test]
-    fn dailies_bindings_registered() {
-        let editor = Editor::new();
-        let normal = editor.keymaps.get("normal").unwrap();
-        let entries = normal.which_key_entries(&parse_key_seq_spaced("SPC n d"), &editor.commands);
-        assert!(
-            entries.iter().any(|e| e.label.contains("today")),
-            "dailies bindings should include 'today'"
-        );
-        assert_eq!(entries.len(), 5, "should have 5 dailies bindings");
-    }
-
-    #[test]
-    fn spc_sub_prefixes_have_which_key_group_names() {
-        // Verify sub-prefixes (like SPC n d) also have group names
-        use crate::keymap::parse_key_seq_spaced;
-        let editor = Editor::new();
-        let normal = editor.keymaps.get("normal").unwrap();
-        let spc_n = parse_key_seq_spaced("SPC n");
-        let entries = normal.which_key_entries(&spc_n, &editor.commands);
-        let d_entry = entries.iter().find(|e| {
-            use crate::keymap::Key;
-            matches!(e.key.key, Key::Char('d'))
-        });
-        assert!(d_entry.is_some(), "SPC n should have a 'd' entry");
-        let d = d_entry.unwrap();
-        assert!(d.is_group, "SPC n d should be a group");
-        assert_eq!(
-            d.label, "+dailies",
-            "SPC n d group should be labeled +dailies"
-        );
-    }
+    // dailies_bindings_registered + spc_sub_prefixes_have_which_key_group_names
+    // moved to the binary-level module-load test (crates/mae bootstrap tests):
+    // the SPC n d dailies bindings and which-key group names now come from the
+    // keymap-doom module, which mae-core cannot load (no SchemeRuntime here).
 
     #[test]
     fn overlay_keymaps_have_parent_field() {
