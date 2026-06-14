@@ -6,20 +6,45 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(kb)* Clippy needless-borrow in tests + regenerate code map ([4e7b333](https://github.com/cuttlefisch/mae/commit/4e7b33398dab70e2dc31a47ae5162433a247b169))
+
+### Miscellaneous
+
+- Sync Cargo.lock to 0.13.9 after merging release bump ([c0c51f7](https://github.com/cuttlefisch/mae/commit/c0c51f7ecf6d9a5ba414f734db573c40d955a178))
+
+## [0.13.9] - 2026-06-14
+
+### Bug Fixes
+
 - *(ci)* Collab-start test checks all keymaps + refresh code map ([567d16f](https://github.com/cuttlefisch/mae/commit/567d16f2a71a53831d9b6f05c0bf84c8ebfc92ae))
 - *(e2e)* Hook dispatch order + test isolation for flavor/mode/options ([7e96429](https://github.com/cuttlefisch/mae/commit/7e96429535efef23107a1e48a5f1e73aa60571a1))
 
 ### Documentation
 
+- Update grading dipstick header for expanded metrics + perf companion ([6f7b7b5](https://github.com/cuttlefisch/mae/commit/6f7b7b58d2613d6c1a941c3e1321f152c08f7c5b))
 - Document test isolation + clean env for e2e in CLAUDE.md ([74b53dc](https://github.com/cuttlefisch/mae/commit/74b53dc654c13bde67ed1ce8fff0aaf089a9072c))
 
 ### Features
 
+- *(kb)* Orderless field-weighted relevance ranker (search_ranked) ([fdbc6ee](https://github.com/cuttlefisch/mae/commit/fdbc6ee4b9f5fcaf3d9439e2d6a04c0f78596975))
+- *(kb)* Route search through the relevance ranker + graded dipstick harness ([37f0a2c](https://github.com/cuttlefisch/mae/commit/37f0a2c11e5d0fce61e2709c184b59b78df90df0))
+- *(kb)* Tune search_ranked to top-1 1.00 on graded dipstick ([45d7e61](https://github.com/cuttlefisch/mae/commit/45d7e6105750e4a3438bdbaf7d55960640f50d2f))
+- *(kb)* KbScope-aware federated search + enriched kb_search output ([dac76b2](https://github.com/cuttlefisch/mae/commit/dac76b23c19f5b0df604de0b2c3400106cfa43d3))
+- *(kb)* Recency sort + session visit tracking (Phase 3) ([eb05ff9](https://github.com/cuttlefisch/mae/commit/eb05ff9a6a3b9de6f7f2aefb2cf72a67e1e156c8))
+- *(kb)* Graph relatedness — KnowledgeBase/Cozo `related` + kb_related tool (Phase 4) ([8bd763f](https://github.com/cuttlefisch/mae/commit/8bd763f344fe374736680b67019135d73c04901d))
+- *(kb)* "Related" section in the KB buffer (Phase 2) ([2f13d1a](https://github.com/cuttlefisch/mae/commit/2f13d1afd0fbe287fac09b815846b3cf8b49d780))
+- *(kb)* Kb_search_scope config option + honor it in kb_search (Phase 5, config surface) ([32babe7](https://github.com/cuttlefisch/mae/commit/32babe715556135a91a9cfe87cc5f4c66793a382))
 - *(modules)* Embed built-in modules in the binary (always-present baseline) ([d92fec2](https://github.com/cuttlefisch/mae/commit/d92fec2df7a7d45e7dfa6b562530ef8edcb6b2b1))
 - *(modules)* Live reload-modules / mae-reload command ([e073633](https://github.com/cuttlefisch/mae/commit/e07363360512468db14cffe7748bbe0e0f513b3c))
 - *(keymaps)* Non-modal keybind flavor + transient leader keypad + live switching ([dfa0a24](https://github.com/cuttlefisch/mae/commit/dfa0a24d87bababafa64a12283d769a5af789f47))
 - *(keymaps)* Guided flavor picker (dashboard quick-action) + GEMINI/manual sync ([d8bed02](https://github.com/cuttlefisch/mae/commit/d8bed02f722e8b1611631d5e9763290ff8c00740))
 - *(test-runner)* File-boundary state isolation + leak detection ([9441536](https://github.com/cuttlefisch/mae/commit/9441536adf4afad8fc3ad36e64dcb9dd04fa2769))
+- *(kb)* Guided KB-search-scope picker (Phase 5 UI) ([04e6c36](https://github.com/cuttlefisch/mae/commit/04e6c3663d823f516df4e00b03d965f4fce6c355))
+- *(kb)* Lazy completion at scale + contract-aligned vector stub (Phase 6) ([70e9b56](https://github.com/cuttlefisch/mae/commit/70e9b566a70ca34c6c38b4f980942a56b95c0f15))
+
+### Miscellaneous
+
+- Bump version to 0.13.9 ([24b9387](https://github.com/cuttlefisch/mae/commit/24b93874b3e0c2d09bfa4ee8ed15ab6e87f18189))
 
 ### Refactor
 
@@ -28,6 +53,7 @@ All notable changes to this project will be documented in this file.
 
 ### Testing
 
+- *(kb)* Richer accuracy metrics + performance/scale validation (#38) ([7b013ae](https://github.com/cuttlefisch/mae/commit/7b013ae0423283a5ec12fe814640105bc2f0cc72))
 - Regression coverage for module architecture; update CLAUDE/GEMINI ([6229ec2](https://github.com/cuttlefisch/mae/commit/6229ec232aea66d53fefb246f50cb293248ed739))
 
 ## [0.13.8] - 2026-06-14
