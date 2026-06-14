@@ -34,7 +34,7 @@ fn build_synthetic_kb(n: usize) -> KnowledgeBase {
             "Node {i} about buffer window command. See [[note:n{next1}]] and \
              [[note:n{next2}]] and hub [[note:n{hub}]].",
         );
-        let mut node = Node::new(&id, &format!("Note {i} title"), NodeKind::Note, &body);
+        let mut node = Node::new(&id, format!("Note {i} title"), NodeKind::Note, &body);
         node.tags = vec![
             topics[i % topics.len()].to_string(),
             topics[(i / 7) % topics.len()].to_string(),

@@ -569,7 +569,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (521 built-in)
+## Commands (522 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -973,6 +973,7 @@ Source: `shared/sync/src/lib.rs`
 | `leader-dispatch` | Open the transient leader keypad (which-key dispatch); resolves one command then returns |
 | `keymap-set-flavor` | Switch keymap flavor live (:keymap-set-flavor <name>; no arg toggles doom/nonmodal) |
 | `choose-keymap-flavor` | Open the guided keybindings picker (modal vs non-modal, with descriptions) |
+| `kb-set-search-scope` | Choose the default KB search scope (all / local / remote / instance) |
 | `set-save` | Set an option and persist to config.toml (:set-save <key> [value]) |
 | `kill-other-buffers` | Close all buffers except current (SPC b o) |
 | `save-all-buffers` | Save all modified buffers (SPC b S) |

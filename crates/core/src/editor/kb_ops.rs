@@ -2360,8 +2360,8 @@ mod tests {
         // distinctive node far beyond the empty-query window.
         for i in 0..(Editor::KB_FIND_LAZY_THRESHOLD + 500) {
             editor.kb.primary.insert(mae_kb::Node::new(
-                &format!("note:bulk{i}"),
-                &format!("Bulk Note {i}"),
+                format!("note:bulk{i}"),
+                format!("Bulk Note {i}"),
                 mae_kb::NodeKind::Note,
                 "filler body",
             ));
@@ -2396,8 +2396,8 @@ mod tests {
         let mut editor = Editor::new();
         for i in 0..(Editor::KB_FIND_LAZY_THRESHOLD + 100) {
             editor.kb.primary.insert(mae_kb::Node::new(
-                &format!("note:bulk{i}"),
-                &format!("Bulk Note {i}"),
+                format!("note:bulk{i}"),
+                format!("Bulk Note {i}"),
                 mae_kb::NodeKind::Note,
                 "filler",
             ));
