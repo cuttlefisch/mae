@@ -90,12 +90,12 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 ## Keybinding Architecture
 
-- **Kernel keymaps** (`keymaps.rs`): vi-modal primitives (hjkl, operators, text objects, Escape, `:`). Currently also has SPC leader bindings as a transitional default — migrating to keymap flavor modules.
-- **Keymap flavor modules** (`modules/keymap-doom/`, future `keymap-emacs/`, `keymap-minimal/`): define the full SPC leader tree. Selected via `keymap_flavor` option (default: "doom").
+- **Kernel keymaps** (`keymaps.rs`): vi-modal primitives ONLY (hjkl, operators, text objects, Escape, `:`, `C-w`, `C-c`). The kernel defines **no** SPC leader bindings (enforced by `kernel_keymap_has_no_leader_bindings`). The full SPC tree lives in the keymap flavor module — single source of truth; the old drifting kernel duplication is removed.
+- **Keymap flavor modules** (`modules/keymap-doom/`, future `keymap-emacs/`, `keymap-minimal/`): define the full SPC leader tree. Selected via `keymap_flavor` option (default: "doom"). `keymap-doom` is **embedded in the binary** (`pkg::embedded`), so the default flavor is always present regardless of install layout; an on-disk module of the same name overrides it (dev loop).
 - **Feature modules** (dailies, git-status, etc.): add bindings ONLY for module-specific commands not covered by the keymap flavor.
-- **Scheme API**: `(define-key MAP KEY CMD)` and `(set-group-name MAP PREFIX LABEL)` are the canonical binding APIs. Both work at init time and REPL time.
-- **`(mae!)` block**: Declarative module selection in `init.scm`. Only declared modules load.
-- **Never duplicate** bindings between kernel and modules without a documented migration path.
+- **Scheme API**: `(define-key MAP KEY CMD)` and `(set-group-name MAP PREFIX LABEL)` are the canonical binding APIs. Both work at init time and REPL time. `:reload-modules` (alias `mae-reload`) re-runs module loading live — no restart needed.
+- **`(mae!)` block**: Declarative module selection in `init.scm` (read before module loading; keymap flavor + language modules auto-enable).
+- **Never duplicate** bindings between kernel and modules. The kernel↔keymap-doom duplication is resolved — add new leader bindings to `modules/keymap-doom/autoloads.scm`, never `keymaps.rs`.
 
 ## Sync Engine (yrs/YATA)
 

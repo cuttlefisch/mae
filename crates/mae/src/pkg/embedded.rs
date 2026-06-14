@@ -181,4 +181,23 @@ mod tests {
         // Embedded-only modules are still present after the overlay.
         assert!(merged.iter().any(|d| d.manifest.name() == "surround"));
     }
+
+    #[test]
+    fn merge_with_no_disk_yields_embedded_baseline() {
+        // Clean-install simulation: with zero on-disk modules, the merged set is
+        // exactly the embedded baseline — keymap-doom (and the full built-in set)
+        // is always present. This is the guarantee that makes removing the
+        // kernel's duplicated leader bindings safe.
+        let merged = merge_modules(Vec::new());
+        assert!(
+            merged.len() >= 20,
+            "embedded baseline incomplete: {}",
+            merged.len()
+        );
+        assert!(
+            merged.iter().any(|d| d.manifest.name() == "keymap-doom"
+                && matches!(d.source, ModuleSource::Embedded { .. })),
+            "keymap-doom must be present from the embedded baseline with no disk modules"
+        );
+    }
 }

@@ -163,12 +163,12 @@ All phases below are COMPLETE. See ROADMAP.md for granular milestone details.
 
 ## Keybinding Architecture
 
-- **Kernel keymaps** (`keymaps.rs`): vi-modal primitives only (hjkl, operators, text objects, Escape, `:`). Currently also has SPC leader bindings as a transitional default — these are migrating to keymap flavor modules.
-- **Keymap flavor modules** (`modules/keymap-doom/`, future `keymap-emacs/`, `keymap-minimal/`): define the full SPC leader tree. Selected via `keymap_flavor` option (default: "doom").
+- **Kernel keymaps** (`keymaps.rs`): vi-modal primitives ONLY (hjkl, operators, text objects, Escape, `:`, `C-w` window + resize, `C-c` capture). The kernel defines **no** SPC leader bindings — enforced by the `kernel_keymap_has_no_leader_bindings` test. The whole SPC tree lives in the keymap flavor module (single source of truth; the old kernel duplication that drifted out of sync — e.g. SPC C collab was module-only — has been removed).
+- **Keymap flavor modules** (`modules/keymap-doom/`, future `keymap-emacs/`, `keymap-minimal/`): define the full SPC leader tree. Selected via `keymap_flavor` option (default: "doom"). `keymap-doom` is **embedded in the binary** (`pkg::embedded`, `include_dir!`), so the default flavor is always present regardless of install layout — no filesystem discovery needed. An on-disk module of the same name overrides the embedded copy (dev loop / custom flavors).
 - **Feature modules** (dailies, git-status, etc.): add bindings ONLY for module-specific commands not covered by the keymap flavor.
-- **Scheme API**: `(define-key MAP KEY CMD)` and `(set-group-name MAP PREFIX LABEL)` are the canonical binding APIs. Both work at init time and REPL time (runtime redefinable).
-- **`(mae!)` block**: Declarative module selection in `init.scm`. Only declared modules load. If a kernel command's binding is in a module, the user MUST declare that module or the binding won't exist.
-- **Never duplicate** bindings between kernel and modules without a documented migration path. The current duplication between `keymaps.rs` and `keymap-doom` is acknowledged tech debt with a ROADMAP entry.
+- **Scheme API**: `(define-key MAP KEY CMD)` and `(set-group-name MAP PREFIX LABEL)` are the canonical binding APIs. Both work at init time and REPL time (runtime redefinable). `:reload-modules` (alias `mae-reload`) re-runs module loading live — editing the `(mae!)` block or a module's autoloads no longer needs a restart.
+- **`(mae!)` block**: Declarative module selection in `init.scm`. Only declared modules load (keymap flavor + language modules auto-enable). Belongs in `init.scm` — it is read before module loading; `config.scm` is too late.
+- **Never duplicate** bindings between kernel and modules. The kernel↔keymap-doom duplication is **resolved** — the module is the sole owner of the leader tree. If you need a new leader binding, add it to `modules/keymap-doom/autoloads.scm`, never `keymaps.rs`.
 - **Never add ad-hoc solutions**: Prefer proper architectural solutions over hardcoded workarounds. When you find yourself duplicating logic between TUI and GUI renderers, extract shared code.
 - **Every option must be Scheme-accessible**: If a behavior is configurable, it goes through OptionRegistry. No config.toml-only settings, no env-var-only settings, no compile-time-only flags for user-facing behavior.
 

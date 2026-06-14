@@ -4373,6 +4373,27 @@ mod tests {
     }
 
     #[test]
+    fn load_source_evaluates_in_memory_content() {
+        // load_source is how embedded modules are loaded (no filesystem).
+        let mut rt = new_runtime();
+        rt.load_source(
+            "(define embedded-test-var 42)",
+            "embedded:test/autoloads.scm",
+        )
+        .expect("valid in-memory source should evaluate");
+        let out = rt.eval("embedded-test-var").unwrap();
+        assert!(
+            out.contains("42"),
+            "define from load_source should take effect: {out}"
+        );
+        // Malformed source surfaces an error rather than silently succeeding.
+        assert!(
+            rt.load_source("(((", "embedded:test/bad.scm").is_err(),
+            "malformed in-memory source should error"
+        );
+    }
+
+    #[test]
     fn eval_arithmetic() {
         let mut rt = new_runtime();
         let result = rt.eval("(+ 1 2 3)").unwrap();

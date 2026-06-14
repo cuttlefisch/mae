@@ -1591,6 +1591,45 @@ mod tests {
     }
 
     #[test]
+    fn unknown_keymap_flavor_falls_back_to_doom() {
+        // A bogus keymap_flavor must not leave the user with no leader tree —
+        // load_modules falls back to the embedded keymap-doom.
+        let mut scheme = require_scheme!();
+        let mut editor = Editor::new();
+        editor.keymap_flavor = "nonexistent-flavor".to_string();
+        reload_all_modules(&mut scheme, &mut editor);
+        assert!(
+            editor
+                .active_modules
+                .iter()
+                .any(|m| m.name == "keymap-doom" && m.status == "loaded"),
+            "unknown flavor should fall back to keymap-doom"
+        );
+    }
+
+    #[test]
+    fn keymap_flavor_option_roundtrips() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("keymap_flavor")
+                .map(|(v, _)| v)
+                .as_deref(),
+            Some("doom"),
+            "default keymap_flavor should be doom"
+        );
+        editor.set_option("keymap_flavor", "emacs").unwrap();
+        assert_eq!(editor.keymap_flavor, "emacs");
+        assert_eq!(
+            editor
+                .get_option("keymap_flavor")
+                .map(|(v, _)| v)
+                .as_deref(),
+            Some("emacs")
+        );
+    }
+
+    #[test]
     fn load_memory_context_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
         let mem_dir = dir.path().join(".mae/memory");
