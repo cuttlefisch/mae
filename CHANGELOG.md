@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- *(kb,modules,daemon)* Kb_view_query parse error, module discovery, daemon naming ([78ade4a](https://github.com/cuttlefisch/mae/commit/78ade4a867937a96bae41af1bfefdd39cb7e5c24))
+- *(modules)* Unify discovery path, add macOS data dir, make load failures loud ([d2fe898](https://github.com/cuttlefisch/mae/commit/d2fe8980aa344b28b2f4817515a07bbf7cca415c))
+
+## [0.13.7] - 2026-06-13
+
+### Miscellaneous
+
+- Bump version to 0.13.7 ([d43888c](https://github.com/cuttlefisch/mae/commit/d43888c30391c520ac9c33a8f945b3936574dfa1))
+
 ### Style
 
 - Rustfmt the macOS doc/test/font changes (+ Cargo.lock version sync) ([d0a81b1](https://github.com/cuttlefisch/mae/commit/d0a81b1bb9360ab906344b48fd0c9d4894ecd67b))
