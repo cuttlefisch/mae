@@ -1388,6 +1388,18 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "feed-keys",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "which-key-open?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "which-key-entry-count",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "test-buffer-string",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -3205,6 +3217,26 @@
     {
       "name": "module-reload",
       "doc": "Reload a module's autoloads (:module-reload <name>)"
+    },
+    {
+      "name": "reload-modules",
+      "doc": "Re-discover and reload ALL modules' autoloads (live reload, no restart)"
+    },
+    {
+      "name": "mae-reload",
+      "doc": "Alias for reload-modules — live-reload all modules without a restart"
+    },
+    {
+      "name": "leader-dispatch",
+      "doc": "Open the transient leader keypad (which-key dispatch); resolves one command then returns"
+    },
+    {
+      "name": "keymap-set-flavor",
+      "doc": "Switch keymap flavor live (:keymap-set-flavor <name>; no arg toggles doom/nonmodal)"
+    },
+    {
+      "name": "choose-keymap-flavor",
+      "doc": "Open the guided keybindings picker (modal vs non-modal, with descriptions)"
     },
     {
       "name": "set-save",
