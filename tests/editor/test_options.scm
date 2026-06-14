@@ -7,7 +7,7 @@
   (lambda ()
     (it-test "line_numbers option round-trip"
       (lambda ()
-        (should (get-option "line_numbers"))
+        (set-option! "line_numbers" "true")
         (should-equal (get-option "line_numbers") "true")
         (set-option! "line_numbers" "false")
         (should-equal (get-option "line_numbers") "false")

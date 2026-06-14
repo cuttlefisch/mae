@@ -393,21 +393,20 @@ pub(crate) fn drain_hook_evals(editor: &mut Editor, scheme: &mut SchemeRuntime) 
     }
     let hooks: Vec<(String, String)> = editor.pending_hook_evals.drain(..).collect();
     for (hook_name, fn_name) in hooks {
+        // Try builtin command dispatch first — it's cheaper than a Scheme eval
+        // and avoids triggering VM error-handling paths that can corrupt global
+        // Scheme state (e.g. `format-before-save` is a dispatch arm, not a
+        // Scheme function).
+        if editor.dispatch_with_multicursor(&fn_name) {
+            continue;
+        }
         scheme.inject_editor_state(editor);
         scheme.inject_value("*hook-name*", &hook_name);
         match scheme.call_function(&fn_name) {
             Ok(_) => scheme.apply_to_editor(editor),
             Err(e) => {
-                // A hook target may name an editor command rather than a Scheme
-                // function — either a registered command or a builtin dispatch
-                // arm such as `format-before-save`. Fall back to command
-                // dispatch; only surface the Scheme error if that doesn't handle
-                // it either. This is what lets `(add-hook! "before-save"
-                // "format-before-save")` work.
-                if !editor.dispatch_with_multicursor(&fn_name) {
-                    warn!(hook = %hook_name, fn_name = %fn_name, error = %e, "hook error");
-                    editor.set_status(format!("Hook error ({}): {}", hook_name, e));
-                }
+                warn!(hook = %hook_name, fn_name = %fn_name, error = %e, "hook error");
+                editor.set_status(format!("Hook error ({}): {}", hook_name, e));
             }
         }
     }

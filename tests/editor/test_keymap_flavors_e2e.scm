@@ -77,7 +77,11 @@
     (it-test "keypad closed, still insert, nothing stray"
       (lambda ()
         (should (not (which-key-open?)))
-        (should-mode "insert")))))
+        (should-mode "insert")))
+    (it-test "restore doom flavor for remaining tests"
+      (lambda () (execute-ex "keymap-set-flavor doom")))
+    (it-test "back to normal mode after restore"
+      (lambda () (should-mode "normal")))))
 
 (describe-group "leader: N-level traversal is flavor-independent, restoration is flavor-specific"
   (lambda ()

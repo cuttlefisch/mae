@@ -23,4 +23,8 @@
     (it-test "keypad open"
       (lambda () (should (which-key-open?))))
     (it-test "cancel"
-      (lambda () (feed-keys "escape")))))
+      (lambda () (feed-keys "escape")))
+    (it-test "restore doom flavor for remaining tests"
+      (lambda () (execute-ex "keymap-set-flavor doom")))
+    (it-test "back to normal mode"
+      (lambda () (should-mode "normal")))))
