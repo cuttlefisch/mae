@@ -6,8 +6,40 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(ci)* Collab-start test checks all keymaps + refresh code map ([567d16f](https://github.com/cuttlefisch/mae/commit/567d16f2a71a53831d9b6f05c0bf84c8ebfc92ae))
+- *(e2e)* Hook dispatch order + test isolation for flavor/mode/options ([7e96429](https://github.com/cuttlefisch/mae/commit/7e96429535efef23107a1e48a5f1e73aa60571a1))
+
+### Documentation
+
+- Document test isolation + clean env for e2e in CLAUDE.md ([74b53dc](https://github.com/cuttlefisch/mae/commit/74b53dc654c13bde67ed1ce8fff0aaf089a9072c))
+
+### Features
+
+- *(modules)* Embed built-in modules in the binary (always-present baseline) ([d92fec2](https://github.com/cuttlefisch/mae/commit/d92fec2df7a7d45e7dfa6b562530ef8edcb6b2b1))
+- *(modules)* Live reload-modules / mae-reload command ([e073633](https://github.com/cuttlefisch/mae/commit/e07363360512468db14cffe7748bbe0e0f513b3c))
+- *(keymaps)* Non-modal keybind flavor + transient leader keypad + live switching ([dfa0a24](https://github.com/cuttlefisch/mae/commit/dfa0a24d87bababafa64a12283d769a5af789f47))
+- *(keymaps)* Guided flavor picker (dashboard quick-action) + GEMINI/manual sync ([d8bed02](https://github.com/cuttlefisch/mae/commit/d8bed02f722e8b1611631d5e9763290ff8c00740))
+- *(test-runner)* File-boundary state isolation + leak detection ([9441536](https://github.com/cuttlefisch/mae/commit/9441536adf4afad8fc3ad36e64dcb9dd04fa2769))
+
+### Refactor
+
+- *(paths)* Consolidate path resolvers into pkg::paths ([0b8bf5d](https://github.com/cuttlefisch/mae/commit/0b8bf5d32abaae93752030b9c27fa29e062bcbcb))
+- *(keymaps)* Single source of truth — remove duplicated kernel leader tree ([072b4e2](https://github.com/cuttlefisch/mae/commit/072b4e245d483aee0af7b499708ca7f132151778))
+
+### Testing
+
+- Regression coverage for module architecture; update CLAUDE/GEMINI ([6229ec2](https://github.com/cuttlefisch/mae/commit/6229ec232aea66d53fefb246f50cb293248ed739))
+
+## [0.13.8] - 2026-06-14
+
+### Bug Fixes
+
 - *(kb,modules,daemon)* Kb_view_query parse error, module discovery, daemon naming ([78ade4a](https://github.com/cuttlefisch/mae/commit/78ade4a867937a96bae41af1bfefdd39cb7e5c24))
 - *(modules)* Unify discovery path, add macOS data dir, make load failures loud ([d2fe898](https://github.com/cuttlefisch/mae/commit/d2fe8980aa344b28b2f4817515a07bbf7cca415c))
+
+### Miscellaneous
+
+- Bump version to 0.13.8 ([8cc99ce](https://github.com/cuttlefisch/mae/commit/8cc99ce275dd56d5d31936eb8ec9e667f386e704))
 
 ## [0.13.7] - 2026-06-13
 
