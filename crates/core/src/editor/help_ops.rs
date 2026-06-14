@@ -473,6 +473,8 @@ impl Editor {
         };
         // Record access for activity tracking (UserOrg notes only).
         self.kb_record_access(&target);
+        // Record the visit for recency ordering (KbSort::Recency).
+        self.kb.record_visit(&target);
 
         let prev_idx = self.active_buffer_idx();
         let idx = self.ensure_kb_buffer_idx(&target);

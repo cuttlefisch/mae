@@ -778,7 +778,10 @@ impl Editor {
     /// Search across the primary KB and federated instances, restricted to the
     /// given `scope` (plan decision D4). `KbScope::All` reproduces
     /// `kb_federated_search` exactly. Local results always win on duplicates.
-    /// Respects `kb_search_sort` ("relevance" default / "activity" / "alphabetical").
+    /// Respects `kb_search_sort` ("relevance" default / "activity" /
+    /// "alphabetical" / "recency"). "recency" ranks by relevance first, then
+    /// stably re-sorts so session-visited nodes float to the top (most-recent
+    /// first; unvisited nodes keep their relevance order below them).
     pub fn kb_federated_search_scoped(
         &self,
         query: &str,
@@ -787,6 +790,7 @@ impl Editor {
         use mae_kb::KbScope;
         let use_activity = self.kb.search_sort == "activity";
         let use_alpha = self.kb.search_sort == "alphabetical";
+        let use_recency = self.kb.search_sort == "recency";
         let weights = mae_kb::activity::ActivityWeights {
             decay: self.kb.activity_decay,
             ..Default::default()
@@ -859,6 +863,14 @@ impl Editor {
 
         if use_alpha {
             results.sort_by(|a, b| a.1.id.cmp(&b.1.id));
+        } else if use_recency {
+            // Stable sort by descending visit ordinal: most-recently-visited
+            // first; ties (incl. all unvisited at rank 0) keep relevance order.
+            results.sort_by(|a, b| {
+                self.kb
+                    .visit_rank(&b.1.id)
+                    .cmp(&self.kb.visit_rank(&a.1.id))
+            });
         }
 
         results
@@ -2201,6 +2213,64 @@ mod tests {
             0,
             "RemoteOnly excludes non-shared local imports"
         );
+    }
+
+    #[test]
+    fn kb_search_recency_floats_visited_to_top() {
+        let mut editor = Editor::new();
+        editor.kb.search_sort = "recency".to_string();
+
+        // Pick two nodes that both match a common query but aren't the top
+        // relevance hit, then visit the second one and confirm it leads.
+        let baseline = editor.kb_federated_search("buffer");
+        assert!(baseline.len() >= 2, "need ≥2 matches for the query");
+        // A match that is NOT already first under relevance.
+        let promote = baseline[1].1.id.clone();
+
+        // No visits yet → recency order == relevance order (stable).
+        let ids_before: Vec<String> = editor
+            .kb_federated_search("buffer")
+            .iter()
+            .map(|(_, n)| n.id.clone())
+            .collect();
+        assert_eq!(ids_before.first(), Some(&baseline[0].1.id.clone()));
+
+        // Visit the promoted node; it should now sort first.
+        editor.kb.record_visit(&promote);
+        let ids_after: Vec<String> = editor
+            .kb_federated_search("buffer")
+            .iter()
+            .map(|(_, n)| n.id.clone())
+            .collect();
+        assert_eq!(
+            ids_after.first(),
+            Some(&promote),
+            "visited node should float to the top under recency sort"
+        );
+    }
+
+    #[test]
+    fn kb_search_sort_option_accepts_recency() {
+        let mut editor = Editor::new();
+        assert!(editor.set_option("kb_search_sort", "recency").is_ok());
+        assert_eq!(editor.kb.search_sort, "recency");
+        assert_eq!(
+            editor.get_option("kb_search_sort").map(|(v, _)| v),
+            Some("recency".to_string())
+        );
+        // Invalid value is rejected and leaves the setting unchanged.
+        assert!(editor.set_option("kb_search_sort", "bogus").is_err());
+        assert_eq!(editor.kb.search_sort, "recency");
+    }
+
+    #[test]
+    fn kb_visit_log_is_monotonic() {
+        let mut editor = Editor::new();
+        editor.kb.record_visit("concept:buffer");
+        editor.kb.record_visit("concept:window");
+        editor.kb.record_visit("concept:buffer"); // re-visit bumps ahead
+        assert!(editor.kb.visit_rank("concept:buffer") > editor.kb.visit_rank("concept:window"));
+        assert_eq!(editor.kb.visit_rank("never-visited"), 0);
     }
 
     #[test]

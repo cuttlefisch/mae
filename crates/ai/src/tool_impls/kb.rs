@@ -84,9 +84,11 @@ pub fn execute_kb_get(editor: &Editor, args: &serde_json::Value) -> Result<Strin
     }
 }
 
-/// Record a KB node ID as visited by the AI agent (for cycle detection).
+/// Record a KB node ID as visited by the AI agent (for cycle detection and
+/// recency ordering).
 pub fn record_kb_visit(editor: &mut Editor, id: &str) {
     editor.kb.ai_visited_ids.insert(id.to_string());
+    editor.kb.record_visit(id);
 }
 
 pub fn execute_kb_search(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {

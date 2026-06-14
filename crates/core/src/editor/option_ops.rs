@@ -561,12 +561,12 @@ impl super::Editor {
                 self.kb.activity_decay = v.clamp(0.0001, 1.0);
             }
             "kb_search_sort" => match value {
-                "relevance" | "activity" | "alphabetical" => {
+                "relevance" | "activity" | "alphabetical" | "recency" => {
                     self.kb.search_sort = value.to_string();
                 }
                 _ => {
                     return Err(format!(
-                    "Invalid kb_search_sort: '{}' (expected: relevance, activity, alphabetical)",
+                    "Invalid kb_search_sort: '{}' (expected: relevance, activity, alphabetical, recency)",
                     value
                 ))
                 }
