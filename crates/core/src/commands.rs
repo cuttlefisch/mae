@@ -1018,6 +1018,14 @@ impl CommandRegistry {
             "Reload a module's autoloads (:module-reload <name>)",
         );
         reg.register_builtin(
+            "reload-modules",
+            "Re-discover and reload ALL modules' autoloads (live reload, no restart)",
+        );
+        reg.register_builtin(
+            "mae-reload",
+            "Alias for reload-modules — live-reload all modules without a restart",
+        );
+        reg.register_builtin(
             "set-save",
             "Set an option and persist to config.toml (:set-save <key> [value])",
         );

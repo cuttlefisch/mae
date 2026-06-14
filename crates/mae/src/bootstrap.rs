@@ -1264,6 +1264,28 @@ pub fn reload_module(name: &str, scheme: &mut SchemeRuntime, editor: &mut Editor
     }
 }
 
+/// Reload ALL modules at runtime: re-discover (embedded baseline + on-disk
+/// overrides) and re-run every enabled module's autoloads, exactly as startup
+/// does. Registration is idempotent (define-key / register-command / options
+/// overwrite; hooks dedupe), so this safely picks up on-disk edits and — after
+/// `:reload-config` re-evaluates init.scm — changes to the `(mae!)` block.
+///
+/// This is the live counterpart to startup module loading (it reuses
+/// [`load_modules`], so there is no second copy of the load logic to drift) and
+/// the missing piece that previously forced a full restart to apply config.
+pub fn reload_all_modules(scheme: &mut SchemeRuntime, editor: &mut Editor) {
+    // Per-load keymap-conflict warnings would otherwise accumulate across reloads.
+    editor.module_binding_warnings.clear();
+    let registry = load_modules(scheme, editor);
+    let loaded = registry
+        .list()
+        .iter()
+        .filter(|m| matches!(m.status, crate::pkg::loader::ModuleStatus::Loaded))
+        .count();
+    info!(modules = loaded, "reloaded all modules");
+    editor.set_status(format!("Reloaded {loaded} module(s)"));
+}
+
 /// Load user config.scm — runs AFTER module autoloads so users can override.
 ///
 /// This is the second half of the three-file model:
@@ -1509,6 +1531,63 @@ mod tests {
         let count = load_init_files(&mut scheme, &mut editor);
         // Count depends on whether user has an init.scm, so just verify no panic
         let _ = count;
+    }
+
+    #[test]
+    fn reload_all_modules_loads_embedded_and_is_idempotent() {
+        // Embedded keymap-doom must load even with no on-disk modules, and a
+        // second reload must not change binding/module counts (idempotent
+        // registration). This is the core regression guard for the whole
+        // overhaul: it proves the embedded baseline populates the leader tree,
+        // so removing the kernel's duplicated SPC bindings is safe.
+        let mut scheme = require_scheme!();
+        let mut editor = Editor::new();
+
+        let total_normal = |e: &Editor| -> usize {
+            e.keymaps
+                .get("normal")
+                .map(|k| k.bindings().count())
+                .unwrap_or(0)
+        };
+        let has_collab = |e: &Editor| -> bool {
+            e.keymaps
+                .get("normal")
+                .map(|k| k.bindings().any(|(_, cmd)| cmd == "collab-start"))
+                .unwrap_or(false)
+        };
+
+        reload_all_modules(&mut scheme, &mut editor);
+        let mods1 = editor.active_modules.len();
+        let binds1 = total_normal(&editor);
+        assert!(
+            mods1 >= 20,
+            "embedded modules should load with no on-disk modules, got {mods1}"
+        );
+        assert!(
+            editor
+                .active_modules
+                .iter()
+                .any(|m| m.name == "keymap-doom" && m.status == "loaded"),
+            "embedded keymap-doom must load"
+        );
+        // The collab leader binding (module-only — the originally-missing key)
+        // is present once embedded keymap-doom loads.
+        assert!(
+            has_collab(&editor),
+            "collab-start (SPC C s) should be bound after embedded keymap-doom loads"
+        );
+
+        reload_all_modules(&mut scheme, &mut editor);
+        assert_eq!(
+            mods1,
+            editor.active_modules.len(),
+            "module count stable across reload"
+        );
+        assert_eq!(
+            binds1,
+            total_normal(&editor),
+            "binding count stable (idempotent reload)"
+        );
     }
 
     #[test]

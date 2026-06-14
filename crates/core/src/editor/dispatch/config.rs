@@ -373,6 +373,12 @@ impl Editor {
                     self.set_status(format!("Reloading module '{}'...", arg));
                 }
             }
+            // Live reload of ALL modules (the "__all__" sentinel is handled in
+            // the event loop). `mae-reload` is an alias.
+            "reload-modules" | "mae-reload" => {
+                self.pending_module_reloads.push("__all__".to_string());
+                self.set_status("Reloading all modules...".to_string());
+            }
 
             _ => return None,
         }

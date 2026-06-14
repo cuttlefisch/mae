@@ -357,7 +357,11 @@ pub(crate) async fn run_terminal_loop(
         // Process module reload requests.
         let reloads = std::mem::take(&mut editor.pending_module_reloads);
         for module_name in reloads {
-            crate::bootstrap::reload_module(&module_name, scheme, editor);
+            if module_name == "__all__" {
+                crate::bootstrap::reload_all_modules(scheme, editor);
+            } else {
+                crate::bootstrap::reload_module(&module_name, scheme, editor);
+            }
         }
         trace!("drain_intents_and_lifecycle exit");
 
