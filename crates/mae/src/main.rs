@@ -207,7 +207,7 @@ fn main() -> io::Result<()> {
     // (`upgrade` is handled earlier so it owns its own `--help`.)
     if let Some(subcmd) = args.get(1).map(|s| s.as_str()) {
         match subcmd {
-            "sync" | "purge" | "list" | "info" | "create" => {
+            "sync" | "purge" | "prune-shadows" | "list" | "info" | "create" => {
                 let rest: Vec<String> = args[2..].to_vec();
                 let code = pkg::cli::dispatch_subcmd(subcmd, &rest);
                 std::process::exit(code);
