@@ -32,6 +32,21 @@ use tracing::{debug, error, info, warn};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The collab listener's authentication provider, resolved once at startup and
+/// cloned (Arc-backed) per connection.
+#[derive(Clone)]
+enum CollabAuth {
+    /// No authentication (trusted loopback).
+    None,
+    /// Symmetric pre-shared keys (trusted_keys keystore + legacy psk).
+    Psk(Arc<mae_mcp::auth::PskAuth>),
+    /// Asymmetric Ed25519 (ADR-017): the daemon's identity + trusted client keys.
+    Key {
+        identity: Arc<mae_mcp::identity::Identity>,
+        authorized: Arc<mae_mcp::identity::AuthorizedKeys>,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -51,12 +66,22 @@ async fn main() {
         return;
     }
 
-    // Keystore management: `mae-daemon keygen [name]`, `mae-daemon keys`.
+    // Symmetric keystore (psk mode): `keygen [name]`, `keys`.
     if args.get(1).map(|s| s.as_str()) == Some("keygen") {
         std::process::exit(run_keygen(args.get(2).map(|s| s.as_str())));
     }
     if args.get(1).map(|s| s.as_str()) == Some("keys") {
         std::process::exit(run_keys_list());
+    }
+
+    // Asymmetric key mode (ADR-017): `identity`, `authorized`,
+    // `authorize <pubkey-line>`, `revoke <label>`.
+    match args.get(1).map(|s| s.as_str()) {
+        Some("identity") => std::process::exit(run_identity()),
+        Some("authorized") => std::process::exit(run_authorized_list()),
+        Some("authorize") => std::process::exit(run_authorize(&args[2..])),
+        Some("revoke") => std::process::exit(run_revoke(args.get(2).map(|s| s.as_str()))),
+        _ => {}
     }
 
     // Parse optional CLI overrides: --config, --bind, --data-dir
@@ -286,59 +311,101 @@ async fn spawn_collab_server(config: &DaemonConfig) {
         Err(e) => warn!(error = %e, "failed to list collab documents for recovery"),
     }
 
-    // Create auth provider. In "psk" mode the daemon trusts a SET of keys:
-    // the trusted-keys keystore plus any legacy psk/psk_command (one unnamed
-    // key). A client authenticates by proving knowledge of any trusted key.
+    // Create the auth provider for this listener.
+    //   "psk": trust a SET of symmetric keys (keystore + legacy psk/psk_command).
+    //   "key": asymmetric Ed25519 — own identity + authorized_keys (ADR-017).
+    //   else:  no auth (trusted loopback).
     let auth_mode = collab.auth.mode.clone();
-    let use_psk = auth_mode == "psk";
-    let psk_auth: Option<std::sync::Arc<mae_mcp::auth::PskAuth>> = if use_psk {
-        let mut keys: Vec<(Option<String>, String)> = Vec::new();
-
-        // Legacy: psk_command / psk → one unnamed trusted key.
-        if let Some(key) = mae_mcp::auth::load_psk(
-            collab.auth.psk_command.as_deref(),
-            collab.auth.psk.as_deref(),
-        )
-        .await
-        {
-            keys.push((None, key));
-        }
-
-        // Keystore: every entry is a trusted peer credential.
-        if let Some(path) = collab.auth.keystore_path() {
-            match mae_mcp::keystore::load_optional(&path) {
-                Ok(Some(ks)) => {
-                    if let Some(w) = ks.permission_warning() {
-                        warn!("{w}");
+    let collab_auth: CollabAuth = match auth_mode.as_str() {
+        "psk" => {
+            let mut keys: Vec<(Option<String>, String)> = Vec::new();
+            // Legacy: psk_command / psk → one unnamed trusted key.
+            if let Some(key) = mae_mcp::auth::load_psk(
+                collab.auth.psk_command.as_deref(),
+                collab.auth.psk.as_deref(),
+            )
+            .await
+            {
+                keys.push((None, key));
+            }
+            // Keystore: every entry is a trusted peer credential.
+            if let Some(path) = collab.auth.keystore_path() {
+                match mae_mcp::keystore::load_optional(&path) {
+                    Ok(Some(ks)) => {
+                        if let Some(w) = ks.permission_warning() {
+                            warn!("{w}");
+                        }
+                        for e in ks.entries {
+                            keys.push((e.name, e.secret));
+                        }
+                        info!(path = %path.display(), keys = keys.len(), "loaded collab keystore");
                     }
-                    for e in ks.entries {
-                        keys.push((e.name, e.secret));
+                    Ok(None) => debug!(path = %path.display(), "no collab keystore present"),
+                    Err(e) => {
+                        warn!(path = %path.display(), error = %e, "failed to read collab keystore")
                     }
-                    info!(path = %path.display(), keys = keys.len(), "loaded collab keystore");
-                }
-                Ok(None) => {
-                    debug!(path = %path.display(), "no collab keystore present");
-                }
-                Err(e) => {
-                    warn!(path = %path.display(), error = %e, "failed to read collab keystore");
                 }
             }
+            if keys.is_empty() {
+                error!(
+                    "collab.auth.mode = 'psk' but no keys available (empty keystore and no psk)"
+                );
+                warn!("collab service disabled");
+                return;
+            }
+            info!(
+                auth = "psk",
+                trusted_keys = keys.len(),
+                "collab authentication configured"
+            );
+            CollabAuth::Psk(Arc::new(mae_mcp::auth::PskAuth::from_keys(keys)))
         }
-
-        if keys.is_empty() {
-            error!("collab.auth.mode = 'psk' but no keys available (empty keystore and no psk)");
-            warn!("collab service disabled");
-            return;
+        "key" => {
+            let dir = match collab.auth.identity_dir() {
+                Some(d) => d,
+                None => {
+                    error!("collab.auth.mode = 'key' but no identity dir (set XDG_DATA_HOME/HOME)");
+                    warn!("collab service disabled");
+                    return;
+                }
+            };
+            let identity = match mae_mcp::identity::Identity::load_or_generate(&dir, "daemon") {
+                Ok(id) => Arc::new(id),
+                Err(e) => {
+                    error!(error = %e, dir = %dir.display(), "failed to load daemon identity");
+                    warn!("collab service disabled");
+                    return;
+                }
+            };
+            let ak_path = collab
+                .auth
+                .authorized_keys_path()
+                .unwrap_or_else(|| dir.join("authorized_keys"));
+            let authorized = mae_mcp::identity::AuthorizedKeys::load(&ak_path);
+            if authorized.is_empty() {
+                error!(
+                    "collab.auth.mode = 'key' but authorized_keys ({}) is empty — no client can \
+                     connect (authorize one with: mae-daemon authorize <pubkey-line>)",
+                    ak_path.display()
+                );
+                warn!("collab service disabled");
+                return;
+            }
+            info!(
+                auth = "key",
+                fingerprint = %identity.fingerprint(),
+                authorized = authorized.len(),
+                "collab authentication configured"
+            );
+            CollabAuth::Key {
+                identity,
+                authorized: Arc::new(authorized),
+            }
         }
-        info!(
-            auth = "psk",
-            trusted_keys = keys.len(),
-            "collab authentication configured"
-        );
-        Some(std::sync::Arc::new(mae_mcp::auth::PskAuth::from_keys(keys)))
-    } else {
-        info!(auth = %auth_mode, "collab authentication configured");
-        None
+        other => {
+            info!(auth = %other, "collab authentication configured");
+            CollabAuth::None
+        }
     };
 
     // Bind TCP
@@ -405,27 +472,45 @@ async fn spawn_collab_server(config: &DaemonConfig) {
                     let reader = BufReader::new(reader);
                     let store = Arc::clone(&doc_store);
                     let bc = Arc::clone(&broadcaster);
-                    let psk_clone = psk_auth.clone();
+                    let auth = collab_auth.clone();
                     tokio::spawn(async move {
-                        if let Some(ref auth) = psk_clone {
-                            collab_handler::handle_client_with_auth(
-                                reader,
-                                writer,
-                                auth.as_ref(),
-                                store,
-                                bc,
-                                server_start_time,
-                            )
-                            .await;
-                        } else {
-                            collab_handler::handle_client(
-                                reader,
-                                writer,
-                                store,
-                                bc,
-                                server_start_time,
-                            )
-                            .await;
+                        match auth {
+                            CollabAuth::Psk(a) => {
+                                collab_handler::handle_client_with_auth(
+                                    reader,
+                                    writer,
+                                    a.as_ref(),
+                                    store,
+                                    bc,
+                                    server_start_time,
+                                )
+                                .await;
+                            }
+                            CollabAuth::Key {
+                                identity,
+                                authorized,
+                            } => {
+                                let ka = mae_mcp::auth::KeyAuth::server(identity, authorized);
+                                collab_handler::handle_client_with_auth(
+                                    reader,
+                                    writer,
+                                    &ka,
+                                    store,
+                                    bc,
+                                    server_start_time,
+                                )
+                                .await;
+                            }
+                            CollabAuth::None => {
+                                collab_handler::handle_client(
+                                    reader,
+                                    writer,
+                                    store,
+                                    bc,
+                                    server_start_time,
+                                )
+                                .await;
+                            }
                         }
                     });
                 }
@@ -466,6 +551,21 @@ fn run_check_config() {
                     "  auth.keystore: {} ({} key(s))",
                     p.display(),
                     config.collab.auth.keystore_key_count()
+                );
+            }
+        }
+        if config.collab.auth.mode == "key" {
+            if let Some(dir) = config.collab.auth.identity_dir() {
+                match mae_mcp::identity::Identity::load_or_generate(&dir, "daemon") {
+                    Ok(id) => println!("  auth.identity: {}", id.fingerprint()),
+                    Err(e) => println!("  auth.identity: <error: {e}>"),
+                }
+            }
+            if let Some(p) = config.collab.auth.authorized_keys_path() {
+                println!(
+                    "  auth.authorized_keys: {} ({} key(s))",
+                    p.display(),
+                    config.collab.auth.authorized_key_count()
                 );
             }
         }
@@ -550,6 +650,134 @@ fn run_keys_list() -> i32 {
         }
         Err(e) => {
             eprintln!("error: failed to read keystore {}: {e}", path.display());
+            1
+        }
+    }
+}
+
+/// `mae-daemon identity` — print this daemon's Ed25519 public key + fingerprint
+/// (generating the keypair if absent). Share the fingerprint out-of-band so
+/// clients can verify the TOFU prompt.
+fn run_identity() -> i32 {
+    let config = DaemonConfig::load();
+    let dir = match config.collab.auth.identity_dir() {
+        Some(d) => d,
+        None => {
+            eprintln!("error: cannot resolve identity dir (set XDG_DATA_HOME or HOME)");
+            return 1;
+        }
+    };
+    match mae_mcp::identity::Identity::load_or_generate(&dir, "daemon") {
+        Ok(id) => {
+            println!("Daemon identity ({}):", dir.join("id_ed25519").display());
+            println!("  fingerprint: {}", id.fingerprint());
+            println!("  public key:  {}", id.public().to_line());
+            0
+        }
+        Err(e) => {
+            eprintln!("error: failed to load/generate identity: {e}");
+            1
+        }
+    }
+}
+
+/// `mae-daemon authorized` — list trusted client public keys.
+fn run_authorized_list() -> i32 {
+    let config = DaemonConfig::load();
+    let path = match config.collab.auth.authorized_keys_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("error: cannot resolve authorized_keys path");
+            return 1;
+        }
+    };
+    let ak = mae_mcp::identity::AuthorizedKeys::load(&path);
+    println!(
+        "Authorized client keys in {} ({}):",
+        path.display(),
+        ak.len()
+    );
+    for pk in ak.entries() {
+        println!(
+            "  {:<16} {}",
+            pk.label.as_deref().unwrap_or("(unlabeled)"),
+            pk.fingerprint()
+        );
+    }
+    0
+}
+
+/// `mae-daemon authorize <pubkey-line>` — add a client public key line
+/// (`mae-ed25519 <b64> <label>`) to authorized_keys.
+fn run_authorize(rest: &[String]) -> i32 {
+    if rest.is_empty() {
+        eprintln!("usage: mae-daemon authorize <mae-ed25519 <b64> [label]>");
+        return 2;
+    }
+    let line = rest.join(" ");
+    let pk = match mae_mcp::identity::PublicKey::from_line(&line) {
+        Some(pk) => pk,
+        None => {
+            eprintln!("error: not a valid key line (expected 'mae-ed25519 <b64> [label]')");
+            return 1;
+        }
+    };
+    let config = DaemonConfig::load();
+    let path = match config.collab.auth.authorized_keys_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("error: cannot resolve authorized_keys path");
+            return 1;
+        }
+    };
+    let mut ak = mae_mcp::identity::AuthorizedKeys::load(&path);
+    let fp = pk.fingerprint();
+    let label = pk.label.clone().unwrap_or_default();
+    match ak.add(pk) {
+        Ok(()) => {
+            println!("Authorized {label} ({fp}) → {}", path.display());
+            0
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            println!("Already authorized: {fp}");
+            0
+        }
+        Err(e) => {
+            eprintln!("error: failed to authorize: {e}");
+            1
+        }
+    }
+}
+
+/// `mae-daemon revoke <label>` — remove authorized client key(s) by label.
+fn run_revoke(label: Option<&str>) -> i32 {
+    let label = match label {
+        Some(l) => l,
+        None => {
+            eprintln!("usage: mae-daemon revoke <label>");
+            return 2;
+        }
+    };
+    let config = DaemonConfig::load();
+    let path = match config.collab.auth.authorized_keys_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("error: cannot resolve authorized_keys path");
+            return 1;
+        }
+    };
+    let mut ak = mae_mcp::identity::AuthorizedKeys::load(&path);
+    match ak.revoke(label) {
+        Ok(0) => {
+            println!("No authorized key labeled '{label}'");
+            0
+        }
+        Ok(n) => {
+            println!("Revoked {n} key(s) labeled '{label}'");
+            0
+        }
+        Err(e) => {
+            eprintln!("error: failed to revoke: {e}");
             1
         }
     }

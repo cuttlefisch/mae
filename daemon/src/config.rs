@@ -76,6 +76,12 @@ pub struct AuthConfig {
     /// `$XDG_DATA_HOME/mae/collab/trusted_keys`. The daemon trusts every key
     /// in this file (named or unnamed) as a peer credential.
     pub keystore: Option<String>,
+    /// (mode = "key") Path to the asymmetric authorized_keys file. Defaults to
+    /// `$XDG_DATA_HOME/mae/collab/authorized_keys`.
+    pub authorized_keys: Option<String>,
+    /// (mode = "key") Directory holding the daemon's Ed25519 identity. Defaults
+    /// to `$XDG_DATA_HOME/mae/collab`.
+    pub identity_dir: Option<String>,
 }
 
 impl Default for AuthConfig {
@@ -85,6 +91,8 @@ impl Default for AuthConfig {
             psk_command: None,
             psk: None,
             keystore: None,
+            authorized_keys: None,
+            identity_dir: None,
         }
     }
 }
@@ -104,6 +112,29 @@ impl AuthConfig {
         self.keystore_path()
             .and_then(|p| mae_mcp::keystore::load_optional(&p).ok().flatten())
             .map(|ks| ks.len())
+            .unwrap_or(0)
+    }
+
+    /// (mode = "key") Directory holding the daemon's Ed25519 identity.
+    pub fn identity_dir(&self) -> Option<std::path::PathBuf> {
+        self.identity_dir
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .or_else(mae_mcp::identity::default_collab_dir)
+    }
+
+    /// (mode = "key") Path to the authorized_keys file.
+    pub fn authorized_keys_path(&self) -> Option<std::path::PathBuf> {
+        self.authorized_keys
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .or_else(|| mae_mcp::identity::default_collab_dir().map(|d| d.join("authorized_keys")))
+    }
+
+    /// (mode = "key") Number of authorized client keys (0 if the file is absent).
+    pub fn authorized_key_count(&self) -> usize {
+        self.authorized_keys_path()
+            .map(|p| mae_mcp::identity::AuthorizedKeys::load(&p).len())
             .unwrap_or(0)
     }
 }
@@ -300,10 +331,10 @@ impl DaemonConfig {
         }
 
         match c.auth.mode.as_str() {
-            "none" | "psk" => {}
+            "none" | "psk" | "key" => {}
             other => {
                 issues.push(format!(
-                    "unknown collab auth mode '{other}' (supported: 'none', 'psk')"
+                    "unknown collab auth mode '{other}' (supported: 'none', 'psk', 'key')"
                 ));
             }
         }
@@ -316,6 +347,14 @@ impl DaemonConfig {
             issues.push(
                 "collab.auth.mode = 'psk' but no keys available — add a key to the keystore \
                  (mae-daemon keygen) or set collab.auth.psk_command / collab.auth.psk"
+                    .to_string(),
+            );
+        }
+
+        if c.auth.mode == "key" && c.auth.authorized_key_count() == 0 {
+            issues.push(
+                "collab.auth.mode = 'key' but authorized_keys is empty — no client can connect \
+                 (authorize a client key with: mae-daemon authorize <pubkey-line>)"
                     .to_string(),
             );
         }
