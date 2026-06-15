@@ -134,35 +134,119 @@ impl AuthProvider for NoAuth {
 
 // --- PskAuth ---
 
+/// One key the auth provider knows about: an optional name plus secret bytes.
+struct KeyMaterial {
+    name: Option<String>,
+    secret: Vec<u8>,
+}
+
 /// Pre-shared key authentication using mutual HMAC-SHA256 proof.
+///
+/// A *client* holds exactly one key (the first in `keys`) and may advertise its
+/// name via `offer_id` so a multi-key server can pick the matching secret. A
+/// *server* may hold a SET of trusted keys (a `trusted_keys` keystore): it
+/// selects the one named by the client's `key_id`, or the first key when the
+/// client offers none (preserving single-key backward compatibility).
 pub struct PskAuth {
-    psk: Vec<u8>,
+    keys: Vec<KeyMaterial>,
+    /// Client-side: the `key_id` to advertise in the hello (`None` = unnamed).
+    offer_id: Option<String>,
 }
 
 impl PskAuth {
-    /// Create from a pre-shared key string.
+    /// Create from a single pre-shared key string (unnamed). Backward compatible
+    /// with the original single-key constructor.
     pub fn new(psk: &str) -> Self {
         Self {
-            psk: psk.as_bytes().to_vec(),
+            keys: vec![KeyMaterial {
+                name: None,
+                secret: psk.as_bytes().to_vec(),
+            }],
+            offer_id: None,
         }
     }
 
-    /// Create from raw key bytes.
+    /// Create from raw key bytes (unnamed, single key).
     pub fn from_bytes(psk: Vec<u8>) -> Self {
-        Self { psk }
+        Self {
+            keys: vec![KeyMaterial {
+                name: None,
+                secret: psk,
+            }],
+            offer_id: None,
+        }
     }
 
-    fn compute_proof(&self, nonce_a: &str, nonce_b: &str) -> String {
-        let mut mac = HmacSha256::new_from_slice(&self.psk).expect("HMAC accepts any key length");
+    /// Build a server-side provider trusting a SET of keys. Each entry is an
+    /// optional name plus its secret. A client authenticates if it proves
+    /// knowledge of any trusted key (selected by `key_id`, else the first).
+    pub fn from_keys<I, S>(keys: I) -> Self
+    where
+        I: IntoIterator<Item = (Option<String>, S)>,
+        S: Into<String>,
+    {
+        Self {
+            keys: keys
+                .into_iter()
+                .map(|(name, secret)| KeyMaterial {
+                    name,
+                    secret: secret.into().into_bytes(),
+                })
+                .collect(),
+            offer_id: None,
+        }
+    }
+
+    /// Client-side: advertise this `key_id` in the hello so a multi-key server
+    /// selects the matching key. `None` leaves the hello unnamed.
+    pub fn offering(mut self, id: Option<String>) -> Self {
+        self.offer_id = id;
+        self
+    }
+
+    /// True when this provider holds no keys (a misconfigured server).
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// Server-side key selection: named lookup, else the first (default) key.
+    fn select(&self, key_id: Option<&str>) -> Option<&KeyMaterial> {
+        match key_id {
+            Some(id) => self.keys.iter().find(|k| k.name.as_deref() == Some(id)),
+            None => self.keys.first(),
+        }
+    }
+
+    /// HMAC-SHA256(secret, nonce_a || nonce_b), hex-encoded.
+    fn proof_with(secret: &[u8], nonce_a: &str, nonce_b: &str) -> String {
+        let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
         mac.update(nonce_a.as_bytes());
         mac.update(nonce_b.as_bytes());
         hex::encode(mac.finalize().into_bytes())
     }
 
-    fn verify_proof(&self, nonce_a: &str, nonce_b: &str, proof: &str) -> bool {
-        let expected = self.compute_proof(nonce_a, nonce_b);
-        // Constant-time comparison via hmac
-        expected == proof
+    /// Constant-time verification of a hex proof against `secret`.
+    fn verify_with(secret: &[u8], nonce_a: &str, nonce_b: &str, proof_hex: &str) -> bool {
+        let proof = match hex::decode(proof_hex) {
+            Some(p) => p,
+            None => return false,
+        };
+        let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
+        mac.update(nonce_a.as_bytes());
+        mac.update(nonce_b.as_bytes());
+        // `verify_slice` is constant-time (defends against proof-timing oracles).
+        mac.verify_slice(&proof).is_ok()
+    }
+
+    /// Compute a proof with the primary (first) key. Used in unit tests.
+    #[cfg(test)]
+    fn compute_proof(&self, nonce_a: &str, nonce_b: &str) -> String {
+        let secret = self
+            .keys
+            .first()
+            .map(|k| k.secret.as_slice())
+            .unwrap_or(&[]);
+        Self::proof_with(secret, nonce_a, nonce_b)
     }
 
     fn generate_nonce() -> String {
@@ -193,11 +277,29 @@ impl AuthProvider for PskAuth {
             return Err(AuthError::Protocol("unexpected hello format".into()));
         }
 
+        // Select the trusted key the client is presenting (named, else default).
+        let key = match self.select(hello.key_id.as_deref()) {
+            Some(k) => k,
+            None => {
+                let fail = AuthFail {
+                    auth: "fail".to_string(),
+                    reason: "unknown key id".to_string(),
+                };
+                let msg = serde_json::to_string(&fail).unwrap();
+                writer.write_all(msg.as_bytes()).await?;
+                writer.write_all(b"\n").await?;
+                writer.flush().await?;
+                warn!(key_id = ?hello.key_id, "PSK auth failed: unknown key id");
+                return Err(AuthError::Rejected("unknown key id".into()));
+            }
+        };
+        let client_label = key.name.clone().unwrap_or_else(|| "psk".to_string());
+
         let client_nonce = hello.nonce;
         let server_nonce = Self::generate_nonce();
 
         // 2. Send challenge with server proof
-        let server_proof = self.compute_proof(&client_nonce, &server_nonce);
+        let server_proof = Self::proof_with(&key.secret, &client_nonce, &server_nonce);
         let challenge = AuthChallenge {
             auth: "challenge".to_string(),
             server_nonce: server_nonce.clone(),
@@ -220,7 +322,7 @@ impl AuthProvider for PskAuth {
         }
 
         // 4. Verify client proof
-        if !self.verify_proof(&server_nonce, &client_nonce, &response.proof) {
+        if !Self::verify_with(&key.secret, &server_nonce, &client_nonce, &response.proof) {
             let fail = AuthFail {
                 auth: "fail".to_string(),
                 reason: "invalid proof".to_string(),
@@ -229,7 +331,7 @@ impl AuthProvider for PskAuth {
             writer.write_all(msg.as_bytes()).await?;
             writer.write_all(b"\n").await?;
             writer.flush().await?;
-            warn!("PSK auth failed: invalid client proof");
+            warn!(key = %client_label, "PSK auth failed: invalid client proof");
             return Err(AuthError::Rejected("invalid proof".into()));
         }
 
@@ -242,10 +344,8 @@ impl AuthProvider for PskAuth {
         writer.write_all(b"\n").await?;
         writer.flush().await?;
 
-        info!("PSK auth succeeded");
-        Ok(AuthResult {
-            client_label: "psk-authenticated".to_string(),
-        })
+        info!(key = %client_label, "PSK auth succeeded");
+        Ok(AuthResult { client_label })
     }
 
     async fn client_handshake<R, W>(&self, reader: &mut R, writer: &mut W) -> Result<(), AuthError>
@@ -253,12 +353,20 @@ impl AuthProvider for PskAuth {
         R: AsyncBufRead + Unpin + Send,
         W: AsyncWrite + Unpin + Send,
     {
-        // 1. Send hello
+        // The client presents exactly one key (the first).
+        let secret = self
+            .keys
+            .first()
+            .map(|k| k.secret.clone())
+            .ok_or_else(|| AuthError::Protocol("client has no PSK".into()))?;
+
+        // 1. Send hello (advertising our key_id so a multi-key server can pick).
         let client_nonce = Self::generate_nonce();
         let hello = AuthHello {
             auth: "hello".to_string(),
             version: 1,
             nonce: client_nonce.clone(),
+            key_id: self.offer_id.clone(),
         };
         let msg = serde_json::to_string(&hello).unwrap();
         writer.write_all(msg.as_bytes()).await?;
@@ -278,14 +386,14 @@ impl AuthProvider for PskAuth {
         let server_nonce = challenge.server_nonce;
 
         // 3. Verify server proof
-        if !self.verify_proof(&client_nonce, &server_nonce, &challenge.proof) {
+        if !Self::verify_with(&secret, &client_nonce, &server_nonce, &challenge.proof) {
             return Err(AuthError::Rejected(
-                "server proof invalid — wrong PSK?".into(),
+                "server proof invalid — wrong key?".into(),
             ));
         }
 
         // 4. Send response with client proof
-        let client_proof = self.compute_proof(&server_nonce, &client_nonce);
+        let client_proof = Self::proof_with(&secret, &server_nonce, &client_nonce);
         let response = AuthResponse {
             auth: "response".to_string(),
             proof: client_proof,
@@ -327,6 +435,10 @@ struct AuthHello {
     auth: String,
     version: u32,
     nonce: String,
+    /// Optional key name so a multi-key server can select the matching secret.
+    /// Absent for unnamed keys; older servers ignore it (backward compatible).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -357,6 +469,17 @@ struct AuthFail {
 mod hex {
     pub fn encode(bytes: impl AsRef<[u8]>) -> String {
         bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Decode a hex string to bytes. Returns `None` on odd length or non-hex.
+    pub fn decode(s: &str) -> Option<Vec<u8>> {
+        if !s.len().is_multiple_of(2) {
+            return None;
+        }
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+            .collect()
     }
 }
 
@@ -509,5 +632,81 @@ mod tests {
         let n2 = PskAuth::generate_nonce();
         assert_ne!(n1, n2);
         assert_eq!(n1.len(), 32); // 16 bytes = 32 hex chars
+    }
+
+    /// Run a full handshake between a server provider and a client provider,
+    /// returning both results.
+    async fn run_handshake(
+        server_auth: PskAuth,
+        client_auth: PskAuth,
+    ) -> (Result<AuthResult, AuthError>, Result<(), AuthError>) {
+        let (client_stream, server_stream) = duplex(4096);
+        let (cr, cw) = tokio::io::split(client_stream);
+        let (sr, sw) = tokio::io::split(server_stream);
+        let server_handle = tokio::spawn(async move {
+            let mut sr = BufReader::new(sr);
+            let mut sw = tokio::io::BufWriter::new(sw);
+            server_auth.server_handshake(&mut sr, &mut sw).await
+        });
+        let client_handle = tokio::spawn(async move {
+            let mut cr = BufReader::new(cr);
+            let mut cw = tokio::io::BufWriter::new(cw);
+            client_auth.client_handshake(&mut cr, &mut cw).await
+        });
+        let (s, c) = tokio::join!(server_handle, client_handle);
+        (s.unwrap(), c.unwrap())
+    }
+
+    #[tokio::test]
+    async fn multikey_server_selects_named_key() {
+        // Server trusts two named peers; client offers "phone".
+        let server = PskAuth::from_keys([
+            (Some("laptop".to_string()), "key-laptop"),
+            (Some("phone".to_string()), "key-phone"),
+        ]);
+        let client = PskAuth::new("key-phone").offering(Some("phone".to_string()));
+        let (s, c) = run_handshake(server, client).await;
+        assert!(s.is_ok(), "server: {:?}", s.err());
+        assert!(c.is_ok(), "client: {:?}", c.err());
+        assert_eq!(s.unwrap().client_label, "phone");
+    }
+
+    #[tokio::test]
+    async fn multikey_unknown_key_id_rejected() {
+        let server = PskAuth::from_keys([(Some("laptop".to_string()), "key-laptop")]);
+        let client = PskAuth::new("whatever").offering(Some("nonexistent".to_string()));
+        let (s, c) = run_handshake(server, client).await;
+        assert!(s.is_err(), "server must reject unknown key id");
+        assert!(c.is_err(), "client must see rejection");
+    }
+
+    #[tokio::test]
+    async fn multikey_named_key_wrong_secret_rejected() {
+        // Right name, wrong secret → invalid proof.
+        let server = PskAuth::from_keys([(Some("laptop".to_string()), "real-secret")]);
+        let client = PskAuth::new("wrong-secret").offering(Some("laptop".to_string()));
+        let (s, c) = run_handshake(server, client).await;
+        let server_ok = s.is_ok();
+        let client_ok = c.is_ok();
+        assert!(!server_ok || !client_ok, "wrong secret must fail");
+    }
+
+    #[tokio::test]
+    async fn unnamed_client_uses_default_key_backward_compat() {
+        // Old-style client (no key_id) against a single-key server still works.
+        let server = PskAuth::from_keys([(None, "shared")]);
+        let client = PskAuth::new("shared"); // no offering()
+        let (s, c) = run_handshake(server, client).await;
+        assert!(s.is_ok(), "server: {:?}", s.err());
+        assert!(c.is_ok(), "client: {:?}", c.err());
+    }
+
+    #[test]
+    fn hex_roundtrip() {
+        assert_eq!(hex::decode("00ff10").unwrap(), vec![0x00, 0xff, 0x10]);
+        assert!(hex::decode("xyz").is_none());
+        assert!(hex::decode("abc").is_none(), "odd length rejected");
+        let bytes = [1u8, 2, 250, 3];
+        assert_eq!(hex::decode(&hex::encode(bytes)).unwrap(), bytes);
     }
 }

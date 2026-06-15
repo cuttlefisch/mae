@@ -316,6 +316,7 @@ Source: `shared/mcp/src/lib.rs`
 | `client` | mod |
 | `client_mgr` | mod |
 | `daemon_client` | mod |
+| `keystore` | mod |
 | `protocol` | mod |
 | `session` | mod |
 | `McpToolRequest` | struct |

@@ -44,6 +44,7 @@ pub mod broadcast;
 pub mod client;
 pub mod client_mgr;
 pub mod daemon_client;
+pub mod keystore;
 pub mod protocol;
 pub mod session;
 
