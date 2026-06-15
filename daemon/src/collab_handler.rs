@@ -511,6 +511,83 @@ async fn handle_doc_request(
     .await
 }
 
+/// Per-KB membership gate (ADR-017): `Ok(())` if the peer may access `kb_id`.
+///
+/// Authenticated (key/TLS) peers are gated against the KB's
+/// `KbCollectionDoc.members()` (the creator is always a member). Anonymous
+/// (psk/none) sessions are NOT gated — they fall back to connection-level trust,
+/// preserving backward compatibility for shared-secret deployments.
+async fn kb_membership_check(
+    doc_store: &DocStore,
+    kb_id: &str,
+    auth_label: Option<&str>,
+) -> Result<(), String> {
+    let label = match auth_label {
+        Some(l) => l,
+        None => return Ok(()),
+    };
+    let collection_doc = format!("kbc:{kb_id}");
+    let (state, _sv) = doc_store
+        .encode_state_and_sv(&collection_doc)
+        .await
+        .map_err(|e| format!("KB '{kb_id}' not found: {e}"))?;
+    let coll = KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))?;
+    if coll.creator() == label || coll.members().iter().any(|m| m == label) {
+        Ok(())
+    } else {
+        Err(format!("not a member of KB '{kb_id}'"))
+    }
+}
+
+/// Owner-only membership mutation. Loads `kbc:{kb_id}`, verifies the caller is
+/// the creator, applies `mutate` (add/remove), persists + broadcasts the update.
+async fn kb_membership_mutate(
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    session_id: u64,
+    kb_id: &str,
+    member: &str,
+    auth_label: Option<&str>,
+    add: bool,
+) -> Result<(), String> {
+    let collection_doc = format!("kbc:{kb_id}");
+    let (state, _sv) = doc_store
+        .encode_state_and_sv(&collection_doc)
+        .await
+        .map_err(|e| format!("KB '{kb_id}' not found: {e}"))?;
+    let mut coll =
+        KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))?;
+    // Owner-only: an authenticated caller must be the creator. (Anonymous psk
+    // sessions retain connection-level trust and may manage membership.)
+    if let Some(label) = auth_label {
+        if coll.creator() != label {
+            return Err(format!(
+                "only the owner ('{}') can manage members of KB '{kb_id}'",
+                coll.creator()
+            ));
+        }
+    }
+    let update = if add {
+        coll.add_member(member)
+    } else {
+        coll.remove_member(member)
+    };
+    let result = doc_store
+        .apply_update(&collection_doc, &update, None)
+        .await
+        .map_err(|e| format!("failed to persist membership: {e}"))?;
+    // Broadcast the collection change to subscribers (excluding the caller).
+    broadcaster.lock().unwrap().broadcast_except(
+        &EditorEvent::SyncUpdate {
+            buffer_name: collection_doc,
+            update_base64: update_to_base64(&update),
+            wal_seq: result.wal_seq,
+        },
+        session_id,
+    );
+    Ok(())
+}
+
 /// Handle document-level methods directly (without editor tool dispatch).
 /// `auth_label` (key/TLS sessions) is authoritative for attribution (ADR-017).
 #[allow(clippy::too_many_arguments)]
@@ -1201,6 +1278,12 @@ async fn handle_doc_request_inner(
             };
             info!(session = session_id, kb_id = %kb_id, "kb/join");
 
+            // Per-KB membership gate (ADR-017): authenticated non-members denied.
+            if let Err(e) = kb_membership_check(doc_store, &kb_id, auth_label).await {
+                warn!(session = session_id, kb_id = %kb_id, reason = %e, "kb/join denied");
+                return JsonRpcResponse::error(id, McpError::internal_error(e));
+            }
+
             // Read the collection doc.
             let collection_doc = format!("kbc:{kb_id}");
             let (collection_state, _sv) = match doc_store.encode_state_and_sv(&collection_doc).await
@@ -1317,6 +1400,12 @@ async fn handle_doc_request_inner(
             }
             info!(session = session_id, kb_id = %kb_id, node_id = %node_id, update_len = update_bytes.len(), "kb/node_update");
 
+            // Per-KB membership gate (ADR-017): authenticated non-members denied.
+            if let Err(e) = kb_membership_check(doc_store, &kb_id, auth_label).await {
+                warn!(session = session_id, kb_id = %kb_id, reason = %e, "kb/node_update denied");
+                return JsonRpcResponse::error(id, McpError::internal_error(e));
+            }
+
             let node_doc = format!("kb:{node_id}");
             match doc_store.apply_update(&node_doc, &update_bytes, None).await {
                 Ok(result) => {
@@ -1339,6 +1428,46 @@ async fn handle_doc_request_inner(
                     id,
                     McpError::internal_error(format!("failed to apply node update: {e}")),
                 ),
+            }
+        }
+
+        "kb/add_member" | "kb/remove_member" => {
+            let add = request.method == "kb/add_member";
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            let member = match params["member"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'member' field".to_string()),
+                    );
+                }
+            };
+            info!(session = session_id, kb_id = %kb_id, member = %member, add, "kb membership change");
+            match kb_membership_mutate(
+                doc_store,
+                broadcaster,
+                session_id,
+                &kb_id,
+                &member,
+                auth_label,
+                add,
+            )
+            .await
+            {
+                Ok(()) => JsonRpcResponse::success(
+                    id,
+                    serde_json::json!({ "kb_id": kb_id, "member": member, "added": add }),
+                ),
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
             }
         }
 
@@ -2213,6 +2342,192 @@ mod tests {
             resp.error.is_none(),
             "anonymous share must succeed: {:?}",
             resp.error
+        );
+    }
+
+    /// Dispatch an arbitrary doc request as an (optionally authenticated) peer.
+    async fn dispatch_as(
+        store: &Arc<DocStore>,
+        bc: &SharedBroadcaster,
+        auth_label: Option<&str>,
+        msg: serde_json::Value,
+        docs: &mut HashSet<String>,
+    ) -> JsonRpcResponse {
+        handle_doc_request_inner(
+            &msg.to_string(),
+            store,
+            bc,
+            std::time::Instant::now(),
+            0,
+            auth_label,
+            docs,
+        )
+        .await
+    }
+
+    fn kb_join_msg(kb_id: &str) -> serde_json::Value {
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/join","params":{"kb_id":kb_id}})
+    }
+    fn kb_node_update_msg(kb_id: &str) -> serde_json::Value {
+        let mut ts = TextSync::with_client_id("", 7);
+        let upd = ts.insert(0, "x");
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/node_update",
+            "params":{"kb_id":kb_id,"node_id":"concept:n","update":update_to_base64(&upd)}})
+    }
+    fn kb_member_msg(method: &str, kb_id: &str, member: &str) -> serde_json::Value {
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,
+            "params":{"kb_id":kb_id,"member":member}})
+    }
+
+    #[tokio::test]
+    async fn membership_creator_joins_nonmember_denied() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        // alice creates + shares the KB (members = [alice]).
+        assert!(
+            kb_share_as(&store, &bc, Some("alice"), "kbm", "alice", &mut docs)
+                .await
+                .error
+                .is_none()
+        );
+        // alice (creator/member) may join.
+        assert!(
+            dispatch_as(&store, &bc, Some("alice"), kb_join_msg("kbm"), &mut docs)
+                .await
+                .error
+                .is_none(),
+            "creator must be able to join"
+        );
+        // bob (authenticated, not a member) is denied.
+        let denied = dispatch_as(&store, &bc, Some("bob"), kb_join_msg("kbm"), &mut docs).await;
+        assert!(denied.error.is_some(), "non-member join must be denied");
+        assert!(denied.error.unwrap().message.contains("not a member"));
+    }
+
+    #[tokio::test]
+    async fn membership_owner_add_then_remove_gates_updates() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(&store, &bc, Some("alice"), "kbm2", "alice", &mut docs).await;
+
+        // bob denied before being added.
+        assert!(dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            kb_node_update_msg("kbm2"),
+            &mut docs
+        )
+        .await
+        .error
+        .is_some());
+
+        // Owner alice adds bob.
+        assert!(
+            dispatch_as(
+                &store,
+                &bc,
+                Some("alice"),
+                kb_member_msg("kb/add_member", "kbm2", "bob"),
+                &mut docs
+            )
+            .await
+            .error
+            .is_none(),
+            "owner add_member must succeed"
+        );
+
+        // Now bob can join + update.
+        assert!(
+            dispatch_as(&store, &bc, Some("bob"), kb_join_msg("kbm2"), &mut docs)
+                .await
+                .error
+                .is_none(),
+            "added member must be able to join"
+        );
+        assert!(
+            dispatch_as(
+                &store,
+                &bc,
+                Some("bob"),
+                kb_node_update_msg("kbm2"),
+                &mut docs
+            )
+            .await
+            .error
+            .is_none(),
+            "added member must be able to update"
+        );
+
+        // Owner removes bob → his next update is denied.
+        assert!(dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            kb_member_msg("kb/remove_member", "kbm2", "bob"),
+            &mut docs
+        )
+        .await
+        .error
+        .is_none());
+        assert!(
+            dispatch_as(
+                &store,
+                &bc,
+                Some("bob"),
+                kb_node_update_msg("kbm2"),
+                &mut docs
+            )
+            .await
+            .error
+            .is_some(),
+            "removed member must be denied"
+        );
+    }
+
+    #[tokio::test]
+    async fn membership_only_owner_manages_members() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(&store, &bc, Some("alice"), "kbm3", "alice", &mut docs).await;
+        // alice adds bob (a member, but NOT the owner).
+        dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            kb_member_msg("kb/add_member", "kbm3", "bob"),
+            &mut docs,
+        )
+        .await;
+        // bob (non-owner) cannot add carol.
+        let denied = dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            kb_member_msg("kb/add_member", "kbm3", "carol"),
+            &mut docs,
+        )
+        .await;
+        assert!(denied.error.is_some(), "non-owner must not manage members");
+        assert!(denied.error.unwrap().message.contains("owner"));
+    }
+
+    #[tokio::test]
+    async fn membership_anonymous_not_gated() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        // psk/none sharer + anonymous joiner: no per-peer identity → not gated.
+        kb_share_as(&store, &bc, None, "kbm4", "alice", &mut docs).await;
+        assert!(
+            dispatch_as(&store, &bc, None, kb_join_msg("kbm4"), &mut docs)
+                .await
+                .error
+                .is_none(),
+            "anonymous sessions are not membership-gated"
         );
     }
 
