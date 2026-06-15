@@ -400,6 +400,7 @@ jobs:
       - name: Update Homebrew tap
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/cuttlefisch/homebrew-mae.git" tap
@@ -434,5 +435,29 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git diff --cached --quiet || git commit -m "mae ${VERSION}"
-          git push
+          if git diff --cached --quiet; then
+            echo "Tap already up to date for ${VERSION}; nothing to do."
+            exit 0
+          fi
+
+          # Land the bump THROUGH branch protection rather than a direct push to
+          # the protected `main`: open a PR and enable auto-merge. The tap CI
+          # (brew style + per-arch install smoke against the just-published
+          # release assets) gates the merge, so a bad url/sha256 fails loudly
+          # instead of shipping a broken formula. Requires the tap's "Allow
+          # auto-merge" setting and a HOMEBREW_TAP_TOKEN that can open PRs.
+          BRANCH="release/mae-${VERSION}"
+          git checkout -b "$BRANCH"
+          git commit -m "mae ${VERSION}"
+          git push -f origin "$BRANCH"
+
+          gh pr create --repo cuttlefisch/homebrew-mae \
+            --base main --head "$BRANCH" \
+            --title "mae ${VERSION}" \
+            --body "Automated formula + cask bump for mae ${VERSION}. Merges automatically once tap CI is green." \
+            || echo "PR already exists for ${BRANCH}; continuing."
+
+          # Auto-merge once required checks pass (0 reviews required). If checks
+          # are somehow already satisfied, this merges immediately.
+          gh pr merge --repo cuttlefisch/homebrew-mae "$BRANCH" --auto --squash \
+            || echo "Could not enable auto-merge (is 'Allow auto-merge' enabled on the tap?)."
