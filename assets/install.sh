@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-VERSION="0.13.10"  # updated by version-bump workflow
+VERSION="0.13.11"  # updated by version-bump workflow
 
 BINARIES="mae mae-mcp-shim mae-daemon"
 SERVICES="mae-daemon"
