@@ -1493,7 +1493,7 @@ extend it from Scheme via `(bind-context-keymap …)`.\n\
 - First consumer: the shared `navigation` context for read-only nav buffers \
 (flavor-independent movement + both SPC and C-; open the leader).\n\n\
 Full ADR: `docs/adr/015-keymap-resolution-chain.md`\n\n\
-See also: [[concept:adr-artifact-interaction]], [[concept:scheme-api]], [[concept:keybindings]]\n";
+See also: [[concept:adr-artifact-interaction]], [[concept:scheme-api]], [[concept:keymap-inheritance]]\n";
 
 pub(super) const CONCEPT_ADR_ARTIFACT_INTERACTION: &str = "\
 **ADR-016: ArtifactType Axis & Interaction Model for Non-Text Artifacts** — \
