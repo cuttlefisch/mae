@@ -174,6 +174,25 @@ mod tests {
             "keymap-leader should define the `leader` keymap + the full mae tree"
         );
 
+        // Phase 1b: keymap-leader also populates the shared `navigation` context
+        // (flavor-independent movement + BOTH leader entries) and routes the
+        // dashboard through it. Assert on the embedded bytes so the check is
+        // immune to a stale on-disk keymap-leader shadowing the built-in.
+        assert!(
+            leader_autoloads.contains("(define-key \"navigation\" \"SPC\" \"leader-dispatch\")")
+                && leader_autoloads
+                    .contains("(define-key \"navigation\" \"C-;\" \"leader-dispatch\")")
+                && leader_autoloads.contains("(define-key \"navigation\" \"C-n\" \"move-down\")")
+                && leader_autoloads.contains("(define-key \"navigation\" \"C-p\" \"move-up\")"),
+            "embedded keymap-leader must bind the shared navigation context \
+             (C-n/C-p + SPC/C-; -> leader-dispatch)"
+        );
+        assert!(
+            leader_autoloads
+                .contains("(bind-context-keymap \"kind\" \"dashboard\" \"navigation\")"),
+            "embedded keymap-leader must route the dashboard through the navigation context"
+        );
+
         // The non-modal flavor ships embedded too (the 2nd canonical flavor).
         assert!(
             mods.iter().any(|d| d.manifest.name() == "keymap-nonmodal"),

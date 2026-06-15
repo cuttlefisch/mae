@@ -321,12 +321,22 @@ impl Editor {
         // Created empty in the kernel so any module can bind into it regardless
         // of load order, and so it survives reset_keymaps_to_kernel.
         maps.insert("leader".to_string(), Keymap::new("leader"));
+        // The shared `navigation` context keymap: flavor-independent movement and
+        // leader access for read-only nav buffers (dashboard, file tree, modules,
+        // help, …). Created empty in the kernel (parent `normal`) so it survives
+        // reset_keymaps_to_kernel and any module can bind into it; populated by
+        // the keymap-leader module. Nav overlays parent onto it (below) so the
+        // resolution chain is overlay → navigation → normal.
+        maps.insert(
+            "navigation".to_string(),
+            Keymap::with_parent("navigation", "normal"),
+        );
         maps.insert("command".to_string(), Keymap::new("command"));
         maps.insert("shell-insert".to_string(), shell_insert);
 
         // Shell-normal keymap: inherits normal mode, adds shell-specific bindings.
         // `i` is inherited from parent `normal` (→ enter-insert-mode → ShellInsert).
-        let mut shell_normal = Keymap::with_parent("shell-normal", "normal");
+        let mut shell_normal = Keymap::with_parent("shell-normal", "navigation");
         shell_normal.bind(parse_key_seq("v"), "shell-select-mode");
         shell_normal.bind(parse_key_seq("q"), "enter-insert-mode");
         shell_normal.bind(parse_key_seq("?"), "show-buffer-keys");
@@ -334,14 +344,14 @@ impl Editor {
 
         // Shell-select keymap: read-only vim buffer for shell scrollback.
         // Inherits normal mode for motions; q/Esc exit back to the shell.
-        let mut shell_select = Keymap::with_parent("shell-select", "normal");
+        let mut shell_select = Keymap::with_parent("shell-select", "navigation");
         shell_select.bind(parse_key_seq("q"), "close-shell-select");
         shell_select.bind(vec![KeyPress::special(Key::Escape)], "close-shell-select");
         shell_select.bind(parse_key_seq("?"), "show-buffer-keys");
         maps.insert("shell-select".to_string(), shell_select);
 
         // Module list keymap — Enter to expand, q to close
-        let mut modules_km = Keymap::with_parent("modules", "normal");
+        let mut modules_km = Keymap::with_parent("modules", "navigation");
         modules_km.bind(
             vec![KeyPress::special(Key::Enter)],
             "describe-module-at-cursor",
@@ -358,7 +368,7 @@ impl Editor {
         // S-Tab = global visibility cycle
         // n/p = link navigation (moved from Tab/S-Tab)
         // e = edit source (Obsidian-style toggle)
-        let mut help = Keymap::with_parent("help", "normal");
+        let mut help = Keymap::with_parent("help", "navigation");
         help.bind(vec![KeyPress::special(Key::Enter)], "help-follow-link");
         help.bind(vec![KeyPress::special(Key::Tab)], "help-cycle");
         help.bind(vec![KeyPress::special(Key::BackTab)], "help-global-cycle");
@@ -511,7 +521,10 @@ mod tests {
     fn help_keymap_exists_with_bindings() {
         let editor = Editor::new();
         let help_map = editor.keymaps.get("help").unwrap();
-        assert_eq!(help_map.parent.as_deref(), Some("normal"));
+        // help now parents onto the shared `navigation` context (which itself
+        // parents onto `normal`), so nav buffers get flavor-independent movement
+        // + leader access. Chain: help → navigation → normal.
+        assert_eq!(help_map.parent.as_deref(), Some("navigation"));
         let q_key = parse_key_seq("q");
         assert_eq!(
             help_map.lookup(&q_key),
@@ -551,8 +564,13 @@ mod tests {
         // git-status, org, markdown keymaps moved to modules
         // Only kernel keymaps remain at construction
         assert!(editor.keymaps.get("normal").unwrap().parent.is_none());
+        // Nav overlays now parent onto the shared `navigation` context.
         assert_eq!(
             editor.keymaps.get("help").unwrap().parent.as_deref(),
+            Some("navigation")
+        );
+        assert_eq!(
+            editor.keymaps.get("navigation").unwrap().parent.as_deref(),
             Some("normal")
         );
     }

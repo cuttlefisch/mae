@@ -9,7 +9,7 @@
 ;;; @provides: agenda-autoloads
 
 ;; Create agenda keymap inheriting from normal
-(define-keymap "agenda" "normal")
+(define-keymap "agenda" "navigation")
 
 (define-key "agenda" "Enter" "agenda-goto")
 (define-key "agenda" "q" "kill-buffer")
