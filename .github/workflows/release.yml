@@ -331,7 +331,7 @@ jobs:
           ```bash
           brew tap cuttlefisch/mae
           brew install mae                    # CLI + daemon + modules + manual KB
-          brew install --cask mae             # optional: GUI .app bundle
+          brew install --cask mae-app         # optional: GUI .app bundle
           brew services start mae             # optional: background daemon
           ```
 
@@ -426,9 +426,10 @@ jobs:
                /sha256/ && in_lin && !lin_done {sub(/sha256 ".*"/, "sha256 \""linux"\""); lin_done=1}
                {print}' Formula/mae.rb > Formula/mae.rb.tmp && mv Formula/mae.rb.tmp Formula/mae.rb
 
-          # Update Cask
-          sed -i "s/version \".*\"/version \"${VERSION}\"/" Casks/mae.rb
-          sed -i "s/sha256 \".*\"/sha256 \"${{ steps.sha.outputs.gui }}\"/" Casks/mae.rb
+          # Update Cask (renamed mae.rb -> mae-app.rb to avoid the formula/cask
+          # token collision that left the CLI unlinked after `brew upgrade`).
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" Casks/mae-app.rb
+          sed -i "s/sha256 \".*\"/sha256 \"${{ steps.sha.outputs.gui }}\"/" Casks/mae-app.rb
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
