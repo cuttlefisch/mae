@@ -1195,6 +1195,20 @@ async fn handle_doc_request_inner(
                     );
                 }
             };
+            // Strict binding: re-stamp the collection's creator + seed members with
+            // the AUTHENTICATED label, overriding whatever the client baked in
+            // (ADR-017). Without this, owner-checks + membership use the client's
+            // self-claimed user_name, not the verified peer identity.
+            let collection_bytes = match auth_label {
+                Some(label) => match KbCollectionDoc::from_bytes(&collection_bytes) {
+                    Ok(mut coll) => {
+                        coll.set_creator(label);
+                        coll.encode_state()
+                    }
+                    Err(_) => collection_bytes,
+                },
+                None => collection_bytes,
+            };
             let collection_doc = format!("kbc:{kb_id}");
             if let Err(e) = doc_store
                 .share_doc(&collection_doc, &collection_bytes)

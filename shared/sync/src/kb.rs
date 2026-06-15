@@ -488,6 +488,23 @@ impl KbCollectionDoc {
         }
     }
 
+    /// Re-stamp the authoritative creator and ensure they are a member.
+    /// Used by the daemon to bind a shared collection to the AUTHENTICATED peer
+    /// identity (ADR-017 strict binding), overriding the client-supplied creator.
+    /// Returns the encoded update.
+    pub fn set_creator(&mut self, creator: &str) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        root.insert(&mut txn, COLL_CREATOR_KEY, creator);
+        if let Some(Out::YArray(members)) = root.get(&txn, COLL_MEMBERS_KEY) {
+            let already = members.iter(&txn).any(|v| v.to_string(&txn) == creator);
+            if !already {
+                members.push_back(&mut txn, creator);
+            }
+        }
+        txn.encode_update_v1()
+    }
+
     /// Add a member to the collection. Returns encoded update.
     pub fn add_member(&mut self, user_name: &str) -> Vec<u8> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
@@ -868,6 +885,27 @@ mod tests {
 
         coll.remove_member("alice");
         assert_eq!(coll.members(), vec!["bob"]);
+    }
+
+    #[test]
+    fn collection_set_creator_restamps_and_seeds_member() {
+        // A collection built with a client-claimed creator...
+        let mut coll = KbCollectionDoc::new("Test", "client-name");
+        assert_eq!(coll.creator(), "client-name");
+        // ...is re-stamped to the authenticated identity, which becomes a member.
+        coll.set_creator("alice");
+        assert_eq!(coll.creator(), "alice", "creator overridden");
+        assert!(
+            coll.members().contains(&"alice".to_string()),
+            "creator seeded as member"
+        );
+        // Idempotent: no duplicate member on re-stamp.
+        coll.set_creator("alice");
+        assert_eq!(
+            coll.members().iter().filter(|m| *m == "alice").count(),
+            1,
+            "no duplicate member"
+        );
     }
 
     #[test]
