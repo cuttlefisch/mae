@@ -111,6 +111,35 @@ impl Editor {
                 self.mark_full_redraw();
                 Some(true)
             }
+            "kb-member-add" | "kb-member-remove" => {
+                // :kb-member-add <kb-id> <member>  (args via command_line).
+                let line = self.vi.command_line.trim().to_string();
+                let mut parts = line.split_whitespace();
+                let kb_id = parts.next().unwrap_or("").to_string();
+                let member = parts.next().unwrap_or("").to_string();
+                if kb_id.is_empty() || member.is_empty() {
+                    self.set_status(format!("usage: :{name} <kb-id> <member>"));
+                    return Some(true);
+                }
+                let add = name == "kb-member-add";
+                self.collab.pending_intent = Some(if add {
+                    CollabIntent::KbAddMember {
+                        kb_id: kb_id.clone(),
+                        member: member.clone(),
+                    }
+                } else {
+                    CollabIntent::KbRemoveMember {
+                        kb_id: kb_id.clone(),
+                        member: member.clone(),
+                    }
+                });
+                self.set_status(format!(
+                    "{} '{member}' {} KB '{kb_id}'...",
+                    if add { "Adding" } else { "Removing" },
+                    if add { "to" } else { "from" }
+                ));
+                Some(true)
+            }
             "kb-list-remote" => {
                 // Reuse existing ListDocs mechanism to show KB list
                 self.collab.pending_intent = Some(CollabIntent::ListDocs);
@@ -180,6 +209,46 @@ mod tests {
             ),
             "expected DiscoverPeers, got: {:?}",
             editor.collab.pending_intent
+        );
+    }
+
+    #[test]
+    fn dispatch_kb_member_add_parses_args() {
+        let mut editor = Editor::new();
+        // Args arrive via command_line (as the ex-command parser sets them).
+        editor.vi.command_line = "my-kb alice".to_string();
+        assert_eq!(editor.dispatch_collab("kb-member-add"), Some(true));
+        match editor.collab.pending_intent {
+            Some(CollabIntent::KbAddMember {
+                ref kb_id,
+                ref member,
+            }) => {
+                assert_eq!(kb_id, "my-kb");
+                assert_eq!(member, "alice");
+            }
+            other => panic!("expected KbAddMember, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_kb_member_remove_parses_args() {
+        let mut editor = Editor::new();
+        editor.vi.command_line = "my-kb bob".to_string();
+        assert_eq!(editor.dispatch_collab("kb-member-remove"), Some(true));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::KbRemoveMember { .. })
+        ));
+    }
+
+    #[test]
+    fn dispatch_kb_member_add_missing_args_no_intent() {
+        let mut editor = Editor::new();
+        editor.vi.command_line = "only-kb-id".to_string();
+        assert_eq!(editor.dispatch_collab("kb-member-add"), Some(true));
+        assert!(
+            editor.collab.pending_intent.is_none(),
+            "incomplete args must not queue an intent"
         );
     }
 

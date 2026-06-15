@@ -134,6 +134,10 @@ pub enum CollabIntent {
     JoinKb { kb_id: String },
     /// Leave (unsubscribe from) a shared KB.
     LeaveKb { kb_id: String },
+    /// Add a trusted peer to a KB's member list (owner-only, ADR-017).
+    KbAddMember { kb_id: String, member: String },
+    /// Remove a peer from a KB's member list (owner-only, ADR-017).
+    KbRemoveMember { kb_id: String, member: String },
     /// Send a CRDT update for a KB node to the server.
     KbNodeUpdate {
         kb_id: String,

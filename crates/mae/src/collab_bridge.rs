@@ -139,6 +139,12 @@ pub enum CollabCommand {
         node_id: String,
         update: Vec<u8>,
     },
+    /// Add or remove a trusted peer from a KB's member list (owner-only).
+    KbMember {
+        kb_id: String,
+        member: String,
+        add: bool,
+    },
 }
 
 /// Events sent from the collab background task back to the main thread.
@@ -443,6 +449,16 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         }
         CollabIntent::JoinKb { kb_id } => CollabCommand::JoinKb { kb_id },
         CollabIntent::LeaveKb { kb_id } => CollabCommand::LeaveKb { kb_id },
+        CollabIntent::KbAddMember { kb_id, member } => CollabCommand::KbMember {
+            kb_id,
+            member,
+            add: true,
+        },
+        CollabIntent::KbRemoveMember { kb_id, member } => CollabCommand::KbMember {
+            kb_id,
+            member,
+            add: false,
+        },
         CollabIntent::KbNodeUpdate {
             kb_id,
             node_id,
@@ -636,6 +652,7 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::JoinKb { .. } => "join-kb",
         CollabCommand::LeaveKb { .. } => "leave-kb",
         CollabCommand::KbNodeUpdate { .. } => "kb-node-update",
+        CollabCommand::KbMember { .. } => "kb-member",
     }
 }
 
@@ -1527,6 +1544,11 @@ pub(crate) enum PendingResponseKind {
     KbLeave {
         kb_id: String,
     },
+    KbMember {
+        kb_id: String,
+        member: String,
+        add: bool,
+    },
 }
 
 /// Spawn a dedicated reader task that feeds complete messages into an mpsc channel.
@@ -2136,6 +2158,27 @@ async fn run_collab_task(
                                     Err(e) => { error!("kb node update serialize error: {e}"); continue; }
                                 };
                                 let _ = write_framed(w, &body, write_timeout).await;
+                            }
+                        }
+                        CollabCommand::KbMember { kb_id, member, add } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let method = if add { "kb/add_member" } else { "kb/remove_member" };
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req_id,
+                                    "method": method,
+                                    "params": { "kb_id": kb_id, "member": member }
+                                });
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    if write_framed(w, &body, write_timeout).await.is_ok() {
+                                        pending_responses.insert(
+                                            req_id,
+                                            PendingResponseKind::KbMember { kb_id, member, add },
+                                        );
+                                    }
+                                }
                             }
                         }
                         CollabCommand::Connect { address } => {
@@ -2888,6 +2931,32 @@ fn handle_response(
         PendingResponseKind::KbLeave { kb_id } => {
             try_send_evt(evt_tx, CollabEvent::KbLeft { kb_id });
         }
+        PendingResponseKind::KbMember { kb_id, member, add } => {
+            // The membership change response carries error (e.g. not owner) or ok.
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("membership change failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: msg.to_string(),
+                    },
+                );
+            } else {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::StatusReport {
+                        lines: vec![format!(
+                            "{} '{member}' {} KB '{kb_id}'",
+                            if add { "Added" } else { "Removed" },
+                            if add { "to" } else { "from" }
+                        )],
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -3144,6 +3213,14 @@ async fn handle_disconnected_cmd(
         }
         CollabCommand::KbNodeUpdate { .. } => {
             // Silently drop — not connected.
+        }
+        CollabCommand::KbMember { kb_id, .. } => {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
+                    message: format!("Not connected — cannot change members of KB '{kb_id}'"),
+                },
+            );
         }
     }
 }
