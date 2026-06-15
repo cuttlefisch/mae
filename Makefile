@@ -419,6 +419,11 @@ test-scheme-editor: build-tui
 test-scheme-collab-local: build-tui
 	$(RELEASE_BIN) --test tests/collab-local/
 
+## test-collab-mtls-e2e: single-host trusted-peer mTLS e2e (real daemon + editor)
+test-collab-mtls-e2e: build-tui build-daemon
+	MAE_BIN=$(RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
+		scripts/collab-mtls-e2e.sh
+
 ## test-scheme-all: run all local Scheme tests (crdt + editor + collab-local)
 test-scheme-all: build-tui
 	$(RELEASE_BIN) --test tests/crdt/

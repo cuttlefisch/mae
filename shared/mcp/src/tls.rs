@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::{
     ClientConfig, DigitallySignedStruct, DistinguishedName, ServerConfig, SignatureScheme,
@@ -27,6 +27,7 @@ use crate::identity::{AuthorizedKeys, HostKeyVerifier, Identity, PeerIdentity, P
 
 // Re-export the tokio-rustls types so the daemon + editor don't need a direct
 // dep on tokio-rustls (they already depend on mae-mcp).
+pub use rustls::pki_types::ServerName;
 pub use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 /// The ring-based crypto provider (explicit, never the process default).

@@ -1336,11 +1336,8 @@ pub(crate) struct CollabSpawn {
     backoff_factor: u64,
     max_reconnect_attempts: u64,
     heartbeat_secs: u64,
-    /// PSK for mutual authentication (empty = no auth). May be a `cmd:` sentinel.
-    psk: String,
-    /// Key name advertised to a multi-key daemon (the keystore key's name).
-    /// `None` for legacy psk/psk_command or an unnamed keystore key.
-    key_id: Option<String>,
+    /// How this editor authenticates to the daemon (psk / key+mTLS / key+JSON).
+    transport: ClientTransport,
 }
 
 /// Resolve the client collab credential: `(psk_or_cmd_sentinel, key_id)`.
@@ -1402,12 +1399,7 @@ pub(crate) fn setup_collab_channels(
     let max_reconnect_attempts = editor.collab.max_reconnect_attempts;
     let heartbeat_secs = editor.collab.heartbeat_interval;
 
-    // Resolve the client credential (see `resolve_client_credential`).
-    let (psk, key_id) = resolve_client_credential(
-        &editor.collab.psk_command,
-        &editor.collab.psk,
-        mae_mcp::keystore::default_keystore_path().as_deref(),
-    );
+    let transport = resolve_client_transport(editor);
 
     let spawn = CollabSpawn {
         cmd_rx,
@@ -1419,11 +1411,54 @@ pub(crate) fn setup_collab_channels(
         backoff_factor,
         max_reconnect_attempts,
         heartbeat_secs,
-        psk,
-        key_id,
+        transport,
     };
 
     (evt_rx, cmd_tx, spawn)
+}
+
+/// Resolve how the editor authenticates to the daemon from `collab_*` options.
+///
+/// - `auth_mode = "key"` → load this editor's Ed25519 identity + a
+///   `known_hosts` verifier (TOFU policy from `collab_host_key_policy`); use
+///   mTLS unless `collab_tls = false` (then the JSON KeyAuth fallback).
+/// - otherwise → PSK / none (see `resolve_client_credential`).
+fn resolve_client_transport(editor: &Editor) -> ClientTransport {
+    if editor.collab.auth_mode == "key" {
+        if let Some(dir) = mae_mcp::identity::default_collab_dir() {
+            let label = hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "mae-editor".to_string());
+            match mae_mcp::identity::Identity::load_or_generate(&dir, &label) {
+                Ok(id) => {
+                    let policy = mae_mcp::identity::HostKeyPolicy::from_str_opt(
+                        &editor.collab.host_key_policy,
+                    );
+                    let verifier: std::sync::Arc<dyn mae_mcp::identity::HostKeyVerifier> =
+                        std::sync::Arc::new(mae_mcp::identity::FileHostKeyVerifier::new(
+                            dir.join("known_hosts"),
+                            policy,
+                        ));
+                    let identity = std::sync::Arc::new(id);
+                    return if editor.collab.tls {
+                        ClientTransport::KeyTls { identity, verifier }
+                    } else {
+                        ClientTransport::KeyJson { identity, verifier }
+                    };
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to load collab identity; falling back to no-auth");
+                }
+            }
+        }
+    }
+    let (psk, key_id) = resolve_client_credential(
+        &editor.collab.psk_command,
+        &editor.collab.psk,
+        mae_mcp::keystore::default_keystore_path().as_deref(),
+    );
+    ClientTransport::Plain { psk, key_id }
 }
 
 /// Spawn the collab background task. MUST be called from within a tokio runtime.
@@ -1437,8 +1472,7 @@ pub(crate) fn spawn_collab_task(spawn: CollabSpawn) {
         spawn.backoff_factor,
         spawn.max_reconnect_attempts,
         spawn.heartbeat_secs,
-        spawn.psk,
-        spawn.key_id,
+        spawn.transport,
     ));
 
     // Auto-connect if configured
@@ -1502,8 +1536,89 @@ pub(crate) enum PendingResponseKind {
 /// partially-consumed data, corrupting all subsequent reads. By running `read_message` in
 /// a dedicated task that is never cancelled, we ensure it always runs to completion.
 /// The `select!` loop receives from the channel, which is always cancel-safe.
-fn spawn_reader_task(
-    reader: tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>,
+/// A type-erased read half — TCP or TLS — so the connection loop is uniform.
+type BoxReader = Box<dyn tokio::io::AsyncBufRead + Unpin + Send>;
+/// A type-erased write half — TCP or TLS.
+type BoxWriter = Box<dyn tokio::io::AsyncWrite + Unpin + Send>;
+
+/// How the editor authenticates to the daemon. Resolved once from options.
+enum ClientTransport {
+    /// Plaintext TCP. `psk` empty = no auth; otherwise PSK handshake (may be a
+    /// `cmd:` sentinel resolved at task start). `key_id` names a keystore key.
+    Plain { psk: String, key_id: Option<String> },
+    /// Plaintext TCP + the JSON KeyAuth signed-challenge handshake (key mode,
+    /// `collab_tls = false` fallback).
+    KeyJson {
+        identity: std::sync::Arc<mae_mcp::identity::Identity>,
+        verifier: std::sync::Arc<dyn mae_mcp::identity::HostKeyVerifier>,
+    },
+    /// Native mTLS (key mode, default) — identity + pinning are the TLS layer.
+    KeyTls {
+        identity: std::sync::Arc<mae_mcp::identity::Identity>,
+        verifier: std::sync::Arc<dyn mae_mcp::identity::HostKeyVerifier>,
+    },
+}
+
+impl ClientTransport {
+    /// The PSK (or `cmd:` sentinel) for a Plain transport — test inspection.
+    #[cfg(test)]
+    fn plain_psk(&self) -> Option<&str> {
+        match self {
+            ClientTransport::Plain { psk, .. } => Some(psk.as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// Connect to `addr` and run the auth handshake, returning boxed read/write
+/// halves ready for `send_initialize`. The trust decision (TOFU / authorized
+/// peer) happens inside the handshake.
+async fn establish_connection(
+    addr: &str,
+    transport: &ClientTransport,
+) -> Result<(BoxReader, BoxWriter), String> {
+    use tokio::io::BufReader;
+    use tokio::net::TcpStream;
+    match transport {
+        ClientTransport::KeyTls { identity, verifier } => {
+            let cfg = mae_mcp::tls::client_config(identity, addr.to_string(), verifier.clone())?;
+            let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
+            let connector = mae_mcp::tls::TlsConnector::from(cfg);
+            let server_name =
+                mae_mcp::tls::ServerName::try_from(mae_mcp::tls::SNI).map_err(|e| e.to_string())?;
+            let tls = connector
+                .connect(server_name, stream)
+                .await
+                .map_err(|e| format!("TLS handshake failed: {e}"))?;
+            let (r, w) = tokio::io::split(tls);
+            Ok((
+                Box::new(BufReader::new(r)) as BoxReader,
+                Box::new(w) as BoxWriter,
+            ))
+        }
+        ClientTransport::KeyJson { identity, verifier } => {
+            use mae_mcp::auth::{AuthProvider, KeyAuth};
+            let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
+            let (r, mut w) = stream.into_split();
+            let mut br = BufReader::new(r);
+            let auth = KeyAuth::client(identity.clone(), addr.to_string(), verifier.clone());
+            auth.client_handshake(&mut br, &mut w)
+                .await
+                .map_err(|e| format!("key auth failed: {e}"))?;
+            Ok((Box::new(br) as BoxReader, Box::new(w) as BoxWriter))
+        }
+        ClientTransport::Plain { psk, key_id } => {
+            let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
+            let (r, mut w) = stream.into_split();
+            let mut br = BufReader::new(r);
+            perform_psk_auth(&mut br, &mut w, psk, key_id.as_deref()).await?;
+            Ok((Box::new(br) as BoxReader, Box::new(w) as BoxWriter))
+        }
+    }
+}
+
+fn spawn_reader_task<R: tokio::io::AsyncBufRead + Unpin + Send + 'static>(
+    reader: R,
 ) -> mpsc::Receiver<Result<String, String>> {
     let (msg_tx, msg_rx) = mpsc::channel::<Result<String, String>>(32);
     tokio::spawn(async move {
@@ -1542,32 +1657,48 @@ async fn run_collab_task(
     backoff_factor: u64,
     max_reconnect_attempts: u64,
     heartbeat_secs: u64,
-    psk_config: String,
-    key_id: Option<String>,
+    transport: ClientTransport,
 ) {
     use mae_mcp::write_framed;
     use std::collections::HashMap;
-    use tokio::io::BufReader;
-    use tokio::net::tcp::OwnedWriteHalf;
-    use tokio::net::TcpStream;
 
-    // Resolve PSK: if prefixed with "cmd:", run the command to get the key.
-    let resolved_psk = if let Some(cmd) = psk_config.strip_prefix("cmd:") {
-        mae_mcp::auth::load_psk(Some(cmd), None)
-            .await
-            .unwrap_or_default()
-    } else {
-        psk_config
+    // Resolve a `cmd:` PSK sentinel once (run the command to get the key).
+    let transport = match transport {
+        ClientTransport::Plain { psk, key_id } => {
+            let psk = if let Some(cmd) = psk.strip_prefix("cmd:") {
+                mae_mcp::auth::load_psk(Some(cmd), None)
+                    .await
+                    .unwrap_or_default()
+            } else {
+                psk
+            };
+            ClientTransport::Plain { psk, key_id }
+        }
+        other => other,
     };
-    if !resolved_psk.is_empty() {
-        info!(
-            auth = "psk",
-            "PSK authentication enabled for collab connections"
-        );
+    match &transport {
+        ClientTransport::KeyTls { .. } => {
+            info!(
+                auth = "key",
+                tls = true,
+                "mTLS authentication enabled for collab"
+            )
+        }
+        ClientTransport::KeyJson { .. } => {
+            info!(
+                auth = "key",
+                tls = false,
+                "KeyAuth authentication enabled for collab"
+            )
+        }
+        ClientTransport::Plain { psk, .. } if !psk.is_empty() => {
+            info!(auth = "psk", "PSK authentication enabled for collab")
+        }
+        _ => {}
     }
 
     let mut msg_rx: Option<mpsc::Receiver<Result<String, String>>> = None;
-    let mut writer: Option<OwnedWriteHalf> = None;
+    let mut writer: Option<BoxWriter> = None;
     let mut target_address: Option<String> = None;
     let mut shared_docs: Vec<String> = Vec::new();
     let mut reconnect_enabled = false;
@@ -1597,7 +1728,7 @@ async fn run_collab_task(
     /// Dropping msg_rx causes the reader task to terminate on its next send.
     fn tear_down(
         rx: &mut Option<mpsc::Receiver<Result<String, String>>>,
-        wr: &mut Option<OwnedWriteHalf>,
+        wr: &mut Option<BoxWriter>,
     ) {
         *rx = None;
         *wr = None;
@@ -2133,7 +2264,7 @@ async fn run_collab_task(
                                 &mut target_address, &mut reconnect_enabled,
                                 &mut shared_docs, &mut next_request_id,
                                 &mut pending_responses, write_timeout,
-                                &resolved_psk, key_id.as_deref(),
+                                &transport,
                             ).await;
                         }
                         _ = tokio::time::sleep(std::time::Duration::from_secs(
@@ -2152,31 +2283,27 @@ async fn run_collab_task(
                                 continue;
                             }
                             reconnect_attempt += 1;
-                            if let Ok(stream) = TcpStream::connect(&addr_clone).await {
-                                let (r, mut w) = stream.into_split();
-                                let mut buf_reader = BufReader::new(r);
-                                // PSK auth before JSON-RPC initialize.
-                                if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, &resolved_psk, key_id.as_deref()).await {
-                                    debug!(error = %e, "PSK auth failed on reconnect, will retry");
-                                    continue;
-                                }
-                                if let Some(peer_count) = send_initialize(&mut w, &mut buf_reader, write_timeout).await {
-                                    // Spawn dedicated reader task (cancel-safety fix).
-                                    msg_rx = Some(spawn_reader_task(buf_reader));
-                                    writer = Some(w);
-                                    reconnect_attempt = 0; // Reset on success.
-                                    // Subscribe to sync_update events (B4 fix).
-                                    if let Some(ref mut w) = writer {
-                                        send_subscribe(w, &mut next_request_id, &mut pending_responses, write_timeout).await;
+                            match establish_connection(&addr_clone, &transport).await {
+                                Ok((mut reader, mut w)) => {
+                                    if let Some(peer_count) = send_initialize(&mut w, &mut reader, write_timeout).await {
+                                        // Spawn dedicated reader task (cancel-safety fix).
+                                        msg_rx = Some(spawn_reader_task(reader));
+                                        writer = Some(w);
+                                        reconnect_attempt = 0; // Reset on success.
+                                        // Subscribe to sync_update events (B4 fix).
+                                        if let Some(ref mut w) = writer {
+                                            send_subscribe(w, &mut next_request_id, &mut pending_responses, write_timeout).await;
+                                        }
+                                        try_send_evt(&evt_tx, CollabEvent::Connected {
+                                            address: addr_clone,
+                                            peer_count,
+                                        });
                                     }
-                                    try_send_evt(&evt_tx, CollabEvent::Connected {
-                                        address: addr_clone,
-                                        peer_count,
-                                    });
                                 }
-                            } else {
-                                debug!(addr = %addr_clone, attempt = reconnect_attempt,
-                                    "reconnect failed, will retry");
+                                Err(e) => {
+                                    debug!(addr = %addr_clone, attempt = reconnect_attempt, error = %e,
+                                        "reconnect failed, will retry");
+                                }
                             }
                         }
                     }
@@ -2198,8 +2325,7 @@ async fn run_collab_task(
                     &mut next_request_id,
                     &mut pending_responses,
                     write_timeout,
-                    &resolved_psk,
-                    key_id.as_deref(),
+                    &transport,
                 )
                 .await;
             }
@@ -2795,41 +2921,25 @@ async fn handle_disconnected_cmd(
     cmd: CollabCommand,
     evt_tx: &mpsc::Sender<CollabEvent>,
     msg_rx: &mut Option<mpsc::Receiver<Result<String, String>>>,
-    writer: &mut Option<tokio::net::tcp::OwnedWriteHalf>,
+    writer: &mut Option<BoxWriter>,
     target_address: &mut Option<String>,
     reconnect_enabled: &mut bool,
     shared_docs: &mut Vec<String>,
     next_request_id: &mut u64,
     pending_responses: &mut std::collections::HashMap<u64, PendingResponseKind>,
     write_timeout: std::time::Duration,
-    psk: &str,
-    key_id: Option<&str>,
+    transport: &ClientTransport,
 ) {
-    use tokio::io::BufReader;
-
     match cmd {
         CollabCommand::Connect { address } => {
             *target_address = Some(address.clone());
-            match tokio::net::TcpStream::connect(&address).await {
-                Ok(stream) => {
-                    let (r, mut w) = stream.into_split();
-                    let mut buf_reader = BufReader::new(r);
-                    // PSK auth before JSON-RPC initialize.
-                    if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, psk, key_id).await {
-                        *reconnect_enabled = true;
-                        try_send_evt(
-                            evt_tx,
-                            CollabEvent::Error {
-                                message: format!("{} ({})", e, address),
-                            },
-                        );
-                        return;
-                    }
+            match establish_connection(&address, transport).await {
+                Ok((mut reader, mut w)) => {
                     if let Some(peer_count) =
-                        send_initialize(&mut w, &mut buf_reader, write_timeout).await
+                        send_initialize(&mut w, &mut reader, write_timeout).await
                     {
                         // Spawn dedicated reader task (cancel-safety fix).
-                        *msg_rx = Some(spawn_reader_task(buf_reader));
+                        *msg_rx = Some(spawn_reader_task(reader));
                         *writer = Some(w);
                         *reconnect_enabled = true;
                         // Subscribe to sync_update events (B4 fix).
@@ -2883,27 +2993,13 @@ async fn handle_disconnected_cmd(
                         .clone()
                         .unwrap_or_else(|| default_addr.clone());
                     *target_address = Some(addr.clone());
-                    match tokio::net::TcpStream::connect(&addr).await {
-                        Ok(stream) => {
-                            let (r, mut w) = stream.into_split();
-                            let mut buf_reader = BufReader::new(r);
-                            // PSK auth before JSON-RPC initialize.
-                            if let Err(e) =
-                                perform_psk_auth(&mut buf_reader, &mut w, psk, key_id).await
-                            {
-                                try_send_evt(
-                                    evt_tx,
-                                    CollabEvent::Error {
-                                        message: format!("{} ({})", e, addr),
-                                    },
-                                );
-                                return;
-                            }
+                    match establish_connection(&addr, transport).await {
+                        Ok((mut reader, mut w)) => {
                             if let Some(peer_count) =
-                                send_initialize(&mut w, &mut buf_reader, write_timeout).await
+                                send_initialize(&mut w, &mut reader, write_timeout).await
                             {
                                 // Spawn dedicated reader task (cancel-safety fix).
-                                *msg_rx = Some(spawn_reader_task(buf_reader));
+                                *msg_rx = Some(spawn_reader_task(reader));
                                 *writer = Some(w);
                                 *reconnect_enabled = true;
                                 // Subscribe after server start too.
@@ -5203,8 +5299,9 @@ mod tests {
 
         let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
         assert_eq!(
-            spawn.psk, "my-secret-key",
-            "CollabSpawn.psk should contain the direct PSK value"
+            spawn.transport.plain_psk(),
+            Some("my-secret-key"),
+            "transport should carry the direct PSK value"
         );
     }
 
@@ -5216,8 +5313,9 @@ mod tests {
 
         let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
         assert_eq!(
-            spawn.psk, "cmd:cat /tmp/test-psk.txt",
-            "CollabSpawn.psk should contain cmd: prefix for deferred resolution"
+            spawn.transport.plain_psk(),
+            Some("cmd:cat /tmp/test-psk.txt"),
+            "transport should carry the cmd: prefix for deferred resolution"
         );
     }
 
@@ -5229,12 +5327,12 @@ mod tests {
         let _ = editor.set_option("collab_psk_command", "pass show mae/psk");
 
         let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
+        let psk = spawn.transport.plain_psk().unwrap_or("");
         assert!(
-            spawn.psk.starts_with("cmd:"),
-            "psk_command should take precedence over psk: got '{}'",
-            spawn.psk
+            psk.starts_with("cmd:"),
+            "psk_command should take precedence over psk: got '{psk}'"
         );
-        assert_eq!(spawn.psk, "cmd:pass show mae/psk");
+        assert_eq!(psk, "cmd:pass show mae/psk");
     }
 
     #[test]
