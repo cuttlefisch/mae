@@ -4,9 +4,42 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- *(kb)* ADR-015 node links to existing concept:keymap-inheritance ([e287d24](https://github.com/cuttlefisch/mae/commit/e287d24419adfc67c0893bcf3d6c374123a8948e))
+
+### CI
+
+- *(release)* Point the Homebrew tap update at the renamed cask (mae-app) ([c28fad9](https://github.com/cuttlefisch/mae/commit/c28fad9729082b8cb9ef03aee7407dd19fa895cf))
+- *(release)* Deploy tap bump via auto-merged PR (through branch protection) ([4e9d5f6](https://github.com/cuttlefisch/mae/commit/4e9d5f65d35bf8b0dd7c00d57538575d9718c5e8))
+
+## [0.13.11] - 2026-06-14
+
+### Bug Fixes
+
+- *(modules)* Keymap flavor & dependency-closure bugs that brick the leader menu ([817cc2d](https://github.com/cuttlefisch/mae/commit/817cc2dc9cad82448c02c3dea1bc7645158539e3))
+- *(upgrade)* Self-heal Homebrew formula link so `mae upgrade` can't strand the CLI off PATH ([5a81fa4](https://github.com/cuttlefisch/mae/commit/5a81fa4eea3e232f8bc900bbfb6a184afc4d3452))
+- *(pkg)* Unify reload pipeline + keymap_flavor authority + warn on stale shadow (C1/H2/H3/H4) ([d39c0ff](https://github.com/cuttlefisch/mae/commit/d39c0ff01e761defc71a9c79c0b3cf7abf30c22a))
+
+### Documentation
+
+- *(adr)* ADR-015 keymap resolution chain, ADR-016 artifact interaction model ([0f62018](https://github.com/cuttlefisch/mae/commit/0f620181b146ab571c1d69c802f49dfc0447fad2))
+- *(kb)* Mirror ADR-015/016 as concept KB nodes + KB Source headers ([286bf56](https://github.com/cuttlefisch/mae/commit/286bf569202f9aaaba02bd2bd7df85b6ad8ac28a))
+
+### Features
+
+- *(keymap)* Data-driven keymap registry + Scheme context API (Phase 1a, ADR-015) ([053eb22](https://github.com/cuttlefisch/mae/commit/053eb224d02a7afbc68171db264b7900adf3333d))
+- *(keymap)* Shared navigation context for read-only nav buffers (Phase 1b) ([bb58240](https://github.com/cuttlefisch/mae/commit/bb5824087f03fb4bcfea5bf2e6ad926fc928d6e7))
+- *(pkg)* `mae prune-shadows` — remove stale on-disk module copies ([cdc0c06](https://github.com/cuttlefisch/mae/commit/cdc0c06733bc7bbf458c5aa5dafa731151f443fc))
+
 ### Miscellaneous
 
 - Sync Cargo.lock to 0.13.10 after backmerging main ([c62ad34](https://github.com/cuttlefisch/mae/commit/c62ad348644c8d1619ffd8deff4590b9b5260191))
+- Bump version to 0.13.11 ([ec7e56d](https://github.com/cuttlefisch/mae/commit/ec7e56d0b33aa7faaaf74294695349482ae24e4f))
+
+### Refactor
+
+- *(keymap)* Single layered resolution chain for dispatch + display (Phase 0, ADR-015) ([e1e58e0](https://github.com/cuttlefisch/mae/commit/e1e58e00a51e7e22af4ea36119d267fab5a5790b))
 
 ## [0.13.10] - 2026-06-14
 
