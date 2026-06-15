@@ -20,7 +20,16 @@
 ;; C-; opens the transient leader keypad (the mae which-key menu).
 ;; Chosen for cross-OS safety: C-SPC collides with macOS Spotlight, M-SPC with
 ;; the macOS Character Viewer. Rebind with (define-key "insert" "<key>" "leader-dispatch").
+;;
+;; Bind it in normal + visual too, NOT just insert. A non-modal user still ends
+;; up in Normal mode on read-only / normal-mode-only buffers (the dashboard, file
+;; tree, modules list) and after pressing Esc — and the insert-only binding left
+;; the which-key menu completely unreachable there (the doom flavor's SPC leader
+;; doesn't exist in this flavor). Binding all three modes makes the keypad
+;; reachable from anywhere, regardless of the mode a buffer forces.
 (define-key "insert" "C-;" "leader-dispatch")
+(define-key "normal" "C-;" "leader-dispatch")
+(define-key "visual" "C-;" "leader-dispatch")
 
 ;; CUA chords (insert mode). Plain keys still insert; these dispatch commands.
 (define-key "insert" "C-s" "save")

@@ -974,15 +974,25 @@ fn enable_with_deps(
     all_modules: &[crate::pkg::embedded::DiscoveredModule],
     enabled: &mut HashMap<String, Vec<String>>,
 ) {
+    // Cycle/duplicate guard is SEPARATE from the `enabled` check on purpose. A
+    // module declared in the (mae!) block is already present in `enabled`, but its
+    // dependency closure must STILL be expanded — otherwise the resolver fails
+    // with "depends on <X> which is not enabled" and drops everything. The old
+    // code short-circuited on `enabled.contains_key`, so a *declared* flavor
+    // (e.g. `keymap-doom`) never pulled in its `keymap-leader` dependency. Track
+    // visited nodes independently and always walk a node's deps the first time we
+    // see it, enabled or not.
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut stack = vec![name.to_string()];
     while let Some(n) = stack.pop() {
-        if enabled.contains_key(&n) {
+        if !visited.insert(n.clone()) {
             continue;
         }
-        enabled.insert(n.clone(), vec![]);
+        // Enable if not already declared (preserve any existing flags).
+        enabled.entry(n.clone()).or_default();
         if let Some(d) = all_modules.iter().find(|d| d.manifest.name() == n) {
             for dep in d.manifest.dependencies.keys() {
-                if !enabled.contains_key(dep) {
+                if !visited.contains(dep) {
                     stack.push(dep.clone());
                 }
             }
@@ -1104,17 +1114,27 @@ pub fn load_modules(
         enable_with_deps(&name, &all_modules, &mut enabled);
     }
 
-    let resolved = match resolve_load_order(&all_modules, &enabled) {
-        Ok(r) => r,
-        Err(e) => {
-            error!(error = %e, "module resolution failed");
-            editor.set_status(format!("Module error: {}", e));
-            return ModuleRegistry::new();
-        }
-    };
+    // Graceful degradation: resolution skips unsatisfiable modules instead of
+    // aborting the whole load, so one broken drop-in module can't take out the
+    // embedded keymap-leader/flavor and brick the leader/which-key system.
+    let outcome = resolve_load_order(&all_modules, &enabled);
+    let resolved = outcome.resolved;
 
     let mut registry = ModuleRegistry::new();
     registry.register_resolved(&resolved);
+
+    // Record skipped modules as Failed (durable in list_modules/audit) and
+    // aggregate them into a single user-visible message instead of a transient,
+    // last-wins status line.
+    let mut failures: Vec<String> = Vec::new();
+    for sk in &outcome.skipped {
+        if let Some(d) = all_modules.iter().find(|d| d.manifest.name() == sk.name) {
+            registry.register_skipped(d, sk.reason.clone());
+        }
+        let msg = format!("module '{}' skipped: {}", sk.name, sk.reason);
+        warn!("{}", msg);
+        failures.push(msg);
+    }
 
     let current_version = env!("CARGO_PKG_VERSION");
     for module in &resolved {
@@ -1122,7 +1142,7 @@ pub fn load_modules(
         if let Err(e) = module.manifest.check_mae_version(current_version) {
             registry.mark_failed(&module.name, e.clone());
             error!(module = %module.name, error = %e, "module version constraint failed");
-            editor.set_status(format!("Module '{}' skipped: {}", module.name, e));
+            failures.push(format!("module '{}' skipped: {}", module.name, e));
             continue;
         }
 
@@ -1161,9 +1181,42 @@ pub fn load_modules(
             Err(e) => {
                 registry.mark_failed(&module.name, e.clone());
                 error!(module = %module.name, error = %e, "module load failed");
-                editor.set_status(format!("Module '{}' failed: {}", module.name, e));
+                failures.push(format!("module '{}' failed: {}", module.name, e));
                 // Continue loading other modules — error isolation
             }
+        }
+    }
+
+    // Surface every failure durably (message log) plus one aggregate status line,
+    // so a user with several failing modules doesn't just see the last one flash
+    // by. Each individual reason is already in the log; the status points there.
+    if !failures.is_empty() {
+        for msg in &failures {
+            editor
+                .message_log
+                .push(mae_core::messages::MessageLevel::Warn, "modules", msg);
+        }
+        editor.set_status(format!(
+            "{} module(s) did not load (see :messages)",
+            failures.len()
+        ));
+    }
+
+    // Safety net: the leader/which-key system depends on keymap-leader plus the
+    // active flavor. If either failed to load the editor is effectively unusable
+    // (no SPC / C-; leader). Make that loud rather than a silent dead keymap.
+    let flavor_mod = format!("keymap-{}", editor.keymap_flavor);
+    for core in ["keymap-leader", flavor_mod.as_str()] {
+        if all_modules.iter().any(|d| d.manifest.name() == core) && !registry.is_loaded(core) {
+            let msg = format!(
+                "core keymap module '{core}' did not load — the leader/which-key menu \
+                 will be unavailable. Check :messages for the cause."
+            );
+            error!("{}", msg);
+            editor
+                .message_log
+                .push(mae_core::messages::MessageLevel::Error, "modules", &msg);
+            editor.set_status(msg);
         }
     }
 
@@ -1357,10 +1410,17 @@ pub fn reload_all_modules(scheme: &mut SchemeRuntime, editor: &mut Editor) {
 /// flavor's `default_mode`. The shared `leader` tree is flavor-independent, so
 /// only the thin entry bindings and the startup mode actually change.
 pub fn switch_keymap_flavor(scheme: &mut SchemeRuntime, editor: &mut Editor, flavor: &str) {
+    editor.reset_keymaps_to_kernel();
+    // Re-run init.scm BEFORE modules (mirroring startup's init → modules → config
+    // order) so user customizations that live in init.scm survive the switch. The
+    // default init.scm template puts keybindings here — e.g.
+    // `(define-key "shell-insert" "C-]" ...)` — and the old path re-ran only
+    // config.scm, silently dropping every init.scm binding on each flavor switch.
+    load_init_files(scheme, editor);
+    // The live switch is authoritative over whatever init.scm set for the flavor.
     let _ = editor.set_option("keymap_flavor", flavor);
     // Baseline; the new flavor's autoloads re-set this (non-modal → "insert").
     let _ = editor.set_option("default_mode", "normal");
-    editor.reset_keymaps_to_kernel();
     reload_all_modules(scheme, editor);
     // Re-apply user config.scm so personal bindings/options survive the switch.
     load_config_scm(scheme, editor);
@@ -1583,6 +1643,58 @@ mod tests {
         () => {
             SchemeRuntime::new().expect("SchemeRuntime::new() should not fail")
         };
+    }
+
+    fn disc(name: &str, toml: &str) -> crate::pkg::embedded::DiscoveredModule {
+        use crate::pkg::embedded::{DiscoveredModule, ModuleSource};
+        use crate::pkg::manifest::ModuleManifest;
+        use std::path::{Path, PathBuf};
+        DiscoveredModule {
+            source: ModuleSource::Disk(PathBuf::from(format!("modules/{name}"))),
+            manifest: ModuleManifest::from_str(toml, Path::new("test")).unwrap(),
+        }
+    }
+
+    #[test]
+    fn enable_with_deps_expands_deps_of_already_enabled_module() {
+        // Regression for the Linux "keymap-doom depends on keymap-leader which is
+        // not enabled" brick: when the flavor is declared in (mae!) it is already
+        // in `enabled`, and enable_with_deps must STILL pull in keymap-leader.
+        let all = vec![
+            disc(
+                "keymap-doom",
+                "[module]\nname = \"keymap-doom\"\n\n[dependencies]\nkeymap-leader = \"*\"",
+            ),
+            disc("keymap-leader", "[module]\nname = \"keymap-leader\""),
+        ];
+        // keymap-doom pre-enabled (as if declared in the mae! block).
+        let mut enabled: HashMap<String, Vec<String>> = HashMap::new();
+        enabled.insert("keymap-doom".to_string(), vec![]);
+
+        enable_with_deps("keymap-doom", &all, &mut enabled);
+
+        assert!(
+            enabled.contains_key("keymap-leader"),
+            "declared keymap-doom must still pull in its keymap-leader dependency"
+        );
+
+        // And the resolver must now produce a consistent order with no skips.
+        let outcome = crate::pkg::resolver::resolve_load_order(&all, &enabled);
+        assert!(outcome.skipped.is_empty(), "nothing should be skipped");
+        let names: Vec<&str> = outcome.resolved.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"keymap-doom") && names.contains(&"keymap-leader"));
+    }
+
+    #[test]
+    fn enable_with_deps_terminates_on_cycle() {
+        // Self-referential / cyclic deps must not loop forever.
+        let all = vec![
+            disc("a", "[module]\nname = \"a\"\n\n[dependencies]\nb = \"*\""),
+            disc("b", "[module]\nname = \"b\"\n\n[dependencies]\na = \"*\""),
+        ];
+        let mut enabled: HashMap<String, Vec<String>> = HashMap::new();
+        enable_with_deps("a", &all, &mut enabled);
+        assert!(enabled.contains_key("a") && enabled.contains_key("b"));
     }
 
     #[test]
