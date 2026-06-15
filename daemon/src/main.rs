@@ -51,6 +51,14 @@ async fn main() {
         return;
     }
 
+    // Keystore management: `mae-daemon keygen [name]`, `mae-daemon keys`.
+    if args.get(1).map(|s| s.as_str()) == Some("keygen") {
+        std::process::exit(run_keygen(args.get(2).map(|s| s.as_str())));
+    }
+    if args.get(1).map(|s| s.as_str()) == Some("keys") {
+        std::process::exit(run_keys_list());
+    }
+
     // Parse optional CLI overrides: --config, --bind, --data-dir
     let mut config_path: Option<String> = None;
     let mut bind_override: Option<String> = None;
@@ -278,25 +286,60 @@ async fn spawn_collab_server(config: &DaemonConfig) {
         Err(e) => warn!(error = %e, "failed to list collab documents for recovery"),
     }
 
-    // Create auth provider
+    // Create auth provider. In "psk" mode the daemon trusts a SET of keys:
+    // the trusted-keys keystore plus any legacy psk/psk_command (one unnamed
+    // key). A client authenticates by proving knowledge of any trusted key.
     let auth_mode = collab.auth.mode.clone();
     let use_psk = auth_mode == "psk";
-    let psk_key: Option<String> = if use_psk {
-        let key = mae_mcp::auth::load_psk(
+    let psk_auth: Option<std::sync::Arc<mae_mcp::auth::PskAuth>> = if use_psk {
+        let mut keys: Vec<(Option<String>, String)> = Vec::new();
+
+        // Legacy: psk_command / psk → one unnamed trusted key.
+        if let Some(key) = mae_mcp::auth::load_psk(
             collab.auth.psk_command.as_deref(),
             collab.auth.psk.as_deref(),
         )
-        .await;
-        if key.is_none() {
-            error!("collab.auth.mode = 'psk' but no PSK could be loaded");
+        .await
+        {
+            keys.push((None, key));
+        }
+
+        // Keystore: every entry is a trusted peer credential.
+        if let Some(path) = collab.auth.keystore_path() {
+            match mae_mcp::keystore::load_optional(&path) {
+                Ok(Some(ks)) => {
+                    if let Some(w) = ks.permission_warning() {
+                        warn!("{w}");
+                    }
+                    for e in ks.entries {
+                        keys.push((e.name, e.secret));
+                    }
+                    info!(path = %path.display(), keys = keys.len(), "loaded collab keystore");
+                }
+                Ok(None) => {
+                    debug!(path = %path.display(), "no collab keystore present");
+                }
+                Err(e) => {
+                    warn!(path = %path.display(), error = %e, "failed to read collab keystore");
+                }
+            }
+        }
+
+        if keys.is_empty() {
+            error!("collab.auth.mode = 'psk' but no keys available (empty keystore and no psk)");
             warn!("collab service disabled");
             return;
         }
-        key
+        info!(
+            auth = "psk",
+            trusted_keys = keys.len(),
+            "collab authentication configured"
+        );
+        Some(std::sync::Arc::new(mae_mcp::auth::PskAuth::from_keys(keys)))
     } else {
+        info!(auth = %auth_mode, "collab authentication configured");
         None
     };
-    info!(auth = %auth_mode, "collab authentication configured");
 
     // Bind TCP
     let tcp_listener = match tokio::net::TcpListener::bind(&collab.bind).await {
@@ -362,14 +405,13 @@ async fn spawn_collab_server(config: &DaemonConfig) {
                     let reader = BufReader::new(reader);
                     let store = Arc::clone(&doc_store);
                     let bc = Arc::clone(&broadcaster);
-                    let psk_clone = psk_key.clone();
+                    let psk_clone = psk_auth.clone();
                     tokio::spawn(async move {
-                        if let Some(ref key) = psk_clone {
-                            let psk_auth = mae_mcp::auth::PskAuth::new(key);
+                        if let Some(ref auth) = psk_clone {
                             collab_handler::handle_client_with_auth(
                                 reader,
                                 writer,
-                                &psk_auth,
+                                auth.as_ref(),
                                 store,
                                 bc,
                                 server_start_time,
@@ -418,6 +460,15 @@ fn run_check_config() {
             config.resolve_collab_data_dir().display()
         );
         println!("  auth.mode: {}", config.collab.auth.mode);
+        if config.collab.auth.mode == "psk" {
+            if let Some(p) = config.collab.auth.keystore_path() {
+                println!(
+                    "  auth.keystore: {} ({} key(s))",
+                    p.display(),
+                    config.collab.auth.keystore_key_count()
+                );
+            }
+        }
 
         let issues = config.check_collab();
         if !issues.is_empty() {
@@ -430,6 +481,78 @@ fn run_check_config() {
     }
 
     println!("Config OK");
+}
+
+/// `mae-daemon keygen [name]` — generate a random key, append it to the
+/// keystore (creating it 0600), and print it so it can be copied to peers.
+fn run_keygen(name: Option<&str>) -> i32 {
+    let config = DaemonConfig::load();
+    let path = match config.collab.auth.keystore_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("error: cannot resolve keystore path (set XDG_DATA_HOME or HOME)");
+            return 1;
+        }
+    };
+    let secret = mae_mcp::keystore::generate_secret();
+    match mae_mcp::keystore::add_key(&path, name, &secret) {
+        Ok(count) => {
+            let label = name
+                .map(|n| format!("'{n}'"))
+                .unwrap_or_else(|| "unnamed".into());
+            println!("Added {label} key to {}", path.display());
+            println!("Keystore now holds {count} key(s).");
+            println!();
+            println!("Trusted-keys line (this host already trusts it):");
+            match name {
+                Some(n) => println!("  {n} {secret}"),
+                None => println!("  {secret}"),
+            }
+            println!();
+            println!("To let a peer connect, copy the EXACT line above into its keystore");
+            println!("(same path: {}).", path.display());
+            println!("The secret is symmetric — both sides must hold the identical line.");
+            0
+        }
+        Err(e) => {
+            eprintln!("error: failed to add key to {}: {e}", path.display());
+            1
+        }
+    }
+}
+
+/// `mae-daemon keys` — list the names (and fingerprints) of trusted keys.
+fn run_keys_list() -> i32 {
+    let config = DaemonConfig::load();
+    let path = match config.collab.auth.keystore_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("error: cannot resolve keystore path");
+            return 1;
+        }
+    };
+    match mae_mcp::keystore::load_optional(&path) {
+        Ok(Some(ks)) => {
+            if let Some(w) = ks.permission_warning() {
+                eprintln!("warning: {w}");
+            }
+            println!("Trusted keys in {} ({}):", path.display(), ks.len());
+            for e in &ks.entries {
+                // Show a short fingerprint, never the secret itself.
+                let fp: String = e.secret.chars().take(8).collect();
+                println!("  {:<16} {}…", e.name.as_deref().unwrap_or("(unnamed)"), fp);
+            }
+            0
+        }
+        Ok(None) => {
+            println!("No keystore at {} (run: mae-daemon keygen)", path.display());
+            0
+        }
+        Err(e) => {
+            eprintln!("error: failed to read keystore {}: {e}", path.display());
+            1
+        }
+    }
 }
 
 fn run_doctor() {
@@ -449,6 +572,15 @@ fn run_doctor() {
 
     // Check collab
     if config.collab.enabled {
+        if config.collab.auth.mode == "psk" {
+            if let Some(p) = config.collab.auth.keystore_path() {
+                let n = config.collab.auth.keystore_key_count();
+                println!("  collab keystore: {} ({n} key(s))", p.display());
+                if let Some(w) = mae_mcp::keystore::permission_warning(&p) {
+                    println!("    ! {w}");
+                }
+            }
+        }
         let issues = config.check_collab();
         if issues.is_empty() {
             println!("  collab config: OK");

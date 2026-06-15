@@ -66,10 +66,16 @@ impl Default for CollabConfig {
 pub struct AuthConfig {
     /// Auth mode: "none" or "psk".
     pub mode: String,
-    /// PSK command (preferred — e.g., `pass show mae/key`).
+    /// PSK command (legacy — e.g., `pass show mae/key`). Loaded as one
+    /// (unnamed) trusted key, in addition to the keystore.
     pub psk_command: Option<String>,
-    /// PSK fallback (plaintext — not recommended).
+    /// PSK fallback (legacy plaintext — prefer the keystore). Loaded as one
+    /// (unnamed) trusted key.
     pub psk: Option<String>,
+    /// Path to the trusted-keys keystore. Defaults to
+    /// `$XDG_DATA_HOME/mae/collab/trusted_keys`. The daemon trusts every key
+    /// in this file (named or unnamed) as a peer credential.
+    pub keystore: Option<String>,
 }
 
 impl Default for AuthConfig {
@@ -78,7 +84,27 @@ impl Default for AuthConfig {
             mode: "none".to_string(),
             psk_command: None,
             psk: None,
+            keystore: None,
         }
+    }
+}
+
+impl AuthConfig {
+    /// Resolve the keystore path: the configured override, else the shared
+    /// default (`$XDG_DATA_HOME/mae/collab/trusted_keys`).
+    pub fn keystore_path(&self) -> Option<std::path::PathBuf> {
+        self.keystore
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .or_else(mae_mcp::keystore::default_keystore_path)
+    }
+
+    /// Number of trusted keys available from the keystore file (0 if missing).
+    pub fn keystore_key_count(&self) -> usize {
+        self.keystore_path()
+            .and_then(|p| mae_mcp::keystore::load_optional(&p).ok().flatten())
+            .map(|ks| ks.len())
+            .unwrap_or(0)
     }
 }
 
@@ -282,9 +308,14 @@ impl DaemonConfig {
             }
         }
 
-        if c.auth.mode == "psk" && c.auth.psk_command.is_none() && c.auth.psk.is_none() {
+        if c.auth.mode == "psk"
+            && c.auth.psk_command.is_none()
+            && c.auth.psk.is_none()
+            && c.auth.keystore_key_count() == 0
+        {
             issues.push(
-                "collab.auth.mode = 'psk' requires collab.auth.psk_command or collab.auth.psk"
+                "collab.auth.mode = 'psk' but no keys available — add a key to the keystore \
+                 (mae-daemon keygen) or set collab.auth.psk_command / collab.auth.psk"
                     .to_string(),
             );
         }

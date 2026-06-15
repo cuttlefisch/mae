@@ -1336,8 +1336,43 @@ pub(crate) struct CollabSpawn {
     backoff_factor: u64,
     max_reconnect_attempts: u64,
     heartbeat_secs: u64,
-    /// PSK for mutual authentication (empty = no auth).
+    /// PSK for mutual authentication (empty = no auth). May be a `cmd:` sentinel.
     psk: String,
+    /// Key name advertised to a multi-key daemon (the keystore key's name).
+    /// `None` for legacy psk/psk_command or an unnamed keystore key.
+    key_id: Option<String>,
+}
+
+/// Resolve the client collab credential: `(psk_or_cmd_sentinel, key_id)`.
+///
+/// Precedence:
+///   1. `psk_command` (legacy) — returned as a `cmd:` sentinel, resolved async
+///      in `run_collab_task`. No `key_id`.
+///   2. `psk` (legacy plaintext). No `key_id`.
+///   3. the trusted-keys keystore at `keystore_path` — present its primary key,
+///      advertising the key's name as the wire `key_id` so a multi-key daemon
+///      can select it.
+///   4. nothing configured → empty secret (no-auth).
+///
+/// Pure (the only I/O is reading `keystore_path`) so it is unit-testable with a
+/// temp path or `None`.
+fn resolve_client_credential(
+    psk_command: &str,
+    psk: &str,
+    keystore_path: Option<&std::path::Path>,
+) -> (String, Option<String>) {
+    if !psk_command.is_empty() {
+        (format!("cmd:{psk_command}"), None)
+    } else if !psk.is_empty() {
+        (psk.to_string(), None)
+    } else if let Some(entry) = keystore_path
+        .and_then(|p| mae_mcp::keystore::load_optional(p).ok().flatten())
+        .and_then(|ks| ks.primary().cloned())
+    {
+        (entry.secret, entry.name)
+    } else {
+        (String::new(), None)
+    }
 }
 
 /// Create collab channels and read config. Does NOT require a tokio runtime.
@@ -1367,18 +1402,12 @@ pub(crate) fn setup_collab_channels(
     let max_reconnect_attempts = editor.collab.max_reconnect_attempts;
     let heartbeat_secs = editor.collab.heartbeat_interval;
 
-    // PSK: prefer psk_command output, fall back to psk string.
-    // Actual async resolution happens in run_collab_task; here we just pass config.
-    let psk_raw = editor.collab.psk.clone();
-    let psk_cmd = editor.collab.psk_command.clone();
-    // If psk_command is set, we pass it as a sentinel; run_collab_task resolves it async.
-    // If only psk is set, use it directly.
-    let psk = if !psk_cmd.is_empty() {
-        // Sentinel: resolve async in the task. Store the command prefixed.
-        format!("cmd:{}", psk_cmd)
-    } else {
-        psk_raw
-    };
+    // Resolve the client credential (see `resolve_client_credential`).
+    let (psk, key_id) = resolve_client_credential(
+        &editor.collab.psk_command,
+        &editor.collab.psk,
+        mae_mcp::keystore::default_keystore_path().as_deref(),
+    );
 
     let spawn = CollabSpawn {
         cmd_rx,
@@ -1391,6 +1420,7 @@ pub(crate) fn setup_collab_channels(
         max_reconnect_attempts,
         heartbeat_secs,
         psk,
+        key_id,
     };
 
     (evt_rx, cmd_tx, spawn)
@@ -1408,6 +1438,7 @@ pub(crate) fn spawn_collab_task(spawn: CollabSpawn) {
         spawn.max_reconnect_attempts,
         spawn.heartbeat_secs,
         spawn.psk,
+        spawn.key_id,
     ));
 
     // Auto-connect if configured
@@ -1512,6 +1543,7 @@ async fn run_collab_task(
     max_reconnect_attempts: u64,
     heartbeat_secs: u64,
     psk_config: String,
+    key_id: Option<String>,
 ) {
     use mae_mcp::write_framed;
     use std::collections::HashMap;
@@ -2101,7 +2133,7 @@ async fn run_collab_task(
                                 &mut target_address, &mut reconnect_enabled,
                                 &mut shared_docs, &mut next_request_id,
                                 &mut pending_responses, write_timeout,
-                                &resolved_psk,
+                                &resolved_psk, key_id.as_deref(),
                             ).await;
                         }
                         _ = tokio::time::sleep(std::time::Duration::from_secs(
@@ -2124,7 +2156,7 @@ async fn run_collab_task(
                                 let (r, mut w) = stream.into_split();
                                 let mut buf_reader = BufReader::new(r);
                                 // PSK auth before JSON-RPC initialize.
-                                if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, &resolved_psk).await {
+                                if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, &resolved_psk, key_id.as_deref()).await {
                                     debug!(error = %e, "PSK auth failed on reconnect, will retry");
                                     continue;
                                 }
@@ -2167,6 +2199,7 @@ async fn run_collab_task(
                     &mut pending_responses,
                     write_timeout,
                     &resolved_psk,
+                    key_id.as_deref(),
                 )
                 .await;
             }
@@ -2770,6 +2803,7 @@ async fn handle_disconnected_cmd(
     pending_responses: &mut std::collections::HashMap<u64, PendingResponseKind>,
     write_timeout: std::time::Duration,
     psk: &str,
+    key_id: Option<&str>,
 ) {
     use tokio::io::BufReader;
 
@@ -2781,7 +2815,7 @@ async fn handle_disconnected_cmd(
                     let (r, mut w) = stream.into_split();
                     let mut buf_reader = BufReader::new(r);
                     // PSK auth before JSON-RPC initialize.
-                    if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, psk).await {
+                    if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, psk, key_id).await {
                         *reconnect_enabled = true;
                         try_send_evt(
                             evt_tx,
@@ -2854,7 +2888,9 @@ async fn handle_disconnected_cmd(
                             let (r, mut w) = stream.into_split();
                             let mut buf_reader = BufReader::new(r);
                             // PSK auth before JSON-RPC initialize.
-                            if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, psk).await {
+                            if let Err(e) =
+                                perform_psk_auth(&mut buf_reader, &mut w, psk, key_id).await
+                            {
                                 try_send_evt(
                                     evt_tx,
                                     CollabEvent::Error {
@@ -3019,7 +3055,12 @@ async fn handle_disconnected_cmd(
 /// Perform PSK mutual authentication handshake before JSON-RPC initialize.
 /// Returns `Ok(())` on success or if no PSK is configured (no-auth mode).
 /// Returns `Err(message)` if auth fails.
-async fn perform_psk_auth<R, W>(reader: &mut R, writer: &mut W, psk: &str) -> Result<(), String>
+async fn perform_psk_auth<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    psk: &str,
+    key_id: Option<&str>,
+) -> Result<(), String>
 where
     R: tokio::io::AsyncBufRead + Unpin + Send,
     W: tokio::io::AsyncWrite + Unpin + Send,
@@ -3030,7 +3071,7 @@ where
         return Ok(());
     }
 
-    let auth = PskAuth::new(psk);
+    let auth = PskAuth::new(psk).offering(key_id.map(String::from));
     auth.client_handshake(reader, writer)
         .await
         .map_err(|e| format!("PSK auth failed: {e}"))
@@ -5095,7 +5136,7 @@ mod tests {
         let client_handle = tokio::spawn(async move {
             let mut cr = BufReader::new(cr);
             let mut cw = BufWriter::new(cw);
-            perform_psk_auth(&mut cr, &mut cw, psk).await
+            perform_psk_auth(&mut cr, &mut cw, psk, None).await
         });
 
         let (server_result, client_result) = tokio::join!(server_handle, client_handle);
@@ -5128,7 +5169,7 @@ mod tests {
         let client_handle = tokio::spawn(async move {
             let mut cr = BufReader::new(cr);
             let mut cw = BufWriter::new(cw);
-            perform_psk_auth(&mut cr, &mut cw, "wrong-key").await
+            perform_psk_auth(&mut cr, &mut cw, "wrong-key", None).await
         });
 
         let (server_result, client_result) = tokio::join!(server_handle, client_handle);
@@ -5150,7 +5191,7 @@ mod tests {
         let mut cr = BufReader::new(cr);
         let mut cw = BufWriter::new(cw);
 
-        let result = perform_psk_auth(&mut cr, &mut cw, "").await;
+        let result = perform_psk_auth(&mut cr, &mut cw, "", None).await;
         assert!(result.is_ok(), "empty PSK should skip auth and return Ok");
     }
 
@@ -5198,14 +5239,38 @@ mod tests {
 
     #[test]
     fn setup_collab_channels_empty_psk_is_empty() {
-        // When neither psk nor psk_command is set, psk should be empty.
-        let editor = Editor::new();
-        let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
-        assert!(
-            spawn.psk.is_empty(),
-            "default PSK should be empty string, got '{}'",
-            spawn.psk
-        );
+        // With no psk/psk_command AND no keystore, the credential is empty.
+        let (psk, key_id) = resolve_client_credential("", "", None);
+        assert!(psk.is_empty(), "no creds → empty psk, got '{psk}'");
+        assert_eq!(key_id, None);
+    }
+
+    #[test]
+    fn resolve_credential_precedence() {
+        // psk_command wins, returned as a cmd: sentinel, no key_id.
+        let (psk, id) = resolve_client_credential("pass show k", "plain", None);
+        assert_eq!(psk, "cmd:pass show k");
+        assert_eq!(id, None);
+        // psk wins over keystore when no command.
+        let (psk, id) = resolve_client_credential("", "plain", None);
+        assert_eq!(psk, "plain");
+        assert_eq!(id, None);
+    }
+
+    #[test]
+    fn resolve_credential_from_keystore_primary() {
+        // A keystore with a named primary key → present its secret + name.
+        let dir = std::env::temp_dir().join(format!("mae-cred-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("trusted_keys");
+        mae_mcp::keystore::add_key(&path, Some("framework"), "deadbeef").unwrap();
+        mae_mcp::keystore::add_key(&path, Some("thinkpad"), "cafef00d").unwrap();
+
+        let (psk, id) = resolve_client_credential("", "", Some(&path));
+        assert_eq!(psk, "deadbeef", "presents the primary (first) key");
+        assert_eq!(id.as_deref(), Some("framework"), "advertises the key name");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
