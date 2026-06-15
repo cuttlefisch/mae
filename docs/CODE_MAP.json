@@ -343,6 +343,10 @@
           "kind": "mod"
         },
         {
+          "name": "keymap_registry",
+          "kind": "mod"
+        },
+        {
           "name": "link_detect",
           "kind": "mod"
         },
@@ -997,6 +1001,10 @@
     },
     {
       "name": "define-keymap",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "bind-context-keymap",
       "source": "crates/scheme/src/runtime.rs"
     },
     {

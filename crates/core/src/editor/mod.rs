@@ -330,7 +330,6 @@ use crate::keymap::{KeyPress, Keymap, WhichKeyEntry};
 use crate::messages::MessageLog;
 use crate::options::OptionRegistry;
 use crate::search::SearchState;
-use crate::syntax::Language;
 use crate::theme::{default_theme, Theme};
 use crate::window::{Rect, WindowId, WindowManager};
 use crate::Mode;
@@ -655,6 +654,12 @@ pub struct Editor {
     pub current_command: String,
     pub commands: CommandRegistry,
     pub keymaps: HashMap<String, Keymap>,
+    /// Data-driven routing from buffer context (kind / language) to the context
+    /// keymap that overlays the modality keymap in the resolution chain. Replaces
+    /// the old hardcoded match; kernel-seeded, re-seeded on
+    /// `reset_keymaps_to_kernel`, and extended by modules via Scheme. See
+    /// [`crate::keymap_registry`].
+    pub keymap_registry: crate::keymap_registry::KeymapRegistry,
     /// Current which-key prefix being accumulated. Empty = no popup.
     pub which_key_prefix: Vec<KeyPress>,
     /// Scroll offset (in rows) for the which-key popup. Reset when prefix changes.
@@ -1049,6 +1054,7 @@ impl Editor {
             current_command: String::new(),
             commands,
             keymaps,
+            keymap_registry: crate::keymap_registry::KeymapRegistry::kernel_defaults(),
             which_key_prefix: Vec::new(),
             which_key_scroll: 0,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
@@ -1247,7 +1253,7 @@ impl Editor {
     /// Buffer-kind overlays (git-status, file-tree, help, debug) and language
     /// overlays (org, markdown) sit on top of "normal" — if the overlay has no
     /// match, the caller should retry with the fallback.
-    pub fn current_keymap_names(&self) -> Option<(&'static str, Option<&'static str>)> {
+    pub fn current_keymap_names(&self) -> Option<(&str, Option<&str>)> {
         // Transient keypad/leader layer overrides mode-based keymap selection:
         // while active, keys resolve against the shared `leader` keymap (the mae
         // which-key tree), regardless of the underlying mode (Normal for the doom
@@ -1262,15 +1268,16 @@ impl Editor {
 
         match self.mode {
             Mode::Normal => {
-                // Buffer-kind overlay via BufferMode trait
-                use crate::buffer_mode::BufferMode;
-                if let Some(km_name) = kind.keymap_name() {
+                // Context keymap from the data-driven registry: buffer kind first
+                // (git-status, file-tree, navigation, …), then language overlay
+                // (org/markdown). Both fall back to "normal". No hardcoded match —
+                // a module can route a new kind/language without a kernel patch.
+                if let Some(km_name) = self.keymap_registry.context_for_kind(kind) {
                     Some((km_name, Some("normal")))
-                } else if lang == Some(Language::Org) {
-                    // Language overlays stay hardcoded until Language::keymap_name() exists
-                    Some(("org", Some("normal")))
-                } else if lang == Some(Language::Markdown) {
-                    Some(("markdown", Some("normal")))
+                } else if let Some(km_name) =
+                    lang.and_then(|l| self.keymap_registry.context_for_language(l))
+                {
+                    Some((km_name, Some("normal")))
                 } else {
                     Some(("normal", None))
                 }
@@ -1344,6 +1351,10 @@ impl Editor {
     /// bindings from the previous flavor (the `leader`/`insert` entries differ).
     pub fn reset_keymaps_to_kernel(&mut self) {
         self.keymaps = Self::default_keymaps();
+        // Re-seed the context routing to the kernel baseline too; module
+        // registrations (e.g. a "navigation" context, canvas artifact) re-apply
+        // on the subsequent module reload, exactly like the keymaps themselves.
+        self.keymap_registry = crate::keymap_registry::KeymapRegistry::kernel_defaults();
         self.leader_active = false;
         self.clear_which_key_prefix();
     }
