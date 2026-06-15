@@ -437,6 +437,17 @@ impl OptionRegistry {
                 opt!("collab_psk_command", &["collab-psk-command"],
                     "Shell command to retrieve the PSK (preferred over collab_psk for security)",
                     OptionKind::String, "", Some("collaboration.psk_command"), &[]),
+                opt!("collab_auth_mode", &["collab-auth-mode"],
+                    "Auth for the mae-daemon: none | psk | key (key = Ed25519 trusted-peer identity over mTLS)",
+                    OptionKind::String, "psk", Some("collaboration.auth_mode"),
+                    &["none", "psk", "key"]),
+                opt!("collab_host_key_policy", &["collab-host-key-policy"],
+                    "Trust policy for an unknown daemon identity in key mode: prompt | accept-new | strict",
+                    OptionKind::String, "prompt", Some("collaboration.host_key_policy"),
+                    &["prompt", "accept-new", "strict"]),
+                opt!("collab_tls", &["collab-tls"],
+                    "Use native mTLS in key mode (recommended; false = plaintext JSON KeyAuth)",
+                    OptionKind::Bool, "true", Some("collaboration.tls"), &[]),
 
                 // --- Daemon ---
                 opt!("daemon_enabled", &["daemon-enabled"],

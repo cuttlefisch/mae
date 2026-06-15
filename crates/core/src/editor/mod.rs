@@ -239,6 +239,15 @@ pub struct CollabState {
     pub psk: String,
     /// Shell command to retrieve the PSK (preferred over psk for security).
     pub psk_command: String,
+    /// Auth mode for connecting to the daemon: "none" | "psk" | "key".
+    /// "key" uses the Ed25519 trusted-peer identity (mTLS).
+    pub auth_mode: String,
+    /// Host-key (daemon identity) trust policy in key mode:
+    /// "prompt" (interactive TOFU) | "accept-new" | "strict".
+    pub host_key_policy: String,
+    /// Use native mTLS in key mode (recommended). When false, the plaintext
+    /// JSON KeyAuth handshake is used.
+    pub tls: bool,
 }
 
 impl CollabState {
@@ -272,6 +281,9 @@ impl CollabState {
             pending_kb_updates: Vec::new(),
             psk: String::new(),
             psk_command: String::new(),
+            auth_mode: "psk".to_string(),
+            host_key_policy: "prompt".to_string(),
+            tls: true,
         }
     }
 }

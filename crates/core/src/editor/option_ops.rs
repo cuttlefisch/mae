@@ -172,6 +172,9 @@ impl super::Editor {
                 }
             }
             "collab_psk_command" => self.collab.psk_command.clone(),
+            "collab_auth_mode" => self.collab.auth_mode.clone(),
+            "collab_host_key_policy" => self.collab.host_key_policy.clone(),
+            "collab_tls" => self.collab.tls.to_string(),
             "daemon_enabled" => self.kb.daemon_enabled.to_string(),
             "daemon_socket" => self.kb.daemon_socket.display().to_string(),
             "daemon_cache_size" => self.kb.daemon_cache_size.to_string(),
@@ -691,6 +694,28 @@ impl super::Editor {
             }
             "collab_psk_command" => {
                 self.collab.psk_command = value.to_string();
+            }
+            "collab_auth_mode" => match value {
+                "none" | "psk" | "key" => self.collab.auth_mode = value.to_string(),
+                _ => {
+                    return Err(format!(
+                        "Invalid collab_auth_mode: '{value}' (expected 'none', 'psk', or 'key')"
+                    ))
+                }
+            },
+            "collab_host_key_policy" => match value {
+                "prompt" | "accept-new" | "strict" => {
+                    self.collab.host_key_policy = value.to_string()
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid collab_host_key_policy: '{value}' (expected 'prompt', \
+                         'accept-new', or 'strict')"
+                    ))
+                }
+            },
+            "collab_tls" => {
+                self.collab.tls = parse_option_bool(value)?;
             }
             "daemon_enabled" => {
                 self.kb.daemon_enabled = parse_option_bool(value)?;

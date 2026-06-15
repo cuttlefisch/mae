@@ -620,6 +620,34 @@ fn collab_psk_accessible_via_scheme_alias() {
 }
 
 #[test]
+fn collab_auth_mode_validates_and_sets() {
+    let mut editor = Editor::new();
+    assert_eq!(editor.collab.auth_mode, "psk", "default auth mode");
+    assert!(editor.set_option("collab_auth_mode", "key").is_ok());
+    assert_eq!(editor.collab.auth_mode, "key");
+    assert!(editor.set_option("collab-auth-mode", "none").is_ok());
+    assert_eq!(editor.collab.auth_mode, "none");
+    assert!(
+        editor.set_option("collab_auth_mode", "bogus").is_err(),
+        "invalid auth mode must be rejected"
+    );
+}
+
+#[test]
+fn collab_host_key_policy_and_tls_options() {
+    let mut editor = Editor::new();
+    assert_eq!(editor.collab.host_key_policy, "prompt", "default policy");
+    assert!(editor.collab.tls, "tls defaults on");
+    assert!(editor
+        .set_option("collab_host_key_policy", "accept-new")
+        .is_ok());
+    assert_eq!(editor.collab.host_key_policy, "accept-new");
+    assert!(editor.set_option("collab_host_key_policy", "nope").is_err());
+    assert!(editor.set_option("collab_tls", "false").is_ok());
+    assert!(!editor.collab.tls);
+}
+
+#[test]
 fn collab_psk_option_registered_with_config_key() {
     let editor = Editor::new();
     let def = editor

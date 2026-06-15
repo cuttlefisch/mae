@@ -160,6 +160,7 @@ fn main() -> io::Result<()> {
         println!("  --init-config [--force] Write a commented template and run wizard");
         println!("  --print-config-path     Print the config file path and exit");
         println!("  --print-config-template Print the default commented template to stdout");
+        println!("  --collab-identity       Print this editor's collab peer identity (for `mae-daemon authorize`)");
         println!("  --gui                   Force GUI backend (default on a desktop session; auto-off over SSH/tty)");
         println!("  --no-gui, --tui, -nw    Force terminal mode (like emacs -nw)");
         println!("  --connect [ADDR]        Connect to daemon (like emacsclient -c)");
@@ -226,6 +227,38 @@ fn main() -> io::Result<()> {
     if args.iter().any(|a| a == "--print-config-template") {
         print!("{}", config::default_config_template());
         return Ok(());
+    }
+    // --collab-identity: print this editor's Ed25519 peer identity (generating
+    // it on first use) so an admin can authorize it on the daemon.
+    if args.iter().any(|a| a == "--collab-identity") {
+        let label = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "mae-editor".to_string());
+        match mae_mcp::identity::default_collab_dir() {
+            Some(dir) => match mae_mcp::identity::Identity::load_or_generate(&dir, &label) {
+                Ok(id) => {
+                    println!(
+                        "MAE collab peer identity ({}):",
+                        dir.join("id_ed25519").display()
+                    );
+                    println!("  fingerprint: {}", id.fingerprint());
+                    println!("  public key:  {}", id.public().to_line());
+                    println!();
+                    println!("Authorize on the daemon host with:");
+                    println!("  mae-daemon authorize {}", id.public().to_line());
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("error: failed to load/generate identity: {e}");
+                    std::process::exit(1);
+                }
+            },
+            None => {
+                eprintln!("error: cannot resolve collab dir (set XDG_DATA_HOME or HOME)");
+                std::process::exit(1);
+            }
+        }
     }
     if args.iter().any(|a| a == "--setup-agents") {
         let dir = args
