@@ -358,7 +358,9 @@ pub(crate) async fn run_terminal_loop(
         let reloads = std::mem::take(&mut editor.pending_module_reloads);
         for module_name in reloads {
             if module_name == "__all__" {
-                crate::bootstrap::reload_all_modules(scheme, editor);
+                // Full reload pipeline (init → modules → config.scm → default_mode),
+                // not modules-only, so `:reload-modules` matches startup (C1/H2).
+                crate::bootstrap::reload_everything(scheme, editor, None);
             } else if let Some(flavor) = module_name.strip_prefix("__flavor:") {
                 crate::bootstrap::switch_keymap_flavor(scheme, editor, flavor);
             } else {

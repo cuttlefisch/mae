@@ -1554,7 +1554,9 @@ impl GuiApp {
         let reloads = std::mem::take(&mut self.editor.pending_module_reloads);
         for module_name in reloads {
             if module_name == "__all__" {
-                bootstrap::reload_all_modules(&mut self.scheme, &mut self.editor);
+                // Full reload pipeline (init → modules → config.scm → default_mode),
+                // not modules-only, so `:reload-modules` matches startup (C1/H2).
+                bootstrap::reload_everything(&mut self.scheme, &mut self.editor, None);
             } else if let Some(flavor) = module_name.strip_prefix("__flavor:") {
                 bootstrap::switch_keymap_flavor(&mut self.scheme, &mut self.editor, flavor);
             } else {
