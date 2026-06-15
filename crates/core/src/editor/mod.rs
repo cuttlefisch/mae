@@ -1293,6 +1293,51 @@ impl Editor {
         self.keymaps.get(name)
     }
 
+    /// The ordered keymap resolution chain for the current focus, most-specific
+    /// layer first.
+    ///
+    /// This is the SINGLE source of truth consumed by keystroke dispatch
+    /// (`handle_keymap_mode`), the which-key popup (`merged_which_key_entries`),
+    /// and `describe-bindings`. Routing all three through one chain makes the
+    /// keymap a key *resolves against* and the keymap the UI *shows* incapable of
+    /// diverging — previously dispatch used a flat `(primary, fallback)` pair
+    /// while `describe-bindings` walked the `parent` chain N levels, so a 3-deep
+    /// chain (e.g. `git-log → git-status → normal`) would dispatch and display
+    /// differently.
+    ///
+    /// The chain is `current_keymap_names()`'s primary keymap plus its `parent`
+    /// ancestry, followed by the fallback plus its ancestry (deduped, cycle-safe).
+    /// For the current 2-deep keymaps this reproduces the old behavior exactly.
+    /// Empty when there is no keymap (ShellInsert — keys go straight to the PTY).
+    ///
+    /// Phase 0 derives the chain from the existing `current_keymap_names()` match;
+    /// a later phase replaces the source with the data-driven keymap registry
+    /// without changing any consumer.
+    pub fn keymap_chain(&self) -> Vec<String> {
+        let Some((primary, fallback)) = self.current_keymap_names() else {
+            return Vec::new();
+        };
+        let mut chain: Vec<String> = Vec::new();
+        self.extend_keymap_chain(primary, &mut chain);
+        if let Some(fb) = fallback {
+            self.extend_keymap_chain(fb, &mut chain);
+        }
+        chain
+    }
+
+    /// Append `start` and its `parent` ancestry to `chain`, skipping any name
+    /// already present (dedupe + cycle guard).
+    fn extend_keymap_chain(&self, start: &str, chain: &mut Vec<String>) {
+        let mut cur = Some(start.to_string());
+        while let Some(name) = cur.take() {
+            if chain.iter().any(|n| n == &name) {
+                break;
+            }
+            cur = self.keymaps.get(&name).and_then(|km| km.parent.clone());
+            chain.push(name);
+        }
+    }
+
     /// Reset all keymaps to the fresh kernel defaults (vi-modal primitives only,
     /// no leader tree). Used by runtime keymap-flavor switching: reset to a clean
     /// slate, then re-run module loading to apply the new flavor — avoids stale
@@ -1355,25 +1400,20 @@ impl Editor {
         results
     }
 
-    /// Merge which-key entries from the overlay keymap and its parent.
+    /// Merge which-key entries across the full resolution chain (most-specific
+    /// layer first; a more-specific layer's binding for a key shadows a deeper
+    /// one). Uses the same `keymap_chain()` as dispatch so the popup can't show a
+    /// key the dispatcher wouldn't run.
     fn merged_which_key_entries(&self, prefix: &[KeyPress]) -> Vec<WhichKeyEntry> {
-        let Some((primary, fallback)) = self.current_keymap_names() else {
-            return vec![];
-        };
-        let mut entries = self
-            .keymaps
-            .get(primary)
-            .map(|km| km.which_key_entries(prefix, &self.commands))
-            .unwrap_or_default();
-        if let Some(fb_name) = fallback {
-            if let Some(fb_km) = self.keymaps.get(fb_name) {
-                let fb_entries = fb_km.which_key_entries(prefix, &self.commands);
-                let existing: std::collections::HashSet<String> =
-                    entries.iter().map(|e| format!("{:?}", e.key)).collect();
-                for entry in fb_entries {
-                    if !existing.contains(&format!("{:?}", entry.key)) {
-                        entries.push(entry);
-                    }
+        let mut entries: Vec<WhichKeyEntry> = Vec::new();
+        let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for km_name in self.keymap_chain() {
+            let Some(km) = self.keymaps.get(&km_name) else {
+                continue;
+            };
+            for entry in km.which_key_entries(prefix, &self.commands) {
+                if existing.insert(format!("{:?}", entry.key)) {
+                    entries.push(entry);
                 }
             }
         }

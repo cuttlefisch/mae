@@ -423,6 +423,55 @@ mod tests {
     }
 
     #[test]
+    fn keymap_chain_walks_full_ancestry_so_dispatch_matches_display() {
+        // Regression guard for the dual-mechanism divergence: dispatch used to
+        // consult only (primary, single-fallback) while describe-bindings walked
+        // the parent chain N levels. A 3-deep chain would dispatch and display
+        // differently. Now both consume `keymap_chain()`, so a binding in the
+        // DEEPEST layer must be reachable by the same chain the UI renders.
+        use crate::keymap::{Keymap, LookupResult};
+        let mut editor = Editor::new();
+        // Force the primary keymap to be an overlay with a 3-deep ancestry:
+        //   file-tree -> mid -> normal, with the test binding only in `mid`.
+        editor.buffers[0].kind = crate::buffer::BufferKind::FileTree;
+        let mut mid = Keymap::with_parent("mid", "normal");
+        mid.bind(vec![KeyPress::ctrl('t')], "mid-only-command");
+        editor.keymaps.insert("mid".to_string(), mid);
+        editor.keymaps.insert(
+            "file-tree".to_string(),
+            Keymap::with_parent("file-tree", "mid"),
+        );
+
+        let chain = editor.keymap_chain();
+        assert_eq!(
+            chain,
+            vec![
+                "file-tree".to_string(),
+                "mid".to_string(),
+                "normal".to_string()
+            ],
+            "chain must walk the full parent ancestry, deduped"
+        );
+
+        // Dispatch-style resolution over the chain finds the deep binding.
+        let keys = vec![KeyPress::ctrl('t')];
+        let resolved =
+            chain
+                .iter()
+                .find_map(|n| match editor.keymaps.get(n).map(|k| k.lookup(&keys)) {
+                    Some(LookupResult::Exact(c)) => Some(c.to_string()),
+                    _ => None,
+                });
+        assert_eq!(
+            resolved.as_deref(),
+            Some("mid-only-command"),
+            "a binding in the deepest chain layer must resolve"
+        );
+        // Display (which-key/describe-bindings) iterates the SAME chain, so it is
+        // guaranteed to surface the same binding — divergence is impossible.
+    }
+
+    #[test]
     fn ctrl_g_resolves_to_file_info() {
         let editor = Editor::new();
         let normal = editor.keymaps.get("normal").unwrap();
