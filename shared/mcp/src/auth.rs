@@ -428,6 +428,298 @@ impl AuthProvider for PskAuth {
     }
 }
 
+// --- KeyAuth (asymmetric Ed25519, ADR-017) ---
+
+use crate::identity::{AuthorizedKeys, HostKeyVerifier, Identity, PublicKey};
+use std::sync::Arc;
+
+/// Asymmetric peer authentication: a mutual signed-challenge handshake over
+/// Ed25519 keys. The server trusts a set of client public keys
+/// (`authorized_keys`); the client pins the server's key via a
+/// [`HostKeyVerifier`] (TOFU). See ADR-017.
+pub struct KeyAuth {
+    identity: Arc<Identity>,
+    role: KeyRole,
+}
+
+enum KeyRole {
+    Server {
+        authorized: Arc<AuthorizedKeys>,
+    },
+    Client {
+        addr: String,
+        verifier: Arc<dyn HostKeyVerifier>,
+    },
+}
+
+impl KeyAuth {
+    /// Build a server-side provider trusting the given client keys.
+    pub fn server(identity: Arc<Identity>, authorized: Arc<AuthorizedKeys>) -> Self {
+        Self {
+            identity,
+            role: KeyRole::Server { authorized },
+        }
+    }
+
+    /// Build a client-side provider that verifies the daemon at `addr` via
+    /// `verifier` (TOFU / known_hosts policy).
+    pub fn client(
+        identity: Arc<Identity>,
+        addr: String,
+        verifier: Arc<dyn HostKeyVerifier>,
+    ) -> Self {
+        Self {
+            identity,
+            role: KeyRole::Client { addr, verifier },
+        }
+    }
+
+    fn gen_nonce_b64() -> String {
+        let mut bytes = [0u8; 16];
+        rand::rng().fill_bytes(&mut bytes);
+        b64::encode(&bytes)
+    }
+}
+
+#[async_trait::async_trait]
+impl AuthProvider for KeyAuth {
+    async fn server_handshake<R, W>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> Result<AuthResult, AuthError>
+    where
+        R: AsyncBufRead + Unpin + Send,
+        W: AsyncWrite + Unpin + Send,
+    {
+        let authorized = match &self.role {
+            KeyRole::Server { authorized } => authorized,
+            KeyRole::Client { .. } => {
+                return Err(AuthError::Protocol("KeyAuth client used as server".into()))
+            }
+        };
+
+        // 1. Read client hello.
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        let hello: KeyHello = serde_json::from_str(line.trim())
+            .map_err(|e| AuthError::Protocol(format!("invalid key hello: {e}")))?;
+        if hello.auth != "key-hello" || hello.v != 1 {
+            return Err(AuthError::Protocol("unexpected key hello".into()));
+        }
+        let client_pub = PublicKey::from_encoded(&hello.client_pub, None)
+            .ok_or_else(|| AuthError::Protocol("bad client public key".into()))?;
+        let client_nonce = b64::decode(&hello.client_nonce)
+            .ok_or_else(|| AuthError::Protocol("bad nonce".into()))?;
+
+        // 2. Send offer with server proof (signature over the transcript).
+        let server_nonce_b64 = Self::gen_nonce_b64();
+        let server_nonce = b64::decode(&server_nonce_b64).unwrap();
+        let server_pub = self.identity.public();
+        let t = crate::identity::transcript(
+            &client_pub.to_bytes(),
+            &server_pub.to_bytes(),
+            &client_nonce,
+            &server_nonce,
+        );
+        let sig_s = self.identity.sign(&t);
+        let offer = KeyOffer {
+            auth: "key-offer".to_string(),
+            server_pub: server_pub.encoded(),
+            server_nonce: server_nonce_b64,
+            sig: b64::encode(&sig_s),
+        };
+        write_line(writer, &serde_json::to_string(&offer).unwrap()).await?;
+
+        // 3. Read client auth (its signature over the same transcript).
+        line.clear();
+        reader.read_line(&mut line).await?;
+        let auth_msg: KeyAuthMsg = serde_json::from_str(line.trim())
+            .map_err(|e| AuthError::Protocol(format!("invalid key auth: {e}")))?;
+        let sig_c = b64::decode(&auth_msg.sig)
+            .ok_or_else(|| AuthError::Protocol("bad client sig".into()))?;
+
+        // 4. Verify the client owns its key.
+        if !client_pub.verify(&t, &sig_c) {
+            send_fail(writer, "invalid client signature").await?;
+            warn!("KeyAuth: client signature invalid");
+            return Err(AuthError::Rejected("invalid client signature".into()));
+        }
+
+        // 5. Is the client key authorized?
+        match authorized.authorize(&client_pub.to_bytes()) {
+            Some(label) => {
+                let client_label = if label.is_empty() {
+                    client_pub.fingerprint()
+                } else {
+                    label
+                };
+                send_ok(writer).await?;
+                info!(client = %client_label, fp = %client_pub.fingerprint(), "KeyAuth succeeded");
+                Ok(AuthResult { client_label })
+            }
+            None => {
+                send_fail(writer, "public key not authorized").await?;
+                warn!(fp = %client_pub.fingerprint(), "KeyAuth: client key not authorized");
+                Err(AuthError::Rejected(format!(
+                    "client key not authorized (fingerprint {})",
+                    client_pub.fingerprint()
+                )))
+            }
+        }
+    }
+
+    async fn client_handshake<R, W>(&self, reader: &mut R, writer: &mut W) -> Result<(), AuthError>
+    where
+        R: AsyncBufRead + Unpin + Send,
+        W: AsyncWrite + Unpin + Send,
+    {
+        let (addr, verifier) = match &self.role {
+            KeyRole::Client { addr, verifier } => (addr, verifier),
+            KeyRole::Server { .. } => {
+                return Err(AuthError::Protocol("KeyAuth server used as client".into()))
+            }
+        };
+
+        // 1. Send hello.
+        let client_nonce_b64 = Self::gen_nonce_b64();
+        let client_nonce = b64::decode(&client_nonce_b64).unwrap();
+        let client_pub = self.identity.public();
+        let hello = KeyHello {
+            auth: "key-hello".to_string(),
+            v: 1,
+            client_pub: client_pub.encoded(),
+            client_nonce: client_nonce_b64,
+        };
+        write_line(writer, &serde_json::to_string(&hello).unwrap()).await?;
+
+        // 2. Read offer.
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        let offer: KeyOffer = serde_json::from_str(line.trim())
+            .map_err(|e| AuthError::Protocol(format!("invalid key offer: {e}")))?;
+        if offer.auth != "key-offer" {
+            return Err(AuthError::Protocol("expected key offer".into()));
+        }
+        let server_pub = PublicKey::from_encoded(&offer.server_pub, None)
+            .ok_or_else(|| AuthError::Protocol("bad server public key".into()))?;
+        let server_nonce = b64::decode(&offer.server_nonce)
+            .ok_or_else(|| AuthError::Protocol("bad nonce".into()))?;
+        let sig_s =
+            b64::decode(&offer.sig).ok_or_else(|| AuthError::Protocol("bad server sig".into()))?;
+
+        let t = crate::identity::transcript(
+            &client_pub.to_bytes(),
+            &server_pub.to_bytes(),
+            &client_nonce,
+            &server_nonce,
+        );
+
+        // 3. Verify the server owns the key it presented.
+        if !server_pub.verify(&t, &sig_s) {
+            return Err(AuthError::Rejected("server signature invalid".into()));
+        }
+
+        // 4. TOFU / known_hosts policy.
+        if !verifier.verify(addr, &server_pub) {
+            return Err(AuthError::Rejected(format!(
+                "daemon host key not trusted (fingerprint {})",
+                server_pub.fingerprint()
+            )));
+        }
+
+        // 5. Prove we own our key.
+        let sig_c = self.identity.sign(&t);
+        let auth_msg = KeyAuthMsg {
+            auth: "key-auth".to_string(),
+            sig: b64::encode(&sig_c),
+        };
+        write_line(writer, &serde_json::to_string(&auth_msg).unwrap()).await?;
+
+        // 6. Read result.
+        line.clear();
+        reader.read_line(&mut line).await?;
+        if let Ok(ok) = serde_json::from_str::<AuthOk>(line.trim()) {
+            if ok.auth == "ok" {
+                return Ok(());
+            }
+        }
+        if let Ok(fail) = serde_json::from_str::<AuthFail>(line.trim()) {
+            return Err(AuthError::Rejected(fail.reason));
+        }
+        Err(AuthError::Protocol("unexpected key auth result".into()))
+    }
+
+    fn name(&self) -> &str {
+        "key"
+    }
+}
+
+async fn write_line<W>(writer: &mut W, s: &str) -> Result<(), AuthError>
+where
+    W: AsyncWrite + Unpin + Send,
+{
+    writer.write_all(s.as_bytes()).await?;
+    writer.write_all(b"\n").await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+async fn send_ok<W>(writer: &mut W) -> Result<(), AuthError>
+where
+    W: AsyncWrite + Unpin + Send,
+{
+    write_line(
+        writer,
+        &serde_json::to_string(&AuthOk { auth: "ok".into() }).unwrap(),
+    )
+    .await
+}
+
+async fn send_fail<W>(writer: &mut W, reason: &str) -> Result<(), AuthError>
+where
+    W: AsyncWrite + Unpin + Send,
+{
+    let fail = AuthFail {
+        auth: "fail".to_string(),
+        reason: reason.to_string(),
+    };
+    write_line(writer, &serde_json::to_string(&fail).unwrap()).await
+}
+
+/// base64 helpers for the key handshake wire form.
+mod b64 {
+    use base64::prelude::{Engine as _, BASE64_STANDARD};
+    pub fn encode(bytes: &[u8]) -> String {
+        BASE64_STANDARD.encode(bytes)
+    }
+    pub fn decode(s: &str) -> Option<Vec<u8>> {
+        BASE64_STANDARD.decode(s).ok()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct KeyHello {
+    auth: String,
+    v: u32,
+    client_pub: String,
+    client_nonce: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct KeyOffer {
+    auth: String,
+    server_pub: String,
+    server_nonce: String,
+    sig: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct KeyAuthMsg {
+    auth: String,
+    sig: String,
+}
+
 // --- Wire format ---
 
 #[derive(Serialize, Deserialize)]
@@ -708,5 +1000,108 @@ mod tests {
         assert!(hex::decode("abc").is_none(), "odd length rejected");
         let bytes = [1u8, 2, 250, 3];
         assert_eq!(hex::decode(&hex::encode(bytes)).unwrap(), bytes);
+    }
+
+    // --- KeyAuth (asymmetric) ---
+
+    use crate::identity::{AuthorizedKeys, HostKeyVerifier, Identity, PublicKey};
+
+    /// Test verifier with a fixed accept/reject decision and optional expected key.
+    struct StubVerifier {
+        accept: bool,
+    }
+    impl HostKeyVerifier for StubVerifier {
+        fn verify(&self, _addr: &str, _server_pub: &PublicKey) -> bool {
+            self.accept
+        }
+    }
+
+    fn empty_authorized() -> AuthorizedKeys {
+        // A path that does not exist → empty trust store (no I/O on load).
+        AuthorizedKeys::load(std::path::Path::new(
+            "/nonexistent/mae-test/authorized_keys",
+        ))
+    }
+
+    async fn run_key_handshake(
+        server: KeyAuth,
+        client: KeyAuth,
+    ) -> (Result<AuthResult, AuthError>, Result<(), AuthError>) {
+        let (client_stream, server_stream) = duplex(8192);
+        let (cr, cw) = tokio::io::split(client_stream);
+        let (sr, sw) = tokio::io::split(server_stream);
+        let sh = tokio::spawn(async move {
+            let mut sr = BufReader::new(sr);
+            let mut sw = tokio::io::BufWriter::new(sw);
+            server.server_handshake(&mut sr, &mut sw).await
+        });
+        let ch = tokio::spawn(async move {
+            let mut cr = BufReader::new(cr);
+            let mut cw = tokio::io::BufWriter::new(cw);
+            client.client_handshake(&mut cr, &mut cw).await
+        });
+        let (s, c) = tokio::join!(sh, ch);
+        (s.unwrap(), c.unwrap())
+    }
+
+    #[tokio::test]
+    async fn keyauth_authorized_client_succeeds() {
+        let server_id = Arc::new(Identity::generate("daemon"));
+        let client_id = Arc::new(Identity::generate("laptop"));
+
+        // Server authorizes the client's public key (add() persists to disk).
+        let dir = std::env::temp_dir().join(format!("mae-ka-ok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut authorized = AuthorizedKeys::load(&dir.join("authorized_keys"));
+        authorized.add(client_id.public()).unwrap();
+        let authorized = Arc::new(authorized);
+
+        let server = KeyAuth::server(server_id.clone(), authorized);
+        let client = KeyAuth::client(
+            client_id.clone(),
+            "daemon:9473".to_string(),
+            Arc::new(StubVerifier { accept: true }),
+        );
+
+        let (s, c) = run_key_handshake(server, client).await;
+        assert!(s.is_ok(), "server: {:?}", s.err());
+        assert!(c.is_ok(), "client: {:?}", c.err());
+        assert_eq!(s.unwrap().client_label, "laptop");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn keyauth_unauthorized_client_rejected() {
+        let server_id = Arc::new(Identity::generate("daemon"));
+        let client_id = Arc::new(Identity::generate("intruder"));
+        let server = KeyAuth::server(server_id, Arc::new(empty_authorized()));
+        let client = KeyAuth::client(
+            client_id,
+            "daemon:9473".to_string(),
+            Arc::new(StubVerifier { accept: true }),
+        );
+        let (s, c) = run_key_handshake(server, client).await;
+        assert!(s.is_err(), "unauthorized client must be rejected by server");
+        assert!(c.is_err(), "client must see the rejection");
+    }
+
+    #[tokio::test]
+    async fn keyauth_client_rejects_untrusted_host() {
+        // Client's verifier rejects the host key → client aborts before authorizing.
+        let server_id = Arc::new(Identity::generate("daemon"));
+        let client_id = Arc::new(Identity::generate("laptop"));
+        let dir = std::env::temp_dir().join(format!("mae-ka-host-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut authorized = AuthorizedKeys::load(&dir.join("authorized_keys"));
+        authorized.add(client_id.public()).unwrap();
+        let server = KeyAuth::server(server_id, Arc::new(authorized));
+        let client = KeyAuth::client(
+            client_id,
+            "daemon:9473".to_string(),
+            Arc::new(StubVerifier { accept: false }),
+        );
+        let (_s, c) = run_key_handshake(server, client).await;
+        assert!(c.is_err(), "client must abort on untrusted host key");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

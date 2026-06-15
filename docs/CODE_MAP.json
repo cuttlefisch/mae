@@ -777,6 +777,10 @@
           "kind": "mod"
         },
         {
+          "name": "identity",
+          "kind": "mod"
+        },
+        {
           "name": "keystore",
           "kind": "mod"
         },
