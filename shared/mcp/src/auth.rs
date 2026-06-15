@@ -1007,6 +1007,7 @@ mod tests {
     use crate::identity::{AuthorizedKeys, HostKeyVerifier, Identity, PublicKey};
 
     /// Test verifier with a fixed accept/reject decision and optional expected key.
+    #[derive(Debug)]
     struct StubVerifier {
         accept: bool,
     }

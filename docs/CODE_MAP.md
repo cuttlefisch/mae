@@ -320,6 +320,7 @@ Source: `shared/mcp/src/lib.rs`
 | `keystore` | mod |
 | `protocol` | mod |
 | `session` | mod |
+| `tls` | mod |
 | `McpToolRequest` | struct |
 | `McpToolResult` | struct |
 | `McpServer` | struct |

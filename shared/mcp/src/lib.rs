@@ -48,6 +48,7 @@ pub mod identity;
 pub mod keystore;
 pub mod protocol;
 pub mod session;
+pub mod tls;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

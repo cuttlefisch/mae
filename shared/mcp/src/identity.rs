@@ -35,10 +35,39 @@ pub fn default_collab_dir() -> Option<PathBuf> {
 // --- PublicKey ---
 
 /// A peer's public key plus an optional human label.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PublicKey {
     key: VerifyingKey,
     pub label: Option<String>,
+}
+
+/// An authenticated peer's identity, recovered from a verified key/cert.
+/// Authoritative for attribution + membership (ADR-017 strict binding).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PeerIdentity {
+    /// Human label (from authorized_keys / the cert CN), else the fingerprint.
+    pub label: String,
+    /// SHA256 fingerprint of the public key.
+    pub fingerprint: String,
+    /// Raw 32-byte Ed25519 public key.
+    pub pubkey: [u8; 32],
+}
+
+impl PeerIdentity {
+    /// A synthetic identity for non-key auth modes (psk/none), so handlers have
+    /// a uniform type. `label` comes from the auth result; no real key.
+    pub fn synthetic(label: &str) -> Self {
+        Self {
+            label: label.to_string(),
+            fingerprint: String::new(),
+            pubkey: [0u8; 32],
+        }
+    }
+
+    /// True for a real (key-authenticated) identity, false for synthetic.
+    pub fn is_authenticated(&self) -> bool {
+        self.pubkey != [0u8; 32]
+    }
 }
 
 impl PublicKey {
@@ -149,6 +178,15 @@ impl Identity {
         self.signing.sign(msg).to_bytes().to_vec()
     }
 
+    /// PKCS#8 DER encoding of the private key (for building a TLS keypair).
+    pub fn pkcs8_der(&self) -> Result<Vec<u8>, String> {
+        use ed25519_dalek::pkcs8::EncodePrivateKey;
+        self.signing
+            .to_pkcs8_der()
+            .map(|d| d.as_bytes().to_vec())
+            .map_err(|e| format!("pkcs8 encode failed: {e}"))
+    }
+
     /// Load the identity from `dir/id_ed25519`, generating + persisting one
     /// (0600 private key, public-key line) if absent.
     pub fn load_or_generate(dir: &Path, label: &str) -> std::io::Result<Self> {
@@ -252,6 +290,7 @@ impl KnownHosts {
 // --- authorized_keys (daemon trusts client keys) ---
 
 /// Trusted client public keys (daemon side).
+#[derive(Debug)]
 pub struct AuthorizedKeys {
     path: PathBuf,
     entries: Vec<PublicKey>,
@@ -370,7 +409,8 @@ impl HostKeyPolicy {
 
 /// Decides whether to trust a daemon's presented public key. Implementations
 /// handle `known_hosts` pinning, policy, and (in the editor) prompting.
-pub trait HostKeyVerifier: Send + Sync {
+/// `Debug` is required because this is held inside a rustls cert verifier.
+pub trait HostKeyVerifier: Send + Sync + std::fmt::Debug {
     /// Return `true` to proceed with `server_pub` from `addr`, `false` to abort.
     fn verify(&self, addr: &str, server_pub: &PublicKey) -> bool;
 }
@@ -378,6 +418,7 @@ pub trait HostKeyVerifier: Send + Sync {
 /// Default `known_hosts`-backed verifier: pins on first use per `policy`, and
 /// always aborts when a previously pinned key changes (MITM defense). Cannot
 /// prompt — under `Prompt` it rejects unknown hosts (the editor overrides).
+#[derive(Debug)]
 pub struct FileHostKeyVerifier {
     pub path: PathBuf,
     pub policy: HostKeyPolicy,

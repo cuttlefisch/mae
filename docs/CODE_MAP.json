@@ -793,6 +793,10 @@
           "kind": "mod"
         },
         {
+          "name": "tls",
+          "kind": "mod"
+        },
+        {
           "name": "McpToolRequest",
           "kind": "struct"
         },
