@@ -82,6 +82,9 @@ pub struct AuthConfig {
     /// (mode = "key") Directory holding the daemon's Ed25519 identity. Defaults
     /// to `$XDG_DATA_HOME/mae/collab`.
     pub identity_dir: Option<String>,
+    /// (mode = "key") Use native mTLS for confidentiality (recommended). When
+    /// false, falls back to the plaintext JSON KeyAuth handshake.
+    pub tls: bool,
 }
 
 impl Default for AuthConfig {
@@ -93,6 +96,7 @@ impl Default for AuthConfig {
             keystore: None,
             authorized_keys: None,
             identity_dir: None,
+            tls: true,
         }
     }
 }

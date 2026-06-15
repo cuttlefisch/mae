@@ -50,6 +50,10 @@ pub struct ClientSession {
     pub events_delivered: u64,
     /// Total events dropped due to backpressure.
     pub events_dropped: u64,
+    /// The authenticated peer identity (key/TLS modes). `None` for anonymous
+    /// (no-auth) sessions. Authoritative for attribution + KB membership
+    /// (ADR-017 strict binding).
+    pub peer_identity: Option<crate::identity::PeerIdentity>,
 }
 
 impl ClientSession {
@@ -67,7 +71,25 @@ impl ClientSession {
             tool_calls: 0,
             events_delivered: 0,
             events_dropped: 0,
+            peer_identity: None,
         }
+    }
+
+    /// Create a session bound to an authenticated peer identity.
+    pub fn with_identity(identity: crate::identity::PeerIdentity) -> Self {
+        Self {
+            peer_identity: Some(identity),
+            ..Self::new()
+        }
+    }
+
+    /// The authenticated peer label, if this session is key/TLS-authenticated
+    /// with a real (non-synthetic) identity.
+    pub fn authenticated_label(&self) -> Option<&str> {
+        self.peer_identity
+            .as_ref()
+            .filter(|p| p.is_authenticated())
+            .map(|p| p.label.as_str())
     }
 
     /// Update the last activity timestamp.

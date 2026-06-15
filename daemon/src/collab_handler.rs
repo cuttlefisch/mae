@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use mae_mcp::broadcast::{EditorEvent, SharedBroadcaster};
+use mae_mcp::identity::PeerIdentity;
 use mae_mcp::protocol::{JsonRpcRequest, JsonRpcResponse, McpError, ToolInfo};
 use mae_mcp::session::ClientSession;
 use mae_mcp::{McpToolRequest, McpToolResult};
@@ -45,32 +46,82 @@ pub async fn handle_client_with_auth<R, W, A>(
     W: AsyncWrite + Unpin + Send,
     A: AuthProvider,
 {
-    match auth.server_handshake(&mut reader, &mut writer).await {
+    let peer = match auth.server_handshake(&mut reader, &mut writer).await {
         Ok(result) => {
             info!(
                 auth = auth.name(),
                 client = %result.client_label,
                 "auth handshake succeeded"
             );
+            // The JSON handshake proves a credential but carries no public key,
+            // so bind a synthetic identity from the authenticated label.
+            PeerIdentity::synthetic(&result.client_label)
         }
         Err(e) => {
             warn!(auth = auth.name(), error = %e, "auth handshake failed, dropping connection");
             return;
         }
-    }
-    handle_client(reader, writer, doc_store, broadcaster, start_time).await;
+    };
+    handle_client_authenticated(reader, writer, peer, doc_store, broadcaster, start_time).await;
+}
+
+/// Anonymous (no-auth) connection — used for the loopback/`none` mode.
+pub async fn handle_client<R, W>(
+    reader: R,
+    writer: W,
+    doc_store: Arc<DocStore>,
+    broadcaster: SharedBroadcaster,
+    start_time: std::time::Instant,
+) where
+    R: AsyncBufRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin,
+{
+    run_session(
+        ClientSession::new(),
+        reader,
+        writer,
+        doc_store,
+        broadcaster,
+        start_time,
+    )
+    .await;
+}
+
+/// Authenticated connection — binds `peer` (from mTLS or the JSON handshake) to
+/// the session so attribution + KB membership reflect the verified identity.
+pub async fn handle_client_authenticated<R, W>(
+    reader: R,
+    writer: W,
+    peer: PeerIdentity,
+    doc_store: Arc<DocStore>,
+    broadcaster: SharedBroadcaster,
+    start_time: std::time::Instant,
+) where
+    R: AsyncBufRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin,
+{
+    run_session(
+        ClientSession::with_identity(peer),
+        reader,
+        writer,
+        doc_store,
+        broadcaster,
+        start_time,
+    )
+    .await;
 }
 
 /// Run the client handler loop for a single connection.
 ///
-/// Generic over reader/writer — works with TCP, Unix, or any async stream.
+/// Generic over reader/writer — works with TCP, TLS, Unix, or any async stream.
 ///
 /// CANCEL-SAFETY: `read_message` uses `read_line` / `read_exact` internally,
 /// which are NOT cancel-safe — if a `tokio::select!` cancels them mid-read the
 /// BufReader is left in a corrupted state (header consumed, body still pending).
 /// To avoid this, we spawn a dedicated reader task that feeds complete messages
 /// into an mpsc channel, so `read_message` always runs to completion.
-pub async fn handle_client<R, W>(
+async fn run_session<R, W>(
+    mut session: ClientSession,
     reader: R,
     mut writer: W,
     doc_store: Arc<DocStore>,
@@ -82,7 +133,9 @@ pub async fn handle_client<R, W>(
 {
     let write_timeout = std::time::Duration::from_secs(WRITE_TIMEOUT_SECS);
 
-    let mut session = ClientSession::new();
+    if let Some(label) = session.authenticated_label() {
+        info!(session = session.id, peer = %label, "authenticated peer");
+    }
     let session_id = session.id;
     info!(session = session_id, "collab client connected");
 

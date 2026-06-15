@@ -40,9 +40,15 @@ enum CollabAuth {
     None,
     /// Symmetric pre-shared keys (trusted_keys keystore + legacy psk).
     Psk(Arc<mae_mcp::auth::PskAuth>),
-    /// Asymmetric Ed25519 (ADR-017): the daemon's identity + trusted client keys.
+    /// Asymmetric Ed25519, plaintext JSON KeyAuth handshake (tls=false fallback).
     Key {
         identity: Arc<mae_mcp::identity::Identity>,
+        authorized: Arc<mae_mcp::identity::AuthorizedKeys>,
+    },
+    /// Asymmetric Ed25519 over native mTLS (default for key mode) — encryption +
+    /// mutual auth + pinning unified in the TLS layer (ADR-017).
+    KeyTls {
+        acceptor: mae_mcp::tls::TlsAcceptor,
         authorized: Arc<mae_mcp::identity::AuthorizedKeys>,
     },
 }
@@ -391,15 +397,40 @@ async fn spawn_collab_server(config: &DaemonConfig) {
                 warn!("collab service disabled");
                 return;
             }
-            info!(
-                auth = "key",
-                fingerprint = %identity.fingerprint(),
-                authorized = authorized.len(),
-                "collab authentication configured"
-            );
-            CollabAuth::Key {
-                identity,
-                authorized: Arc::new(authorized),
+            let authorized = Arc::new(authorized);
+            if collab.auth.tls {
+                match mae_mcp::tls::server_config(&identity, authorized.clone()) {
+                    Ok(cfg) => {
+                        info!(
+                            auth = "key",
+                            tls = true,
+                            fingerprint = %identity.fingerprint(),
+                            authorized = authorized.len(),
+                            "collab authentication configured (mTLS)"
+                        );
+                        CollabAuth::KeyTls {
+                            acceptor: mae_mcp::tls::TlsAcceptor::from(cfg),
+                            authorized,
+                        }
+                    }
+                    Err(e) => {
+                        error!(error = %e, "failed to build TLS server config");
+                        warn!("collab service disabled");
+                        return;
+                    }
+                }
+            } else {
+                info!(
+                    auth = "key",
+                    tls = false,
+                    fingerprint = %identity.fingerprint(),
+                    authorized = authorized.len(),
+                    "collab authentication configured (plaintext KeyAuth)"
+                );
+                CollabAuth::Key {
+                    identity,
+                    authorized,
+                }
             }
         }
         other => {
@@ -468,12 +499,48 @@ async fn spawn_collab_server(config: &DaemonConfig) {
             match tcp_listener.accept().await {
                 Ok((stream, addr)) => {
                     info!(addr = %addr, "collab TCP client connected");
-                    let (reader, writer) = stream.into_split();
-                    let reader = BufReader::new(reader);
                     let store = Arc::clone(&doc_store);
                     let bc = Arc::clone(&broadcaster);
                     let auth = collab_auth.clone();
                     tokio::spawn(async move {
+                        // mTLS path needs the whole stream (cannot pre-split).
+                        if let CollabAuth::KeyTls {
+                            acceptor,
+                            authorized,
+                        } = auth
+                        {
+                            match acceptor.accept(stream).await {
+                                Ok(tls) => {
+                                    let peer = {
+                                        let (_, conn) = tls.get_ref();
+                                        conn.peer_certificates().and_then(|c| {
+                                            mae_mcp::tls::peer_identity_from_tls(c, &authorized)
+                                        })
+                                    };
+                                    let Some(peer) = peer else {
+                                        warn!(%addr, "TLS peer cert not resolvable to an identity");
+                                        return;
+                                    };
+                                    info!(%addr, peer = %peer.label, "mTLS client authenticated");
+                                    let (r, w) = tokio::io::split(tls);
+                                    collab_handler::handle_client_authenticated(
+                                        BufReader::new(r),
+                                        w,
+                                        peer,
+                                        store,
+                                        bc,
+                                        server_start_time,
+                                    )
+                                    .await;
+                                }
+                                Err(e) => warn!(%addr, error = %e, "TLS handshake failed"),
+                            }
+                            return;
+                        }
+
+                        // Plaintext paths (psk / legacy key / none): split the TCP stream.
+                        let (reader, writer) = stream.into_split();
+                        let reader = BufReader::new(reader);
                         match auth {
                             CollabAuth::Psk(a) => {
                                 collab_handler::handle_client_with_auth(
@@ -511,6 +578,7 @@ async fn spawn_collab_server(config: &DaemonConfig) {
                                 )
                                 .await;
                             }
+                            CollabAuth::KeyTls { .. } => unreachable!("handled above"),
                         }
                     });
                 }
@@ -555,6 +623,15 @@ fn run_check_config() {
             }
         }
         if config.collab.auth.mode == "key" {
+            println!(
+                "  auth.tls: {} ({})",
+                config.collab.auth.tls,
+                if config.collab.auth.tls {
+                    "mTLS — encrypted"
+                } else {
+                    "plaintext JSON KeyAuth"
+                }
+            );
             if let Some(dir) = config.collab.auth.identity_dir() {
                 match mae_mcp::identity::Identity::load_or_generate(&dir, "daemon") {
                     Ok(id) => println!("  auth.identity: {}", id.fingerprint()),

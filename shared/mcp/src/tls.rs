@@ -25,6 +25,10 @@ use rustls::{
 
 use crate::identity::{AuthorizedKeys, HostKeyVerifier, Identity, PeerIdentity, PublicKey};
 
+// Re-export the tokio-rustls types so the daemon + editor don't need a direct
+// dep on tokio-rustls (they already depend on mae-mcp).
+pub use tokio_rustls::{TlsAcceptor, TlsConnector};
+
 /// The ring-based crypto provider (explicit, never the process default).
 pub fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
