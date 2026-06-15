@@ -137,6 +137,9 @@ async fn run_session<R, W>(
         info!(session = session.id, peer = %label, "authenticated peer");
     }
     let session_id = session.id;
+    // The authoritative peer label (key/TLS sessions only). When present it
+    // overrides self-claimed creator/user_name/saved_by (ADR-017 strict binding).
+    let auth_label: Option<String> = session.authenticated_label().map(str::to_string);
     info!(session = session_id, "collab client connected");
 
     // Track which docs this session has interacted with for disconnect cleanup.
@@ -235,12 +238,12 @@ async fn run_session<R, W>(
                 // Notifications must not generate a response — handle and continue.
                 if is_doc && is_notif {
                     debug!(session = session_id, "notification detected, handling without response");
-                    handle_doc_notification(&msg, &doc_store, &broadcaster, session_id, &mut session_docs).await;
+                    handle_doc_notification_inner(&msg, &doc_store, &broadcaster, session_id, auth_label.as_deref(), &mut session_docs).await;
                     continue;
                 }
 
                 let mut response = if is_doc {
-                    handle_doc_request(&msg, &doc_store, &broadcaster, start_time, session_id, &mut session_docs).await
+                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), &mut session_docs).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
@@ -390,11 +393,23 @@ fn is_notification(msg: &str) -> bool {
 ///
 /// Unlike `handle_doc_request`, this does NOT return a response — per JSON-RPC 2.0,
 /// notifications must not be replied to. Currently handles `sync/awareness` relay.
+#[cfg(test)]
 async fn handle_doc_notification(
+    msg: &str,
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    session_id: u64,
+    session_docs: &mut HashSet<String>,
+) {
+    handle_doc_notification_inner(msg, doc_store, broadcaster, session_id, None, session_docs).await
+}
+
+async fn handle_doc_notification_inner(
     msg: &str,
     _doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     session_id: u64,
+    auth_label: Option<&str>,
     session_docs: &mut HashSet<String>,
 ) {
     // Parse method and params manually — no JsonRpcRequest (requires `id`).
@@ -428,11 +443,15 @@ async fn handle_doc_notification(
                     &EditorEvent::AwarenessUpdate {
                         doc_id: doc_name,
                         client_id: session_id,
-                        user_name: state
-                            .get("user_name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown")
-                            .to_string(),
+                        // Strict binding: an authenticated peer's cursor label is
+                        // its verified identity, not a self-claimed name.
+                        user_name: auth_label.map(str::to_string).unwrap_or_else(|| {
+                            state
+                                .get("user_name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string()
+                        }),
                         cursor_row: state
                             .get("cursor_row")
                             .and_then(|v| v.as_u64())
@@ -470,13 +489,38 @@ async fn handle_doc_notification(
     }
 }
 
-/// Handle document-level methods directly (without editor tool dispatch).
+/// Anonymous wrapper used by the test suite (no authenticated identity).
+#[cfg(test)]
 async fn handle_doc_request(
     msg: &str,
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     start_time: std::time::Instant,
     session_id: u64,
+    session_docs: &mut HashSet<String>,
+) -> JsonRpcResponse {
+    handle_doc_request_inner(
+        msg,
+        doc_store,
+        broadcaster,
+        start_time,
+        session_id,
+        None,
+        session_docs,
+    )
+    .await
+}
+
+/// Handle document-level methods directly (without editor tool dispatch).
+/// `auth_label` (key/TLS sessions) is authoritative for attribution (ADR-017).
+#[allow(clippy::too_many_arguments)]
+async fn handle_doc_request_inner(
+    msg: &str,
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    start_time: std::time::Instant,
+    session_id: u64,
+    auth_label: Option<&str>,
     session_docs: &mut HashSet<String>,
 ) -> JsonRpcResponse {
     let request: JsonRpcRequest = match serde_json::from_str(msg) {
@@ -608,11 +652,14 @@ async fn handle_doc_request(
                     &EditorEvent::AwarenessUpdate {
                         doc_id: doc_name.clone(),
                         client_id: session_id,
-                        user_name: state
-                            .get("user_name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown")
-                            .to_string(),
+                        // Strict binding: authenticated peer's cursor label wins.
+                        user_name: auth_label.map(str::to_string).unwrap_or_else(|| {
+                            state
+                                .get("user_name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string()
+                        }),
                         cursor_row: state
                             .get("cursor_row")
                             .and_then(|v| v.as_u64())
@@ -823,7 +870,11 @@ async fn handle_doc_request(
 
         "docs/save_committed" => {
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
-            let saved_by = params["saved_by"].as_str().unwrap_or("unknown").to_string();
+            // Strict binding: an authenticated peer's saved_by is its verified
+            // identity, not a self-claimed name.
+            let saved_by = auth_label
+                .map(str::to_string)
+                .unwrap_or_else(|| params["saved_by"].as_str().unwrap_or("unknown").to_string());
             let save_epoch = params["save_epoch"].as_u64().unwrap_or(0);
             let content_hash = params["content_hash"].as_str().unwrap_or("").to_string();
 
@@ -1022,7 +1073,30 @@ async fn handle_doc_request(
                 }
             };
             let name = params["name"].as_str().unwrap_or("").to_string();
-            let creator = params["creator"].as_str().unwrap_or("").to_string();
+            let claimed_creator = params["creator"].as_str().unwrap_or("").to_string();
+            // Strict identity binding: a key/TLS-authenticated peer cannot claim a
+            // creator other than its verified identity (ADR-017). The authenticated
+            // label is authoritative; for anonymous (psk/none) sessions the
+            // self-claimed value stands.
+            let creator = match auth_label {
+                Some(label) => {
+                    if !claimed_creator.is_empty() && claimed_creator != label {
+                        warn!(
+                            session = session_id, kb_id = %kb_id,
+                            claimed = %claimed_creator, authenticated = %label,
+                            "kb/share creator mismatch — rejecting"
+                        );
+                        return JsonRpcResponse::error(
+                            id,
+                            McpError::internal_error(format!(
+                                "creator mismatch: authenticated as '{label}', cannot share as '{claimed_creator}'"
+                            )),
+                        );
+                    }
+                    label.to_string()
+                }
+                None => claimed_creator,
+            };
             info!(session = session_id, kb_id = %kb_id, name = %name, creator = %creator, "kb/share");
 
             // Decode and store the collection doc.
@@ -2067,6 +2141,81 @@ mod tests {
     }
 
     /// Helper: share a KB with nodes via the handler.
+    /// Build a kb/share request with the given claimed `creator` and dispatch it
+    /// through `handle_doc_request_inner` with an authenticated `auth_label`.
+    async fn kb_share_as(
+        store: &Arc<DocStore>,
+        bc: &SharedBroadcaster,
+        auth_label: Option<&str>,
+        kb_id: &str,
+        creator: &str,
+        session_docs: &mut HashSet<String>,
+    ) -> JsonRpcResponse {
+        let coll = KbCollectionDoc::new(kb_id, creator);
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "kb/share",
+            "params": {
+                "kb_id": kb_id,
+                "name": kb_id,
+                "creator": creator,
+                "collection_state": update_to_base64(&coll.encode_state()),
+                "nodes": [],
+            }
+        });
+        handle_doc_request_inner(
+            &msg.to_string(),
+            store,
+            bc,
+            std::time::Instant::now(),
+            0,
+            auth_label,
+            session_docs,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn strict_binding_rejects_spoofed_creator() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        // Authenticated as "alice" but claims creator "mallory" → rejected.
+        let resp = kb_share_as(&store, &bc, Some("alice"), "kb1", "mallory", &mut docs).await;
+        assert!(resp.error.is_some(), "spoofed creator must be rejected");
+        assert!(
+            resp.error.unwrap().message.contains("creator mismatch"),
+            "error should explain the creator mismatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn strict_binding_allows_matching_creator() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        // Authenticated as "alice", claims creator "alice" → accepted.
+        let resp = kb_share_as(&store, &bc, Some("alice"), "kb2", "alice", &mut docs).await;
+        assert!(
+            resp.error.is_none(),
+            "matching creator must succeed: {:?}",
+            resp.error
+        );
+    }
+
+    #[tokio::test]
+    async fn anonymous_session_keeps_self_claimed_creator() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        // No auth (psk/none) → self-claimed creator stands (backward compatible).
+        let resp = kb_share_as(&store, &bc, None, "kb3", "whoever", &mut docs).await;
+        assert!(
+            resp.error.is_none(),
+            "anonymous share must succeed: {:?}",
+            resp.error
+        );
+    }
+
     async fn share_kb_with_nodes(
         store: &Arc<DocStore>,
         bc: &SharedBroadcaster,
