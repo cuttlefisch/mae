@@ -198,6 +198,8 @@ pub fn handle_key(
     {
         debug!(key_code = ?key.code, splash_selection = editor.splash_selection, "splash intercept");
         match key.code {
+            // Vi (j/k) + arrows + CUA (C-n/C-p) all move the selection, so the
+            // dashboard feels native in both the doom and non-modal flavors.
             KeyCode::Char('j') | KeyCode::Down => {
                 let count = mae_core::render_common::splash::splash_action_count();
                 if count > 0 {
@@ -205,7 +207,21 @@ pub fn handle_key(
                 }
                 return;
             }
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let count = mae_core::render_common::splash::splash_action_count();
+                if count > 0 {
+                    editor.splash_selection = (editor.splash_selection + 1) % count;
+                }
+                return;
+            }
             KeyCode::Char('k') | KeyCode::Up => {
+                let count = mae_core::render_common::splash::splash_action_count();
+                if count > 0 {
+                    editor.splash_selection = (editor.splash_selection + count - 1) % count;
+                }
+                return;
+            }
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let count = mae_core::render_common::splash::splash_action_count();
                 if count > 0 {
                     editor.splash_selection = (editor.splash_selection + count - 1) % count;

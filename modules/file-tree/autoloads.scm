@@ -7,7 +7,7 @@
 ;;; @provides: file-tree-autoloads
 
 ;; Create the file-tree keymap with normal as parent (for fallback)
-(define-keymap "file-tree" "normal")
+(define-keymap "file-tree" "navigation")
 
 ;; Normal mode: toggle binding
 (define-key "leader" "f t" "file-tree-toggle")

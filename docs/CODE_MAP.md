@@ -161,6 +161,7 @@ Source: `crates/core/src/lib.rs`
 | `kb_seed` | mod |
 | `kb_view` | mod |
 | `keymap` | mod |
+| `keymap_registry` | mod |
 | `link_detect` | mod |
 | `lock_stats` | mod |
 | `lsp_intent` | mod |
@@ -409,6 +410,7 @@ Source: `shared/sync/src/lib.rs`
 | `gc-stats` | `crates/scheme/src/runtime.rs` |
 | `define-key` | `crates/scheme/src/runtime.rs` |
 | `define-keymap` | `crates/scheme/src/runtime.rs` |
+| `bind-context-keymap` | `crates/scheme/src/runtime.rs` |
 | `define-command` | `crates/scheme/src/runtime.rs` |
 | `set-status` | `crates/scheme/src/runtime.rs` |
 | `set-theme` | `crates/scheme/src/runtime.rs` |

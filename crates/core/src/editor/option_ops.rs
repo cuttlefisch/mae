@@ -1320,13 +1320,12 @@ impl super::Editor {
             seq.iter().map(format_key).collect::<Vec<_>>().join(" ")
         }
 
-        let (primary_map, parent_map) = match self.current_keymap_names() {
-            Some(names) => names,
-            None => {
-                self.set_status("No keymap for current mode".to_string());
-                return;
-            }
-        };
+        let chain = self.keymap_chain();
+        if chain.is_empty() {
+            self.set_status("No keymap for current mode".to_string());
+            return;
+        }
+        let primary_map = chain[0].clone();
         let mode = self.mode;
 
         let mut lines = Vec::new();
@@ -1337,41 +1336,15 @@ impl super::Editor {
         lines.push("=".repeat(60));
         lines.push(String::new());
 
-        // Collect bindings from the keymap chain (child → parent)
+        // Collect bindings across the full resolution chain (most-specific first;
+        // the same `keymap_chain()` dispatch uses, so the report matches reality).
         let mut all_bindings: Vec<(String, String)> = Vec::new();
-        let mut visited_maps = Vec::new();
-        let mut current_map = Some(primary_map.to_string());
-        if current_map.as_deref() != parent_map {
-            // If there's a separate parent, we'll traverse to it via the keymap's parent field
-        }
-
-        while let Some(map_name) = current_map.take() {
-            if visited_maps.contains(&map_name) {
-                break;
-            }
-            if let Some(km) = self.keymaps.get(&map_name) {
+        for map_name in &chain {
+            if let Some(km) = self.keymaps.get(map_name) {
                 for (seq, cmd) in km.bindings() {
                     let key_str = format_seq(seq);
                     if !all_bindings.iter().any(|(k, _)| k == &key_str) {
                         all_bindings.push((key_str, cmd.clone()));
-                    }
-                }
-                visited_maps.push(map_name);
-                current_map = km.parent.clone();
-            } else {
-                break;
-            }
-        }
-
-        // Also include parent_map if it wasn't in the chain
-        if let Some(pm) = parent_map {
-            if !visited_maps.iter().any(|v| v == pm) {
-                if let Some(km) = self.keymaps.get(pm) {
-                    for (seq, cmd) in km.bindings() {
-                        let key_str = format_seq(seq);
-                        if !all_bindings.iter().any(|(k, _)| k == &key_str) {
-                            all_bindings.push((key_str, cmd.clone()));
-                        }
                     }
                 }
             }

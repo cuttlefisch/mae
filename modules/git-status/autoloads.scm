@@ -9,7 +9,7 @@
 ;;; @provides: git-status-autoloads
 
 ;; Create git-status keymap inheriting from normal
-(define-keymap "git-status" "normal")
+(define-keymap "git-status" "navigation")
 
 ;; Navigation
 (define-key "git-status" "j" "move-down")

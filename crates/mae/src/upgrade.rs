@@ -534,7 +534,47 @@ fn run_brew_upgrade(cask: bool) -> i32 {
     } else {
         up.args(["upgrade", "mae"]);
     }
-    run_inherit(up, "brew upgrade")
+    let code = run_inherit(up, "brew upgrade");
+    // The `mae` formula and the `mae` cask (the GUI app, which `depends_on` the
+    // formula) share a Homebrew token. That collision makes `brew upgrade`
+    // install the new formula keg WITHOUT running `link`, stranding `mae` /
+    // `mae-mcp-shim` / `mae-daemon` in the Cellar and off PATH (observed on a
+    // real 0.13.11 upgrade: the CLI vanished and the MCP shim failed with
+    // ENOENT). Self-heal the link so the supported upgrade path can't silently
+    // leave the user without a working `mae`. (The proper fix is distinct
+    // formula/cask tokens in the tap; this guards users until that ships.)
+    if code == 0 && !cask {
+        ensure_formula_linked_onto_path();
+    }
+    code
+}
+
+/// After a Homebrew *formula* upgrade, make sure the keg is actually linked onto
+/// PATH; if not, run `brew link --overwrite mae` to repair it. No-op when brew
+/// isn't resolvable or the binary is already linked.
+fn ensure_formula_linked_onto_path() {
+    let Some(prefix) = config::brew_prefix() else {
+        return;
+    };
+    let linked = prefix.join("bin/mae").exists();
+    if linked {
+        return;
+    }
+    println!(
+        "{YELLOW} mae upgraded but not linked onto PATH (Homebrew formula/cask \
+         token collision) — running `brew link --overwrite mae`…"
+    );
+    let mut link = Command::new("brew");
+    link.args(["link", "--overwrite", "mae"]);
+    let _ = run_inherit(link, "brew link");
+    if prefix.join("bin/mae").exists() {
+        println!("{GREEN} mae linked onto PATH ({}/bin)", prefix.display());
+    } else {
+        eprintln!(
+            "{RED} could not link mae automatically. Run it yourself:\n    \
+             brew link --overwrite mae"
+        );
+    }
 }
 
 fn run_source_upgrade(root: &Path) -> i32 {

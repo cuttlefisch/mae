@@ -3,7 +3,7 @@
 //! Integrates with SchemeRuntime and Editor to load module autoloads,
 //! track module state, and support reload/unload.
 
-use super::embedded::ModuleSource;
+use super::embedded::{DiscoveredModule, ModuleSource};
 use super::manifest::ModuleManifest;
 use super::resolver::ResolvedModule;
 use std::collections::HashMap;
@@ -77,6 +77,28 @@ impl ModuleRegistry {
                 },
             );
         }
+    }
+
+    /// Register a discovered-but-skipped module as Failed, so it remains visible
+    /// in `list_modules`/`:describe-module`/audit even though it never made it
+    /// into the resolved load order (e.g. unsatisfiable dependency, dependency
+    /// cycle). Without this, gracefully-skipped modules would vanish silently.
+    pub fn register_skipped(&mut self, d: &DiscoveredModule, reason: String) {
+        let name = d.manifest.name().to_string();
+        self.modules
+            .entry(name.clone())
+            .or_insert_with(|| ModuleState {
+                name: name.clone(),
+                version: d.manifest.module.version.clone(),
+                source: d.source.clone(),
+                manifest: d.manifest.clone(),
+                enabled_flags: Vec::new(),
+                status: ModuleStatus::Failed(reason),
+                commands: Vec::new(),
+                keybindings: Vec::new(),
+                options: Vec::new(),
+                hooks: Vec::new(),
+            });
     }
 
     /// Mark a module as loaded.

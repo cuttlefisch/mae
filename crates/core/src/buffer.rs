@@ -37,7 +37,7 @@ pub mod buffer_names {
 }
 
 /// What kind of content this buffer holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BufferKind {
     /// Normal text editing buffer (backed by rope).
     Text,

@@ -207,7 +207,7 @@ fn main() -> io::Result<()> {
     // (`upgrade` is handled earlier so it owns its own `--help`.)
     if let Some(subcmd) = args.get(1).map(|s| s.as_str()) {
         match subcmd {
-            "sync" | "purge" | "list" | "info" | "create" => {
+            "sync" | "purge" | "prune-shadows" | "list" | "info" | "create" => {
                 let rest: Vec<String> = args[2..].to_vec();
                 let code = pkg::cli::dispatch_subcmd(subcmd, &rest);
                 std::process::exit(code);
@@ -1554,7 +1554,9 @@ impl GuiApp {
         let reloads = std::mem::take(&mut self.editor.pending_module_reloads);
         for module_name in reloads {
             if module_name == "__all__" {
-                bootstrap::reload_all_modules(&mut self.scheme, &mut self.editor);
+                // Full reload pipeline (init → modules → config.scm → default_mode),
+                // not modules-only, so `:reload-modules` matches startup (C1/H2).
+                bootstrap::reload_everything(&mut self.scheme, &mut self.editor, None);
             } else if let Some(flavor) = module_name.strip_prefix("__flavor:") {
                 bootstrap::switch_keymap_flavor(&mut self.scheme, &mut self.editor, flavor);
             } else {

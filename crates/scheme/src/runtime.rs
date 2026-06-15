@@ -25,6 +25,9 @@ struct SharedState {
     keymap_bindings: Vec<(String, String, String)>,
     /// (keymap_name, parent_name) — new keymaps to create
     keymap_defs: Vec<(String, String)>,
+    /// (selector_type, selector_value, keymap) — route a buffer context (kind or
+    /// language) to a context keymap. Drains into `Editor::keymap_registry`.
+    context_bindings: Vec<(String, String, String)>,
     /// (command_name, doc_string, scheme_function_name)
     command_defs: Vec<(String, String, String)>,
     /// Status messages set by Scheme code
@@ -417,6 +420,28 @@ impl SchemeRuntime {
                 let name = arg_string(args, 0, "define-keymap")?;
                 let parent = arg_string(args, 1, "define-keymap")?;
                 s.lock().unwrap().keymap_defs.push((name, parent));
+                Ok(Value::Void)
+            },
+        );
+
+        // (bind-context-keymap SELECTOR-TYPE SELECTOR-VALUE KEYMAP)
+        // Route a buffer context to a context keymap (overlays the modality keymap
+        // in the resolution chain). SELECTOR-TYPE is "kind" (e.g. "dashboard",
+        // "file-tree") or "language" (e.g. "org"). This is how a module wires a
+        // new buffer kind / a shared "navigation" context without a kernel patch.
+        let s = shared.clone();
+        vm.register_fn(
+            "bind-context-keymap",
+            "Route a buffer context (kind/language) to a context keymap",
+            Arity::Fixed(3),
+            move |args: &[Value]| {
+                let selector_type = arg_string(args, 0, "bind-context-keymap")?;
+                let selector_value = arg_string(args, 1, "bind-context-keymap")?;
+                let keymap = arg_string(args, 2, "bind-context-keymap")?;
+                s.lock()
+                    .unwrap()
+                    .context_bindings
+                    .push((selector_type, selector_value, keymap));
                 Ok(Value::Void)
             },
         );
@@ -3556,6 +3581,21 @@ impl SchemeRuntime {
                 editor
                     .keymaps
                     .insert(name.clone(), mae_core::Keymap::with_parent(&name, &parent));
+            }
+        }
+
+        // Apply context routing (buffer kind / language -> context keymap).
+        for (sel_type, sel_value, keymap) in state.context_bindings.drain(..) {
+            if let Err(e) = editor
+                .keymap_registry
+                .apply_binding(&sel_type, &sel_value, &keymap)
+            {
+                warn!(
+                    selector_type = %sel_type,
+                    selector_value = %sel_value,
+                    keymap = %keymap,
+                    "ignoring bind-context-keymap: {e}"
+                );
             }
         }
 

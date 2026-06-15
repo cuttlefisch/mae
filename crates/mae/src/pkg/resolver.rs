@@ -18,13 +18,37 @@ pub struct ResolvedModule {
     pub enabled_flags: Vec<String>,
 }
 
-/// Resolve load order via topological sort. Returns modules in dependency order.
+/// A module that could NOT be resolved (and why), so the caller can surface it
+/// without letting it take down the rest of the load.
+#[derive(Debug, Clone)]
+pub struct SkippedModule {
+    pub name: String,
+    pub reason: String,
+}
+
+/// Outcome of resolution: the modules that resolved (in load order) plus any that
+/// were skipped because their dependency graph was unsatisfiable.
+#[derive(Debug, Clone, Default)]
+pub struct ResolveOutcome {
+    pub resolved: Vec<ResolvedModule>,
+    pub skipped: Vec<SkippedModule>,
+}
+
+/// Resolve load order via topological sort, returning modules in dependency order.
 ///
-/// Errors on circular dependencies or missing required dependencies.
+/// Resolution degrades gracefully: a module with a missing/disabled dependency, or
+/// one caught in a circular dependency, is *skipped* (recorded in
+/// [`ResolveOutcome::skipped`]) rather than aborting the entire load. This is a
+/// deliberate change from the old all-or-nothing behavior — a single broken
+/// drop-in module (the documented `~/.local/share/mae/modules` extensibility
+/// path) must NOT be able to brick the editor by taking out the embedded
+/// `keymap-leader`/flavor and the whole leader/which-key system with it. Skipping
+/// a module also skips everything that (transitively) depends on it, so the
+/// surviving set is always internally consistent and safe to load.
 pub fn resolve_load_order(
     modules: &[DiscoveredModule],
     enabled: &HashMap<String, Vec<String>>, // name -> enabled flags
-) -> Result<Vec<ResolvedModule>, String> {
+) -> ResolveOutcome {
     // Build name -> index map
     let name_map: HashMap<&str, usize> = modules
         .iter()
@@ -32,38 +56,62 @@ pub fn resolve_load_order(
         .map(|(i, d)| (d.manifest.name(), i))
         .collect();
 
-    // Filter to only enabled modules
-    let active: Vec<usize> = modules
+    // Start with every enabled+discovered module active, then prune to a
+    // resolvable subset.
+    let mut active: HashSet<usize> = modules
         .iter()
         .enumerate()
         .filter(|(_, d)| enabled.contains_key(d.manifest.name()))
         .map(|(i, _)| i)
         .collect();
 
-    // Topological sort (Kahn's algorithm)
+    let mut skipped: Vec<SkippedModule> = Vec::new();
+
+    // Fixpoint prune: drop any active module whose dependency is unavailable
+    // (not discovered) or disabled (not active). Dropping a module makes its
+    // active dependents unsatisfiable too, so we loop until the set is stable.
+    loop {
+        let mut to_remove: Vec<(usize, String)> = Vec::new();
+        for &idx in &active {
+            for dep_name in modules[idx].manifest.dependencies.keys() {
+                let reason = match name_map.get(dep_name.as_str()) {
+                    None => Some(format!("depends on '{dep_name}' which is not available")),
+                    Some(&dep_idx) if !active.contains(&dep_idx) => {
+                        Some(format!("depends on '{dep_name}' which is not enabled"))
+                    }
+                    _ => None,
+                };
+                if let Some(reason) = reason {
+                    to_remove.push((idx, reason));
+                    break; // first unsatisfied dep is enough to skip this module
+                }
+            }
+        }
+        if to_remove.is_empty() {
+            break;
+        }
+        // Deterministic skip order for stable diagnostics.
+        to_remove.sort_by_key(|(idx, _)| *idx);
+        for (idx, reason) in to_remove {
+            if active.remove(&idx) {
+                skipped.push(SkippedModule {
+                    name: modules[idx].manifest.name().to_string(),
+                    reason,
+                });
+            }
+        }
+    }
+
+    // Topological sort the surviving active set (Kahn's algorithm).
     let mut in_degree: HashMap<usize, usize> = HashMap::new();
     let mut adj: HashMap<usize, Vec<usize>> = HashMap::new();
-
     for &idx in &active {
         in_degree.entry(idx).or_insert(0);
         for dep_name in modules[idx].manifest.dependencies.keys() {
             if let Some(&dep_idx) = name_map.get(dep_name.as_str()) {
-                if active.contains(&dep_idx) {
-                    adj.entry(dep_idx).or_default().push(idx);
-                    *in_degree.entry(idx).or_insert(0) += 1;
-                } else {
-                    return Err(format!(
-                        "Module '{}' depends on '{}' which is not enabled",
-                        modules[idx].manifest.name(),
-                        dep_name
-                    ));
-                }
-            } else {
-                return Err(format!(
-                    "Module '{}' depends on '{}' which is not available",
-                    modules[idx].manifest.name(),
-                    dep_name
-                ));
+                // dep_idx is guaranteed active here (pruning ensured it).
+                adj.entry(dep_idx).or_default().push(idx);
+                *in_degree.entry(idx).or_insert(0) += 1;
             }
         }
     }
@@ -90,20 +138,26 @@ pub fn resolve_load_order(
     }
 
     if order.len() != active.len() {
-        // Find cycle
+        // Whatever didn't come out of the queue is part of a cycle — skip those
+        // members (and report them) instead of failing the whole load.
         let sorted: HashSet<usize> = order.iter().copied().collect();
-        let cycle_members: Vec<&str> = active
+        let mut cycle: Vec<usize> = active
             .iter()
+            .copied()
             .filter(|i| !sorted.contains(i))
-            .map(|&i| modules[i].manifest.name())
             .collect();
-        return Err(format!(
-            "Circular dependency among: {}",
-            cycle_members.join(", ")
-        ));
+        cycle.sort();
+        let names: Vec<&str> = cycle.iter().map(|&i| modules[i].manifest.name()).collect();
+        let joined = names.join(", ");
+        for &i in &cycle {
+            skipped.push(SkippedModule {
+                name: modules[i].manifest.name().to_string(),
+                reason: format!("part of a circular dependency among: {joined}"),
+            });
+        }
     }
 
-    Ok(order
+    let resolved = order
         .into_iter()
         .map(|idx| {
             let d = &modules[idx];
@@ -115,7 +169,9 @@ pub fn resolve_load_order(
                 enabled_flags: flags,
             }
         })
-        .collect())
+        .collect();
+
+    ResolveOutcome { resolved, skipped }
 }
 
 #[cfg(test)]
@@ -152,9 +208,10 @@ mod tests {
             .iter()
             .map(|d| (d.manifest.name().to_string(), vec![]))
             .collect();
-        let order = resolve_load_order(&modules, &enabled).unwrap();
+        let outcome = resolve_load_order(&modules, &enabled);
         // All should be present (order is deterministic but may vary)
-        assert_eq!(order.len(), 3);
+        assert_eq!(outcome.resolved.len(), 3);
+        assert!(outcome.skipped.is_empty());
     }
 
     #[test]
@@ -167,38 +224,75 @@ mod tests {
             .iter()
             .map(|d| (d.manifest.name().to_string(), vec![]))
             .collect();
-        let order = resolve_load_order(&modules, &enabled).unwrap();
-        let names: Vec<&str> = order.iter().map(|r| r.name.as_str()).collect();
+        let outcome = resolve_load_order(&modules, &enabled);
+        let names: Vec<&str> = outcome.resolved.iter().map(|r| r.name.as_str()).collect();
         let tables_pos = names.iter().position(|&n| n == "tables").unwrap();
         let org_pos = names.iter().position(|&n| n == "org").unwrap();
         assert!(tables_pos < org_pos, "tables must load before org");
     }
 
     #[test]
-    fn circular_dep_detected() {
+    fn circular_dep_skips_cycle_members_not_everything() {
+        // A cycle between a<->b must not take down an unrelated healthy module.
         let modules = vec![
             make_module("a", &[("b", "*")]),
             make_module("b", &[("a", "*")]),
+            make_module("healthy", &[]),
         ];
         let enabled: HashMap<String, Vec<String>> = modules
             .iter()
             .map(|d| (d.manifest.name().to_string(), vec![]))
             .collect();
-        let result = resolve_load_order(&modules, &enabled);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Circular dependency"));
+        let outcome = resolve_load_order(&modules, &enabled);
+        let resolved: Vec<&str> = outcome.resolved.iter().map(|r| r.name.as_str()).collect();
+        assert!(
+            resolved.contains(&"healthy"),
+            "healthy module must still load"
+        );
+        let skipped: Vec<&str> = outcome.skipped.iter().map(|s| s.name.as_str()).collect();
+        assert!(skipped.contains(&"a") && skipped.contains(&"b"));
+        assert!(outcome
+            .skipped
+            .iter()
+            .all(|s| s.reason.contains("circular")));
     }
 
     #[test]
-    fn missing_dep_error() {
-        let modules = vec![make_module("org", &[("tables", ">=0.1.0")])];
+    fn missing_dep_skips_only_the_dependent() {
+        // org needs the (absent) tables module; healthy is independent.
+        let modules = vec![
+            make_module("org", &[("tables", ">=0.1.0")]),
+            make_module("healthy", &[]),
+        ];
         let enabled: HashMap<String, Vec<String>> = modules
             .iter()
             .map(|d| (d.manifest.name().to_string(), vec![]))
             .collect();
-        let result = resolve_load_order(&modules, &enabled);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not available"));
+        let outcome = resolve_load_order(&modules, &enabled);
+        let resolved: Vec<&str> = outcome.resolved.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(resolved, vec!["healthy"]);
+        assert_eq!(outcome.skipped.len(), 1);
+        assert_eq!(outcome.skipped[0].name, "org");
+        assert!(outcome.skipped[0].reason.contains("not available"));
+    }
+
+    #[test]
+    fn transitive_dependents_of_a_skipped_module_are_also_skipped() {
+        // c -> b -> tables(absent). Both b and c must be skipped, a survives.
+        let modules = vec![
+            make_module("a", &[]),
+            make_module("b", &[("tables", "*")]),
+            make_module("c", &[("b", "*")]),
+        ];
+        let enabled: HashMap<String, Vec<String>> = modules
+            .iter()
+            .map(|d| (d.manifest.name().to_string(), vec![]))
+            .collect();
+        let outcome = resolve_load_order(&modules, &enabled);
+        let resolved: Vec<&str> = outcome.resolved.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(resolved, vec!["a"]);
+        let skipped: Vec<&str> = outcome.skipped.iter().map(|s| s.name.as_str()).collect();
+        assert!(skipped.contains(&"b") && skipped.contains(&"c"));
     }
 
     #[test]
@@ -207,9 +301,9 @@ mod tests {
         let mut enabled = HashMap::new();
         enabled.insert("a".to_string(), vec![]);
         // b is not enabled
-        let order = resolve_load_order(&modules, &enabled).unwrap();
-        assert_eq!(order.len(), 1);
-        assert_eq!(order[0].name, "a");
+        let outcome = resolve_load_order(&modules, &enabled);
+        assert_eq!(outcome.resolved.len(), 1);
+        assert_eq!(outcome.resolved[0].name, "a");
     }
 
     #[test]
@@ -220,7 +314,7 @@ mod tests {
             "org".to_string(),
             vec!["+agenda".to_string(), "+babel".to_string()],
         );
-        let order = resolve_load_order(&modules, &enabled).unwrap();
-        assert_eq!(order[0].enabled_flags, vec!["+agenda", "+babel"]);
+        let outcome = resolve_load_order(&modules, &enabled);
+        assert_eq!(outcome.resolved[0].enabled_flags, vec!["+agenda", "+babel"]);
     }
 }

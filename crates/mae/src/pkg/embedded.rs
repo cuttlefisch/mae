@@ -129,6 +129,46 @@ pub fn merge_modules(disk: Vec<DiscoveredModule>) -> Vec<DiscoveredModule> {
     by_name.into_values().collect()
 }
 
+/// On-disk modules that shadow an embedded module of the SAME name with an OLDER
+/// `version` — i.e. a stale on-disk copy suppressing a newer built-in (the
+/// classic "upgraded the binary but `~/.local/share/mae/modules` / an app-bundle
+/// `MAE_MODULES_PATH` is stale" trap). Returns `(name, disk_version,
+/// embedded_version)`.
+///
+/// The override still applies (the documented "disk wins" contract is
+/// preserved); the caller surfaces these so the staleness is visible rather than
+/// silently breaking an upgraded feature (audit H4, warn-only). A disk copy at
+/// version >= the embedded one is treated as a deliberate override and not
+/// reported. Unparseable versions are skipped.
+pub fn stale_embedded_shadows(disk: &[DiscoveredModule]) -> Vec<(String, String, String)> {
+    use std::collections::HashMap;
+    let embedded: HashMap<String, String> = discover_embedded_modules()
+        .into_iter()
+        .map(|d| {
+            (
+                d.manifest.name().to_string(),
+                d.manifest.module.version.clone(),
+            )
+        })
+        .collect();
+    let mut out = Vec::new();
+    for d in disk {
+        let name = d.manifest.name();
+        if let Some(emb_ver) = embedded.get(name) {
+            let disk_ver = &d.manifest.module.version;
+            if let (Ok(dv), Ok(ev)) = (
+                semver::Version::parse(disk_ver),
+                semver::Version::parse(emb_ver),
+            ) {
+                if dv < ev {
+                    out.push((name.to_string(), disk_ver.clone(), emb_ver.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +214,25 @@ mod tests {
             "keymap-leader should define the `leader` keymap + the full mae tree"
         );
 
+        // Phase 1b: keymap-leader also populates the shared `navigation` context
+        // (flavor-independent movement + BOTH leader entries) and routes the
+        // dashboard through it. Assert on the embedded bytes so the check is
+        // immune to a stale on-disk keymap-leader shadowing the built-in.
+        assert!(
+            leader_autoloads.contains("(define-key \"navigation\" \"SPC\" \"leader-dispatch\")")
+                && leader_autoloads
+                    .contains("(define-key \"navigation\" \"C-;\" \"leader-dispatch\")")
+                && leader_autoloads.contains("(define-key \"navigation\" \"C-n\" \"move-down\")")
+                && leader_autoloads.contains("(define-key \"navigation\" \"C-p\" \"move-up\")"),
+            "embedded keymap-leader must bind the shared navigation context \
+             (C-n/C-p + SPC/C-; -> leader-dispatch)"
+        );
+        assert!(
+            leader_autoloads
+                .contains("(bind-context-keymap \"kind\" \"dashboard\" \"navigation\")"),
+            "embedded keymap-leader must route the dashboard through the navigation context"
+        );
+
         // The non-modal flavor ships embedded too (the 2nd canonical flavor).
         assert!(
             mods.iter().any(|d| d.manifest.name() == "keymap-nonmodal"),
@@ -203,6 +262,29 @@ mod tests {
         );
         // Embedded-only modules are still present after the overlay.
         assert!(merged.iter().any(|d| d.manifest.name() == "surround"));
+    }
+
+    #[test]
+    fn stale_shadow_detected_only_when_disk_is_older() {
+        let mk = |name: &str, ver: &str| DiscoveredModule {
+            source: ModuleSource::Disk(PathBuf::from(format!("/tmp/{name}"))),
+            manifest: ModuleManifest::from_str(
+                &format!("[module]\nname = \"{name}\"\nversion = \"{ver}\""),
+                Path::new("test"),
+            )
+            .unwrap(),
+        };
+        // keymap-leader ships embedded at 0.2.0 (bumped for the navigation work).
+        // A stale 0.1.0 on-disk copy must be flagged...
+        let stale = stale_embedded_shadows(&[mk("keymap-leader", "0.1.0")]);
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].0, "keymap-leader");
+        assert_eq!(stale[0].1, "0.1.0");
+        // ...but an equal or newer disk copy is a deliberate override, not stale.
+        assert!(stale_embedded_shadows(&[mk("keymap-leader", "0.2.0")]).is_empty());
+        assert!(stale_embedded_shadows(&[mk("keymap-leader", "9.9.9")]).is_empty());
+        // A disk module with no embedded counterpart is never "stale".
+        assert!(stale_embedded_shadows(&[mk("user-custom-mod", "0.0.1")]).is_empty());
     }
 
     #[test]

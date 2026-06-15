@@ -26,6 +26,7 @@ pub fn dispatch_subcmd(subcmd: &str, args: &[String]) -> i32 {
         "sync" => cmd_sync(),
         "upgrade" => cmd_upgrade(),
         "purge" => cmd_purge(),
+        "prune-shadows" => cmd_prune_shadows(args),
         "help" | "--help" | "-h" => {
             print_help();
             0
@@ -55,7 +56,117 @@ fn print_help() {
     println!("  info <NAME>       Show detailed information about a module");
     println!("  create <NAME>     Scaffold a new module directory");
     println!("  doctor [NAME]     Validate module manifests");
+    println!("  prune-shadows     Remove stale on-disk module copies shadowing newer built-ins");
+    println!("                    (dry-run by default; pass --force to delete)");
     println!("  help              Print this help");
+}
+
+/// Remove stale on-disk module copies that shadow a NEWER built-in (the
+/// "upgraded the binary but ~/.local/share/mae/modules is stale" trap — same
+/// detection as the `:messages` warning). Dry-run by default; `--force` deletes.
+///
+/// Scoped to the USER DATA module dirs only (XDG + platform data dir). It never
+/// touches a dev repo/cwd module tree, and only REPORTS (never deletes) stale
+/// copies under an explicit `MAE_MODULES_PATH` — that's a user-controlled
+/// override (often a read-only app bundle), not ours to remove.
+fn cmd_prune_shadows(args: &[String]) -> i32 {
+    use crate::pkg::embedded::stale_embedded_shadows;
+
+    let force = args
+        .iter()
+        .any(|a| matches!(a.as_str(), "--force" | "-f" | "--yes" | "-y"));
+
+    // Deletable data dirs (installer/upgrade copies land here).
+    let mut data_dirs: Vec<PathBuf> = Vec::new();
+    if let Some(d) = crate::pkg::paths::data_dir_candidate("mae/modules") {
+        data_dirs.push(d);
+    }
+    if let Some(d) = dirs::data_dir().map(|d| d.join("mae/modules")) {
+        if !data_dirs.contains(&d) {
+            data_dirs.push(d);
+        }
+    }
+
+    let mut disk = Vec::new();
+    for dir in &data_dirs {
+        if dir.exists() {
+            disk.extend(discover_modules(dir));
+        }
+    }
+    let stale = stale_embedded_shadows(&disk);
+
+    // Report-only: an explicit MAE_MODULES_PATH (e.g. an app bundle) we won't delete.
+    if let Ok(p) = std::env::var("MAE_MODULES_PATH") {
+        let override_dir = PathBuf::from(&p);
+        if override_dir.exists() {
+            let override_disk = discover_modules(&override_dir);
+            let override_stale = stale_embedded_shadows(&override_disk);
+            if !override_stale.is_empty() {
+                println!(
+                    "Note: MAE_MODULES_PATH ({p}) also has stale copies — not removed \
+                     (user-controlled override). Refresh or unset it manually:"
+                );
+                for (name, dv, ev) in &override_stale {
+                    println!("  {name} (v{dv} < built-in v{ev})");
+                }
+                println!();
+            }
+        }
+    }
+
+    if stale.is_empty() {
+        println!("No stale built-in module copies found in user data module dirs.");
+        return 0;
+    }
+
+    let stale_names: std::collections::HashSet<&str> =
+        stale.iter().map(|(n, _, _)| n.as_str()).collect();
+    let mut targets: Vec<(String, PathBuf, String, String)> = Vec::new();
+    for d in &disk {
+        if stale_names.contains(d.manifest.name()) {
+            if let Some(path) = d.source.disk_dir() {
+                if let Some((_, dv, ev)) = stale.iter().find(|(n, _, _)| n == d.manifest.name()) {
+                    targets.push((
+                        d.manifest.name().to_string(),
+                        path.to_path_buf(),
+                        dv.clone(),
+                        ev.clone(),
+                    ));
+                }
+            }
+        }
+    }
+
+    println!("Stale on-disk module copies shadowing newer built-ins:");
+    for (name, path, dv, ev) in &targets {
+        println!("  {name} (v{dv} < built-in v{ev})  {}", path.display());
+    }
+    println!();
+
+    if !force {
+        println!(
+            "Dry run — re-run `mae prune-shadows --force` to delete the {} director(ies) above.",
+            targets.len()
+        );
+        return 0;
+    }
+
+    let mut removed = 0;
+    for (name, path, _, _) in &targets {
+        print!("  Removing {name} ({})...", path.display());
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => {
+                println!(" done");
+                removed += 1;
+            }
+            Err(e) => eprintln!(" failed: {e}"),
+        }
+    }
+    println!(
+        "\n{removed} stale module copy(ies) removed. Restart MAE (or run :reload-modules) \
+         to pick up the built-ins."
+    );
+    0
 }
 
 fn module_search_dirs() -> Vec<PathBuf> {

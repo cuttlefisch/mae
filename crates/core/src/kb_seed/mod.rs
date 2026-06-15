@@ -882,6 +882,22 @@ fn static_nodes() -> Vec<Node> {
         )
         .with_tags(["adr", "kb", "sync", "architecture"]),
         Node::new(
+            "concept:adr-keymap-resolution",
+            "ADR-015: Keymap Resolution Chain (Accepted)",
+            NodeKind::Concept,
+            CONCEPT_ADR_KEYMAP_RESOLUTION,
+        )
+        .with_tags(["adr", "keymap", "architecture"])
+        .with_aliases(["keymap chain", "navigation mode", "keymap registry"]),
+        Node::new(
+            "concept:adr-artifact-interaction",
+            "ADR-016: Artifact Interaction Model (Proposed)",
+            NodeKind::Concept,
+            CONCEPT_ADR_ARTIFACT_INTERACTION,
+        )
+        .with_tags(["adr", "keymap", "crdt", "architecture"])
+        .with_aliases(["artifact type", "interaction model", "canvas modality"]),
+        Node::new(
             "concept:collab-architecture",
             "Collaborative Editing Architecture",
             NodeKind::Concept,

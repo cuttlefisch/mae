@@ -39,27 +39,27 @@ pub(super) fn handle_keymap_mode(
 
     pending_keys.push(kp);
 
-    let Some((mode_name, fallback_name)) = editor.current_keymap_names() else {
-        return; // ShellInsert — handled by main.rs handle_shell_key
-    };
+    // Resolve against the unified keymap chain (most-specific layer first). The
+    // first layer that returns Exact OR Prefix wins — a higher layer's Prefix
+    // must not be shadowed by a deeper layer's binding, or multi-key sequences
+    // (dd, gg, SPC b b) would break. Empty chain == ShellInsert (handled by
+    // main.rs handle_shell_key). This is the same chain which-key + describe-
+    // bindings render, so dispatch and display can't diverge.
+    let chain = editor.keymap_chain();
+    if chain.is_empty() {
+        return;
+    }
 
-    let mut result = editor
-        .keymaps
-        .get(mode_name)
-        .map(|km| km.lookup(pending_keys))
-        .unwrap_or(LookupResult::None);
-
-    // Overlay keymaps (org, git-status) fall back to normal if no match.
-    if matches!(result, LookupResult::None) {
-        if let Some(fb) = fallback_name {
-            let fb_result = editor
-                .keymaps
-                .get(fb)
-                .map(|km| km.lookup(pending_keys))
-                .unwrap_or(LookupResult::None);
-            if !matches!(fb_result, LookupResult::None) {
-                result = fb_result;
-            }
+    let mut result = LookupResult::None;
+    for km_name in &chain {
+        let r = editor
+            .keymaps
+            .get(km_name)
+            .map(|km| km.lookup(pending_keys))
+            .unwrap_or(LookupResult::None);
+        if !matches!(r, LookupResult::None) {
+            result = r;
+            break;
         }
     }
 
@@ -121,8 +121,8 @@ pub(super) fn handle_keymap_mode(
             // E.g. `dgg` → split at 1: `d` (operator-delete) + `gg`
             //       `ysw` → split at 2: `ys` (operator-surround) + `w`
             // Longest match wins (try from len-1 down to 1).
-            // For operator splitting, check both the overlay and fallback keymaps.
-            let lookup_names: Vec<&str> = std::iter::once(mode_name).chain(fallback_name).collect();
+            // For operator splitting, check every layer of the resolution chain.
+            let lookup_names: Vec<&str> = chain.iter().map(String::as_str).collect();
             let mut split_at = 0;
             let mut split_cmd = String::new();
             if pending_keys.len() > 1 {

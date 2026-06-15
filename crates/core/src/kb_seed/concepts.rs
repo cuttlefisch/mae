@@ -1473,6 +1473,49 @@ FTS5 indexes materialized text from `YText::to_string()`.\n\n\
 Full ADR: `docs/adr/005-kb-crdt.md`\n\n\
 See also: [[concept:sync-engine]], [[concept:knowledge-base]], [[concept:collaborative-state]]\n";
 
+pub(super) const CONCEPT_ADR_KEYMAP_RESOLUTION: &str = "\
+**ADR-015: Unified Layered Keymap Resolution Chain** — Status: **Accepted**\n\n\
+** Decision\n\
+Resolve keystrokes against ONE ordered keymap chain (most-specific layer first), \
+consumed identically by dispatch, the which-key popup, and describe-bindings. \
+`Editor::keymap_chain()` is the single source of truth; `Keymap::lookup` stays the \
+single-map hot primitive and `Keymap.parent` is demoted to introspection sugar.\n\n\
+** Why\n\
+- Dispatch used a flat (primary, fallback) pair while describe-bindings walked the \
+parent chain N levels — they agreed only by convention, so a 3-deep chain would \
+dispatch and display differently (latent bug).\n\
+- Buffer-context routing was a hardcoded Rust match (BufferMode::keymap_name + \
+org/markdown), violating principle #7 (no kernel patch to extend).\n\n\
+** Mechanism\n\
+- A data-driven `KeymapRegistry` (kernel-seeded, re-seeded on \
+reset_keymaps_to_kernel) maps BufferKind/Language -> context keymap; modules \
+extend it from Scheme via `(bind-context-keymap …)`.\n\
+- First consumer: the shared `navigation` context for read-only nav buffers \
+(flavor-independent movement + both SPC and C-; open the leader).\n\n\
+Full ADR: `docs/adr/015-keymap-resolution-chain.md`\n\n\
+See also: [[concept:adr-artifact-interaction]], [[concept:scheme-api]], [[concept:keymap-inheritance]]\n";
+
+pub(super) const CONCEPT_ADR_ARTIFACT_INTERACTION: &str = "\
+**ADR-016: ArtifactType Axis & Interaction Model for Non-Text Artifacts** — \
+Status: **Proposed**\n\n\
+** Decision\n\
+Decompose the conflated `Mode` enum into four orthogonal, registry-driven axes: \
+modality, ArtifactType, buffer-kind context, and a stacked transient-overlay \
+layer. Each artifact type (text/visual-canvas/kb-graph/terminal) declares its own \
+modalities and interaction keymaps.\n\n\
+** Why\n\
+- `Mode` mixes input modality (Normal/Insert/Visual), transient UI (Command/Search/\
+Palette), and artifact input (ShellInsert) — no clean seam for non-text CRDT \
+artifacts (principle #11: canvas=YMap/YArray, KB nodes=yrs docs are first-class).\n\n\
+** Phases (follow-up PRs, build on ADR-015)\n\
+- Phase 2: extract transient overlays from `Mode` into a composable overlay stack \
+(capture vs layer), enabling e.g. completion-in-search.\n\
+- Phase 3: ArtifactType + per-artifact modalities; canvas/kb-graph interaction \
+commands mutate the yrs doc (not the render mirror) and double as the AI peer's \
+MCP tool-calls.\n\n\
+Full ADR: `docs/adr/016-artifact-interaction-model.md`\n\n\
+See also: [[concept:adr-keymap-resolution]], [[concept:adr-text-sync]], [[concept:collaborative-state]]\n";
+
 pub(super) const CONCEPT_COLLAB_ARCHITECTURE: &str = "\
 **Collaborative Editing Architecture** describes how MAE synchronises editor \
 state across multiple clients — from solo AI agents on a single machine to \

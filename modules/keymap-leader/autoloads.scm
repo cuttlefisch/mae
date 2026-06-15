@@ -221,4 +221,23 @@
 (define-key "leader" "C K l" "kb-leave")
 (define-key "leader" "C K r" "kb-list-remote")
 
+;;; ── Shared `navigation` context ──────────────────────────────────────────
+;;; Flavor-independent bindings for read-only nav buffers (dashboard, file tree,
+;;; modules, help/KB, git-status, agenda, debug, shell). These buffers force
+;;; Normal mode regardless of flavor, which left non-modal users facing vi keys
+;;; they don't know and split leader access (doom: SPC only; non-modal: C-; only).
+;;; The `navigation` keymap is kernel-created (parent `normal`) and the nav
+;;; overlays parent onto it (chain: overlay → navigation → normal), so motions
+;;; (j/k/gg/G/arrows) come free from `normal` while we add CUA movement and BOTH
+;;; leader entries here — identical behavior in every flavor.
+(define-key "navigation" "C-n" "move-down")
+(define-key "navigation" "C-p" "move-up")
+(define-key "navigation" "SPC" "leader-dispatch")
+(define-key "navigation" "C-;" "leader-dispatch")
+
+;; Route the dashboard (no dedicated overlay keymap) through `navigation`. The
+;; overlay buffers (file-tree/modules/help/git-status/agenda/debug/shell-*) reach
+;; it via their keymap parent instead.
+(bind-context-keymap "kind" "dashboard" "navigation")
+
 (provide-feature "keymap-leader-autoloads")

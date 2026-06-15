@@ -35,6 +35,7 @@ pub mod input;
 pub mod kb_seed;
 pub mod kb_view;
 pub mod keymap;
+pub mod keymap_registry;
 pub mod link_detect;
 pub mod lock_stats;
 pub mod lsp_intent;

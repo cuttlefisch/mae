@@ -9,7 +9,7 @@
 ;;; @provides: debug-autoloads
 
 ;; Create debug keymap inheriting from normal
-(define-keymap "debug" "normal")
+(define-keymap "debug" "navigation")
 
 (define-key "debug" "j" "debug-move-down")
 (define-key "debug" "k" "debug-move-up")

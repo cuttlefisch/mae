@@ -668,7 +668,7 @@ fn drain_module_reloads(editor: &mut Editor, scheme: &mut SchemeRuntime) {
     }
     for r in reloads {
         if r == "__all__" {
-            crate::bootstrap::reload_all_modules(scheme, editor);
+            crate::bootstrap::reload_everything(scheme, editor, None);
         } else if let Some(flavor) = r.strip_prefix("__flavor:") {
             crate::bootstrap::switch_keymap_flavor(scheme, editor, flavor);
         } else {
