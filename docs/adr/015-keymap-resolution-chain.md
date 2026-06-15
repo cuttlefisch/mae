@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-06-15
 **Supersedes:** None
+**KB Source**: `concept:adr-keymap-resolution`
 
 ## Context
 

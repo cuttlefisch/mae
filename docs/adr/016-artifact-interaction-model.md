@@ -4,6 +4,7 @@
 **Date:** 2026-06-15
 **Supersedes:** None
 **Depends on:** ADR-015 (unified keymap resolution chain)
+**KB Source**: `concept:adr-artifact-interaction`
 
 ## Context
 
