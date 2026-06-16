@@ -55,6 +55,27 @@ fn mouse_click_clamps_to_line_length() {
 }
 
 #[test]
+fn mouse_double_click_past_line_end_does_not_panic() {
+    // Regression (collab two-machine run): a double-click word-select in the
+    // right pane of a vertical split — where the screen column (~138) far
+    // overruns a short line — pushed char_offset_at past the rope and panicked
+    // in word_start_backward's rope.char(). Two clicks at the same far-past-EOL
+    // position register as click_count==2 (word-select) and must clamp, not crash.
+    let mut editor = Editor::new();
+    for c in "hi".chars() {
+        let win = editor.window_mgr.focused_window_mut();
+        editor.buffers[0].insert_char(win, c);
+    }
+    // Two clicks at the same column far beyond the 2-char line.
+    editor.handle_mouse_click(1, 138, crate::input::MouseButton::Left);
+    editor.handle_mouse_click(1, 138, crate::input::MouseButton::Left);
+    // Reaching here means no panic; the cursor stays within the line.
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_row, 0);
+    assert!(win.cursor_col <= 1);
+}
+
+#[test]
 fn mouse_click_dynamic_gutter_large_file() {
     // Regression: gutter width should scale with line count.
     // 120 lines → 3 digits → gutter = max(3,2)+1 = 4 cols.

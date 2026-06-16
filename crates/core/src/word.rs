@@ -70,11 +70,16 @@ pub fn word_start_forward(rope: &Rope, pos: usize) -> usize {
 
 /// vi `b` — move to start of previous word.
 pub fn word_start_backward(rope: &Rope, pos: usize) -> usize {
-    if rope.len_chars() == 0 || pos == 0 {
+    let len = rope.len_chars();
+    if len == 0 || pos == 0 {
         return 0;
     }
 
-    let mut p = pos;
+    // Clamp to a valid char index. Callers may pass an out-of-bounds offset —
+    // e.g. mouse word-select from a click past a line's end, or in the right
+    // pane of a split window where the screen column exceeds the line length.
+    // (word_end_forward already guards its `pos` against the same overrun.)
+    let mut p = pos.min(len);
 
     // Move back one to look at the char before cursor
     p -= 1;
@@ -1369,5 +1374,30 @@ mod tests {
         let rope = Rope::from_str("abc   def");
         // cursor on space (pos 4) — inner selects whitespace run
         assert_eq!(big_word_object_range(&rope, 4, true), Some((3, 6)));
+    }
+
+    // Regression: mouse word-select (double-click) in the right pane of a split
+    // window passed an out-of-bounds char offset (screen column >> line length)
+    // into word_start_backward, panicking in rope.char(). The collab two-machine
+    // run crashed alice this way. These must clamp, not panic.
+    #[test]
+    fn word_motions_clamp_out_of_bounds_pos() {
+        let rope = Rope::from_str("run2: line from alice (D)\n"); // 26 chars
+        let len = rope.len_chars();
+        // Far past the end (the live crash used char index 138 into a 34-char rope).
+        let start = word_start_backward(&rope, 138);
+        let end = word_end_forward(&rope, 138);
+        assert!(start <= len, "word_start_backward overran: {start} > {len}");
+        assert!(end <= len, "word_end_forward overran: {end} > {len}");
+        // Exactly at len (one past the last index) must also be safe.
+        assert!(word_start_backward(&rope, len) <= len);
+        assert!(word_end_forward(&rope, len) <= len);
+    }
+
+    #[test]
+    fn word_start_backward_out_of_bounds_on_empty_rope() {
+        let rope = Rope::from_str("");
+        assert_eq!(word_start_backward(&rope, 99), 0);
+        assert_eq!(word_end_forward(&rope, 99), 0);
     }
 }

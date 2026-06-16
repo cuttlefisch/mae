@@ -33,38 +33,55 @@ Each entry is tagged with **where in the plan** it happened: **Step** (e.g. `T2.
 | 5 | T2.4 | alice (local) connects | mTLS auth `peer=alice` | authed session=2; pinned key == `07aW…7Ls` (out-of-band ✅) | ✅ |
 | 6 | T2.5 | alice opens `collab-demo.txt` + `collab-share` | daemon accepts | `sync/share accepted`, `synced_docs=1` | ✅ |
 | 7 | T2.5 | bob `collab-join` | bob sees alice's line | bob received `collab demo — line from alice (D)` | ✅ (bob row 8) **alice→bob receive** |
-| 8 | T2.5 | bob edits line w/ `—`, propagates to alice | alice shows bob's edit | **alice GUI panicked & crashed** | ❌ [I-1](#i-1) |
+| 8 | T2.5 | (during convergence) clicked split panes to focus collab buffer | focus switches | **alice GUI panicked & crashed** (double-click word-select past EOL) | ✅ **fixed** [I-1](#i-1) |
+| 9 | T2.5 | headless convergence (daemon + 2 `--test` editors, bob edits) | alice receives | content 36→60, **no crash** — isolates I-1 to the mouse path | ✅ |
 
 ## Issues
 
-### I-1 ❌ HIGH — alice rope panic on remote update (`Rope::char` OOB) · Step T2.5 {#i-1}
+### I-1 ✅ RESOLVED — alice panic: mouse double-click word-select past line end · Step T2.5 {#i-1}
 
-Same issue bob filed as **I-1** (his notes) — D owns the backtrace + fix.
+Bob filed the matching **I-1**. The remote-update theory was a **red herring** — the real
+trigger was a **mouse click**, not the CRDT sync (headless convergence never crashed).
 
-- **Symptom (alice GUI stderr):**
+- **Actual trigger (user-confirmed):** clicking the **left/right window splits** a few times
+  to focus the shared-collab pane. Two clicks at the same spot register as a **double-click →
+  word-select**, and a click in the right pane of a vertical split has a large **screen
+  column (~138)** that far overruns the short collab line.
+- **Backtrace (`/tmp/alice-bt.log`, RUST_BACKTRACE=full):**
   ```
-  thread 'main' panicked at ropey-1.6.1/src/rope.rs:803:13:
-  Attempt to index past end of Rope: char index 138, Rope char length 34
+  ropey::rope::Rope::char                              (rope.rs:803 — index 138 into 34-char rope)
+  mae_core::word::word_start_backward
+  mae_core::editor::mouse_ops::handle_mouse_click_inner   (double-click word-select)
+  <mae::GuiApp as ApplicationHandler>::window_event
   ```
-- **Panicking call:** `Rope::char(idx)` (ropey `rope.rs:799`) — an **editing/cursor** op
-  (word-motion / multicursor / search / buffer char lookup), **not** pure render. So a
-  `.char()` caller received a stale offset **138** (≫ alice's 34-char rope) when bob's
-  remote edit arrived.
-- **Trigger (from bob's repro):** bob joins, **edits a line containing `—` (U+2014)**, the
-  update propagates to alice → alice panics. Strong **char vs UTF-16 vs byte** offset-mismatch smell.
-- **Scoped / ruled out:**
-  - `mae_sync::TextSync::apply_update` is safe — full `rebuild_rope()` from the yrs string,
-    no per-index rope ops (`shared/sync/src/text.rs:265`).
-  - Local cursor adjustment after a remote update **is** clamped
-    (`crates/mae/src/collab_bridge.rs:834`, `adjusted.min(new_len.saturating_sub(1))`).
-  - GUI remote-cursor/selection render uses **pixel math** + `line_len(row)` clamps
-    (`crates/gui/src/cursor.rs:391,488`) — no direct rope char-index.
-  - ⇒ Suspect a remaining **editor-side apply-remote / sync-update-hook / redraw** path that
-    feeds an unclamped char offset into `rope.char()` (`crates/core`).
-- **Pinpoint plan (D):** reproduce locally **headless** (daemon + two `--test` editors, bob
-  joins same `/tmp/...collab-demo.txt` doc-id + edits the `—` line) under
-  `RUST_BACKTRACE=full` → exact frame → clamp + regression test in `crates/core`/`mae-sync`.
-- **Status:** OPEN — D capturing backtrace now.
+- **Root cause:** the double-click path computed `char_offset_at(target_row, text_col)` with
+  an **unclamped `text_col`** (the single-click path clamps; the double-click path didn't),
+  and `word_start_backward` guarded `pos == 0` but **not** `pos > len_chars()` (unlike
+  `word_end_forward`, which already guards `pos >= max_pos`). So a click past EOL produced
+  `offset = line_start + 138` → `rope.char(137)` → panic. `char_offset_at` clamps `row` but
+  not `col`, which let the overrun through.
+- **Fix (`6c048bc7`+):**
+  1. `crates/core/src/word.rs` — `word_start_backward` clamps `pos.min(len_chars())` (defense
+     in depth; symmetric with `word_end_forward`).
+  2. `crates/core/src/editor/mouse_ops.rs` — double-click path clamps `text_col` to the
+     clicked line's length before `char_offset_at` (matches single-click; also protects the
+     link-follow branch).
+- **Tests:** `word_motions_clamp_out_of_bounds_pos` + `word_start_backward_out_of_bounds_on_empty_rope`
+  (word.rs); `mouse_double_click_past_line_end_does_not_panic` (mouse_tests.rs). All green;
+  full mae-core suite 2237/2237.
+- **Note:** the unclamped **cross-window column** (fallback `handle_mouse_click` gets raw
+  screen coords, not window-relative, when `pixel_to_buffer_position` returns `None`) is a
+  separate latent correctness issue — clamping makes it safe (selects the last word) but a
+  follow-up should make the fallback window-relative. Logged as **I-3** below.
+- **Status:** ✅ FIXED — needs both machines on the rebuilt binary to re-verify T2.5.
+
+### I-3 ⚠️ follow-up — split-window click uses raw (not window-relative) coords · Step T2.5
+- When `pixel_to_buffer_position` returns `None`, `main.rs` falls back to
+  `handle_mouse_click(row, col)` with **raw screen** row/col; in a split the column isn't
+  offset by the pane's x-origin, so clicks in a right pane map to the wrong column (now
+  clamped, so no crash, but cursor lands at the line end rather than the clicked glyph).
+- **Fix idea:** subtract the focused window's `area_col`/`area_row` before dispatch, or always
+  resolve via the focused window's fresh layout. Low severity (cosmetic) post-I-1 fix.
 
 ### Cross-refs to bob's issues
 - **I-2** (bob) ⚠️ bob's local edit to joined buffer not visible on read-back — re-test early

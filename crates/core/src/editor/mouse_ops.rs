@@ -124,14 +124,25 @@ impl super::Editor {
 
                 // --- Double-click: try link following, then word select ---
                 if click_count == 2 {
+                    // Clamp to the clicked line's content. The raw text_col can
+                    // exceed the line length — a click past end-of-line, or in the
+                    // right pane of a split window where the screen column far
+                    // overruns a short line — which would push char_offset_at past
+                    // the rope and panic in word_start_backward.
+                    let click_col = {
+                        let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+                        let line_len = buf.line_len(target_row);
+                        text_col.min(if line_len > 0 { line_len - 1 } else { 0 })
+                    };
+
                     // Try link following first (existing behavior)
-                    if self.try_link_follow_at(target_row, text_col) {
+                    if self.try_link_follow_at(target_row, click_col) {
                         return;
                     }
 
                     // No link — select word at cursor
                     let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                    let offset = buf.char_offset_at(target_row, text_col);
+                    let offset = buf.char_offset_at(target_row, click_col);
                     let word_start = crate::word::word_start_backward(buf.rope(), offset);
                     let word_end = crate::word::word_end_forward(buf.rope(), offset);
                     // word_end is inclusive (on last char of word)
