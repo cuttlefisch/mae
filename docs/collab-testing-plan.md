@@ -11,6 +11,49 @@ live run** (the real multi-machine goal).
 
 ---
 
+## Setup — build + dependencies (do this first, on every machine)
+
+The repo is **two Cargo workspaces** that must both be built: the editor (repo
+root) and the daemon (`daemon/`).
+
+### Toolchain + system packages
+- **Rust ≥ 1.95** (MSRV): `rustup default stable` (or `rustup toolchain install 1.95`).
+- **iproute2** (the e2e scripts use `ss` for port readiness):
+  - Fedora: `sudo dnf install iproute` · Debian/Ubuntu: `sudo apt install iproute2`
+- **GUI build only** (skip if using the TUI build, which is enough for collab tests):
+  - Fedora: `sudo dnf install clang fontconfig-devel freetype-devel`
+  - Debian/Ubuntu: `sudo apt install clang libfontconfig1-dev libfreetype6-dev`
+
+### Build both binaries
+```bash
+git fetch && git checkout feat/crdt-collab-validation && git pull
+
+make build-tui        # editor (release, terminal) → target/release/mae
+make build-daemon     # daemon (release)           → daemon/target/release/mae-daemon
+# (or `make build` for the GUI editor; or debug: `cargo build` + `cd daemon && cargo build`)
+
+./target/release/mae --version
+./daemon/target/release/mae-daemon --version       # both should match
+```
+
+> **Tip:** the Makefile e2e targets (`make test-collab-e2e-all`) build both binaries
+> for you, so for Tier 0 you can skip the manual build. For the **two-machine run**
+> you need the binaries on `PATH` — `make install` / `make install-daemon`, or
+> copy `target/release/mae` and `daemon/target/release/mae-daemon` into `~/.local/bin`.
+
+### Key setup — who generates what
+| Tier | Keys | How |
+|------|------|-----|
+| **0 automated** | generated + authorized **by the scripts** | nothing to do — `collab-mtls-e2e.sh` / `collab-membership-e2e.sh` create isolated identities, authorize them, and clean up |
+| **1 / 2 manual** | **you** generate + authorize | identities auto-generate on first `mae --collab-identity` / `mae-daemon identity`; you exchange the public-key lines and run `mae-daemon authorize` (Tier 2 Step 3) |
+
+Identities live under `$XDG_DATA_HOME/mae/collab/` (`~/.local/share/mae/collab/`):
+`id_ed25519` (private, 0600), `id_ed25519.pub`, `known_hosts` (pinned daemons),
+`authorized_keys` (daemon's trusted clients). To reset a peer's identity, delete
+`id_ed25519*` and re-run — then re-authorize it.
+
+---
+
 ## Tier 0 — Automated (run on one machine; also runs in CI)
 
 ```bash
