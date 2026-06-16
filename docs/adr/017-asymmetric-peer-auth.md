@@ -1,6 +1,8 @@
 # ADR-017: Asymmetric Peer Authentication for Collab (SSH-style keys + TOFU)
 
-**Status:** Proposed
+**Status:** Accepted (implemented v0.13.x) — `key` mode uses **mTLS** keyed by
+the Ed25519 identities; the JSON `KeyAuth` handshake is retained as the
+`collab_tls = false` fallback. Per-KB membership + strict identity binding shipped.
 **Date:** 2026-06-15
 **Supersedes:** None (extends the PSK auth shipped in v0.11.0)
 **Depends on:** ADR-006 (collaborative state engine), ADR-007 (save coordination)

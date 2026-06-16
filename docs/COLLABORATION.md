@@ -104,42 +104,45 @@ user_name = "bob"
 
 ### Editor Options
 
+Configured via `init.scm` (the primary config surface) — **not** `config.toml`,
+which is being retired. Secrets (PSKs) never go in `config.toml`; see §8/§10.
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `collab-server-address` | string | `""` | Server `host:port`. Empty string = solo mode. |
-| `collab-auto-connect` | bool-string | `"false"` | Connect automatically on startup when address is set. |
-| `collab-username` | string | `""` | Display name shown to peers (empty = system hostname). |
-| `collab-wal-threshold` | integer | `500` | WAL entries before compaction (server-side). |
-| `collab-write-timeout-ms` | integer | `5000` | Peer write timeout in milliseconds. |
+| `collab-server-address` | string | `127.0.0.1:9473` | Daemon `host:port`. |
+| `collab-auto-connect` | bool | `false` | Connect automatically on startup. |
+| `collab-user-name` | string | `""` | Display name (empty = hostname). Overridden by the authenticated identity in key mode (§10). |
+| `collab-write-timeout-ms` | int | `5000` | Peer write timeout (ms). |
+| `collab-reconnect-interval` | int | `5` | Base reconnect interval (s). |
+| `collab-reconnect-backoff-factor` | int | `2` | Exponential backoff multiplier. |
+| `collab-auth-mode` | string | `psk` | `none` \| `psk` \| `key` (trusted-peer mTLS — §10). |
+| `collab-host-key-policy` | string | `prompt` | Key mode TOFU: `prompt` \| `accept-new` \| `strict`. |
+| `collab-tls` | bool | `true` | Use mTLS in key mode (false = plaintext KeyAuth fallback). |
+| `collab-psk` | string | `""` | PSK (plaintext fallback — prefer a keystore/command). |
+| `collab-psk-command` | string | `""` | Command that prints the PSK (e.g. `pass show mae/key`). |
 
-Set options at runtime:
-
-```scheme
-(set-option! "collab-server-address" "127.0.0.1:9473")
-```
-
-Persist across restarts with `:set-save`:
+Set + persist at runtime (writes `init.scm`):
 
 ```
 :set collab-server-address 127.0.0.1:9473
+:set collab-auto-connect true
 :set-save
+```
+
+Or directly in `init.scm`:
+
+```scheme
+(set-option! "collab-server-address" "192.168.1.10:9473")
+(set-option! "collab-auto-connect" "true")
+(set-option! "collab-auth-mode" "key")   ; trusted-peer mode (§10)
 ```
 
 ### Environment Variables
 
 | Variable | Overrides |
 |----------|-----------|
-| `MAE_COLLAB_ADDR` | `collab-server-address` |
+| `MAE_COLLAB_SERVER` | `collab-server-address` |
 | `MAE_COLLAB_AUTO_CONNECT` | `collab-auto-connect` (`1` = true) |
-
-### config.toml
-
-```toml
-[collab]
-server_address = "127.0.0.1:9473"
-auto_connect = true
-username = "alice"
-```
 
 ---
 
@@ -151,27 +154,36 @@ username = "alice"
 mae-daemon [OPTIONS] [SUBCOMMAND]
 
 Options:
-  --bind <ADDR>          Listen address (default: 127.0.0.1:9473)
-  --unix-socket <PATH>   Also listen on a Unix domain socket
-  --db <PATH>            SQLite WAL path (default: ~/.local/share/mae/collab.db)
-  --wal-threshold <N>    Compact after N WAL entries (default: 500)
-  --check-config         Validate configuration and exit
+  --bind <ADDR>          Override the collab listen address (e.g. 0.0.0.0:9473)
+  --config <PATH>        Use a specific daemon.toml
+  --data-dir <PATH>      Override the data directory
+  --check-config         Validate configuration (+ print effective settings) and exit
+  --version, -V          Print version
 
 Subcommands:
-  doctor                 Run diagnostics (port, WAL, disk space)
+  doctor                 Run diagnostics (config, collab storage, port)
+  # Symmetric PSK mode (collab.auth.mode = "psk"):
+  keygen [NAME]          Generate a random trusted key + write it to the keystore
+  keys                   List trusted keys (names + fingerprints)
+  # Asymmetric key mode (collab.auth.mode = "key", recommended — see §10):
+  identity               Print this daemon's Ed25519 public key + fingerprint
+  authorized             List authorized client keys
+  authorize <pubkey>     Authorize a client public-key line (mae-ed25519 <b64> <label>)
+  revoke <label>         Revoke an authorized client by label
 ```
+
+All other settings (bind, storage, auth) live in `~/.config/mae/daemon.toml`
+(see §4 config below). The daemon's KB Unix socket and persistence paths come
+from config/XDG, not CLI flags.
 
 Examples:
 
 ```bash
-# Local loopback only
+# Local loopback only (uses daemon.toml, default 127.0.0.1:9473)
 mae-daemon
 
-# LAN / VPN (all interfaces)
+# LAN / VPN: override the bind for all interfaces
 mae-daemon --bind 0.0.0.0:9473
-
-# Custom database path
-mae-daemon --db /var/lib/mae/collab.db
 
 # Validate config without starting
 mae-daemon --check-config
@@ -487,7 +499,7 @@ applying it to memory. On restart:
 2. Replay WAL entries newer than the snapshot.
 3. Serve from the recovered in-memory state.
 
-If the WAL is corrupted, delete `~/.local/share/mae/collab.db` and restart. All
+If the WAL is corrupted, delete `~/.local/share/mae/collab/state.db` and restart. All
 connected clients will push their local state on reconnect, restoring the merged
 document.
 
@@ -495,26 +507,35 @@ document.
 
 ## 8. Security
 
-**Current posture: PSK authentication (HMAC-SHA256).** Both server and clients
-must share the same pre-shared key (`collab_psk` / `collab_psk_command`).
-Connections without a valid PSK are rejected at the TCP handshake.
+Three auth modes (`collab.auth.mode` on the daemon, `collab-auth-mode` on the
+editor):
+
+| Mode | Mechanism | Use |
+|------|-----------|-----|
+| `none` | No auth | Trusted loopback only |
+| `psk` | Pre-shared key, HMAC-SHA256 mutual handshake | Quick shared-secret setups |
+| `key` | **Ed25519 mTLS** — encryption + mutual auth + TOFU pinning + per-KB membership | **Recommended; multi-user / enterprise (§10)** |
 
 | Phase | Mechanism | Status |
 |-------|-----------|--------|
 | v1 | No auth — trusted LAN / VPN only | Superseded |
-| v2 (current) | Pre-shared key (PSK) HMAC-SHA256 | ✅ Shipped (v0.11.0) |
-| v3 | SSH key exchange | Planned |
-| v4 | OAuth 2.0 / OIDC for enterprise deployments | Planned |
+| v2 | Pre-shared key (PSK) HMAC-SHA256 | ✅ Shipped (v0.11.0) |
+| v3 | **Ed25519 mTLS trusted peers + per-KB membership** (ADR-017) | ✅ Shipped |
+| v4 | OAuth 2.0 / OIDC for enterprise SSO | Planned |
+
+**Secrets** never belong in `config.toml`. Use `key` mode (no shared secret), or
+a PSK keystore / `collab-psk-command` for `psk` mode.
 
 **Recommendations:**
 
 - Bind to `127.0.0.1` for solo/loopback use (default).
-- Use a VPN (WireGuard, Tailscale) when collaborating across machines.
-- Firewall the port (`9473`) from untrusted networks.
-- Never bind to `0.0.0.0` on a machine with a public IP without a VPN or firewall rule.
-
-Unix domain socket (`--unix-socket`) access is controlled by filesystem
-permissions. Use it for intra-machine IPC where tighter isolation is needed.
+- For multi-machine, use **`key` mode** — it encrypts (mTLS) and authenticates
+  each peer. On a trusted LAN it's sufficient; on untrusted networks add a VPN
+  (WireGuard, Tailscale).
+- `psk`/`none` modes are **plaintext** on the wire — keep them on trusted
+  networks or behind a TLS-terminating proxy / VPN.
+- Firewall the port (`9473`) from untrusted networks; never bind `0.0.0.0` on a
+  public IP without a VPN or firewall rule.
 
 ---
 
@@ -594,6 +615,95 @@ When the last client disconnects (`peer_count` reaches 0):
 - If a save is in flight when disconnection occurs, the `SendSaveIntent` / `SendSaveCommitted`
   commands are dropped silently. The local file save (`:w`) has already succeeded at that point.
 - Peers will not receive a `save_committed` notification, but the CRDT state is consistent.
+
+---
+
+## 10. Trusted-Peer Mode (key auth + mTLS)
+
+For multi-user / multi-machine collaboration and **long-term shared knowledge
+management**, use `key` mode (ADR-017). It gives every peer a stable **Ed25519
+identity**, encrypts the channel with **mutual TLS**, pins the daemon on first
+connect (**TOFU**), authoritatively attributes edits to the verified identity,
+and enforces **per-KB membership** (least privilege). It supersedes `psk` mode's
+shared secret. Layout lives under `$XDG_DATA_HOME/mae/collab/` (like `~/.ssh/`):
+`id_ed25519`(.pub), `known_hosts`, `authorized_keys`.
+
+### Daemon (the hub)
+
+`~/.config/mae/daemon.toml`:
+
+```toml
+[collab]
+bind = "0.0.0.0:9473"     # LAN; for untrusted networks tunnel via VPN
+
+[collab.auth]
+mode = "key"              # Ed25519 + mTLS (tls = true by default)
+```
+
+```bash
+mae-daemon identity        # prints the daemon's fingerprint + public key line
+mae-daemon --check-config  # shows auth.mode=key, tls, identity, authorized count
+```
+
+Share the daemon's **fingerprint** out-of-band so clients can verify the TOFU
+prompt.
+
+### Authorize each peer
+
+On each editor machine, print its identity (auto-generated on first use):
+
+```bash
+mae --collab-identity      # → mae-ed25519 <base64> <hostname>  (+ fingerprint)
+```
+
+On the daemon host, authorize it (relabel as you like — the label is the peer's
+identity for attribution + membership):
+
+```bash
+mae-daemon authorize mae-ed25519 <base64> alice
+mae-daemon authorized      # list trusted peers
+mae-daemon revoke alice    # per-peer revocation (no secret rotation)
+```
+
+### Editor (each peer)
+
+In `init.scm` (or `:set … :set-save`):
+
+```scheme
+(set-option! "collab-auth-mode" "key")
+(set-option! "collab-server-address" "192.168.1.10:9473")
+(set-option! "collab-auto-connect" "true")
+;; collab-host-key-policy: prompt (default, interactive) | accept-new | strict
+```
+
+On first connect, an unknown daemon key triggers a **"Trust Daemon Key?
+SHA256:… [y/N]"** dialog — verify it matches `mae-daemon identity`, accept to
+pin. A *changed* key later aborts the connection (MITM defense). Headless
+(`mae --test`/CI) should use `accept-new`.
+
+### Shared KBs among members
+
+The KB **creator/owner** shares it and manages membership; only members may join
+or edit:
+
+```
+:kb-share                       # owner shares the active KB
+:kb-member-add <kb-id> alice    # owner adds a trusted peer (by label)
+:kb-member-remove <kb-id> alice
+:kb-join <kb-id>                # members only — non-members are denied
+```
+
+The daemon binds the shared collection's creator to the *authenticated* identity
+and rejects a spoofed `creator`/cursor name. **Known limitation:** a member can
+still smuggle membership edits through a raw collection update; the sanctioned
+path is the owner-only `kb-member-*` commands (server-side CRDT field ACLs are
+future work).
+
+### Validate it
+
+`make test-collab-mtls-e2e` (single-host mTLS) and
+`make test-collab-membership-e2e` (two-editor membership) exercise the full
+stack with real daemon + editors.
 
 ---
 
