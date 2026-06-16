@@ -643,6 +643,27 @@ async fn kb_access(
     }
 }
 
+/// Membership-smuggling defense (ADR-018): a raw `sync/update` to a collection
+/// doc (`kbc:{kb}`) mutates owner/members/policy and is therefore owner-only. The
+/// editor only ever touches collections via the gated `kb/*` methods, so a raw
+/// `kbc:` write from a non-owner is rejected. Non-collection docs are unaffected.
+async fn deny_collection_smuggling(
+    doc_store: &DocStore,
+    doc_name: &str,
+    principal: Option<&str>,
+) -> Result<(), String> {
+    if let Some(kb_id) = doc_name.strip_prefix("kbc:") {
+        match kb_access(doc_store, kb_id, principal, KbOp::Manage).await? {
+            AccessDecision::Allow => Ok(()),
+            _ => Err(format!(
+                "only the owner may write the collection doc for KB '{kb_id}'"
+            )),
+        }
+    } else {
+        Ok(())
+    }
+}
+
 /// Handle document-level methods directly (without editor tool dispatch).
 /// `auth_principal` (key fingerprint / psk:<keyid>) is the authoritative subject
 /// for KB access control (ADR-018); `auth_label` is display/attribution only.
@@ -697,6 +718,12 @@ async fn handle_doc_request_inner(
                     );
                 }
             };
+            // ADR-018 membership-smuggling defense: a raw write to a collection doc
+            // (`kbc:`) is owner-only.
+            if let Err(e) = deny_collection_smuggling(doc_store, &doc_name, auth_principal).await {
+                warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update denied (collection smuggling)");
+                return JsonRpcResponse::error(id, McpError::internal_error(e));
+            }
             // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
             if session_docs.insert(doc_name.clone()) {
                 // First interaction — track client connect + subscribe to doc events.
@@ -3115,6 +3142,40 @@ mod tests {
             coll.role_of(b),
             None,
             "a different key with the same label is NOT a member"
+        );
+    }
+
+    #[tokio::test]
+    async fn raw_collection_write_smuggling_denied() {
+        // A non-owner cannot escalate by sending a raw `kbc:` sync/update that
+        // grants itself ownership — the membership-smuggling defense.
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kbs",
+            "alice",
+            &mut docs,
+        )
+        .await;
+        let mut coll = load_coll(&store, "kbs").await;
+        let evil = coll.upsert_member(&fp("bob"), "bob", SyncRole::Owner);
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"sync/update",
+            "params":{"doc":"kbc:kbs","update":update_to_base64(&evil)}});
+        let denied = dispatch_as(&store, &bc, Some("bob"), Some(&fp("bob")), msg, &mut docs).await;
+        assert!(
+            denied.error.is_some(),
+            "non-owner raw collection write must be denied"
+        );
+        let after = load_coll(&store, "kbs").await;
+        assert_eq!(
+            after.role_of(&fp("bob")),
+            None,
+            "smuggled membership must not apply"
         );
     }
 
