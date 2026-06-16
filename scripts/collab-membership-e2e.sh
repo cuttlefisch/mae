@@ -25,7 +25,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAE_BIN="${MAE_BIN:-$ROOT/target/debug/mae}"
 MAE_DAEMON_BIN="${MAE_DAEMON_BIN:-$ROOT/daemon/target/debug/mae-daemon}"
-port_free() { ! ss -tln 2>/dev/null | grep -q ":$1 "; }
+# Portable TCP-listen probe + timeout. Linux has ss + timeout; macOS has neither
+# by default. Prefer ss (Linux/CI behavior unchanged), then lsof, then netstat.
+port_listening() {
+  if command -v ss >/dev/null 2>&1; then ss -tln 2>/dev/null | grep -q ":$1 "
+  elif command -v lsof >/dev/null 2>&1; then lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+  else netstat -an 2>/dev/null | grep -iE "[._:]$1[[:space:]].*listen" >/dev/null 2>&1; fi
+}
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+port_free() { ! port_listening "$1"; }
 pick_port() {
   local p="$1"
   for _ in $(seq 0 49); do port_free "$p" && { echo "$p"; return 0; }; p=$((p + 1)); done
@@ -114,13 +122,13 @@ EOF
 # --- Start daemon ---
 srv env MAE_LOG=info "$MAE_DAEMON_BIN" > "$WORK/daemon.log" 2>&1 &
 DAEMON_PID=$!
-for _ in $(seq 1 20); do ss -tlnp 2>/dev/null | grep -q ":$PORT " && break; sleep 0.25; done
-ss -tlnp 2>/dev/null | grep -q ":$PORT " || { echo "ERROR: daemon not listening"; cat "$WORK/daemon.log"; exit 1; }
+for _ in $(seq 1 20); do port_listening "$PORT" && break; sleep 0.25; done
+port_listening "$PORT" || { echo "ERROR: daemon not listening"; cat "$WORK/daemon.log"; exit 1; }
 
 run_editor() {
   local who="$1" scen="$2" log="$3"
   "$who" env MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
-    MAE_LOG="warn" timeout 120 "$MAE_BIN" --test "$scen" > "$log" 2>&1
+    MAE_LOG="warn" ${TIMEOUT_BIN:+$TIMEOUT_BIN 120} "$MAE_BIN" --test "$scen" > "$log" 2>&1
 }
 
 # alice first (creates + shares), then bob.

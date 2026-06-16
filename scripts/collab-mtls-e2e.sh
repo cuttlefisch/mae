@@ -25,10 +25,23 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAE_BIN="${MAE_BIN:-$ROOT/target/debug/mae}"
 MAE_DAEMON_BIN="${MAE_DAEMON_BIN:-$ROOT/daemon/target/debug/mae-daemon}"
 
+# Portable TCP-listen probe + command timeout. Linux has ss + timeout; macOS has
+# neither by default. Prefer ss (so Linux/CI behavior is unchanged), then fall
+# back to lsof, then netstat. Timeout falls back to gtimeout, then to no timeout.
+port_listening() {
+  if command -v ss >/dev/null 2>&1; then ss -tln 2>/dev/null | grep -q ":$1 "
+  elif command -v lsof >/dev/null 2>&1; then lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+  else netstat -an 2>/dev/null | grep -iE "[._:]$1[[:space:]].*listen" >/dev/null 2>&1; fi
+}
+# A timeout binary to prefix the editor run with. Used unquoted as
+# ${TIMEOUT_BIN:+$TIMEOUT_BIN <secs>} so it expands to nothing when absent (macOS
+# without coreutils) — must be a real binary because it runs through `env`.
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+
 # Pick a free TCP port. Honor an explicit MAE_E2E_PORT verbatim; otherwise scan
-# upward from a base until ss reports nothing listening — so a running daemon
+# upward from a base until nothing is listening — so a running daemon
 # (default 9473) or a concurrent test run never causes "address already in use".
-port_free() { ! ss -tln 2>/dev/null | grep -q ":$1 "; }
+port_free() { ! port_listening "$1"; }
 pick_port() {
   local p="$1"
   for _ in $(seq 0 49); do port_free "$p" && { echo "$p"; return 0; }; p=$((p + 1)); done
@@ -105,16 +118,16 @@ EOF
 srv_env env MAE_LOG=info "$MAE_DAEMON_BIN" > "$WORK/daemon.log" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 20); do
-  ss -tlnp 2>/dev/null | grep -q ":$PORT " && break
+  port_listening "$PORT" && break
   sleep 0.25
 done
-ss -tlnp 2>/dev/null | grep -q ":$PORT " || { echo "ERROR: daemon failed to listen on $PORT"; cat "$WORK/daemon.log"; exit 1; }
+port_listening "$PORT" || { echo "ERROR: daemon failed to listen on $PORT"; cat "$WORK/daemon.log"; exit 1; }
 grep -q 'mTLS' "$WORK/daemon.log" || { echo "ERROR: daemon not in mTLS mode"; cat "$WORK/daemon.log"; exit 1; }
 
 # --- Run the editor scenario over mTLS ---
 set +e
 cli_env env MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
-  timeout 90 "$MAE_BIN" --test "$WORK/scen/mtls.scm" > "$WORK/tap.out" 2> "$WORK/cli.log"
+  ${TIMEOUT_BIN:+$TIMEOUT_BIN 90} "$MAE_BIN" --test "$WORK/scen/mtls.scm" > "$WORK/tap.out" 2> "$WORK/cli.log"
 set -e
 
 echo "--- TAP ---"

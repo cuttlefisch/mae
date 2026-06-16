@@ -8,6 +8,32 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+/// XDG-first config base dir: `$XDG_CONFIG_HOME/mae` when set, else the platform
+/// default (`dirs::config_dir()/mae`). Per CLAUDE.md principle #13 the daemon must
+/// honor XDG on macOS too — the bare `dirs` crate uses Apple paths there and
+/// silently ignores env-var isolation, diverging from the `mae-mcp` identity /
+/// keystore resolution and breaking the collab e2e harness on macOS.
+fn xdg_config_base() -> Option<PathBuf> {
+    if let Some(v) = std::env::var_os("XDG_CONFIG_HOME") {
+        if !v.is_empty() {
+            return Some(PathBuf::from(v).join("mae"));
+        }
+    }
+    dirs::config_dir().map(|d| d.join("mae"))
+}
+
+/// XDG-first data base dir: `$XDG_DATA_HOME/mae` when set, else `dirs::data_dir()/mae`.
+fn xdg_data_base() -> PathBuf {
+    if let Some(v) = std::env::var_os("XDG_DATA_HOME") {
+        if !v.is_empty() {
+            return PathBuf::from(v).join("mae");
+        }
+    }
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("mae")
+}
+
 /// Top-level daemon configuration.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -246,7 +272,7 @@ impl DaemonConfig {
     /// Load config from `~/.config/mae/daemon.toml`, falling back to defaults.
     /// Also checks for legacy `state-server.toml` and auto-migrates collab settings.
     pub fn load() -> Self {
-        let config_dir = dirs::config_dir().map(|d| d.join("mae"));
+        let config_dir = xdg_config_base();
 
         if let Some(ref dir) = config_dir {
             let daemon_path = dir.join("daemon.toml");
@@ -287,13 +313,9 @@ impl DaemonConfig {
         Self::default()
     }
 
-    /// Effective KB data directory (explicit config or XDG default).
+    /// Effective KB data directory (explicit config or XDG-first default).
     pub fn effective_data_dir(&self) -> PathBuf {
-        self.data_dir.clone().unwrap_or_else(|| {
-            dirs::data_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("mae")
-        })
+        self.data_dir.clone().unwrap_or_else(xdg_data_base)
     }
 
     /// Resolve the collab data directory, creating it if needed.

@@ -124,6 +124,12 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 12. **Local-first by design.** MAE satisfies 5 of 7 Ink & Switch local-first ideals today (no spinners, multi-device, network optional, collaboration without conflict, user ownership). P2P collaboration and E2E encryption will complete the remaining two. The daemon is an optimization for persistence and discovery, not a requirement for collaboration.
 
+13. **Cross-platform parity (macOS + Linux) is a development constraint, not an afterthought.** MAE is developed and run across macOS and Linux *simultaneously* (often on the same branch, same day). Every script, path-resolution, and tool invocation MUST behave identically on both — or fail loudly with a portable fallback, never silently no-op on one platform. A "fix" that only works on one developer's machine is not a fix; it manufactures the stop-and-go cross-machine debugging this principle exists to prevent. Concretely:
+    - **Directory resolution is XDG-first on ALL platforms.** Honor `XDG_CONFIG_HOME` / `XDG_DATA_HOME` when set, then fall back to the platform default. The bare `dirs` / `directories` crate follows Apple conventions on macOS (`~/Library/Application Support`) and *ignores* XDG — so calling `dirs::config_dir()` / `dirs::data_dir()` directly breaks env-var test isolation and contradicts the documented `~/.config/mae` + `~/.local/share/mae` contract. Use the XDG-first helpers (`mae-mcp::identity::default_collab_dir`, `mae-mcp::keystore`, editor `pkg/paths.rs::{dirs_candidate,data_dir_candidate}`), never raw `dirs::*` for primary config/data paths.
+    - **Shell scripts use portable tooling.** No Linux-only commands without a fallback: `ss` → `lsof` → `netstat`; `timeout` → `gtimeout` → optional/omitted; avoid GNU-only behavior (`sed -i` arg differences, `readlink -f`, `mktemp` templates, `date` flags). Prefer POSIX; gate platform branches on capability (`command -v`), not `uname`. Keep the Linux path first so CI/driver behavior is unchanged.
+    - **CI must exercise both OSes** for anything touching paths, sockets, or scripts — the collab e2e (`scripts/collab-*-e2e.sh`) especially, since that's where this bites.
+    This is the cross-machine corollary to principles #8 (shared computation) and #9 (downstream impact): verify the change on *both* platforms, not just the one in front of you.
+
 ### Rendering Pipeline
 The GUI renderer uses a three-phase pipeline: `compute_layout()` produces
 a `FrameLayout`, `render_buffer_content()` draws text, and `render_cursor()`
