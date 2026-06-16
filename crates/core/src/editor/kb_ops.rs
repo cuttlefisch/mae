@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use mae_kb::federation::{ImportHealth, ImportReport};
+use mae_kb::KbStore;
 
 use super::Editor;
 
@@ -404,6 +405,36 @@ impl Editor {
         }
     }
 
+    /// Locate the in-memory KB that owns `id`: `None` = primary, `Some(uuid)` =
+    /// a federated instance. Used so writes (update/delete) resolve nodes the
+    /// same way reads do — i.e. across `primary` ∪ `instances` — instead of
+    /// primary-only (I-9).
+    fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {
+        if self.kb.primary.contains(id) {
+            return Some(None);
+        }
+        self.kb
+            .instances
+            .iter()
+            .find(|(_, kb)| kb.contains(id))
+            .map(|(uuid, _)| Some(uuid.clone()))
+    }
+
+    /// Persist a node to its owning store: the primary store, or the matching
+    /// federated instance store (keyed by uuid). Best-effort write-through.
+    fn kb_persist_node_in(&self, owner: &Option<String>, node: &mae_kb::Node) {
+        match owner {
+            None => self.kb_persist_node(node),
+            Some(uuid) => {
+                if let Some(store) = self.kb.instance_stores.get(uuid) {
+                    if let Err(e) = store.update_node(node) {
+                        tracing::warn!(node_id = %node.id, error = %e, "KB instance store write-through failed");
+                    }
+                }
+            }
+        }
+    }
+
     /// Persist a deletion to the backing store (if present). Best-effort.
     fn kb_persist_delete(&self, id: &str) {
         if let Some(ref store) = self.kb.store {
@@ -442,19 +473,39 @@ impl Editor {
     /// Delete a KB node from the local knowledge base.
     /// Rejects deleting seed nodes (built-in help).
     pub fn kb_delete_node(&mut self, id: &str) -> Result<(), String> {
-        match self.kb.primary.get(id) {
-            None => Err(format!("No KB node: {}", id)),
-            Some(node) if node.source == Some(mae_kb::NodeSource::Seed) => Err(format!(
+        // Resolve across primary ∪ federated instances (I-9), like update/read.
+        let owner = self
+            .kb_owner_of(id)
+            .ok_or_else(|| format!("No KB node: {}", id))?;
+        let node = match &owner {
+            None => self.kb.primary.get(id),
+            Some(uuid) => self.kb.instances.get(uuid).and_then(|kb| kb.get(id)),
+        }
+        .ok_or_else(|| format!("No KB node: {}", id))?;
+        if node.source == Some(mae_kb::NodeSource::Seed) {
+            return Err(format!(
                 "Cannot delete seed node '{}' — built-in help is protected",
                 id
-            )),
-            Some(_) => {
+            ));
+        }
+        match &owner {
+            None => {
                 self.kb_persist_delete(id);
                 self.kb.primary.remove(id);
-                self.set_status(format!("KB node deleted: {}", id));
-                Ok(())
+            }
+            Some(uuid) => {
+                if let Some(store) = self.kb.instance_stores.get(uuid) {
+                    if let Err(e) = store.delete_node(id) {
+                        tracing::warn!(node_id = %id, error = %e, "KB instance store delete failed");
+                    }
+                }
+                if let Some(kb) = self.kb.instances.get_mut(uuid) {
+                    kb.remove(id);
+                }
             }
         }
+        self.set_status(format!("KB node deleted: {}", id));
+        Ok(())
     }
 
     /// Update fields on an existing KB node.
@@ -466,12 +517,19 @@ impl Editor {
         body: Option<&str>,
         tags: Option<Vec<String>>,
     ) -> Result<(), String> {
-        let existing = self
-            .kb
-            .primary
-            .get(id)
-            .ok_or_else(|| format!("No KB node: {}", id))?
-            .clone();
+        // Resolve the node across primary ∪ federated instances (I-9): a shared
+        // KB lives in `instances` on the host that registered it, and in
+        // `primary` on a peer that joined it. The write path must find it in
+        // either, mirroring the read path — not primary-only.
+        let owner = self
+            .kb_owner_of(id)
+            .ok_or_else(|| format!("No KB node: {}", id))?;
+        let existing = match &owner {
+            None => self.kb.primary.get(id),
+            Some(uuid) => self.kb.instances.get(uuid).and_then(|kb| kb.get(id)),
+        }
+        .ok_or_else(|| format!("No KB node: {}", id))?
+        .clone();
         if existing.source == Some(mae_kb::NodeSource::Seed) {
             return Err(format!(
                 "Cannot modify seed node '{}' — built-in help is protected",
@@ -501,9 +559,17 @@ impl Editor {
         };
 
         if let Some(kb_id) = shared_kb_id {
-            // Use CRDT-aware upsert to generate update bytes for broadcasting.
-            // client_id 1 is used for local edits (distinct from remote).
-            if let Some(update_bytes) = self.kb.primary.upsert_with_crdt(updated, 1) {
+            // CRDT-aware upsert on the OWNING in-memory KB to generate update
+            // bytes for broadcasting. client_id 1 marks local edits.
+            let update_bytes = match &owner {
+                None => self.kb.primary.upsert_with_crdt(updated, 1),
+                Some(uuid) => self
+                    .kb
+                    .instances
+                    .get_mut(uuid)
+                    .and_then(|kb| kb.upsert_with_crdt(updated, 1)),
+            };
+            if let Some(update_bytes) = update_bytes {
                 // Persist CRDT update to pending queue (durable offline queue).
                 if let Some(ref store) = self.kb.store {
                     let _ = store.push_pending_update(&kb_id, id, &update_bytes);
@@ -512,13 +578,31 @@ impl Editor {
                     .pending_kb_updates
                     .push((kb_id, id.to_string(), update_bytes));
             }
-            // Persist the updated node to store.
-            if let Some(node) = self.kb.primary.get(id) {
-                self.kb_persist_node(node);
+            // Persist the updated node to its owning store.
+            let persisted = match &owner {
+                None => self.kb.primary.get(id).cloned(),
+                Some(uuid) => self
+                    .kb
+                    .instances
+                    .get(uuid)
+                    .and_then(|kb| kb.get(id))
+                    .cloned(),
+            };
+            if let Some(node) = persisted {
+                self.kb_persist_node_in(&owner, &node);
             }
         } else {
-            self.kb_persist_node(&updated);
-            self.kb.primary.insert(updated);
+            self.kb_persist_node_in(&owner, &updated);
+            match &owner {
+                None => {
+                    self.kb.primary.insert(updated);
+                }
+                Some(uuid) => {
+                    if let Some(kb) = self.kb.instances.get_mut(uuid) {
+                        kb.insert(updated);
+                    }
+                }
+            }
         }
 
         self.set_status(format!("KB node updated: {}", id));
@@ -2562,6 +2646,106 @@ mod tests {
         assert_eq!(node.title, "Updated Title");
         assert_eq!(node.body, "original body"); // unchanged
         assert_eq!(node.tags, vec!["tag1".to_string()]);
+    }
+
+    /// I-9: a node that lives in a federated *instance* (not `primary`) — the
+    /// shape on the host that registered a shared KB — must be editable via
+    /// `kb_update_node`, not rejected with "No KB node" (the original
+    /// primary-only resolution bug).
+    #[test]
+    fn kb_update_node_resolves_federated_instance() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        let mut n = mae_kb::Node::new(
+            "collabtest:overview",
+            "Overview",
+            mae_kb::NodeKind::Note,
+            "body",
+        );
+        n.source = Some(mae_kb::NodeSource::Federation);
+        inst.insert(n);
+        editor.kb.instances.insert("uuid-collabtest".into(), inst);
+
+        // Not in primary — only in the instance.
+        assert!(editor.kb.primary.get("collabtest:overview").is_none());
+        let res = editor.kb_update_node(
+            "collabtest:overview",
+            Some("Overview v2"),
+            Some("new body"),
+            None,
+        );
+        assert!(
+            res.is_ok(),
+            "instance node must resolve for update: {res:?}"
+        );
+        let updated = editor
+            .kb
+            .instances
+            .get("uuid-collabtest")
+            .and_then(|kb| kb.get("collabtest:overview"))
+            .expect("node still in instance");
+        assert_eq!(updated.title, "Overview v2");
+        assert_eq!(updated.body, "new body");
+    }
+
+    /// I-9: editing an instance node that belongs to a *shared* KB must queue a
+    /// CRDT update for broadcast (so the edit propagates to peers) — previously
+    /// impossible because the write never resolved the instance node at all.
+    #[test]
+    fn kb_update_node_shared_instance_queues_crdt_update() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        let mut n = mae_kb::Node::new(
+            "collabtest:alpha",
+            "Alpha",
+            mae_kb::NodeKind::Note,
+            "alpha body",
+        );
+        n.source = Some(mae_kb::NodeSource::Federation);
+        inst.insert(n);
+        editor.kb.instances.insert("uuid-collabtest".into(), inst);
+
+        // Mark the KB shared (as the share/join events would) + on_save sync.
+        editor.collab.kb_sync_mode = "on_save".into();
+        let mut nodes = std::collections::HashSet::new();
+        nodes.insert("collabtest:alpha".to_string());
+        editor.collab.shared_kbs.insert("collabtest".into(), nodes);
+
+        assert!(editor.collab.pending_kb_updates.is_empty());
+        editor
+            .kb_update_node("collabtest:alpha", None, Some("edited"), None)
+            .unwrap();
+        assert_eq!(
+            editor.collab.pending_kb_updates.len(),
+            1,
+            "edit to a shared instance node must queue a kb/node_update"
+        );
+        let (kb_id, node_id, _bytes) = &editor.collab.pending_kb_updates[0];
+        assert_eq!(kb_id, "collabtest");
+        assert_eq!(node_id, "collabtest:alpha");
+    }
+
+    /// I-9: deleting an instance node must resolve it (not "No KB node").
+    #[test]
+    fn kb_delete_node_resolves_federated_instance() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        let mut n = mae_kb::Node::new("collabtest:beta", "Beta", mae_kb::NodeKind::Note, "b");
+        n.source = Some(mae_kb::NodeSource::Federation);
+        inst.insert(n);
+        editor.kb.instances.insert("uuid-collabtest".into(), inst);
+
+        let res = editor.kb_delete_node("collabtest:beta");
+        assert!(
+            res.is_ok(),
+            "instance node must resolve for delete: {res:?}"
+        );
+        assert!(editor
+            .kb
+            .instances
+            .get("uuid-collabtest")
+            .and_then(|kb| kb.get("collabtest:beta"))
+            .is_none());
     }
 
     #[test]

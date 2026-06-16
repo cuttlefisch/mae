@@ -1294,10 +1294,23 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     } else {
                         editor.kb.primary.list_ids(None).into_iter().collect()
                     }
-                } else if let Some(kb) = editor.kb.instances.get(&kb_id) {
-                    kb.list_ids(None).into_iter().collect()
                 } else {
-                    HashSet::new()
+                    // `instances` is keyed by UUID, but `kb_id` is the human name
+                    // (e.g. "collabtest"). Resolve name→uuid via the registry first,
+                    // else `shared_kbs` gets an EMPTY set and later edits to the
+                    // shared KB never match → no kb/node_update is broadcast (I-9).
+                    let uuid = editor
+                        .kb
+                        .registry
+                        .find(&kb_id)
+                        .map(|inst| inst.uuid.clone());
+                    let kb = uuid
+                        .and_then(|u| editor.kb.instances.get(&u))
+                        .or_else(|| editor.kb.instances.get(&kb_id));
+                    match kb {
+                        Some(kb) => kb.list_ids(None).into_iter().collect(),
+                        None => HashSet::new(),
+                    }
                 };
             editor.collab.shared_kbs.insert(kb_id.clone(), node_ids);
             editor.set_status(format!("KB '{}' shared ({} nodes)", kb_id, node_count));
@@ -5224,6 +5237,63 @@ mod tests {
         assert!(
             tracked.contains("node-1") && tracked.contains("node-2"),
             "shared_kbs should contain all node IDs: {:?}",
+            tracked
+        );
+    }
+
+    /// I-9: sharing a *named federated instance* must track its node IDs by
+    /// resolving name→uuid. `instances` is keyed by uuid, so the old
+    /// `instances.get(&kb_id)` (name) missed → `shared_kbs` got an EMPTY set →
+    /// later edits to the shared KB never matched → no kb/node_update broadcast.
+    #[test]
+    fn collab_kb_shared_named_instance_tracks_nodes_by_uuid() {
+        let mut editor = Editor::new();
+        let uuid = "uuid-collabtest".to_string();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "collabtest:overview",
+            "Overview",
+            mae_kb::NodeKind::Note,
+            "b",
+        ));
+        inst.insert(mae_kb::Node::new(
+            "collabtest:alpha",
+            "Alpha",
+            mae_kb::NodeKind::Note,
+            "b",
+        ));
+        editor.kb.instances.insert(uuid.clone(), inst);
+        // Registry maps the human name → uuid (as `:kb-register` would).
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: uuid.clone(),
+                name: "collabtest".into(),
+                org_dir: std::path::PathBuf::from("/tmp/collabtest"),
+                db_path: std::path::PathBuf::from("/tmp/collabtest.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: true,
+                remote_peers: Vec::new(),
+                last_sync: None,
+            });
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbShared {
+                kb_id: "collabtest".to_string(),
+                node_count: 2,
+            },
+        );
+
+        let tracked = &editor.collab.shared_kbs["collabtest"];
+        assert!(
+            tracked.contains("collabtest:overview") && tracked.contains("collabtest:alpha"),
+            "named-instance share must track nodes via uuid resolution, got: {:?}",
             tracked
         );
     }
