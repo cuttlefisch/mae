@@ -140,11 +140,32 @@ trigger was a **mouse click**, not the CRDT sync (headless convergence never cra
   (`command.rs`, mirroring `:collab-join <name>`); the intent processor already resolves the
   name (`collab_bridge.rs:418`, errors if unknown). Bare `:kb-share`/`SPC C S` unchanged
   (active/first instance). Docs updated; 2 regression tests in `command_tests.rs`.
-- **Status:** ✅ fixed; both machines need the rebuilt binary, then live T2.6 shares
-  `:kb-share collabtest`.
+- **Status:** ✅ fixed (shipped `b111b9e6`). Implementing it surfaced two deeper bugs (I-5, I-6).
+
+### I-5 ✅ FIXED — named-instance KB share resolved `instances` by name (keyed by UUID) · Step T2.6
+- **Found via:** live `:kb-share collabtest` returned "KB 'collabtest' not found" even though
+  `collabtest` was registered + queryable via `kb_search`.
+- **Root cause:** `editor.kb.instances` is keyed by **UUID** (`kb_ops.rs:236`), but the ShareKb
+  resolver did `instances.get(&kb_name)` with the **name** (`collab_bridge.rs:421`) → never
+  matched. (The membership e2e only worked because it shared `"default"` → the *primary* path.)
+- **Fix:** resolve name→uuid via `registry.find()` before the `instances` lookup
+  (`collab_bridge.rs`, with a uuid-passthrough fallback).
+
+### I-6 ✅ FIXED — `:kb-join`/`:kb-leave <id>` ignored the arg (joined the active KB) · Step T2.6
+- **Found via:** the e2e — bob's `:kb-join collabtest` hit `kb_id=default` (denied), not
+  `collabtest`. Same bug family as I-4: the dispatch used `active_instance_name()` and the
+  ex-command never parsed the arg (the handler's own comment claimed command.rs did — it didn't).
+- **Fix:** `command.rs` now parses `:kb-join <id>` / `:kb-leave <id>` (mirroring `:collab-join`
+  and the I-4 kb-share arm). 2 regression tests.
+- **Also fixed a FALSE PASS in the membership e2e:** the verdict counted any non-denied
+  `kb/join` line, but the daemon logs the *request* (`"kb/join"`) before the membership check,
+  so a denied join still matched. Re-keyed the verdict on `"kb/join: complete"` for `collabtest`
+  (the daemon's acceptance line, `collab_handler.rs:1357`). e2e now genuinely exercises
+  register → share-by-name → deny → add → allow, **green** (alice 8/8, bob 7/7) with bob's
+  join correctly targeting `collabtest`.
 
 ## Next
 
-1. Rebuild/relaunch both on the I-4 fix; live T2.6 via `:kb-share collabtest`
-   (deny → add → allow → remove), then T2.7 (security checks).
+1. Rebuild/relaunch both on the I-4/I-5/I-6 fixes; live T2.6 via `:kb-share collabtest`
+   / `:kb-join collabtest` (deny → add → allow → remove), then T2.7 (security checks).
 2. Log each step here with the shared convention.

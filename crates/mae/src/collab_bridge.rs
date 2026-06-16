@@ -414,11 +414,20 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         CollabIntent::JoinDoc { doc_id } => CollabCommand::JoinDoc { doc_id },
         CollabIntent::ShareKb { kb_name, node_ids } => {
             // Look up the KB instance: KB_DEFAULT_NAME/"primary" → editor.kb.primary,
-            // otherwise check editor.kb.instances.
+            // otherwise resolve a registered instance. `editor.kb.instances` is keyed
+            // by UUID, but callers pass a human name (e.g. ":kb-share collabtest"), so
+            // map name→uuid via the registry first (find() accepts a name or a uuid).
+            // Without this, every named-instance share failed with "KB not found".
             let kb = if kb_name == mae_core::KB_DEFAULT_NAME || kb_name == "primary" {
                 Some(&editor.kb.primary)
             } else {
-                editor.kb.instances.get(&kb_name)
+                let uuid = editor
+                    .kb
+                    .registry
+                    .find(&kb_name)
+                    .map(|inst| inst.uuid.clone());
+                uuid.and_then(|u| editor.kb.instances.get(&u))
+                    .or_else(|| editor.kb.instances.get(&kb_name))
             };
             let kb = match kb {
                 Some(k) => k,

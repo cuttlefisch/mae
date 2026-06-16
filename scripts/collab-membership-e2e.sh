@@ -94,13 +94,14 @@ cat > "$WORK/scen/alice.scm" <<EOF
 (describe-group "alice (owner)"
   (lambda ()
     (it-test "connects" (lambda () (wait-connected 30000)))
-    (it-test "ingests the collabtest fixture"
-      (lambda () (execute-ex "kb-ingest $ROOT/tests/fixtures/kb/collabtest") (sleep-ms 800)))
-    (it-test "shares KB" (lambda () (run-command "kb-share") (sleep-ms 800)))
+    (it-test "registers the collabtest fixture as a named instance"
+      (lambda () (execute-ex "kb-register collabtest $ROOT/tests/fixtures/kb/collabtest") (sleep-ms 1000)))
+    (it-test "shares the collabtest KB by name"
+      (lambda () (execute-ex "kb-share collabtest") (sleep-ms 800)))
     (it-test "signals shared" (lambda () (write-file "$WORK/sync/shared" "1")))
     (it-test "waits for bob's denied join" (lambda () (wait-for-file "$WORK/sync/bob-tried" 60000)))
     (it-test "adds bob as member"
-      (lambda () (execute-ex "kb-member-add default bob") (sleep-ms 800)))
+      (lambda () (execute-ex "kb-member-add collabtest bob") (sleep-ms 800)))
     (it-test "signals added" (lambda () (write-file "$WORK/sync/added" "1")))
     (it-test "waits for bob's join" (lambda () (wait-for-file "$WORK/sync/bob-joined" 60000)))))
 EOF
@@ -113,11 +114,11 @@ cat > "$WORK/scen/bob.scm" <<EOF
     (it-test "connects" (lambda () (wait-connected 30000)))
     (it-test "waits for share" (lambda () (wait-for-file "$WORK/sync/shared" 60000)))
     (it-test "attempts join (expect denied)"
-      (lambda () (execute-ex "kb-join default") (sleep-ms 800)))
+      (lambda () (execute-ex "kb-join collabtest") (sleep-ms 800)))
     (it-test "signals tried" (lambda () (write-file "$WORK/sync/bob-tried" "1")))
     (it-test "waits for membership" (lambda () (wait-for-file "$WORK/sync/added" 60000)))
     (it-test "attempts join (expect allowed)"
-      (lambda () (execute-ex "kb-join default") (sleep-ms 800)))
+      (lambda () (execute-ex "kb-join collabtest") (sleep-ms 800)))
     (it-test "signals joined" (lambda () (write-file "$WORK/sync/bob-joined" "1")))))
 EOF
 
@@ -149,9 +150,12 @@ grep -iE 'kb/join denied|kb membership change|not a member' "$WORK/daemon.log" |
 # --- Verdict (strip ANSI from the daemon log first) ---
 LOG="$WORK/daemon.clean.log"
 sed 's/\x1b\[[0-9;]*m//g' "$WORK/daemon.log" > "$LOG"
-denied=$(grep -c 'kb/join denied' "$LOG" || true)
-changed=$(grep -c 'kb membership change' "$LOG" || true)
-joined_after_add=$(awk '/kb membership change.*member=bob.*add=true/{seen=1} seen && /kb\/join/ && !/denied/{c++} END{print c+0}' "$LOG")
+# Key the verdict on the SHARED kb (collabtest) and on the daemon's acceptance
+# line ("kb/join: complete"), not the request line — the request is logged before
+# the membership check, so counting any non-denied "kb/join" false-passes.
+denied=$(grep -cE 'kb/join denied.*collabtest' "$LOG" || true)
+changed=$(grep -cE 'kb membership change.*kb_id=collabtest.*member=bob.*add=true' "$LOG" || true)
+joined_after_add=$(awk '/kb membership change.*kb_id=collabtest.*member=bob.*add=true/{seen=1} seen && /kb\/join: complete.*collabtest/{c++} END{print c+0}' "$LOG")
 fail=0
 [ "$denied" -ge 1 ] || { echo "FAIL: expected a denied join for the non-member (got $denied)"; fail=1; }
 [ "$changed" -ge 1 ] || { echo "FAIL: expected a membership change (got $changed)"; fail=1; }

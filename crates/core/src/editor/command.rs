@@ -1132,6 +1132,28 @@ impl Editor {
                     }
                     // No arg: fall through to dispatch (shares the active instance).
                 }
+                // kb-join / kb-leave with an explicit KB id: act on THAT KB. Without
+                // this the dispatch fallback ignores the arg and uses the active
+                // instance, so `:kb-join <other-kb>` silently joined the wrong KB.
+                // No-arg falls through to dispatch (active instance / picker).
+                if command == "kb-join" {
+                    if let Some(kb_id) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                        self.collab.pending_intent = Some(super::CollabIntent::JoinKb {
+                            kb_id: kb_id.to_string(),
+                        });
+                        self.set_status(format!("Joining KB '{}'...", kb_id));
+                        return true;
+                    }
+                }
+                if command == "kb-leave" {
+                    if let Some(kb_id) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                        self.collab.pending_intent = Some(super::CollabIntent::LeaveKb {
+                            kb_id: kb_id.to_string(),
+                        });
+                        self.set_status(format!("Leaving KB '{}'...", kb_id));
+                        return true;
+                    }
+                }
                 // Final fallback: dispatch any registered builtin command by
                 // name. This lets `:debug-stop`, `:debug-continue`, etc. work
                 // without explicit `:`-arms, and is the foundation for making
