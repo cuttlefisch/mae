@@ -124,8 +124,8 @@ Chronological; each row is one observation tied to a plan step.
 |-----------|------|--------|
 | alice → bob (receive) | T2.5 | ✅ confirmed (Run 1 + Run 2) |
 | bob → alice (send) | T2.5 | ✅ **confirmed Run 2** (alice shows bob's line, no crash) |
-| simultaneous edit | T2.5 | ⏳ next |
-| KB membership | T2.6 | ⏳ not reached |
+| simultaneous edit | T2.5 | ✅ **confirmed Run 2** — concurrent bob+alice inserts merged; both replicas identical; em-dash propagated; no crash |
+| KB membership | T2.6 | ⏳ in progress |
 | security checks | T2.7 | ⏳ not reached |
 
 ## Next run (from scratch)
