@@ -54,8 +54,8 @@ pub struct PeerIdentity {
 }
 
 impl PeerIdentity {
-    /// A synthetic identity for non-key auth modes (psk/none), so handlers have
-    /// a uniform type. `label` comes from the auth result; no real key.
+    /// A synthetic identity for the `none` auth mode, so handlers have a uniform
+    /// type. No real key and no principal — `none` sessions are loopback-trusted.
     pub fn synthetic(label: &str) -> Self {
         Self {
             label: label.to_string(),
@@ -64,9 +64,32 @@ impl PeerIdentity {
         }
     }
 
+    /// A synthetic identity for `psk` auth: a single stable principal `psk:<keyid>`
+    /// shared by every peer presenting that pre-shared key. Coarse by design — real
+    /// per-identity access control requires `key` mode (ADR-018).
+    pub fn synthetic_psk(keyid: &str) -> Self {
+        Self {
+            label: keyid.to_string(),
+            fingerprint: format!("psk:{keyid}"),
+            pubkey: [0u8; 32],
+        }
+    }
+
     /// True for a real (key-authenticated) identity, false for synthetic.
     pub fn is_authenticated(&self) -> bool {
         self.pubkey != [0u8; 32]
+    }
+
+    /// The access-control **principal** (ADR-018): the key fingerprint for a real
+    /// key/TLS-authenticated peer, the `psk:<keyid>` string for psk, or `None` for
+    /// an unauthenticated (`none`/loopback) session. This — never the mutable,
+    /// non-unique label — is the sole subject identity for KB ownership/membership.
+    pub fn principal(&self) -> Option<&str> {
+        if self.is_authenticated() || self.fingerprint.starts_with("psk:") {
+            Some(&self.fingerprint)
+        } else {
+            None
+        }
     }
 }
 
@@ -402,12 +425,35 @@ impl AuthorizedKeys {
             .map(|k| k.label.clone().unwrap_or_default())
     }
 
+    /// The trusted entry for `pubkey_bytes`, if any (label + fingerprint accessor).
+    pub fn authorize_full(&self, pubkey_bytes: &[u8; 32]) -> Option<&PublicKey> {
+        self.entries.iter().find(|k| &k.to_bytes() == pubkey_bytes)
+    }
+
+    /// Find a trusted key by its `SHA256:<b64>` fingerprint (the principal).
+    pub fn lookup_by_fingerprint(&self, fp: &str) -> Option<&PublicKey> {
+        self.entries.iter().find(|k| k.fingerprint() == fp)
+    }
+
+    /// Find a trusted key by its (unique) label. Well-defined because `add`
+    /// enforces label uniqueness.
+    pub fn lookup_by_label(&self, label: &str) -> Option<&PublicKey> {
+        self.entries
+            .iter()
+            .find(|k| k.label.as_deref() == Some(label))
+    }
+
     /// All entries (for listing).
     pub fn entries(&self) -> &[PublicKey] {
         &self.entries
     }
 
     /// Add a trusted key (rejecting an exact-bytes duplicate). Persists 0600.
+    ///
+    /// Enforces **label uniqueness** (ADR-018): a non-empty label may name at most
+    /// one key. Without this, two distinct keys could share a label and become
+    /// indistinguishable for access control (and `revoke(label)` would be
+    /// ambiguous). Unlabeled keys are allowed and not constrained.
     pub fn add(&mut self, pubkey: PublicKey) -> std::io::Result<()> {
         if self
             .entries
@@ -419,6 +465,21 @@ impl AuthorizedKeys {
                 "public key already authorized",
             ));
         }
+        if let Some(new_label) = pubkey.label.as_deref().filter(|l| !l.is_empty()) {
+            if self
+                .entries
+                .iter()
+                .any(|k| k.label.as_deref() == Some(new_label))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "label '{new_label}' is already authorized for a different key \
+                         (labels must be unique)"
+                    ),
+                ));
+            }
+        }
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
             secure_dir(parent);
@@ -429,9 +490,22 @@ impl AuthorizedKeys {
     }
 
     /// Remove the key(s) with `label`. Returns how many were removed. Persists.
+    /// With label uniqueness enforced by `add`, this removes at most one key.
     pub fn revoke(&mut self, label: &str) -> std::io::Result<usize> {
         let before = self.entries.len();
         self.entries.retain(|k| k.label.as_deref() != Some(label));
+        let removed = before - self.entries.len();
+        if removed > 0 {
+            crate::keystore::write_secure(&self.path, &self.render())?;
+        }
+        Ok(removed)
+    }
+
+    /// Remove the key with the given `SHA256:<b64>` fingerprint (the precise,
+    /// unambiguous revocation — ADR-018). Returns how many were removed. Persists.
+    pub fn revoke_by_fingerprint(&mut self, fp: &str) -> std::io::Result<usize> {
+        let before = self.entries.len();
+        self.entries.retain(|k| k.fingerprint() != fp);
         let removed = before - self.entries.len();
         if removed > 0 {
             crate::keystore::write_secure(&self.path, &self.render())?;
@@ -722,6 +796,61 @@ mod tests {
         assert_eq!(ak2.revoke("laptop").unwrap(), 1);
         assert!(ak2.authorize(&client.to_bytes()).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn authorized_keys_label_uniqueness_and_distinct_principals() {
+        // ADR-018: a non-empty label may name at most one key, and two distinct
+        // keys are distinct principals even if an admin tries to reuse a label.
+        let dir = std::env::temp_dir().join(format!("mae-ak-uniq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("authorized_keys");
+        let mut ak = AuthorizedKeys::load(&path);
+        let alice = Identity::generate("alice").public();
+        let other = Identity::generate("alice").public(); // different key, SAME label
+        ak.add(alice.clone()).unwrap();
+        let err = ak.add(other.clone()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(ak.len(), 1, "collision must not add a second key");
+        assert_ne!(
+            alice.fingerprint(),
+            other.fingerprint(),
+            "distinct keys have distinct principals despite a label collision attempt"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn authorized_keys_fingerprint_lookup_and_revoke() {
+        let dir = std::env::temp_dir().join(format!("mae-ak-fp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("authorized_keys");
+        let mut ak = AuthorizedKeys::load(&path);
+        let k = Identity::generate("bob").public();
+        ak.add(k.clone()).unwrap();
+        let fp = k.fingerprint();
+        assert!(ak.lookup_by_fingerprint(&fp).is_some());
+        assert!(ak.lookup_by_label("bob").is_some());
+        assert!(ak.authorize_full(&k.to_bytes()).is_some());
+        assert_eq!(ak.revoke_by_fingerprint(&fp).unwrap(), 1);
+        assert!(ak.lookup_by_fingerprint(&fp).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn peer_identity_principal_per_auth_mode() {
+        let k = Identity::generate("alice").public();
+        let real = PeerIdentity {
+            label: "alice".into(),
+            fingerprint: k.fingerprint(),
+            pubkey: k.to_bytes(),
+        };
+        assert_eq!(real.principal(), Some(k.fingerprint().as_str()));
+        assert_eq!(
+            PeerIdentity::synthetic_psk("team").principal(),
+            Some("psk:team")
+        );
+        assert_eq!(PeerIdentity::synthetic("anon").principal(), None);
     }
 
     #[test]
