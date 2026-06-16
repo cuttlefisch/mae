@@ -193,11 +193,49 @@ Both machines rebuilt daemon + editor. Daemon D pid 3337008, `0.0.0.0:9480`, fp
 | 3 | alice `:kb-pending` + `:kb-approve … editor` | recorded by fingerprint | ✅ `kb/list_pending` (session 4) then `kb/approve_member: complete … role="editor"` |
 | 4 | bob `:kb-join collabtest` again | ALLOWED, 3 nodes | ✅ `kb/join: complete … node_count=3` — bob received replication |
 | 5 | alice `:kb-member-add … viewer` | role demoted | ✅ `kb membership change … add=true role="viewer"` |
-| 6 | bob edits a node → should be **rejected** | `kb/node_update denied` | ⚠️ **BLOCKED by I-8** — bob's `kb_update` failed client-side ("No KB node"), never reached the daemon gate |
+| 6 | bob edits a node → should be **rejected** | `kb/node_update denied` | ⚠️ **BLOCKED by I-8/I-9** — no `kb/node_update` ever reaches the daemon (write propagation broken), so the gate can't be exercised live |
+| 7 | alice `:kb-policy collabtest restrictive` + `:kb-member-remove bob` | bob non-member under restrictive | ✅ `kb/set_policy: complete policy="restrictive"` + `kb membership change … add=false` |
+| 8 | bob `:kb-join collabtest` (non-member, restrictive) | **DENIED** (deny-by-default, no pending) | ✅ `kb/join denied … reason=not a member of KB 'collabtest'` (WARN). bob's UI showed "0 nodes" — his **B-1** UX bug, daemon correctly denied |
 
-**T2.6 steps 1–5 PASS** end-to-end over real mTLS — the full invite → pending →
-approve-by-fingerprint → join cycle, identity anchored to the key fingerprint the whole
-way. Step 6 (viewer-edit-denial) is blocked by a newly-found client-side bug, **I-8**.
+**T2.6 access-control PASSES live over mTLS:** invite → pending → approve-by-fingerprint
+→ join (steps 1–4), role demote (5), **and restrictive deny-by-default (7–8)**. Identity
+anchored to the key fingerprint throughout. The two things NOT demonstrable live are both
+*content-editing* gaps, not access-control failures: step 6 (viewer-edit-denial) is blocked
+because **KB edits don't propagate at all** (I-9), of which I-8 is one face. The daemon's
+viewer-Edit gate is real + unit-tested (daemon 144 green); it simply has no live traffic to
+act on yet.
+
+### I-9 🚨 OPEN (critical) — shared-KB content edits do not propagate between peers · Step T2.6 {#i-9}
+
+The headline gap. **No `kb/node_update` has *ever* reached the daemon** in the entire live
+run (grep on the daemon log is empty), on either machine, despite a successful local
+`kb_update`. So ADR-018 access control works, but the collaborative KB *editing* it gates is
+non-functional end-to-end.
+
+- **Mirror-image resolution asymmetry (register vs. join):** the KB lives in a different store
+  on each machine, and the read/write/search/instances paths each consult a different store:
+  | path | alice (registered instance) | bob (joined via collab) |
+  |---|---|---|
+  | `kb_get <id>` (node_json) | ✅ resolves (iterates `instances`) | ❌ "No KB node" (bob's **B-3**) |
+  | `kb_update <id>` (kb_update_node) | ❌ "No KB node" (primary-only, **I-8**) | ✅ resolves + writes locally |
+  | `kb_search` | ✅ | ✅ |
+  | `kb_instances` lists it | ✅ | ❌ not tracked (bob's **B-3**) |
+- **Even when the write succeeds (bob), nothing broadcasts.** `kb_update_node`'s CRDT-broadcast
+  block (`kb_ops.rs:492-518`) only fires when `collab.kb_sync_mode == "on_save"` **and** the id
+  is in `collab.shared_kbs`. A joined KB isn't registered in `shared_kbs`, so the branch is
+  skipped → no `kb/node_update` RPC → owner never sees the edit (bob's row 7 = ❌).
+- **Consolidated fix scope (the I-8 follow-up the user signed off on, now bigger):**
+  1. Unify KB node resolution across `kb_get`/`kb_update`/`kb_delete`/`kb_search`/`kb_instances`
+     so register-as-instance and join-via-collab present the **same** node namespace + store.
+  2. On `kb-join`, track the joined KB in `collab.shared_kbs` (and surface it in `kb_instances`)
+     so edits to its nodes flow through the CRDT-broadcast path.
+  3. Make `kb_update_node`/`kb_delete_node` federation-aware (resolve across primary ∪ instances ∪
+     joined; apply CRDT upsert to the owning store; emit `kb/node_update`).
+  4. Regression + e2e: edit a node in a joined KB → `kb/node_update` reaches the daemon →
+     converges to the owner; then the viewer-denial e2e becomes drivable (closes T2.6 step 6).
+- **Status:** OPEN, **critical** — this is the actual collaborative-KB-editing feature; access
+  control is the scaffolding around it. Supersedes the narrow I-8 framing (I-8 kept as a
+  sub-symptom). Cross-ref bob's **B-3** (same family, owner/join side).
 
 ### I-8 ⚠️ OPEN — KB write path (`kb_update`/`kb_delete`) is primary-only, not federation-aware · Step T2.6 {#i-8}
 
