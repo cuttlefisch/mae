@@ -139,14 +139,61 @@ Chronological; each row is one observation tied to a plan step.
 - **[#66] T2.4 — interactive `prompt` TOFU deadlocks TUI / `HostKeyPrompt` unwired.**
   Workaround: `accept-new` (both editors). https://github.com/cuttlefisch/mae/issues/66
 
-## Convergence scorecard
+## Run 3 — 2026-06-16 (ADR-018 identity-anchored KB access; T2.6)
 
-| Direction | Step | Result |
+Both machines rebuilt daemon + editor for ADR-018 (`863d854`→`2ce3ebf`). Membership now
+keys on the **key fingerprint**; default join policy **`invite`**; roles owner⊇editor⊇viewer.
+Tier-0 re-validated locally first: `collab-membership-e2e.sh` **alice 8/8, bob 7/7**, daemon
+log `kb/join: pending → kb/approve_member (editor) → kb/join: complete (3 nodes)`.
+
+| # | Step | Action | Expected | Actual | Status |
+|---|------|--------|----------|--------|--------|
+| 1 | pre | rebuild daemon+editor (ADR-018), relaunch bob (PID 56128), reconnect MCP | clean | fingerprint `07aW…7Ls` unchanged (no re-TOFU); KB clean | ✅ |
+| 2 | T2.6 | bob `kb_join collabtest` (not yet a member) | PENDING (invite) | editor said "Joined (0 nodes)"; daemon recorded **pending**; no local instance | ✅ (see B-1 UX) |
+| 3 | T2.6 | (alice `:kb-pending` shows bob's fp → `:kb-approve … editor`) | bob now member | approved by fingerprint | ✅ |
+| 4 | T2.6 | bob `kb_join collabtest` again | ALLOWED + 3 nodes | "Joined (3 nodes)" | ✅ **invite→pending→approve→allowed** |
+| 5 | T2.6 | `kb_search "ZEPHYRINE"` | → `collabtest:overview` | resolves to overview (+ over-matched alpha, B-2) | ✅ **replication proven** |
+| 6 | T2.6 | editor-role write: `kb_update collabtest:overview` (title marker) | allowed (editor⊇edit) | succeeded; returned node w/ full body | ✅ **editor write allowed** |
+| 7 | T2.6 | propagation editor→owner | alice sees `[bob edit]` title | ⏳ alice confirming | ⏳ |
+| 8 | T2.6 | viewer-role write (after alice demotes bob → viewer) | **rejected** (read-only) | ⏳ not reached | ⏳ |
+
+## Issues — Run 3 (ADR-018 / T2.6)
+
+### B-1 ⚠️ UX — pending join reported as "Joined (0 nodes)"  ·  Step T2.6
+- Under `invite` policy, bob's `kb-join` is recorded **pending** server-side, but the editor
+  status says **"Joined KB 'collabtest' (0 nodes)"** — a real user can't tell *pending
+  approval* from *joined-but-empty*. Should say e.g. "Join requested — pending owner approval".
+- Daemon-side oracle (alice's `:kb-pending`) is correct; this is editor-side wording only.
+
+### B-2 ⚠️ low — `kb_search "ZEPHYRINE"` over-matches `collabtest:alpha`  ·  Step T2.6
+- Sentinel `ZEPHYRINE` is unique to `collabtest:overview` (fixture invariant), but search
+  returns **overview AND alpha**. alpha links to overview — likely link/neighbor weighting in
+  the relevance ranking. Doesn't break the replication proof (overview is the top hit) but
+  weakens the "unique sentinel" assertion. Excerpt shown was `:PROPERTIES:` (matched metadata?).
+
+### B-3 ⚠️ MED — joined KB nodes: searchable + writable by id, but NOT in `kb_instances` and `kb_get`-by-id fails  ·  Step T2.6
+- After `kb_join collabtest` (3 nodes): `kb_search` finds the nodes with **`instance: null`**;
+  `kb_instances` reports **"no external instances registered"**; `kb_get collabtest:overview`
+  → **"No KB node"**; yet `kb_update collabtest:overview` **succeeds** (resolves + returns the node).
+- ⇒ Inconsistent joined-peer representation: the **read path** (`kb_get`) and the **write path**
+  (`kb_update`) resolve joined nodes differently, and the joined KB isn't registered as a tracked
+  instance. Open Q for alice (ADR-018 author): should a joined KB surface as a federated
+  `collabtest` instance (addressable by id, edits sync back) or merge into local? Needs alignment;
+  affects how role/edit-propagation tests are driven.
+
+## Convergence + membership scorecard
+
+| Capability | Step | Result |
 |-----------|------|--------|
-| alice → bob (receive) | T2.5 | ✅ confirmed (Run 1 + Run 2) |
-| bob → alice (send) | T2.5 | ✅ **confirmed Run 2** (alice shows bob's line, no crash) |
-| simultaneous edit | T2.5 | ✅ **confirmed Run 2** — concurrent bob+alice inserts merged; both replicas identical; em-dash propagated; no crash |
-| KB membership | T2.6 | ⏳ in progress |
+| alice → bob (receive) | T2.5 | ✅ Run 1 + Run 2 |
+| bob → alice (send) | T2.5 | ✅ Run 2 (no crash) |
+| simultaneous edit | T2.5 | ✅ Run 2 (replicas identical) |
+| KB membership: invite→pending→approve→allowed | T2.6 | ✅ Run 3 (by fingerprint, mTLS) |
+| KB replication to approved peer | T2.6 | ✅ Run 3 (ZEPHYRINE sentinel) |
+| editor-role write allowed | T2.6 | ✅ Run 3 (kb_update) |
+| editor edit propagates to owner | T2.6 | ⏳ alice confirming |
+| viewer-role write rejected | T2.6 | ⏳ pending demotion |
+| restrictive policy denies 3rd peer | T2.6 | ⏳ not reached |
 | security checks | T2.7 | ⏳ not reached |
 
 ## Next run (from scratch)
