@@ -1,0 +1,7 @@
+:PROPERTIES:
+:ID: 18b996ecfdc3d2c9-b2f8-4000-8000-000000000000
+:END:
+#+title: collabtest (MAE KB Instance)
+
+This file marks this directory as a MAE KB instance.
+It is safe to delete — MAE will recreate it on next registration.

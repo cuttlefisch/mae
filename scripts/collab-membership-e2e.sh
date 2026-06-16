@@ -94,6 +94,8 @@ cat > "$WORK/scen/alice.scm" <<EOF
 (describe-group "alice (owner)"
   (lambda ()
     (it-test "connects" (lambda () (wait-connected 30000)))
+    (it-test "ingests the collabtest fixture"
+      (lambda () (execute-ex "kb-ingest $ROOT/tests/fixtures/kb/collabtest") (sleep-ms 800)))
     (it-test "shares KB" (lambda () (run-command "kb-share") (sleep-ms 800)))
     (it-test "signals shared" (lambda () (write-file "$WORK/sync/shared" "1")))
     (it-test "waits for bob's denied join" (lambda () (wait-for-file "$WORK/sync/bob-tried" 60000)))

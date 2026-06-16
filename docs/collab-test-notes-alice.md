@@ -38,18 +38,18 @@ Each entry is tagged with **where in the plan** it happened: **Step** (e.g. `T2.
 | 10 | T2.5 | post-fix live run: bob joins `collab-demo2.txt`, both edit | converge both ways | bob's line + alice's seed + alice's typed line all merged on alice; 52 session-7 + 1 session-8 updates | ✅ **converges** |
 | 11 | T2.5 | I-1 fix live check: double-click @ col 138 in split | no crash | alice survived (was the exact crash gesture) | ✅ |
 
-### I-2 (bob) — REATTRIBUTED: not a bug, an MCP `eval_scheme` artifact · Step T2.5
+### I-2 (bob) — RESOLVED: not a bug, a wrong-active-buffer MCP artifact · Step T2.5
 - alice→bob send appeared broken when driven via MCP `eval_scheme (buffer-insert …)`: **0**
-  session-7 updates, and the inserted line vanished on the next remote rope rebuild.
-- **Cause:** `eval_scheme` `buffer-insert` mutates the rope mirror directly but does **not**
-  run the event-loop post-edit step that captures the yrs update for collab. So the edit never
-  reaches the CRDT and is lost when a remote update rebuilds the rope.
+  session-7 updates, and the inserted line never appeared in the collab buffer.
+- **Confirmed cause (bob pinned it):** when driving via MCP the active buffer was **`*AI:claude*`**
+  (the agent shell), so `buffer-insert` targeted the **wrong buffer** — not the shared doc; a
+  same-burst `switch-to-buffer` didn't take before the insert. (My earlier "skips the post-edit
+  flush" guess was wrong — the edit simply went elsewhere.)
 - **Proof:** typing the same line via **real keystrokes** in the GUI produced **52** session-7
-  updates and propagated to bob. Headless `--test` `buffer-insert` propagates too (the test
-  runner drives the post-edit flush). ⇒ Real edits sync; only the MCP-eval insert path skips it.
-- **Status:** ✅ not a collab bug. *Testing-harness caveat:* drive collab edits via real input
-  (or the `--test` runner), not `eval_scheme buffer-insert`. (Minor: MCP `eval_scheme` could
-  run the post-edit collab flush for parity — optional polish, file separately if desired.)
+  updates and propagated to bob. ⇒ Real edits sync.
+- **Status:** ✅ not a collab bug. *Testing-harness caveat:* when driving collab edits over MCP,
+  `switch-to-buffer` to the shared doc as its **own step**, verify with `list_buffers`, then edit
+  — or use real input / the `--test` runner.
 
 ## Issues
 
@@ -110,14 +110,28 @@ trigger was a **mouse click**, not the CRDT sync (headless convergence never cra
 
 | Direction | Step | Result |
 |-----------|------|--------|
-| alice → bob (receive) | T2.5 | ✅ (bob confirmed) |
-| bob → alice (send) | T2.5 | ❌ blocked by I-1 (alice crash) |
-| simultaneous | T2.5 | ⏳ not reached |
+| alice → bob (receive) | T2.5 | ✅ (Run 2) |
+| bob → alice (send) | T2.5 | ✅ (Run 2, post-I-1 fix) |
+| alice → bob (send, real keys) | T2.5 | ✅ (Run 2) |
+| simultaneous | T2.5 | ✅ (bob confirmed Run 2) |
 
-## Next run (from scratch, after I-1 fix)
+## T2.6 — shared-KB membership (in progress)
 
-1. **D: capture I-1 backtrace → fix in `crates/core` → push.** ← in progress
-2. Both `git pull --rebase` → rebuild both binaries (GUI).
-3. Restart daemon (key, `0.0.0.0:9480`, authorize bob) + alice (`accept-new`) + bob.
-4. Re-run T2.4 → T2.7; re-test bob's I-2 early with a stable link.
-5. Log every step here with the shared convention.
+- **New committed fixture: `tests/fixtures/kb/collabtest/`** — a 3-node throwaway KB
+  (`overview`/`alpha`/`beta`, sentinels `ZEPHYRINE`/`QUOKKA`/`NARWHAL`) so we never
+  replicate personal `RoamNotes` to a peer. Follows the `assets/manual` org format
+  (`:ID: collabtest:*`). Validated via MCP: `kb-register collabtest <dir>` → 3 nodes,
+  `kb_search "ZEPHYRINE"` → `collabtest:overview`.
+- **Wired into `scripts/collab-membership-e2e.sh`:** alice now ingests the fixture
+  before sharing, so membership runs against real content. **e2e green** (alice 8/8,
+  bob 7/7, `PASS`: deny → add → allow).
+- **Caveat:** the `mae --test` runtime doesn't register the KB query layer, so the
+  fixture can't be asserted via a scheme test (the whole `tests/kb-lifecycle` suite is
+  orphaned for the same reason). Validation is the membership e2e + MCP `kb_search`.
+- **Live two-machine T2.6:** pending — share `collabtest` (a named instance, isolated
+  from RoamNotes) and run deny → add → allow → remove across D/E.
+
+## Next
+
+1. Live T2.6 (membership) against the `collabtest` fixture, then T2.7 (security checks).
+2. Log each step here with the shared convention.

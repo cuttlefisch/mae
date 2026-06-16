@@ -1,0 +1,12 @@
+:PROPERTIES:
+:ID: collabtest:beta
+:KIND: note
+:END:
+#+title: Collab Test Beta
+#+filetags: :collabtest:fixture:
+
+Beta is the second leaf node of the collab test fixture. It links back to the
+[[references:collabtest:overview][Overview]] and across to
+[[references:collabtest:alpha][Alpha]].
+
+The sentinel token NARWHAL appears only on this node.
