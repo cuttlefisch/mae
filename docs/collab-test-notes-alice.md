@@ -180,6 +180,49 @@ Zanzibar/ReBAC + OWASP. **All layers tested green** (mae-mcp 124, mae-sync 155, 
   (default `invite`). Members managed **by fingerprint**.
 - **No more `collab-user-name=alice` workaround** — `:kb-share` binds owner from the cert.
 
+## Run 3 — 2026-06-16 — live T2.6 under ADR-018 (two machines, key mode, real mTLS)
+
+Both machines rebuilt daemon + editor. Daemon D pid 3337008, `0.0.0.0:9480`, fp
+`SHA256:07aW…7Ls`, authorized=2. alice (owner, loopback) session 4; bob (mac
+`192.168.1.132`) session 5, fp `SHA256:9xLh0DWeeAi3hl2W7yudaE05aTHtYQpNUUyMWO+2CrI`.
+
+| # | Step | Expected | Result |
+|---|---|---|---|
+| 1 | alice `:kb-share collabtest` | owner = alice's fp (no `collab-user-name` workaround) | ✅ `kb/share: complete … node_count=3`; owner derived from cert (session 4 = alice's principal) |
+| 2 | bob `:kb-join collabtest` | PENDING (invite policy), 0 nodes | ✅ `kb/join: pending … principal=Some("SHA256:9xLh0DWee…")`, bob got 0 nodes |
+| 3 | alice `:kb-pending` + `:kb-approve … editor` | recorded by fingerprint | ✅ `kb/list_pending` (session 4) then `kb/approve_member: complete … role="editor"` |
+| 4 | bob `:kb-join collabtest` again | ALLOWED, 3 nodes | ✅ `kb/join: complete … node_count=3` — bob received replication |
+| 5 | alice `:kb-member-add … viewer` | role demoted | ✅ `kb membership change … add=true role="viewer"` |
+| 6 | bob edits a node → should be **rejected** | `kb/node_update denied` | ⚠️ **BLOCKED by I-8** — bob's `kb_update` failed client-side ("No KB node"), never reached the daemon gate |
+
+**T2.6 steps 1–5 PASS** end-to-end over real mTLS — the full invite → pending →
+approve-by-fingerprint → join cycle, identity anchored to the key fingerprint the whole
+way. Step 6 (viewer-edit-denial) is blocked by a newly-found client-side bug, **I-8**.
+
+### I-8 ⚠️ OPEN — KB write path (`kb_update`/`kb_delete`) is primary-only, not federation-aware · Step T2.6 {#i-8}
+
+- **Symptom (bob, reproduced on alice):** `kb_get collabtest:overview` resolves, but
+  `kb_update collabtest:overview` → **`No KB node: collabtest:overview`**. Read sees the
+  node, write doesn't.
+- **Root cause:** `Editor::kb_update_node` (`crates/core/src/editor/kb_ops.rs:469-473`) and
+  `kb_delete_node` (`:445`) resolve the id **only against `self.kb.primary`**. Joined/registered
+  KBs (collabtest) live in `self.kb.instances`, which the write path never consults.
+  `kb_get`/`node_json` (`crates/ai/src/tool_impls/kb.rs:46-66`) *does* iterate instances —
+  hence the read/write asymmetry. The CRDT-broadcast block (`kb_ops.rs:492-518`) is downstream
+  of the failed resolution, so it never runs → **no `kb/node_update` is ever emitted** for a
+  shared-KB node.
+- **Impact:** No one — not even the owner — can edit a shared/joined KB node via `kb_update`.
+  This blocks the **viewer-edit-denial e2e** (the edit dies client-side before the daemon's
+  Edit gate runs). The daemon-side gate is real + unit-tested (daemon 144 green incl. the
+  viewer-edit-denied case); it just can't be demonstrated through `kb_update` until I-8 is fixed.
+- **Fix direction:** make `kb_update_node`/`kb_delete_node` federation-aware — resolve the id
+  across `primary` ∪ `instances`, apply the CRDT upsert to the owning store, and ensure the
+  shared-KB broadcast path keys off the resolved instance (not just `self.collab.shared_kbs`
+  membership against primary). Add a regression test: edit a node in a *registered instance*
+  → succeeds + emits a node_update. Verify both owner-edit (allowed) and the e2e viewer-denial
+  once writes flow.
+- **Status:** OPEN. Captured during live T2.6; does not invalidate steps 1–5.
+
 ## Next — live T2.6 under ADR-018 (BOTH machines rebuild daemon + editor)
 
 > ⚠️ Both `mae` and `mae-daemon` changed. On each machine: `git pull` →
