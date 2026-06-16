@@ -514,6 +514,66 @@ impl Editor {
         uuid
     }
 
+    /// The collab ids of every KB this editor durably syncs (ADR-019): the
+    /// primary-share marker + each shared registered instance. Used on
+    /// (re)connect to re-subscribe so remote edits resume flowing after a
+    /// restart, and at startup to warm the cache.
+    pub fn durable_shared_kb_ids(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        if self.kb.registry.primary_shared {
+            ids.push(
+                self.kb
+                    .registry
+                    .primary_collab_id
+                    .clone()
+                    .unwrap_or_else(|| crate::editor::KB_DEFAULT_NAME.to_string()),
+            );
+        }
+        for inst in &self.kb.registry.instances {
+            if inst.shared {
+                if let Some(c) = &inst.collab_id {
+                    ids.push(c.clone());
+                }
+            }
+        }
+        ids
+    }
+
+    /// Rebuild the transient `shared_kbs` node-id index from DURABLE markers
+    /// (ADR-019). Local-only — no daemon round-trip. The emit gate already
+    /// works from the markers; this warms the cache (status/mDNS counts, fast
+    /// reverse lookups) so a restart leaves the editor in a consistent state.
+    pub fn reconstruct_kb_sync_gate(&mut self) {
+        if self.kb.registry.primary_shared {
+            let kb_id = self
+                .kb
+                .registry
+                .primary_collab_id
+                .clone()
+                .unwrap_or_else(|| crate::editor::KB_DEFAULT_NAME.to_string());
+            let ids: std::collections::HashSet<String> =
+                self.kb.primary.list_ids(None).into_iter().collect();
+            self.collab.shared_kbs.insert(kb_id, ids);
+        }
+        let shared: Vec<(String, String)> = self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .filter(|i| i.shared)
+            .filter_map(|i| i.collab_id.clone().map(|c| (i.uuid.clone(), c)))
+            .collect();
+        for (uuid, collab_id) in shared {
+            let ids: std::collections::HashSet<String> = self
+                .kb
+                .instances
+                .get(&uuid)
+                .map(|kb| kb.list_ids(None).into_iter().collect())
+                .unwrap_or_default();
+            self.collab.shared_kbs.insert(collab_id, ids);
+        }
+    }
+
     /// The collaborative id a node's owning KB is shared under, derived from
     /// **durable** registry markers (ADR-019) — not the transient `shared_kbs`
     /// cache. This is the broadcast-gate authority, so a shared KB keeps
@@ -3080,6 +3140,41 @@ mod tests {
             editor.kb.primary.get("collabtest:overview").is_none(),
             "remote update must not copy the node into primary"
         );
+    }
+
+    /// ADR-019 Phase 3: after a restart the transient cache is empty, but
+    /// reconstruction rebuilds it from the durable registry markers (primary +
+    /// shared instances), and durable_shared_kb_ids lists what to re-subscribe.
+    #[test]
+    fn reconstruct_kb_sync_gate_rebuilds_from_durable_markers() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "collabtest:overview",
+            "O",
+            mae_kb::NodeKind::Note,
+            "b",
+        ));
+        editor.kb.instances.insert("uuid-ct".into(), inst);
+        editor.kb.registry.instances.push(shared_ct_instance());
+        editor.kb.registry.primary_shared = true;
+        editor.kb.registry.primary_collab_id = Some("default".into());
+        editor
+            .kb
+            .primary
+            .insert(mae_kb::Node::new("p:1", "P", mae_kb::NodeKind::Note, "b"));
+
+        assert!(
+            editor.collab.shared_kbs.is_empty(),
+            "cache empty post-restart"
+        );
+        editor.reconstruct_kb_sync_gate();
+        assert!(editor.collab.shared_kbs["collabtest"].contains("collabtest:overview"));
+        assert!(editor.collab.shared_kbs["default"].contains("p:1"));
+
+        let mut ids = editor.durable_shared_kb_ids();
+        ids.sort();
+        assert_eq!(ids, vec!["collabtest".to_string(), "default".to_string()]);
     }
 
     #[test]

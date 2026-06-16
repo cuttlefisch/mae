@@ -351,6 +351,15 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         }
     }
 
+    // ADR-019: feed the reconstruction queue through the single intent slot,
+    // one per tick, so re-join/re-share fans out across all durably-shared KBs
+    // on reconnect (reusing the existing per-intent handling below).
+    if editor.collab.pending_intent.is_none() {
+        if let Some(next) = editor.collab.reconnect_intents.pop_front() {
+            editor.collab.pending_intent = Some(next);
+        }
+    }
+
     let intent = match editor.collab.pending_intent.take() {
         Some(i) => i,
         None => return,
@@ -772,11 +781,34 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     offline_docs.len()
                 ));
             }
+
+            // ADR-019: KBs get the same reconnect care as buffers. Rebuild the
+            // gate cache from durable markers, then re-subscribe (re-join) every
+            // durably-shared KB so remote edits resume flowing without a manual
+            // re-share. Idempotent via subscribed_kbs; queued one-per-tick.
+            editor.reconstruct_kb_sync_gate();
+            let durable_kbs = editor.durable_shared_kb_ids();
+            let mut resubscribed = 0;
+            for kb_id in durable_kbs {
+                if editor.collab.subscribed_kbs.insert(kb_id.clone()) {
+                    editor
+                        .collab
+                        .reconnect_intents
+                        .push_back(CollabIntent::JoinKb { kb_id });
+                    resubscribed += 1;
+                }
+            }
+            if resubscribed > 0 {
+                info!(count = resubscribed, "reconnect: re-subscribing shared KBs");
+            }
+
             editor.mark_full_redraw();
         }
         CollabEvent::Disconnected { reason } => {
             info!(reason = %reason, "collab disconnected");
             editor.collab.status = CollabStatus::Disconnected;
+            // Re-subscribe on the next connect (ADR-019).
+            editor.collab.subscribed_kbs.clear();
             editor.set_status(format!("Collab disconnected: {}", reason));
             // Preserve sync_doc and collab_doc_id for offline recovery (WU3).
             // Only clear UI tracking state — CRDT state survives disconnect

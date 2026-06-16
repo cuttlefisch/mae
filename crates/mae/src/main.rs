@@ -985,6 +985,11 @@ fn main() -> io::Result<()> {
         // Build the CozoDB-first query layer AFTER all stores are loaded
         // (primary + manual + federated instances).
         editor.kb.rebuild_query_layer();
+
+        // ADR-019: warm the shared-KB sync cache from durable markers at startup
+        // so a restarted editor's broadcast gate + status reflect what syncs (the
+        // re-subscribe to RECEIVE happens on the Connected event).
+        editor.reconstruct_kb_sync_gate();
     }
 
     // Optionally connect to mae-daemon for LRU-cached KB access.

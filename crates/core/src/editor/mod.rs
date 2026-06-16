@@ -205,6 +205,14 @@ pub struct CollabState {
     pub synced_buffers: HashSet<String>,
     /// Pending collaborative editing intent for the binary event loop to drain.
     pub pending_intent: Option<CollabIntent>,
+    /// Queue of reconstruction intents (ADR-019) drained one-per-tick through
+    /// `pending_intent` — e.g. re-join/re-share every durably-shared KB on
+    /// reconnect so the editor resumes RECEIVING remote edits without a manual
+    /// re-share. Fans out beyond the single-slot `pending_intent`.
+    pub reconnect_intents: std::collections::VecDeque<CollabIntent>,
+    /// KBs already re-subscribed this connection (idempotency guard so a
+    /// reconnect storm doesn't double-join).
+    pub subscribed_kbs: HashSet<String>,
     /// TCP address of the collaborative state server.
     pub server_address: String,
     /// Automatically connect to the state server on startup.
@@ -276,6 +284,8 @@ impl CollabState {
             synced_buffers: HashSet::new(),
             confirmed_shares: HashSet::new(),
             pending_intent: None,
+            reconnect_intents: std::collections::VecDeque::new(),
+            subscribed_kbs: HashSet::new(),
             server_address: DEFAULT_COLLAB_ADDRESS.to_string(),
             auto_connect: false,
             auto_share: false,
