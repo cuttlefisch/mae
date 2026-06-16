@@ -35,6 +35,21 @@ Each entry is tagged with **where in the plan** it happened: **Step** (e.g. `T2.
 | 7 | T2.5 | bob `collab-join` | bob sees alice's line | bob received `collab demo — line from alice (D)` | ✅ (bob row 8) **alice→bob receive** |
 | 8 | T2.5 | (during convergence) clicked split panes to focus collab buffer | focus switches | **alice GUI panicked & crashed** (double-click word-select past EOL) | ✅ **fixed** [I-1](#i-1) |
 | 9 | T2.5 | headless convergence (daemon + 2 `--test` editors, bob edits) | alice receives | content 36→60, **no crash** — isolates I-1 to the mouse path | ✅ |
+| 10 | T2.5 | post-fix live run: bob joins `collab-demo2.txt`, both edit | converge both ways | bob's line + alice's seed + alice's typed line all merged on alice; 52 session-7 + 1 session-8 updates | ✅ **converges** |
+| 11 | T2.5 | I-1 fix live check: double-click @ col 138 in split | no crash | alice survived (was the exact crash gesture) | ✅ |
+
+### I-2 (bob) — REATTRIBUTED: not a bug, an MCP `eval_scheme` artifact · Step T2.5
+- alice→bob send appeared broken when driven via MCP `eval_scheme (buffer-insert …)`: **0**
+  session-7 updates, and the inserted line vanished on the next remote rope rebuild.
+- **Cause:** `eval_scheme` `buffer-insert` mutates the rope mirror directly but does **not**
+  run the event-loop post-edit step that captures the yrs update for collab. So the edit never
+  reaches the CRDT and is lost when a remote update rebuilds the rope.
+- **Proof:** typing the same line via **real keystrokes** in the GUI produced **52** session-7
+  updates and propagated to bob. Headless `--test` `buffer-insert` propagates too (the test
+  runner drives the post-edit flush). ⇒ Real edits sync; only the MCP-eval insert path skips it.
+- **Status:** ✅ not a collab bug. *Testing-harness caveat:* drive collab edits via real input
+  (or the `--test` runner), not `eval_scheme buffer-insert`. (Minor: MCP `eval_scheme` could
+  run the post-edit collab flush for parity — optional polish, file separately if desired.)
 
 ## Issues
 
