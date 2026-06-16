@@ -325,6 +325,43 @@ Regression: editor workspace (mae-core 2247, mae-ai 450, mae 269, mae-mcp 125) +
 daemon (85/36/14/9) all green, 0 failures. Clippy clean. **Both machines must
 rebuild daemon + editor** to pick these up before resuming.
 
+## ✅ ADR-019 landed 2026-06-17 — durable, reconstruction-capable shared-KB sync
+
+The "edits don't propagate" investigation root-caused a structural flaw: the
+broadcast gate (`shared_kbs`) was a transient, event-only set — never durable,
+never reconstructed. Even an in-session share left it empty for the owner. Fixed
+as a full architectural pass (7 phases, ADR-019), all on `feat/crdt-collab-validation`:
+
+- **P0 `23b73f15`** — traceability: `MAE_LOG=kb_sync=debug` greps an edit end-to-end;
+  `introspect` now shows shared_kbs / kb_sync_mode / pending counts / owning-instance
+  markers + a `gate_present` divergence flag (diagnose live via MCP, no rebuild).
+- **P1 `23b73f15`** — **durable emit gate**: share stamps `KbInstance.shared/collab_id`
+  (+ new registry `primary_shared/collab_id`), persisted; `kb_update_node` gates on the
+  DURABLE marker (`kb_collab_id_of`), not the cache → edits emit across restart.
+- **P2 `35aafc20`** — joined KBs are **first-class instances** (addressable, in
+  `kb_instances`, durable markers) instead of dumped into `primary` (fixes bob's B-3);
+  guest edits now emit.
+- **P4 `35aafc20`** — receive routes to the **owning instance** (`kb_apply_remote_update`),
+  not always primary.
+- **P3 `e6a4c458`** — reconstruct gate from durable markers at startup + on `Connected`;
+  re-subscribe (re-join) every durable KB via a `reconnect_intents` queue → survives
+  reconnect/restart.
+- **P5 `cf673b7c`** — B-5 tolerant KB row-load (no main-thread stall); **B-6 XDG-first KB
+  path** (also correctness: marker save+load paths must match); I-10 live label
+  resolution; MCP `kb_share` honors `kb_id`; **Collab Status buffer auto-refresh** on
+  KbShared/KbJoined/KbLeft (bob's stale-after-join report).
+- **P6 `fb5c4559`** — [ADR-019](adr/019-durable-reconstruction-capable-kb-sync.md) +
+  restart-survival e2e (durable marker survives registry save→load; restarted editor with
+  empty cache still emits).
+
+**Regression:** editor (mae-core 2251, mae-ai 451, mae 270, mae-mcp 125) + daemon all
+green, 0 failures; clippy clean. **Both machines rebuild editor + daemon** (daemon changed
+for I-10 label). Daemon fingerprint `07aW…7Ls` unchanged (no re-TOFU). After rebuild, the
+T2.6 flow below should propagate edits **both ways** + survive restart.
+
+> **Note (this machine):** during the bug hunt I moved alice's editor collab dir aside, so
+> alice regenerated her key (`SHA256:+jBinAwoF…`, re-authorized live). bob's key unchanged.
+
 ## (Superseded) Next — live T2.6 under ADR-018 (BOTH machines rebuild daemon + editor)
 
 > ⚠️ Both `mae` and `mae-daemon` changed. On each machine: `git pull` →
