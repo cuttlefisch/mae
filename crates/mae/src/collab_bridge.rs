@@ -64,6 +64,19 @@ fn try_send_evt(tx: &mpsc::Sender<CollabEvent>, event: CollabEvent) {
     }
 }
 
+/// Re-render the `*Collab Status*` buffer if it is currently open, by queuing a
+/// fresh status query (ADR-019, bob's report): state-changing collab events
+/// previously left it stale — e.g. it kept showing "pending owner approval"
+/// even after the join succeeded. Queued (one-per-tick) so it never blocks.
+fn refresh_collab_status_if_open(editor: &mut Editor) {
+    if editor.find_buffer_by_name("*Collab Status*").is_some() {
+        editor
+            .collab
+            .reconnect_intents
+            .push_back(CollabIntent::ShowStatus);
+    }
+}
+
 // --- Command / Event types ---
 
 /// Commands sent from the main thread to the collab background task.
@@ -1372,6 +1385,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             }
             tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_count, "share: durable marker stamped");
             editor.set_status(format!("KB '{}' shared ({} nodes)", kb_id, node_count));
+            refresh_collab_status_if_open(editor);
         }
         CollabEvent::KbJoined {
             kb_id,
@@ -1426,6 +1440,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             } else {
                 editor.set_status(format!("Joined KB '{}' ({} nodes)", kb_id, inserted));
             }
+            refresh_collab_status_if_open(editor);
             editor.mark_full_redraw();
         }
         CollabEvent::KbLeft { kb_id } => {
@@ -1434,6 +1449,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             // Only stop receiving further updates.
             editor.collab.shared_kbs.remove(&kb_id);
             editor.set_status(format!("Left KB '{}' (local copy preserved)", kb_id));
+            refresh_collab_status_if_open(editor);
             editor.mark_full_redraw();
         }
         CollabEvent::KbNodeUpdate {

@@ -407,6 +407,11 @@ impl AuthorizedKeys {
         }
     }
 
+    /// The on-disk path this set was loaded from (for live re-reads, I-10).
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Number of trusted keys.
     pub fn len(&self) -> usize {
         self.entries.len()

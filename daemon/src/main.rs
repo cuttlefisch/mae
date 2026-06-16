@@ -518,8 +518,15 @@ async fn spawn_collab_server(config: &DaemonConfig) {
                                 Ok(tls) => {
                                     let peer = {
                                         let (_, conn) = tls.get_ref();
+                                        // I-10: re-read authorized_keys fresh so the resolved
+                                        // LABEL reflects post-startup authorize/revoke (the cert
+                                        // verifier is already live); the startup `authorized`
+                                        // snapshot would show a stale/fingerprint-only label.
+                                        let live = mae_mcp::identity::AuthorizedKeys::load(
+                                            authorized.path(),
+                                        );
                                         conn.peer_certificates().and_then(|c| {
-                                            mae_mcp::tls::peer_identity_from_tls(c, &authorized)
+                                            mae_mcp::tls::peer_identity_from_tls(c, &live)
                                         })
                                     };
                                     let Some(peer) = peer else {

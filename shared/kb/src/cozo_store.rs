@@ -1166,7 +1166,15 @@ impl KbStore for CozoKbStore {
 
         let mut nodes = Vec::with_capacity(result.rows.len());
         for row in &result.rows {
-            nodes.push(row_to_node(row)?);
+            // ADR-019 / B-5: tolerate a malformed row — skip it (with a warning)
+            // instead of aborting the entire load, which previously errored and
+            // stalled the editor's main thread on a single bad-arity row.
+            match row_to_node(row) {
+                Ok(node) => nodes.push(node),
+                Err(e) => {
+                    tracing::warn!(error = %e, "KB store: skipping malformed node row");
+                }
+            }
         }
         Ok(nodes)
     }
@@ -1808,7 +1816,15 @@ impl CozoKbStore {
         let result = self.run_immut(&query).map_err(cozo_err)?;
         let mut nodes = Vec::new();
         for row in &result.rows {
-            nodes.push(row_to_node(row)?);
+            // ADR-019 / B-5: tolerate a malformed row — skip it (with a warning)
+            // instead of aborting the entire load, which previously errored and
+            // stalled the editor's main thread on a single bad-arity row.
+            match row_to_node(row) {
+                Ok(node) => nodes.push(node),
+                Err(e) => {
+                    tracing::warn!(error = %e, "KB store: skipping malformed node row");
+                }
+            }
         }
         Ok(nodes)
     }

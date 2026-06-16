@@ -767,9 +767,15 @@ fn main() -> io::Result<()> {
 
     // Load KB federation registry and import enabled instances.
     if !clean_mode {
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
-            .join("mae");
+        // XDG-first (CLAUDE.md principle #13 / B-6): honor XDG_DATA_HOME, then
+        // ~/.local/share — NOT dirs::data_dir() (macOS ~/Library). This MUST
+        // match editor.mae_data_dir() (where ADR-019 persists the shared-KB
+        // registry markers) or those markers would save + load to different
+        // paths and silently fail to survive restart.
+        let data_dir = editor.mae_data_dir().unwrap_or_else(|| {
+            crate::pkg::paths::data_dir_candidate("mae")
+                .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share/mae"))
+        });
 
         // Build an in-memory manual KB so the help system's cozo-backed
         // `KbQueryLayer` can resolve built-in nodes (`index`, command/option

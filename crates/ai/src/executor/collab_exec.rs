@@ -169,23 +169,32 @@ fn execute_collab_discover(editor: &mut Editor) -> Result<String, String> {
 }
 
 fn execute_kb_share(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    // Accept both `kb_id` and `kb_name` (the tool previously read only `kb_name`
+    // and silently shared the default KB when callers passed `kb_id`).
     let kb_name = args
-        .get("kb_name")
+        .get("kb_id")
+        .or_else(|| args.get("kb_name"))
         .and_then(|v| v.as_str())
         .unwrap_or(mae_core::KB_DEFAULT_NAME)
         .to_string();
 
-    // Collect node IDs from the named KB.
+    // Collect node IDs from the named KB. `instances` is keyed by UUID, so
+    // resolve name→uuid via the registry first (a bare name lookup missed).
     let node_ids: Vec<String> = if kb_name == mae_core::KB_DEFAULT_NAME || kb_name == "primary" {
         if let Some(q) = editor.kb.query_layer() {
             q.list_ids(None)
         } else {
             editor.kb.primary.list_ids(None)
         }
-    } else if let Some(kb) = editor.kb.instances.get(&kb_name) {
-        kb.list_ids(None)
     } else {
-        return Err(format!("No KB instance named '{}'", kb_name));
+        let uuid = editor.kb.registry.find(&kb_name).map(|i| i.uuid.clone());
+        match uuid
+            .and_then(|u| editor.kb.instances.get(&u))
+            .or_else(|| editor.kb.instances.get(&kb_name))
+        {
+            Some(kb) => kb.list_ids(None),
+            None => return Err(format!("No KB instance named '{}'", kb_name)),
+        }
     };
 
     let count = node_ids.len();

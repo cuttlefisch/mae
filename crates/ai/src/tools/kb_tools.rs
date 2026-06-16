@@ -569,14 +569,14 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         // --- KB sharing tools ---
         ToolDefinition {
             name: "kb_share".into(),
-            description: "Share a knowledge base for collaborative editing via the connected daemon. Shares all nodes in the KB instance.".into(),
+            description: "Share a knowledge base for collaborative editing via the connected daemon. Shares all nodes in the named KB instance (NOT the active/default KB unless you name it).".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
-                    "kb_name".into(),
+                    "kb_id".into(),
                     ToolProperty {
                         prop_type: "string".into(),
-                        description: "Name of the KB instance to share (default: 'default' = primary KB)".into(),
+                        description: "Name of the KB instance to share, e.g. 'collabtest' (default: 'default' = primary KB). Alias: kb_name.".into(),
                         enum_values: None,
                     },
                 )]),
