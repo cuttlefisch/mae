@@ -1349,25 +1349,9 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             let node_count = node_states.len();
             info!(kb = %kb_id, node_count, collection_bytes = collection_state.len(), "KB joined — applying to local store");
 
-            // Initialize shared KB directory if data_dir is available.
-            if let Some(ref data_dir) = editor.kb.data_dir {
-                let slug = mae_kb::data_dir::slugify(&kb_id);
-                let meta = mae_kb::data_dir::SharedKbMeta {
-                    name: kb_id.clone(),
-                    collab_id: kb_id.clone(),
-                    creator: String::new(), // extracted from collection if available
-                    created_at: mae_kb::data_dir::chrono_now_iso(),
-                    peers: vec![],
-                    last_sync: Some(mae_kb::data_dir::chrono_now_iso()),
-                    sync_mode: mae_core::KB_SYNC_MODE_DEFAULT.to_string(),
-                };
-                if let Err(e) = data_dir.init_shared_kb(&slug, &meta) {
-                    warn!(kb = %kb_id, error = %e, "failed to init shared KB directory");
-                }
-            }
-
-            // Apply each node to the primary KB (or create a federated instance).
-            let mut inserted = 0;
+            // Decode the joined nodes (ADR-019: tolerant — skip a bad row rather
+            // than abort the whole join).
+            let mut nodes: Vec<mae_kb::Node> = Vec::with_capacity(node_states.len());
             let mut errors = 0;
             for (node_id, state_bytes) in &node_states {
                 match mae_sync::kb::KbNodeDoc::from_bytes(state_bytes) {
@@ -1377,9 +1361,8 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                             mae_kb::NodeKind::Note,
                             mae_kb::NodeSource::Federation,
                         );
-                        debug!(kb = %kb_id, node_id = %node_id, title = %node.title, "inserting joined KB node");
-                        editor.kb.primary.insert(node);
-                        inserted += 1;
+                        debug!(kb = %kb_id, node_id = %node_id, title = %node.title, "decoded joined KB node");
+                        nodes.push(node);
                     }
                     Err(e) => {
                         warn!(kb = %kb_id, node_id = %node_id, error = %e, "failed to decode KB node — skipping");
@@ -1387,10 +1370,16 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     }
                 }
             }
+            let inserted = nodes.len();
 
-            // Track joined nodes for continuous sync.
+            // ADR-019: register the joined KB as a FIRST-CLASS federated instance
+            // (durable shared/collab_id markers, addressable, in kb_instances) —
+            // not dumped into `primary`. This gives the emit gate + receive
+            // routing a real owning instance and survives restart.
             let joined_node_ids: HashSet<String> =
                 node_states.iter().map(|(id, _)| id.clone()).collect();
+            editor.kb_register_joined_instance(&kb_id, nodes);
+            // Keep the transient index in sync as a cache.
             editor
                 .collab
                 .shared_kbs
@@ -1426,11 +1415,11 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 update_len = update_bytes.len(),
                 "remote KB node update — applying"
             );
-            match editor
-                .kb
-                .primary
-                .apply_remote_update(&node_id, &update_bytes)
-            {
+            // ADR-019: route to the OWNING KB (instance or primary), not always
+            // primary. The node-id namespace prefix hints the target instance
+            // for a node not yet present locally.
+            let hint = node_id.split(':').next().filter(|p| !p.is_empty());
+            match editor.kb_apply_remote_update(&node_id, &update_bytes, hint) {
                 Ok(changed) => {
                     if changed {
                         debug!(kb = %kb_id, node = %node_id, "KB node content changed by remote update");
@@ -5464,6 +5453,9 @@ mod tests {
     #[test]
     fn collab_kb_joined_populates_tracking() {
         let mut editor = Editor::new();
+        let tmp = std::env::temp_dir().join(format!("mae-adr019-join-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        editor.data_dir_override = Some(tmp.clone());
 
         // Create a CRDT node state for the join event.
         let doc = mae_sync::kb::KbNodeDoc::new("join-node-1", "Joined Title", "joined body", &[]);
@@ -5486,6 +5478,24 @@ mod tests {
             editor.collab.shared_kbs["remote-kb"].contains("join-node-1"),
             "shared_kbs should contain the joined node ID"
         );
+        // ADR-019: joined KB is a FIRST-CLASS instance with durable markers, NOT
+        // dumped into primary (fixes B-3).
+        let inst = editor
+            .kb
+            .registry
+            .find_by_collab_id("remote-kb")
+            .expect("joined KB must be a registered instance");
+        assert!(inst.shared && inst.collab_id.as_deref() == Some("remote-kb"));
+        let uuid = inst.uuid.clone();
+        assert!(
+            editor.kb.instances[&uuid].get("join-node-1").is_some(),
+            "joined node must live in the instance"
+        );
+        assert!(
+            editor.kb.primary.get("join-node-1").is_none(),
+            "joined node must NOT be dumped into primary"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

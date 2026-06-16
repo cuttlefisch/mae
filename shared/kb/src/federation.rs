@@ -640,7 +640,7 @@ fn write_sentinel(org_dir: &Path, uuid: &str, name: &str) -> io::Result<()> {
 }
 
 /// Generate a simple UUID-like string.
-fn generate_uuid() -> String {
+pub fn generate_uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
