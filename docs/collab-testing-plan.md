@@ -100,16 +100,31 @@ srv mae-daemon --check-config                 # → auth.mode=key, tls=true, 1 k
 **D = daemon host + editor "alice"; E = editor "bob".** Both connect to D's
 daemon over the LAN. Use your real config dirs (not isolated temp dirs).
 
+> **Port choice — avoid colliding with an already-running daemon.** The default
+> collab port is `9473`. If you already run a personal `mae-daemon` on D (it binds
+> `127.0.0.1:9473`), a **test** daemon binding `0.0.0.0:9473` will fail to start —
+> `0.0.0.0` includes loopback, so the two overlap ("address already in use →
+> collab disabled"). This plan uses **`9480`** for the test daemon to sidestep that.
+> Check first: `ss -tlnp | grep -E ':(9473|9480)'` should show nothing for the port
+> you pick. Substitute any free port; just keep `bind`, the firewall rule, and
+> `--server` consistent.
+>
+> **Bind vs. connect — `0.0.0.0` is NOT a connect target.** The daemon *binds*
+> `0.0.0.0:<port>` (listen on all interfaces). Editors *connect to* D's **reachable
+> IP** — D's LAN IP from E, or `127.0.0.1` from D's own editor — never `0.0.0.0`.
+> `mae setup-collab --server 0.0.0.0:…` is rejected for this reason.
+
 ### Step 1 — Prereqs (both machines)
 - [ ] Both built from `feat/crdt-collab-validation` (`mae --version`, `mae-daemon --version` match).
 - [ ] On the same LAN; D's IP known (`ip -4 addr` → e.g. `192.168.1.137`).
-- [ ] Port `9473` open on D (firewall): `sudo firewall-cmd --add-port=9473/tcp` (Fedora) / `sudo ufw allow 9473/tcp`.
+- [ ] Chosen test port (`9480` here) free on D: `ss -tlnp | grep 9480` shows nothing.
+- [ ] Port `9480` open on D (firewall): `sudo firewall-cmd --add-port=9480/tcp` (Fedora) / `sudo ufw allow 9480/tcp`.
 
 ### Step 2 — Start the daemon on D (key + mTLS, all interfaces)
 `~/.config/mae/daemon.toml` on **D**:
 ```toml
 [collab]
-bind = "0.0.0.0:9473"
+bind = "0.0.0.0:9480"
 [collab.auth]
 mode = "key"
 ```
@@ -117,9 +132,9 @@ mode = "key"
 # D:
 mae-daemon identity            # note D's fingerprint — you'll verify it on E
 mae-daemon                     # (or: systemctl --user start mae-daemon)
-ss -tlnp | grep 9473           # confirm listening on 0.0.0.0:9473
+ss -tlnp | grep 9480           # confirm listening on 0.0.0.0:9480
 ```
-- [ ] D listens on `0.0.0.0:9473`; daemon log says `collab authentication configured (mTLS)`.
+- [ ] D listens on `0.0.0.0:9480`; daemon log says `collab authentication configured (mTLS)`.
 
 ### Step 3 — Exchange + authorize identities
 ```bash
@@ -133,19 +148,21 @@ mae-daemon authorize mae-ed25519 <alice-b64> alice
 mae-daemon authorized          # → lists alice + bob with fingerprints
 ```
 - [ ] `mae-daemon authorized` lists both `alice` and `bob` with distinct fingerprints.
-- [ ] Reachability: on **E**, `nc -zv 192.168.1.137 9473` succeeds.
+- [ ] Reachability: on **E**, `nc -zv 192.168.1.137 9480` succeeds.
 
 ### Step 4 — Connect both editors (TOFU)
 On **both** D (alice) and E (bob), the one-command setup (idempotent — generates
 the identity + writes the options to `init.scm`):
 ```bash
-mae setup-collab --server 192.168.1.137:9473
+# E (bob) connects to D's LAN IP; D (alice) uses 127.0.0.1 (its own daemon).
+mae setup-collab --server 192.168.1.137:9480   # on E
+mae setup-collab --server 127.0.0.1:9480        # on D (alice's editor)
 # (add --ssh-key ~/.ssh/id_ed25519 to reuse an existing SSH key as the identity)
 ```
 Equivalent manual `init.scm`:
 ```scheme
 (set-option! "collab-auth-mode" "key")
-(set-option! "collab-server-address" "192.168.1.137:9473")  ; loopback ok on D
+(set-option! "collab-server-address" "192.168.1.137:9480")  ; 127.0.0.1:9480 on D
 (set-option! "collab-auto-connect" "true")
 ;; collab-host-key-policy defaults to "prompt"
 ```
@@ -173,7 +190,7 @@ Launch `mae`; on first connect each editor shows **"Trust Daemon Key? SHA256:…
 ### Step 7 — Security / negative checks
 - [ ] **Unauthorized peer:** a 3rd machine NOT in `authorized_keys` → connect fails (daemon log: `verify_client_cert` rejection / TLS refused).
 - [ ] **Changed host key:** on D, delete `~/.local/share/mae/collab/id_ed25519` and restart the daemon (new identity). On E, reconnect → editor **aborts** with a host-key-changed error (MITM defense). Restore by re-pinning (delete E's `known_hosts` entry).
-- [ ] **Confidentiality:** on D, `sudo tcpdump -A -i any port 9473` during a key-mode session → shows TLS records, **not** plaintext JSON-RPC. (Contrast: a `psk`-mode session is plaintext.)
+- [ ] **Confidentiality:** on D, `sudo tcpdump -A -i any port 9480` during a key-mode session → shows TLS records, **not** plaintext JSON-RPC. (Contrast: a `psk`-mode session is plaintext.)
 
 ---
 
@@ -183,8 +200,8 @@ Launch `mae`; on first connect each editor shows **"Trust Daemon Key? SHA256:…
 |---|-------|-------|
 | T0 | `make test-collab-e2e-all` green | ☐ |
 | T1 | Single-host CLI smoke (identity/authorize/check-config) | ☐ |
-| 2 | Daemon listens `0.0.0.0:9473`, mTLS configured | ☐ |
-| 3 | Both peers authorized; E reaches D:9473 | ☐ |
+| 2 | Daemon listens `0.0.0.0:9480`, mTLS configured | ☐ |
+| 3 | Both peers authorized; E reaches D:9480 | ☐ |
 | 4 | TOFU prompt fingerprint matches; both connect | ☐ |
 | 5 | Buffer edits converge; cursor labels = authenticated identity | ☐ |
 | 6 | KB join denied → owner adds → allowed → remove denies | ☐ |
@@ -195,7 +212,8 @@ Launch `mae`; on first connect each editor shows **"Trust Daemon Key? SHA256:…
 ---
 
 ## Troubleshooting
-- **TLS handshake EOF / connection refused:** wrong daemon (check `ss -tlnp | grep 9473`), or daemon not in `key`+`tls` mode (`mae-daemon --check-config`).
+- **TLS handshake EOF / connection refused:** wrong daemon (check `ss -tlnp | grep 9480`), or daemon not in `key`+`tls` mode (`mae-daemon --check-config`).
+- **"address already in use → collab disabled":** the port is taken — most often an already-running personal daemon on `9473`, or a stale test daemon. `ss -tlnp | grep <port>` to find it; pick a free port and keep `bind` / firewall / `--server` consistent.
 - **"client key not authorized":** the editor's pubkey isn't in `authorized_keys` — re-run `mae-daemon authorize`.
 - **TOFU never appears / auto-connects:** `collab-host-key-policy` is `accept-new`, or the host is already pinned in `~/.local/share/mae/collab/known_hosts`.
 - **KB join always allowed (no denial):** both peers share the same authorized-keys **label** → give them distinct labels in `mae-daemon authorize`.

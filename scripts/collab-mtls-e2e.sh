@@ -13,7 +13,10 @@
 # Env overrides:
 #   MAE_BIN         path to the `mae` binary       (default: target/debug/mae)
 #   MAE_DAEMON_BIN  path to the `mae-daemon` binary (default: daemon/target/debug/mae-daemon)
-#   MAE_E2E_PORT    TCP port for the daemon         (default: 9476)
+#   MAE_E2E_PORT    TCP port for the daemon (default: first free port from 9476;
+#                   loopback-bound, so it never collides with a real daemon on
+#                   9473 — but auto-skips any port already in use, e.g. another
+#                   test run or a personal daemon on the default)
 #
 # Exit 0 on success (TAP "0 failed"), non-zero otherwise.
 set -euo pipefail
@@ -21,7 +24,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAE_BIN="${MAE_BIN:-$ROOT/target/debug/mae}"
 MAE_DAEMON_BIN="${MAE_DAEMON_BIN:-$ROOT/daemon/target/debug/mae-daemon}"
-PORT="${MAE_E2E_PORT:-9476}"
+
+# Pick a free TCP port. Honor an explicit MAE_E2E_PORT verbatim; otherwise scan
+# upward from a base until ss reports nothing listening — so a running daemon
+# (default 9473) or a concurrent test run never causes "address already in use".
+port_free() { ! ss -tln 2>/dev/null | grep -q ":$1 "; }
+pick_port() {
+  local p="$1"
+  for _ in $(seq 0 49); do port_free "$p" && { echo "$p"; return 0; }; p=$((p + 1)); done
+  echo "ERROR: no free port found near $1" >&2; return 1
+}
+if [ -n "${MAE_E2E_PORT:-}" ]; then PORT="$MAE_E2E_PORT"; else PORT="$(pick_port 9476)"; fi
 
 for bin in "$MAE_BIN" "$MAE_DAEMON_BIN"; do
   [ -x "$bin" ] || { echo "ERROR: missing binary: $bin (build first)"; exit 2; }

@@ -272,6 +272,17 @@ fn main() -> io::Result<()> {
             .and_then(|i| args.get(i + 1))
             .cloned()
             .unwrap_or_else(|| "127.0.0.1:9473".to_string());
+        // `--server` is the address this editor CONNECTS to (the daemon's
+        // reachable IP). `0.0.0.0` is a *bind* address (the daemon's), never a
+        // connect target — catch the common mix-up early.
+        if server.starts_with("0.0.0.0") {
+            eprintln!(
+                "error: --server is the daemon's reachable address to connect TO, not a bind address.\n\
+                 '0.0.0.0' is what the DAEMON binds (in daemon.toml) to listen on all interfaces.\n\
+                 Use the daemon host's LAN IP (e.g. 192.168.1.10:9473), or 127.0.0.1:9473 on the same machine."
+            );
+            std::process::exit(2);
+        }
         let mut editor = Editor::new();
         for (opt, val) in [
             ("collab_auth_mode", "key"),

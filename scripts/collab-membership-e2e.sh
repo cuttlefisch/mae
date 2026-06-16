@@ -17,13 +17,21 @@
 # membership change, and no denial after bob is added. Coordination uses a
 # shared /sync dir (single host) via the scheme test framework's file barriers.
 #
-# Env: MAE_BIN, MAE_DAEMON_BIN (defaults to debug), MAE_E2E_PORT (default 9477).
+# Env: MAE_BIN, MAE_DAEMON_BIN (defaults to debug). MAE_E2E_PORT pins the daemon
+# port; if unset, the first free port from 9477 is auto-selected (loopback-bound,
+# so it never collides with a real daemon on 9473, and auto-skips a busy port).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAE_BIN="${MAE_BIN:-$ROOT/target/debug/mae}"
 MAE_DAEMON_BIN="${MAE_DAEMON_BIN:-$ROOT/daemon/target/debug/mae-daemon}"
-PORT="${MAE_E2E_PORT:-9477}"
+port_free() { ! ss -tln 2>/dev/null | grep -q ":$1 "; }
+pick_port() {
+  local p="$1"
+  for _ in $(seq 0 49); do port_free "$p" && { echo "$p"; return 0; }; p=$((p + 1)); done
+  echo "ERROR: no free port found near $1" >&2; return 1
+}
+if [ -n "${MAE_E2E_PORT:-}" ]; then PORT="$MAE_E2E_PORT"; else PORT="$(pick_port 9477)"; fi
 for bin in "$MAE_BIN" "$MAE_DAEMON_BIN"; do
   [ -x "$bin" ] || { echo "ERROR: missing binary: $bin"; exit 2; }
 done
