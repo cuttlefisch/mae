@@ -399,7 +399,12 @@ async fn spawn_collab_server(config: &DaemonConfig) {
             }
             let authorized = Arc::new(authorized);
             if collab.auth.tls {
-                match mae_mcp::tls::server_config(&identity, authorized.clone()) {
+                // I-10: the verifier reloads `authorized_keys` per handshake
+                // (mtime-gated), so `mae-daemon authorize`/`revoke` take effect
+                // on the running daemon without a restart. The `authorized`
+                // snapshot below is kept only for the startup log + handler
+                // principal/label resolution.
+                match mae_mcp::tls::server_config_reloading(&identity, &ak_path) {
                     Ok(cfg) => {
                         info!(
                             auth = "key",

@@ -13,6 +13,7 @@
 //! We use the **ring** crypto backend with an explicit [`CryptoProvider`] so we
 //! never clash with the editor's reqwest (which installs an aws-lc-rs default).
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -114,9 +115,56 @@ pub fn peer_identity_from_tls(
 
 // --- Server side: verify client cert against AuthorizedKeys ---
 
+/// Source the client-cert verifier consults on **every** handshake so that
+/// `authorize`/`revoke` changes take effect on a running daemon without a
+/// restart (I-10). The startup-snapshot model — baking a fixed
+/// `Arc<AuthorizedKeys>` into the rustls `ServerConfig` — meant a revoked key
+/// stayed trusted until the process bounced, which is unacceptable for a
+/// multi-user service (revocation must be timely).
+pub trait ClientAuthSource: Send + Sync + std::fmt::Debug {
+    /// The currently-trusted key set. May re-read from disk.
+    fn snapshot(&self) -> Arc<AuthorizedKeys>;
+}
+
+/// Static set — fixed for the lifetime of the config (tests, callers that don't
+/// need live reload). Preserves the original `server_config` behavior.
+#[derive(Debug)]
+pub struct StaticAuth(pub Arc<AuthorizedKeys>);
+
+impl ClientAuthSource for StaticAuth {
+    fn snapshot(&self) -> Arc<AuthorizedKeys> {
+        self.0.clone()
+    }
+}
+
+/// File-backed authorized set re-read from disk on **every** handshake, so
+/// `authorize`/`revoke` take effect immediately on a running daemon. Collab
+/// connections are infrequent, so a small re-parse per handshake is negligible
+/// — and "always reflects disk" avoids any cache-staleness window. If the file
+/// is missing/unreadable the set is empty (fail-secure: deny).
+#[derive(Debug)]
+pub struct ReloadingAuthorizedKeys {
+    path: PathBuf,
+}
+
+impl ReloadingAuthorizedKeys {
+    /// Build from a path (contents are read fresh on each handshake).
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+        }
+    }
+}
+
+impl ClientAuthSource for ReloadingAuthorizedKeys {
+    fn snapshot(&self) -> Arc<AuthorizedKeys> {
+        Arc::new(AuthorizedKeys::load(&self.path))
+    }
+}
+
 #[derive(Debug)]
 struct Ed25519ClientVerifier {
-    authorized: Arc<AuthorizedKeys>,
+    authorized: Arc<dyn ClientAuthSource>,
     provider: Arc<CryptoProvider>,
 }
 
@@ -132,7 +180,8 @@ impl ClientCertVerifier for Ed25519ClientVerifier {
         _now: UnixTime,
     ) -> Result<ClientCertVerified, rustls::Error> {
         let pubkey = ed25519_pubkey_from_cert(end_entity).ok_or_else(app_verify_failure)?;
-        if self.authorized.authorize(&pubkey).is_some() {
+        // Re-read the trusted set per handshake (live revoke/authorize, I-10).
+        if self.authorized.snapshot().authorize(&pubkey).is_some() {
             Ok(ClientCertVerified::assertion())
         } else {
             Err(app_verify_failure())
@@ -241,6 +290,27 @@ impl ServerCertVerifier for Ed25519ServerVerifier {
 pub fn server_config(
     id: &Identity,
     authorized: Arc<AuthorizedKeys>,
+) -> Result<Arc<ServerConfig>, String> {
+    server_config_with_auth(id, Arc::new(StaticAuth(authorized)))
+}
+
+/// Build a server [`ServerConfig`] whose client-cert verifier consults a
+/// file-backed [`ReloadingAuthorizedKeys`], so `authorize`/`revoke` take effect
+/// on a running server without a restart (I-10). Use this for the daemon.
+pub fn server_config_reloading(
+    id: &Identity,
+    authorized_keys_path: impl AsRef<Path>,
+) -> Result<Arc<ServerConfig>, String> {
+    server_config_with_auth(
+        id,
+        Arc::new(ReloadingAuthorizedKeys::new(authorized_keys_path)),
+    )
+}
+
+/// Build a server [`ServerConfig`] with an arbitrary [`ClientAuthSource`].
+pub fn server_config_with_auth(
+    id: &Identity,
+    authorized: Arc<dyn ClientAuthSource>,
 ) -> Result<Arc<ServerConfig>, String> {
     let provider = provider();
     let (cert, key) = cert_and_key(id)?;
@@ -434,6 +504,80 @@ mod tests {
             "server must not accept an unauthorized client"
         );
         assert!(client_res.is_err(), "client handshake must fail");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// I-10: the daemon's reloading verifier must honor a `revoke` (and an
+    /// `authorize`) on the **same** `ServerConfig` — no restart. We build one
+    /// config via `server_config_reloading`, run a handshake while the client is
+    /// authorized (succeeds), rewrite the file to drop the key, and run a second
+    /// handshake on the SAME acceptor (must now be rejected).
+    #[tokio::test]
+    async fn mtls_reloading_verifier_honors_live_revoke() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio_rustls::{TlsAcceptor, TlsConnector};
+
+        let dir = std::env::temp_dir().join(format!("mae-mtls-reload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ak_path = dir.join("authorized_keys");
+
+        let server_id = Identity::generate("daemon");
+        let client_id = Identity::generate("laptop");
+
+        // Authorize the client on disk, then build ONE reloading server config.
+        let mut ak = AuthorizedKeys::load(&ak_path);
+        ak.add(client_id.public()).unwrap(); // persists to ak_path
+        let scfg = server_config_reloading(&server_id, &ak_path).unwrap();
+
+        // Helper: one handshake against the given acceptor; Ok = client got bytes.
+        async fn one(scfg: Arc<ServerConfig>, client_id: &Identity) -> Result<(), String> {
+            let acceptor = TlsAcceptor::from(scfg);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                if let Ok((stream, _)) = listener.accept().await {
+                    if let Ok(mut tls) = acceptor.accept(stream).await {
+                        let _ = tls.write_all(b"ok").await;
+                    }
+                }
+            });
+            let verifier = Arc::new(StubHostVerifier { accept: true });
+            let ccfg = client_config(client_id, SNI.into(), verifier).unwrap();
+            let connector = TlsConnector::from(ccfg);
+            let res = async {
+                let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+                let mut tls = connector
+                    .connect(ServerName::try_from(SNI).unwrap(), tcp)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let mut buf = [0u8; 2];
+                tls.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
+                Ok::<(), String>(())
+            }
+            .await;
+            let _ = server.await;
+            res
+        }
+
+        // 1) Authorized → succeeds.
+        assert!(
+            one(scfg.clone(), &client_id).await.is_ok(),
+            "authorized client should connect"
+        );
+
+        // 2) Revoke on disk (rewrite the file without the client's key).
+        let mut ak = AuthorizedKeys::load(&ak_path);
+        ak.revoke_by_fingerprint(&client_id.public().fingerprint())
+            .unwrap();
+        assert!(ak.is_empty(), "revoke should empty the file");
+
+        // 3) SAME config, second handshake → rejected, with NO restart.
+        assert!(
+            one(scfg.clone(), &client_id).await.is_err(),
+            "revoked client must be rejected on reconnect without a server restart"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
