@@ -691,30 +691,42 @@ Launch `mae`; an unknown daemon key triggers a **"Trust Daemon Key? SHA256:…
 *changed* key later aborts the connection (MITM defense). Headless
 (`mae --test`/CI) should set `collab-host-key-policy` to `accept-new`.
 
-### Shared KBs among members
+### Shared KBs — identity, roles, and join policy (ADR-018)
 
-The KB **creator/owner** shares it and manages membership; only members may join
-or edit:
+**Identity is your key, not your name.** KB ownership and membership are keyed on
+your **Ed25519 key fingerprint** (`SHA256:…`), never the label or `collab-user-name`
+(which are display-only). The daemon binds the owner to the *verified cert* on
+`:kb-share`, so a self-claimed name is ignored — there is no "creator mismatch".
+
+**Roles** (hierarchical — `owner ⊇ editor ⊇ viewer`): owner manages members + policy;
+editor reads + edits nodes; **viewer is read-only**.
+
+**Join policy** per KB (owner sets it; default **`invite`**):
+- `restrictive` — only the owner + explicitly-added members.
+- `invite` — a non-member's join becomes a **pending request** the owner approves.
+- `permissive` — any authorized peer auto-joins as a **viewer**.
 
 ```
-:kb-share                       # owner shares the active KB (first registered instance)
-:kb-share <name>                # owner shares a SPECIFIC KB instance by name
-:kb-member-add <kb-id> alice    # owner adds a trusted peer (by label)
-:kb-member-remove <kb-id> alice
-:kb-join <kb-id>                # members only — non-members are denied
+:kb-share <name>                       # owner shares a specific KB (owner = your key)
+:kb-policy <kb> restrictive|invite|permissive
+:kb-pending <kb>                       # list pending requests: (label, fingerprint)
+:kb-approve <kb> <fingerprint> [role]  # approve a pending peer (default editor)
+:kb-member-add <kb> <fingerprint> [role]   # add directly, by fingerprint
+:kb-member-remove <kb> <fingerprint>
+:kb-join <kb>                          # member → join; non-member → per policy
 ```
 
-> **Choose what you share.** With several registered KBs (e.g. personal notes +
-> a project KB), `:kb-share <name>` shares exactly that one — see `:kb-instances`
-> for names. Bare `:kb-share` shares the active (first-registered) instance, so
-> name it explicitly when you have more than one KB to avoid replicating the
-> wrong collection to peers.
+> **Members are managed by fingerprint.** Find a peer's fingerprint from
+> `:kb-pending` (for a pending request) or `mae-daemon authorized` (admin). Labels
+> are display only and must be unique in `authorized_keys`.
 
-The daemon binds the shared collection's creator to the *authenticated* identity
-and rejects a spoofed `creator`/cursor name. **Known limitation:** a member can
-still smuggle membership edits through a raw collection update; the sanctioned
-path is the owner-only `kb-member-*` commands (server-side CRDT field ACLs are
-future work).
+**Admin (daemon):** `mae-daemon authorize <pubkey-line> <unique-label>` (labels must
+be unique), `mae-daemon revoke <label|SHA256:fingerprint>` (revoke by fingerprint is
+unambiguous).
+
+A non-owner cannot escalate via a raw collection write — the daemon owner-gates raw
+`kbc:` updates (membership-smuggling defense). The model follows NIST RBAC + Google
+Zanzibar/ReBAC + OWASP authorization (see [ADR-018](adr/018-identity-anchored-kb-access-control.md)).
 
 ### Validate it
 
