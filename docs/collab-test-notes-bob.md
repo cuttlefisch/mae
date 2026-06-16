@@ -159,11 +159,23 @@ log `kb/join: pending → kb/approve_member (editor) → kb/join: complete (3 no
 
 ## Issues — Run 3 (ADR-018 / T2.6)
 
-### B-1 ⚠️ UX — pending join reported as "Joined (0 nodes)"  ·  Step T2.6
-- Under `invite` policy, bob's `kb-join` is recorded **pending** server-side, but the editor
-  status says **"Joined KB 'collabtest' (0 nodes)"** — a real user can't tell *pending
-  approval* from *joined-but-empty*. Should say e.g. "Join requested — pending owner approval".
-- Daemon-side oracle (alice's `:kb-pending`) is correct; this is editor-side wording only.
+### B-1 ⚠️ CONFIRMED UX bug — editor shows "Joined (0 nodes)" for pending AND denied  ·  Step T2.6
+- The editor status says **"Joined KB 'collabtest' (0 nodes)"** for **three distinct** daemon
+  outcomes: (a) pending owner approval (invite), (b) **denied** (restrictive + non-member),
+  and (c) a genuine empty join. A user cannot tell access was refused or deferred.
+- Confirmed live: bob's `kb-join` after alice **revoked bob + set policy restrictive** showed
+  the same "Joined (0 nodes)" even though the daemon **denied** it (alice's daemon log:
+  `kb/join denied … collabtest`).
+- **Fix:** surface the daemon's decision in the editor — distinct messages for
+  pending / denied / joined(N), and don't say "Joined" when access was refused.
+- Daemon-side enforcement is correct; this is editor-side wording only.
+
+### B-4 ℹ️ NOTE (likely intended) — revoked member keeps the local KB copy  ·  Step T2.6
+- After alice revoked bob, bob still has the 3 collabtest nodes locally (searchable, incl.
+  bob's own `[bob edit]` title). Expected **local-first** behavior — revoke stops future sync
+  but doesn't wipe already-replicated data (mirrors `kb_leave` "local copy preserved"). Access
+  control is about *future* sync + *write propagation*, not local erasure. Flagging so it's a
+  conscious decision, not a surprise (a "forget on revoke" option could be future work).
 
 ### B-2 ⚠️ low — `kb_search "ZEPHYRINE"` over-matches `collabtest:alpha`  ·  Step T2.6
 - Sentinel `ZEPHYRINE` is unique to `collabtest:overview` (fixture invariant), but search
@@ -191,9 +203,9 @@ log `kb/join: pending → kb/approve_member (editor) → kb/join: complete (3 no
 | KB membership: invite→pending→approve→allowed | T2.6 | ✅ Run 3 (by fingerprint, mTLS) |
 | KB replication to approved peer | T2.6 | ✅ Run 3 (ZEPHYRINE sentinel) |
 | editor-role write allowed | T2.6 | ✅ Run 3 (kb_update) |
-| editor edit propagates to owner | T2.6 | ⏳ alice confirming |
-| viewer-role write rejected | T2.6 | ⏳ pending demotion |
-| restrictive policy denies 3rd peer | T2.6 | ⏳ not reached |
+| editor edit propagates to owner | T2.6 | ⏳ unconfirmed (alice pivoted to the deny test before confirming) |
+| revoke + restrictive → join denied | T2.6 | ✅ Run 3 (bob revoked + policy restrictive → join denied; bob keeps local copy, B-4) |
+| viewer-role write rejected | T2.6 | ⏳ not run (alice did revoke+restrictive instead of demote-to-viewer) |
 | security checks | T2.7 | ⏳ not reached |
 
 ## Next run (from scratch)
