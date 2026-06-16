@@ -164,8 +164,37 @@ trigger was a **mouse click**, not the CRDT sync (headless convergence never cra
   register → share-by-name → deny → add → allow, **green** (alice 8/8, bob 7/7) with bob's
   join correctly targeting `collabtest`.
 
-## Next
+### ADR-018 ✅ IMPLEMENTED — identity-anchored KB access control (the structural fix)
 
-1. Rebuild/relaunch both on the I-4/I-5/I-6 fixes; live T2.6 via `:kb-share collabtest`
-   / `:kb-join collabtest` (deny → add → allow → remove), then T2.7 (security checks).
-2. Log each step here with the shared convention.
+I-7 (creator-mismatch reject) was the symptom of a deeper gap: KB ownership/membership
+keyed on a **mutable, non-unique label** + self-claimed `collab-user-name`. Rebuilt the
+whole model — see [ADR-018](adr/018-identity-anchored-kb-access-control.md) +
+[COLLABORATION.md](COLLABORATION.md). Shipped across `feat/crdt-collab-validation`
+(commits `863d854`→`585f799`): identity plumbing → v2 CRDT schema → `kb_access` engine →
+CLI → editor commands → migration → docs/e2e + smuggling gate. Grounded in NIST RBAC +
+Zanzibar/ReBAC + OWASP. **All layers tested green** (mae-mcp 124, mae-sync 155, daemon
+144, editor dispatch) and the **membership e2e passes the full flow over real mTLS**.
+
+- **Identity = key fingerprint** (`SHA256:…`); label/`collab-user-name` are display-only.
+- **Roles** `owner ⊇ editor ⊇ viewer`; **join policy** `restrictive|invite|permissive`
+  (default `invite`). Members managed **by fingerprint**.
+- **No more `collab-user-name=alice` workaround** — `:kb-share` binds owner from the cert.
+
+## Next — live T2.6 under ADR-018 (BOTH machines rebuild daemon + editor)
+
+> ⚠️ Both `mae` and `mae-daemon` changed. On each machine: `git pull` →
+> `make build && make install` (GUI) + `make build-daemon && make install-daemon`,
+> then restart the daemon and relaunch the editor. D's daemon fingerprint
+> `SHA256:07aW…7Ls` is unchanged (no re-TOFU). Default join policy is **invite**.
+
+1. **alice (owner):** `:kb-share collabtest` → owner bound to alice's key (no workaround).
+2. **bob:** `:kb-join collabtest` → **PENDING** (invite policy), not denied.
+3. **alice:** `:kb-pending collabtest` (lists bob's label + fingerprint) →
+   `:kb-approve collabtest <bob-fingerprint> editor`.
+4. **bob:** `:kb-join collabtest` → **ALLOWED** (member); edits a node → propagates.
+5. **Role check:** alice `:kb-member-add collabtest <bob-fp> viewer` → bob's next node
+   edit is **rejected** (read-only). `:kb-policy collabtest restrictive` → a 3rd peer's
+   join is denied.
+6. T2.7 security: unauthorized peer rejected; `mae-daemon revoke <fp>` → denied on
+   reconnect; `tcpdump` still shows TLS.
+7. Log each step here with the shared convention.
