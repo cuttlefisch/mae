@@ -3077,34 +3077,65 @@ fn handle_response(
             }
         }
         PendingResponseKind::KbJoin { kb_id } => {
-            let collection_state = result
-                .and_then(|r| r.get("collection_state"))
-                .and_then(|v| v.as_str())
-                .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())
-                .unwrap_or_default();
-            let node_states: Vec<(String, Vec<u8>)> = result
-                .and_then(|r| r.get("nodes"))
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|n| {
-                            let id = n.get("id")?.as_str()?.to_string();
-                            let state =
-                                mae_sync::encoding::base64_to_update(n.get("state")?.as_str()?)
-                                    .ok()?;
-                            Some((id, state))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            try_send_evt(
-                evt_tx,
-                CollabEvent::KbJoined {
-                    kb_id,
-                    collection_state,
-                    node_states,
-                },
-            );
+            // Distinguish denied / pending / joined so the editor stops showing
+            // "Joined (0 nodes)" for all three outcomes (B-1). Daemon shapes:
+            //   denied  → JSON-RPC error
+            //   pending → success { status: "pending" }   (invite policy)
+            //   joined  → success { collection_state, nodes: [...] }
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("access denied");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("KB '{kb_id}' join denied: {msg}"),
+                    },
+                );
+            } else if result
+                .and_then(|r| r.get("status"))
+                .and_then(|s| s.as_str())
+                == Some("pending")
+            {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::StatusReport {
+                        lines: vec![format!(
+                            "KB '{kb_id}': join request sent — pending owner approval"
+                        )],
+                    },
+                );
+            } else {
+                let collection_state = result
+                    .and_then(|r| r.get("collection_state"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())
+                    .unwrap_or_default();
+                let node_states: Vec<(String, Vec<u8>)> = result
+                    .and_then(|r| r.get("nodes"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|n| {
+                                let id = n.get("id")?.as_str()?.to_string();
+                                let state =
+                                    mae_sync::encoding::base64_to_update(n.get("state")?.as_str()?)
+                                        .ok()?;
+                                Some((id, state))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::KbJoined {
+                        kb_id,
+                        collection_state,
+                        node_states,
+                    },
+                );
+            }
         }
         PendingResponseKind::KbLeave { kb_id } => {
             try_send_evt(evt_tx, CollabEvent::KbLeft { kb_id });
@@ -4839,6 +4870,87 @@ mod tests {
             matches!(event, CollabEvent::SaveIntentConflict { .. }),
             "expected SaveIntentConflict, got {:?}",
             event
+        );
+    }
+
+    /// B-1: a kb/join response must surface joined / pending / denied as three
+    /// DISTINCT outcomes — not "Joined (0 nodes)" for all of them.
+    #[tokio::test]
+    async fn kb_join_pending_response_is_distinct() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut shared = Vec::new();
+        let val = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": { "kb_id": "collabtest", "status": "pending" }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::KbJoin {
+                kb_id: "collabtest".into(),
+            },
+            &tx,
+            &mut shared,
+            &mut std::collections::HashMap::new(),
+        );
+        match rx.try_recv().unwrap() {
+            CollabEvent::StatusReport { lines } => {
+                assert!(
+                    lines.iter().any(|l| l.contains("pending")),
+                    "pending join should report pending approval, got {lines:?}"
+                );
+            }
+            other => panic!("expected StatusReport for pending, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn kb_join_denied_response_is_distinct() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut shared = Vec::new();
+        let val = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "error": { "code": -32603, "message": "not a member of KB 'collabtest'" }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::KbJoin {
+                kb_id: "collabtest".into(),
+            },
+            &tx,
+            &mut shared,
+            &mut std::collections::HashMap::new(),
+        );
+        match rx.try_recv().unwrap() {
+            CollabEvent::Error { message } => {
+                assert!(
+                    message.contains("denied"),
+                    "denied join should report denial, got {message:?}"
+                );
+            }
+            other => panic!("expected Error for denied join, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn kb_join_success_response_emits_joined() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut shared = Vec::new();
+        let val = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": { "kb_id": "collabtest", "collection_state": "", "nodes": [] }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::KbJoin {
+                kb_id: "collabtest".into(),
+            },
+            &tx,
+            &mut shared,
+            &mut std::collections::HashMap::new(),
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), CollabEvent::KbJoined { .. }),
+            "a real join must emit KbJoined"
         );
     }
 
