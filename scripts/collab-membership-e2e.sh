@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
-# collab-membership-e2e.sh — two-editor end-to-end test of per-KB membership
-# enforcement among trusted peers over mTLS (ADR-017 phase 4).
+# collab-membership-e2e.sh — two-editor end-to-end test of identity-anchored KB
+# access control over mTLS (ADR-018: principal = key fingerprint, roles, policy).
 #
 # Topology (single host, two isolated editor identities):
-#   - daemon: key+tls, authorizes alice + bob (distinct labels).
-#   - alice (owner): shares the KB, later adds bob as a member.
-#   - bob: authorized to CONNECT, but NOT a KB member at first.
+#   - daemon: key+tls, authorizes alice + bob (distinct labels → distinct keys).
+#   - alice (owner): registers + shares the `collabtest` fixture KB.
+#   - bob: authorized to CONNECT, but NOT a KB member.
 #
-# Flow:
-#   1. alice connects + shares KB 'default'  (members = [alice]).
-#   2. bob connects + kb-joins              → DENIED (not a member).
-#   3. alice :kb-member-add default bob.
-#   4. bob kb-joins again                   → ALLOWED.
+# Flow (default join policy = invite):
+#   1. alice shares `collabtest` → owner bound to alice's key fingerprint.
+#   2. bob :kb-join collabtest             → PENDING (invite policy).
+#   3. alice :kb-approve collabtest <bob-fingerprint> editor.
+#   4. bob :kb-join collabtest again       → ALLOWED (now a member).
 #
-# Oracle = the daemon log: it must show a denied join for a non-member, a
-# membership change, and no denial after bob is added. Coordination uses a
-# shared /sync dir (single host) via the scheme test framework's file barriers.
+# Membership keys on the cryptographic PRINCIPAL (fingerprint), never the label —
+# bob is approved by his fingerprint (captured from `mae-daemon authorized`).
+# Oracle = the daemon log: kb/join: pending → kb/approve_member: complete →
+# kb/join: complete. Coordination uses a shared /sync dir via file barriers.
 #
 # Env: MAE_BIN, MAE_DAEMON_BIN (defaults to debug). MAE_E2E_PORT pins the daemon
 # port; if unset, the first free port from 9477 is auto-selected (loopback-bound,
@@ -78,6 +79,11 @@ B_KEY="$(bob "$MAE_BIN" --collab-identity 2>/dev/null | sed -n 's/.*public key: 
 [ -n "$A_KEY" ] && [ -n "$B_KEY" ] || { echo "ERROR: could not read editor identities"; exit 1; }
 srv "$MAE_DAEMON_BIN" authorize mae-ed25519 "$A_KEY" alice >/dev/null
 srv "$MAE_DAEMON_BIN" authorize mae-ed25519 "$B_KEY" bob   >/dev/null
+# ADR-018: membership keys on the cryptographic PRINCIPAL (key fingerprint), not
+# the label. Capture bob's fingerprint from the authorized list for the approve.
+BOB_FP="$(srv "$MAE_DAEMON_BIN" authorized 2>/dev/null | awk '/[[:space:]]bob[[:space:]]/{print $2} /^  bob /{print $2}' | grep -m1 '^SHA256:')"
+[ -n "$BOB_FP" ] || BOB_FP="$(srv "$MAE_DAEMON_BIN" authorized 2>/dev/null | awk '$1=="bob"{print $2}' | head -1)"
+[ -n "$BOB_FP" ] || { echo "ERROR: could not read bob's fingerprint"; srv "$MAE_DAEMON_BIN" authorized; exit 1; }
 
 for who in alice bob; do
   cat > "$WORK/$who/.config/mae/init.scm" <<'EOF'
@@ -88,7 +94,8 @@ done
 
 cp "$ROOT/tests/collab-e2e/lib/test-helpers.scm" "$WORK/scen/helpers.scm"
 
-# alice (owner): share, wait for bob's denied attempt, add bob, wait for bob's join.
+# alice (owner): share (policy=invite), wait for bob's pending request, approve
+# bob by FINGERPRINT, wait for his join.
 cat > "$WORK/scen/alice.scm" <<EOF
 (load "$WORK/scen/helpers.scm")
 (describe-group "alice (owner)"
@@ -96,29 +103,29 @@ cat > "$WORK/scen/alice.scm" <<EOF
     (it-test "connects" (lambda () (wait-connected 30000)))
     (it-test "registers the collabtest fixture as a named instance"
       (lambda () (execute-ex "kb-register collabtest $ROOT/tests/fixtures/kb/collabtest") (sleep-ms 1000)))
-    (it-test "shares the collabtest KB by name"
+    (it-test "shares the collabtest KB by name (owner bound to alice's key)"
       (lambda () (execute-ex "kb-share collabtest") (sleep-ms 800)))
     (it-test "signals shared" (lambda () (write-file "$WORK/sync/shared" "1")))
-    (it-test "waits for bob's denied join" (lambda () (wait-for-file "$WORK/sync/bob-tried" 60000)))
-    (it-test "adds bob as member"
-      (lambda () (execute-ex "kb-member-add collabtest bob") (sleep-ms 800)))
-    (it-test "signals added" (lambda () (write-file "$WORK/sync/added" "1")))
+    (it-test "waits for bob's pending request" (lambda () (wait-for-file "$WORK/sync/bob-tried" 60000)))
+    (it-test "approves bob by fingerprint as editor"
+      (lambda () (execute-ex "kb-approve collabtest $BOB_FP editor") (sleep-ms 1000)))
+    (it-test "signals approved" (lambda () (write-file "$WORK/sync/added" "1")))
     (it-test "waits for bob's join" (lambda () (wait-for-file "$WORK/sync/bob-joined" 60000)))))
 EOF
 
-# bob: wait for share, attempt join (denied), wait for add, attempt join (allowed).
+# bob: request join (invite → pending), wait for approval, join (allowed).
 cat > "$WORK/scen/bob.scm" <<EOF
 (load "$WORK/scen/helpers.scm")
 (describe-group "bob (member candidate)"
   (lambda ()
     (it-test "connects" (lambda () (wait-connected 30000)))
     (it-test "waits for share" (lambda () (wait-for-file "$WORK/sync/shared" 60000)))
-    (it-test "attempts join (expect denied)"
-      (lambda () (execute-ex "kb-join collabtest") (sleep-ms 800)))
+    (it-test "requests join (invite policy -> pending)"
+      (lambda () (execute-ex "kb-join collabtest") (sleep-ms 1000)))
     (it-test "signals tried" (lambda () (write-file "$WORK/sync/bob-tried" "1")))
-    (it-test "waits for membership" (lambda () (wait-for-file "$WORK/sync/added" 60000)))
-    (it-test "attempts join (expect allowed)"
-      (lambda () (execute-ex "kb-join collabtest") (sleep-ms 800)))
+    (it-test "waits for approval" (lambda () (wait-for-file "$WORK/sync/added" 60000)))
+    (it-test "joins (now a member)"
+      (lambda () (execute-ex "kb-join collabtest") (sleep-ms 1000)))
     (it-test "signals joined" (lambda () (write-file "$WORK/sync/bob-joined" "1")))))
 EOF
 
@@ -145,21 +152,20 @@ wait "${PIDS[@]}" 2>/dev/null || true
 echo "--- alice TAP ---"; grep -E '^(ok|not ok|#)' "$WORK/alice.tap" || true
 echo "--- bob TAP ---";   grep -E '^(ok|not ok|#)' "$WORK/bob.tap" || true
 echo "--- daemon membership events ---"
-grep -iE 'kb/join denied|kb membership change|not a member' "$WORK/daemon.log" || true
+grep -iE 'kb/join: pending|kb/approve_member: complete|kb/join: complete' "$WORK/daemon.log" || true
 
 # --- Verdict (strip ANSI from the daemon log first) ---
 LOG="$WORK/daemon.clean.log"
 sed 's/\x1b\[[0-9;]*m//g' "$WORK/daemon.log" > "$LOG"
-# Key the verdict on the SHARED kb (collabtest) and on the daemon's acceptance
-# line ("kb/join: complete"), not the request line — the request is logged before
-# the membership check, so counting any non-denied "kb/join" false-passes.
-denied=$(grep -cE 'kb/join denied.*collabtest' "$LOG" || true)
-changed=$(grep -cE 'kb membership change.*kb_id=collabtest.*member=bob.*add=true' "$LOG" || true)
-joined_after_add=$(awk '/kb membership change.*kb_id=collabtest.*member=bob.*add=true/{seen=1} seen && /kb\/join: complete.*collabtest/{c++} END{print c+0}' "$LOG")
+# ADR-018 invite flow, keyed on daemon acceptance lines for `collabtest`:
+#   bob's join → pending; owner approves; bob's next join → complete (member).
+pending=$(grep -cE 'kb/join: pending.*collabtest' "$LOG" || true)
+approved=$(grep -cE 'kb/approve_member: complete.*collabtest' "$LOG" || true)
+joined_after_approve=$(awk '/kb\/approve_member: complete.*collabtest/{seen=1} seen && /kb\/join: complete.*collabtest/{c++} END{print c+0}' "$LOG")
 fail=0
-[ "$denied" -ge 1 ] || { echo "FAIL: expected a denied join for the non-member (got $denied)"; fail=1; }
-[ "$changed" -ge 1 ] || { echo "FAIL: expected a membership change (got $changed)"; fail=1; }
-[ "$joined_after_add" -ge 1 ] || { echo "FAIL: bob's join after being added was not allowed"; fail=1; }
+[ "$pending" -ge 1 ] || { echo "FAIL: bob's invite join was not recorded pending (got $pending)"; fail=1; }
+[ "$approved" -ge 1 ] || { echo "FAIL: owner approval not seen (got $approved)"; fail=1; }
+[ "$joined_after_approve" -ge 1 ] || { echo "FAIL: bob's join after approval was not allowed"; fail=1; }
 grep 'authenticated' "$LOG" | grep -q 'bob' || { echo "FAIL: bob never authenticated over mTLS"; fail=1; }
 if grep -qE '^not ok' "$WORK/alice.tap" "$WORK/bob.tap"; then echo "FAIL: a scenario step failed"; fail=1; fi
-[ "$fail" -eq 0 ] && echo "PASS: per-KB membership enforced (non-member denied → owner add → allowed)" || exit 1
+[ "$fail" -eq 0 ] && echo "PASS: ADR-018 invite flow (join → pending → owner approve → join allowed)" || exit 1
