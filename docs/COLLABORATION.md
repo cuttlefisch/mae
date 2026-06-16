@@ -648,38 +648,48 @@ mae-daemon --check-config  # shows auth.mode=key, tls, identity, authorized coun
 Share the daemon's **fingerprint** out-of-band so clients can verify the TOFU
 prompt.
 
-### Authorize each peer
-
-On each editor machine, print its identity (auto-generated on first use):
+### Editor setup (each peer) — one command
 
 ```bash
-mae --collab-identity      # → mae-ed25519 <base64> <hostname>  (+ fingerprint)
+mae setup-collab --server 192.168.1.10:9473
 ```
 
-On the daemon host, authorize it (relabel as you like — the label is the peer's
-identity for attribution + membership):
+This is **idempotent**: it generates the peer's Ed25519 identity (if absent),
+persists `collab-auth-mode=key` + the server address + `collab-auto-connect` to
+`init.scm`, and prints the exact `mae-daemon authorize …` line to hand to the
+admin. (`mae --collab-identity` just prints the identity without touching config.)
+
+**Reuse an existing SSH key** (opt-in — convenient if you already manage an
+Ed25519 SSH key; it becomes your collab identity):
 
 ```bash
+mae setup-collab --server 192.168.1.10:9473 --ssh-key ~/.ssh/id_ed25519
+```
+
+> Trade-off: reusing one key across SSH and MAE means a compromise of either
+> affects both. A dedicated MAE identity (the default) keeps them separate.
+> Only unencrypted Ed25519 SSH keys are supported.
+
+### Authorize each peer (daemon host)
+
+The label you assign is the peer's identity for attribution + membership.
+
+```bash
+# MAE-native key (from `mae setup-collab` / `mae --collab-identity`):
 mae-daemon authorize mae-ed25519 <base64> alice
+# ...or import the peer's SSH public key (pairs with editor `--ssh-key`):
+mae-daemon authorize --from-ssh-pub /path/to/alice_id_ed25519.pub alice
+
 mae-daemon authorized      # list trusted peers
 mae-daemon revoke alice    # per-peer revocation (no secret rotation)
 ```
 
-### Editor (each peer)
+### First connect (TOFU)
 
-In `init.scm` (or `:set … :set-save`):
-
-```scheme
-(set-option! "collab-auth-mode" "key")
-(set-option! "collab-server-address" "192.168.1.10:9473")
-(set-option! "collab-auto-connect" "true")
-;; collab-host-key-policy: prompt (default, interactive) | accept-new | strict
-```
-
-On first connect, an unknown daemon key triggers a **"Trust Daemon Key?
-SHA256:… [y/N]"** dialog — verify it matches `mae-daemon identity`, accept to
-pin. A *changed* key later aborts the connection (MITM defense). Headless
-(`mae --test`/CI) should use `accept-new`.
+Launch `mae`; an unknown daemon key triggers a **"Trust Daemon Key? SHA256:…
+[y/N]"** dialog — verify it matches `mae-daemon identity`, accept to pin. A
+*changed* key later aborts the connection (MITM defense). Headless
+(`mae --test`/CI) should set `collab-host-key-policy` to `accept-new`.
 
 ### Shared KBs among members
 

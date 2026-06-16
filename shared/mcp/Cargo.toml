@@ -23,6 +23,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "tls1
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
 x509-parser = "0.16"
+# Optional reuse of an existing OpenSSH Ed25519 key as the collab identity.
+ssh-key = { version = "0.6", default-features = false, features = ["ed25519", "alloc", "std"] }
 
 [[bin]]
 name = "mae-mcp-shim"

@@ -115,6 +115,36 @@ impl PublicKey {
         Self::from_encoded(b64, label)
     }
 
+    /// Parse an **OpenSSH** Ed25519 public-key line — `ssh-ed25519 <b64> [comment]`
+    /// (e.g. from `~/.ssh/id_ed25519.pub`). The label defaults to the comment.
+    /// Only the public key is imported (never a private key — key separation).
+    pub fn from_ssh_line(line: &str, label: Option<String>) -> Option<Self> {
+        let mut toks = line.split_whitespace();
+        if toks.next()? != "ssh-ed25519" {
+            return None;
+        }
+        let blob = BASE64_STANDARD.decode(toks.next()?).ok()?;
+        let comment = toks.next().map(|s| s.to_string());
+        // SSH wire format: string("ssh-ed25519") || string(32-byte key).
+        let read_str = |buf: &[u8], off: usize| -> Option<(usize, usize)> {
+            let len = u32::from_be_bytes(buf.get(off..off + 4)?.try_into().ok()?) as usize;
+            let start = off + 4;
+            buf.get(start..start + len)?; // bounds check
+            Some((start, len))
+        };
+        let (a_start, a_len) = read_str(&blob, 0)?;
+        if &blob[a_start..a_start + a_len] != b"ssh-ed25519" {
+            return None;
+        }
+        let (k_start, k_len) = read_str(&blob, a_start + a_len)?;
+        if k_len != 32 {
+            return None;
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&blob[k_start..k_start + 32]);
+        Self::from_bytes(&key, label.or(comment))
+    }
+
     /// OpenSSH-style fingerprint: `SHA256:<base64(sha256(pubkey))>` (no padding).
     pub fn fingerprint(&self) -> String {
         use sha2::{Digest, Sha256};
@@ -197,21 +227,58 @@ impl Identity {
             }
         }
         // Generate + persist.
+        let id = Self::generate(label);
+        id.save(dir)?;
+        Ok(id)
+    }
+
+    /// Persist this identity to `dir`: private key `id_ed25519` (0600, hex) +
+    /// public-key line `id_ed25519.pub`. Overwrites any existing identity.
+    pub fn save(&self, dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
         secure_dir(dir);
-        let id = Self::generate(label);
-        let hex: String = id
+        let hex: String = self
             .signing
             .to_bytes()
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        crate::keystore::write_secure(&priv_path, &format!("{hex}\n"))?;
+        crate::keystore::write_secure(&dir.join("id_ed25519"), &format!("{hex}\n"))?;
         std::fs::write(
             dir.join("id_ed25519.pub"),
-            format!("{}\n", id.public().to_line()),
-        )?;
-        Ok(id)
+            format!("{}\n", self.public().to_line()),
+        )
+    }
+
+    /// Build an identity from a raw 32-byte Ed25519 seed.
+    pub fn from_seed(seed: &[u8; 32], label: &str) -> Self {
+        Self {
+            signing: SigningKey::from_bytes(seed),
+            label: label.to_string(),
+        }
+    }
+
+    /// Import an existing **OpenSSH Ed25519 private key** as a collab identity
+    /// (opt-in key reuse). Errors on encrypted or non-ed25519 keys. The caller
+    /// persists it via [`save`](Self::save). The matching SSH *public* key can be
+    /// authorized on the daemon with `mae-daemon authorize --from-ssh-pub`.
+    pub fn import_ssh_private_key(path: &Path, label: &str) -> Result<Self, String> {
+        let key = ssh_key::PrivateKey::read_openssh_file(path)
+            .map_err(|e| format!("read OpenSSH key {}: {e}", path.display()))?;
+        if key.is_encrypted() {
+            return Err(
+                "the SSH key is passphrase-encrypted — decrypt a copy first \
+                 (`ssh-keygen -p -f <copy>` with an empty passphrase) or use a \
+                 MAE-native identity"
+                    .into(),
+            );
+        }
+        match key.key_data() {
+            ssh_key::private::KeypairData::Ed25519(kp) => {
+                Ok(Self::from_seed(&kp.private.to_bytes(), label))
+            }
+            _ => Err("not an Ed25519 SSH key (only ssh-ed25519 is supported)".into()),
+        }
     }
 
     fn parse_private(hex: &str, label: &str) -> Option<Self> {
@@ -519,6 +586,68 @@ mod tests {
             PublicKey::from_line("ssh-rsa AAAA foo").is_none(),
             "wrong algo"
         );
+    }
+
+    #[test]
+    fn ssh_ed25519_pubkey_roundtrips() {
+        // Build a real OpenSSH ed25519 pubkey line from a known key, then parse it.
+        let id = Identity::generate("laptop");
+        let key = id.public().to_bytes();
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&(11u32).to_be_bytes());
+        blob.extend_from_slice(b"ssh-ed25519");
+        blob.extend_from_slice(&(32u32).to_be_bytes());
+        blob.extend_from_slice(&key);
+        let line = format!(
+            "ssh-ed25519 {} alice@host",
+            base64::prelude::BASE64_STANDARD.encode(&blob)
+        );
+        let pk = PublicKey::from_ssh_line(&line, None).expect("parse ssh pubkey");
+        assert_eq!(pk.to_bytes(), key, "ssh pubkey bytes must match");
+        assert_eq!(pk.label.as_deref(), Some("alice@host"), "comment → label");
+        // An explicit label overrides the comment.
+        let pk2 = PublicKey::from_ssh_line(&line, Some("bob".into())).unwrap();
+        assert_eq!(pk2.label.as_deref(), Some("bob"));
+        // Non-ed25519 / garbage rejected.
+        assert!(PublicKey::from_ssh_line("ssh-rsa AAAA x", None).is_none());
+        assert!(PublicKey::from_ssh_line("not a key", None).is_none());
+    }
+
+    #[test]
+    fn import_ssh_private_key_matches_pubkey() {
+        use ssh_key::private::{Ed25519Keypair, Ed25519PrivateKey, KeypairData, PrivateKey};
+        let dir = std::env::temp_dir().join(format!("mae-sshimp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("id_ed25519");
+
+        // Build an OpenSSH ed25519 private key from a known seed and write it.
+        let seed = [7u8; 32];
+        let private = Ed25519PrivateKey::from_bytes(&seed);
+        let public = (&private).into();
+        let kp = Ed25519Keypair { public, private };
+        let ssh = PrivateKey::new(KeypairData::Ed25519(kp), "me@host").unwrap();
+        ssh.write_openssh_file(&path, ssh_key::LineEnding::LF)
+            .unwrap();
+
+        // Import it — the MAE identity must equal the same seed's identity.
+        let imported = Identity::import_ssh_private_key(&path, "laptop").unwrap();
+        assert_eq!(
+            imported.public().to_bytes(),
+            Identity::from_seed(&seed, "x").public().to_bytes()
+        );
+
+        // The SSH .pub the daemon would authorize must match the imported identity.
+        let pubfile = std::fs::read_to_string(dir.join("id_ed25519.pub")).ok();
+        if let Some(line) = pubfile {
+            let from_pub = PublicKey::from_ssh_line(line.trim(), None).unwrap();
+            assert_eq!(
+                from_pub.to_bytes(),
+                imported.public().to_bytes(),
+                "daemon --from-ssh-pub must trust the key the editor presents"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

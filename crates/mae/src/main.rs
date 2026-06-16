@@ -161,6 +161,8 @@ fn main() -> io::Result<()> {
         println!("  --print-config-path     Print the config file path and exit");
         println!("  --print-config-template Print the default commented template to stdout");
         println!("  --collab-identity       Print this editor's collab peer identity (for `mae-daemon authorize`)");
+        println!("  setup-collab [--server ADDR] [--ssh-key PATH]");
+        println!("                          One-command key-mode setup: identity + init.scm (optionally reuse an SSH key)");
         println!("  --gui                   Force GUI backend (default on a desktop session; auto-off over SSH/tty)");
         println!("  --no-gui, --tui, -nw    Force terminal mode (like emacs -nw)");
         println!("  --connect [ADDR]        Connect to daemon (like emacsclient -c)");
@@ -254,6 +256,90 @@ fn main() -> io::Result<()> {
                     std::process::exit(1);
                 }
             },
+            None => {
+                eprintln!("error: cannot resolve collab dir (set XDG_DATA_HOME or HOME)");
+                std::process::exit(1);
+            }
+        }
+    }
+    // `mae setup-collab [--server <addr>]`: idempotent one-command key-mode setup.
+    // Generates the peer identity (if absent), persists collab key-mode options to
+    // init.scm, and prints the `mae-daemon authorize` line for the admin.
+    if args.get(1).is_some_and(|a| a == "setup-collab") {
+        let server = args
+            .iter()
+            .position(|a| a == "--server")
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .unwrap_or_else(|| "127.0.0.1:9473".to_string());
+        let mut editor = Editor::new();
+        for (opt, val) in [
+            ("collab_auth_mode", "key"),
+            ("collab_server_address", server.as_str()),
+            ("collab_auto_connect", "true"),
+        ] {
+            if let Err(e) = editor.set_option(opt, val) {
+                eprintln!("error: set {opt}: {e}");
+                std::process::exit(1);
+            }
+            if let Err(e) = editor.save_option_to_init(opt) {
+                eprintln!("error: persist {opt}: {e}");
+                std::process::exit(1);
+            }
+        }
+        let label = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "mae-editor".to_string());
+        // --ssh-key <path>: reuse an existing OpenSSH Ed25519 key as the identity
+        // (opt-in). The matching .pub is authorized on the daemon via
+        // `mae-daemon authorize --from-ssh-pub`.
+        let ssh_key = args
+            .iter()
+            .position(|a| a == "--ssh-key")
+            .and_then(|i| args.get(i + 1));
+        let id = if let Some(ssh_path) = ssh_key {
+            match mae_mcp::identity::Identity::import_ssh_private_key(
+                std::path::Path::new(ssh_path),
+                &label,
+            ) {
+                Ok(id) => {
+                    if let Some(dir) = mae_mcp::identity::default_collab_dir() {
+                        if let Err(e) = id.save(&dir) {
+                            eprintln!("error: persist identity: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                    println!("✓ imported SSH identity from {ssh_path}");
+                    Some(id)
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            mae_mcp::identity::default_collab_dir()
+                .and_then(|dir| mae_mcp::identity::Identity::load_or_generate(&dir, &label).ok())
+        };
+        match id {
+            Some(id) => {
+                println!("✓ collab key mode configured (init.scm updated):");
+                println!("    collab-auth-mode = key");
+                println!("    collab-server-address = {server}");
+                println!("    collab-auto-connect = true");
+                println!();
+                println!("Your peer identity:");
+                println!("  fingerprint: {}", id.fingerprint());
+                println!("  public key:  {}", id.public().to_line());
+                println!();
+                println!("On the daemon host, authorize this peer:");
+                println!("  mae-daemon authorize {}", id.public().to_line());
+                println!();
+                println!("Then launch `mae` — it auto-connects; accept the daemon's");
+                println!("key on first connect (verify the fingerprint, then press y).");
+                return Ok(());
+            }
             None => {
                 eprintln!("error: cannot resolve collab dir (set XDG_DATA_HOME or HOME)");
                 std::process::exit(1);

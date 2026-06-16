@@ -136,13 +136,23 @@ mae-daemon authorized          # → lists alice + bob with fingerprints
 - [ ] Reachability: on **E**, `nc -zv 192.168.1.137 9473` succeeds.
 
 ### Step 4 — Connect both editors (TOFU)
-On **both** D (alice) and E (bob), in `init.scm`:
+On **both** D (alice) and E (bob), the one-command setup (idempotent — generates
+the identity + writes the options to `init.scm`):
+```bash
+mae setup-collab --server 192.168.1.137:9473
+# (add --ssh-key ~/.ssh/id_ed25519 to reuse an existing SSH key as the identity)
+```
+Equivalent manual `init.scm`:
 ```scheme
 (set-option! "collab-auth-mode" "key")
 (set-option! "collab-server-address" "192.168.1.137:9473")  ; loopback ok on D
 (set-option! "collab-auto-connect" "true")
 ;; collab-host-key-policy defaults to "prompt"
 ```
+> If you used `--ssh-key`, authorize each peer in Step 3 with
+> `mae-daemon authorize --from-ssh-pub <peer>.pub <label>` instead of the
+> `mae-ed25519` line.
+
 Launch `mae`; on first connect each editor shows **"Trust Daemon Key? SHA256:…
 [y/N]"**.
 - [ ] The fingerprint shown matches `mae-daemon identity` from Step 2. Press `y`.

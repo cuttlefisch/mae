@@ -789,14 +789,42 @@ fn run_authorized_list() -> i32 {
 fn run_authorize(rest: &[String]) -> i32 {
     if rest.is_empty() {
         eprintln!("usage: mae-daemon authorize <mae-ed25519 <b64> [label]>");
+        eprintln!("   or: mae-daemon authorize --from-ssh-pub <path/to/id_ed25519.pub> [label]");
         return 2;
     }
-    let line = rest.join(" ");
-    let pk = match mae_mcp::identity::PublicKey::from_line(&line) {
-        Some(pk) => pk,
-        None => {
-            eprintln!("error: not a valid key line (expected 'mae-ed25519 <b64> [label]')");
-            return 1;
+    // --from-ssh-pub <file> [label]: import an OpenSSH Ed25519 PUBLIC key (only
+    // the public half — never a private key) as a trusted peer.
+    let pk = if rest[0] == "--from-ssh-pub" {
+        let file = match rest.get(1) {
+            Some(f) => f,
+            None => {
+                eprintln!("usage: mae-daemon authorize --from-ssh-pub <file> [label]");
+                return 2;
+            }
+        };
+        let line = match std::fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: cannot read {file}: {e}");
+                return 1;
+            }
+        };
+        let label = rest.get(2).cloned();
+        match mae_mcp::identity::PublicKey::from_ssh_line(line.trim(), label) {
+            Some(pk) => pk,
+            None => {
+                eprintln!("error: {file} is not an ssh-ed25519 public key");
+                return 1;
+            }
+        }
+    } else {
+        let line = rest.join(" ");
+        match mae_mcp::identity::PublicKey::from_line(&line) {
+            Some(pk) => pk,
+            None => {
+                eprintln!("error: not a valid key line (expected 'mae-ed25519 <b64> [label]')");
+                return 1;
+            }
         }
     };
     let config = DaemonConfig::load();
