@@ -170,6 +170,29 @@ log `kb/join: pending → kb/approve_member (editor) → kb/join: complete (3 no
   pending / denied / joined(N), and don't say "Joined" when access was refused.
 - Daemon-side enforcement is correct; this is editor-side wording only.
 
+### B-5 🐛 MED (robustness + concurrency) — `kb_join` stalls the main thread on a malformed KB row  ·  Step T2.6 (Run 4)
+- On the clean-restart run, `kb_join collabtest` triggered:
+  `failed to load user nodes from primary store error=CozoDB: The tuple bound by variable
+  'title' is too short: index 1, length 1`, then **`WATCHDOG: main thread stall ... 10s`** →
+  join aborted (`synced_docs:0`, no outcome).
+- **Trigger:** stale `collabtest` data persisted in bob's primary store from the prior run
+  (B-4 — revoke didn't wipe it; bob's `[bob edit]` title was written by the *pre-I-9 broken*
+  write path, likely producing the malformed row). Survives editor relaunch.
+- **Two defects:** (1) a malformed KB row makes the load **error** instead of skipping/repairing;
+  (2) the failing CozoDB query runs **on the main thread** and **stalls the event loop ~10s**
+  (concurrency-principle violation — KB I/O must be off the UI thread).
+- **Repro:** have a bad-arity row in `primary.cozo`, then `kb_join` (or any primary-store load).
+- **Workaround (this run):** moved `primary.cozo` + `shared/collabtest/` aside
+  (`*.malformed.<ts>` / `*.stale.<ts>` under `~/Library/Application Support/mae/kb/`) → fresh KB.
+
+### B-6 🐛 (principle #13) — editor KB store path is NOT XDG-first  ·  cross-platform parity
+- Editor primary KB lives at macOS **`~/Library/Application Support/mae/kb/primary.cozo`**
+  (via `dirs::data_dir()`), while the editor's **collab identity** is XDG-first
+  (`~/.local/share/mae/collab/`). Same inconsistency class as the **daemon XDG bug we fixed
+  in `a8ac842`** (CLAUDE.md principle #13): KB data should be XDG-first too, or env-var
+  isolation + Linux/macOS parity silently diverge. Latent (not the current blocker), but it's
+  the same root cause we already committed a principle about.
+
 ### B-4 ℹ️ NOTE (likely intended) — revoked member keeps the local KB copy  ·  Step T2.6
 - After alice revoked bob, bob still has the 3 collabtest nodes locally (searchable, incl.
   bob's own `[bob edit]` title). Expected **local-first** behavior — revoke stops future sync
