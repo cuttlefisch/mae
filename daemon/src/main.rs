@@ -80,8 +80,8 @@ async fn main() {
         std::process::exit(run_keys_list());
     }
 
-    // Asymmetric key mode (ADR-017): `identity`, `authorized`,
-    // `authorize <pubkey-line>`, `revoke <label>`.
+    // Asymmetric key mode (ADR-017/018): `identity`, `authorized`,
+    // `authorize <pubkey-line>` (labels must be unique), `revoke <label|SHA256:fp>`.
     match args.get(1).map(|s| s.as_str()) {
         Some("identity") => std::process::exit(run_identity()),
         Some("authorized") => std::process::exit(run_authorized_list()),
@@ -844,8 +844,17 @@ fn run_authorize(rest: &[String]) -> i32 {
             0
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            println!("Already authorized: {fp}");
-            0
+            // Distinguish a re-authorize of the same key (benign) from a label
+            // collision with a DIFFERENT key (rejected — labels must be unique).
+            let msg = e.to_string();
+            if msg.contains("label") {
+                eprintln!("error: {msg}");
+                eprintln!("  pick a unique label, or `mae-daemon revoke <label>` first.");
+                1
+            } else {
+                println!("Already authorized: {fp}");
+                0
+            }
         }
         Err(e) => {
             eprintln!("error: failed to authorize: {e}");
@@ -855,11 +864,11 @@ fn run_authorize(rest: &[String]) -> i32 {
 }
 
 /// `mae-daemon revoke <label>` — remove authorized client key(s) by label.
-fn run_revoke(label: Option<&str>) -> i32 {
-    let label = match label {
+fn run_revoke(target: Option<&str>) -> i32 {
+    let target = match target {
         Some(l) => l,
         None => {
-            eprintln!("usage: mae-daemon revoke <label>");
+            eprintln!("usage: mae-daemon revoke <label|SHA256:fingerprint>");
             return 2;
         }
     };
@@ -872,13 +881,21 @@ fn run_revoke(label: Option<&str>) -> i32 {
         }
     };
     let mut ak = mae_mcp::identity::AuthorizedKeys::load(&path);
-    match ak.revoke(label) {
+    // Revoke by fingerprint (the precise, unambiguous identity — ADR-018) or by a
+    // now-unique label.
+    let by_fp = target.starts_with("SHA256:");
+    let result = if by_fp {
+        ak.revoke_by_fingerprint(target)
+    } else {
+        ak.revoke(target)
+    };
+    match result {
         Ok(0) => {
-            println!("No authorized key labeled '{label}'");
+            println!("No authorized key matching '{target}'");
             0
         }
         Ok(n) => {
-            println!("Revoked {n} key(s) labeled '{label}'");
+            println!("Revoked {n} key(s) matching '{target}'");
             0
         }
         Err(e) => {
