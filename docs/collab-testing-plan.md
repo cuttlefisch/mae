@@ -11,6 +11,37 @@ live run** (the real multi-machine goal).
 
 ---
 
+## Live-run coordination board (this session)
+
+> Shared scratchpad — **each machine fills in its own row, commits, and pushes**.
+> Both connect by explicit `host:port` (mDNS came back empty on this LAN, so don't
+> rely on discovery). Min build: commit `a8ac842` or later (cross-platform e2e fix).
+
+| Role | Machine | LAN IP | Built ≥ `a8ac842` | Identity fingerprint | Status |
+|------|---------|--------|-------------------|----------------------|--------|
+| **D** = daemon host + editor "alice" | _framework (driver)_ | `192.168.1.137`? | ☐ | _paste `mae-daemon identity` SHA256 here_ | building harness |
+| **E** = editor "bob" | `Marthas-MacBook-Pro` (mac) | `192.168.1.132` | ✅ | `SHA256:9xLh0DWeeAi3hl2W7yudaE05aTHtYQpNUUyMWO+2CrI` | **ready** |
+
+**Chosen test port:** `9480` (avoids the personal-daemon `:9473` collision).
+
+### D — to do (driver), to unblock E
+1. `git pull --rebase` to ≥ `a8ac842`; `make build-tui build-daemon`.
+2. `~/.config/mae/daemon.toml`: `[collab] bind = "0.0.0.0:9480"` + `[collab.auth] mode = "key"`.
+3. Authorize bob (E's key is already generated):
+   ```
+   mae-daemon authorize mae-ed25519 aBjMkdzHH9YVUxfP5NxHJo7fcu5qGC75pUl1SWdAvnM= bob
+   ```
+4. `mae-daemon identity` → paste D's fingerprint into the board above (E verifies it at the TOFU prompt).
+5. `mae-daemon`; open firewall: `sudo firewall-cmd --add-port=9480/tcp` (or `ufw allow 9480/tcp`).
+6. Fill in / confirm D's row (IP, fingerprint, status → "listening").
+
+### E — ready state (mac, done)
+- Built from `a8ac842` (`mae`/`mae-daemon` 0.13.12); local personal daemon **stopped** (port `9473` clear) to keep the run clean.
+- Identity generated at `~/.local/share/mae/collab/id_ed25519` (line + fingerprint in the board).
+- On D's "listening": `nc -zv 192.168.1.137 9480` → `mae setup-collab --server 192.168.1.137:9480` → verify TOFU fingerprint == D's row → run Steps 5–7.
+
+---
+
 ## Setup — build + dependencies (do this first, on every machine)
 
 The repo is **two Cargo workspaces** that must both be built: the editor (repo
