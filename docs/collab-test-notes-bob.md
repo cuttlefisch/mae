@@ -76,6 +76,27 @@ Chronological; each row is one observation tied to a plan step.
   insert. **Fix (test procedure):** `switch-to-buffer` as its own step, verify `active`
   via `list_buffers`, then edit. Confirmed working in Run 2.
 
+### I-2 reconciliation with alice's notes  ·  Step T2.5
+- alice independently reattributed I-2 to "`eval_scheme buffer-insert` skips the
+  event-loop post-edit flush, so it never reaches the CRDT" (she saw **0 session-7
+  updates** from bob's eval insert in Run 1).
+- **Run 2 evidence reconciles it:** bob's Run-2 edits *were* `eval_scheme buffer-insert`
+  and **did propagate to alice** (user-confirmed: `run2: line from bob (E)` + the SIMUL
+  line). So eval edits *do* reach the CRDT once they target the correct buffer.
+- **Unified cause:** Run-1's "0 updates / not visible" was the **wrong active buffer**
+  (`*AI:claude*`, not shared → nothing to flush). In the live GUI the event loop flushes
+  eval edits on the next tick. Net: **not a collab bug**; testing caveat = ensure the
+  collab doc is the verified-active buffer before editing via MCP.
+- *(Optional polish alice flagged: have MCP `eval_scheme buffer-insert` run the post-edit
+  collab flush synchronously for parity with real input — file separately if wanted.)*
+
+### I-3 ⚠️ follow-up (from alice) — split-window clicks use raw, not window-relative coords  ·  Step T2.5
+- When `pixel_to_buffer_position` returns `None`, the fallback `handle_mouse_click(row,col)`
+  gets **raw screen** coords; in a split the column isn't offset by the pane's x-origin, so
+  right-pane clicks map to the wrong column. The I-1 clamp makes it **safe** (no panic; lands
+  at line end), but it's a latent correctness bug. Fix idea: subtract focused window
+  `area_col`/`area_row` (or resolve via the focused window's fresh layout). Low severity.
+
 ### I-7 ✅ RESOLVED — connection flapping was a symptom of I-1  ·  Step T2.4/5
 - With the I-1 crash gone, no flapping in Run 2. The earlier `peer closed connection
   without TLS close_notify` churn was alice crashing/restarting, not an independent bug.
