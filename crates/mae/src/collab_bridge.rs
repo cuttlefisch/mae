@@ -5498,6 +5498,90 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// ADR-019 restart-survival (the bug): the durable share marker must survive
+    /// a registry SAVE→LOAD round-trip, so a freshly-started editor's emit gate
+    /// fires without any live event. This is the persistence crux of "edits keep
+    /// propagating across editor restart".
+    #[test]
+    fn adr019_share_marker_survives_registry_reload() {
+        let tmp = std::env::temp_dir().join(format!("mae-adr019-reload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let mut editor = Editor::new();
+        editor.data_dir_override = Some(tmp.clone());
+
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "collabtest:overview",
+            "O",
+            mae_kb::NodeKind::Note,
+            "b",
+        ));
+        editor.kb.instances.insert("uuid-ct".into(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-ct".into(),
+                name: "collabtest".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+            });
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbShared {
+                kb_id: "collabtest".to_string(),
+                node_count: 1,
+            },
+        );
+
+        // Simulate restart: load the registry fresh from disk.
+        let reloaded = mae_kb::federation::KbRegistry::load(&tmp);
+        let inst = reloaded
+            .find("collabtest")
+            .expect("instance survives reload");
+        assert!(
+            inst.shared && inst.collab_id.as_deref() == Some("collabtest"),
+            "durable share marker must survive a registry save→load round-trip"
+        );
+
+        // A restarted editor (empty cache) with the reloaded registry: the emit
+        // gate fires from the durable marker → edits still queue for broadcast.
+        let mut restarted = Editor::new();
+        restarted.kb.registry = reloaded;
+        let mut inst2 = mae_kb::KnowledgeBase::new();
+        let mut n = mae_kb::Node::new("collabtest:overview", "O", mae_kb::NodeKind::Note, "b");
+        n.source = Some(mae_kb::NodeSource::Federation);
+        inst2.insert(n);
+        restarted.kb.instances.insert("uuid-ct".into(), inst2);
+        restarted.collab.kb_sync_mode = "on_save".into();
+        assert!(restarted.collab.shared_kbs.is_empty());
+
+        restarted
+            .kb_update_node(
+                "collabtest:overview",
+                Some("edited after restart"),
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            restarted.collab.pending_kb_updates.len(),
+            1,
+            "post-restart edit must still queue a kb/node_update (durable gate)"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn collab_kb_joined_populates_tracking() {
         let mut editor = Editor::new();
