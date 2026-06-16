@@ -261,7 +261,47 @@ non-functional end-to-end.
   once writes flow.
 - **Status:** OPEN. Captured during live T2.6; does not invalidate steps 1–5.
 
-## Next — live T2.6 under ADR-018 (BOTH machines rebuild daemon + editor)
+### I-10 🚨 OPEN (security) — daemon auth is a once-at-startup snapshot; authorize/revoke need a restart · Step T2.7 {#i-10}
+
+- **Symptom (demonstrated live):** ran `mae-daemon revoke <bob-fp>` → bob removed from on-disk
+  `authorized_keys` (only alice left), **yet bob's mTLS session stayed established and unblocked**
+  — no auth-layer rejection in the daemon log. Revoking a key (even a *compromised* one) does
+  nothing until the daemon restarts.
+- **Root cause:** `daemon/src/main.rs:390` calls `AuthorizedKeys::load(&ak_path)` **once at
+  startup**, wraps it in an `Arc`, and bakes it into the rustls `ServerConfig` client-cert
+  verifier (`mae_mcp::tls::server_config`). There is **no reload/watch** — the running server
+  never re-reads the file. The `mae-daemon revoke`/`authorize` CLIs mutate the file from a
+  separate process the live daemon never consults.
+- **Impact:** can't add or remove collaborators on a running daemon; **revocation is not
+  enforceable live** — a serious gap for a multi-user service (OWASP: revocation must be timely).
+  Also blocks T2.7 (revoked-key-denied-on-reconnect) without a restart workaround.
+- **Fix direction:** make the authorized set live. The cert verifier should consult a shared,
+  swappable source (`Arc<ArcSwap<AuthorizedKeys>>` or `Arc<RwLock<…>>`) rather than a baked-in
+  copy; reload on file change (reuse the existing `notify` infra) or re-read per handshake
+  (connections are infrequent). `authorize`/`revoke` then take effect immediately. Add an
+  integration test: connect → revoke → **reconnect denied** with no restart.
+- **Status:** OPEN, **security**. User flagged the once-at-startup model as unacceptable;
+  pivoting to fixes (I-10 + I-9 + B-1) before resuming the KB test plan from the start.
+
+> **Test-state note:** bob is now de-authorized **on disk** (re-add before resuming:
+> `mae-daemon authorize mae-ed25519 aBjMkdzHH9YVUxfP5NxHJo7fcu5qGC75pUl1SWdAvnM= bob`).
+> The live daemon still trusts him until it restarts — itself the I-10 repro.
+
+## Pivot — bug-fix pass before resuming KB tests (decided 2026-06-16)
+
+Live T2.6 validated ADR-018 access control but surfaced three defects that must be fixed
+before re-running the KB collab plan from the start:
+
+1. **I-10 (security)** — live auth reload (no restart for authorize/revoke). *Cleanest; first.*
+2. **I-9 (critical)** — shared-KB edit propagation + unified node resolution (folds in I-8).
+   The core collaborative-editing feature; biggest change.
+3. **B-1 (UX, bob)** — editor can't distinguish joined / pending / denied (all show "0 nodes").
+
+Each lands with positive + negative tests (TDD), `make ci-all` green, both-OS aware. After
+the fixes both machines rebuild and we restart the KB test plan clean (re-authorize bob,
+re-share collabtest, re-run T2.6 incl. the now-unblocked viewer-edit-denial + T2.7 revoke).
+
+## (Superseded) Next — live T2.6 under ADR-018 (BOTH machines rebuild daemon + editor)
 
 > ⚠️ Both `mae` and `mae-daemon` changed. On each machine: `git pull` →
 > `make build && make install` (GUI) + `make build-daemon && make install-daemon`,
