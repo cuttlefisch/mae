@@ -6,7 +6,7 @@
 use sha2::{Digest, Sha256};
 use yrs::{
     updates::decoder::Decode, updates::encoder::Encode, Array, ArrayPrelim, Doc, GetString, Map,
-    MapPrelim, Out, ReadTxn, Text, TextPrelim, Transact,
+    MapPrelim, MapRef, Out, ReadTxn, Text, TextPrelim, Transact,
 };
 
 use crate::text::{new_doc, new_doc_with_client_id};
@@ -343,9 +343,104 @@ impl KbNodeDoc {
 
 const COLLECTION_MAP: &str = "collection";
 const COLL_NAME_KEY: &str = "name";
-const COLL_CREATOR_KEY: &str = "creator";
+const COLL_CREATOR_KEY: &str = "creator"; // legacy display label (never authoritative)
 const COLL_NODES_KEY: &str = "nodes";
-const COLL_MEMBERS_KEY: &str = "members";
+const COLL_MEMBERS_KEY: &str = "members"; // legacy YArray<label>, read-only after ADR-018
+                                          // ADR-018 identity-anchored schema (v2):
+const COLL_SCHEMA_KEY: &str = "schema";
+const COLL_OWNER_KEY: &str = "owner"; // owner principal (key fingerprint)
+const COLL_MEMBER_ROLES_KEY: &str = "member_roles"; // YMap<fingerprint -> {role,label}>
+const COLL_POLICY_KEY: &str = "join_policy"; // restrictive|invite|permissive
+const COLL_PENDING_KEY: &str = "pending"; // YMap<fingerprint -> {label,requested_at}>
+const MEMBER_ROLE_KEY: &str = "role";
+const MEMBER_LABEL_KEY: &str = "label";
+const PENDING_AT_KEY: &str = "requested_at";
+
+/// Collection schema version. v2 = ADR-018 (principal-anchored owner/roles/policy).
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// A KB role. Hierarchical RBAC (NIST INCITS 359): `owner ⊇ editor ⊇ viewer`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Owner,
+    Editor,
+    Viewer,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Owner => "owner",
+            Role::Editor => "editor",
+            Role::Viewer => "viewer",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Role> {
+        match s {
+            "owner" => Some(Role::Owner),
+            "editor" => Some(Role::Editor),
+            "viewer" => Some(Role::Viewer),
+            _ => None,
+        }
+    }
+    fn rank(self) -> u8 {
+        match self {
+            Role::Viewer => 0,
+            Role::Editor => 1,
+            Role::Owner => 2,
+        }
+    }
+    /// Role inheritance: a senior role holds all junior permissions.
+    pub fn includes(self, other: Role) -> bool {
+        self.rank() >= other.rank()
+    }
+}
+
+/// Per-KB join policy (maps to Drive sharing modes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum JoinPolicy {
+    /// Default-deny: only owner + explicitly added members.
+    Restrictive,
+    /// Non-members' joins become pending → owner approves (default).
+    #[default]
+    Invite,
+    /// Any authenticated peer auto-joins as viewer.
+    Permissive,
+}
+
+impl JoinPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JoinPolicy::Restrictive => "restrictive",
+            JoinPolicy::Invite => "invite",
+            JoinPolicy::Permissive => "permissive",
+        }
+    }
+    pub fn parse(s: &str) -> Option<JoinPolicy> {
+        match s {
+            "restrictive" => Some(JoinPolicy::Restrictive),
+            "invite" => Some(JoinPolicy::Invite),
+            "permissive" => Some(JoinPolicy::Permissive),
+            _ => None,
+        }
+    }
+}
+
+/// A KB member: the principal (key fingerprint), its role, and a display label.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Member {
+    pub fingerprint: String,
+    pub role: Role,
+    pub label: String,
+}
+
+/// A pending join request (invite policy).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingRequest {
+    pub fingerprint: String,
+    pub label: String,
+    pub requested_at: String,
+}
 
 /// A KB collection manifest represented as a yrs document.
 ///
@@ -536,6 +631,290 @@ impl KbCollectionDoc {
 
     /// List all members.
     pub fn members(&self) -> Vec<String> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        match root.get(&txn, COLL_MEMBERS_KEY) {
+            Some(Out::YArray(arr)) => arr.iter(&txn).map(|v| v.to_string(&txn)).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    // --- ADR-018: identity-anchored owner / roles / join-policy / pending ---
+
+    /// Create a v2 collection owned by `owner_principal` (a key fingerprint), with
+    /// `owner_label` for display. Seeds schema=2, owner, the owner member entry
+    /// (role=owner), join_policy=invite, an empty pending map, and legacy
+    /// `creator`/`members` for back-compat reads. An empty owner principal is
+    /// tolerated (the daemon stamps the real owner from the verified cert).
+    pub fn new_owned(name: &str, owner_principal: &str, owner_label: &str) -> Self {
+        Self::new_owned_with(
+            name,
+            owner_principal,
+            owner_label,
+            None,
+            JoinPolicy::default(),
+        )
+    }
+
+    /// Like `new_owned` but with an explicit client id and join policy.
+    pub fn new_owned_with(
+        name: &str,
+        owner_principal: &str,
+        owner_label: &str,
+        client_id: Option<u64>,
+        policy: JoinPolicy,
+    ) -> Self {
+        let doc = match client_id {
+            Some(id) => new_doc_with_client_id(id),
+            None => new_doc(),
+        };
+        {
+            let root = doc.get_or_insert_map(COLLECTION_MAP);
+            let mut txn = doc.transact_mut();
+            root.insert(&mut txn, COLL_NAME_KEY, name);
+            root.insert(&mut txn, COLL_SCHEMA_KEY, SCHEMA_VERSION as i64);
+            root.insert(&mut txn, COLL_OWNER_KEY, owner_principal);
+            root.insert(&mut txn, COLL_CREATOR_KEY, owner_label); // legacy display
+            root.insert(&mut txn, COLL_NODES_KEY, MapPrelim::default());
+            root.insert(&mut txn, COLL_POLICY_KEY, policy.as_str());
+            root.insert(&mut txn, COLL_PENDING_KEY, MapPrelim::default());
+            let m = root.insert(&mut txn, COLL_MEMBER_ROLES_KEY, MapPrelim::default());
+            if !owner_principal.is_empty() {
+                let entry = m.insert(&mut txn, owner_principal, MapPrelim::default());
+                entry.insert(&mut txn, MEMBER_ROLE_KEY, Role::Owner.as_str());
+                entry.insert(&mut txn, MEMBER_LABEL_KEY, owner_label);
+            }
+            // legacy members array (read-only after migration)
+            let legacy = root.insert(&mut txn, COLL_MEMBERS_KEY, ArrayPrelim::default());
+            legacy.push_back(&mut txn, owner_label);
+        }
+        Self { doc }
+    }
+
+    /// Schema version (0 = legacy v1, absent the schema key).
+    pub fn schema_version(&self) -> u32 {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        root.get(&txn, COLL_SCHEMA_KEY)
+            .map(|v| v.to_string(&txn).parse::<u32>().unwrap_or(0))
+            .unwrap_or(0)
+    }
+
+    /// Owner principal (key fingerprint). Empty if unset.
+    pub fn owner(&self) -> String {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        root.get(&txn, COLL_OWNER_KEY)
+            .map(|v| v.to_string(&txn))
+            .unwrap_or_default()
+    }
+
+    /// Owner display label (legacy `creator` field).
+    pub fn owner_label(&self) -> String {
+        self.creator()
+    }
+
+    /// The role of `principal` (key fingerprint), if it is a member.
+    pub fn role_of(&self, principal: &str) -> Option<Role> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
+                return entry
+                    .get(&txn, MEMBER_ROLE_KEY)
+                    .map(|r| r.to_string(&txn))
+                    .and_then(|s| Role::parse(&s));
+            }
+        }
+        None
+    }
+
+    /// All members with their roles (the ReBAC tuple set for this KB).
+    pub fn member_roles(&self) -> Vec<Member> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        let mut out = Vec::new();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            for (fp, v) in m.iter(&txn) {
+                if let Out::YMap(entry) = v {
+                    let role = entry
+                        .get(&txn, MEMBER_ROLE_KEY)
+                        .map(|r| r.to_string(&txn))
+                        .and_then(|s| Role::parse(&s))
+                        .unwrap_or(Role::Viewer);
+                    let label = entry
+                        .get(&txn, MEMBER_LABEL_KEY)
+                        .map(|l| l.to_string(&txn))
+                        .unwrap_or_default();
+                    out.push(Member {
+                        fingerprint: fp.to_string(),
+                        role,
+                        label,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// The KB join policy (default invite).
+    pub fn join_policy(&self) -> JoinPolicy {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        root.get(&txn, COLL_POLICY_KEY)
+            .map(|v| v.to_string(&txn))
+            .and_then(|s| JoinPolicy::parse(&s))
+            .unwrap_or_default()
+    }
+
+    /// Pending join requests (invite policy).
+    pub fn pending(&self) -> Vec<PendingRequest> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        let mut out = Vec::new();
+        if let Some(Out::YMap(p)) = root.get(&txn, COLL_PENDING_KEY) {
+            for (fp, v) in p.iter(&txn) {
+                if let Out::YMap(req) = v {
+                    let label = req
+                        .get(&txn, MEMBER_LABEL_KEY)
+                        .map(|l| l.to_string(&txn))
+                        .unwrap_or_default();
+                    let requested_at = req
+                        .get(&txn, PENDING_AT_KEY)
+                        .map(|t| t.to_string(&txn))
+                        .unwrap_or_default();
+                    out.push(PendingRequest {
+                        fingerprint: fp.to_string(),
+                        label,
+                        requested_at,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Helper: get-or-create the `member_roles` YMap within an open txn.
+    fn member_roles_map(root: &MapRef, txn: &mut yrs::TransactionMut) -> MapRef {
+        match root.get(txn, COLL_MEMBER_ROLES_KEY) {
+            Some(Out::YMap(m)) => m,
+            _ => root.insert(txn, COLL_MEMBER_ROLES_KEY, MapPrelim::default()),
+        }
+    }
+
+    /// Bind the authoritative owner = `principal` (key fingerprint), display
+    /// `label`. Idempotent; ensures schema=2 + default policy + the owner member
+    /// entry. The daemon calls this on kb/share to bind the verified cert identity.
+    pub fn set_owner(&mut self, principal: &str, label: &str) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        root.insert(&mut txn, COLL_OWNER_KEY, principal);
+        root.insert(&mut txn, COLL_CREATOR_KEY, label);
+        if root.get(&txn, COLL_SCHEMA_KEY).is_none() {
+            root.insert(&mut txn, COLL_SCHEMA_KEY, SCHEMA_VERSION as i64);
+        }
+        if root.get(&txn, COLL_POLICY_KEY).is_none() {
+            root.insert(&mut txn, COLL_POLICY_KEY, JoinPolicy::default().as_str());
+        }
+        if root.get(&txn, COLL_PENDING_KEY).is_none() {
+            root.insert(&mut txn, COLL_PENDING_KEY, MapPrelim::default());
+        }
+        let m = Self::member_roles_map(&root, &mut txn);
+        let entry = m.insert(&mut txn, principal, MapPrelim::default());
+        entry.insert(&mut txn, MEMBER_ROLE_KEY, Role::Owner.as_str());
+        entry.insert(&mut txn, MEMBER_LABEL_KEY, label);
+        txn.encode_update_v1()
+    }
+
+    /// Insert or update a member's role (keyed by principal; CRDT-safe LWW).
+    pub fn upsert_member(&mut self, principal: &str, label: &str, role: Role) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        let m = Self::member_roles_map(&root, &mut txn);
+        let entry = m.insert(&mut txn, principal, MapPrelim::default());
+        entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
+        entry.insert(&mut txn, MEMBER_LABEL_KEY, label);
+        txn.encode_update_v1()
+    }
+
+    /// Update only the role of an existing member (no-op if absent).
+    pub fn set_role(&mut self, principal: &str, role: Role) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
+                entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
+            }
+        }
+        txn.encode_update_v1()
+    }
+
+    /// Remove a member by principal.
+    pub fn remove_principal(&mut self, principal: &str) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            m.remove(&mut txn, principal);
+        }
+        txn.encode_update_v1()
+    }
+
+    /// Set the KB join policy.
+    pub fn set_join_policy(&mut self, policy: JoinPolicy) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        root.insert(&mut txn, COLL_POLICY_KEY, policy.as_str());
+        txn.encode_update_v1()
+    }
+
+    /// Record a pending join request (idempotent re-request).
+    pub fn add_pending(&mut self, principal: &str, label: &str, requested_at: &str) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        let p = match root.get(&txn, COLL_PENDING_KEY) {
+            Some(Out::YMap(p)) => p,
+            _ => root.insert(&mut txn, COLL_PENDING_KEY, MapPrelim::default()),
+        };
+        let req = p.insert(&mut txn, principal, MapPrelim::default());
+        req.insert(&mut txn, MEMBER_LABEL_KEY, label);
+        req.insert(&mut txn, PENDING_AT_KEY, requested_at);
+        txn.encode_update_v1()
+    }
+
+    /// Remove a pending request.
+    pub fn remove_pending(&mut self, principal: &str) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        if let Some(Out::YMap(p)) = root.get(&txn, COLL_PENDING_KEY) {
+            p.remove(&mut txn, principal);
+        }
+        txn.encode_update_v1()
+    }
+
+    /// Approve a pending principal as `role` — removes pending + adds the member
+    /// in a SINGLE transaction (atomic, no transient half-state on peers).
+    pub fn approve(&mut self, principal: &str, role: Role) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        let mut label = String::new();
+        if let Some(Out::YMap(p)) = root.get(&txn, COLL_PENDING_KEY) {
+            if let Some(Out::YMap(req)) = p.get(&txn, principal) {
+                label = req
+                    .get(&txn, MEMBER_LABEL_KEY)
+                    .map(|l| l.to_string(&txn))
+                    .unwrap_or_default();
+            }
+            p.remove(&mut txn, principal);
+        }
+        let m = Self::member_roles_map(&root, &mut txn);
+        let entry = m.insert(&mut txn, principal, MapPrelim::default());
+        entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
+        entry.insert(&mut txn, MEMBER_LABEL_KEY, label.as_str());
+        txn.encode_update_v1()
+    }
+
+    /// Legacy v1 members (the read-only `members` YArray of labels), for migration.
+    pub fn legacy_members(&self) -> Vec<String> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let txn = self.doc.transact();
         match root.get(&txn, COLL_MEMBERS_KEY) {
@@ -940,5 +1319,96 @@ mod tests {
         let nodes_a = coll_a.list_nodes();
         let nodes_b = coll_b.list_nodes();
         assert_eq!(nodes_a.len(), nodes_b.len());
+    }
+
+    // --- ADR-018 v2 schema: owner / roles / policy / pending ---
+
+    #[test]
+    fn role_hierarchy_includes() {
+        assert!(Role::Owner.includes(Role::Editor));
+        assert!(Role::Owner.includes(Role::Viewer));
+        assert!(Role::Editor.includes(Role::Viewer));
+        assert!(!Role::Viewer.includes(Role::Editor));
+        assert!(!Role::Editor.includes(Role::Owner));
+    }
+
+    #[test]
+    fn collection_v2_new_owned_seeds_owner_role_policy() {
+        let coll = KbCollectionDoc::new_owned("KB", "SHA256:owner", "alice");
+        assert_eq!(coll.schema_version(), 2);
+        assert_eq!(coll.owner(), "SHA256:owner");
+        assert_eq!(coll.owner_label(), "alice");
+        assert_eq!(coll.role_of("SHA256:owner"), Some(Role::Owner));
+        assert_eq!(coll.join_policy(), JoinPolicy::Invite);
+        assert!(coll.pending().is_empty());
+        assert_eq!(coll.member_roles().len(), 1);
+    }
+
+    #[test]
+    fn collection_v2_roles_and_upsert() {
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:owner", "alice");
+        coll.upsert_member("SHA256:bob", "bob", Role::Editor);
+        assert_eq!(coll.role_of("SHA256:bob"), Some(Role::Editor));
+        coll.set_role("SHA256:bob", Role::Viewer);
+        assert_eq!(coll.role_of("SHA256:bob"), Some(Role::Viewer));
+        coll.remove_principal("SHA256:bob");
+        assert_eq!(coll.role_of("SHA256:bob"), None);
+    }
+
+    #[test]
+    fn collection_v2_join_policy() {
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
+        assert_eq!(coll.join_policy(), JoinPolicy::Invite);
+        coll.set_join_policy(JoinPolicy::Restrictive);
+        assert_eq!(coll.join_policy(), JoinPolicy::Restrictive);
+    }
+
+    #[test]
+    fn collection_v2_pending_then_approve_atomic() {
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
+        coll.add_pending("SHA256:bob", "bob", "2026-06-16T00:00:00Z");
+        assert_eq!(coll.pending().len(), 1);
+        assert_eq!(coll.role_of("SHA256:bob"), None);
+        coll.approve("SHA256:bob", Role::Editor);
+        assert!(coll.pending().is_empty(), "approve clears pending");
+        assert_eq!(coll.role_of("SHA256:bob"), Some(Role::Editor));
+        let m = coll
+            .member_roles()
+            .into_iter()
+            .find(|m| m.fingerprint == "SHA256:bob")
+            .unwrap();
+        assert_eq!(m.label, "bob", "approve carries the pending label");
+    }
+
+    #[test]
+    fn collection_v2_two_client_member_merge_converges() {
+        let mut a =
+            KbCollectionDoc::new_owned_with("KB", "SHA256:o", "alice", Some(1), JoinPolicy::Invite);
+        let state = a.encode_state();
+        let mut b = KbCollectionDoc::from_bytes(&state).unwrap();
+        let ua = a.upsert_member("SHA256:bob", "bob", Role::Editor);
+        let ub = b.upsert_member("SHA256:carol", "carol", Role::Viewer);
+        a.apply_update(&ub).unwrap();
+        b.apply_update(&ua).unwrap();
+        for c in [&a, &b] {
+            assert_eq!(c.role_of("SHA256:bob"), Some(Role::Editor));
+            assert_eq!(c.role_of("SHA256:carol"), Some(Role::Viewer));
+        }
+        assert_eq!(a.member_roles().len(), b.member_roles().len());
+    }
+
+    #[test]
+    fn collection_v2_roundtrip_preserves_schema() {
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
+        coll.upsert_member("SHA256:bob", "bob", Role::Viewer);
+        coll.set_join_policy(JoinPolicy::Permissive);
+        coll.add_pending("SHA256:eve", "eve", "t");
+        let bytes = coll.encode_state();
+        let r = KbCollectionDoc::from_bytes(&bytes).unwrap();
+        assert_eq!(r.schema_version(), 2);
+        assert_eq!(r.owner(), "SHA256:o");
+        assert_eq!(r.role_of("SHA256:bob"), Some(Role::Viewer));
+        assert_eq!(r.join_policy(), JoinPolicy::Permissive);
+        assert_eq!(r.pending().len(), 1);
     }
 }
