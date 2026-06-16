@@ -128,10 +128,23 @@ trigger was a **mouse click**, not the CRDT sync (headless convergence never cra
 - **Caveat:** the `mae --test` runtime doesn't register the KB query layer, so the
   fixture can't be asserted via a scheme test (the whole `tests/kb-lifecycle` suite is
   orphaned for the same reason). Validation is the membership e2e + MCP `kb_search`.
-- **Live two-machine T2.6:** pending — share `collabtest` (a named instance, isolated
-  from RoamNotes) and run deny → add → allow → remove across D/E.
+- **Live two-machine T2.6:** ready — share `collabtest` by name (see I-4) and run
+  deny → add → allow → remove across D/E.
+
+### I-4 ✅ FIXED — `kb-share` could not target a specific KB (shares first instance) · Step T2.6
+- **Gap:** `kb-share` shared `registry.instances.first()` (`kb_state.rs:99`) with no way to
+  pick the KB. On a machine with personal notes + a project KB (alice: RoamNotes is first),
+  bare `:kb-share` would replicate **RoamNotes** to peers — a real data-leak risk and the
+  blocker for a clean live T2.6 against the fixture.
+- **Fix:** `:kb-share <name>` now queues `ShareKb { kb_name: <name> }` for that instance
+  (`command.rs`, mirroring `:collab-join <name>`); the intent processor already resolves the
+  name (`collab_bridge.rs:418`, errors if unknown). Bare `:kb-share`/`SPC C S` unchanged
+  (active/first instance). Docs updated; 2 regression tests in `command_tests.rs`.
+- **Status:** ✅ fixed; both machines need the rebuilt binary, then live T2.6 shares
+  `:kb-share collabtest`.
 
 ## Next
 
-1. Live T2.6 (membership) against the `collabtest` fixture, then T2.7 (security checks).
+1. Rebuild/relaunch both on the I-4 fix; live T2.6 via `:kb-share collabtest`
+   (deny → add → allow → remove), then T2.7 (security checks).
 2. Log each step here with the shared convention.

@@ -697,11 +697,18 @@ The KB **creator/owner** shares it and manages membership; only members may join
 or edit:
 
 ```
-:kb-share                       # owner shares the active KB
+:kb-share                       # owner shares the active KB (first registered instance)
+:kb-share <name>                # owner shares a SPECIFIC KB instance by name
 :kb-member-add <kb-id> alice    # owner adds a trusted peer (by label)
 :kb-member-remove <kb-id> alice
 :kb-join <kb-id>                # members only — non-members are denied
 ```
+
+> **Choose what you share.** With several registered KBs (e.g. personal notes +
+> a project KB), `:kb-share <name>` shares exactly that one — see `:kb-instances`
+> for names. Bare `:kb-share` shares the active (first-registered) instance, so
+> name it explicitly when you have more than one KB to avoid replicating the
+> wrong collection to peers.
 
 The daemon binds the shared collection's creator to the *authenticated* identity
 and rejects a spoofed `creator`/cursor name. **Known limitation:** a member can

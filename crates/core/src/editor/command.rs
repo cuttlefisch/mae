@@ -1115,6 +1115,23 @@ impl Editor {
                     }
                     // No arg: open palette picker (falls through to dispatch_builtin)
                 }
+                // kb-share with an explicit KB name: share THAT instance, not just
+                // the first-registered one. Without this a user with several KBs
+                // (e.g. personal notes + a project KB) cannot choose which to share
+                // and could replicate the wrong one to peers. No-arg `:kb-share`
+                // (and `SPC C S`) falls through to dispatch and shares the active
+                // instance as before. The intent processor validates the name.
+                if command == "kb-share" {
+                    if let Some(name) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                        self.collab.pending_intent = Some(super::CollabIntent::ShareKb {
+                            kb_name: name.to_string(),
+                            node_ids: vec![],
+                        });
+                        self.set_status(format!("Sharing KB '{}'...", name));
+                        return true;
+                    }
+                    // No arg: fall through to dispatch (shares the active instance).
+                }
                 // Final fallback: dispatch any registered builtin command by
                 // name. This lets `:debug-stop`, `:debug-continue`, etc. work
                 // without explicit `:`-arms, and is the foundation for making
