@@ -923,6 +923,58 @@ impl KbCollectionDoc {
         }
     }
 
+    /// Migrate a legacy v1 collection (label `creator` + `members` YArray) to the
+    /// v2 identity-anchored schema. Idempotent: returns `None` if already v2.
+    ///
+    /// `resolver(label) -> Some((fingerprint, label))` maps a legacy label to its
+    /// key principal (e.g. via the daemon's authorized_keys). A label that doesn't
+    /// resolve becomes a transitional `legacy:<label>` principal — preserved for
+    /// audit, but a real key peer won't match it, so the owner should re-add it by
+    /// fingerprint (or simply re-share, which `set_owner` re-binds). The legacy
+    /// `members` YArray is left intact (read-only); v2 data lives under new keys.
+    pub fn migrate_if_legacy<F>(&mut self, resolver: F) -> Option<Vec<u8>>
+    where
+        F: Fn(&str) -> Option<(String, String)>,
+    {
+        if self.schema_version() >= 2 {
+            return None;
+        }
+        let creator_label = self.creator();
+        let legacy = self.legacy_members();
+        // Resolve a label → (principal, label); fall back to legacy:<label>.
+        let resolve = |label: &str| -> (String, String) {
+            resolver(label).unwrap_or_else(|| (format!("legacy:{label}"), label.to_string()))
+        };
+        let (owner_principal, owner_label) = resolve(&creator_label);
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        root.insert(&mut txn, COLL_SCHEMA_KEY, SCHEMA_VERSION as i64);
+        root.insert(&mut txn, COLL_OWNER_KEY, owner_principal.as_str());
+        if root.get(&txn, COLL_POLICY_KEY).is_none() {
+            root.insert(&mut txn, COLL_POLICY_KEY, JoinPolicy::default().as_str());
+        }
+        if root.get(&txn, COLL_PENDING_KEY).is_none() {
+            root.insert(&mut txn, COLL_PENDING_KEY, MapPrelim::default());
+        }
+        let m = Self::member_roles_map(&root, &mut txn);
+        // Owner entry first.
+        {
+            let e = m.insert(&mut txn, owner_principal.as_str(), MapPrelim::default());
+            e.insert(&mut txn, MEMBER_ROLE_KEY, Role::Owner.as_str());
+            e.insert(&mut txn, MEMBER_LABEL_KEY, owner_label.as_str());
+        }
+        for label in legacy {
+            let (principal, disp) = resolve(&label);
+            if principal == owner_principal {
+                continue; // already the owner
+            }
+            let e = m.insert(&mut txn, principal.as_str(), MapPrelim::default());
+            e.insert(&mut txn, MEMBER_ROLE_KEY, Role::Editor.as_str());
+            e.insert(&mut txn, MEMBER_LABEL_KEY, disp.as_str());
+        }
+        Some(txn.encode_update_v1())
+    }
+
     /// Access the underlying Doc.
     pub fn doc(&self) -> &Doc {
         &self.doc
@@ -1410,5 +1462,40 @@ mod tests {
         assert_eq!(r.role_of("SHA256:bob"), Some(Role::Viewer));
         assert_eq!(r.join_policy(), JoinPolicy::Permissive);
         assert_eq!(r.pending().len(), 1);
+    }
+
+    #[test]
+    fn migrate_v1_resolves_labels_to_principals() {
+        // Build a legacy v1 collection (label creator + members YArray).
+        let mut coll = KbCollectionDoc::new("KB", "alice");
+        coll.add_member("bob");
+        assert_eq!(coll.schema_version(), 0, "legacy = no schema key");
+        // resolver maps known labels to fingerprints.
+        let resolver = |label: &str| match label {
+            "alice" => Some(("SHA256:alice".to_string(), "alice".to_string())),
+            "bob" => Some(("SHA256:bob".to_string(), "bob".to_string())),
+            _ => None,
+        };
+        let update = coll.migrate_if_legacy(resolver).expect("migrated");
+        assert!(!update.is_empty());
+        assert_eq!(coll.schema_version(), 2);
+        assert_eq!(coll.owner(), "SHA256:alice");
+        assert_eq!(coll.role_of("SHA256:alice"), Some(Role::Owner));
+        assert_eq!(coll.role_of("SHA256:bob"), Some(Role::Editor));
+        assert_eq!(coll.join_policy(), JoinPolicy::Invite);
+        // idempotent
+        assert!(coll.migrate_if_legacy(resolver).is_none());
+    }
+
+    #[test]
+    fn migrate_v1_unresolved_label_falls_back_to_legacy_principal() {
+        let mut coll = KbCollectionDoc::new("KB", "alice");
+        coll.add_member("ghost");
+        // resolver knows nobody → legacy:<label> principals.
+        coll.migrate_if_legacy(|_| None).expect("migrated");
+        assert_eq!(coll.schema_version(), 2);
+        assert_eq!(coll.owner(), "legacy:alice");
+        assert_eq!(coll.role_of("legacy:alice"), Some(Role::Owner));
+        assert_eq!(coll.role_of("legacy:ghost"), Some(Role::Editor));
     }
 }
