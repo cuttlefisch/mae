@@ -1719,5 +1719,22 @@ their shared KBs.\n\n\
 ** PSK Authentication\n\
 Set `collab_psk` or `collab_psk_command` to enable HMAC-SHA256 mutual \
 authentication. Both client and server must share the same key.\n\n\
+** Access Control: identity, roles, policy (ADR-018)\n\
+Ownership and membership key on your **Ed25519 key fingerprint** (`SHA256:…`), \
+NOT your label or `collab-user-name` (display only). On `:kb-share` the daemon \
+binds the owner to your verified key; a self-claimed creator is ignored.\n\
+- Roles (hierarchical, owner ⊇ editor ⊇ viewer): owner manages members + \
+policy; editor reads + edits; **viewer is read-only**.\n\
+- Per-KB join policy (default `invite`): `restrictive` (owner + added members \
+only), `invite` (join → pending → owner approves), `permissive` (any \
+authorized peer auto-joins as viewer).\n\
+- `:kb-policy <kb> <restrictive|invite|permissive>`, `:kb-pending <kb>` (lists \
+label + fingerprint), `:kb-approve <kb> <fingerprint> [role]`, \
+`:kb-member-add <kb> <fingerprint> [role]`, `:kb-member-remove <kb> <fingerprint>`.\n\
+- Members are managed by **fingerprint** (from `:kb-pending` or, for admins, \
+`mae-daemon authorized`). Admin: `mae-daemon authorize <line> <unique-label>`, \
+`mae-daemon revoke <label|SHA256:fp>`.\n\
+**As an AI peer you act under the human's KB role and cannot exceed it** — the \
+daemon enforces identically for keybindings and tool calls.\n\n\
 See also: [[concept:knowledge-base]], [[concept:collab-architecture]], \
 [[concept:sync-engine]], [[concept:adr-kb-crdt]], [[index]]\n";
