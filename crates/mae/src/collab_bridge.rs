@@ -154,6 +154,14 @@ pub enum CollabEvent {
         address: String,
         peer_count: usize,
     },
+    /// TOFU: an unknown daemon identity needs interactive approval. The main
+    /// thread shows a confirm dialog and sends the decision back via `reply`
+    /// (the connection task blocks on it). ADR-017.
+    HostKeyPrompt {
+        addr: String,
+        fingerprint: String,
+        reply: std::sync::mpsc::Sender<bool>,
+    },
     Disconnected {
         reason: String,
     },
@@ -661,6 +669,20 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
 /// Handle an event from the collab background task — update editor state.
 pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
     match event {
+        CollabEvent::HostKeyPrompt {
+            addr,
+            fingerprint,
+            reply,
+        } => {
+            // Stash the reply channel; the y/n answer in apply_mini_dialog sends it
+            // back to the (blocked) connection task. ADR-017 TOFU.
+            editor.pending_host_key_reply = Some(reply);
+            editor.mini_dialog = Some(mae_core::command_palette::MiniDialogState::confirm(
+                format!("Trust daemon at {addr}?\n  {fingerprint}\n(first connect — accept & pin?) [y/N]"),
+                mae_core::command_palette::MiniDialogContext::PeerKeyAccept { addr, fingerprint },
+            ));
+            editor.mark_full_redraw();
+        }
         CollabEvent::Connected {
             address,
             peer_count,
@@ -1416,7 +1438,7 @@ pub(crate) fn setup_collab_channels(
     let max_reconnect_attempts = editor.collab.max_reconnect_attempts;
     let heartbeat_secs = editor.collab.heartbeat_interval;
 
-    let transport = resolve_client_transport(editor);
+    let transport = resolve_client_transport(editor, &evt_tx);
 
     let spawn = CollabSpawn {
         cmd_rx,
@@ -1440,7 +1462,10 @@ pub(crate) fn setup_collab_channels(
 ///   `known_hosts` verifier (TOFU policy from `collab_host_key_policy`); use
 ///   mTLS unless `collab_tls = false` (then the JSON KeyAuth fallback).
 /// - otherwise → PSK / none (see `resolve_client_credential`).
-fn resolve_client_transport(editor: &Editor) -> ClientTransport {
+fn resolve_client_transport(
+    editor: &Editor,
+    evt_tx: &mpsc::Sender<CollabEvent>,
+) -> ClientTransport {
     if editor.collab.auth_mode == "key" {
         if let Some(dir) = mae_mcp::identity::default_collab_dir() {
             let label = hostname::get()
@@ -1452,11 +1477,22 @@ fn resolve_client_transport(editor: &Editor) -> ClientTransport {
                     let policy = mae_mcp::identity::HostKeyPolicy::from_str_opt(
                         &editor.collab.host_key_policy,
                     );
+                    let known_hosts = dir.join("known_hosts");
+                    // `prompt` → interactive TOFU; otherwise the non-interactive
+                    // accept-new / strict file verifier.
                     let verifier: std::sync::Arc<dyn mae_mcp::identity::HostKeyVerifier> =
-                        std::sync::Arc::new(mae_mcp::identity::FileHostKeyVerifier::new(
-                            dir.join("known_hosts"),
-                            policy,
-                        ));
+                        if policy == mae_mcp::identity::HostKeyPolicy::Prompt {
+                            std::sync::Arc::new(PromptingHostKeyVerifier {
+                                known_hosts,
+                                evt_tx: evt_tx.clone(),
+                                timeout: std::time::Duration::from_secs(120),
+                            })
+                        } else {
+                            std::sync::Arc::new(mae_mcp::identity::FileHostKeyVerifier::new(
+                                known_hosts,
+                                policy,
+                            ))
+                        };
                     let identity = std::sync::Arc::new(id);
                     return if editor.collab.tls {
                         ClientTransport::KeyTls { identity, verifier }
@@ -1588,6 +1624,51 @@ impl ClientTransport {
         match self {
             ClientTransport::Plain { psk, .. } => Some(psk.as_str()),
             _ => None,
+        }
+    }
+}
+
+/// A `HostKeyVerifier` that prompts the user interactively (TOFU) for an unknown
+/// daemon identity, via a round-trip to the main thread. A previously pinned key
+/// that matches is accepted silently; a CHANGED key is rejected (MITM defense).
+struct PromptingHostKeyVerifier {
+    known_hosts: std::path::PathBuf,
+    evt_tx: mpsc::Sender<CollabEvent>,
+    timeout: std::time::Duration,
+}
+
+impl std::fmt::Debug for PromptingHostKeyVerifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromptingHostKeyVerifier")
+            .field("known_hosts", &self.known_hosts)
+            .finish_non_exhaustive()
+    }
+}
+
+impl mae_mcp::identity::HostKeyVerifier for PromptingHostKeyVerifier {
+    fn verify(&self, addr: &str, server_pub: &mae_mcp::identity::PublicKey) -> bool {
+        let mut kh = mae_mcp::identity::KnownHosts::load(&self.known_hosts);
+        if let Some(pinned) = kh.get(addr) {
+            return pinned.to_bytes() == server_pub.to_bytes();
+        }
+        // Unknown host — ask the user (the connection task blocks here; the main
+        // UI thread is separate, so no deadlock).
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel::<bool>();
+        if self
+            .evt_tx
+            .try_send(CollabEvent::HostKeyPrompt {
+                addr: addr.to_string(),
+                fingerprint: server_pub.fingerprint(),
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            warn!("host-key prompt could not be delivered; rejecting");
+            return false;
+        }
+        match reply_rx.recv_timeout(self.timeout) {
+            Ok(true) => kh.pin(addr, server_pub).is_ok(),
+            _ => false,
         }
     }
 }
@@ -3435,6 +3516,110 @@ pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tofu_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("mae-tofu-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn prompting_verifier_pinned_match_no_prompt() {
+        use mae_mcp::identity::{HostKeyVerifier, Identity, KnownHosts};
+        let dir = tofu_dir("pin");
+        let kh = dir.join("known_hosts");
+        let server = Identity::generate("daemon").public();
+        KnownHosts::load(&kh).pin("d:9473", &server).unwrap();
+        // No receiver needed — a pinned match must NOT prompt.
+        let (tx, _rx) = mpsc::channel::<CollabEvent>(8);
+        let v = PromptingHostKeyVerifier {
+            known_hosts: kh,
+            evt_tx: tx,
+            timeout: std::time::Duration::from_millis(50),
+        };
+        assert!(
+            v.verify("d:9473", &server),
+            "pinned key must be accepted silently"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prompting_verifier_changed_key_rejected() {
+        use mae_mcp::identity::{HostKeyVerifier, Identity, KnownHosts};
+        let dir = tofu_dir("changed");
+        let kh = dir.join("known_hosts");
+        KnownHosts::load(&kh)
+            .pin("d:9473", &Identity::generate("real").public())
+            .unwrap();
+        let (tx, _rx) = mpsc::channel::<CollabEvent>(8);
+        let v = PromptingHostKeyVerifier {
+            known_hosts: kh,
+            evt_tx: tx,
+            timeout: std::time::Duration::from_millis(50),
+        };
+        // A DIFFERENT key for the same addr → abort (no prompt).
+        assert!(!v.verify("d:9473", &Identity::generate("imposter").public()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prompting_verifier_unknown_accept_pins() {
+        use mae_mcp::identity::{HostKeyVerifier, Identity, KnownHosts};
+        let dir = tofu_dir("accept");
+        let kh = dir.join("known_hosts");
+        let server = Identity::generate("daemon").public();
+        let server_bytes = server.to_bytes();
+        let (tx, mut rx) = mpsc::channel::<CollabEvent>(8);
+        let v = PromptingHostKeyVerifier {
+            known_hosts: kh.clone(),
+            evt_tx: tx,
+            timeout: std::time::Duration::from_secs(5),
+        };
+        // verify() blocks until the (simulated) user answers via the event reply.
+        let handle = std::thread::spawn(move || v.verify("d:9473", &server));
+        match rx.blocking_recv().expect("prompt event") {
+            CollabEvent::HostKeyPrompt {
+                reply, fingerprint, ..
+            } => {
+                assert!(fingerprint.starts_with("SHA256:"));
+                reply.send(true).unwrap();
+            }
+            other => panic!("expected HostKeyPrompt, got {other:?}"),
+        }
+        assert!(handle.join().unwrap(), "accepted host must verify");
+        // ...and is now pinned.
+        assert_eq!(
+            KnownHosts::load(&kh).get("d:9473").unwrap().to_bytes(),
+            server_bytes
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prompting_verifier_unknown_reject_not_pinned() {
+        use mae_mcp::identity::{HostKeyVerifier, Identity, KnownHosts};
+        let dir = tofu_dir("reject");
+        let kh = dir.join("known_hosts");
+        let server = Identity::generate("daemon").public();
+        let (tx, mut rx) = mpsc::channel::<CollabEvent>(8);
+        let v = PromptingHostKeyVerifier {
+            known_hosts: kh.clone(),
+            evt_tx: tx,
+            timeout: std::time::Duration::from_secs(5),
+        };
+        let handle = std::thread::spawn(move || v.verify("d:9473", &server));
+        if let CollabEvent::HostKeyPrompt { reply, .. } = rx.blocking_recv().unwrap() {
+            reply.send(false).unwrap();
+        }
+        assert!(!handle.join().unwrap(), "rejected host must not verify");
+        assert!(
+            KnownHosts::load(&kh).get("d:9473").is_none(),
+            "rejected host must not be pinned"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn drain_collab_intent_connect() {

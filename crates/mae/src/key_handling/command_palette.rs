@@ -278,10 +278,16 @@ fn handle_mini_dialog(editor: &mut Editor, key: KeyEvent) {
     if is_confirm {
         match key.code {
             KeyCode::Esc | KeyCode::Char('n') => {
+                // A pending TOFU host-key prompt: reject (only set for PeerKeyAccept).
+                if let Some(reply) = editor.pending_host_key_reply.take() {
+                    let _ = reply.send(false);
+                    editor.set_status("Host key rejected — connection aborted");
+                } else {
+                    editor.set_status("Cancelled");
+                }
                 editor.mini_dialog = None;
                 editor.command_palette = None;
                 editor.set_mode(Mode::Normal);
-                editor.set_status("Cancelled");
             }
             KeyCode::Enter | KeyCode::Char('y') => {
                 let dialog = editor.mini_dialog.take().unwrap();
@@ -560,6 +566,13 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             } else {
                 editor.set_status("Buffer no longer exists".to_string());
             }
+        }
+        MiniDialogContext::PeerKeyAccept { addr, fingerprint } => {
+            // TOFU accept: unblock the connection task to pin + proceed.
+            if let Some(reply) = editor.pending_host_key_reply.take() {
+                let _ = reply.send(true);
+            }
+            editor.set_status(format!("Trusted {addr} ({fingerprint}) — pinned"));
         }
         MiniDialogContext::RevertBuffer { buf_idx } => {
             let buf_idx = *buf_idx;

@@ -152,6 +152,11 @@ pub enum MiniDialogContext {
         address: String,
     },
     SetupKbNotesDir,
+    /// TOFU: accept (and pin) a daemon's host key on first connect (ADR-017).
+    PeerKeyAccept {
+        addr: String,
+        fingerprint: String,
+    },
 }
 
 /// State for a multi-field mini-dialog (edit-link, rename, etc.)
@@ -172,7 +177,10 @@ impl MiniDialogState {
     pub fn title(&self) -> &'static str {
         match self.kind {
             MiniDialogKind::EditLink => "Edit Link",
-            MiniDialogKind::Confirm => "Confirm",
+            MiniDialogKind::Confirm => match &self.context {
+                MiniDialogContext::PeerKeyAccept { .. } => "Trust Daemon Key?",
+                _ => "Confirm",
+            },
             MiniDialogKind::SingleInput => match &self.context {
                 MiniDialogContext::FileRename { .. } | MiniDialogContext::FileTreeRename { .. } => {
                     "Rename"
