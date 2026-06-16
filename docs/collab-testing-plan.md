@@ -15,30 +15,48 @@ live run** (the real multi-machine goal).
 
 > Shared scratchpad — **each machine fills in its own row, commits, and pushes**.
 > Both connect by explicit `host:port` (mDNS came back empty on this LAN, so don't
-> rely on discovery). Min build: commit `a8ac842` or later (cross-platform e2e fix).
+> rely on discovery). Min build: commit `b947a52` or later.
 
-| Role | Machine | LAN IP | Built ≥ `a8ac842` | Identity fingerprint | Status |
-|------|---------|--------|-------------------|----------------------|--------|
-| **D** = daemon host + editor "alice" | _framework (driver)_ | `192.168.1.137`? | ☐ | _paste `mae-daemon identity` SHA256 here_ | building harness |
-| **E** = editor "bob" | `Marthas-MacBook-Pro` (mac) | `192.168.1.132` | ✅ | `SHA256:9xLh0DWeeAi3hl2W7yudaE05aTHtYQpNUUyMWO+2CrI` | **ready** |
+> [!IMPORTANT]
+> **Known bug — use `accept-new`, not the `prompt` default ([issue #66]).** The
+> interactive TOFU `prompt` policy (what `mae setup-collab` writes) is unwired and
+> **freezes the editor** (~120s, then fails) — hard-freezes the **TUI**, silently
+> fails the **GUI**. This bites **every** editor, including **D's own "alice"** (it
+> connects to D's daemon too). Until #66 is fixed, **each editor must add**
+> `(set-option! "collab_host_key_policy" "accept-new")` to `init.scm` (non-blocking,
+> auto-pins on first sight). Verify the daemon fingerprint **out-of-band**: after
+> connecting, check the pinned `~/.local/share/mae/collab/known_hosts` entry equals
+> D's `mae-daemon identity` SHA256.
+>
+> [issue #66]: https://github.com/cuttlefisch/mae/issues/66
+
+| Role | Machine | LAN IP | Built ≥ `b947a52` | `accept-new` set | Identity fingerprint | Status |
+|------|---------|--------|-------------------|------------------|----------------------|--------|
+| **D** = daemon host + editor "alice" | _framework (driver)_ | `192.168.1.137`? | ☐ | ☐ | _paste `mae-daemon identity` SHA256 here_ | daemon listening :9480 |
+| **E** = editor "bob" | `Marthas-MacBook-Pro` (mac) | `192.168.1.132` | ✅ | ✅ | `SHA256:9xLh0DWeeAi3hl2W7yudaE05aTHtYQpNUUyMWO+2CrI` | **dev GUI build up, connecting** |
 
 **Chosen test port:** `9480` (avoids the personal-daemon `:9473` collision).
 
-### D — to do (driver), to unblock E
-1. `git pull --rebase` to ≥ `a8ac842`; `make build-tui build-daemon`.
+### D — to do (driver)
+1. `git pull --rebase` to ≥ `b947a52`; **rebuild both binaries** — `make build-daemon`
+   plus `make build` (GUI) or `make build-tui`. The branch moved since the harness was
+   first built (cross-platform e2e fix `a8ac842`), so a rebuild is required.
 2. `~/.config/mae/daemon.toml`: `[collab] bind = "0.0.0.0:9480"` + `[collab.auth] mode = "key"`.
 3. Authorize bob (E's key is already generated):
    ```
    mae-daemon authorize mae-ed25519 aBjMkdzHH9YVUxfP5NxHJo7fcu5qGC75pUl1SWdAvnM= bob
    ```
-4. `mae-daemon identity` → paste D's fingerprint into the board above (E verifies it at the TOFU prompt).
+4. `mae-daemon identity` → paste D's fingerprint into the board above.
 5. `mae-daemon`; open firewall: `sudo firewall-cmd --add-port=9480/tcp` (or `ufw allow 9480/tcp`).
-6. Fill in / confirm D's row (IP, fingerprint, status → "listening").
+6. **Before launching alice's editor:** `mae setup-collab --server 127.0.0.1:9480`, then add
+   `(set-option! "collab_host_key_policy" "accept-new")` to `init.scm` (see #66 box) or it freezes.
+7. Fill in / confirm D's row (IP, fingerprint, both checkboxes, status → "listening").
 
 ### E — ready state (mac, done)
-- Built from `a8ac842` (`mae`/`mae-daemon` 0.13.12); local personal daemon **stopped** (port `9473` clear) to keep the run clean.
-- Identity generated at `~/.local/share/mae/collab/id_ed25519` (line + fingerprint in the board).
-- On D's "listening": `nc -zv 192.168.1.137 9480` → `mae setup-collab --server 192.168.1.137:9480` → verify TOFU fingerprint == D's row → run Steps 5–7.
+- Built from `b947a52` (`mae`/`mae-daemon` 0.13.12, **dev GUI** via `make build`); local personal daemon **stopped** (port `9473` clear).
+- Identity at `~/.local/share/mae/collab/id_ed25519` (line + fingerprint in the board).
+- `init.scm`: key mode, `server 192.168.1.137:9480`, auto-connect, **`accept-new`**.
+- Editor up, MCP-driven; on connect, verify the pinned `known_hosts` fingerprint == D's row, then run Steps 5–7.
 
 ---
 
@@ -195,16 +213,27 @@ Equivalent manual `init.scm`:
 (set-option! "collab-auth-mode" "key")
 (set-option! "collab-server-address" "192.168.1.137:9480")  ; 127.0.0.1:9480 on D
 (set-option! "collab-auto-connect" "true")
-;; collab-host-key-policy defaults to "prompt"
+(set-option! "collab-host-key-policy" "accept-new")  ; NOT "prompt" — see #66 box
 ```
 > If you used `--ssh-key`, authorize each peer in Step 3 with
 > `mae-daemon authorize --from-ssh-pub <peer>.pub <label>` instead of the
 > `mae-ed25519` line.
 
-Launch `mae`; on first connect each editor shows **"Trust Daemon Key? SHA256:…
-[y/N]"**.
-- [ ] The fingerprint shown matches `mae-daemon identity` from Step 2. Press `y`.
+> [!WARNING]
+> `setup-collab` leaves `collab-host-key-policy = "prompt"`, which freezes the editor
+> ([#66]). **Set it to `accept-new` before launching** (line above). The interactive
+> "Trust Daemon Key? [y/N]" prompt below is the *intended* UX once #66 is fixed — for
+> now `accept-new` auto-pins silently and you verify the fingerprint out-of-band.
+>
+> [#66]: https://github.com/cuttlefisch/mae/issues/66
+
+Launch `mae`. With `accept-new`, it connects + auto-pins (no prompt). Verify the pin:
 - [ ] `:collab-status` shows Connected. Daemon log: `mTLS client authenticated peer=alice` / `peer=bob`.
+- [ ] **Out-of-band key check:** the pinned line in `~/.local/share/mae/collab/known_hosts`
+      for D's address matches D's `mae-daemon identity` SHA256 (catches MITM that silent
+      auto-pin would otherwise miss).
+- [ ] *(Deferred to #66)* with `prompt` policy, the editor shows **"Trust Daemon Key? SHA256:… [y/N]"**
+      and the fingerprint matches Step 2 — re-test this path once #66 lands.
 
 ### Step 5 — Buffer collaboration converges
 - [ ] On **D (alice)**: open/create a file, `:collab-share`.
@@ -229,11 +258,12 @@ Launch `mae`; on first connect each editor shows **"Trust Daemon Key? SHA256:…
 
 | # | Check | Pass? |
 |---|-------|-------|
-| T0 | `make test-collab-e2e-all` green | ☐ |
+| T0 | `make test-collab-e2e-all` green | ✅ (macOS, b947a52) |
 | T1 | Single-host CLI smoke (identity/authorize/check-config) | ☐ |
 | 2 | Daemon listens `0.0.0.0:9480`, mTLS configured | ☐ |
 | 3 | Both peers authorized; E reaches D:9480 | ☐ |
-| 4 | TOFU prompt fingerprint matches; both connect | ☐ |
+| 4 | `accept-new` connects + pins; pinned fingerprint == D's (out-of-band) | ☐ |
+| 4b | *(deferred #66)* interactive `prompt` TOFU shows + matches | ☐ |
 | 5 | Buffer edits converge; cursor labels = authenticated identity | ☐ |
 | 6 | KB join denied → owner adds → allowed → remove denies | ☐ |
 | 7a | Unauthorized peer rejected | ☐ |
