@@ -45,7 +45,43 @@ Chronological; each row is one observation tied to a plan step.
 
 ## Issues — detail + repro
 
-### I-1 ❌ HIGH — alice rope panic crash on remote update  ·  Step T2.5  ·  task #18
+## Run 2 — 2026-06-16 (after fix `a57455f`, from scratch)
+
+| # | Step | Action | Result | Status |
+|---|------|--------|--------|--------|
+| 1 | pre | pull `a57455f`, rebuild GUI, relaunch bob (PID 51874), reconnect MCP | fixed binary, regression tests pass | ✅ |
+| 2 | T2.4 | reconnect + re-pin; fingerprint vs D | `SHA256:07aWf…7Ls` **matches** prior pin | ✅ no MITM |
+| 3 | T2.5 | join `…collab-demo2.txt` | buffer = `run2: line from alice (D)` | ✅ **alice→bob** |
+| 4 | T2.5 | **I-2 probe**: edit bob — found active buffer was `*AI:claude*`, switched (separate step), verified active, inserted | bob's line rendered locally | ✅ **I-2 was a driving artifact, not a bug** |
+| 5 | T2.5 | bob's edit propagates to alice | alice shows `run2: line from bob (E)`; **alice did NOT crash** | ✅ **bob→alice** + I-1 fix holds |
+| 6 | T2.4/5 | watch link stability | no flapping, no disconnect | ✅ I-7 was a symptom of I-1 |
+
+**Run 2 headline: full bidirectional CRDT sync over mTLS, two machines, confirmed.**
+
+## Issues — detail + repro
+
+### I-1 ✅ FIXED (`a57455f`) — rope panic on double-click word-select  ·  Step T2.5  ·  task #18
+- **Actual root cause (not the CRDT path):** double-click word-select in the right pane
+  of a **split window** (or past EOL) produced a screen `text_col` far beyond the line
+  (live: char index **138 into a 34-char rope**); `char_offset_at` → out-of-bounds offset
+  → `word_start_backward`'s `rope.char(p)` panicked. The collab/multibyte angle was a
+  red herring — it was unclamped mouse column math.
+- **Fix:** clamp `text_col` to the clicked line in `mouse_ops.rs` + guard
+  `word_start_backward` (clamp `pos` to `len`) in `word.rs` + 2 regression tests.
+- **Verified:** regression tests pass in bob's build; **Run 2 had no crash** after bob→alice.
+
+### I-2 ✅ RESOLVED (not a product bug) — bob edit "not visible"  ·  Step T2.5
+- **Cause:** when driving via MCP, the active buffer is `*AI:claude*`, so `buffer-insert`
+  targeted the wrong buffer; `switch-to-buffer` in the same burst didn't take before the
+  insert. **Fix (test procedure):** `switch-to-buffer` as its own step, verify `active`
+  via `list_buffers`, then edit. Confirmed working in Run 2.
+
+### I-7 ✅ RESOLVED — connection flapping was a symptom of I-1  ·  Step T2.4/5
+- With the I-1 crash gone, no flapping in Run 2. The earlier `peer closed connection
+  without TLS close_notify` churn was alice crashing/restarting, not an independent bug.
+
+### (historical) I-1 original notes
+- alice rope panic crash on remote update  ·  Step T2.5  ·  task #18
 - **What:** alice's editor panics (rope-related) and crashes when a remote update
   arrives during buffer convergence. Seen ≥2× this run.
 - **Where in pipeline:** T2.5 (buffer convergence), on **alice receiving bob's edit**.
@@ -86,9 +122,11 @@ Chronological; each row is one observation tied to a plan step.
 
 | Direction | Step | Result |
 |-----------|------|--------|
-| alice → bob (receive) | T2.5 | ✅ confirmed (row 8) |
-| bob → alice (send) | T2.5 | ❌ blocked by I-1 (alice crash) + I-2 (edit not visible) |
-| simultaneous edit | T2.5 | ⏳ not reached |
+| alice → bob (receive) | T2.5 | ✅ confirmed (Run 1 + Run 2) |
+| bob → alice (send) | T2.5 | ✅ **confirmed Run 2** (alice shows bob's line, no crash) |
+| simultaneous edit | T2.5 | ⏳ next |
+| KB membership | T2.6 | ⏳ not reached |
+| security checks | T2.7 | ⏳ not reached |
 
 ## Next run (from scratch)
 
