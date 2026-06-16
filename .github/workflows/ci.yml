@@ -187,12 +187,12 @@ jobs:
   e2e:
     name: e2e / scheme + packages
     runs-on: ubuntu-latest
-    needs: [check]
+    needs: [check, daemon]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Install GUI dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libfreetype6-dev
+        run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libfreetype6-dev iproute2
       - name: Download mae binary
         uses: actions/download-artifact@v8
         with:
@@ -203,6 +203,16 @@ jobs:
           mkdir -p target/release
           cp /tmp/mae-dl/mae target/release/mae
           chmod +x target/release/mae
+      - name: Download daemon binary
+        uses: actions/download-artifact@v8
+        with:
+          name: mae-daemon-binary
+          path: /tmp/daemon-dl
+      - name: Install daemon binary
+        run: |
+          mkdir -p daemon/target/release
+          cp /tmp/daemon-dl/mae-daemon daemon/target/release/mae-daemon
+          chmod +x daemon/target/release/mae-daemon
       - name: Validate init.scm
         run: ./target/release/mae --check-config
       - name: Editor tests
@@ -211,6 +221,16 @@ jobs:
         run: ./target/release/mae --test tests/crdt/
       - name: Collab local tests
         run: ./target/release/mae --test tests/collab-local/
+      - name: Trusted-peer mTLS e2e
+        env:
+          MAE_BIN: ${{ github.workspace }}/target/release/mae
+          MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
+        run: scripts/collab-mtls-e2e.sh
+      - name: Per-KB membership e2e
+        env:
+          MAE_BIN: ${{ github.workspace }}/target/release/mae
+          MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
+        run: scripts/collab-membership-e2e.sh
       - name: Package install
         run: |
           mkdir -p ~/.config/mae
