@@ -15,7 +15,7 @@ use mae_mcp::protocol::{JsonRpcRequest, JsonRpcResponse, McpError, ToolInfo};
 use mae_mcp::session::ClientSession;
 use mae_mcp::{McpToolRequest, McpToolResult};
 use mae_sync::encoding::{base64_to_update, update_to_base64};
-use mae_sync::kb::KbCollectionDoc;
+use mae_sync::kb::{JoinPolicy, KbCollectionDoc, Role as SyncRole};
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -133,13 +133,15 @@ async fn run_session<R, W>(
 {
     let write_timeout = std::time::Duration::from_secs(WRITE_TIMEOUT_SECS);
 
-    if let Some(label) = session.authenticated_label() {
-        info!(session = session.id, peer = %label, "authenticated peer");
-    }
     let session_id = session.id;
-    // The authoritative peer label (key/TLS sessions only). When present it
-    // overrides self-claimed creator/user_name/saved_by (ADR-017 strict binding).
+    // The authoritative access-control **principal** (ADR-018): the key fingerprint
+    // (or psk:<keyid>), never the mutable label. KB ownership/membership key on this.
+    let auth_principal: Option<String> = session.authenticated_principal().map(str::to_string);
+    // The display label (key/TLS sessions) — logging/attribution only.
     let auth_label: Option<String> = session.authenticated_label().map(str::to_string);
+    if let Some((principal, label)) = session.principal_and_label() {
+        info!(session = session_id, principal, peer = %label, "authenticated peer");
+    }
     info!(session = session_id, "collab client connected");
 
     // Track which docs this session has interacted with for disconnect cleanup.
@@ -238,12 +240,12 @@ async fn run_session<R, W>(
                 // Notifications must not generate a response — handle and continue.
                 if is_doc && is_notif {
                     debug!(session = session_id, "notification detected, handling without response");
-                    handle_doc_notification_inner(&msg, &doc_store, &broadcaster, session_id, auth_label.as_deref(), &mut session_docs).await;
+                    handle_doc_notification_inner(&msg, &doc_store, &broadcaster, session_id, auth_label.as_deref(), auth_principal.as_deref(), &mut session_docs).await;
                     continue;
                 }
 
                 let mut response = if is_doc {
-                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), &mut session_docs).await
+                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), &mut session_docs).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
@@ -401,15 +403,28 @@ async fn handle_doc_notification(
     session_id: u64,
     session_docs: &mut HashSet<String>,
 ) {
-    handle_doc_notification_inner(msg, doc_store, broadcaster, session_id, None, session_docs).await
+    handle_doc_notification_inner(
+        msg,
+        doc_store,
+        broadcaster,
+        session_id,
+        None,
+        None,
+        session_docs,
+    )
+    .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_doc_notification_inner(
     msg: &str,
     _doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     session_id: u64,
     auth_label: Option<&str>,
+    // Used by the raw-`kbc:`/`kb:` sync/update owner gate (membership-smuggling
+    // defense); wired with the abuse tests.
+    _auth_principal: Option<&str>,
     session_docs: &mut HashSet<String>,
 ) {
     // Parse method and params manually — no JsonRpcRequest (requires `id`).
@@ -506,90 +521,131 @@ async fn handle_doc_request(
         start_time,
         session_id,
         None,
+        None,
         session_docs,
     )
     .await
 }
 
-/// Per-KB membership gate (ADR-017): `Ok(())` if the peer may access `kb_id`.
-///
-/// Authenticated (key/TLS) peers are gated against the KB's
-/// `KbCollectionDoc.members()` (the creator is always a member). Anonymous
-/// (psk/none) sessions are NOT gated — they fall back to connection-level trust,
-/// preserving backward compatibility for shared-secret deployments.
-async fn kb_membership_check(
-    doc_store: &DocStore,
-    kb_id: &str,
-    auth_label: Option<&str>,
-) -> Result<(), String> {
-    let label = match auth_label {
-        Some(l) => l,
-        None => return Ok(()),
-    };
+/// A KB operation, for the access engine (ADR-018).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KbOp {
+    Join,
+    #[allow(dead_code)]
+    Read,
+    Edit,
+    Manage,
+}
+
+/// The access decision (ADR-018). `AllowAutoJoin` = a permissive-policy non-member
+/// the caller must add as a viewer; `Pending` = an invite-policy non-member to be
+/// recorded for owner approval.
+#[derive(Debug, PartialEq, Eq)]
+enum AccessDecision {
+    Allow,
+    AllowAutoJoin,
+    Pending,
+    Deny(String),
+}
+
+/// Load the collection doc for `kb_id` (`kbc:{kb_id}`).
+async fn load_collection(doc_store: &DocStore, kb_id: &str) -> Result<KbCollectionDoc, String> {
     let collection_doc = format!("kbc:{kb_id}");
     let (state, _sv) = doc_store
         .encode_state_and_sv(&collection_doc)
         .await
         .map_err(|e| format!("KB '{kb_id}' not found: {e}"))?;
-    let coll = KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))?;
-    if coll.creator() == label || coll.members().iter().any(|m| m == label) {
-        Ok(())
-    } else {
-        Err(format!("not a member of KB '{kb_id}'"))
-    }
+    KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))
 }
 
-/// Owner-only membership mutation. Loads `kbc:{kb_id}`, verifies the caller is
-/// the creator, applies `mutate` (add/remove), persists + broadcasts the update.
-async fn kb_membership_mutate(
+/// Persist a collection update + broadcast it to other subscribers. Returns wal_seq.
+async fn persist_and_broadcast_collection(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     session_id: u64,
     kb_id: &str,
-    member: &str,
-    auth_label: Option<&str>,
-    add: bool,
-) -> Result<(), String> {
+    update: &[u8],
+) -> Result<u64, String> {
     let collection_doc = format!("kbc:{kb_id}");
-    let (state, _sv) = doc_store
-        .encode_state_and_sv(&collection_doc)
-        .await
-        .map_err(|e| format!("KB '{kb_id}' not found: {e}"))?;
-    let mut coll =
-        KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))?;
-    // Owner-only: an authenticated caller must be the creator. (Anonymous psk
-    // sessions retain connection-level trust and may manage membership.)
-    if let Some(label) = auth_label {
-        if coll.creator() != label {
-            return Err(format!(
-                "only the owner ('{}') can manage members of KB '{kb_id}'",
-                coll.creator()
-            ));
-        }
-    }
-    let update = if add {
-        coll.add_member(member)
-    } else {
-        coll.remove_member(member)
-    };
     let result = doc_store
-        .apply_update(&collection_doc, &update, None)
+        .apply_update(&collection_doc, update, None)
         .await
-        .map_err(|e| format!("failed to persist membership: {e}"))?;
-    // Broadcast the collection change to subscribers (excluding the caller).
+        .map_err(|e| format!("failed to persist collection: {e}"))?;
     broadcaster.lock().unwrap().broadcast_except(
         &EditorEvent::SyncUpdate {
             buffer_name: collection_doc,
-            update_base64: update_to_base64(&update),
+            update_base64: update_to_base64(update),
             wal_seq: result.wal_seq,
         },
         session_id,
     );
-    Ok(())
+    Ok(result.wal_seq)
+}
+
+/// A coarse monotonic-ish timestamp (unix seconds) for pending-request ordering.
+fn now_stamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        .to_string()
+}
+
+/// ADR-018 complete-mediation access engine: every KB operation routes through
+/// here. Resolves the caller's role from its cryptographic **principal** (key
+/// fingerprint — never a label), then decides by hierarchical RBAC role × the
+/// KB's join policy × the operation. `principal == None` (the `none`/loopback
+/// auth mode) is connection-level-trusted and blanket-allowed (dev only — real
+/// per-identity policy requires `key` mode).
+async fn kb_access(
+    doc_store: &DocStore,
+    kb_id: &str,
+    principal: Option<&str>,
+    op: KbOp,
+) -> Result<AccessDecision, String> {
+    let principal = match principal {
+        Some(p) => p,
+        None => return Ok(AccessDecision::Allow),
+    };
+    let coll = load_collection(doc_store, kb_id).await?;
+    match coll.role_of(principal) {
+        Some(role) => {
+            // Hierarchical RBAC: owner ⊇ editor ⊇ viewer.
+            let allowed = match op {
+                KbOp::Join | KbOp::Read => true,
+                KbOp::Edit => role.includes(SyncRole::Editor),
+                KbOp::Manage => role.includes(SyncRole::Owner),
+            };
+            if allowed {
+                Ok(AccessDecision::Allow)
+            } else {
+                Ok(AccessDecision::Deny(format!(
+                    "role '{}' may not {:?} KB '{kb_id}'",
+                    role.as_str(),
+                    op
+                )))
+            }
+        }
+        None => match op {
+            // Non-member join is governed by the KB's join policy.
+            KbOp::Join => match coll.join_policy() {
+                JoinPolicy::Permissive => Ok(AccessDecision::AllowAutoJoin),
+                JoinPolicy::Invite => Ok(AccessDecision::Pending),
+                JoinPolicy::Restrictive => Ok(AccessDecision::Deny(format!(
+                    "not a member of KB '{kb_id}'"
+                ))),
+            },
+            _ => Ok(AccessDecision::Deny(format!(
+                "not a member of KB '{kb_id}'"
+            ))),
+        },
+    }
 }
 
 /// Handle document-level methods directly (without editor tool dispatch).
-/// `auth_label` (key/TLS sessions) is authoritative for attribution (ADR-017).
+/// `auth_principal` (key fingerprint / psk:<keyid>) is the authoritative subject
+/// for KB access control (ADR-018); `auth_label` is display/attribution only.
 #[allow(clippy::too_many_arguments)]
 async fn handle_doc_request_inner(
     msg: &str,
@@ -598,6 +654,7 @@ async fn handle_doc_request_inner(
     start_time: std::time::Instant,
     session_id: u64,
     auth_label: Option<&str>,
+    auth_principal: Option<&str>,
     session_docs: &mut HashSet<String>,
 ) -> JsonRpcResponse {
     let request: JsonRpcRequest = match serde_json::from_str(msg) {
@@ -1150,33 +1207,18 @@ async fn handle_doc_request_inner(
                 }
             };
             let name = params["name"].as_str().unwrap_or("").to_string();
-            let claimed_creator = params["creator"].as_str().unwrap_or("").to_string();
-            // Strict identity binding: a key/TLS-authenticated peer cannot claim a
-            // creator other than its verified identity (ADR-017). The authenticated
-            // label is authoritative; for anonymous (psk/none) sessions the
-            // self-claimed value stands.
-            let creator = match auth_label {
-                Some(label) => {
-                    if !claimed_creator.is_empty() && claimed_creator != label {
-                        warn!(
-                            session = session_id, kb_id = %kb_id,
-                            claimed = %claimed_creator, authenticated = %label,
-                            "kb/share creator mismatch — rejecting"
-                        );
-                        return JsonRpcResponse::error(
-                            id,
-                            McpError::internal_error(format!(
-                                "creator mismatch: authenticated as '{label}', cannot share as '{claimed_creator}'"
-                            )),
-                        );
-                    }
-                    label.to_string()
-                }
-                None => claimed_creator,
-            };
-            info!(session = session_id, kb_id = %kb_id, name = %name, creator = %creator, "kb/share");
+            // ADR-018: the client-supplied `creator` is only a DISPLAY label hint —
+            // never authoritative. The daemon derives the OWNER from the verified
+            // cert principal (key fingerprint) and ignores any claimed identity, so
+            // there is no "creator mismatch" failure (the old I-7 reject is gone).
+            let creator_hint = params["creator"].as_str().unwrap_or("").to_string();
+            let owner_label = auth_label.unwrap_or(creator_hint.as_str()).to_string();
+            info!(
+                session = session_id, kb_id = %kb_id, name = %name,
+                owner = ?auth_principal, owner_label = %owner_label, "kb/share"
+            );
 
-            // Decode and store the collection doc.
+            // Decode the collection doc.
             let collection_b64 = match params["collection_state"].as_str() {
                 Some(s) => s,
                 None => {
@@ -1195,14 +1237,14 @@ async fn handle_doc_request_inner(
                     );
                 }
             };
-            // Strict binding: re-stamp the collection's creator + seed members with
-            // the AUTHENTICATED label, overriding whatever the client baked in
-            // (ADR-017). Without this, owner-checks + membership use the client's
-            // self-claimed user_name, not the verified peer identity.
-            let collection_bytes = match auth_label {
-                Some(label) => match KbCollectionDoc::from_bytes(&collection_bytes) {
+            // ADR-018 strict binding: bind the OWNER = the AUTHENTICATED principal
+            // (key fingerprint), overriding whatever the client baked in. A
+            // self-claimed creator is simply ignored — never rejected. `none` mode
+            // (no principal) keeps the client collection as-is (loopback trust).
+            let collection_bytes = match auth_principal {
+                Some(principal) => match KbCollectionDoc::from_bytes(&collection_bytes) {
                     Ok(mut coll) => {
-                        coll.set_creator(label);
+                        coll.set_owner(principal, &owner_label);
                         coll.encode_state()
                     }
                     Err(_) => collection_bytes,
@@ -1263,7 +1305,8 @@ async fn handle_doc_request_inner(
             let meta = serde_json::json!({
                 "kb_id": kb_id,
                 "name": name,
-                "creator": creator,
+                "owner": auth_principal.unwrap_or(""),
+                "owner_label": owner_label,
                 "node_count": node_count,
                 "shared_by": session_id,
             });
@@ -1292,10 +1335,58 @@ async fn handle_doc_request_inner(
             };
             info!(session = session_id, kb_id = %kb_id, "kb/join");
 
-            // Per-KB membership gate (ADR-017): authenticated non-members denied.
-            if let Err(e) = kb_membership_check(doc_store, &kb_id, auth_label).await {
-                warn!(session = session_id, kb_id = %kb_id, reason = %e, "kb/join denied");
-                return JsonRpcResponse::error(id, McpError::internal_error(e));
+            // ADR-018 access gate (complete mediation): member → join; non-member
+            // resolved by the KB's join policy (restrictive/invite/permissive).
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Join).await {
+                Ok(AccessDecision::Allow) => {}
+                Ok(AccessDecision::AllowAutoJoin) => {
+                    // permissive: auto-grant the least-privilege role (viewer).
+                    if let (Some(principal), Ok(mut coll)) =
+                        (auth_principal, load_collection(doc_store, &kb_id).await)
+                    {
+                        let update = coll.upsert_member(
+                            principal,
+                            auth_label.unwrap_or(principal),
+                            SyncRole::Viewer,
+                        );
+                        let _ = persist_and_broadcast_collection(
+                            doc_store,
+                            broadcaster,
+                            session_id,
+                            &kb_id,
+                            &update,
+                        )
+                        .await;
+                    }
+                }
+                Ok(AccessDecision::Pending) => {
+                    if let (Some(principal), Ok(mut coll)) =
+                        (auth_principal, load_collection(doc_store, &kb_id).await)
+                    {
+                        let update = coll.add_pending(
+                            principal,
+                            auth_label.unwrap_or(principal),
+                            &now_stamp(),
+                        );
+                        let _ = persist_and_broadcast_collection(
+                            doc_store,
+                            broadcaster,
+                            session_id,
+                            &kb_id,
+                            &update,
+                        )
+                        .await;
+                    }
+                    info!(session = session_id, kb_id = %kb_id, principal = ?auth_principal, "kb/join: pending");
+                    return JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({ "kb_id": kb_id, "status": "pending" }),
+                    );
+                }
+                Ok(AccessDecision::Deny(msg)) | Err(msg) => {
+                    warn!(session = session_id, kb_id = %kb_id, reason = %msg, "kb/join denied");
+                    return JsonRpcResponse::error(id, McpError::internal_error(msg));
+                }
             }
 
             // Read the collection doc.
@@ -1414,10 +1505,21 @@ async fn handle_doc_request_inner(
             }
             info!(session = session_id, kb_id = %kb_id, node_id = %node_id, update_len = update_bytes.len(), "kb/node_update");
 
-            // Per-KB membership gate (ADR-017): authenticated non-members denied.
-            if let Err(e) = kb_membership_check(doc_store, &kb_id, auth_label).await {
-                warn!(session = session_id, kb_id = %kb_id, reason = %e, "kb/node_update denied");
-                return JsonRpcResponse::error(id, McpError::internal_error(e));
+            // ADR-018: editing a node requires editor/owner role. Viewers and
+            // non-members are denied (least privilege).
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Edit).await {
+                Ok(AccessDecision::Allow) => {}
+                Ok(AccessDecision::Deny(msg)) | Err(msg) => {
+                    warn!(session = session_id, kb_id = %kb_id, reason = %msg, "kb/node_update denied");
+                    return JsonRpcResponse::error(id, McpError::internal_error(msg));
+                }
+                Ok(_) => {
+                    warn!(session = session_id, kb_id = %kb_id, "kb/node_update denied");
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!("cannot edit KB '{kb_id}'")),
+                    );
+                }
             }
 
             let node_doc = format!("kb:{node_id}");
@@ -1456,6 +1558,7 @@ async fn handle_doc_request_inner(
                     );
                 }
             };
+            // `member` is now a PRINCIPAL (key fingerprint), not a label.
             let member = match params["member"].as_str() {
                 Some(s) => s.to_string(),
                 None => {
@@ -1465,22 +1568,215 @@ async fn handle_doc_request_inner(
                     );
                 }
             };
-            info!(session = session_id, kb_id = %kb_id, member = %member, add, "kb membership change");
-            match kb_membership_mutate(
+            let role = params["role"]
+                .as_str()
+                .and_then(SyncRole::parse)
+                .unwrap_or(SyncRole::Editor);
+            // ADR-018: owner-only (Manage). The verified principal is the subject.
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+                Ok(AccessDecision::Allow) => {}
+                Ok(AccessDecision::Deny(m)) | Err(m) => {
+                    return JsonRpcResponse::error(id, McpError::internal_error(m));
+                }
+                Ok(_) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
+                    );
+                }
+            }
+            let mut coll = match load_collection(doc_store, &kb_id).await {
+                Ok(c) => c,
+                Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+            };
+            if !add && coll.owner() == member {
+                return JsonRpcResponse::error(
+                    id,
+                    McpError::internal_error(format!("cannot remove the owner of KB '{kb_id}'")),
+                );
+            }
+            let update = if add {
+                coll.upsert_member(&member, params["label"].as_str().unwrap_or(""), role)
+            } else {
+                coll.remove_principal(&member)
+            };
+            match persist_and_broadcast_collection(
                 doc_store,
                 broadcaster,
                 session_id,
                 &kb_id,
-                &member,
-                auth_label,
-                add,
+                &update,
             )
             .await
             {
-                Ok(()) => JsonRpcResponse::success(
-                    id,
-                    serde_json::json!({ "kb_id": kb_id, "member": member, "added": add }),
-                ),
+                Ok(_) => {
+                    info!(session = session_id, kb_id = %kb_id, member = %member, add, role = role.as_str(), "kb membership change");
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({ "kb_id": kb_id, "member": member, "added": add }),
+                    )
+                }
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+            }
+        }
+
+        "kb/set_policy" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    )
+                }
+            };
+            let policy = match params["policy"].as_str().and_then(JoinPolicy::parse) {
+                Some(p) => p,
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error(
+                            "policy must be restrictive|invite|permissive".to_string(),
+                        ),
+                    )
+                }
+            };
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+                Ok(AccessDecision::Allow) => {}
+                Ok(AccessDecision::Deny(m)) | Err(m) => {
+                    return JsonRpcResponse::error(id, McpError::internal_error(m))
+                }
+                Ok(_) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
+                    )
+                }
+            }
+            let mut coll = match load_collection(doc_store, &kb_id).await {
+                Ok(c) => c,
+                Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+            };
+            let update = coll.set_join_policy(policy);
+            match persist_and_broadcast_collection(
+                doc_store,
+                broadcaster,
+                session_id,
+                &kb_id,
+                &update,
+            )
+            .await
+            {
+                Ok(_) => {
+                    info!(session = session_id, kb_id = %kb_id, policy = policy.as_str(), "kb/set_policy: complete");
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({ "kb_id": kb_id, "policy": policy.as_str() }),
+                    )
+                }
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+            }
+        }
+
+        "kb/list_pending" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    )
+                }
+            };
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+                Ok(AccessDecision::Allow) => {}
+                Ok(AccessDecision::Deny(m)) | Err(m) => {
+                    return JsonRpcResponse::error(id, McpError::internal_error(m))
+                }
+                Ok(_) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
+                    )
+                }
+            }
+            let coll = match load_collection(doc_store, &kb_id).await {
+                Ok(c) => c,
+                Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+            };
+            let pending: Vec<_> = coll
+                .pending()
+                .into_iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "fingerprint": p.fingerprint,
+                        "label": p.label,
+                        "requested_at": p.requested_at,
+                    })
+                })
+                .collect();
+            JsonRpcResponse::success(
+                id,
+                serde_json::json!({ "kb_id": kb_id, "pending": pending }),
+            )
+        }
+
+        "kb/approve_member" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    )
+                }
+            };
+            let principal = match params["principal"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'principal' field".to_string()),
+                    )
+                }
+            };
+            let role = params["role"]
+                .as_str()
+                .and_then(SyncRole::parse)
+                .unwrap_or(SyncRole::Editor);
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+                Ok(AccessDecision::Allow) => {}
+                Ok(AccessDecision::Deny(m)) | Err(m) => {
+                    return JsonRpcResponse::error(id, McpError::internal_error(m))
+                }
+                Ok(_) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
+                    )
+                }
+            }
+            let mut coll = match load_collection(doc_store, &kb_id).await {
+                Ok(c) => c,
+                Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+            };
+            let update = coll.approve(&principal, role);
+            match persist_and_broadcast_collection(
+                doc_store,
+                broadcaster,
+                session_id,
+                &kb_id,
+                &update,
+            )
+            .await
+            {
+                Ok(_) => {
+                    info!(session = session_id, kb_id = %kb_id, principal = %principal, role = role.as_str(), "kb/approve_member: complete");
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({ "kb_id": kb_id, "principal": principal, "role": role.as_str() }),
+                    )
+                }
                 Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
             }
         }
@@ -2283,24 +2579,32 @@ mod tests {
          #+begin_src rust\nfn main() { println!(\"hello\"); }\n#+end_src\n"
     }
 
-    /// Helper: share a KB with nodes via the handler.
-    /// Build a kb/share request with the given claimed `creator` and dispatch it
-    /// through `handle_doc_request_inner` with an authenticated `auth_label`.
+    // --- ADR-018 access-control test harness (principals, not labels) ---
+
+    /// A peer's principal (fake key fingerprint) from a label.
+    fn fp(label: &str) -> String {
+        format!("SHA256:{label}")
+    }
+
+    /// Share a KB authenticated as `auth_principal` (key fingerprint) with display
+    /// `auth_label`. The daemon stamps the owner from the principal; any claimed
+    /// `creator` is ignored.
     async fn kb_share_as(
         store: &Arc<DocStore>,
         bc: &SharedBroadcaster,
         auth_label: Option<&str>,
+        auth_principal: Option<&str>,
         kb_id: &str,
-        creator: &str,
+        claimed_creator: &str,
         session_docs: &mut HashSet<String>,
     ) -> JsonRpcResponse {
-        let coll = KbCollectionDoc::new(kb_id, creator);
+        let coll = KbCollectionDoc::new_owned(kb_id, "", auth_label.unwrap_or(""));
         let msg = serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": "kb/share",
             "params": {
                 "kb_id": kb_id,
                 "name": kb_id,
-                "creator": creator,
+                "creator": claimed_creator,
                 "collection_state": update_to_base64(&coll.encode_state()),
                 "nodes": [],
             }
@@ -2312,58 +2616,18 @@ mod tests {
             std::time::Instant::now(),
             0,
             auth_label,
+            auth_principal,
             session_docs,
         )
         .await
     }
 
-    #[tokio::test]
-    async fn strict_binding_rejects_spoofed_creator() {
-        let store = test_doc_store();
-        let bc = test_broadcaster();
-        let mut docs = HashSet::new();
-        // Authenticated as "alice" but claims creator "mallory" → rejected.
-        let resp = kb_share_as(&store, &bc, Some("alice"), "kb1", "mallory", &mut docs).await;
-        assert!(resp.error.is_some(), "spoofed creator must be rejected");
-        assert!(
-            resp.error.unwrap().message.contains("creator mismatch"),
-            "error should explain the creator mismatch"
-        );
-    }
-
-    #[tokio::test]
-    async fn strict_binding_allows_matching_creator() {
-        let store = test_doc_store();
-        let bc = test_broadcaster();
-        let mut docs = HashSet::new();
-        // Authenticated as "alice", claims creator "alice" → accepted.
-        let resp = kb_share_as(&store, &bc, Some("alice"), "kb2", "alice", &mut docs).await;
-        assert!(
-            resp.error.is_none(),
-            "matching creator must succeed: {:?}",
-            resp.error
-        );
-    }
-
-    #[tokio::test]
-    async fn anonymous_session_keeps_self_claimed_creator() {
-        let store = test_doc_store();
-        let bc = test_broadcaster();
-        let mut docs = HashSet::new();
-        // No auth (psk/none) → self-claimed creator stands (backward compatible).
-        let resp = kb_share_as(&store, &bc, None, "kb3", "whoever", &mut docs).await;
-        assert!(
-            resp.error.is_none(),
-            "anonymous share must succeed: {:?}",
-            resp.error
-        );
-    }
-
-    /// Dispatch an arbitrary doc request as an (optionally authenticated) peer.
+    /// Dispatch an arbitrary doc request as a peer (label + principal).
     async fn dispatch_as(
         store: &Arc<DocStore>,
         bc: &SharedBroadcaster,
         auth_label: Option<&str>,
+        auth_principal: Option<&str>,
         msg: serde_json::Value,
         docs: &mut HashSet<String>,
     ) -> JsonRpcResponse {
@@ -2374,9 +2638,18 @@ mod tests {
             std::time::Instant::now(),
             0,
             auth_label,
+            auth_principal,
             docs,
         )
         .await
+    }
+
+    async fn load_coll(store: &Arc<DocStore>, kb_id: &str) -> KbCollectionDoc {
+        let (state, _) = store
+            .encode_state_and_sv(&format!("kbc:{kb_id}"))
+            .await
+            .expect("collection exists");
+        KbCollectionDoc::from_bytes(&state).expect("valid collection")
     }
 
     fn kb_join_msg(kb_id: &str) -> serde_json::Value {
@@ -2388,99 +2661,269 @@ mod tests {
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/node_update",
             "params":{"kb_id":kb_id,"node_id":"concept:n","update":update_to_base64(&upd)}})
     }
-    fn kb_member_msg(method: &str, kb_id: &str, member: &str) -> serde_json::Value {
+    /// member is a PRINCIPAL (fingerprint); optional role.
+    fn kb_member_msg(
+        method: &str,
+        kb_id: &str,
+        member: &str,
+        role: Option<&str>,
+    ) -> serde_json::Value {
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,
-            "params":{"kb_id":kb_id,"member":member}})
+            "params":{"kb_id":kb_id,"member":member,"role":role,"label":member}})
+    }
+    fn kb_policy_msg(kb_id: &str, policy: &str) -> serde_json::Value {
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/set_policy",
+            "params":{"kb_id":kb_id,"policy":policy}})
+    }
+    fn kb_approve_msg(kb_id: &str, principal: &str, role: Option<&str>) -> serde_json::Value {
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/approve_member",
+            "params":{"kb_id":kb_id,"principal":principal,"role":role}})
     }
 
     #[tokio::test]
-    async fn membership_creator_joins_nonmember_denied() {
+    async fn share_ignores_claimed_creator_and_binds_owner_to_principal() {
         let store = test_doc_store();
         let bc = test_broadcaster();
         let mut docs = HashSet::new();
-        // alice creates + shares the KB (members = [alice]).
+        // Authenticated principal = alice's key; claims creator "mallory" → SUCCEEDS,
+        // owner bound to the principal (the I-7 reject is gone; the claim is ignored).
+        let resp = kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kb1",
+            "mallory",
+            &mut docs,
+        )
+        .await;
         assert!(
-            kb_share_as(&store, &bc, Some("alice"), "kbm", "alice", &mut docs)
-                .await
-                .error
-                .is_none()
+            resp.error.is_none(),
+            "claimed creator must be ignored, not rejected: {:?}",
+            resp.error
         );
-        // alice (creator/member) may join.
+        let coll = load_coll(&store, "kb1").await;
+        assert_eq!(coll.owner(), fp("alice"), "owner = verified principal");
+        assert_eq!(coll.role_of(&fp("alice")), Some(SyncRole::Owner));
+        assert_eq!(
+            coll.role_of(&fp("mallory")),
+            None,
+            "spoofed name is not a member"
+        );
+    }
+
+    #[tokio::test]
+    async fn anonymous_share_succeeds() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        let resp = kb_share_as(&store, &bc, None, None, "kb3", "whoever", &mut docs).await;
         assert!(
-            dispatch_as(&store, &bc, Some("alice"), kb_join_msg("kbm"), &mut docs)
-                .await
-                .error
-                .is_none(),
-            "creator must be able to join"
+            resp.error.is_none(),
+            "anonymous (none) share must succeed: {:?}",
+            resp.error
         );
-        // bob (authenticated, not a member) is denied.
-        let denied = dispatch_as(&store, &bc, Some("bob"), kb_join_msg("kbm"), &mut docs).await;
-        assert!(denied.error.is_some(), "non-member join must be denied");
+    }
+
+    #[tokio::test]
+    async fn restrictive_nonmember_join_denied() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kbr",
+            "alice",
+            &mut docs,
+        )
+        .await;
+        dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            kb_policy_msg("kbr", "restrictive"),
+            &mut docs,
+        )
+        .await;
+        let denied = dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            Some(&fp("bob")),
+            kb_join_msg("kbr"),
+            &mut docs,
+        )
+        .await;
+        assert!(
+            denied.error.is_some(),
+            "restrictive: non-member join denied"
+        );
         assert!(denied.error.unwrap().message.contains("not a member"));
     }
 
     #[tokio::test]
-    async fn membership_owner_add_then_remove_gates_updates() {
+    async fn invite_nonmember_join_pending() {
         let store = test_doc_store();
         let bc = test_broadcaster();
         let mut docs = HashSet::new();
-        kb_share_as(&store, &bc, Some("alice"), "kbm2", "alice", &mut docs).await;
+        // default policy = invite
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kbi",
+            "alice",
+            &mut docs,
+        )
+        .await;
+        let resp = dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            Some(&fp("bob")),
+            kb_join_msg("kbi"),
+            &mut docs,
+        )
+        .await;
+        assert!(
+            resp.error.is_none(),
+            "invite join returns success+pending, not error"
+        );
+        assert_eq!(
+            resp.result.as_ref().and_then(|r| r["status"].as_str()),
+            Some("pending")
+        );
+        let coll = load_coll(&store, "kbi").await;
+        assert_eq!(coll.pending().len(), 1, "join recorded as pending");
+        assert_eq!(
+            coll.role_of(&fp("bob")),
+            None,
+            "pending peer is not yet a member"
+        );
+    }
 
-        // bob denied before being added.
+    #[tokio::test]
+    async fn permissive_nonmember_join_autoadds_viewer() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kbp",
+            "alice",
+            &mut docs,
+        )
+        .await;
+        dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            kb_policy_msg("kbp", "permissive"),
+            &mut docs,
+        )
+        .await;
+        let resp = dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            Some(&fp("bob")),
+            kb_join_msg("kbp"),
+            &mut docs,
+        )
+        .await;
+        assert!(resp.error.is_none(), "permissive join succeeds");
+        let coll = load_coll(&store, "kbp").await;
+        assert_eq!(
+            coll.role_of(&fp("bob")),
+            Some(SyncRole::Viewer),
+            "auto-granted least privilege"
+        );
+    }
+
+    #[tokio::test]
+    async fn owner_add_member_then_join_and_edit() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kbm2",
+            "alice",
+            &mut docs,
+        )
+        .await;
+        // bob denied edit before being added.
         assert!(dispatch_as(
             &store,
             &bc,
             Some("bob"),
+            Some(&fp("bob")),
             kb_node_update_msg("kbm2"),
             &mut docs
         )
         .await
         .error
         .is_some());
-
-        // Owner alice adds bob.
+        // owner adds bob (default editor).
+        assert!(dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            kb_member_msg("kb/add_member", "kbm2", &fp("bob"), None),
+            &mut docs
+        )
+        .await
+        .error
+        .is_none());
+        // bob now joins (member) + edits.
         assert!(
             dispatch_as(
                 &store,
                 &bc,
-                Some("alice"),
-                kb_member_msg("kb/add_member", "kbm2", "bob"),
+                Some("bob"),
+                Some(&fp("bob")),
+                kb_join_msg("kbm2"),
                 &mut docs
             )
             .await
             .error
             .is_none(),
-            "owner add_member must succeed"
-        );
-
-        // Now bob can join + update.
-        assert!(
-            dispatch_as(&store, &bc, Some("bob"), kb_join_msg("kbm2"), &mut docs)
-                .await
-                .error
-                .is_none(),
-            "added member must be able to join"
+            "member joins directly"
         );
         assert!(
             dispatch_as(
                 &store,
                 &bc,
                 Some("bob"),
+                Some(&fp("bob")),
                 kb_node_update_msg("kbm2"),
                 &mut docs
             )
             .await
             .error
             .is_none(),
-            "added member must be able to update"
+            "editor may edit"
         );
-
-        // Owner removes bob → his next update is denied.
+        // owner removes bob → next edit denied.
         assert!(dispatch_as(
             &store,
             &bc,
             Some("alice"),
-            kb_member_msg("kb/remove_member", "kbm2", "bob"),
+            Some(&fp("alice")),
+            kb_member_msg("kb/remove_member", "kbm2", &fp("bob"), None),
             &mut docs
         )
         .await
@@ -2491,57 +2934,202 @@ mod tests {
                 &store,
                 &bc,
                 Some("bob"),
+                Some(&fp("bob")),
                 kb_node_update_msg("kbm2"),
                 &mut docs
             )
             .await
             .error
             .is_some(),
-            "removed member must be denied"
+            "removed member denied"
         );
     }
 
     #[tokio::test]
-    async fn membership_only_owner_manages_members() {
+    async fn viewer_cannot_node_update() {
         let store = test_doc_store();
         let bc = test_broadcaster();
         let mut docs = HashSet::new();
-        kb_share_as(&store, &bc, Some("alice"), "kbm3", "alice", &mut docs).await;
-        // alice adds bob (a member, but NOT the owner).
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kbv",
+            "alice",
+            &mut docs,
+        )
+        .await;
+        // add bob as VIEWER
         dispatch_as(
             &store,
             &bc,
             Some("alice"),
-            kb_member_msg("kb/add_member", "kbm3", "bob"),
+            Some(&fp("alice")),
+            kb_member_msg("kb/add_member", "kbv", &fp("bob"), Some("viewer")),
             &mut docs,
         )
         .await;
-        // bob (non-owner) cannot add carol.
+        // viewer may join/read but not edit.
+        assert!(dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            Some(&fp("bob")),
+            kb_join_msg("kbv"),
+            &mut docs
+        )
+        .await
+        .error
+        .is_none());
         let denied = dispatch_as(
             &store,
             &bc,
             Some("bob"),
-            kb_member_msg("kb/add_member", "kbm3", "carol"),
+            Some(&fp("bob")),
+            kb_node_update_msg("kbv"),
+            &mut docs,
+        )
+        .await;
+        assert!(
+            denied.error.is_some(),
+            "viewer must not edit (least privilege)"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_owner_manages_members() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kbm3",
+            "alice",
+            &mut docs,
+        )
+        .await;
+        dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            kb_member_msg("kb/add_member", "kbm3", &fp("bob"), None),
+            &mut docs,
+        )
+        .await;
+        // bob (editor, non-owner) cannot add carol.
+        let denied = dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            Some(&fp("bob")),
+            kb_member_msg("kb/add_member", "kbm3", &fp("carol"), None),
             &mut docs,
         )
         .await;
         assert!(denied.error.is_some(), "non-owner must not manage members");
-        assert!(denied.error.unwrap().message.contains("owner"));
     }
 
     #[tokio::test]
-    async fn membership_anonymous_not_gated() {
+    async fn pending_then_approve_allows_join() {
         let store = test_doc_store();
         let bc = test_broadcaster();
         let mut docs = HashSet::new();
-        // psk/none sharer + anonymous joiner: no per-peer identity → not gated.
-        kb_share_as(&store, &bc, None, "kbm4", "alice", &mut docs).await;
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kba",
+            "alice",
+            &mut docs,
+        )
+        .await;
+        // bob requests (invite default) → pending.
+        dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            Some(&fp("bob")),
+            kb_join_msg("kba"),
+            &mut docs,
+        )
+        .await;
+        // owner approves as editor.
+        let ok = dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            kb_approve_msg("kba", &fp("bob"), Some("editor")),
+            &mut docs,
+        )
+        .await;
+        assert!(ok.error.is_none(), "owner approve succeeds: {:?}", ok.error);
+        let coll = load_coll(&store, "kba").await;
+        assert!(coll.pending().is_empty(), "approval clears pending");
+        assert_eq!(coll.role_of(&fp("bob")), Some(SyncRole::Editor));
+        // bob now joins as a member.
+        assert!(dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            Some(&fp("bob")),
+            kb_join_msg("kba"),
+            &mut docs
+        )
+        .await
+        .error
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn label_collision_two_keys_distinct_principals() {
+        // Two peers share the same display label but have distinct principals — the
+        // member added by one is NOT the other (no label-based impersonation).
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kbc",
+            "alice",
+            &mut docs,
+        )
+        .await;
+        // owner adds principal A under label "dupe".
+        let a = "SHA256:keyA";
+        let b = "SHA256:keyB";
+        dispatch_as(&store, &bc, Some("alice"), Some(&fp("alice")),
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/add_member","params":{"kb_id":"kbc","member":a,"role":"editor","label":"dupe"}}), &mut docs).await;
+        let coll = load_coll(&store, "kbc").await;
+        assert_eq!(coll.role_of(a), Some(SyncRole::Editor));
+        assert_eq!(
+            coll.role_of(b),
+            None,
+            "a different key with the same label is NOT a member"
+        );
+    }
+
+    #[tokio::test]
+    async fn none_mode_not_gated() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(&store, &bc, None, None, "kbn", "alice", &mut docs).await;
         assert!(
-            dispatch_as(&store, &bc, None, kb_join_msg("kbm4"), &mut docs)
+            dispatch_as(&store, &bc, None, None, kb_join_msg("kbn"), &mut docs)
                 .await
                 .error
                 .is_none(),
-            "anonymous sessions are not membership-gated"
+            "none/loopback sessions are connection-trusted (dev only)"
         );
     }
 
