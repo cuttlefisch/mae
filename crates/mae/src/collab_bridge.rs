@@ -315,8 +315,11 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
     // Only send when connected — updates accumulate in pending_kb_updates while offline.
     // Sources: (1) in-memory Vec, (2) SQLite pending_updates table (crash-durable).
     if matches!(editor.collab.status, CollabStatus::Connected { .. }) {
-        // First drain in-memory pending updates.
+        // First drain in-memory pending updates. (ADR-019 traceability: a single
+        // edit is greppable end-to-end via target `kb_sync`, e.g. MAE_LOG=kb_sync=debug.)
+        let in_mem = editor.collab.pending_kb_updates.len();
         for (kb_id, node_id, update) in std::mem::take(&mut editor.collab.pending_kb_updates) {
+            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, bytes = update.len(), "drain: send kb/node_update (in-mem)");
             let cmd = CollabCommand::KbNodeUpdate {
                 kb_id,
                 node_id,
@@ -325,6 +328,9 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             if collab_tx.try_send(cmd).is_err() {
                 warn!("collab command channel full — KB node update dropped");
             }
+        }
+        if in_mem > 0 {
+            tracing::debug!(target: "kb_sync", count = in_mem, "drain: flushed in-memory kb updates");
         }
         // Then drain SQLite-persisted pending updates (survives crashes).
         if let Some(ref store) = editor.kb.store {
@@ -1313,6 +1319,26 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     }
                 };
             editor.collab.shared_kbs.insert(kb_id.clone(), node_ids);
+
+            // ADR-019: stamp the DURABLE share marker so "this KB syncs" survives
+            // editor restart / reconnect (the transient `shared_kbs` set above is
+            // only a cache; the emit gate now reads these markers). Persisted to
+            // the XDG-first registry. Only on a confirmed share.
+            let now = mae_kb::data_dir::chrono_now_iso();
+            if kb_id == mae_core::KB_DEFAULT_NAME || kb_id == "primary" {
+                editor.kb.registry.primary_shared = true;
+                editor.kb.registry.primary_collab_id = Some(kb_id.clone());
+            } else if let Some(inst) = editor.kb.registry.find_mut(&kb_id) {
+                inst.shared = true;
+                inst.collab_id = Some(kb_id.clone());
+                inst.last_sync = Some(now);
+            }
+            if let Some(dir) = editor.mae_data_dir() {
+                if let Err(e) = editor.kb.registry.save(&dir) {
+                    warn!(kb = %kb_id, error = %e, "failed to persist shared-KB registry marker");
+                }
+            }
+            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_count, "share: durable marker stamped");
             editor.set_status(format!("KB '{}' shared ({} nodes)", kb_id, node_count));
         }
         CollabEvent::KbJoined {
@@ -5318,6 +5344,10 @@ mod tests {
     #[test]
     fn collab_kb_shared_populates_tracking() {
         let mut editor = Editor::new();
+        // Isolate the registry save (handler stamps the primary-shared marker).
+        let tmp = std::env::temp_dir().join(format!("mae-adr019-prim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        editor.data_dir_override = Some(tmp.clone());
         // Insert some nodes into the primary KB.
         editor.kb.primary.insert(mae_kb::Node::new(
             "node-1".to_string(),
@@ -5351,15 +5381,26 @@ mod tests {
             "shared_kbs should contain all node IDs: {:?}",
             tracked
         );
+        // ADR-019: primary-share durable marker stamped.
+        assert!(editor.kb.registry.primary_shared);
+        assert_eq!(
+            editor.kb.registry.primary_collab_id.as_deref(),
+            Some("default")
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// I-9: sharing a *named federated instance* must track its node IDs by
-    /// resolving name→uuid. `instances` is keyed by uuid, so the old
-    /// `instances.get(&kb_id)` (name) missed → `shared_kbs` got an EMPTY set →
-    /// later edits to the shared KB never matched → no kb/node_update broadcast.
+    /// I-9 + ADR-019: sharing a *named federated instance* tracks its node IDs by
+    /// resolving name→uuid (cache) AND stamps the DURABLE registry marker
+    /// (`shared`/`collab_id`) so the share survives editor restart.
     #[test]
     fn collab_kb_shared_named_instance_tracks_nodes_by_uuid() {
         let mut editor = Editor::new();
+        // Isolate the registry save to a temp dir (the handler persists markers).
+        let tmp = std::env::temp_dir().join(format!("mae-adr019-share-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        editor.data_dir_override = Some(tmp.clone());
+
         let uuid = "uuid-collabtest".to_string();
         let mut inst = mae_kb::KnowledgeBase::new();
         inst.insert(mae_kb::Node::new(
@@ -5375,7 +5416,7 @@ mod tests {
             "b",
         ));
         editor.kb.instances.insert(uuid.clone(), inst);
-        // Registry maps the human name → uuid (as `:kb-register` would).
+        // Registry maps the human name → uuid, NOT yet shared (handler stamps it).
         editor
             .kb
             .registry
@@ -5389,7 +5430,7 @@ mod tests {
                 enabled: true,
                 last_import: None,
                 collab_id: None,
-                shared: true,
+                shared: false,
                 remote_peers: Vec::new(),
                 last_sync: None,
             });
@@ -5408,6 +5449,16 @@ mod tests {
             "named-instance share must track nodes via uuid resolution, got: {:?}",
             tracked
         );
+        // Durable marker stamped (survives restart).
+        let inst = editor.kb.registry.find("collabtest").unwrap();
+        assert!(inst.shared, "share must stamp durable shared=true");
+        assert_eq!(inst.collab_id.as_deref(), Some("collabtest"));
+        // And persisted to the isolated registry file.
+        assert!(
+            tmp.join("kb-registry.toml").exists(),
+            "registry marker must be persisted"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -5468,10 +5519,9 @@ mod tests {
             mae_kb::NodeKind::Note,
             "original body".to_string(),
         ));
-        editor.collab.shared_kbs.insert(
-            "my-kb".to_string(),
-            HashSet::from(["shared-node".to_string()]),
-        );
+        // ADR-019: the durable primary-share marker is the gate authority.
+        editor.kb.registry.primary_shared = true;
+        editor.kb.registry.primary_collab_id = Some("my-kb".to_string());
         editor.collab.kb_sync_mode = mae_core::KB_SYNC_MODE_DEFAULT.to_string();
 
         // Update the node.
@@ -5608,10 +5658,9 @@ mod tests {
             mae_kb::NodeKind::Note,
             "original body with café and 日本語".to_string(),
         ));
-        editor.collab.shared_kbs.insert(
-            "test-kb".to_string(),
-            HashSet::from(["crdt-test".to_string()]),
-        );
+        // ADR-019: durable primary-share marker gates the broadcast.
+        editor.kb.registry.primary_shared = true;
+        editor.kb.registry.primary_collab_id = Some("test-kb".to_string());
         editor.collab.kb_sync_mode = mae_core::KB_SYNC_MODE_DEFAULT.to_string();
 
         editor

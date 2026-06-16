@@ -420,6 +420,30 @@ impl Editor {
             .map(|(uuid, _)| Some(uuid.clone()))
     }
 
+    /// The collaborative id a node's owning KB is shared under, derived from
+    /// **durable** registry markers (ADR-019) — not the transient `shared_kbs`
+    /// cache. This is the broadcast-gate authority, so a shared KB keeps
+    /// propagating edits across editor restart/reconnect (the cache may be
+    /// empty until reconstruction runs). `owner == None` ⇒ primary KB;
+    /// `Some(uuid)` ⇒ a federated instance.
+    fn kb_collab_id_of(&self, owner: &Option<String>) -> Option<String> {
+        match owner {
+            None => self.kb.registry.primary_shared.then(|| {
+                self.kb
+                    .registry
+                    .primary_collab_id
+                    .clone()
+                    .unwrap_or_else(|| crate::editor::KB_DEFAULT_NAME.to_string())
+            }),
+            Some(uuid) => self
+                .kb
+                .registry
+                .find_by_uuid(uuid)
+                .filter(|i| i.shared)
+                .and_then(|i| i.collab_id.clone()),
+        }
+    }
+
     /// Persist a node to its owning store: the primary store, or the matching
     /// federated instance store (keyed by uuid). Best-effort write-through.
     fn kb_persist_node_in(&self, owner: &Option<String>, node: &mae_kb::Node) {
@@ -547,16 +571,23 @@ impl Editor {
             updated.tags = t;
         }
 
-        // Check if this node belongs to a shared KB and sync mode is "on_save".
+        // Does this node's OWNING KB sync, per durable registry markers
+        // (ADR-019)? Derived from the owning instance's `shared`/`collab_id`,
+        // not the transient `shared_kbs` cache — so edits broadcast even right
+        // after a restart, before the cache is reconstructed.
         let shared_kb_id = if self.collab.kb_sync_mode == "on_save" {
-            self.collab
-                .shared_kbs
-                .iter()
-                .find(|(_, nodes)| nodes.contains(id))
-                .map(|(kb_id, _)| kb_id.clone())
+            self.kb_collab_id_of(&owner)
         } else {
             None
         };
+        tracing::debug!(
+            target: "kb_sync",
+            node_id = %id,
+            owner = ?owner,
+            sync_mode = %self.collab.kb_sync_mode,
+            gate_hit = shared_kb_id.is_some(),
+            "kb edit: broadcast-gate decision"
+        );
 
         if let Some(kb_id) = shared_kb_id {
             // CRDT-aware upsert on the OWNING in-memory KB to generate update
@@ -2688,9 +2719,10 @@ mod tests {
         assert_eq!(updated.body, "new body");
     }
 
-    /// I-9: editing an instance node that belongs to a *shared* KB must queue a
-    /// CRDT update for broadcast (so the edit propagates to peers) — previously
-    /// impossible because the write never resolved the instance node at all.
+    /// ADR-019: editing an instance node whose KB carries a DURABLE share marker
+    /// must queue a CRDT update for broadcast — **even with `shared_kbs` empty**
+    /// (the exact editor-restart scenario: the transient cache is gone but the
+    /// registry marker survives, so the emit gate still fires).
     #[test]
     fn kb_update_node_shared_instance_queues_crdt_update() {
         let mut editor = Editor::new();
@@ -2705,11 +2737,29 @@ mod tests {
         inst.insert(n);
         editor.kb.instances.insert("uuid-collabtest".into(), inst);
 
-        // Mark the KB shared (as the share/join events would) + on_save sync.
+        // Durable marker only (registry), NOT the transient shared_kbs cache.
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-collabtest".into(),
+                name: "collabtest".into(),
+                org_dir: std::path::PathBuf::from("/tmp/collabtest"),
+                db_path: std::path::PathBuf::from("/tmp/collabtest.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: Some("collabtest".into()),
+                shared: true,
+                remote_peers: Vec::new(),
+                last_sync: None,
+            });
         editor.collab.kb_sync_mode = "on_save".into();
-        let mut nodes = std::collections::HashSet::new();
-        nodes.insert("collabtest:alpha".to_string());
-        editor.collab.shared_kbs.insert("collabtest".into(), nodes);
+        assert!(
+            editor.collab.shared_kbs.is_empty(),
+            "gate must fire from the durable marker, not the cache"
+        );
 
         assert!(editor.collab.pending_kb_updates.is_empty());
         editor
@@ -2718,11 +2768,54 @@ mod tests {
         assert_eq!(
             editor.collab.pending_kb_updates.len(),
             1,
-            "edit to a shared instance node must queue a kb/node_update"
+            "edit to a durably-shared instance node must queue a kb/node_update"
         );
         let (kb_id, node_id, _bytes) = &editor.collab.pending_kb_updates[0];
         assert_eq!(kb_id, "collabtest");
         assert_eq!(node_id, "collabtest:alpha");
+    }
+
+    /// ADR-019: with the durable marker ABSENT (instance not shared), an edit
+    /// must NOT broadcast — even if a stale `shared_kbs` cache entry exists.
+    #[test]
+    fn kb_update_node_unshared_instance_does_not_queue() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        let mut n = mae_kb::Node::new("local:x", "X", mae_kb::NodeKind::Note, "b");
+        n.source = Some(mae_kb::NodeSource::Federation);
+        inst.insert(n);
+        editor.kb.instances.insert("uuid-local".into(), inst);
+        // Registry instance exists but is NOT shared.
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-local".into(),
+                name: "local".into(),
+                org_dir: std::path::PathBuf::from("/tmp/local"),
+                db_path: std::path::PathBuf::from("/tmp/local.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+            });
+        editor.collab.kb_sync_mode = "on_save".into();
+        // A stale cache entry must NOT be trusted as authority.
+        let mut nodes = std::collections::HashSet::new();
+        nodes.insert("local:x".to_string());
+        editor.collab.shared_kbs.insert("local".into(), nodes);
+
+        editor
+            .kb_update_node("local:x", None, Some("edited"), None)
+            .unwrap();
+        assert!(
+            editor.collab.pending_kb_updates.is_empty(),
+            "unshared KB must not broadcast even with a stale cache entry"
+        );
     }
 
     /// I-9: deleting an instance node must resolve it (not "No KB node").
