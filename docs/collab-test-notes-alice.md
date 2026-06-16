@@ -236,6 +236,7 @@ non-functional end-to-end.
 - **Status:** OPEN, **critical** — this is the actual collaborative-KB-editing feature; access
   control is the scaffolding around it. Supersedes the narrow I-8 framing (I-8 kept as a
   sub-symptom). Cross-ref bob's **B-3** (same family, owner/join side).
+  **✅ FIXED (`697b9015`)** — see "Fixes landed" below.
 
 ### I-8 ⚠️ OPEN — KB write path (`kb_update`/`kb_delete`) is primary-only, not federation-aware · Step T2.6 {#i-8}
 
@@ -259,7 +260,7 @@ non-functional end-to-end.
   membership against primary). Add a regression test: edit a node in a *registered instance*
   → succeeds + emits a node_update. Verify both owner-edit (allowed) and the e2e viewer-denial
   once writes flow.
-- **Status:** OPEN. Captured during live T2.6; does not invalidate steps 1–5.
+- **Status:** ✅ FIXED (`697b9015`, folded into I-9). Captured during live T2.6.
 
 ### I-10 🚨 OPEN (security) — daemon auth is a once-at-startup snapshot; authorize/revoke need a restart · Step T2.7 {#i-10}
 
@@ -280,8 +281,8 @@ non-functional end-to-end.
   copy; reload on file change (reuse the existing `notify` infra) or re-read per handshake
   (connections are infrequent). `authorize`/`revoke` then take effect immediately. Add an
   integration test: connect → revoke → **reconnect denied** with no restart.
-- **Status:** OPEN, **security**. User flagged the once-at-startup model as unacceptable;
-  pivoting to fixes (I-10 + I-9 + B-1) before resuming the KB test plan from the start.
+- **Status:** ✅ FIXED (`27929083`) — live reload per handshake; see "Fixes landed" below.
+  User flagged the once-at-startup model as unacceptable; fixed before resuming the plan.
 
 > **Test-state note:** bob is now de-authorized **on disk** (re-add before resuming:
 > `mae-daemon authorize mae-ed25519 aBjMkdzHH9YVUxfP5NxHJo7fcu5qGC75pUl1SWdAvnM= bob`).
@@ -300,6 +301,29 @@ before re-running the KB collab plan from the start:
 Each lands with positive + negative tests (TDD), `make ci-all` green, both-OS aware. After
 the fixes both machines rebuild and we restart the KB test plan clean (re-authorize bob,
 re-share collabtest, re-run T2.6 incl. the now-unblocked viewer-edit-denial + T2.7 revoke).
+
+### ✅ Fixes landed 2026-06-16 (all tested, on `feat/crdt-collab-validation`)
+
+- **I-10 (`27929083`)** — `ClientAuthSource` consulted per handshake;
+  `ReloadingAuthorizedKeys` re-reads `authorized_keys` from disk each connection
+  (fail-secure on missing); daemon uses `server_config_reloading`.
+  `authorize`/`revoke` now take effect with **no restart**. Test:
+  `mtls_reloading_verifier_honors_live_revoke` (one config, authorized→connect,
+  revoke-on-disk→reconnect-rejected).
+- **I-9 (`697b9015`, folds I-8)** — federation-aware writes:
+  `kb_update_node`/`kb_delete_node` resolve across `primary ∪ instances`
+  (`kb_owner_of`) and mutate the owning KB/store; `node_json` (kb_get) falls
+  through on a query-layer miss (joined nodes live in `primary`); the `KbShared`
+  handler resolves name→uuid so `shared_kbs` is populated (was empty → no
+  broadcast). Tests: instance-node update resolves + queues a CRDT update;
+  instance delete resolves; named-instance share tracks by uuid.
+- **B-1 (`43f6c5a5`)** — kb/join surfaces **joined / pending / denied** as three
+  distinct outcomes (was "Joined (0 nodes)" for all). Tests: pending→StatusReport,
+  denied→Error, success→KbJoined.
+
+Regression: editor workspace (mae-core 2247, mae-ai 450, mae 269, mae-mcp 125) +
+daemon (85/36/14/9) all green, 0 failures. Clippy clean. **Both machines must
+rebuild daemon + editor** to pick these up before resuming.
 
 ## (Superseded) Next — live T2.6 under ADR-018 (BOTH machines rebuild daemon + editor)
 
