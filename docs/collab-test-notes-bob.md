@@ -216,6 +216,29 @@ log `kb/join: pending → kb/approve_member (editor) → kb/join: complete (3 no
   `collabtest` instance (addressable by id, edits sync back) or merge into local? Needs alignment;
   affects how role/edit-propagation tests are driven.
 
+## Run 4 — 2026-06-16 (after I-9/I-10/B-1 fixes + fresh KB; clean T2.6 from top)
+
+Both rebuilt (`9b72494`→`9dc858e`); bob's malformed KB reset (B-5 workaround); display-rule
+QoL detour (#67). Clean re-run:
+
+| # | Step | Action | Result | Status |
+|---|------|--------|--------|--------|
+| 1 | pre | relaunch bob (PID 59974) fresh KB; fingerprint `07aW…7Ls` | no CozoDB error (B-5 gone); a transient watchdog 10s stall seen (B-7?) | ✅ / ⚠️ |
+| 2 | T2.6 | bob `kb_join collabtest` (non-member) | `*Collab Status*`: **"join request sent — pending owner approval"** | ✅ **B-1 fix verified** (distinct pending msg) |
+| 3 | T2.6 | (alice `:kb-approve … editor`) → bob `kb_join` again | bob has 3 nodes; `kb_search ZEPHYRINE` → overview+alpha (fresh content) | ✅ **approve→allowed + replication** |
+| 4 | T2.6 | `kb_get collabtest:overview` | resolves + returns node (failed pre-I-9) | ✅ **B-3 read path FIXED by I-9** |
+| 5 | T2.6 | editor write: `kb_update` title → `[bob editor edit]` | applied locally | ✅ write |
+| 6 | T2.6 | propagation editor→owner | **alice found bugs — paused to plan fixes** | ⏳ blocked |
+
+Minor follow-ups seen Run 4:
+- **`*Collab Status*` not refreshed on success** — stayed "pending owner approval" after the
+  re-join succeeded (B-1-adjacent; success should clear/replace the pending StatusReport).
+- **B-7? watchdog 10s stall** on startup/connect (no CozoDB error this time) — distinct from B-5;
+  watch whether it's the collab connect blocking the main thread on a fresh KB. Not yet root-caused.
+- **B-3 partial:** `kb_get`/`kb_update` now resolve joined nodes, but `kb_instances` still shows
+  none + search `instance: null` — joined KB merges into primary rather than a tracked instance
+  (may be intended). Read/write paths fixed; only instance-listing remains.
+
 ## Convergence + membership scorecard
 
 | Capability | Step | Result |
@@ -223,12 +246,13 @@ log `kb/join: pending → kb/approve_member (editor) → kb/join: complete (3 no
 | alice → bob (receive) | T2.5 | ✅ Run 1 + Run 2 |
 | bob → alice (send) | T2.5 | ✅ Run 2 (no crash) |
 | simultaneous edit | T2.5 | ✅ Run 2 (replicas identical) |
-| KB membership: invite→pending→approve→allowed | T2.6 | ✅ Run 3 (by fingerprint, mTLS) |
-| KB replication to approved peer | T2.6 | ✅ Run 3 (ZEPHYRINE sentinel) |
-| editor-role write allowed | T2.6 | ✅ Run 3 (kb_update) |
-| editor edit propagates to owner | T2.6 | ⏳ unconfirmed (alice pivoted to the deny test before confirming) |
-| revoke + restrictive → join denied | T2.6 | ✅ Run 3 (bob revoked + policy restrictive → join denied; bob keeps local copy, B-4) |
-| viewer-role write rejected | T2.6 | ⏳ not run (alice did revoke+restrictive instead of demote-to-viewer) |
+| KB membership: invite→pending→approve→allowed | T2.6 | ✅ Run 3 + Run 4 (by fingerprint, mTLS; B-1 distinct msgs in Run 4) |
+| KB replication to approved peer | T2.6 | ✅ Run 3 + Run 4 (ZEPHYRINE) |
+| joined-node read/write by id (`kb_get`/`kb_update`) | T2.6 | ✅ Run 4 (I-9 fixed B-3 read path) |
+| editor-role write allowed | T2.6 | ✅ Run 3 + Run 4 |
+| editor edit propagates to owner | T2.6 | ⏳ Run 4: alice found bugs, planning fixes |
+| revoke + restrictive → join denied | T2.6 | ✅ Run 3 |
+| viewer-role write rejected | T2.6 | ⏳ not run |
 | security checks | T2.7 | ⏳ not reached |
 
 ## Next run (from scratch)
