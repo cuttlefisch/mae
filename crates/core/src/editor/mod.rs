@@ -134,10 +134,24 @@ pub enum CollabIntent {
     JoinKb { kb_id: String },
     /// Leave (unsubscribe from) a shared KB.
     LeaveKb { kb_id: String },
-    /// Add a trusted peer to a KB's member list (owner-only, ADR-017).
-    KbAddMember { kb_id: String, member: String },
-    /// Remove a peer from a KB's member list (owner-only, ADR-017).
+    /// Add a peer (by principal/fingerprint) to a KB with a role (owner-only, ADR-018).
+    KbAddMember {
+        kb_id: String,
+        member: String,
+        role: String,
+    },
+    /// Remove a peer (by principal) from a KB's members (owner-only, ADR-018).
     KbRemoveMember { kb_id: String, member: String },
+    /// Approve a pending join request as `role` (owner-only, ADR-018).
+    KbApprove {
+        kb_id: String,
+        principal: String,
+        role: String,
+    },
+    /// List pending join requests for a KB (owner-only, ADR-018).
+    KbListPending { kb_id: String },
+    /// Set a KB's join policy (restrictive|invite|permissive; owner-only, ADR-018).
+    KbSetPolicy { kb_id: String, policy: String },
     /// Send a CRDT update for a KB node to the server.
     KbNodeUpdate {
         kb_id: String,

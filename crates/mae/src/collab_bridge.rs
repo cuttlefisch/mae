@@ -139,11 +139,27 @@ pub enum CollabCommand {
         node_id: String,
         update: Vec<u8>,
     },
-    /// Add or remove a trusted peer from a KB's member list (owner-only).
+    /// Add or remove a peer (by principal) from a KB's members (owner-only).
     KbMember {
         kb_id: String,
         member: String,
+        role: String,
         add: bool,
+    },
+    /// Approve a pending join request as `role` (owner-only, ADR-018).
+    KbApprove {
+        kb_id: String,
+        principal: String,
+        role: String,
+    },
+    /// List pending join requests for a KB (owner-only, ADR-018).
+    KbListPending {
+        kb_id: String,
+    },
+    /// Set a KB's join policy (owner-only, ADR-018).
+    KbSetPolicy {
+        kb_id: String,
+        policy: String,
     },
 }
 
@@ -466,16 +482,33 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         }
         CollabIntent::JoinKb { kb_id } => CollabCommand::JoinKb { kb_id },
         CollabIntent::LeaveKb { kb_id } => CollabCommand::LeaveKb { kb_id },
-        CollabIntent::KbAddMember { kb_id, member } => CollabCommand::KbMember {
+        CollabIntent::KbAddMember {
             kb_id,
             member,
+            role,
+        } => CollabCommand::KbMember {
+            kb_id,
+            member,
+            role,
             add: true,
         },
         CollabIntent::KbRemoveMember { kb_id, member } => CollabCommand::KbMember {
             kb_id,
             member,
+            role: String::new(),
             add: false,
         },
+        CollabIntent::KbApprove {
+            kb_id,
+            principal,
+            role,
+        } => CollabCommand::KbApprove {
+            kb_id,
+            principal,
+            role,
+        },
+        CollabIntent::KbListPending { kb_id } => CollabCommand::KbListPending { kb_id },
+        CollabIntent::KbSetPolicy { kb_id, policy } => CollabCommand::KbSetPolicy { kb_id, policy },
         CollabIntent::KbNodeUpdate {
             kb_id,
             node_id,
@@ -663,6 +696,9 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::SendSaveIntent { .. } => "send-save-intent",
         CollabCommand::SendAwareness { .. } => "send-awareness",
         CollabCommand::SendSaveCommitted { .. } => "send-save-committed",
+        CollabCommand::KbApprove { .. } => "kb-approve",
+        CollabCommand::KbListPending { .. } => "kb-pending",
+        CollabCommand::KbSetPolicy { .. } => "kb-policy",
         CollabCommand::ListDocs { .. } => "list-docs",
         CollabCommand::JoinDoc { .. } => "join-doc",
         CollabCommand::ShareKb { .. } => "share-kb",
@@ -2250,7 +2286,7 @@ async fn run_collab_task(
                                 let _ = write_framed(w, &body, write_timeout).await;
                             }
                         }
-                        CollabCommand::KbMember { kb_id, member, add } => {
+                        CollabCommand::KbMember { kb_id, member, role, add } => {
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
                                 next_request_id += 1;
@@ -2259,7 +2295,7 @@ async fn run_collab_task(
                                     "jsonrpc": "2.0",
                                     "id": req_id,
                                     "method": method,
-                                    "params": { "kb_id": kb_id, "member": member }
+                                    "params": { "kb_id": kb_id, "member": member, "role": role, "label": member }
                                 });
                                 if let Ok(body) = serde_json::to_vec(&req) {
                                     if write_framed(w, &body, write_timeout).await.is_ok() {
@@ -2268,6 +2304,45 @@ async fn run_collab_task(
                                             PendingResponseKind::KbMember { kb_id, member, add },
                                         );
                                     }
+                                }
+                            }
+                        }
+                        CollabCommand::KbApprove { kb_id, principal, role } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0", "id": req_id, "method": "kb/approve_member",
+                                    "params": { "kb_id": kb_id, "principal": principal, "role": role }
+                                });
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    let _ = write_framed(w, &body, write_timeout).await;
+                                }
+                            }
+                        }
+                        CollabCommand::KbListPending { kb_id } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0", "id": req_id, "method": "kb/list_pending",
+                                    "params": { "kb_id": kb_id }
+                                });
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    let _ = write_framed(w, &body, write_timeout).await;
+                                }
+                            }
+                        }
+                        CollabCommand::KbSetPolicy { kb_id, policy } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0", "id": req_id, "method": "kb/set_policy",
+                                    "params": { "kb_id": kb_id, "policy": policy }
+                                });
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    let _ = write_framed(w, &body, write_timeout).await;
                                 }
                             }
                         }
@@ -3304,11 +3379,14 @@ async fn handle_disconnected_cmd(
         CollabCommand::KbNodeUpdate { .. } => {
             // Silently drop — not connected.
         }
-        CollabCommand::KbMember { kb_id, .. } => {
+        CollabCommand::KbMember { kb_id, .. }
+        | CollabCommand::KbApprove { kb_id, .. }
+        | CollabCommand::KbListPending { kb_id }
+        | CollabCommand::KbSetPolicy { kb_id, .. } => {
             try_send_evt(
                 evt_tx,
                 CollabEvent::Error {
-                    message: format!("Not connected — cannot change members of KB '{kb_id}'"),
+                    message: format!("Not connected — cannot manage KB '{kb_id}'"),
                 },
             );
         }
