@@ -479,3 +479,55 @@ alice applied a title edit (`[STAGE1-ALICE-RECV-1]`) to `collabtest:overview` an
 not even exercised**. The B-8 emit gap reproduces from the **owner** side too, consistent with the
 `on_save`/enqueue hypothesis above. **Holding** for alice's emit-pipeline fix push. Next: re-pull +
 rebuild on her push, then re-run step 1 (receive) before step 2 (bob → alice emit).
+
+---
+
+## 2026-06-17 ~16:50 — bob on B-8-fix build (`9a3b973` / fix `95295a2b`) — re-test prep
+
+bob rebuilt + installed from `9a3b973` (GUI). B-8 root cause was **NOT** the `on_save`
+hypothesis — it was a **wire-protocol bug**: `kb/node_update` was hand-rolled as a JSON-RPC
+*notification* (no `id`), and the daemon drops unrecognized no-`id` messages. Now a proper
+request via the shared `shared/sync/src/wire.rs` builder. (My on_save lead → disproven; keeping
+the note as a record of the diagnostic path.)
+
+### ⭐ NEW BUG — B-12: pending→approved transition does NOT auto-(re)subscribe the member
+Reproduced cleanly this session:
+1. alice restarted her daemon → membership reset → bob's auto-rejoin on reconnect landed **pending**
+   (invite policy). Because the join was pending (not approved), bob **never subscribed** to the KB
+   docs.
+2. alice approved bob (editor). The daemon broadcast the collection-doc update, but bob logged:
+   `ignoring sync_update for unsubscribed doc  doc=kbc:collabtest` — i.e. **the approval broadcast
+   was dropped** because bob isn't subscribed to `kbc:collabtest`.
+3. bob had to **manually re-issue `kb_join collabtest`** for the subscription to establish.
+
+▶ **Impact:** after a member's join is approved, they silently receive nothing until they manually
+re-join — there's no signal to the member that approval happened, and the approval's own broadcast
+is discarded. **Expected:** approval should either (a) push a join/subscribe-trigger to the member,
+or (b) the member should auto-retry the pending join on receiving an approval/`kbc:` membership
+update (subscribe-then-apply, not drop). Owner-side + member-side coordination. File:line for the
+drop: the `"ignoring sync_update for unsubscribed doc"` arm in `collab_bridge.rs`. **Workaround for
+testing:** manual `kb_join` after approval.
+
+### ✅ Phase-2 merge-on-join CONFIRMED (offline edit preserved, not overwritten)
+The manual re-join completed and **merged** rather than overwrote:
+```
+joining KB collabtest
+KB joined — merging into local store      node_count=3  collection_bytes=867
+join: registered first-class instance (merged)  uuid=18b9da6e…  merged=3   (target=kb_sync)
+KB join complete (merged)                 node_count=3
+```
+Post-merge `kb_get collabtest:overview` → title **still** `[bob editor edit — ADR-019]` (bob's
+local edit survived the join merge) and sentinel `ZEPHYRINE` intact. This is the ADR-020 Phase-2
+contract working: join applies via CRDT `apply_update`, local edits are not clobbered.
+
+### ⚠️ B-11-adjacent — main-thread stall during join STILL present on this build
+Same as the prior baseline: at startup `joining KB` the watchdog logs
+`stall_seconds=6` → `prolonged stall stall_seconds=10` (recovers, `stall_count:0` after). The
+join / disk-first load / merge appears to run **synchronously on the main thread**. Non-fatal at
+3 nodes but will scale badly. Tracking as an owner-side perf item (move join off the UI thread).
+
+### State now: bob subscribed (joined+merged), ready for Step 1 receive re-run
+`introspect.collaboration`: connected, `kb_sync_mode:on_save`, `gate_present:true`,
+`pending_kb_updates:0`, `shared_kbs:[collabtest:3]`. Title baseline `[bob editor edit — ADR-019]`.
+Awaiting alice's `[STAGE1-ALICE-RECV-1]` title edit → expect inbound `sync_update`/`node_update`
+for `kb:collabtest:overview` on bob + her daemon `kb/node_update: received` + `applied wal_seq=…`.
