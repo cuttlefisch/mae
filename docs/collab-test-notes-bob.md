@@ -571,3 +571,55 @@ node `kb:<id>` (+ collection `kbc:<id>`) into its **local** subscribed-docs set 
 `sync_update`s apply instead of hitting the `"ignoring sync_update for unsubscribed doc"` arm.
 Net receive-path verdict: emit ✅, daemon delivery ✅, **member-side local subscribe ❌ (the one fix
 left for Step 1 receive to pass).**
+
+---
+
+## 2026-06-17 ~17:40 — bob on B-13-fix build (`ab19fb1`/`4602ce4b`) — ✅ B-13 confirmed, ❌ NEW B-14 (no-op merge)
+
+bob rebuilt from `ab19fb1`. As alice warned, her editor restart re-shared `collabtest` and
+**clobbered bob's membership (B-12)** → bob's auto-rejoin landed **pending** (no `KB join complete`).
+alice re-approved by fingerprint; bob `kb_join` → `KB join complete (merged) node_count=3` at
+15:09:09.
+
+### ✅ B-13 FIXED — member now receives + runs the apply path (no more "unsubscribed doc" drop)
+alice edited `collabtest:overview` then `collabtest:alpha` (she switched to alpha to decouple from
+the overview's clobber). bob log:
+```
+15:09:53 received sync_update notification  doc=kb:collabtest:overview  wal_seq=427  update_b64_len=1496
+15:09:53 recv: applied remote kb update     node_id=collabtest:overview owner=alice-fp  changed=false
+15:11:02 received sync_update notification  doc=kb:collabtest:alpha      wal_seq=428  update_b64_len=916
+15:11:02 recv: applied remote kb update     node_id=collabtest:alpha     owner=alice-fp  changed=false
+```
+The subscription fix works: inbound `kb:<node>` updates are received and routed to
+`kb_apply_remote_update`. Receive-path now: emit ✅, daemon delivery ✅, member subscribe ✅.
+
+### ⭐ NEW BUG — B-14: inbound CRDT merge is a NO-OP (`changed=false`); content never updates
+Both applies report **`changed=false`** and the node titles on bob are unchanged
+(`collabtest:overview` still `[bob editor edit — ADR-019]`; `collabtest:alpha` still plain
+`Collab Test Alpha` — **no slug**). The update is received + applied but the yrs merge produces no
+change, so bob's content/title never reflects alice's edit.
+
+**Key discriminator (thanks to alice testing `alpha`):** alpha is a node **bob never edited**, yet it
+*also* merges to `changed=false`. So B-14 is **not** a local-edit conflict — it's **structural**.
+Strong hypothesis: **divergent yrs document lineage** — bob's and alice's `collabtest:<node>` are
+independently-created `KbNodeDoc`s that share a node-id but **no common ancestor** (each side built
+its own doc from the org fixture / prior sessions, with distinct yrs client state). alice's broadcast
+is a **delta keyed to her doc's state vector**; applied to bob's unrelated doc it references ops bob
+doesn't have, so yrs buffers/ignores it → `changed=false`, no text change. (wal_seq advances on the
+daemon, update_b64_len is non-trivial, owner=alice-fp — so a real payload arrives; it just doesn't
+mutate bob's divergent doc.)
+
+**Why join didn't fix it:** Phase-2 merge-on-join does `apply_update` of the server snapshot INTO
+bob's pre-existing local doc (merge, not replace). Merging two independent lineages doesn't give bob
+alice's op-history as a shared base, so later deltas still don't apply cleanly. ▶ **Likely fix
+direction (owner/arch):** joined nodes must adopt the **authoritative owner doc lineage** — i.e. on
+join, *replace* the member's node doc with the owner's encoded yrs state (or seed both from a shared
+deterministic base / re-encode the member's doc against the owner's state vector) so that subsequent
+deltas share ancestry and merge as real changes. This is the KB analog of the text-buffer rebuild:
+the joined `KbNodeDoc` must BE the owner's doc, not a same-id sibling. Primary surfaces: the KbJoin
+snapshot-apply path (`collab_bridge.rs` `KB joined — merging`) + `kb_apply_remote_update` (`kb_sync`)
++ `KbNodeDoc` construction in `shared/sync/src/kb.rs`. Needs alice's owner-side wal_seq/state-vector
+view to confirm the lineage divergence.
+
+▶ **Step 1 (receive) status: still RED** — but advanced from "dropped" → "received+applied as no-op".
+The remaining blocker is B-14 (doc-lineage / no-op merge), not subscription.
