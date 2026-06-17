@@ -17,7 +17,7 @@ toml = "1.1"
 tracing = "0.1"
 walkdir = "2"
 notify = "8"
-lru = "0.16"
+lru = "0.18"
 mae-sync = { path = "../sync", optional = true }
 mae-mcp = { path = "../mcp" }
 cozo = { version = "0.7", default-features = false, features = ["rayon"] }
