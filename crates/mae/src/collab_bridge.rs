@@ -2386,6 +2386,21 @@ async fn run_collab_task(
                                     Err(e) => { error!("kb share serialize error: {e}"); continue; }
                                 };
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    // ADR-020 B-13: subscribe the OWNER to its own
+                                    // collection + node docs so peer edits broadcast
+                                    // back are applied, not dropped at the
+                                    // shared_docs filter. (Mirror of the text-buffer
+                                    // share path which adds the doc to shared_docs.)
+                                    let coll_doc = format!("kbc:{kb_id}");
+                                    if !shared_docs.contains(&coll_doc) {
+                                        shared_docs.push(coll_doc);
+                                    }
+                                    for (id, _) in &node_states {
+                                        let node_doc = format!("kb:{id}");
+                                        if !shared_docs.contains(&node_doc) {
+                                            shared_docs.push(node_doc);
+                                        }
+                                    }
                                     pending_responses.insert(req_id, PendingResponseKind::KbShare { kb_id });
                                 }
                             }
@@ -3330,6 +3345,22 @@ fn handle_response(
                             .collect()
                     })
                     .unwrap_or_default();
+                // ADR-020 B-13: establish the member's LIVE subscription to the
+                // collection + each joined node doc, so subsequent inbound
+                // sync_update broadcasts are applied instead of being dropped at the
+                // shared_docs filter. The one-time join snapshot (KbJoined) catches
+                // up; these subscriptions keep it live. (Mirror of the text-buffer
+                // join path.)
+                let coll_doc = format!("kbc:{kb_id}");
+                if !shared_docs.contains(&coll_doc) {
+                    shared_docs.push(coll_doc);
+                }
+                for (id, _) in &node_states {
+                    let node_doc = format!("kb:{id}");
+                    if !shared_docs.contains(&node_doc) {
+                        shared_docs.push(node_doc);
+                    }
+                }
                 try_send_evt(
                     evt_tx,
                     CollabEvent::KbJoined {
@@ -4389,6 +4420,48 @@ mod tests {
         assert_eq!(seq.get("test.rs"), Some(&1));
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, CollabEvent::BufferShared { doc_id } if doc_id == "test.rs"));
+    }
+
+    /// ADR-020 B-13 regression: a successful `kb/join` must add the collection AND
+    /// each node doc to `shared_docs`, or later inbound `sync_update` broadcasts for
+    /// `kb:<node>` are dropped at the `shared_docs.contains()` filter and the member
+    /// never receives live edits (emit works, receive is dead).
+    #[tokio::test]
+    async fn handle_response_kb_join_subscribes_to_collection_and_node_docs() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut shared: Vec<String> = Vec::new();
+        let mut seq = std::collections::HashMap::new();
+
+        let coll = mae_sync::kb::KbCollectionDoc::new("testkb", "owner");
+        let coll_b64 = mae_sync::encoding::update_to_base64(&coll.encode_state());
+        let node = mae_sync::kb::KbNodeDoc::new("testkb:n1", "T", "b", &[]);
+        let node_b64 = mae_sync::encoding::update_to_base64(&node.encode_state());
+
+        let val = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "collection_state": coll_b64,
+                "nodes": [ { "id": "testkb:n1", "state": node_b64 } ]
+            }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::KbJoin {
+                kb_id: "testkb".to_string(),
+            },
+            &tx,
+            &mut shared,
+            &mut seq,
+        );
+        assert!(
+            shared.contains(&"kbc:testkb".to_string()),
+            "join must subscribe to the collection doc"
+        );
+        assert!(
+            shared.contains(&"kb:testkb:n1".to_string()),
+            "join must subscribe to each node doc — else inbound live updates are dropped (B-13)"
+        );
     }
 
     #[tokio::test]
