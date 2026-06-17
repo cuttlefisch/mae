@@ -239,6 +239,41 @@ Minor follow-ups seen Run 4:
   none + search `instance: null` — joined KB merges into primary rather than a tracked instance
   (may be intended). Read/write paths fixed; only instance-listing remains.
 
+## Run 5 — 2026-06-17 (ADR-019 durable/reconstruction-capable KB sync)
+
+Both rebuilt (`23b73f1`→`5d903d3`); bob KB reset clean again (Run-4 leftovers aside). Used
+the new ADR-019 `introspect` (`collaboration`/`kb` sections) to diagnose live.
+
+| # | Step | Action | Result | Status |
+|---|------|--------|--------|--------|
+| 1 | pre | relaunch bob (PID 63383) fresh KB | `introspect`: shared_kbs=[], stall_count=0 | ✅ (B-7 stall gone) |
+| 2 | T2.6 | `kb_join` (non-member) | "join request sent — pending owner approval" | ✅ B-1 |
+| 3 | T2.6 | (alice approve editor) → `kb_join` | allowed | ✅ |
+| 4 | T2.6 | `kb_instances` | **`collabtest [18b9da6e]: 3 nodes, enabled`** | ✅ **B-3 RESOLVED** (ADR-019 P2 first-class instance) |
+| 5 | T2.6 | `kb_search "ZEPHYRINE"` | `instance: "collabtest"` (not null) | ✅ replication + proper attribution |
+| 6 | T2.6 | editor write: `kb_update` title + `kb-save` | local change applied; **alice sees no `kb/node_update`** | ❌ **B-8** |
+| 7 | T2.6 | disambig: `kb-edit-source collabtest:overview` | **no source buffer opened** (joined KB has no source file) | ⚠️ B-9 |
+
+### B-8 🐛 (critical, P4 frontier) — editor KB-node edit does not enqueue/propagate  ·  Step T2.6
+- bob (editor member) `kb_update collabtest:overview` → title changes **locally** (`kb_get`/
+  `kb_update` both return the new title), `kb-save` run, but **no `kb/node_update` reaches the
+  daemon** → alice never sees it.
+- **ADR-019 introspect pinpoints it:** `owning_instances[collabtest].gate_present = true`
+  (P1 durable emit gate IS set), but **`pending_kb_updates = 0`** after `kb_update` + `kb-save`
+  — the edit is **never enqueued** for emission. So nothing flushes on save.
+- **Two hypotheses (for alice):** (1) MCP/AI `kb_update` bypasses the editor's
+  KB-edit→collab-emit path (an "AI is a peer" gap — AI edits should emit like human edits);
+  (2) shared-KB local edits don't enqueue at all on the normal path. Disambiguation via a
+  human-style edit was blocked by B-9 (no source buffer for joined KBs).
+- **Suggested next probe:** test the **receive** direction (alice edits a node → does bob
+  receive it? ADR-019 P4 `kb_apply_remote_update`). If receive works but emit doesn't, the bug
+  is isolated to bob's local-edit **enqueue/emit** path.
+
+### B-9 ⚠️ — `kb-edit-source <joined-node>` opens no buffer  ·  Step T2.6
+- `(execute-ex "kb-edit-source collabtest:overview")` produced no source buffer. Joined KBs
+  arrive over the wire with no on-disk source file, so `kb-edit-source` has nothing to open —
+  blocks the human-style edit path for joined KBs (also blocked the B-8 disambiguation).
+
 ## Convergence + membership scorecard
 
 | Capability | Step | Result |
@@ -246,13 +281,16 @@ Minor follow-ups seen Run 4:
 | alice → bob (receive) | T2.5 | ✅ Run 1 + Run 2 |
 | bob → alice (send) | T2.5 | ✅ Run 2 (no crash) |
 | simultaneous edit | T2.5 | ✅ Run 2 (replicas identical) |
-| KB membership: invite→pending→approve→allowed | T2.6 | ✅ Run 3 + Run 4 (by fingerprint, mTLS; B-1 distinct msgs in Run 4) |
-| KB replication to approved peer | T2.6 | ✅ Run 3 + Run 4 (ZEPHYRINE) |
-| joined-node read/write by id (`kb_get`/`kb_update`) | T2.6 | ✅ Run 4 (I-9 fixed B-3 read path) |
-| editor-role write allowed | T2.6 | ✅ Run 3 + Run 4 |
-| editor edit propagates to owner | T2.6 | ⏳ Run 4: alice found bugs, planning fixes |
+| KB membership: invite→pending→approve→allowed | T2.6 | ✅ Run 3–5 (by fingerprint, mTLS) |
+| KB replication to approved peer | T2.6 | ✅ Run 3–5 (ZEPHYRINE) |
+| joined KB is a first-class instance (`kb_instances`) | T2.6 | ✅ **Run 5** (ADR-019 P2 — B-3 resolved) |
+| joined-node read/write by id (`kb_get`/`kb_update`) | T2.6 | ✅ Run 4–5 |
+| editor-role write allowed (local) | T2.6 | ✅ Run 3–5 |
+| editor KB edit **propagates** to owner | T2.6 | ❌ **Run 5: B-8** (edit not enqueued; `pending_kb_updates=0` despite `gate_present=true`) |
+| owner edit propagates to member (receive) | T2.6 | ⏳ next probe (localize B-8) |
 | revoke + restrictive → join denied | T2.6 | ✅ Run 3 |
 | viewer-role write rejected | T2.6 | ⏳ not run |
+| restart survival (ADR-019) | T2.6 | ⏳ not reached |
 | security checks | T2.7 | ⏳ not reached |
 
 ## Next run (from scratch)
