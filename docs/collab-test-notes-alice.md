@@ -520,3 +520,46 @@ alice edits `collabtest:overview` title → expect bob sees it, the daemon logs
 `kb/node_update: received` + `kb/node_update: applied wal_seq=…`, and bob's log shows an
 inbound `sync_update` for `kb:collabtest:overview`. Then the reverse (bob→alice) and
 restart-survival.
+
+---
+
+## 2026-06-17 ~17:05 — ⭐ B-13 FIXED (`4602ce4b`) — receive path: members now live-subscribe to node docs
+
+Step-1 re-run proved **B-8 emit is fixed** (alice's edit reached the daemon →
+`received`/`applied wal_seq=48,51,52` across three edits) but bob still didn't see it.
+bob localised it: the daemon broadcasts and bob **receives**, but bob **drops it locally**
+(`ignoring sync_update for unsubscribed doc doc=kb:collabtest:overview`). Confirmed
+member-side only (bob: "daemon delivery confirmed").
+
+**Root cause (B-13):** the editor gates inbound `sync_update` by `shared_docs.contains(buffer_name)`
+(`collab_bridge.rs:2832`). Text buffers add their doc to `shared_docs` on share/join — but the
+**KbShare/KbJoin paths never did**, so every inbound `kb:<node>` update was discarded. Emit worked,
+receive was dead.
+
+**Fix (`f7e9e6d1`, pushed on `4602ce4b`):** mirror the text-buffer subscription —
+- **ShareKb** (owner): subscribe to `kbc:<kb>` + each `kb:<node>` → owner receives peer edits (bob→alice).
+- **KbJoin response** (member): subscribe to `kbc:<kb>` + each joined `kb:<node>` → member receives
+  live edits after the join snapshot (alice→bob).
+- Inbound `kb:<node>` already routes to `KbNodeUpdate → kb_apply_remote_update` (by node-id prefix) →
+  `mark_full_redraw`.
+- Test `handle_response_kb_join_subscribes_to_collection_and_node_docs` guards it. 271 bin tests green.
+
+### → BOB: rebuild for the B-13 fix (editor-only; daemon unchanged)
+```sh
+git fetch && git pull          # → 4602ce4b (or later)
+make build                     # GUI editor (NOT cargo build -p mae)
+cp target/release/mae ~/.local/bin/mae.new && mv -f ~/.local/bin/mae.new ~/.local/bin/mae
+# restart bob's editor (MAE_LOG=info,kb_sync=debug,collab=debug → /tmp/bob-collab.log)
+```
+alice's editor is already on the B-13 build (`4602ce4b`); daemon unchanged (B-13 is editor-only).
+
+**⚠️ B-12 still open:** alice's editor restart re-shares `collabtest` and **clobbers bob's
+membership** (owner re-share is destructive on the daemon, not a merge). So on reconnect bob lands
+**pending** again — alice re-approves (`:kb-approve collabtest <bob-fp> editor`), bob re-joins, then
+we test. Tracked as B-12 (fix: daemon `kb/share` must CRDT-merge onto an existing collection/node,
+not delete+replace).
+
+### Expected with B-13 fixed
+alice edits `collabtest:overview` → bob's editor **applies** the inbound `kb:collabtest:overview`
+update (no more "unsubscribed doc" drop) and the title updates **on bob's screen**. Then bob edits →
+alice receives (owner now subscribed to its own node docs). That closes bidirectional Stage-1.
