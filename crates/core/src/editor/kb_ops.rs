@@ -860,13 +860,18 @@ impl Editor {
                     .and_then(|kb| kb.upsert_with_crdt(updated, 1)),
             };
             if let Some(update_bytes) = update_bytes {
-                // Persist CRDT update to pending queue (durable offline queue).
+                // ADR-020 single-source emit: enqueue to EXACTLY ONE queue. With a
+                // durable store, the CRDT update goes to the crash-durable SQLite
+                // pending queue (acked only on daemon-confirm); without a store it
+                // falls back to the transient in-memory queue. Enqueuing to both
+                // (the old behaviour) caused every shared edit to be sent twice.
                 if let Some(ref store) = self.kb.store {
                     let _ = store.push_pending_update(&kb_id, id, &update_bytes);
+                } else {
+                    self.collab
+                        .pending_kb_updates
+                        .push((kb_id, id.to_string(), update_bytes));
                 }
-                self.collab
-                    .pending_kb_updates
-                    .push((kb_id, id.to_string(), update_bytes));
             }
             // Persist the updated node to its owning store.
             let persisted = match &owner {

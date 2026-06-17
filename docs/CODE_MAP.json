@@ -968,6 +968,10 @@
           "kind": "mod"
         },
         {
+          "name": "wire",
+          "kind": "mod"
+        },
+        {
           "name": "SyncError",
           "kind": "enum"
         },

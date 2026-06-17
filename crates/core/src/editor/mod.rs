@@ -259,8 +259,15 @@ pub struct CollabState {
     pub shared_kbs: HashMap<String, HashSet<String>>,
     /// KB sync mode: "manual" (explicit :kb-sync), "on_save" (auto on node edit).
     pub kb_sync_mode: String,
-    /// Pending KB node updates to send (accumulated between ticks).
+    /// Pending KB node updates to send (accumulated between ticks). Transient
+    /// fallback used only when there is no durable store; store-backed updates
+    /// live in the SQLite pending queue (ADR-020 single-source emit).
     pub pending_kb_updates: Vec<(String, String, Vec<u8>)>, // (kb_id, node_id, update_bytes)
+    /// Durable-queue rowids of `kb/node_update`s currently on the wire awaiting the
+    /// daemon's apply-confirmation (ADR-020 queue→send→confirm→ack). Prevents the
+    /// drain from re-sending an in-flight row every tick; cleared on ack, requeue,
+    /// or disconnect (so unconfirmed updates retry on reconnect).
+    pub inflight_kb_updates: std::collections::HashSet<i64>,
     /// Pre-shared key for mutual authentication (plaintext fallback).
     pub psk: String,
     /// Shell command to retrieve the PSK (preferred over psk for security).
@@ -307,6 +314,7 @@ impl CollabState {
             shared_kbs: HashMap::new(),
             kb_sync_mode: KB_SYNC_MODE_DEFAULT.to_string(),
             pending_kb_updates: Vec::new(),
+            inflight_kb_updates: std::collections::HashSet::new(),
             psk: String::new(),
             psk_command: String::new(),
             auth_mode: "psk".to_string(),

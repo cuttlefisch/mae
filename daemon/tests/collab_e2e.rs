@@ -239,6 +239,60 @@ impl Client {
         self.recv().await
     }
 
+    // --- KB sync (ADR-020) ---
+    //
+    // These build their wire messages via the SHARED `mae_sync::wire` constructors
+    // — the SAME functions the editor's emit path uses — so the test and production
+    // can never diverge on the protocol shape (the bug class that hid B-8: the
+    // editor sent `kb/node_update` as a no-`id` notification while a hand-rolled test
+    // client sent the correct request, so no test ever exercised the shipping path).
+
+    /// Owner shares a KB: collection doc + node docs. `nodes` is `(node_id, state_b64)`.
+    async fn kb_share(
+        &mut self,
+        kb_id: &str,
+        collection_state_b64: &str,
+        nodes: &[(String, String)],
+    ) -> serde_json::Value {
+        let msg = mae_sync::wire::kb_share_request(
+            self.next_id,
+            kb_id,
+            kb_id,
+            "tester",
+            collection_state_b64,
+            nodes,
+        );
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
+    /// Member joins a shared KB (subscribes to its node docs, pulls their state).
+    async fn kb_join(&mut self, kb_id: &str) -> serde_json::Value {
+        let msg = mae_sync::wire::kb_join_request(self.next_id, kb_id);
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
+    /// Send a KB node update — the exact request the editor's bg-task emits.
+    async fn kb_node_update(
+        &mut self,
+        kb_id: &str,
+        node_id: &str,
+        update: &[u8],
+    ) -> serde_json::Value {
+        let msg = mae_sync::wire::kb_node_update_request(
+            self.next_id,
+            kb_id,
+            node_id,
+            &update_to_base64(update),
+        );
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
     /// Drain any pending notifications (non-blocking). Includes buffered ones.
     async fn drain_notifications(&mut self) -> Vec<serde_json::Value> {
         let mut notifications: Vec<serde_json::Value> =
@@ -2159,4 +2213,91 @@ async fn multi_doc_content_isolation() {
     // Cross-check: each can read the other's doc without contamination.
     assert_eq!(alice.content("bob-doc.txt").await, "bob-content-edited");
     assert_eq!(bob.content("alice-doc.txt").await, "alice-content-modified");
+}
+
+/// ADR-020 B-8 regression gate — the test that the old suite was missing.
+///
+/// Drives a REAL `kb/node_update` over a REAL connection to the REAL daemon handler
+/// (via the shared `mae_sync::wire` builder the editor uses), and asserts BOTH that
+/// the daemon applied it AND that a second joined client received the broadcast.
+/// This is precisely the round-trip that was never tested: the editor was sending
+/// `kb/node_update` as a no-`id` notification (silently dropped), while the only KB
+/// test asserted editor-side enqueue or used a hand-rolled correct client. With the
+/// shared builder, a regression to a notification (no `id`) makes the daemon's
+/// request handler never run → `applied:true` absent / no broadcast → this fails.
+#[tokio::test]
+async fn kb_node_update_applies_and_broadcasts_to_peer() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut bob = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Alice builds a 1-node KB: the node doc + a collection that LISTS the node
+    // (kb/join uses the collection's node list to subscribe the joiner).
+    let mut node = mae_sync::kb::KbNodeDoc::new("testkb:n1", "Original", "body", &[]);
+    let node_state = node.encode_state();
+    let mut coll = mae_sync::kb::KbCollectionDoc::new("testkb", "alice");
+    coll.add_node("testkb:n1", "Original");
+    let coll_state = coll.encode_state();
+
+    // Alice shares the KB.
+    let share_resp = alice
+        .kb_share(
+            "testkb",
+            &update_to_base64(&coll_state),
+            &[("testkb:n1".to_string(), update_to_base64(&node_state))],
+        )
+        .await;
+    assert!(
+        share_resp.get("error").is_none(),
+        "kb/share failed: {share_resp}"
+    );
+
+    // Bob joins → subscribed to the node doc, eligible for its broadcasts.
+    let join_resp = bob.kb_join("testkb").await;
+    assert!(
+        join_resp.get("error").is_none(),
+        "kb/join failed: {join_resp}"
+    );
+
+    // Alice edits the node title, producing a CRDT delta.
+    let update = node.set_title("Edited [PROBE-RECV]");
+
+    // Alice sends the kb/node_update. THE assertion the old suite lacked: the daemon
+    // must APPLY it (respond `{applied:true}`) — a no-`id` notification is dropped and
+    // this response never comes.
+    let resp = alice.kb_node_update("testkb", "testkb:n1", &update).await;
+    assert!(
+        resp.get("error").is_none(),
+        "kb/node_update rejected by daemon: {resp}"
+    );
+    assert_eq!(
+        resp["result"]["applied"],
+        serde_json::json!(true),
+        "daemon must APPLY the kb/node_update (a no-id notification would be silently dropped): {resp}"
+    );
+
+    // Bob must RECEIVE the broadcast for the node doc.
+    let notif = bob
+        .wait_for_notification("notifications/sync_update", 1000)
+        .await
+        .expect("bob must receive the kb/node_update broadcast (event-driven fan-out)");
+    let event_data = &notif["params"]["event"]["data"];
+    assert_eq!(
+        event_data["buffer_name"],
+        serde_json::json!("kb:testkb:n1"),
+        "broadcast must target the node doc: {notif}"
+    );
+
+    // Bob applies the broadcast to its copy of the node → sees Alice's edit.
+    let remote = base64_to_update(event_data["update_base64"].as_str().unwrap()).unwrap();
+    let mut bob_node = mae_sync::kb::KbNodeDoc::from_bytes(&node_state).unwrap();
+    bob_node.apply_update(&remote).unwrap();
+    assert_eq!(
+        bob_node.title(),
+        "Edited [PROBE-RECV]",
+        "bob's node must reflect alice's edit after applying the broadcast"
+    );
 }

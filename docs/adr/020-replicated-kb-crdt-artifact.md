@@ -64,6 +64,35 @@ pending requests, with at-point actions (share/unshare, add/remove member, set r
 mode, approve). Emacs `customize` is the conceptual model; the git-status (magit) buffer is the
 implementation pattern. Inline customize-style field editing is roadmap (Future Work).
 
+## Root-cause addendum (live-validated, Stage 1.5)
+
+Live two-machine testing localised B-8 to a **wire-protocol divergence**, not the durability
+mechanics that Decision 1 first anticipated. The editor's whole emit path was correct end-to-end
+(`gate_hit:true → drain → bg: written to wire`), yet the daemon received nothing: `kb/node_update`
+was hand-rolled in the background task **as a JSON-RPC notification (no `id`)**, so the daemon's read
+loop routed it to the notification handler (which only relays `sync/awareness`) and **dropped it
+before the apply+broadcast request handler** — while text `sync/update` carried an `id` and worked.
+The reason no test caught it: the one KB e2e was `#[ignore]`d *and* used a hand-rolled client that
+sent the **correct** (id-bearing) shape — the test exercised a parallel implementation, not the
+shipping one.
+
+Fixes (all under Decision 1's "queue → send → confirm → ack" umbrella):
+- **Single shared wire builder.** `mae_sync::wire` is now the one source of truth for the collab
+  JSON-RPC messages, used by the editor emit path **and** the daemon e2e. `kb/node_update` (and
+  `kb/share`/`kb/join`) are requests (carry an `id`); a unit test asserts every request builder has an
+  `id`. Production and tests can no longer diverge on protocol shape.
+- **Real ack on the daemon response.** The durable SQLite row is acked only on the daemon's
+  `{applied:true}` (`KbUpdateAcked`), with an in-flight rowid set preventing re-send storms and
+  cleared on disconnect; an error response surfaces loudly (`KbUpdateFailed`). The old code acked on
+  local channel-send (before the wire), and enqueued to *both* the SQLite queue and an in-memory Vec
+  (double-send) — both fixed (single-source enqueue).
+- **Daemon defense-in-depth.** A request-only doc method arriving as a notification is now a loud
+  `warn!` ("DROPPED … missing `id`"), so this class of regression is caught immediately, not chased.
+- **Wire round-trip e2e.** `daemon/tests/collab_e2e.rs::kb_node_update_applies_and_broadcasts_to_peer`
+  drives a real `kb/node_update` to the real handler and asserts both `applied:true` and that a second
+  joined client receives the broadcast. Verified to **fail** (hang on the never-answered request) when
+  the builder omits the `id`, and pass with it.
+
 ## Sequencing
 
 Stage 1 (emit-pipeline hardening + merge-on-join + durable instances) lands first and is validated by

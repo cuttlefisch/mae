@@ -498,6 +498,20 @@ async fn handle_doc_notification_inner(
                 );
             }
         }
+        // Methods the daemon only handles as REQUESTS (apply/persist/respond). If one
+        // arrives here it was sent without an `id` — a client protocol bug that would
+        // otherwise be silently dropped (exactly the ADR-020 B-8 kb/node_update bug).
+        // Make it LOUD so the next such regression is caught immediately, not chased.
+        "sync/update" | "sync/full_state" | "sync/state_vector" | "sync/share" | "sync/resync"
+        | "kb/node_update" | "kb/share" | "kb/join" | "kb/leave" | "kb/add_member"
+        | "kb/remove_member" | "kb/approve_member" | "kb/set_policy" => {
+            warn!(
+                session = session_id,
+                method,
+                "DROPPED: request-only doc method received as a notification (missing `id`) — \
+                 the client must send this as a JSON-RPC request; nothing was applied"
+            );
+        }
         _ => {
             debug!(session = session_id, method, "unhandled doc notification");
         }

@@ -395,6 +395,7 @@ Source: `shared/sync/src/lib.rs`
 | `encoding` | mod |
 | `kb` | mod |
 | `text` | mod |
+| `wire` | mod |
 | `SyncError` | enum |
 | `DocAddress` | enum |
 | `SavePolicy` | enum |
