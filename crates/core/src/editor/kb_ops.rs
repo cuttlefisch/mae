@@ -425,8 +425,17 @@ impl Editor {
     /// of being dumped into `primary` (fixes B-3: they appear in `kb_instances`
     /// and route correctly), and the instance carries the durable
     /// `shared`/`collab_id` markers that gate broadcasts + survive restart.
-    /// Idempotent: a re-join reuses the existing instance. Returns the uuid.
-    pub fn kb_register_joined_instance(&mut self, kb_id: &str, nodes: Vec<mae_kb::Node>) -> String {
+    ///
+    /// ADR-020: nodes are MERGED via `apply_remote_update` (CRDT) rather than
+    /// inserted/overwritten, so a member's offline/local edits survive a re-join
+    /// (the join is no longer a lossy full-snapshot replace). `node_states` are
+    /// the raw per-node CRDT state bytes. Idempotent: a re-join reuses the
+    /// existing instance. Returns the uuid.
+    pub fn kb_register_joined_instance(
+        &mut self,
+        kb_id: &str,
+        node_states: Vec<(String, Vec<u8>)>,
+    ) -> String {
         // Reuse the existing instance for this collab id (idempotent re-join).
         let uuid = self
             .kb
@@ -461,16 +470,29 @@ impl Editor {
             }
         }
 
-        // In-memory instance: get-or-create, insert nodes.
-        {
+        // In-memory instance: get-or-create, then MERGE each node via CRDT
+        // apply_remote_update (merges into a local doc if present — preserving
+        // offline edits — else creates the node). ADR-020: no overwrite.
+        let merged: Vec<mae_kb::Node> = {
             let kb = self.kb.instances.entry(uuid.clone()).or_default();
-            for node in &nodes {
-                kb.insert(node.clone());
+            let mut out = Vec::with_capacity(node_states.len());
+            for (node_id, state) in &node_states {
+                match kb.apply_remote_update(node_id, state) {
+                    Ok(_changed) => {
+                        if let Some(n) = kb.get(node_id) {
+                            out.push(n.clone());
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(node_id = %node_id, error = %e, "join: failed to merge node — skipping");
+                    }
+                }
             }
-        }
-        // Write-through to the durable instance store, if present.
+            out
+        };
+        // Write-through the merged nodes to the durable instance store.
         if let Some(store) = self.kb.instance_stores.get(&uuid) {
-            for node in &nodes {
+            for node in &merged {
                 if let Err(e) = store.update_node(node) {
                     tracing::warn!(node_id = %node.id, error = %e, "joined-KB instance write-through failed");
                 }
@@ -510,7 +532,7 @@ impl Editor {
             }
         }
         self.kb.rebuild_query_layer();
-        tracing::debug!(target: "kb_sync", kb_id = %kb_id, uuid = %uuid, node_count = nodes.len(), "join: registered first-class instance");
+        tracing::debug!(target: "kb_sync", kb_id = %kb_id, uuid = %uuid, node_count = node_states.len(), merged = merged.len(), "join: registered first-class instance (merged)");
         uuid
     }
 
@@ -3169,6 +3191,51 @@ mod tests {
         assert!(
             editor.kb.primary.get("collabtest:overview").is_none(),
             "remote update must not copy the node into primary"
+        );
+    }
+
+    /// ADR-020 Phase 2: a joined KB is registered + nodes MERGED via
+    /// apply_remote_update (not insert-overwritten). A re-join is idempotent:
+    /// the same instance is reused, the node is kept (merged), and the registry
+    /// has exactly one entry for the collab id.
+    #[test]
+    fn kb_register_joined_instance_merges_and_is_idempotent() {
+        let mut editor = Editor::new();
+        let _dirs = with_test_dirs(&mut editor);
+
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let state = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new("ct:overview", "V0", mae_kb::NodeKind::Note, "b0"),
+                2,
+            )
+            .unwrap();
+
+        let uuid = editor
+            .kb_register_joined_instance("ct", vec![("ct:overview".to_string(), state.clone())]);
+        assert!(
+            editor.kb.instances[&uuid].get("ct:overview").is_some(),
+            "first join creates the node in its instance"
+        );
+        // Joined node lives in the instance, never primary.
+        assert!(editor.kb.primary.get("ct:overview").is_none());
+
+        // Re-join with the same state — apply_remote_update MERGES (idempotent),
+        // does not crash, reuses the instance, keeps the node, no duplicate.
+        let uuid2 =
+            editor.kb_register_joined_instance("ct", vec![("ct:overview".to_string(), state)]);
+        assert_eq!(uuid2, uuid, "re-join reuses the same instance");
+        assert!(editor.kb.instances[&uuid].get("ct:overview").is_some());
+        assert_eq!(
+            editor
+                .kb
+                .registry
+                .instances
+                .iter()
+                .filter(|i| i.collab_id.as_deref() == Some("ct"))
+                .count(),
+            1,
+            "exactly one registry instance for the collab id"
         );
     }
 

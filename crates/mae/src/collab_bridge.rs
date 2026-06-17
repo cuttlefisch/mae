@@ -1403,53 +1403,24 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             node_states,
         } => {
             let node_count = node_states.len();
-            info!(kb = %kb_id, node_count, collection_bytes = collection_state.len(), "KB joined — applying to local store");
+            info!(kb = %kb_id, node_count, collection_bytes = collection_state.len(), "KB joined — merging into local store");
 
-            // Decode the joined nodes (ADR-019: tolerant — skip a bad row rather
-            // than abort the whole join).
-            let mut nodes: Vec<mae_kb::Node> = Vec::with_capacity(node_states.len());
-            let mut errors = 0;
-            for (node_id, state_bytes) in &node_states {
-                match mae_sync::kb::KbNodeDoc::from_bytes(state_bytes) {
-                    Ok(crdt_doc) => {
-                        let node = mae_kb::Node::from_crdt_doc(
-                            &crdt_doc,
-                            mae_kb::NodeKind::Note,
-                            mae_kb::NodeSource::Federation,
-                        );
-                        debug!(kb = %kb_id, node_id = %node_id, title = %node.title, "decoded joined KB node");
-                        nodes.push(node);
-                    }
-                    Err(e) => {
-                        warn!(kb = %kb_id, node_id = %node_id, error = %e, "failed to decode KB node — skipping");
-                        errors += 1;
-                    }
-                }
-            }
-            let inserted = nodes.len();
-
-            // ADR-019: register the joined KB as a FIRST-CLASS federated instance
-            // (durable shared/collab_id markers, addressable, in kb_instances) —
-            // not dumped into `primary`. This gives the emit gate + receive
-            // routing a real owning instance and survives restart.
+            // ADR-019 + ADR-020: register the joined KB as a FIRST-CLASS federated
+            // instance (durable markers, addressable, in kb_instances) and MERGE the
+            // raw node CRDT states (apply_remote_update) rather than overwrite — so a
+            // member's offline/local edits survive a re-join. Per-node decode/merge
+            // errors are tolerated (skipped + warned) inside the helper.
             let joined_node_ids: HashSet<String> =
                 node_states.iter().map(|(id, _)| id.clone()).collect();
-            editor.kb_register_joined_instance(&kb_id, nodes);
+            editor.kb_register_joined_instance(&kb_id, node_states);
             // Keep the transient index in sync as a cache.
             editor
                 .collab
                 .shared_kbs
                 .insert(kb_id.clone(), joined_node_ids);
 
-            info!(kb = %kb_id, inserted, errors, "KB join complete");
-            if errors > 0 {
-                editor.set_status(format!(
-                    "Joined KB '{}' ({} nodes, {} errors)",
-                    kb_id, inserted, errors
-                ));
-            } else {
-                editor.set_status(format!("Joined KB '{}' ({} nodes)", kb_id, inserted));
-            }
+            info!(kb = %kb_id, node_count, "KB join complete (merged)");
+            editor.set_status(format!("Joined KB '{}' ({} nodes)", kb_id, node_count));
             refresh_collab_status_if_open(editor);
             editor.mark_full_redraw();
         }
