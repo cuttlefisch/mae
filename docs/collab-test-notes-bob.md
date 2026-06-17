@@ -328,3 +328,90 @@ the new ADR-019 `introspect` (`collaboration`/`kb` sections) to diagnose live.
 3. Restart daemon (key, `0.0.0.0:9480`, authorize bob) + alice (accept-new) + bob.
 4. Re-run **T2.4 → T2.7**; re-test **I-2 early** with a stable link.
 5. Log every step's outcome here with the convention above.
+
+---
+
+# Holistic design guidance — shared KB as a durable, replicated CRDT artifact (for alice)
+
+> **Whose insight:** bob = the **peer/joiner** (sees the empty-`dir` instance, restart loss,
+> guest-side emit failure); alice = the **owner/creator + daemon** (sees the share path, the
+> broadcast gate, daemon storage/broadcast, membership). The holistic fix spans both sides —
+> this section is bob's peer-side findings + the target model so alice can drive the repair.
+> Grounded in a source read of `kb_ops.rs`, `shared/sync/src/kb.rs`, `shared/sync/src/text.rs`,
+> `collab_bridge.rs`, `shared/kb/src/federation.rs`, ADR-019/006/005.
+
+## Target model (the contract we're missing)
+
+A shared KB should be a **propagated artifact replicated on every member's device**, synced
+**bidirectionally** through each member's daemon — the *same* model that already works for text
+buffers (T2.5 ✅). Per principles **#11 (CRDT-first — "KB nodes are yrs documents")** and **#12
+(local-first — daemon is an optimization, not the source of truth)**:
+
+1. Each member holds a **durable local replica** (own on-disk store), usable offline + across restart.
+2. Any member's edit → yrs txn → **propagates both ways** via the daemon relay to all members.
+3. The daemon is a **sync hub + persistence/discovery** optimization, not required for collab.
+4. Reconnect/restart **reconciles** local + remote via **state-vector diff** (merge, not replace).
+
+## ⭐ Replication is a CONFIGURABLE behavioral trait (key design point)
+
+There are **two legitimate, distinct behaviors** — and today's bug is that we silently produce a
+broken third state. Make this an explicit, configurable per-KB (owner default) and/or per-member option:
+
+| Mode | Behavior | Use case |
+|------|----------|----------|
+| **`replicated`** (local-first default) | full durable local copy on the member's device; bidirectional CRDT sync; offline + restart survival | normal shared KBs |
+| **`hosted` / remote-only** | **no local replication by design**; member queries/edits against the daemon-hosted instance live; no durable local store | terabyte-scale KBs where full replication is impractical |
+
+**The current defect ≠ either mode:** we *attempt* replication (join pulls nodes into memory) but
+**fail to persist durably** (`dir=""`), so we get a broken-`replicated` that loses data on restart —
+**not** an intentional `hosted` choice. The repair must (a) make `replicated` genuinely durable, (b)
+make `hosted` a real, explicit alternative, and (c) in status/errors **distinguish "replication
+disallowed by policy" from "replication failed due to a bug"** — never silently degrade one into the other.
+
+## Concrete gaps (file:line) — replicated mode is not durable/bidirectional
+
+- **G1 — joined instance has no on-disk dir.** `kb_register_joined_instance` pushes a `KbInstance`
+  with `org_dir = PathBuf::new()` (`kb_ops.rs:495`), vs `kb_register` which gets a real `org_dir`
+  + persistent sentinel (`kb_ops.rs:174-291`, `federation.rs:134-189`). → on restart
+  "KB instance dir missing, skipping" → 0 nodes.
+- **G2 — no startup loader for shared instances.** The primary store loads at startup, but there is
+  **no code** that enumerates the shared-KB CozoDB stores and reconstructs `editor.kb.instances`
+  from disk. Joined-node persistence is **best-effort** (`kb_ops.rs:453-477`, write-through warns and
+  continues on failure) and never reloaded. → nodes lost on restart (**B-10**).
+- **G3 — no state-vector reconciliation for KB (all-or-nothing).** `KbJoined` replaces local state
+  with the server's full snapshot (`collab_bridge.rs:1392-1447`); reconnect re-join is
+  full-snapshot, not a state-vector diff. Text sync does it right (`text.rs` — encode SV → server
+  sends only missing ops → `apply_update` merges). → a member's offline/local edits are **lost** on
+  reconnect (overwritten by the snapshot) instead of merging.
+- **G4 — emit-enqueue is live-state-fragile (B-8).** Node bodies *are* yrs-CRDT
+  (`shared/sync/src/kb.rs` `KbNodeDoc`/`KbCollectionDoc`), and the broadcast gate reads durable
+  markers (`kb_ops.rs:811-829`, `kb_collab_id_of` 613-629) which *are* set on join
+  (`shared=true`/`collab_id`, 484-485). Yet live, `pending_kb_updates` stayed **0** on a joined-KB
+  edit. Suspect the node→owning-instance→`kb_collab_id_of` resolution diverges for a
+  dir-less/joined instance (vs the passing `kb_register` repro). Alice's gate-decision trace +
+  owner-side view should pin the exact branch; bob can't capture its own trace (0 nodes post-restart).
+- **G5 — bespoke KB sync vs unified substrate.** KB share/join ships full node states then
+  incremental `KbNodeUpdate`s (`collab_bridge.rs:459-548`), a separate orchestration from the
+  text-buffer state-vector model. Converging KB onto the same resync/diff path as text would fix
+  G3 and reduce divergence.
+
+## Suggested repair (holistic, spans owner + peer)
+
+1. **Unify register & join into one durable artifact.** A member's KB — whether created/registered
+   or joined — should land as the *same* first-class instance: real durable `dir` + CozoDB store +
+   sentinel, regardless of origin. Joined `replicated` instances must allocate a durable dir and
+   **persist received nodes**, not best-effort.
+2. **Add a startup reconstruction loader** that enumerates shared-KB stores on disk and rebuilds
+   `editor.kb.instances` (so restart survives), then reconnect performs a **state-vector reconcile**
+   with the daemon (merge local + remote), mirroring `text.rs`.
+3. **Implement the replication-mode option** (`replicated` | `hosted`): `hosted` skips the local
+   store by design and routes reads/edits to the daemon; `replicated` does the durable+bidirectional
+   path above. Surface the mode in `:collab-status`/introspect and make policy-denied-replication a
+   distinct, explicit state (not a silent empty instance).
+4. **Make emit symmetric with receive** so a member's edit reliably enqueues + propagates (fix B-8)
+   independent of dir/register-vs-join state.
+
+## Restart-survival result (this run)
+❌ Not yet: after relaunch the joined `collabtest` reconstructed its *registration* (uuid/enabled)
+but with **0 nodes** (`dir=""`) and the reconnect re-subscribe didn't restore the snapshot — so the
+durable-replica + reconciliation contract above is the work item.
