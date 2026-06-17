@@ -3257,6 +3257,63 @@ mod tests {
         );
     }
 
+    /// B-8 repro: register a KB via the REAL kb_register path (CozoKbStore
+    /// import — not a hand-inserted instance), stamp the durable share marker as
+    /// the share would, then edit a node. The edit MUST enqueue a CRDT update.
+    /// Live, this produced pending_kb_updates=0 (no emit) — reproduce it here.
+    #[test]
+    fn b8_repro_registered_kb_edit_enqueues() {
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/kb/collabtest"
+        );
+        if !std::path::Path::new(fixture).is_dir() {
+            eprintln!("fixture missing, skipping: {fixture}");
+            return;
+        }
+        let mut editor = Editor::new();
+        let _dirs = with_test_dirs(&mut editor);
+        let result = editor
+            .kb_register("collabtest", std::path::Path::new(fixture))
+            .expect("register collabtest");
+        let uuid = result.uuid.clone();
+        eprintln!("registered uuid={uuid}");
+        eprintln!(
+            "instances keys = {:?}",
+            editor.kb.instances.keys().collect::<Vec<_>>()
+        );
+        eprintln!(
+            "node in instance? {}",
+            editor
+                .kb
+                .instances
+                .get(&uuid)
+                .map(|kb| kb.contains("collabtest:overview"))
+                .unwrap_or(false)
+        );
+        eprintln!(
+            "node in primary? {}",
+            editor.kb.primary.contains("collabtest:overview")
+        );
+
+        // Stamp the durable share marker (as the KbShared handler does).
+        {
+            let inst = editor.kb.registry.find_mut(&uuid).expect("find inst");
+            inst.shared = true;
+            inst.collab_id = Some("collabtest".into());
+        }
+        editor.collab.kb_sync_mode = "on_save".into();
+
+        editor
+            .kb_update_node("collabtest:overview", Some("EDITED"), None, None)
+            .expect("update");
+        assert_eq!(
+            editor.collab.pending_kb_updates.len(),
+            1,
+            "registered-KB edit must enqueue a kb/node_update (B-8)"
+        );
+    }
+
     #[test]
     fn watcher_starts_on_register() {
         let dir = create_test_org_dir();

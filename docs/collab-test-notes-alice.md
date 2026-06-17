@@ -380,3 +380,24 @@ T2.6 flow below should propagate edits **both ways** + survive restart.
 6. T2.7 security: unauthorized peer rejected; `mae-daemon revoke <fp>` → denied on
    reconnect; `tcpdump` still shows TLS.
 7. Log each step here with the shared convention.
+
+## B-8 (bob) — shared-KB edit does not enqueue/emit · Run 5/6 (ADR-019)
+
+Confirmed live on BOTH sides (alice owner-instance + bob guest-instance): a
+`kb_update` on a `collabtest` node changes the node **locally** but
+`pending_kb_updates` stays **0** and **zero `kb/node_update`** ever reaches the
+daemon (grep on the whole daemon log = 0). So nothing propagates either direction.
+
+**Localization so far (alice side):**
+- Phase-0 introspect: `owning_instances[collabtest]` = `shared:true, gate_present:true`,
+  `kb_sync_mode:on_save` — all gate INPUTS present on the live editor.
+- The full live chain is correct by inspection: MCP tool runs on the **live** editor
+  (`ai_event_handler::handle_mcp_request` → `execute_tool` → `kb_update_node`, no
+  snapshot/clone), and `drain_collab_intents` runs every `about_to_wait` (~70 fps).
+- **Local repro PASSES** (`b8_repro_registered_kb_edit_enqueues`): a real `kb_register`
+  of the fixture + durable marker + `kb_update_node` → `pending_kb_updates == 1`,
+  node in the instance (not primary), uuid matches registry. So the **gate logic is
+  correct**; B-8 is live-state-specific, not a logic bug.
+- **Next:** relaunch alice with `MAE_LOG=kb_sync=debug,collab=debug` to capture the
+  `kb edit: broadcast-gate decision` trace (owner + gate_hit) — the binary already has
+  the trace (Phase 0/1); no rebuild needed.
