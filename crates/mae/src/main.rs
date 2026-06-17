@@ -934,59 +934,131 @@ fn main() -> io::Result<()> {
             if !inst.enabled {
                 continue;
             }
-            if inst.org_dir.exists() {
-                info!(name = %inst.name, dir = %inst.org_dir.display(), "loading KB instance");
-                // Try CozoDB-direct load first (retains store handle for query layer).
-                let loaded_via_cozo = if inst.db_path.exists() {
-                    match mae_kb::CozoKbStore::open(&inst.db_path) {
-                        Ok(store) => match store.load_all() {
-                            Ok(nodes) => {
-                                let count = nodes.len();
-                                let mut kb = mae_kb::KnowledgeBase::new();
-                                for node in nodes {
-                                    kb.insert(node);
-                                }
-                                info!(
-                                    name = %inst.name,
-                                    nodes = count,
-                                    "KB instance loaded from CozoDB"
-                                );
-                                editor.kb.instances.insert(inst.uuid.clone(), kb);
-                                editor
-                                    .kb
-                                    .instance_stores
-                                    .insert(inst.uuid.clone(), std::sync::Arc::new(store));
-                                true
+            // ADR-020: load from the durable CozoDB store FIRST when present — this
+            // works for collab-JOINED instances whose `org_dir` is empty (they carry
+            // a real `db_path`). Previously gated on `org_dir.exists()`, so joined
+            // instances were skipped ("dir missing") and lost their nodes (B-10).
+            let loaded_via_cozo = if inst.db_path.exists() {
+                match mae_kb::CozoKbStore::open(&inst.db_path) {
+                    Ok(store) => match store.load_all() {
+                        Ok(nodes) => {
+                            let count = nodes.len();
+                            let mut kb = mae_kb::KnowledgeBase::new();
+                            for node in nodes {
+                                kb.insert(node);
                             }
-                            Err(e) => {
-                                warn!(error = %e, name = %inst.name, "CozoDB load_all failed, falling back to org import");
-                                false
-                            }
-                        },
+                            info!(name = %inst.name, nodes = count, shared = inst.shared, "KB instance loaded from CozoDB");
+                            editor.kb.instances.insert(inst.uuid.clone(), kb);
+                            editor
+                                .kb
+                                .instance_stores
+                                .insert(inst.uuid.clone(), std::sync::Arc::new(store));
+                            true
+                        }
                         Err(e) => {
-                            warn!(error = %e, name = %inst.name, "CozoDB open failed, falling back to org import");
+                            warn!(error = %e, name = %inst.name, "CozoDB load_all failed, falling back to org import");
                             false
                         }
+                    },
+                    Err(e) => {
+                        warn!(error = %e, name = %inst.name, "CozoDB open failed, falling back to org import");
+                        false
                     }
-                } else {
-                    false
-                };
-                if !loaded_via_cozo {
-                    let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
-                    info!(
-                        name = %inst.name,
-                        nodes = report.nodes_imported,
-                        skipped = report.nodes_skipped,
-                        errors = report.errors.len(),
-                        "KB instance loaded from org files"
-                    );
-                    editor.kb.instances.insert(inst.uuid.clone(), kb);
                 }
             } else {
-                info!(name = %inst.name, dir = %inst.org_dir.display(), "KB instance dir missing, skipping");
+                false
+            };
+            if loaded_via_cozo {
+                // done
+            } else if inst.org_dir.exists() {
+                let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
+                info!(
+                    name = %inst.name,
+                    nodes = report.nodes_imported,
+                    skipped = report.nodes_skipped,
+                    errors = report.errors.len(),
+                    "KB instance loaded from org files"
+                );
+                editor.kb.instances.insert(inst.uuid.clone(), kb);
+            } else {
+                warn!(name = %inst.name, db = %inst.db_path.display(), "KB instance has no loadable store or org dir, skipping");
             }
         }
         editor.kb.registry = registry;
+
+        // ADR-020 recovery: reconstruct shared-KB instances present on disk but
+        // MISSING from the registry (e.g. a clobbered registry — the exact failure
+        // that lost a joined KB mid-session). Collect candidates first (immutable
+        // borrow of data_dir), then reconstruct (mutable). Idempotent.
+        let recoveries: Vec<(String, String, std::path::PathBuf, Option<String>)> =
+            if let Some(dd) = editor.kb.data_dir.as_ref() {
+                dd.list_shared_kbs()
+                    .into_iter()
+                    .filter_map(|slug| {
+                        let meta = dd.read_shared_meta(&slug)?;
+                        Some((
+                            meta.collab_id,
+                            meta.name,
+                            dd.shared_kb_db(&slug),
+                            meta.last_sync,
+                        ))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        let mut recovered_any = false;
+        for (collab_id, name, db_path, last_sync) in recoveries {
+            if collab_id.is_empty()
+                || editor.kb.registry.find_by_collab_id(&collab_id).is_some()
+                || !db_path.exists()
+            {
+                continue;
+            }
+            if let Ok(store) = mae_kb::CozoKbStore::open(&db_path) {
+                if let Ok(nodes) = store.load_all() {
+                    let uuid = mae_kb::federation::generate_uuid();
+                    let mut kb = mae_kb::KnowledgeBase::new();
+                    for node in nodes {
+                        kb.insert(node);
+                    }
+                    let count = kb.list_ids(None).len();
+                    editor.kb.instances.insert(uuid.clone(), kb);
+                    editor
+                        .kb
+                        .instance_stores
+                        .insert(uuid.clone(), std::sync::Arc::new(store));
+                    editor
+                        .kb
+                        .registry
+                        .instances
+                        .push(mae_kb::federation::KbInstance {
+                            uuid,
+                            name: if name.is_empty() {
+                                collab_id.clone()
+                            } else {
+                                name.clone()
+                            },
+                            org_dir: std::path::PathBuf::new(),
+                            db_path,
+                            primary: false,
+                            enabled: true,
+                            last_import: None,
+                            collab_id: Some(collab_id.clone()),
+                            shared: true,
+                            remote_peers: Vec::new(),
+                            last_sync,
+                        });
+                    recovered_any = true;
+                    info!(kb = %collab_id, nodes = count, "recovered shared KB instance from disk (registry rescan)");
+                }
+            }
+        }
+        if recovered_any {
+            if let Err(e) = editor.kb.registry.save(&data_dir) {
+                warn!(error = %e, "failed to persist recovered shared-KB registry");
+            }
+        }
 
         // Build the CozoDB-first query layer AFTER all stores are loaded
         // (primary + manual + federated instances).

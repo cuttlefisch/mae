@@ -3239,6 +3239,46 @@ mod tests {
         );
     }
 
+    /// ADR-020 Phase 3 (B-10): a joined instance persists its nodes to a durable
+    /// CozoDB store with a real `db_path` that a fresh open + load_all reloads —
+    /// the foundation of restart survival (the startup loader reads this back).
+    #[test]
+    fn joined_instance_persists_to_reloadable_store() {
+        let mut editor = Editor::new();
+        let tmp = with_test_dirs(&mut editor);
+        let dd = mae_kb::data_dir::KbDataDir::new(&tmp.path().join("data")).unwrap();
+        editor.kb.data_dir = Some(dd);
+
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let state = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new("ct:overview", "Persisted", mae_kb::NodeKind::Note, "body"),
+                2,
+            )
+            .unwrap();
+        let uuid =
+            editor.kb_register_joined_instance("ct", vec![("ct:overview".to_string(), state)]);
+
+        let db_path = {
+            let inst = editor.kb.registry.find_by_uuid(&uuid).unwrap();
+            assert!(
+                !inst.db_path.as_os_str().is_empty() && inst.db_path.exists(),
+                "joined instance must have a real, existing db_path (durable across restart)"
+            );
+            inst.db_path.clone()
+        };
+
+        // Drop the editor (and its live store) to release the sled lock, then
+        // open fresh from db_path exactly as the startup loader does on restart.
+        drop(editor);
+        let store = mae_kb::CozoKbStore::open(&db_path).unwrap();
+        let nodes = store.load_all().unwrap();
+        assert!(
+            nodes.iter().any(|n| n.id == "ct:overview"),
+            "node reloads from the durable store (B-10 restart survival)"
+        );
+    }
+
     /// ADR-019 Phase 3: after a restart the transient cache is empty, but
     /// reconstruction rebuilds it from the durable registry markers (primary +
     /// shared instances), and durable_shared_kb_ids lists what to re-subscribe.
