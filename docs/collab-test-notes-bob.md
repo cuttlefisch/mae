@@ -274,6 +274,34 @@ the new ADR-019 `introspect` (`collaboration`/`kb` sections) to diagnose live.
   arrive over the wire with no on-disk source file, so `kb-edit-source` has nothing to open —
   blocks the human-style edit path for joined KBs (also blocked the B-8 disambiguation).
 
+### B-10 🐛 (CRITICAL — likely the B-8 root cause too) — joined KB instance has empty `dir`; nodes don't survive restart  ·  Step T2.6 restart-survival
+- **Smoking gun (bob startup log, `MAE_LOG=kb_sync=debug,collab=debug`):**
+  ```
+  "KB instance dir missing, skipping"  name=collabtest  dir=""
+  "reconnect: re-subscribing shared KBs"  count=1
+  "joining KB"  kb=collabtest        ← no "complete"/snapshot follows; 0 nodes restored
+  ```
+- After relaunch: `kb_instances` → `collabtest [18b9da6e]: 0 nodes, enabled, dir=` — the
+  **instance registration survives** (uuid/enabled/marker) but the **`dir` is empty**, so the
+  local node store can't be loaded ("dir missing, skipping") and the reconnect re-subscribe
+  **did not restore the 3 nodes** → `kb_get`/`kb_update collabtest:*` now fail ("No KB node").
+- **This unifies B-8 + restart-survival under one root cause:** a collab-**joined** instance is
+  created with **`dir=""`** (no durable on-disk backing), unlike a **`kb_register`ed** instance
+  (real dir) — exactly the difference between alice's *passing* B-8 repro and the *live* failure.
+  A dir-less/degraded instance plausibly (a) fails the emit-enqueue (**B-8**) and (b) loses its
+  nodes on restart (**B-10**). **Fix direction for alice:** give collab-joined instances a real
+  durable `dir` (like `kb_register` does) so they persist + emit; and the reconnect re-subscribe
+  must actually re-fetch the node snapshot from the daemon when the local store is empty.
+- **Blocks bob's own gate-trace capture:** with 0 nodes, bob can't `kb_update` to fire the
+  broadcast-gate trace — relying on alice's trace + this `dir=""` structural lead.
+
+### B-11 ⚠️ UX — `*Collab Status*` buffer takes over the window on launch  ·  startup
+- On launch (collab auto-connect), `*Collab Status*` is displayed/focused **instead of the
+  dashboard** — seen on **both** machines. alice's `5d903d3` ("reconnect re-subscribe skips
+  primary KB — Collab Status launch popup") addressed part of it, but it still pops up. The
+  status buffer shouldn't auto-show on launch — it should only appear on explicit
+  `:collab-status`. Likely the auto-connect status report force-displays the buffer.
+
 ## Convergence + membership scorecard
 
 | Capability | Step | Result |
