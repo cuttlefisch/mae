@@ -470,3 +470,53 @@ Only when all three are green do we proceed to **Stage 2** (Phases 4–7: `repli
 mode + status taxonomy, the `*Collab Status*` launch fix B-11, the magit-style `*KB Sharing*`
 management buffer, flagship e2e) and the **deferred D1–D6** backlog — all still in flight,
 tracked in ADR-020 §Future Work.
+
+---
+
+## 2026-06-17 ~16:30 — ⭐ B-8 ROOT CAUSE FOUND + FIXED (`95295a2b`) — bob: rebuild + re-run Step 1
+
+**The edit emit was a wire-protocol bug, not durability.** alice-side tracing
+(`/tmp/alice-kbsync.log`) proved the editor did everything right —
+`gate_hit:true → drain: send → bg: kb/node_update written to wire (×2)` — yet the
+daemon logged **0** `kb/node_update: received`. Root cause:
+
+> `kb/node_update` was hand-rolled in the editor bg-task **as a JSON-RPC notification
+> (no `id`)**. The daemon's read loop routes no-`id` messages to the *notification*
+> handler, which only relays `sync/awareness` and **drops everything else** — so it
+> never reached the apply+broadcast request handler. Text `sync/update` carries an
+> `id` and works. (Also: the durable row was acked on channel-send, before the wire;
+> and `kb_update_node` enqueued to BOTH SQLite and an in-mem Vec → double-send — hence
+> "written to wire ×2".)
+
+**Why no test caught it (the meta-bug):** the one KB e2e was `#[ignore]`d AND used a
+hand-rolled client that sent the *correct* id-bearing shape — it tested a parallel
+implementation, not the shipping path.
+
+**Fix (`d1e04cee`, pushed on `95295a2b`):**
+- `shared/sync/src/wire.rs` — ONE shared builder for the collab JSON-RPC messages, used
+  by the editor emit path **and** the daemon e2e. `kb/node_update`/`kb/share`/`kb/join`
+  are requests (carry `id`). Unit test asserts every request builder has an `id`.
+- `collab_bridge.rs` — `kb/node_update` is now a request; durable row acked only on the
+  daemon's `{applied:true}` (queue→send→confirm→ack); in-flight rowid set (no re-send
+  storms; cleared on disconnect); error responses surface loudly.
+- `kb_ops.rs` — single-source enqueue (kills the double-send).
+- `daemon/collab_handler.rs` — a request-only doc method arriving as a notification is
+  now a **loud `warn!`**, never a silent drop again.
+- `daemon/tests/collab_e2e.rs::kb_node_update_applies_and_broadcasts_to_peer` — real
+  wire round-trip: share→join→edit→`{applied:true}`→peer receives broadcast. **Proven
+  to FAIL (hang) when the builder omits the `id`, pass with it.** All suites green;
+  clippy clean both workspaces.
+
+### → BOB: to validate the fix
+```sh
+git fetch && git pull         # → 95295a2b (or later)
+make build                    # GUI editor (NOT cargo build -p mae)
+cp target/release/mae ~/.local/bin/mae.new && mv -f ~/.local/bin/mae.new ~/.local/bin/mae
+# restart bob's editor with tracing (MAE_LOG=info,kb_sync=debug,collab=debug)
+```
+alice will rebuild + restart her **daemon** (carries the loud-warn + is the apply/
+broadcast hub) and her **editor** (carries the request-emit). Then re-run **Step 1**:
+alice edits `collabtest:overview` title → expect bob sees it, the daemon logs
+`kb/node_update: received` + `kb/node_update: applied wal_seq=…`, and bob's log shows an
+inbound `sync_update` for `kb:collabtest:overview`. Then the reverse (bob→alice) and
+restart-survival.
