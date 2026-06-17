@@ -401,3 +401,72 @@ daemon (grep on the whole daemon log = 0). So nothing propagates either directio
 - **Next:** relaunch alice with `MAE_LOG=kb_sync=debug,collab=debug` to capture the
   `kb edit: broadcast-gate decision` trace (owner + gate_hit) — the binary already has
   the trace (Phase 0/1); no rebuild needed.
+
+---
+
+## 2026-06-17 ~15:30 — ⭐ STAGE 1 (ADR-020 Phases 0–3) LANDED + PUSHED — bob pickup here
+
+**Branch `feat/crdt-collab-validation` is at `1f4a6993`.** Stage 1 of ADR-020 (the
+holistic shared-KB durability + emit-pipeline redesign) is committed and pushed:
+
+| commit | phase |
+|---|---|
+| `b93498d1` | Phase 0 — ADR-020 doc (`docs/adr/020-replicated-kb-crdt-artifact.md`) + observability seam |
+| `0865b4d8` | Phase 1 — emit-pipeline hardening: never silently lose a `kb/node_update` (durable requeue) + daemon liveness (`track_client_connect` so live docs aren't idle-evicted) |
+| `4d72ed41` | Phase 2 — merge-on-join (CRDT `apply_update`) instead of insert/overwrite (preserves offline edits) |
+| `1f4a6993` | Phase 3 — durable joined instance + **disk-first** startup loader (loads from `db_path` even when `org_dir=""`) + registry rescan to recover shared KBs missing from a clobbered registry. Fixes **B-10**. |
+
+Full design + the four decisions + the deferred backlog (D1–D6) are in
+**`docs/adr/020-replicated-kb-crdt-artifact.md`**; the staged plan is
+`.claude/plans/crystalline-forging-pond.md`.
+
+### → BOB: how to pick up (do this first)
+```sh
+git fetch && git checkout feat/crdt-collab-validation && git pull   # → 1f4a6993
+make build      # ⚠️ GUI build (FEATURES defaults to gui). Do NOT use `cargo build -p mae`
+                #    — that's TUI-only and will drop your GUI (alice hit exactly this).
+# install over ~/.local/bin via temp+mv to avoid "Text file busy", e.g.:
+cp target/release/mae ~/.local/bin/mae.new && mv -f ~/.local/bin/mae.new ~/.local/bin/mae
+# bob is editor-only (no daemon on bob — it connects to alice's daemon at 192.168.1.137:9480).
+# Relaunch bob's editor with tracing so we can localize emit:
+MAE_LOG=info,kb_sync=debug,collab=debug ~/.local/bin/mae   # (or your usual GUI launch + this env)
+```
+alice's **daemon** is already on the Stage-1 build (running, `0.0.0.0:9480`,
+fingerprint `SHA256:07aW…7Ls` unchanged → no re-TOFU; 2 authorized keys incl. the
+**new** alice key `SHA256:+jBinAwoF…`). alice's **editor** is on the Stage-1 GUI build.
+
+### Live finding so far (alice side, this session — bob was offline so only the editor→daemon half ran)
+Daemon traced to `/tmp/mae-daemon-live.log` (`MAE_LOG=info,kb_sync=debug,collab=debug`):
+- ✅ **`kb/share` reaches the daemon** — explicit `kb_share collabtest` →
+  `kb/share: complete session=5 kb_id=collabtest node_count=3 owner=alice (+jBinAwoF…)`.
+- ❌ **`kb/node_update` STILL does not reach the daemon (B-8 not yet closed at emit).**
+  Two `kb_update collabtest:overview` (title → `[STAGE1-ALICE-A1]`, then `[A2]`) changed
+  the node **locally** but produced **0** new daemon log lines — the local daemon
+  (definitely live) received nothing. So this is NOT a bob-offline artifact; the editor
+  is not emitting the update at all. NB: collabtest now loads with a **real dir** under the
+  disk-first loader, yet emit is still 0 — so the dir-less instance (B-10) was a *separate*
+  restart-survival bug, not the emit cause. Phase 1 makes emit durable *once enqueued*; the
+  remaining gap is that the update is apparently **never enqueued** from this path.
+- `collab_status` shows `synced_docs:0` even after a successful share — likely counts
+  text buffers, not KB docs, so treat it as uninformative for KB sync (confirm).
+
+**Open question for the next session (the real Stage-1 blocker):** does the **MCP
+`kb_update` tool path** (`kb_update_node`) fire the broadcast gate, or does it write the node
+to the store **bypassing** the path that enqueues the collab intent? alice's passing local
+repro (`b8_repro_registered_kb_edit_enqueues`) gets `pending_kb_updates == 1` via
+`kb_update_node` — but live it stays 0. Reconcile that divergence: capture the editor-side
+`kb edit: broadcast-gate decision` trace (owner + gate_hit) + `pending_kb_updates` right after
+a live `kb_update`. If the gate never fires live, that's the fix target.
+
+### Remaining Stage-1 LIVE GATE (once bob is live + rebuilt)
+1. **Bidirectional propagation** — alice `kb_update` a node → lands on bob (daemon logs
+   `kb/node_update: received`, doc stays `connected_clients≥1`, no idle-evict); bob edits →
+   lands on alice.
+2. **Restart survival (B-10)** — restart alice's editor → joined nodes reload from disk
+   (disk-first loader) + edits still flow.
+3. **Offline-merge (Phase 2)** — edit while disconnected → merges, not overwritten, on rejoin.
+
+Only when all three are green do we proceed to **Stage 2** (Phases 4–7: `replicated|hosted`
+mode + status taxonomy, the `*Collab Status*` launch fix B-11, the magit-style `*KB Sharing*`
+management buffer, flagship e2e) and the **deferred D1–D6** backlog — all still in flight,
+tracked in ADR-020 §Future Work.
