@@ -559,3 +559,15 @@ session as a subscriber of those docs**, mirroring the text-buffer share/subscri
 receive is non-functional even though emit works. Owner+member coordination; primary file
 `collab_bridge.rs` (the unsubscribed-doc drop arm + the join handler's subscribe step) + daemon
 `collab_handler.rs` (subscriber registration on `kb/join`).
+
+#### B-13 NARROWED → member-side-only (daemon delivery confirmed working)
+A 3rd fresh alice edit (after the `14:53:57` completed join) **did reach bob this time**:
+`14:56:21 ignoring sync_update for unsubscribed doc doc=kb:collabtest:overview`. So the **daemon
+DID broadcast** the node update to bob (RECV-2 earlier not arriving was a pre-completed-join race) —
+i.e. **daemon-side subscriber registration on `kb/join` is working**. bob still **dropped it
+locally** (title unchanged, neither slug applied). ⇒ **B-13 is a one-sided, member-side fix**: in the
+join handler (`collab_bridge.rs`), after `KB join complete (merged)`, bob must `subscribe_doc` each
+node `kb:<id>` (+ collection `kbc:<id>`) into its **local** subscribed-docs set so inbound
+`sync_update`s apply instead of hitting the `"ignoring sync_update for unsubscribed doc"` arm.
+Net receive-path verdict: emit ✅, daemon delivery ✅, **member-side local subscribe ❌ (the one fix
+left for Step 1 receive to pass).**
