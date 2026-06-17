@@ -1289,6 +1289,9 @@ async fn handle_doc_request_inner(
                 );
             }
             session_docs.insert(collection_doc.clone());
+            // ADR-020 liveness: count the sharer as a connected client so the
+            // collection doc isn't idle-evicted while the owner stays connected.
+            let _ = doc_store.track_client_connect(&collection_doc).await;
             broadcaster
                 .lock()
                 .unwrap()
@@ -1320,6 +1323,7 @@ async fn handle_doc_request_inner(
                         continue;
                     }
                     session_docs.insert(node_doc.clone());
+                    let _ = doc_store.track_client_connect(&node_doc).await;
                     broadcaster
                         .lock()
                         .unwrap()
@@ -1431,6 +1435,8 @@ async fn handle_doc_request_inner(
                 }
             };
             session_docs.insert(collection_doc.clone());
+            // ADR-020 liveness: the joining member is a connected client of the docs.
+            let _ = doc_store.track_client_connect(&collection_doc).await;
             broadcaster
                 .lock()
                 .unwrap()
@@ -1457,6 +1463,7 @@ async fn handle_doc_request_inner(
                 match doc_store.encode_state_and_sv(&doc_name).await {
                     Ok((state, _sv)) => {
                         session_docs.insert(doc_name.clone());
+                        let _ = doc_store.track_client_connect(&doc_name).await;
                         broadcaster
                             .lock()
                             .unwrap()
@@ -1559,6 +1566,16 @@ async fn handle_doc_request_inner(
             }
 
             let node_doc = format!("kb:{node_id}");
+            // ADR-020 liveness: an editing session keeps its node doc alive (count
+            // it as a connected client on first touch) so the doc the member is
+            // actively editing isn't idle-evicted out from under them.
+            if session_docs.insert(node_doc.clone()) {
+                let _ = doc_store.track_client_connect(&node_doc).await;
+                broadcaster
+                    .lock()
+                    .unwrap()
+                    .subscribe_doc(session_id, &node_doc);
+            }
             match doc_store.apply_update(&node_doc, &update_bytes, None).await {
                 Ok(result) => {
                     // Broadcast to other subscribers of the collection.

@@ -294,6 +294,14 @@ pub enum CollabEvent {
         node_id: String,
         update_bytes: Vec<u8>,
     },
+    /// ADR-020 emit durability: the background task could not put a `kb/node_update`
+    /// on the wire (write failed, or no writer / disconnected). Re-persist it to the
+    /// durable pending queue so the next drain retries it — never silently dropped (B-8).
+    KbUpdateRequeue {
+        kb_id: String,
+        node_id: String,
+        update: Vec<u8>,
+    },
 }
 
 // --- Intent drain (called every tick) ---
@@ -1481,6 +1489,28 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 }
             }
         }
+        CollabEvent::KbUpdateRequeue {
+            kb_id,
+            node_id,
+            update,
+        } => {
+            // ADR-020 durability: the bg task couldn't put this kb/node_update on
+            // the wire — re-persist it to the durable pending queue so the next
+            // drain retries it (never silently lost, B-8).
+            if let Some(ref store) = editor.kb.store {
+                if let Err(e) = store.push_pending_update(&kb_id, &node_id, &update) {
+                    warn!(target: "kb_sync", kb = %kb_id, node = %node_id, error = %e, "requeue: failed to persist pending kb update");
+                } else {
+                    tracing::debug!(target: "kb_sync", kb = %kb_id, node = %node_id, "requeue: persisted to durable pending queue");
+                }
+            } else {
+                // No durable store — fall back to the in-memory queue.
+                editor
+                    .collab
+                    .pending_kb_updates
+                    .push((kb_id, node_id, update));
+            }
+        }
     }
 }
 
@@ -2347,6 +2377,10 @@ async fn run_collab_task(
                             }
                         }
                         CollabCommand::KbNodeUpdate { kb_id, node_id, update } => {
+                            // ADR-020 durability: never silently lose a kb/node_update.
+                            // On write failure OR no writer, re-queue it (the editor
+                            // re-persists to the durable pending queue → retried).
+                            let mut delivered = false;
                             if let Some(ref mut w) = writer {
                                 let req = serde_json::json!({
                                     "jsonrpc": "2.0",
@@ -2357,18 +2391,25 @@ async fn run_collab_task(
                                         "update": mae_sync::encoding::update_to_base64(&update),
                                     }
                                 });
-                                let body = match serde_json::to_vec(&req) {
-                                    Ok(b) => b,
-                                    Err(e) => { error!("kb node update serialize error: {e}"); continue; }
-                                };
-                                // ADR-020 traceability: surface the wire-send result (was
-                                // discarded `let _ =`, hiding write failures — part of B-8).
-                                match write_framed(w, &body, write_timeout).await {
-                                    Ok(()) => tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, "bg: kb/node_update written to wire"),
-                                    Err(e) => warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, error = %e, "bg: kb/node_update wire write FAILED"),
+                                match serde_json::to_vec(&req) {
+                                    Ok(body) => match write_framed(w, &body, write_timeout).await {
+                                        Ok(()) => {
+                                            delivered = true;
+                                            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, "bg: kb/node_update written to wire");
+                                        }
+                                        Err(e) => warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, error = %e, "bg: kb/node_update wire write FAILED — requeueing"),
+                                    },
+                                    Err(e) => {
+                                        // Serialize errors are not transient; drop with a loud log.
+                                        error!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, error = %e, "bg: kb/node_update serialize error — dropping");
+                                        delivered = true;
+                                    }
                                 }
                             } else {
-                                warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, "bg: kb/node_update dropped — writer absent while connected");
+                                warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, "bg: kb/node_update — writer absent while connected, requeueing");
+                            }
+                            if !delivered {
+                                try_send_evt(&evt_tx, CollabEvent::KbUpdateRequeue { kb_id, node_id, update });
                             }
                         }
                         CollabCommand::KbMember { kb_id, member, role, add } => {
@@ -2580,8 +2621,11 @@ async fn run_collab_task(
                                 Ok((mut reader, mut w)) => {
                                     if let Some(peer_count) = send_initialize(&mut w, &mut reader, write_timeout).await {
                                         // Spawn dedicated reader task (cancel-safety fix).
-                                        msg_rx = Some(spawn_reader_task(reader));
+                                        // ADR-020: set writer before msg_rx so a
+                                        // command never observes connected(msg_rx)=Some
+                                        // while writer is None (avoids a spurious requeue).
                                         writer = Some(w);
+                                        msg_rx = Some(spawn_reader_task(reader));
                                         reconnect_attempt = 0; // Reset on success.
                                         // Subscribe to sync_update events (B4 fix).
                                         if let Some(ref mut w) = writer {
@@ -3289,8 +3333,9 @@ async fn handle_disconnected_cmd(
                         send_initialize(&mut w, &mut reader, write_timeout).await
                     {
                         // Spawn dedicated reader task (cancel-safety fix).
-                        *msg_rx = Some(spawn_reader_task(reader));
+                        // ADR-020: writer before msg_rx (see reconnect note).
                         *writer = Some(w);
+                        *msg_rx = Some(spawn_reader_task(reader));
                         *reconnect_enabled = true;
                         // Subscribe to sync_update events (B4 fix).
                         if let Some(ref mut w) = writer {
@@ -3492,8 +3537,21 @@ async fn handle_disconnected_cmd(
                 },
             );
         }
-        CollabCommand::KbNodeUpdate { .. } => {
-            // Silently drop — not connected.
+        CollabCommand::KbNodeUpdate {
+            kb_id,
+            node_id,
+            update,
+        } => {
+            // ADR-020 durability: not connected — re-queue (don't drop) so the
+            // edit is retried on reconnect.
+            try_send_evt(
+                evt_tx,
+                CollabEvent::KbUpdateRequeue {
+                    kb_id,
+                    node_id,
+                    update,
+                },
+            );
         }
         CollabCommand::KbMember { kb_id, .. }
         | CollabCommand::KbApprove { kb_id, .. }
