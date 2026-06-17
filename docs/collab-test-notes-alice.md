@@ -563,3 +563,53 @@ not delete+replace).
 alice edits `collabtest:overview` → bob's editor **applies** the inbound `kb:collabtest:overview`
 update (no more "unsubscribed doc" drop) and the title updates **on bob's screen**. Then bob edits →
 alice receives (owner now subscribed to its own node docs). That closes bidirectional Stage-1.
+
+---
+
+## 2026-06-17 ~17:40 — ⭐ B-14 + B-15 FIXED (`490d9a3c`) — KB edits finally MERGE across peers
+
+B-13 made bob **receive + run the apply path**, but applies came back `changed=false` and bob's
+content never updated. bob diagnosed the next layer (B-14); the realistic test surfaced a *second*
+bug (B-15) in the same pipeline. **This is the class** you flagged — multiple defects on the same
+path, hidden because every prior merge test used a SHARED lineage (one doc → encode → apply to a doc
+from those same bytes), never two independently-built peers.
+
+- **`changed=false` is NOT hardcoded** — it's `hash_before != hash_after` around the real yrs apply.
+  An honest signal; the rot was upstream.
+- **B-14 (divergent lineage):** yrs merges on lineage (client_id + op history), not the node-id
+  string. alice and bob each built `collabtest:<node>` independently (both imported the org fixture)
+  → incompatible lineages → their title/body YText are different yrs objects at the same map key →
+  `apply_remote_update` no-ops (map last-writer-wins discards the owner's text). **Fix:**
+  `KnowledgeBase::adopt_remote_node` rebuilds the node from the owner's encoded state so both share
+  ONE lineage; `kb_register_joined_instance` now ADOPTS on join (mirrors the text-buffer
+  `from_state_with_client_id` model) instead of merging same-id siblings.
+- **B-15 (edits after the first never entered the CRDT):** `upsert_with_crdt`, when the node already
+  had a `crdt_doc`, rebuilt from the OLD bytes and **ignored the new title/body fields**. So alice's
+  RECV-2/3/4 re-broadcast stale content (byte-identical `update_len=1121` each — visible in the
+  daemon log!). **Fix:** apply the edited fields onto the existing lineage via `set_title`/`set_body`.
+- **Test (the methodology fix):** `divergent_lineage_merge_noops_but_adopt_converges` (shared/kb) —
+  alice edits chained on her lineage, bob built the same id independently; a plain merge no-ops
+  (B-14 marker), adoption converges, and the owner's NEXT chained edit (B-15) merges as a real change.
+  mae-kb 223 green.
+
+### → BOB: rebuild for B-14+B-15 (editor-only; daemon unchanged)
+```sh
+git fetch && git pull          # → 490d9a3c (or later)
+make build                     # GUI editor
+cp target/release/mae ~/.local/bin/mae.new && mv -f ~/.local/bin/mae.new ~/.local/bin/mae
+# restart bob's editor (MAE_LOG=info,kb_sync=debug,collab=debug → /tmp/bob-collab.log)
+```
+alice is already on the B-14+B-15 build (`490d9a3c`). **Both editors need it** (B-15 = emit chains,
+B-14 = receive adopts). daemon unchanged.
+
+**⚠️ Important — fresh divergence:** existing `collabtest:<node>` docs on alice and bob still carry
+their OLD divergent lineages from before this fix. The adopt path only re-establishes shared lineage
+**on join**. So after both rebuild: alice re-approves bob (B-12), **bob re-joins → bob ADOPTS alice's
+current node lineage** (you'll see bob's titles snap to alice's current values), and from then on
+alice's chained edits should propagate live. If a node is still stuck, the cleanest reset is bob
+leave+rejoin so the adopt runs again.
+
+### Expected with B-14+B-15
+After bob's (re)join adopts alice's lineage: alice edits `collabtest:alpha` → bob's alpha title
+updates **on screen** (`changed=true` in bob's log). Then bob→alice reverse. That closes bidirectional
+Stage-1 (modulo B-12 membership-durability, still open).
