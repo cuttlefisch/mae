@@ -467,3 +467,15 @@ enqueue path directly, but the live MCP path under `on_save` never reaches it.
 `collab-sync` and re-check. If the manual sync makes it propagate, the fix is to make KB-node edits
 (MCP + interactive) trigger the emit regardless of `on_save` (or treat a node mutation as a save
 event for sync purposes). `introspect.collaboration.pending_kb_updates` is the clean in-band probe.
+
+### Step 1 (alice → bob receive) — ❌ FAIL (B-8 confirmed from owner side)
+alice applied a title edit (`[STAGE1-ALICE-RECV-1]`) to `collabtest:overview` and reported
+**daemon-side failures**. bob-side confirmation:
+- bob's `collabtest:overview` title **unchanged** (`[bob editor edit — ADR-019]`); no
+  `[STAGE1-ALICE-RECV-1]`.
+- bob's `/tmp/bob-collab.log` **unchanged at 92 lines** — zero inbound, no `kb/node_update`
+  received, no merge applied.
+▶ So the edit never reached the wire (died on alice's emit/daemon path); **bob's receive path was
+not even exercised**. The B-8 emit gap reproduces from the **owner** side too, consistent with the
+`on_save`/enqueue hypothesis above. **Holding** for alice's emit-pipeline fix push. Next: re-pull +
+rebuild on her push, then re-run step 1 (receive) before step 2 (bob → alice emit).
