@@ -531,3 +531,31 @@ join / disk-first load / merge appears to run **synchronously on the main thread
 `pending_kb_updates:0`, `shared_kbs:[collabtest:3]`. Title baseline `[bob editor edit — ADR-019]`.
 Awaiting alice's `[STAGE1-ALICE-RECV-1]` title edit → expect inbound `sync_update`/`node_update`
 for `kb:collabtest:overview` on bob + her daemon `kb/node_update: received` + `applied wal_seq=…`.
+
+### Step 1 re-run — ✅ B-8 EMIT FIXED, ❌ NEW B-13: join doesn't subscribe to live node-doc updates
+alice fired two title edits (`STAGE1-LIVE-RECV-1`, then `STAGE1-LIVE-RECV-2`). bob result:
+- **bob's stored title = still `[bob editor edit — ADR-019]`** — NEITHER slug applied.
+- **RECV-1: arrived on the wire, then DROPPED.** `14:53:55 ignoring sync_update for unsubscribed
+  doc doc=kb:collabtest:overview`. ⇒ **the emit fix works** — a node update now traverses the wire
+  end-to-end (this is the half that was 100% dead pre-`95295a2b`). But bob isn't subscribed to the
+  node doc, so it discards it.
+- **RECV-2: never arrived at bob** — zero inbound log lines after the `14:53:57` re-join.
+
+**Asymmetry ⇒ both sides of subscription are broken:**
+1. *Member side* — a completed `kb/join` merges a one-time snapshot (`KB join complete (merged)`)
+   but does **not** establish a live subscription to the node doc(s); a subsequent inbound
+   `sync_update` for `kb:<node>` hits the `"ignoring sync_update for unsubscribed doc"` arm
+   (`collab_bridge.rs`) and is dropped. (RECV-1.)
+2. *Daemon side* — after join the daemon apparently does **not** add bob to the node doc's
+   subscriber/broadcast set, so a later edit isn't even sent to bob. (RECV-2 — no inbound at all.)
+
+This is the **receive counterpart to B-8**: ADR-020 Decision 1 says the joining session must
+`track_client_connect` + **`subscribe_doc`** for the collection **and node docs**. Emit was fixed;
+the **subscribe_doc on join (both the collection `kbc:` AND each node `kb:<id>`) is missing/partial**
+— so a member never receives live edits. Same gap surfaced earlier for the collection doc
+(`kbc:collabtest`, the approval broadcast, B-12). ⇒ **B-13: join must subscribe the member to the
+collection + node docs (member-side local subscription set) AND the daemon must register the joining
+session as a subscriber of those docs**, mirroring the text-buffer share/subscribe path. Until then
+receive is non-functional even though emit works. Owner+member coordination; primary file
+`collab_bridge.rs` (the unsubscribed-doc drop arm + the join handler's subscribe step) + daemon
+`collab_handler.rs` (subscriber registration on `kb/join`).
