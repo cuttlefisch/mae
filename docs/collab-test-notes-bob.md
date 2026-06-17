@@ -415,3 +415,55 @@ disallowed by policy" from "replication failed due to a bug"** — never silentl
 ❌ Not yet: after relaunch the joined `collabtest` reconstructed its *registration* (uuid/enabled)
 but with **0 nodes** (`dir=""`) and the reconnect re-subscribe didn't restore the snapshot — so the
 durable-replica + reconciliation contract above is the work item.
+
+---
+
+## 2026-06-17 ~15:45 — bob on Stage-1 build (`aaf33f8`) — pre-test baseline + bob-log findings
+
+bob rebuilt + installed from `aaf33f8` (GUI `make build`, v0.13.12), editor-only (connects to
+alice's daemon `192.168.1.137:9480`). Launched with `MAE_LOG=info,kb_sync=debug,collab=debug` →
+`/tmp/bob-collab.log` (bob can self-tail it; no manual line-grabbing needed this round). Alice
+about to pick up. Baseline captured **before** any live edit this round.
+
+### ✅ B-10 (restart survival) looks FIXED on bob's side — disk-first loader works
+`kb_instances`: `collabtest [18b9da6e]: 3 nodes, enabled=true, dir=`. So even with **`dir=""`**
+(empty org_dir) the instance reloaded **3 nodes from its CozoDB store** on startup — the Phase-3
+disk-first loader did its job. `kb_get collabtest:overview` shows sentinel `ZEPHYRINE` intact **and**
+title still `[bob editor edit — ADR-019]` — i.e. bob's edit from the *prior* session **survived the
+restart locally**. Contrast the previous run above (0 nodes, snapshot lost). ▶ Net: the dir-less
+instance now reloads its nodes; restart-survival of bob's *local* state is good. (Still TBD: does
+that surviving bob edit actually reach alice — that's the B-8 emit gate, below.)
+
+### bob startup trace (`/tmp/bob-collab.log`) — reconnect path healthy
+```
+collab connected            address=192.168.1.137:9480  peers=1
+reconnect: re-subscribing shared KBs   count=1     ← ADR-019 re-subscribe fired
+joining KB                  kb=collabtest          ← bob auto-rejoined on connect
+```
+No re-TOFU (alice daemon fingerprint unchanged). Auto-rejoin happened without manual `kb-join`.
+
+### ⚠️ main-thread stall during join (new observation, candidate issue)
+Right at `joining KB` + agent-terminal spawn, the watchdog logged
+`WATCHDOG: main thread stall detected stall_seconds=6` then `prolonged stall … stall_seconds=10`
+(`introspect` later shows `stall_count:0`, so it recovered). Suspect the KB **join / disk-first
+load / merge is running synchronously on the main thread**. Non-fatal now, but it'll get worse with
+bigger KBs — flagging for owner-side review (move join/load off the UI thread).
+
+### ⭐ B-8 hypothesis — `kb_sync_mode: "on_save"` may gate emit on a save event that never fires
+`introspect.collaboration` baseline:
+```json
+{ "collab_status":"connected", "kb_sync_mode":"on_save",
+  "owning_instances":[{ "collab_id":"collabtest","gate_present":true,"shared":true }],
+  "pending_collab_intent":false, "pending_kb_updates":0,
+  "shared_kbs":[{ "kb_id":"collabtest","node_count":3 }] }
+```
+Gate IS present (`gate_present:true`) and bob holds collabtest as a shared owning instance — so the
+durable markers are set. But `kb_sync_mode:"on_save"` is the *sync-trigger* axis. **Hypothesis:** a
+live `kb_update` (MCP) writes the node directly and never triggers a buffer **save**, so an
+on_save-gated emit never enqueues → `pending_kb_updates` stays 0 → 0 daemon lines. This would
+reconcile alice's divergence: her unit repro (`b8_repro_registered_kb_edit_enqueues`) calls the
+enqueue path directly, but the live MCP path under `on_save` never reaches it.
+▶ **Test (this round):** drive `kb_update` → re-`introspect` `pending_kb_updates`; if 0, fire manual
+`collab-sync` and re-check. If the manual sync makes it propagate, the fix is to make KB-node edits
+(MCP + interactive) trigger the emit regardless of `on_save` (or treat a node mutation as a save
+event for sync purposes). `introspect.collaboration.pending_kb_updates` is the clean in-band probe.
