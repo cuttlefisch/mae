@@ -539,6 +539,36 @@ impl Editor {
         ids
     }
 
+    /// Re-subscribe intents for every durably-shared *instance* on reconnect
+    /// (ADR-019). A **guest** (joined KB — empty `org_dir`) re-JOINS to
+    /// re-subscribe (as a member the daemon returns it immediately, no pending
+    /// pop); an **owner** (shared a registered instance — real `org_dir`)
+    /// re-SHARES to re-establish + re-subscribe (silent). The **primary KB is
+    /// skipped**: re-joining one's own primary produces a spurious pending
+    /// request (and re-uploading thousands of nodes is wrong) — that was the
+    /// "Collab Status pops up on launch" regression.
+    pub fn kb_resubscribe_intents(&self) -> Vec<crate::editor::CollabIntent> {
+        use crate::editor::CollabIntent;
+        let mut out = Vec::new();
+        for inst in &self.kb.registry.instances {
+            if !inst.shared {
+                continue;
+            }
+            let Some(kb_id) = inst.collab_id.clone() else {
+                continue;
+            };
+            if inst.org_dir.as_os_str().is_empty() {
+                out.push(CollabIntent::JoinKb { kb_id });
+            } else {
+                out.push(CollabIntent::ShareKb {
+                    kb_name: inst.name.clone(),
+                    node_ids: vec![],
+                });
+            }
+        }
+        out
+    }
+
     /// Rebuild the transient `shared_kbs` node-id index from DURABLE markers
     /// (ADR-019). Local-only — no daemon round-trip. The emit gate already
     /// works from the markers; this warms the cache (status/mDNS counts, fast
@@ -3175,6 +3205,56 @@ mod tests {
         let mut ids = editor.durable_shared_kb_ids();
         ids.sort();
         assert_eq!(ids, vec!["collabtest".to_string(), "default".to_string()]);
+    }
+
+    /// ADR-019: reconnect re-subscribe SKIPS the primary KB (re-joining one's own
+    /// primary popped a spurious pending request → the *Collab Status* buffer on
+    /// launch), re-JOINS guests (empty org_dir), and re-SHARES owner instances.
+    #[test]
+    fn kb_resubscribe_intents_skips_primary_and_distinguishes_owner_guest() {
+        use crate::editor::CollabIntent;
+        let mut editor = Editor::new();
+        // Stale primary share marker (must NOT produce a re-subscribe intent).
+        editor.kb.registry.primary_shared = true;
+        editor.kb.registry.primary_collab_id = Some("default".into());
+        // Guest-joined instance: empty org_dir.
+        let mut guest = shared_ct_instance();
+        guest.name = "joined-kb".into();
+        guest.collab_id = Some("joined-kb".into());
+        guest.org_dir = std::path::PathBuf::new();
+        editor.kb.registry.instances.push(guest);
+        // Owner-shared instance: real org_dir.
+        let mut owner = shared_ct_instance();
+        owner.uuid = "uuid-owned".into();
+        owner.name = "owned-kb".into();
+        owner.collab_id = Some("owned-kb".into());
+        owner.org_dir = std::path::PathBuf::from("/home/u/org");
+        editor.kb.registry.instances.push(owner);
+
+        let intents = editor.kb_resubscribe_intents();
+        assert_eq!(
+            intents.len(),
+            2,
+            "primary must be skipped; 2 instances remain"
+        );
+        assert!(
+            intents
+                .iter()
+                .any(|i| matches!(i, CollabIntent::JoinKb { kb_id } if kb_id == "joined-kb")),
+            "guest (empty org_dir) must re-JOIN"
+        );
+        assert!(
+            intents.iter().any(
+                |i| matches!(i, CollabIntent::ShareKb { kb_name, .. } if kb_name == "owned-kb")
+            ),
+            "owner (real org_dir) must re-SHARE"
+        );
+        assert!(
+            !intents
+                .iter()
+                .any(|i| matches!(i, CollabIntent::JoinKb { kb_id } if kb_id == "default")),
+            "primary KB must NOT be re-subscribed (the launch-popup bug)"
+        );
     }
 
     #[test]

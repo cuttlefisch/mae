@@ -796,18 +796,20 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             }
 
             // ADR-019: KBs get the same reconnect care as buffers. Rebuild the
-            // gate cache from durable markers, then re-subscribe (re-join) every
-            // durably-shared KB so remote edits resume flowing without a manual
-            // re-share. Idempotent via subscribed_kbs; queued one-per-tick.
+            // gate cache from durable markers, then re-subscribe every durably-
+            // shared INSTANCE so remote edits resume flowing — guests re-join,
+            // owners re-share, primary is skipped (see kb_resubscribe_intents).
+            // Idempotent via subscribed_kbs; queued one-per-tick.
             editor.reconstruct_kb_sync_gate();
-            let durable_kbs = editor.durable_shared_kb_ids();
             let mut resubscribed = 0;
-            for kb_id in durable_kbs {
-                if editor.collab.subscribed_kbs.insert(kb_id.clone()) {
-                    editor
-                        .collab
-                        .reconnect_intents
-                        .push_back(CollabIntent::JoinKb { kb_id });
+            for intent in editor.kb_resubscribe_intents() {
+                let key = match &intent {
+                    CollabIntent::JoinKb { kb_id } => kb_id.clone(),
+                    CollabIntent::ShareKb { kb_name, .. } => kb_name.clone(),
+                    _ => continue,
+                };
+                if editor.collab.subscribed_kbs.insert(key) {
+                    editor.collab.reconnect_intents.push_back(intent);
                     resubscribed += 1;
                 }
             }
