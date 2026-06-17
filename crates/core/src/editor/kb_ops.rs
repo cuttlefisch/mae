@@ -470,21 +470,26 @@ impl Editor {
             }
         }
 
-        // In-memory instance: get-or-create, then MERGE each node via CRDT
-        // apply_remote_update (merges into a local doc if present — preserving
-        // offline edits — else creates the node). ADR-020: no overwrite.
+        // In-memory instance: get-or-create, then ADOPT each node's CRDT lineage
+        // from the owner's snapshot (ADR-020 B-14). A plain CRDT *merge*
+        // (apply_remote_update) of two independently-constructed same-id docs
+        // no-ops — divergent yrs lineage means the owner's title/body YText is
+        // discarded by the map's last-writer-wins, so the joiner never sees the
+        // shared content. Adoption rebuilds the node from the owner's encoded state
+        // so both peers share one lineage and the owner's later edits merge as real
+        // changes. (Mirrors the text-buffer adopt-on-join model.)
         let merged: Vec<mae_kb::Node> = {
             let kb = self.kb.instances.entry(uuid.clone()).or_default();
             let mut out = Vec::with_capacity(node_states.len());
             for (node_id, state) in &node_states {
-                match kb.apply_remote_update(node_id, state) {
+                match kb.adopt_remote_node(node_id, state) {
                     Ok(_changed) => {
                         if let Some(n) = kb.get(node_id) {
                             out.push(n.clone());
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(node_id = %node_id, error = %e, "join: failed to merge node — skipping");
+                        tracing::warn!(node_id = %node_id, error = %e, "join: failed to adopt node — skipping");
                     }
                 }
             }

@@ -680,7 +680,21 @@ impl KnowledgeBase {
         // Create or update CRDT doc
         let crdt_doc = if let Some(ref bytes) = node.crdt_doc {
             match mae_sync::kb::KbNodeDoc::from_bytes_with_client_id(bytes, client_id) {
-                Ok(doc) => doc,
+                Ok(mut doc) => {
+                    // ADR-020 B-15: apply the edited fields onto the EXISTING lineage
+                    // (preserving its yrs ancestry) so the change actually enters the
+                    // CRDT and chains with prior ops. Rebuilding from the old bytes
+                    // and IGNORING node.title/body (the prior behaviour) meant every
+                    // edit after the first re-broadcast stale content — peers never
+                    // saw it. Set only when changed to avoid churn ops.
+                    if doc.title() != node.title {
+                        doc.set_title(&node.title);
+                    }
+                    if doc.body() != node.body {
+                        doc.set_body(&node.body);
+                    }
+                    doc
+                }
                 Err(_) => mae_sync::kb::KbNodeDoc::new_with_client_id(
                     &node.id,
                     &node.title,
@@ -757,6 +771,60 @@ impl KnowledgeBase {
             self.insert(node);
             Ok(true)
         }
+    }
+
+    /// Adopt a remote node's CRDT lineage as the canonical local doc (ADR-020 B-14).
+    ///
+    /// Unlike [`apply_remote_update`](Self::apply_remote_update) (which merges a
+    /// *delta* into the local doc), this REBUILDS the local node from the remote's
+    /// full encoded state, so both peers share ONE yrs lineage. This is required on
+    /// join: two peers that *independently* constructed a same-id `KbNodeDoc` (e.g.
+    /// both imported the same org fixture) have incompatible lineages — their
+    /// `title`/`body` `YText`s are different yrs objects at the same map key, so a
+    /// CRDT merge no-ops (the map's last-writer-wins discards one side) and the
+    /// joiner never sees the owner's content (`changed=false`). After adoption the
+    /// owner's subsequent updates merge as real text changes. Mirrors the
+    /// text-buffer `from_state_with_client_id` adopt pattern. Preserves the local
+    /// node's `kind` if already known. Returns whether materialized content changed.
+    #[cfg(feature = "crdt")]
+    pub fn adopt_remote_node(
+        &mut self,
+        node_id: &str,
+        state: &[u8],
+    ) -> Result<bool, mae_sync::SyncError> {
+        let crdt_doc = mae_sync::kb::KbNodeDoc::from_bytes(state)?;
+        let mat = crdt_doc.materialize();
+        // Preserve an existing node's kind (org import sets a real kind); default to
+        // Note for a brand-new node. Compute `changed` against the prior content.
+        let (kind, changed) = match self.nodes.get(node_id) {
+            Some(n) => (
+                n.kind,
+                n.title != mat.title || n.body != mat.body || n.tags != mat.tags,
+            ),
+            None => (NodeKind::Note, true),
+        };
+        let mut node = Node::new(mat.id, mat.title, kind, mat.body);
+        node.tags = mat.tags;
+        node.source = Some(NodeSource::Federation);
+        node.crdt_doc = Some(crdt_doc.encode());
+        self.insert(node);
+        // Rebuild the reverse-link index for this node (mirror apply_remote_update).
+        let links = self
+            .nodes
+            .get(node_id)
+            .map(|n| n.links())
+            .unwrap_or_default();
+        for sources in self.links_in.values_mut() {
+            sources.retain(|s| s != node_id);
+        }
+        self.links_in.retain(|_, v| !v.is_empty());
+        for target in links {
+            let entry = self.links_in.entry(target).or_default();
+            if !entry.contains(&node_id.to_string()) {
+                entry.push(node_id.to_string());
+            }
+        }
+        Ok(changed)
     }
 
     /// Get the state vector for a node's CRDT document.
@@ -2434,5 +2502,72 @@ mod tests {
             restored.body, large_body,
             "large body should round-trip exactly"
         );
+    }
+
+    /// ADR-020 B-14 — the realistic TWO-INDEPENDENT-PEERS scenario the rest of the
+    /// suite never modeled (every other merge test creates one doc → encodes → applies
+    /// to a doc derived from *those same bytes* = shared lineage). Here alice and bob
+    /// build the same node-id INDEPENDENTLY (distinct yrs lineages), so a plain CRDT
+    /// `apply_remote_update` of the owner's state NO-OPS (the map's last-writer-wins
+    /// discards the owner's title/body YText) — the joiner never converges. `adopt_remote_node`
+    /// rebuilds from the owner's state so both share one lineage and later edits merge.
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn divergent_lineage_merge_noops_but_adopt_converges() {
+        // Alice builds her node, then EDITS it chained on her own lineage (the
+        // realistic flow: clone the existing node — which now carries a crdt_doc —
+        // change a field, re-upsert). This also exercises B-15 (the edit must enter
+        // the existing CRDT lineage, not rebuild-and-ignore the new field).
+        let mut alice = KnowledgeBase::new();
+        let _ = alice.upsert_with_crdt(Node::new("t:n", "v0", NodeKind::Note, "body"), 1);
+        let alice_state = {
+            let mut n = alice.get("t:n").unwrap().clone();
+            n.title = "Alice [PROBE]".to_string();
+            alice.upsert_with_crdt(n, 1).unwrap()
+        };
+        assert_eq!(
+            alice.get("t:n").unwrap().title,
+            "Alice [PROBE]",
+            "B-15: a chained edit must actually update the node"
+        );
+
+        // Bob built the SAME node independently — lineage B (client 2) + a local edit.
+        // The BUG: merging alice's update into bob's divergent doc no-ops; the higher
+        // client_id (bob's 2) wins the map LWW, so the owner's title is discarded.
+        let mut bob_merge = KnowledgeBase::new();
+        let _ =
+            bob_merge.upsert_with_crdt(Node::new("t:n", "Bob Local", NodeKind::Note, "body"), 2);
+        let _ = bob_merge.apply_remote_update("t:n", &alice_state);
+        assert_eq!(
+            bob_merge.get("t:n").unwrap().title,
+            "Bob Local",
+            "B-14 regression marker: a plain merge of divergent lineage fails to converge"
+        );
+
+        // The FIX: adoption rebuilds bob's node from alice's encoded state → converges
+        // (bob now shares alice's lineage).
+        let mut bob = KnowledgeBase::new();
+        let _ = bob.upsert_with_crdt(Node::new("t:n", "Bob Local", NodeKind::Note, "body"), 2);
+        let changed = bob.adopt_remote_node("t:n", &alice_state).unwrap();
+        assert!(changed, "adoption changes bob's content to the owner's");
+        assert_eq!(
+            bob.get("t:n").unwrap().title,
+            "Alice [PROBE]",
+            "bob adopts the owner's content + lineage"
+        );
+
+        // Shared lineage now: the owner's NEXT edit (chained on her lineage) merges
+        // as a real change on bob.
+        let alice_next = {
+            let mut n = alice.get("t:n").unwrap().clone();
+            n.title = "Alice 2 [PROBE2]".to_string();
+            alice.upsert_with_crdt(n, 1).unwrap()
+        };
+        let changed2 = bob.apply_remote_update("t:n", &alice_next).unwrap();
+        assert!(
+            changed2,
+            "after adoption the owner's later update merges (shared lineage), not no-op"
+        );
+        assert_eq!(bob.get("t:n").unwrap().title, "Alice 2 [PROBE2]");
     }
 }
