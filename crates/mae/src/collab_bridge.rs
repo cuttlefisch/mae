@@ -2361,7 +2361,14 @@ async fn run_collab_task(
                                     Ok(b) => b,
                                     Err(e) => { error!("kb node update serialize error: {e}"); continue; }
                                 };
-                                let _ = write_framed(w, &body, write_timeout).await;
+                                // ADR-020 traceability: surface the wire-send result (was
+                                // discarded `let _ =`, hiding write failures — part of B-8).
+                                match write_framed(w, &body, write_timeout).await {
+                                    Ok(()) => tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, "bg: kb/node_update written to wire"),
+                                    Err(e) => warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, error = %e, "bg: kb/node_update wire write FAILED"),
+                                }
+                            } else {
+                                warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, "bg: kb/node_update dropped — writer absent while connected");
                             }
                         }
                         CollabCommand::KbMember { kb_id, member, role, add } => {

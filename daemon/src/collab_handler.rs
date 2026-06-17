@@ -1520,6 +1520,15 @@ async fn handle_doc_request_inner(
                     );
                 }
             };
+            // ADR-020 traceability: log on ENTRY so a received kb/node_update is
+            // greppable on the daemon (distinguishes "never arrived" from "rejected").
+            info!(
+                session = session_id,
+                kb_id = %kb_id,
+                node_id = %node_id,
+                update_len = update_bytes.len(),
+                "kb/node_update: received"
+            );
             if update_bytes.len() > MAX_UPDATE_SIZE {
                 return JsonRpcResponse::error(
                     id,
