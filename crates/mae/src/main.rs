@@ -709,6 +709,25 @@ fn main() -> io::Result<()> {
         let _ = editor.set_option("collab_user_name", &resolved);
     }
 
+    // ADR-020 B-16: derive this peer's STABLE, UNIQUE yrs client_id for KB CRDT
+    // edits from the durable collab identity fingerprint. Two peers sharing a
+    // client_id collide in yrs' clock space and their concurrent edits diverge;
+    // seeding from the per-install Ed25519 fingerprint makes every peer distinct
+    // and stable across restarts (so a peer's edits chain on one lineage).
+    if editor.collab.local_kb_client_id == 0 {
+        if let Some(dir) = mae_mcp::identity::default_collab_dir() {
+            let label = editor.collab.user_name.clone();
+            if let Ok(id) = mae_mcp::identity::Identity::load_or_generate(&dir, &label) {
+                let cid = mae_core::editor::derive_kb_client_id(&id.fingerprint());
+                editor.collab.local_kb_client_id = cid;
+                info!(
+                    client_id = cid,
+                    "KB CRDT client_id derived from collab identity"
+                );
+            }
+        }
+    }
+
     // --connect overrides collab options: auto-connect to the given address.
     if let Some(ref addr) = connect_addr {
         let _ = editor.set_option("collab_server_address", addr);

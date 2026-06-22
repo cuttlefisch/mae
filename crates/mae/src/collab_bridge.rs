@@ -506,6 +506,12 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         CollabIntent::ListDocsForJoin => CollabCommand::ListDocs { for_join: true },
         CollabIntent::JoinDoc { doc_id } => CollabCommand::JoinDoc { doc_id },
         CollabIntent::ShareKb { kb_name, node_ids } => {
+            // ADR-020 B-16: establish + persist a canonical CRDT lineage for every
+            // shared node (incl. never-edited ones) BEFORE encoding the payload, so
+            // the owner's local docs ARE the lineage peers adopt on join — otherwise
+            // `to_collection` mints an ephemeral, non-persisted lineage and a peer's
+            // later edit no-ops against the owner's divergent local doc (bob→alice).
+            editor.kb_prepare_share_lineage(&kb_name, &node_ids);
             // Look up the KB instance: KB_DEFAULT_NAME/"primary" → editor.kb.primary,
             // otherwise resolve a registered instance. `editor.kb.instances` is keyed
             // by UUID, but callers pass a human name (e.g. ":kb-share collabtest"), so

@@ -268,6 +268,12 @@ pub struct CollabState {
     /// drain from re-sending an in-flight row every tick; cleared on ack, requeue,
     /// or disconnect (so unconfirmed updates retry on reconnect).
     pub inflight_kb_updates: std::collections::HashSet<i64>,
+    /// Stable, per-peer yrs `client_id` for local KB CRDT edits (ADR-020 B-16),
+    /// derived once at startup from the durable collab identity fingerprint. Two
+    /// peers MUST have distinct client_ids or their concurrent edits to the same
+    /// node collide in yrs' clock space and diverge. `0` = unset (no collab identity
+    /// loaded) → `kb_local_client_id()` falls back to a legacy default.
+    pub local_kb_client_id: u64,
     /// Pre-shared key for mutual authentication (plaintext fallback).
     pub psk: String,
     /// Shell command to retrieve the PSK (preferred over psk for security).
@@ -315,6 +321,7 @@ impl CollabState {
             kb_sync_mode: KB_SYNC_MODE_DEFAULT.to_string(),
             pending_kb_updates: Vec::new(),
             inflight_kb_updates: std::collections::HashSet::new(),
+            local_kb_client_id: 0,
             psk: String::new(),
             psk_command: String::new(),
             auth_mode: "psk".to_string(),
@@ -327,6 +334,24 @@ impl CollabState {
 impl Default for CollabState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Derive a stable, unique yrs `client_id` for KB CRDT edits from this peer's
+/// durable collab identity fingerprint (ADR-020 B-16). FNV-1a 64-bit; never returns
+/// `0` (yrs sentinel) or `1` (the legacy single-peer default), so distinct
+/// identities map to distinct ids and "unset" stays distinguishable. Set once at
+/// startup into `CollabState::local_kb_client_id`.
+pub fn derive_kb_client_id(fingerprint: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in fingerprint.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    if h == 0 || h == 1 {
+        2
+    } else {
+        h
     }
 }
 

@@ -796,6 +796,74 @@ impl Editor {
         Ok(())
     }
 
+    /// This peer's stable, unique yrs `client_id` for local KB CRDT edits
+    /// (ADR-020 B-16), set once at startup from the durable collab identity
+    /// fingerprint. Falls back to `1` only when no collab identity is configured
+    /// (single, unshared peer — no collision possible).
+    pub fn kb_local_client_id(&self) -> u64 {
+        if self.collab.local_kb_client_id != 0 {
+            self.collab.local_kb_client_id
+        } else {
+            1
+        }
+    }
+
+    /// ADR-020 B-16: establish + persist a canonical CRDT lineage for every node
+    /// about to be shared. A node that was never CRDT-edited has `crdt_doc == None`;
+    /// `to_collection` would then mint an EPHEMERAL, non-persisted lineage (fresh
+    /// random doc each call) — so the owner's local doc never matches the lineage
+    /// peers adopt on join, and a peer's later edit no-ops against the owner's
+    /// divergent doc. Here we `upsert_with_crdt` each such node with THIS peer's
+    /// stable client_id (persisting the lineage onto the node) and write it through
+    /// to the durable store, so the owner's local doc IS the shared lineage.
+    pub fn kb_prepare_share_lineage(&mut self, kb_name: &str, node_ids: &[String]) {
+        let cid = self.kb_local_client_id();
+        let is_primary = kb_name == crate::editor::KB_DEFAULT_NAME || kb_name == "primary";
+        let owner: Option<String> = if is_primary {
+            None
+        } else {
+            match self.kb.registry.find(kb_name).map(|i| i.uuid.clone()) {
+                Some(u) => Some(u),
+                None => return,
+            }
+        };
+        // Establish + persist lineage in-memory; collect the nodes to write through.
+        let updated: Vec<mae_kb::Node> = {
+            let kb = match &owner {
+                None => &mut self.kb.primary,
+                Some(u) => match self.kb.instances.get_mut(u) {
+                    Some(k) => k,
+                    None => return,
+                },
+            };
+            let ids: Vec<String> = if node_ids.is_empty() {
+                kb.list_ids(None)
+            } else {
+                node_ids.to_vec()
+            };
+            let mut out = Vec::new();
+            for id in ids {
+                let needs = kb.get(&id).map(|n| n.crdt_doc.is_none()).unwrap_or(false);
+                if needs {
+                    if let Some(node) = kb.get(&id).cloned() {
+                        // upsert_with_crdt stores the new crdt_doc onto the node.
+                        let _ = kb.upsert_with_crdt(node, cid);
+                        if let Some(n) = kb.get(&id) {
+                            out.push(n.clone());
+                        }
+                    }
+                }
+            }
+            out
+        };
+        if !updated.is_empty() {
+            tracing::debug!(target: "kb_sync", kb = %kb_name, count = updated.len(), client_id = cid, "share: established + persisted canonical lineage for unedited nodes");
+            for node in &updated {
+                self.kb_persist_node_in(&owner, node);
+            }
+        }
+    }
+
     /// Update fields on an existing KB node.
     /// Rejects modifying seed nodes (built-in help).
     pub fn kb_update_node(
@@ -854,15 +922,18 @@ impl Editor {
         );
 
         if let Some(kb_id) = shared_kb_id {
-            // CRDT-aware upsert on the OWNING in-memory KB to generate update
-            // bytes for broadcasting. client_id 1 marks local edits.
+            // CRDT-aware upsert on the OWNING in-memory KB to generate update bytes
+            // for broadcasting. ADR-020 B-16: use this peer's STABLE, UNIQUE
+            // client_id (not a hardcoded 1 — two peers sharing a client_id collide
+            // and their concurrent edits diverge).
+            let cid = self.kb_local_client_id();
             let update_bytes = match &owner {
-                None => self.kb.primary.upsert_with_crdt(updated, 1),
+                None => self.kb.primary.upsert_with_crdt(updated, cid),
                 Some(uuid) => self
                     .kb
                     .instances
                     .get_mut(uuid)
-                    .and_then(|kb| kb.upsert_with_crdt(updated, 1)),
+                    .and_then(|kb| kb.upsert_with_crdt(updated, cid)),
             };
             if let Some(update_bytes) = update_bytes {
                 // ADR-020 single-source emit: enqueue to EXACTLY ONE queue. With a
@@ -3286,6 +3357,63 @@ mod tests {
         assert!(
             nodes.iter().any(|n| n.id == "ct:overview"),
             "node reloads from the durable store (B-10 restart survival)"
+        );
+    }
+
+    /// ADR-020 B-16: `kb_prepare_share_lineage` establishes + persists a canonical
+    /// CRDT lineage for a never-edited node, so the owner's local doc IS the lineage
+    /// peers adopt — and a peer's later edit converges on the owner (the bob→alice
+    /// direction that previously no-opped). Drives the OWNER (editor) path.
+    #[test]
+    fn prepare_share_lineage_persists_canonical_doc_so_owner_converges() {
+        let mut editor = Editor::new();
+        editor.collab.local_kb_client_id = 0xA11CE; // alice's stable, unique id
+
+        // A node from org import: present locally with NO CRDT lineage.
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "p:beta",
+            "Plain",
+            mae_kb::NodeKind::Note,
+            "body",
+        ));
+        assert!(
+            editor.kb.primary.get("p:beta").unwrap().crdt_doc.is_none(),
+            "starts with no lineage (the divergence trap)"
+        );
+
+        // Owner prepares to share → establishes + persists the canonical lineage.
+        editor.kb_prepare_share_lineage(crate::editor::KB_DEFAULT_NAME, &[]);
+        let shared_state = editor
+            .kb
+            .primary
+            .get("p:beta")
+            .unwrap()
+            .crdt_doc
+            .clone()
+            .expect("lineage established + persisted onto the local node");
+
+        // Bob adopts the shared lineage and edits with HIS distinct client_id.
+        let mut bob = mae_kb::KnowledgeBase::new();
+        bob.adopt_remote_node("p:beta", &shared_state).unwrap();
+        let bob_edit = {
+            let mut n = bob.get("p:beta").unwrap().clone();
+            n.title = "Bob Edit [REVERSE]".to_string();
+            bob.upsert_with_crdt(n, 0xB0B).unwrap()
+        };
+
+        // The OWNER applies bob's edit to her local doc → converges (was a no-op).
+        let changed = editor
+            .kb
+            .primary
+            .apply_remote_update("p:beta", &bob_edit)
+            .unwrap();
+        assert!(
+            changed,
+            "owner converges to a peer's edit — local doc is now on the shared lineage (B-16)"
+        );
+        assert_eq!(
+            editor.kb.primary.get("p:beta").unwrap().title,
+            "Bob Edit [REVERSE]"
         );
     }
 
