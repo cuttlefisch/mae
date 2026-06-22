@@ -613,3 +613,52 @@ leave+rejoin so the adopt runs again.
 After bob's (re)join adopts alice's lineage: alice edits `collabtest:alpha` → bob's alpha title
 updates **on screen** (`changed=true` in bob's log). Then bob→alice reverse. That closes bidirectional
 Stage-1 (modulo B-12 membership-durability, still open).
+
+---
+
+## 2026-06-22 ~15:48 — ✅ STEP 1 confirmed (bob) + ⭐ B-16 FIXED (`1652fcf4`) — bob→alice owner-side
+
+**Step 1 (alice→bob) is GREEN** (bob confirmed: adopt-on-join snapped his titles to alice's lineage;
+live edit `changed=true`). **Step 2 (bob→alice) failed** — bob's emit + the daemon were green
+(`kb/node_update applied wal_seq=69`), alice RECEIVED it but `changed=false` (owner-side no-op).
+
+**Root cause (B-16) — owner lineage divergence + the audit finding:**
+- `KnowledgeBase::to_collection` (the share payload builder) calls `node.to_crdt_doc()`, which for a
+  **never-edited** node (`crdt_doc=None`, e.g. `beta`) mints an **ephemeral, random lineage each call**
+  and — being `&self` — never persists it. So the daemon + bob (on join) adopted lineage A while
+  alice's LOCAL `beta` kept no durable lineage; bob's edit (on A) no-opped against alice's freshly
+  minted lineage B. (Same `changed=false` failure mode as B-14, but on the **owner**.)
+- Audit (per your "find other hardcoded params") confirmed `client_id = 1` in `kb_update_node` is the
+  ONLY hardcoded collaborative-write param (kb:/kbc:, OffsetKind::Utf16, channel caps, NodeKind::Note
+  fallback are genuine constants). It's a **latent** concurrent-edit collision (two peers
+  indistinguishable to yrs), not the live sequential blocker — proven by a production-fidelity test.
+
+**Fix (`1652fcf4`):**
+- `Editor::kb_prepare_share_lineage` — establishes + **persists** a canonical `crdt_doc` for every
+  shared node (incl. unedited) with write-through, BEFORE encoding the payload → owner's local doc IS
+  the lineage peers adopt. Called from the ShareKb path.
+- Stable, **unique** per-peer `client_id` derived from the durable collab identity fingerprint
+  (`derive_kb_client_id`), set once at startup — replaces the hardcoded `1`.
+
+**Test methodology (your meta-point):** the bugs hid because tests hand-picked DISTINCT client_ids
+(alice=1/bob=2) while production hardcodes 1 for both — *a test using different standins than the code
+can't catch a hardcoded-value bug*. New production-fidelity tests + the full write-up are in
+**`docs/collab-kb-sync-testing-lessons.md`**.
+
+### → BOB: rebuild for B-16 (editor-only; daemon unchanged)
+```sh
+git fetch && git pull          # → decf6ba2 (or later)
+make build                     # GUI editor
+cp target/release/mae ~/.local/bin/mae.new && mv -f ~/.local/bin/mae.new ~/.local/bin/mae
+# restart bob's editor (MAE_LOG=info,kb_sync=debug,collab=debug → /tmp/bob-collab.log)
+```
+alice is on the B-16 build. **Both editors need it** (the owner establishes the persisted lineage on
+share; the client_id is per-peer). Note: existing `collabtest` nodes carry pre-fix lineages —
+alice's restart re-shares with **canonical persisted** lineages this time, so bob's re-join adopts
+those and the reverse direction should finally converge.
+
+### Expected with B-16
+alice restart → re-share (canonical persisted lineage) → re-approve bob (B-12) → bob re-join (adopt) →
+**bob edits `collabtest:beta` → alice's beta updates on screen (`changed=true` in alice's log)**. That
+closes **bidirectional** Stage-1 (modulo B-12 membership-durability + the next-step two-independent-
+peers e2e).
