@@ -780,3 +780,40 @@ bob editor restarted. Startup log (no manual intervention — disk-load + AUTO r
   `collabtest:beta` (the `[BOB-T2-POSTRESTART]` edit, req mapping rowid=6), and confirm your local
   `beta` shows the slug `changed=true`. Then send `alice → bob` (`alpha → [ALICE-T2-POSTRESTART]`) so
   bob confirms receive-after-restart.
+
+### ✅ T3 — offline-merge: PASS (bob side; alice to confirm daemon-side (a))
+Procedure per alice's notes. Baseline: bob connected; `beta [BOB-T2-POSTRESTART]`,
+`overview [ALICE-ADR019-PROP]`.
+- **Step 1 — bob `:collab-disconnect`** → `collab disconnected reason="user requested"`;
+  `collab_status` → disconnected, peer_count=0.
+- **Step 2 — bob offline edit** `beta` → `[BOB-OFFLINE-1]`: local node updated; gate fired
+  (`gate_hit=true`) but **no** `drain: send`/wire line while offline (expected — offline).
+- **Step 3 — alice (during gap)** edited `overview` → `[ALICE-WHILE-BOB-OFFLINE]`.
+- **Step 4 — bob `:collab-connect`** → offline edit flushed + auto-rejoin:
+```
+14:53:53 collab connected  peers=1
+14:53:53 drain: send kb/node_update (durable)  node_id=collabtest:beta  rowid=7  bytes=590  ← offline edit FLUSHED
+14:53:53 bg: written to wire  req_id=34
+14:53:53 kb/node_update: daemon confirmed applied  rowid=Some(7)
+14:53:53 ack: durable pending kb update confirmed + removed  rowid=7   ← acked ONCE
+14:53:53 KB join complete (merged)  node_count=3
+```
+- **PASS criteria:** (a) bob→alice flush — `daemon confirmed applied` rowid=7 ✅ (alice: confirm
+  `kb/node_update received`+`applied wal_seq` for beta + her beta=`[BOB-OFFLINE-1]` changed=true);
+  (b) alice→bob catch-up — bob `kb_get overview` = `[ALICE-WHILE-BOB-OFFLINE]` ✅;
+  (c) no loss/revert — beta `[BOB-OFFLINE-1]` + overview `[ALICE-WHILE-BOB-OFFLINE]` both intact, no
+  pre-gap revert ✅; (d) no duplicate storm — single rowid=7, acked once ✅.
+
+#### ⚠️ YELLOW FLAG (for alice review) — `pending_kb_updates` does NOT reflect offline-pending edits
+While bob was offline with an un-flushed edit, `introspect.collaboration.pending_kb_updates` read
+**0** and **no durable row / `drain: send (durable)` line** existed. The durable enqueue+drain is
+**coupled to the connected send path** — the durable SQLite row (rowid=7) was only created at
+reconnect, then immediately drained+acked. **Net: no data loss** (the edit was preserved in the local
+CRDT doc and re-derived/flushed on reconnect), so T3 PASSES. **But the observability seam is
+misleading:** `pending_kb_updates` can't be used to answer "do I have unsynced offline edits?" — it
+showed 0 despite a real pending offline edit. Suggest either (i) persist the broadcast intent to the
+durable queue **at edit time** (even offline) so `pending_kb_updates ≥ 1` reflects reality and the
+edit survives an offline *crash* (current path would lose it if bob crashed before reconnect — the
+edit only lived in the in-memory/CRDT doc, not the durable queue, during the gap), or (ii) add a
+separate "unsynced-while-offline" indicator. The crash-durability angle is the more important half:
+**offline edit is durable across reconnect but NOT proven durable across an offline crash.**
