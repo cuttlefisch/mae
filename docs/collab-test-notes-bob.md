@@ -982,3 +982,32 @@ is the live B-16 guard.
 slugs, same order, same spacing). Match → **T4 PASS** (concurrent convergence, deterministic, no
 split-brain). Mismatch (reversed order / one slug only / a space inserted) → divergence to flag.
 ▶ **ALICE: confirm your exact `alpha` title here.**
+**(alice confirmed: byte-identical on both machines — T4 PASS.)**
+
+### T5 — body + multi-field — bob side: body ✅, title+body ✅, ❌ NEW B-18 (tags YArray doesn't sync)
+- **Step 1 (alice → bob, body / YText):** ✅ PASS. bob `kb_get alpha` body now contains
+  `[A-T5-BODY] alice live body edit …` (`recv: applied … changed=true`). Title unaffected (fields
+  independent). Body YText syncs.
+- **Step 2 (bob → alice, atomic title+body):** bob set `beta` title=`[B-T5]` + appended body sentinel
+  `[B-T5-BODY]` in one `kb_update` → **single** `kb/node_update` (gate → drain → daemon confirmed
+  applied). Atomic multi-field emitted as one update. (alice to confirm both fields land.)
+- **Step 3 (alice → bob, tags / YArray):** ❌ **FAIL — tags do not converge.** alice added tag
+  `t5tag` to `overview`. The update **reached bob** (`received sync_update doc=kb:collabtest:overview
+  wal_seq=2 update_b64_len=1628`) but **applied `changed=false`**, and bob's `overview` tags remain
+  `["collabtest","fixture"]` — **no `t5tag`**.
+
+#### ⭐ NEW BUG — B-18: node **tags (`YArray`) are not CRDT-synced** (title/body YText sync, tags don't)
+A real payload arrived (1628 bytes) yet produced no change → the tags field is not converging.
+Discriminator vs B-14/B-16 (those were lineage no-ops on YText, now fixed): body **does** sync
+(`changed=true` step 1), so the node doc + reconcile work for YText. Tags specifically no-op.
+**Likely cause (needs alice owner-side confirm):** the `KbNodeDoc` CRDT schema syncs `title`/`body`
+(`YText`) but **tags aren't represented as a synced `YArray`** — so alice's tag edit mutates the
+CozoDB store/index only, the broadcast update carries no tag delta, and bob's apply leaves tags
+untouched (`changed=false`). Alternative: receive-side `kb_apply_remote_update` writes title/body back
+to the store but **drops tags**. Either way tags are outside the CRDT sync path.
+▶ **ALICE owner-side checks to localize:** (1) after your `t5tag` add, does YOUR `overview` show
+`t5tag` locally (rules out a send-side editor bug)? (2) does `KbNodeDoc`/`reconcile_remote_node`
+(`shared/sync/src/kb.rs`, `shared/kb/src/lib.rs`) include a tags `YArray` in the synced doc + the
+apply-back, or only title/body? Fix direction: add tags (and any other metadata fields meant to sync)
+to the `KbNodeDoc` CRDT schema + the reconcile/apply path, mirroring body. **T5 verdict: body + title
+multi-field PASS; tags sub-case FAIL (B-18).**
