@@ -723,6 +723,47 @@ convention so we have a complete record for the write-up.
   - NB (bob): the restart's disk-reload overlaps the auto-rejoin/adopt, so T2 validates durability +
     rejoin together; the **pure offline-durability** case is isolated in **T3** (edit while disconnected).
 
+---
+
+## T3 — offline-merge: READY-TO-RUN procedure (alice ⇄ bob)
+
+**Goal / what it proves:** edits made **while a peer is disconnected** converge on reconnect, in
+**both directions, with nothing lost** — the local-first contract. Exercises the **durable pending
+queue** (ADR-020 Phase 1: bob's offline edit persists to the SQLite queue and flushes on reconnect)
+and the **reconnect reconciliation** (alice's edits during the gap reach bob via his rejoin snapshot).
+
+**Daemon baseline for this run:** line **251** (alice tails `/tmp/mae-daemon-live.log`).
+**Probe slugs:** bob offline → `collabtest:beta` = `[BOB-OFFLINE-1]`; alice during-gap → a DIFFERENT
+node `collabtest:overview` = `[ALICE-WHILE-BOB-OFFLINE]` (different nodes so neither masks the other).
+
+### Steps (ordered — do not interleave)
+0. **Pre-check (both):** connected + synced; record current titles. (alice will `kb_get` overview+beta;
+   bob `kb_get` the same. `collab_status` = connected on both.)
+1. **bob:** `:collab-disconnect`. → bob log `collab disconnected`; alice daemon log: bob's session ends
+   (no more requests from his session id). bob `collab_status` → disconnected. **Tell alice "offline".**
+2. **bob (while offline):** edit `collabtest:beta` title → `[BOB-OFFLINE-1]`.
+   - Expected: bob's LOCAL node updates immediately; **no `kb/node_update` for beta appears in the
+     daemon log** (he's offline). The edit is held in bob's durable queue
+     (`introspect.collaboration` → `pending_kb_updates ≥ 1` or the SQLite pending row). **Tell alice "edited offline".**
+3. **alice (while bob offline):** edit `collabtest:overview` title → `[ALICE-WHILE-BOB-OFFLINE]`.
+   - Expected: alice is still connected → daemon `kb/node_update received → applied wal_seq=N` for
+     `overview`; it is **held for bob** (he's not subscribed while offline — no delivery yet).
+4. **bob:** `:collab-connect` (or auto-reconnect) → auto re-join (adopt) + **durable queue flushes**.
+5. **Convergence — PASS criteria (verify all four):**
+   - **(a) bob→alice flush:** daemon logs `kb/node_update received … node_id=collabtest:beta` →
+     `applied wal_seq=…`; **alice** `recv: applied … changed=true`, `kb_get beta` shows `[BOB-OFFLINE-1]`.
+   - **(b) alice→bob catch-up:** **bob** `kb_get overview` shows `[ALICE-WHILE-BOB-OFFLINE]` (delivered
+     via the rejoin snapshot or broadcast).
+   - **(c) no loss / no revert:** beta still `[BOB-OFFLINE-1]` on both; overview `[ALICE-WHILE-BOB-OFFLINE]`
+     on both; no node reverts to a pre-gap value.
+   - **(d) no duplicate-send storm:** beta flushes **once** (one `received` line; durable row acked once).
+
+### Roles
+- **alice (this session):** step 3 (overview edit during the gap) + verify (a) daemon received bob's beta
+  + alice applied changed=true, and (c)/(d). Watches the daemon log from line 251.
+- **bob:** steps 1, 2, 4 + verify (b) overview slug appears + his beta reached alice; report
+  `pending_kb_updates` while offline (proves the durable queue held it).
+
 ### Known-open (not blocking the matrix)
 - B-12 idle-eviction edge: a collection evicted while everyone's offline, then re-shared, could still
   recreate (narrow) — closed properly by the ADR-021 durable audit record (tracked).
