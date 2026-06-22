@@ -817,3 +817,40 @@ edit survives an offline *crash* (current path would lose it if bob crashed befo
 edit only lived in the in-memory/CRDT doc, not the durable queue, during the gap), or (ii) add a
 separate "unsynced-while-offline" indicator. The crash-durability angle is the more important half:
 **offline edit is durable across reconnect but NOT proven durable across an offline crash.**
+
+### ✅ T3b — offline edit survives a full EDITOR RESTART: PASS (bob; alice to confirm daemon-side (a))
+On the observability-fix build (`9c58dfd`/`6a1a560`). The fix (`6a1a560`) clarified the yellow flag was
+**observability, not durability** — `kb_update_node` already persists to the durable queue at edit
+time (no connection check); introspect now reports `pending_kb_updates = in-mem + durable` plus a new
+`durable_pending_kb_updates` breakdown.
+
+- **Step 0 pre-check:** connected, `pending_kb_updates: 0`, `durable_pending_kb_updates: 0` (new counter present).
+- **Step 1:** `:collab-disconnect` → disconnected.
+- **Step 2 (offline edit)** `beta` → `[BOB-T3B-OFFLINE]`:
+  - log: `kb edit: broadcast-gate decision gate_hit=true` → **`edit: persisted to durable pending queue
+    (survives offline + restart)`**.
+  - `introspect.collaboration` (offline): **`pending_kb_updates: 1`, `durable_pending_kb_updates: 1`**
+    (the yellow-flag fix — previously both read 0 while offline).
+- **Step 3:** bob **QUIT** the editor (graceful), still offline.
+- **Step 4–5 (relaunch + reconnect):** startup `KB instance loaded from CozoDB nodes=3`, then on
+  auto-reconnect the durable row flushed:
+```
+15:09:55 collab connected  peers=1
+15:09:55 drain: send kb/node_update (durable)  node_id=collabtest:beta  rowid=8  bytes=595   ← edit made BEFORE the quit
+15:09:55 bg: written to wire  req_id=11
+15:09:55 kb/node_update: daemon confirmed applied  rowid=Some(8)
+15:09:55 ack: durable pending kb update confirmed + removed  rowid=8   ← acked ONCE
+15:09:56 KB join complete (merged)  node_count=3
+```
+- **PASS criteria:** (a) survives restart + flushes — the edit made before the quit reached the daemon
+  AFTER relaunch (`confirmed applied` rowid=8) ✅ (alice: confirm daemon `received`/`applied wal_seq`
+  for beta + her beta=`[BOB-T3B-OFFLINE]` changed=true); (b) durable visibility — `durable_pending_kb_updates:1`
+  while offline → `0` after flush+ack ✅; (c) no loss — `kb_get beta = [BOB-T3B-OFFLINE]` post-restart,
+  no revert ✅; (d) once — single rowid=8, acked once ✅.
+- **NB (per alice's note):** auto-connect on launch made step-4's *post-relaunch-pre-flush* window too
+  brief to snapshot `durable_pending_kb_updates≥1`; the reliable capture is step-2 (offline) which we
+  got. The crux (a) — the pre-quit edit arriving at the daemon after a process restart — holds
+  regardless, proving the durable queue survived the restart.
+
+⇒ **Yellow flag CLOSED**: offline edits are durable across both reconnect AND a full editor restart,
+and now observable (`durable_pending_kb_updates`). T3 + T3b complete.
