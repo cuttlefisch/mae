@@ -1120,3 +1120,24 @@ Both disconnected, edited `alpha` title concurrently (alice `[A-T4]`, bob `[B-T4
 concurrent full-replace interleave, deterministically ordered by client_id). **Both edits survived,
 single value, no split-brain** → the per-peer-client_id (B-16) guard holds live. Cross-checked
 alice `kb_get` == bob's recorded string (byte-for-byte).
+
+### T5 RESULT: title ✅ + body ✅ PASS · tags ❌ → **B-18 found + FIXED** (`97af88df`)
+- **Body (YText), alice→bob:** ✅ alice appended `[A-T5-BODY]` to `alpha` body → bob applied
+  `changed=true`, title unaffected (independent fields).
+- **Multi-field (title+body atomic), bob→alice:** ✅ bob set `beta` title `[B-T5]` + body `[B-T5-BODY]`
+  in one save → **single** `kb/node_update` → alice `kb_get beta` shows BOTH (the B-15 guard, live).
+- **Tags (YArray):** ❌ FAIL → **B-18.** alice's `t5tag`/`t5clean` adds reached bob as real payloads
+  (`wal_seq=124`, 1628 bytes) but applied `changed=false`; bob's tags stayed `[collabtest,fixture]`.
+  My first run was muddled (batched the tag edit with the body edit); bob's **controlled re-run**
+  (clean isolated `t5clean` add) confirmed it.
+  - **Root cause (code-confirmed):** `KbNodeDoc` had `tags()` but no `set_tags`, and
+    `upsert_with_crdt` only wrote `set_title`/`set_body` — a tags-only edit never entered the CRDT
+    (B-15 class, never extended to tags). Receive side (`apply_crdt_doc → self.tags = doc.tags()`) was
+    fine; the **send** side was the gap.
+  - **FIX (`97af88df`):** added `KbNodeDoc::set_tags` (clear+reinsert YArray) + wired into
+    `upsert_with_crdt`. Tests: mae-sync `set_tags` round-trip + mae-kb production-fidelity
+    tag-only-edit-converges regression. **Links/meta** share the latent send-side gap (not in the
+    active `kb_update` path — links derive from body text) → follow-up.
+  - **LIVE RE-VERIFY pending:** needs BOTH editors rebuilt (shared/sync+shared/kb changed) — re-run
+    the clean tags add after the rebuild; expect bob to converge. (Daemon doesn't need it — it relays
+    the bytes; the editor's send path is where the fix lives.)
