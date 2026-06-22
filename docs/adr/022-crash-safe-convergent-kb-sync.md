@@ -82,3 +82,40 @@ assert both converge with neither side's edits lost) — the two-independent-pee
 member edits offline, its pending queue is dropped, reconnect → SV reconcile still propagates the edit +
 does not clobber. Live: **T3c-stress** — edit-then-instant-`kill -9` (sub-flush-window), relaunch,
 assert no loss + no clobber across both peers; repeat for a 3rd peer.
+
+## Implementation (as built)
+
+**Reconcile primitive** — `KnowledgeBase::reconcile_remote_node(node_id, remote_diff, remote_sv)`
+(`shared/kb/src/lib.rs`): merges `remote_diff` (creating the node if absent; **never** replaces an
+existing one), returns a `ReconcileOutcome { action, content_changed, local_ahead }`. `local_ahead` is the
+ops the remote lacks (`encode_diff(remote_sv)`), gated on a format-independent state-vector comparison
+(`KbNodeDoc::has_ops_beyond` / `kb::sv_has_ops_beyond`) — **not** `diff.is_empty()`, since a yrs v1 update
+against a fully-covering SV is still a non-empty `[0,0]`. Divergence is detected **pre-merge** and
+**order-independently**: the node pre-existed, the remote genuinely held ops we lacked, AND the two
+lineages share no client (`kb::sv_clients_disjoint`). A healthy collab pair always shares the owner's
+lineage client (adopted on first join), so a disjoint client set is the exact B-14 signal — and it does
+not depend on which side wins the YMap last-writer-wins. On divergence we leave the node untouched and
+report `DivergentLineage`; the caller adopts the owner's full state (its diff against our disjoint SV *is*
+its full lineage) to establish a shared lineage.
+
+**Wire / daemon** — `kb_join_request` gains optional `node_svs` (omitted when empty → exact pre-ADR-022
+shape). The daemon `kb/join` handler replies per node with an incremental `diff` (`encode_diff_and_sv`)
+when the member sent an SV, else full `state`; it always includes the daemon's `sv`.
+
+**Editor** — `kb_join_node_svs` gathers per-node SVs from the durable `crdt_docs` (independent of the
+pending queue) and threads them through `CollabIntent::JoinKb → CollabCommand::JoinKb → kb_join_request` at
+every join site. `kb_register_joined_instance` reconciles each node and re-queues any recovered local-ahead
+through the existing durable pending queue (single emit source); the post-(re)connect drain ships it.
+
+**B-17 (found while building the N-peer harness on the real CRDT path):** `derive_kb_client_id` returned a
+full `u64`, but a yrs `ClientID` is **53-bit** — `ClientID::new` debug-panics and, in release, force-sets
+then strips the top 11 bits, silently truncating a >53-bit id to its low 53 bits. Two fingerprints
+differing only above bit 53 would collide on one yrs lineage (a B-16-class collision, release-only). Fixed
+at the source (xor-fold into 53 bits, retaining entropy) and defensively at the boundary
+(`mae_sync::text::clamp_client_id_to_yrs` in `new_doc_with_client_id`, exact release-parity so debug ==
+release). This is the payoff of driving production code paths in tests rather than parallel stand-ins.
+
+Tests: `crates/core/tests/kb_sync_n_peer_e2e.rs` (N∈{2,3,5}: share/join/bidirectional/concurrent/
+offline/restart, and the crash crux as `lost_row_adopt_clobbers_documents_the_bug` vs
+`lost_row_reconcile_converges`); `reconcile_remote_node_*` units; the real-daemon
+`kb_join_with_svs_returns_reconcile_diff_else_full_state` e2e; `client_id_clamped_to_yrs_53_bits`.

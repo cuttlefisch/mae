@@ -64,9 +64,23 @@ anti-patterns:
    **receipt**. An enqueue that is dropped on the wire still passes. → **Assert
    convergence (the peer's content changed), not that an update was emitted.**
 
-A useful razor distilled from #1 and #3:
+6. **Safe-range stand-ins (B-17), found by the N-peer harness.** Every prior CRDT test
+   hand-picked **tiny** client_ids (`1`, `2`, `0xA11CE`) — all comfortably inside yrs's
+   53-bit `ClientID` range. Production derives the id from a 64-bit FNV-1a hash of the
+   identity fingerprint, which routinely sets bits above 53. yrs `ClientID::new`
+   debug-panics on that and, in *release*, silently force-sets/strips the top 11 bits —
+   so two fingerprints differing only above bit 53 collide on one lineage (a B-16-class
+   bug, invisible in release). The ADR-022 N-peer harness derives each peer's id with the
+   **real** `derive_kb_client_id` over distinct fingerprints, so the first run panicked
+   immediately. → **Tests must source values from the production derivation, not
+   hand-picked constants — a constant chosen to "look realistic" still dodges
+   value-range bugs the real generator hits.** (Same family as #3, one level deeper: not
+   just *which* value but its *range*.)
+
+A useful razor distilled from #1, #3, and #6:
 > **If a test passes parameters or serialization that differ from what the production
-> code path produces, it can only test a parallel universe — never the shipping bug.**
+> code path produces — including values from a different generator or numeric range —
+> it can only test a parallel universe, never the shipping bug.**
 
 ## 3. Observability that made live debugging tractable
 
@@ -134,11 +148,19 @@ A KB-sync e2e that would have caught all six bugs — encode these as the contra
   - `kb_node_update_applies_and_broadcasts_to_peer` — real wire round-trip via the
     shared builder (B-8); proven to FAIL (hang) when the builder omits the `id`.
 - `shared/sync/src/wire.rs`: `all_request_builders_carry_an_id` — the mechanical net.
+- **`crates/core/tests/kb_sync_n_peer_e2e.rs` (ADR-022) — the deliverable.** N real
+  `KnowledgeBase` peers with distinct **production-derived** client_ids, an in-test hub,
+  driving the real CRDT path: share/join/bidirectional/concurrent/offline/restart for
+  N∈{2,3,5}, plus the crash crux as sibling tests (`lost_row_adopt_clobbers_documents_the_bug`
+  vs `lost_row_reconcile_converges`). This harness **found B-17** on its first run (item 6).
+- `daemon/tests/collab_e2e.rs`: `kb_join_with_svs_returns_reconcile_diff_else_full_state`
+  — the **real daemon** kb/join SV-reconcile path (diff vs full state + backward-compat).
 
-### The gap still to close (next e2e work)
+### Closed (was: the gap)
 
-The current `daemon/tests/collab_e2e.rs` KB round-trip still seeds the joining client
-from the owner's exact bytes (shared lineage). The flagship e2e should be upgraded to
-**two-independent-peers + bidirectional + concurrent + restart + offline-merge**,
-driving the real edit path on both ends — i.e. items 1–5 above in one test. That is
-the test that makes a two-machine run a confirmation rather than a discovery.
+The flagship **two-independent-peers + bidirectional + concurrent + restart + offline-merge**
+coverage now exists at the editor-logic altitude (the N-peer harness above) and the daemon
+SV-reconcile path is covered by a real-process-handler e2e. Together they make a two-machine
+run a **confirmation rather than a discovery**. Remaining live validation: **T3c-stress**
+(edit-then-instant-`kill -9` within the sled flush window) + a 3rd peer, which exercises the
+one residual window (content never flushed) that no in-process test can model.
