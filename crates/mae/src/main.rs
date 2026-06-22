@@ -94,6 +94,54 @@ fn should_use_gui(
     gui_compiled && !force_tui && (force_gui || display_available)
 }
 
+/// Parse a boolean from an environment variable's **value** (not its mere
+/// presence). Returns `None` when unset so callers can leave a config-derived
+/// default untouched. Recognised falsy: `0/false/no/off` and empty; anything
+/// else non-empty is truthy. This is the fix for the footgun where
+/// `MAE_COLLAB_AUTO_CONNECT=false` still enabled auto-connect because the old
+/// check keyed on `is_ok()` (presence).
+fn env_bool(key: &str) -> Option<bool> {
+    std::env::var(key).ok().map(|v| parse_truthy(&v))
+}
+
+/// Interpret a string as a boolean flag value. Falsy: `0/false/no/off` and
+/// empty/whitespace (case-insensitive); everything else is truthy.
+fn parse_truthy(v: &str) -> bool {
+    !matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "no" | "off" | ""
+    )
+}
+
+/// Apply **per-launch** collaboration overrides (env vars, then CLI `--connect`)
+/// AFTER the config files (config.toml + init.scm) have been applied, so they
+/// take precedence per the standard chain: defaults < config files < env < CLI.
+///
+/// Before this, `init.scm` (loaded last) could override `--connect` and the env
+/// vars were either ignored entirely (GUI/TUI path never read
+/// `MAE_COLLAB_AUTO_CONNECT`) or beaten by a later `(set-option! …)` in
+/// `init.scm`. Env: `MAE_COLLAB_SERVER` (address), `MAE_COLLAB_AUTO_CONNECT`
+/// (parsed truthy/falsy). CLI `--connect` wins last.
+fn apply_collab_launch_overrides(editor: &mut Editor, connect_addr: Option<&str>) {
+    if let Ok(addr) = std::env::var("MAE_COLLAB_SERVER") {
+        if !addr.trim().is_empty() {
+            let _ = editor.set_option("collab_server_address", addr.trim());
+        }
+    }
+    if let Some(v) = env_bool("MAE_COLLAB_AUTO_CONNECT") {
+        let _ = editor.set_option("collab_auto_connect", &v.to_string());
+        info!(
+            auto_connect = v,
+            "env MAE_COLLAB_AUTO_CONNECT override applied"
+        );
+    }
+    if let Some(addr) = connect_addr {
+        let _ = editor.set_option("collab_server_address", addr);
+        let _ = editor.set_option("collab_auto_connect", "true");
+        info!(address = %addr, "CLI --connect: auto-connect enabled");
+    }
+}
+
 /// Entry point for the MAE editor.
 ///
 /// Plain `fn main()` — the tokio runtime is constructed manually so that
@@ -474,15 +522,12 @@ fn main() -> io::Result<()> {
             }
         };
 
-        // Apply env-var overrides for collab.
-        if let Ok(addr) = std::env::var("MAE_COLLAB_SERVER") {
-            editor.collab.server_address = addr;
-        }
-        if std::env::var("MAE_COLLAB_AUTO_CONNECT").is_ok() {
-            editor.collab.auto_connect = true;
-        }
-
         let _module_registry = load_init_file(&mut scheme, &mut editor);
+
+        // Per-launch collab overrides (env vars) win over init.scm — applied AFTER
+        // it, with value parsing (so MAE_COLLAB_AUTO_CONNECT=false disables).
+        // `--test` has no `--connect`. See apply_collab_launch_overrides.
+        apply_collab_launch_overrides(&mut editor, None);
 
         // Build a minimal tokio runtime for the collab bridge.
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -728,12 +773,11 @@ fn main() -> io::Result<()> {
         }
     }
 
-    // --connect overrides collab options: auto-connect to the given address.
-    if let Some(ref addr) = connect_addr {
-        let _ = editor.set_option("collab_server_address", addr);
-        let _ = editor.set_option("collab_auto_connect", "true");
-        info!(address = %addr, "CLI --connect: auto-connect enabled");
-    }
+    // NB: per-launch collab overrides (env + CLI `--connect`) are applied AFTER
+    // init.scm loads (below), so they win over config files — see
+    // `apply_collab_launch_overrides`. (They used to be set here, before init.scm,
+    // which let a `(set-option! "collab_auto_connect" …)` in init.scm clobber the
+    // CLI flag and ignore the env var.)
 
     // Apply daemon settings from config → OptionRegistry.
     if let Some(enabled) = app_config.daemon.enabled {
@@ -783,6 +827,10 @@ fn main() -> io::Result<()> {
         load_history(&mut scheme, &mut editor);
         debug!("init.scm and history loaded");
     }
+
+    // Per-launch overrides win over config files (config.toml + init.scm):
+    // defaults < config files < env < CLI. Must run AFTER init.scm.
+    apply_collab_launch_overrides(&mut editor, connect_addr.as_deref());
 
     // Load KB federation registry and import enabled instances.
     if !clean_mode {
@@ -2651,7 +2699,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_available_from_env, should_use_gui};
+    use super::{display_available_from_env, parse_truthy, should_use_gui};
 
     // --- gui_display_available policy -------------------------------------
 
@@ -2704,5 +2752,17 @@ mod tests {
         // No flags: GUI iff a display is available.
         assert!(should_use_gui(true, false, false, true));
         assert!(!should_use_gui(true, false, false, false));
+    }
+
+    /// The auto-connect footgun fix: a boolean env var must be read by VALUE, not
+    /// presence — `MAE_COLLAB_AUTO_CONNECT=false` (or `0`/empty) must disable.
+    #[test]
+    fn parse_truthy_reads_value_not_presence() {
+        for t in ["1", "true", "TRUE", "yes", "on", "anything", " true "] {
+            assert!(parse_truthy(t), "{t:?} should be truthy");
+        }
+        for f in ["0", "false", "FALSE", "no", "off", "", "  ", " off "] {
+            assert!(!parse_truthy(f), "{f:?} should be falsy");
+        }
     }
 }

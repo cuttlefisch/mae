@@ -142,7 +142,13 @@ Or directly in `init.scm`:
 | Variable | Overrides |
 |----------|-----------|
 | `MAE_COLLAB_SERVER` | `collab-server-address` |
-| `MAE_COLLAB_AUTO_CONNECT` | `collab-auto-connect` (`1` = true) |
+| `MAE_COLLAB_AUTO_CONNECT` | `collab-auto-connect` — read by **value**: `1/true/yes/on` enable, `0/false/no/off`/empty disable |
+
+**Precedence:** defaults < config files (`config.toml`, then `init.scm`) < environment
+variables < CLI flags (`--connect`). Per-launch overrides (env + CLI) are applied *after*
+`init.scm`, so e.g. `MAE_COLLAB_AUTO_CONNECT=false ./mae` starts offline even if your
+`init.scm` calls `(set-option! "collab-auto-connect" "true")`. (Note: the env var is read by
+value — `=false` disables — not by mere presence.)
 
 ---
 
