@@ -1031,3 +1031,25 @@ But to attribute that to a real tags-don't-sync bug we need a controlled pass.
 
 Title + body multi-field results above stand (cleanly executed). Only the **tags** sub-case is open
 pending this controlled re-run.
+
+#### ✅ B-18 CONFIRMED via clean re-run (tags YArray do NOT CRDT-sync)
+Controlled pass: alice cleanly added tag `t5clean` to `overview` (nothing else). bob:
+```
+19:17:54 received sync_update notification  doc=kb:collabtest:overview  wal_seq=3  update_b64_len=1628
+19:17:54 recv: applied remote kb update     node_id=collabtest:overview  changed=false
+```
+bob `kb_get overview` tags = `["collabtest","fixture"]` — **no `t5clean`**. (Pending only alice's
+confirm that `t5clean` is on HER local `overview` — she applied it, so send-side is fine.)
+
+**Smoking gun:** `update_b64_len=1628` is **byte-identical** to the prior muddled run's 1628. The
+broadcast payload is the *same* regardless of the tag change ⇒ the tag edit **never enters the CRDT
+`KbNodeDoc`** (it mutates the CozoDB store/index only); the broadcast re-sends the unchanged
+title/body state → `changed=false` no-op on bob. So **tags are outside the CRDT sync scope** entirely
+(not a lineage/no-op-merge issue — the delta literally isn't in the doc).
+
+⇒ **B-18 CONFIRMED.** **T5 verdict: title ✅ + body ✅ (YText) PASS; tags ❌ (YArray) FAIL.** Fix:
+represent tags (and any other meant-to-sync metadata) as a CRDT field in `KbNodeDoc`
+(`shared/sync/src/kb.rs`) + wire them through emit (`kb_ops` upsert) and `reconcile_remote_node` /
+`kb_apply_remote_update` apply-back, mirroring how body is handled. Until then tag edits are
+local-only. (Severity: medium — content/title/body sync is the core; tags are metadata, but org
+`#+filetags`/agenda/kanban views depend on them, so collab KB workflows that key on tags will diverge.)
