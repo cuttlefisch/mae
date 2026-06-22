@@ -15,7 +15,9 @@ use mae_mcp::protocol::{JsonRpcRequest, JsonRpcResponse, McpError, ToolInfo};
 use mae_mcp::session::ClientSession;
 use mae_mcp::{McpToolRequest, McpToolResult};
 use mae_sync::encoding::{base64_to_update, update_to_base64};
-use mae_sync::kb::{JoinPolicy, KbCollectionDoc, Role as SyncRole};
+use mae_sync::kb::{
+    derive_kb_client_id, update_new_op_authors, JoinPolicy, KbCollectionDoc, Role as SyncRole,
+};
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -1657,6 +1659,73 @@ async fn handle_doc_request_inner(
             }
 
             let node_doc = format!("kb:{node_id}");
+
+            // ADR-023 (B-19) EPOCH FENCE — the security core. `kb_access` above
+            // confirmed the sender's *current* role permits editing, but a granted
+            // member must author under their *current-epoch* client_id. Decode the
+            // update's NEW ops (those beyond the daemon's authoritative node SV) and
+            // reject any authored under a stale-epoch client_id. That is precisely a
+            // member's pre-grant divergent lineage (e.g. viewer-era edits) trying to
+            // cascade after a grant — denied here, at the daemon, independent of any
+            // (possibly malicious) client behaviour. Only enforced in key-auth mode:
+            // `none`/loopback has no per-identity principal to derive an epoch from.
+            if let Some(principal) = auth_principal {
+                let epoch_now = match load_collection(doc_store, &kb_id).await {
+                    Ok(coll) => coll.epoch_of(principal),
+                    Err(e) => {
+                        warn!(session = session_id, kb_id = %kb_id, reason = %e, "kb/node_update: epoch lookup failed");
+                        return JsonRpcResponse::error(
+                            id,
+                            McpError::internal_error(format!(
+                                "epoch lookup failed for KB '{kb_id}': {e}"
+                            )),
+                        );
+                    }
+                };
+                let c_now = derive_kb_client_id(principal, epoch_now);
+                // The daemon's authoritative SV for this node — ops it already holds
+                // are grandfathered; only ops *beyond* it are fenced.
+                let base_sv = match doc_store.encode_state_and_sv(&node_doc).await {
+                    Ok((_, sv)) => sv,
+                    Err(e) => {
+                        return JsonRpcResponse::error(
+                            id,
+                            McpError::internal_error(format!(
+                                "node SV lookup failed for '{node_id}': {e}"
+                            )),
+                        );
+                    }
+                };
+                match update_new_op_authors(&update_bytes, &base_sv) {
+                    Ok(authors) => {
+                        if let Some(stale) = authors.iter().find(|a| **a != c_now) {
+                            warn!(
+                                session = session_id, kb_id = %kb_id, node_id = %node_id,
+                                stale_client = stale, current_client = c_now, epoch = epoch_now,
+                                "kb/node_update: REBASE REQUIRED (stale-epoch op fenced — B-19)"
+                            );
+                            return JsonRpcResponse::error(
+                                id,
+                                McpError::internal_error(format!(
+                                    "rebase required: node '{node_id}' carries an op from \
+                                     stale-epoch client {stale} (current-epoch author is \
+                                     {c_now}, epoch {epoch_now}); adopt authoritative state \
+                                     and re-author the edit"
+                                )),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        // An update we cannot decode cannot be fenced — fail closed.
+                        warn!(session = session_id, kb_id = %kb_id, node_id = %node_id, reason = %e, "kb/node_update: undecodable update rejected");
+                        return JsonRpcResponse::error(
+                            id,
+                            McpError::parse_error(format!("could not decode update: {e}")),
+                        );
+                    }
+                }
+            }
+
             // ADR-020 liveness: an editing session keeps its node doc alive (count
             // it as a connected client on first touch) so the doc the member is
             // actively editing isn't idle-evicted out from under them.
@@ -2871,6 +2940,23 @@ mod tests {
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/node_update",
             "params":{"kb_id":kb_id,"node_id":"concept:n","update":update_to_base64(&upd)}})
     }
+
+    /// ADR-023: a node edit authored under the sender's CURRENT-epoch KB client_id
+    /// `derive_kb_client_id(principal, epoch)` — what the editor's `kb_client_id_for`
+    /// produces and what the daemon's epoch fence accepts. `text` lets a test vary
+    /// the op so a re-authored edit is distinguishable from a stale one.
+    fn kb_node_update_msg_as(
+        kb_id: &str,
+        principal: &str,
+        epoch: u64,
+        text: &str,
+    ) -> serde_json::Value {
+        let cid = derive_kb_client_id(principal, epoch);
+        let mut ts = TextSync::with_client_id("", cid);
+        let upd = ts.insert(0, text);
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/node_update",
+            "params":{"kb_id":kb_id,"node_id":"concept:n","update":update_to_base64(&upd)}})
+    }
     /// member is a PRINCIPAL (fingerprint); optional role.
     fn kb_member_msg(
         method: &str,
@@ -3119,7 +3205,9 @@ mod tests {
                 &bc,
                 Some("bob"),
                 Some(&fp("bob")),
-                kb_node_update_msg("kbm2"),
+                // bob is a freshly-added editor ⇒ epoch 0; he authors under his
+                // current-epoch client_id, which the ADR-023 fence accepts.
+                kb_node_update_msg_as("kbm2", &fp("bob"), 0, "x"),
                 &mut docs
             )
             .await
@@ -3204,6 +3292,144 @@ mod tests {
         assert!(
             denied.error.is_some(),
             "viewer must not edit (least privilege)"
+        );
+    }
+
+    /// ADR-023 (B-19) — the deferred-privilege-escalation exploit, end to end at the
+    /// daemon. A viewer authors edits locally under their viewer-epoch client_id while
+    /// DENIED at the daemon; once later granted editor, those pre-grant edits must NOT
+    /// cascade. The epoch fence rejects the stale lineage (`"rebase required"`); only a
+    /// fresh, current-epoch edit is accepted. (Red before the fence, green after.)
+    #[tokio::test]
+    async fn viewer_era_edits_do_not_cascade_on_grant() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kbx",
+            "alice",
+            &mut docs,
+        )
+        .await;
+
+        // bob is added as a VIEWER — a fresh grant ⇒ epoch 0.
+        dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            kb_member_msg("kb/add_member", "kbx", &fp("bob"), Some("viewer")),
+            &mut docs,
+        )
+        .await;
+
+        // bob (viewer) authors an edit under his epoch-0 client_id and pushes it —
+        // DENIED at the role gate. He keeps it in his local lineage (the cascade seed).
+        let viewer_era = kb_node_update_msg_as("kbx", &fp("bob"), 0, "VIEWER-ERA");
+        assert!(
+            dispatch_as(
+                &store,
+                &bc,
+                Some("bob"),
+                Some(&fp("bob")),
+                viewer_era.clone(),
+                &mut docs
+            )
+            .await
+            .error
+            .is_some(),
+            "viewer edit denied at the role gate"
+        );
+
+        // Owner PROMOTES bob viewer→editor — a role change ⇒ bob's epoch bumps to 1.
+        assert!(
+            dispatch_as(
+                &store,
+                &bc,
+                Some("alice"),
+                Some(&fp("alice")),
+                kb_member_msg("kb/add_member", "kbx", &fp("bob"), Some("editor")),
+                &mut docs
+            )
+            .await
+            .error
+            .is_none(),
+            "owner promotes bob to editor"
+        );
+
+        // THE EXPLOIT: bob re-pushes his VIEWER-ERA op (still authored under epoch 0).
+        // The role gate now passes (he is an editor), but the EPOCH FENCE must reject
+        // it — the op is from his stale, pre-grant client_id.
+        let resp = dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            Some(&fp("bob")),
+            viewer_era.clone(),
+            &mut docs,
+        )
+        .await;
+        let msg = resp
+            .error
+            .as_ref()
+            .map(|e| e.message.clone())
+            .unwrap_or_default();
+        assert!(
+            resp.error.is_some() && msg.contains("rebase required"),
+            "viewer-era lineage must be fenced on grant; got: {msg:?}"
+        );
+
+        // NO CASCADE: the node's canonical content never contains the viewer-era edit.
+        let (state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+        let canonical = TextSync::from_state(&state).unwrap().content();
+        assert!(
+            !canonical.contains("VIEWER-ERA"),
+            "pre-grant edit must not cascade; canonical = {canonical:?}"
+        );
+
+        // bob CAN make a fresh, current-epoch (epoch 1) edit — that is accepted.
+        assert!(
+            dispatch_as(
+                &store,
+                &bc,
+                Some("bob"),
+                Some(&fp("bob")),
+                kb_node_update_msg_as("kbx", &fp("bob"), 1, "FRESH"),
+                &mut docs
+            )
+            .await
+            .error
+            .is_none(),
+            "a fresh current-epoch edit is accepted"
+        );
+        let (state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+        assert!(
+            TextSync::from_state(&state)
+                .unwrap()
+                .content()
+                .contains("FRESH"),
+            "fresh current-epoch edit is applied"
+        );
+
+        // MALICIOUS-CLIENT VARIANT: re-sending the divergent op stays rejected (its
+        // new ops are still from the stale-epoch client_id, never C_now).
+        assert!(
+            dispatch_as(
+                &store,
+                &bc,
+                Some("bob"),
+                Some(&fp("bob")),
+                viewer_era,
+                &mut docs
+            )
+            .await
+            .error
+            .is_some(),
+            "re-sent stale-epoch op stays fenced"
         );
     }
 

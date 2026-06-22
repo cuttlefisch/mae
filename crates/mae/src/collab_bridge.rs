@@ -1475,6 +1475,24 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 .shared_kbs
                 .insert(kb_id.clone(), joined_node_ids);
 
+            // ADR-023: learn THIS peer's current authorization epoch for the KB from
+            // the (full) collection snapshot, so subsequent node edits are authored
+            // under the current-epoch client_id the daemon's fence expects. This is
+            // also the post-rebase relearn point: a "rebase required" rejection
+            // triggers a re-join, which re-delivers collection_state with the bumped
+            // epoch. Absent/0 ⇒ fresh grant ⇒ the legacy base client_id (no change).
+            if !editor.collab.local_fingerprint.is_empty() {
+                if let Ok(coll) = mae_sync::kb::KbCollectionDoc::from_bytes(&collection_state) {
+                    let epoch = coll.epoch_of(&editor.collab.local_fingerprint);
+                    if epoch == 0 {
+                        editor.collab.kb_epochs.remove(&kb_id);
+                    } else {
+                        editor.collab.kb_epochs.insert(kb_id.clone(), epoch);
+                    }
+                    debug!(kb = %kb_id, epoch, "learned KB authorization epoch (ADR-023)");
+                }
+            }
+
             info!(kb = %kb_id, node_count, "KB join complete (merged)");
             editor.set_status(format!("Joined KB '{}' ({} nodes)", kb_id, node_count));
             refresh_collab_status_if_open(editor);
@@ -1562,8 +1580,27 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             // The daemon rejected the update (e.g. access denied / malformed). Surface
             // loudly and drop the durable row — retrying the identical update would not
             // succeed. (A future ReplicationFailed status surfaces this in the UI.)
-            warn!(target: "kb_sync", kb = %kb_id, node = %node_id, error = %message, "kb/node_update failed — dropping");
-            editor.set_status(format!("KB sync rejected for {node_id}: {message}"));
+            //
+            // ADR-023: a "rebase required" rejection is the epoch fence firing — this
+            // op was authored under a stale (pre-grant) authorization epoch and can
+            // NEVER be accepted as-is (that is the whole point: a pre-grant divergent
+            // lineage must not cascade). The security guarantee holds regardless of
+            // what we do here (the daemon enforced it); we drop the row so it isn't
+            // retried forever, relearn our epoch on the next (re)join, and tell the
+            // user their pre-grant edit was not synced and must be re-applied. (The
+            // graceful auto-adopt + re-author under the current epoch is tracked as a
+            // follow-up; it needs a targeted node-adopt primitive.)
+            let is_rebase = message.contains("rebase required");
+            if is_rebase {
+                warn!(target: "kb_sync", kb = %kb_id, node = %node_id, error = %message, "kb/node_update fenced (stale-epoch) — pre-grant edit not synced (B-19)");
+                editor.set_status(format!(
+                    "KB '{kb_id}': your earlier edit to {node_id} was made before your \
+                     access changed and was NOT synced — reconnect and re-apply it"
+                ));
+            } else {
+                warn!(target: "kb_sync", kb = %kb_id, node = %node_id, error = %message, "kb/node_update failed — dropping");
+                editor.set_status(format!("KB sync rejected for {node_id}: {message}"));
+            }
             if let Some(rowid) = rowid {
                 editor.collab.inflight_kb_updates.remove(&rowid);
                 if let Some(ref store) = editor.kb.store {

@@ -281,6 +281,17 @@ pub struct CollabState {
     /// node collide in yrs' clock space and diverge. `0` = unset (no collab identity
     /// loaded) → `kb_local_client_id()` falls back to a legacy default.
     pub local_kb_client_id: u64,
+    /// This peer's own collab principal (key fingerprint) — the identity the daemon
+    /// authorizes against. Stored so KB node ops can be re-derived under a rotated
+    /// authorization epoch (ADR-023). Empty when no collab identity is loaded.
+    pub local_fingerprint: String,
+    /// ADR-023 per-KB authorization epoch for THIS peer, learned from each shared
+    /// KB's `kbc:` collection doc (on join + every membership broadcast). A node
+    /// edit is authored under `derive_kb_client_id(local_fingerprint, epoch)`; a
+    /// role change bumps the epoch (daemon-authored, unforgeable), rotating the
+    /// client_id so the daemon fences the peer's pre-change lineage. Absent ⇒ 0
+    /// (fresh grant / unshared), which equals the legacy base client_id.
+    pub kb_epochs: HashMap<String, u64>,
     /// Pre-shared key for mutual authentication (plaintext fallback).
     pub psk: String,
     /// Shell command to retrieve the PSK (preferred over psk for security).
@@ -329,6 +340,8 @@ impl CollabState {
             pending_kb_updates: Vec::new(),
             inflight_kb_updates: std::collections::HashSet::new(),
             local_kb_client_id: 0,
+            local_fingerprint: String::new(),
+            kb_epochs: HashMap::new(),
             psk: String::new(),
             psk_command: String::new(),
             auth_mode: "psk".to_string(),

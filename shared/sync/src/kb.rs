@@ -945,14 +945,14 @@ impl KbCollectionDoc {
             root.insert(&mut txn, COLL_PENDING_KEY, MapPrelim::default());
         }
         let m = Self::member_roles_map(&root, &mut txn);
-        let prev_epoch = match m.get(&txn, principal) {
-            Some(Out::YMap(e)) => Self::entry_epoch(&e, &txn),
-            _ => 0,
-        };
+        // Preserve the epoch on owner re-stamp (B-12 re-share — same owner, not a
+        // role change); a brand-new owner seeds at epoch 0.
+        let prev = Self::entry_role_epoch(&m, &txn, principal);
+        let epoch = Self::next_epoch(prev, Role::Owner);
         let entry = m.insert(&mut txn, principal, MapPrelim::default());
         entry.insert(&mut txn, MEMBER_ROLE_KEY, Role::Owner.as_str());
         entry.insert(&mut txn, MEMBER_LABEL_KEY, label);
-        entry.insert(&mut txn, MEMBER_EPOCH_KEY, (prev_epoch + 1).to_string());
+        entry.insert(&mut txn, MEMBER_EPOCH_KEY, epoch.to_string());
         txn.encode_update_v1()
     }
 
@@ -965,6 +965,40 @@ impl KbCollectionDoc {
             .unwrap_or(0)
     }
 
+    /// Read a member entry's current role (within an open txn).
+    fn entry_role(entry: &MapRef, txn: &impl ReadTxn) -> Option<Role> {
+        entry
+            .get(txn, MEMBER_ROLE_KEY)
+            .map(|v| v.to_string(txn))
+            .and_then(|s| Role::parse(&s))
+    }
+
+    /// ADR-023 epoch transition. The authorization epoch advances **only when an
+    /// existing member's role actually changes** — the B-19 cascade vector (e.g.
+    /// viewer→editor). A *fresh* grant has no prior write-capable lineage to fence,
+    /// so it stays at epoch 0; this is what lets owners and directly-added editors
+    /// author under the base (epoch-0) client_id with no editor-side epoch sync. A
+    /// role change rotates the client_id the member must author under, fencing their
+    /// pre-change lineage at the daemon. (Monotonicity across remove/re-add is a
+    /// documented hardening follow-up — a removed member's epoch is not persisted.)
+    fn next_epoch(prev: Option<(Role, u64)>, new_role: Role) -> u64 {
+        match prev {
+            None => 0,
+            Some((prev_role, prev_epoch)) if prev_role == new_role => prev_epoch,
+            Some((_, prev_epoch)) => prev_epoch + 1,
+        }
+    }
+
+    /// Read a member entry's `(role, epoch)` for an epoch transition decision.
+    fn entry_role_epoch(m: &MapRef, txn: &impl ReadTxn, principal: &str) -> Option<(Role, u64)> {
+        match m.get(txn, principal) {
+            Some(Out::YMap(e)) => {
+                Self::entry_role(&e, txn).map(|r| (r, Self::entry_epoch(&e, txn)))
+            }
+            _ => None,
+        }
+    }
+
     /// Insert or update a member's role (keyed by principal; CRDT-safe LWW).
     /// ADR-023: any call here is a role (re)assignment, so it **bumps the member's
     /// authorization epoch** — rotating the KB client_id they must author under and
@@ -973,15 +1007,13 @@ impl KbCollectionDoc {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let mut txn = self.doc.transact_mut();
         let m = Self::member_roles_map(&root, &mut txn);
-        // Preserve+bump the epoch across the entry replacement below.
-        let prev_epoch = match m.get(&txn, principal) {
-            Some(Out::YMap(e)) => Self::entry_epoch(&e, &txn),
-            _ => 0,
-        };
+        // Epoch advances only if this changes an existing member's role (ADR-023).
+        let prev = Self::entry_role_epoch(&m, &txn, principal);
+        let epoch = Self::next_epoch(prev, role);
         let entry = m.insert(&mut txn, principal, MapPrelim::default());
         entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
         entry.insert(&mut txn, MEMBER_LABEL_KEY, label);
-        entry.insert(&mut txn, MEMBER_EPOCH_KEY, (prev_epoch + 1).to_string());
+        entry.insert(&mut txn, MEMBER_EPOCH_KEY, epoch.to_string());
         txn.encode_update_v1()
     }
 
@@ -992,9 +1024,12 @@ impl KbCollectionDoc {
         let mut txn = self.doc.transact_mut();
         if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
             if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
-                let next = Self::entry_epoch(&entry, &txn) + 1;
+                // Only an actual role change advances the epoch (ADR-023).
+                let prev =
+                    Self::entry_role(&entry, &txn).map(|r| (r, Self::entry_epoch(&entry, &txn)));
+                let epoch = Self::next_epoch(prev, role);
                 entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
-                entry.insert(&mut txn, MEMBER_EPOCH_KEY, next.to_string());
+                entry.insert(&mut txn, MEMBER_EPOCH_KEY, epoch.to_string());
             }
         }
         txn.encode_update_v1()
@@ -1070,14 +1105,15 @@ impl KbCollectionDoc {
             p.remove(&mut txn, principal);
         }
         let m = Self::member_roles_map(&root, &mut txn);
-        let prev_epoch = match m.get(&txn, principal) {
-            Some(Out::YMap(e)) => Self::entry_epoch(&e, &txn),
-            _ => 0,
-        };
+        // Approving a pending principal is a fresh grant into member_roles (a denied
+        // pending peer has no write-capable lineage); epoch 0 unless this re-grants
+        // an existing member at a new role (ADR-023).
+        let prev = Self::entry_role_epoch(&m, &txn, principal);
+        let epoch = Self::next_epoch(prev, role);
         let entry = m.insert(&mut txn, principal, MapPrelim::default());
         entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
         entry.insert(&mut txn, MEMBER_LABEL_KEY, label.as_str());
-        entry.insert(&mut txn, MEMBER_EPOCH_KEY, (prev_epoch + 1).to_string());
+        entry.insert(&mut txn, MEMBER_EPOCH_KEY, epoch.to_string());
         txn.encode_update_v1()
     }
 
@@ -1531,24 +1567,34 @@ mod tests {
     // ---- ADR-023 (B-19) epoch-fenced-rebase primitives ----
 
     #[test]
-    fn member_epoch_bumps_on_each_role_assignment() {
+    fn member_epoch_advances_only_on_role_change() {
         // The daemon authors these ops, so the epoch is unforgeable by the client.
         let mut coll = KbCollectionDoc::new("Test", "alice");
         assert_eq!(coll.epoch_of("bob"), 0, "non-member starts at epoch 0");
 
+        // Fresh grants stay at epoch 0 — no prior write-capable lineage to fence,
+        // so owners + directly-added editors need no editor-side epoch sync.
         coll.set_owner("alice", "alice");
-        assert_eq!(coll.epoch_of("alice"), 1, "owner seeded at epoch 1");
-
+        assert_eq!(coll.epoch_of("alice"), 0, "fresh owner seeds at epoch 0");
         coll.upsert_member("bob", "bob", Role::Viewer);
-        assert_eq!(coll.epoch_of("bob"), 1, "first grant ⇒ epoch 1");
+        assert_eq!(coll.epoch_of("bob"), 0, "first grant ⇒ epoch 0");
 
-        // The B-19 cascade vector: a role change. The epoch MUST advance so bob's
+        // Re-stamping the SAME role must not advance (B-12 owner re-share idempotency).
+        coll.set_owner("alice", "alice");
+        assert_eq!(coll.epoch_of("alice"), 0, "owner re-stamp preserves epoch");
+        coll.upsert_member("bob", "bob", Role::Viewer);
+        assert_eq!(
+            coll.epoch_of("bob"),
+            0,
+            "same-role re-assignment is a no-op"
+        );
+
+        // The B-19 cascade vector: a role CHANGE. The epoch MUST advance so bob's
         // post-grant client_id differs from his viewer-era one.
         coll.set_role("bob", Role::Editor);
-        assert_eq!(coll.epoch_of("bob"), 2, "viewer→editor bumps the epoch");
-
+        assert_eq!(coll.epoch_of("bob"), 1, "viewer→editor bumps the epoch");
         coll.upsert_member("bob", "bob", Role::Viewer);
-        assert_eq!(coll.epoch_of("bob"), 3, "re-assignment keeps advancing");
+        assert_eq!(coll.epoch_of("bob"), 2, "editor→viewer bumps again");
     }
 
     #[test]
@@ -1577,8 +1623,8 @@ mod tests {
         // edit. update_new_op_authors must attribute each update to its real author,
         // so the daemon can reject the viewer-era lineage and accept only C_now.
         let fp = "ed25519:bob";
-        let c_viewer = derive_kb_client_id(fp, 1); // pre-grant
-        let c_editor = derive_kb_client_id(fp, 2); // post-grant (C_now)
+        let c_viewer = derive_kb_client_id(fp, 0); // pre-grant (added at epoch 0)
+        let c_editor = derive_kb_client_id(fp, 1); // post-grant, viewer→editor (C_now)
 
         let base = KbNodeDoc::new_with_client_id("n1", "Original", "body", &[], 99);
         let base_sv = base.state_vector();

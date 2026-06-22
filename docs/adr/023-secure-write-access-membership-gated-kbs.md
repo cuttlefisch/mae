@@ -49,9 +49,14 @@ authorization; a member's pre-grant divergent lineage can never be accepted — 
 **Mechanism (three parts):**
 
 1. **Per-member authorization epoch** on the collection doc (`kbc:`): a monotonic counter the **daemon**
-   bumps whenever *that member's* role changes (`kb/add_member`, `kb/remove_member`, `kb/approve_member`).
-   Membership ops are already daemon-authored, so the epoch is **unforgeable by the client**. Members read
-   their epoch from `kbc:` on join and on every membership broadcast.
+   advances **only when an *existing* member's role actually changes** (the B-19 vector, e.g.
+   viewer→editor). A *fresh* grant (a new member, owner seed, approve of a previously-denied pending peer)
+   has **no prior write-capable lineage to fence**, so it stays at **epoch 0** — which is exactly what
+   lets owners and directly-added editors author under the legacy/base (epoch-0) client_id with **no
+   editor-side epoch sync required**, so the validated T1–T7 epoch-0 flows cannot regress. Membership ops
+   are already daemon-authored, so the epoch is **unforgeable by the client**. Members read their epoch
+   from `kbc:` on join and on every membership broadcast. (Epoch is not persisted across remove/re-add —
+   monotonicity there is the documented hardening follow-up.)
 
 2. **Epoch-rotated KB client_id:** `derive_kb_client_id(fingerprint, epoch)`. The editor authors node ops
    under its **current-epoch** client_id. A role change rotates the client_id; a continuously-authorized

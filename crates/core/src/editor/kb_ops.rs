@@ -886,6 +886,21 @@ impl Editor {
         }
     }
 
+    /// ADR-023: the yrs `client_id` this peer must author edits to a *specific
+    /// shared KB* under — its base identity client_id rotated by the KB's current
+    /// **authorization epoch** (learned from that KB's `kbc:` collection doc). A
+    /// role change bumps the epoch ⇒ a fresh, unrelated client_id, so the daemon
+    /// fences the peer's pre-change lineage (`"rebase required"`) and only fresh,
+    /// current-epoch ops are accepted. At epoch 0 (fresh grant / owner / directly-
+    /// added editor) this equals `kb_local_client_id()` — no behavioural change.
+    pub fn kb_client_id_for(&self, kb_id: &str) -> u64 {
+        let epoch = self.collab.kb_epochs.get(kb_id).copied().unwrap_or(0);
+        if epoch == 0 || self.collab.local_fingerprint.is_empty() {
+            return self.kb_local_client_id();
+        }
+        crate::editor::derive_kb_client_id(&self.collab.local_fingerprint, epoch)
+    }
+
     /// ADR-020 B-16: establish + persist a canonical CRDT lineage for every node
     /// about to be shared. A node that was never CRDT-edited has `crdt_doc == None`;
     /// `to_collection` would then mint an EPHEMERAL, non-persisted lineage (fresh
@@ -1003,8 +1018,10 @@ impl Editor {
             // CRDT-aware upsert on the OWNING in-memory KB to generate update bytes
             // for broadcasting. ADR-020 B-16: use this peer's STABLE, UNIQUE
             // client_id (not a hardcoded 1 — two peers sharing a client_id collide
-            // and their concurrent edits diverge).
-            let cid = self.kb_local_client_id();
+            // and their concurrent edits diverge). ADR-023: rotated by THIS KB's
+            // authorization epoch so a role-changed member authors under their
+            // current-epoch client_id (the daemon fences any stale-epoch lineage).
+            let cid = self.kb_client_id_for(&kb_id);
             let update_bytes = match &owner {
                 None => self.kb.primary.upsert_with_crdt(updated, cid),
                 Some(uuid) => self
