@@ -891,3 +891,97 @@ to probe the sled flush window.
   recreate (narrow) — closed properly by the ADR-021 durable audit record (tracked).
 - The two-independent-peers **automated** e2e (so CI catches this class, not just two machines) — next code task.
 - B-11 (`*Collab Status*` steals the dashboard on launch) — Stage-2 UX.
+
+---
+
+## T3c-stress — ADR-022 crash-safety: READY-TO-RUN (PASS/FAIL)
+
+The prior T3c was a *characterization* on `6a1a5604` (old adopt path). **ADR-022 has
+landed** (`reconcile_remote_node` + SV-reconcile on (re)join; B-17 fixed): (re)join now
+**merges** the daemon's SV-diff and re-derives any local-ahead edit from the durable
+`crdt_doc` — independent of the pending-queue row surviving. So T3c is now a **PASS/FAIL**:
+a non-graceful `kill -9` must lose **no** durable edit and **clobber nothing**.
+
+> **Why no 3rd machine is needed, and no surgical "delete the row":** convergence for N
+> peers is already proven *deterministically* in-process (`kb_sync_n_peer_e2e.rs`, N∈{2,3,5},
+> incl. `lost_row_reconcile_converges`) + the real-daemon e2e
+> (`kb_join_with_svs_returns_reconcile_diff_else_full_state`). The live run confirms the
+> *integration* on real machines + LAN. The reconcile fires on **every** rejoin, so a plain
+> `kill -9` exercises it; we then **observe** `durable_pending_kb_updates` after relaunch to
+> see *which* path recovered the edit (queue-replay vs reconcile). The pending rows live in
+> the **same sled DB** as content and `kb_raw_query` is read-only, so there is no clean live
+> "delete just the intent" — and we don't need one: the deterministic lost-row case is the
+> in-process suite's job; the live job is "real crash → converge, no clobber."
+
+### §0 — PREREQ: rebuild BOTH machines from the branch (this code is unreleased)
+1. **both:** `git fetch origin && git checkout feat/crdt-collab-validation && git pull`
+   (HEAD should be `cb3a65eb` *docs: ADR-022 as-built* or later).
+2. **both:** build from source (no longer installed-binary-only):
+   - editor: `make build` (GUI; Skia ok on both) → `./target/release/mae`
+   - daemon (alice only): `(cd daemon && cargo build --release)` → `daemon/target/release/mae-daemon`
+   - shim (alice only, for MCP drive): `cargo build --release -p mae-mcp` → `mae-mcp-shim`
+3. **alice:** restart the daemon **on the new binary**, same params as prior runs
+   (`--bind 0.0.0.0:9480`, log → `/tmp/mae-daemon-live.log`). It eager-recovers `collabtest`
+   + membership from WAL (B-12), so bob/alice stay authorized. Confirm log line:
+   `daemon listening … 0.0.0.0:9480`.
+4. **both:** launch the new editor; **alice** reconnects the MCP shim to the new PID socket.
+5. **sanity (the T1/T2 baseline, fast):** bob `:collab-connect` → daemon log
+   `authenticated … peer=bob`; bob `:kb-join collabtest` → bob log shows the 3 nodes
+   reloaded/joined; alice edits `collabtest:alpha → [BASE-1]`, bob sees it (`changed=true`);
+   bob edits `collabtest:beta → [BASE-2]`, alice sees it. **Baseline bidirectional OK.**
+   - **New daemon signal to confirm ADR-022 is live:** on bob's join, the daemon logs
+     `kb/join: complete … reconcile_mode=true diff_count=N` (reconcile path, not full-state).
+
+### §1 — T3c-stress: offline edit → instant `kill -9` → relaunch → reconnect
+**Probe slugs:** `[BOB-T3CS-1]` (alpha), `[BOB-T3CS-2]` (beta), `[BOB-T3CS-3]` (overview).
+alice marks a fresh daemon-log line number here.
+1. **bob:** `:collab-disconnect` (so the edits are genuinely unsynced when the crash lands).
+   → daemon log: bob's session ends.
+2. **bob (offline):** edit in quick succession `alpha→[BOB-T3CS-1]`, `beta→[BOB-T3CS-2]`,
+   `overview→[BOB-T3CS-3]`. Record `introspect → durable_pending_kb_updates` (expect **3**).
+3. **bob:** **`kill -9 $(pgrep -f 'bin/mae$')`** *immediately* after the last edit (aim inside
+   the ~500 ms sled-flush window — back-to-back with step 2's last edit).
+4. **bob:** **relaunch** `./target/release/mae`. **Before** it auto-reconnects/flushes, record:
+   - **Obs A — content durability (bob):** `kb_get` alpha/beta/overview → which `[BOB-T3CS-*]`
+     survived the crash locally? (Disk-first loader reloads from the durable `crdt_doc`.)
+   - **Obs B — intent survival (bob):** `introspect → durable_pending_kb_updates` → 3, <3, or 0?
+     *(0 here + convergence below = live proof the **reconcile** recovered it, not the queue.)*
+5. **bob:** `:collab-connect` (if not auto). The reconnect fires `kb-resubscribe → JoinKb` with
+   bob's per-node **state vectors** → daemon SV-diff → **reconcile + local-ahead re-sync**.
+6. **alice (Obs C — re-sync reached the hub):** daemon log from the step-1 mark — for each
+   surviving `[BOB-T3CS-*]`: `kb/node_update … received → applied wal_seq=…`; alice editor
+   `recv: applied … changed=true`. Then alice `kb_get` alpha/beta/overview.
+7. **bob (Obs D — no clobber):** AFTER reconnect, `kb_get` each again → did any node that showed
+   a `[BOB-T3CS-*]` slug in Obs A **revert** to an older value? (The old adopt-clobber risk.)
+
+### PASS criteria (all four)
+- **(a) No durable loss:** every edit present in **Obs A** (content that reached disk) is, after
+  reconnect, present on **alice** (Obs C) — converged, `changed=true` on apply.
+- **(b) No clobber:** **Obs D** shows **no** node reverting; `[BASE-1]/[BASE-2]` and any
+  alice-side edits are intact on both peers.
+- **(c) Recovery is reconcile-driven (or queue, but it converges either way):** record **Obs B**.
+  If `durable_pending_kb_updates == 0` after relaunch *and* (a) still holds → **the SV-reconcile
+  re-derived the edit from the durable content** (the ADR-022 guarantee, live). If >0, the queue
+  also replayed — still PASS, note which.
+- **(d) Bounded:** after the post-reconnect drain+ack, bob `durable_pending_kb_updates → 0`
+  (no stuck/duplicated intents); a single apply per edit on alice (no double-send).
+- **Edge:** if **Obs A itself lost an edit** (content never flushed before `kill -9`) → that edit
+  is *expected* unrecoverable (nothing durable to reconcile); it's the residual flush-window, NOT
+  a clobber. Note it; it's the separate `crdt_doc` flush-on-write task, not an ADR-022 failure.
+
+### §2 — (OPTIONAL) 3-way fan-out: carol = 2nd editor on alice (read-only observer)
+A 3rd peer needs only a distinct **identity + data dir**, not a 3rd machine. If quick on the day;
+else **leave strict N-peer to CI** (the in-process harness covers N∈{2,3,5}).
+1. **alice:** start carol = a 2nd editor with an isolated env + its own identity:
+   `HOME=/tmp/mae-carol XDG_CONFIG_HOME=/tmp/mae-carol/.config XDG_DATA_HOME=/tmp/mae-carol/.local/share ./target/release/mae` (own MCP socket).
+   Generate/point its `--collab-identity` so it has a distinct fingerprint.
+2. **alice (owner):** authorize carol's key on the daemon + `:kb-member-add collabtest <carol-fp> viewer`.
+3. **carol:** `:collab-connect` + `:kb-join collabtest` → receives the current converged state.
+4. **After §1 step 6 converges:** carol `kb_get` alpha/beta/overview → must show the **same**
+   `[BOB-T3CS-*]` values as alice. PASS = bob's recovered edit fanned out to a 3rd independent
+   subscriber (not just the owner) — hub-and-spoke N-peer convergence, live.
+
+### Roles
+- **bob:** §0 build + §1 steps 1–7 (offline edits, the `kill -9`, relaunch, Obs A/B/D).
+- **alice (this session, MCP-driven):** §0 daemon rebuild+restart + baseline; the step-1 daemon-log
+  mark; Obs C (received + converged); optional carol observer; records the verdict here.
