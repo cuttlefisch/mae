@@ -19,6 +19,46 @@ const TAGS_KEY: &str = "tags";
 const LINKS_KEY: &str = "links";
 const META_KEY: &str = "meta";
 
+/// True if `candidate_sv` carries operations not covered by `base_sv` — i.e.
+/// some client's clock in `candidate_sv` exceeds what `base_sv` has seen.
+///
+/// Both args are v1-encoded yrs state vectors. This is the format-independent
+/// primitive behind ADR-022 reconcile decisions: "is the remote ahead of me?"
+/// (`sv_has_ops_beyond(remote_sv, my_sv)`) and "am I ahead of the remote?"
+/// (`sv_has_ops_beyond(my_sv, remote_sv)`). Avoids the trap that an `encode_diff`
+/// against a fully-covering SV is still a non-empty (`[0,0]`) byte sequence.
+pub fn sv_has_ops_beyond(candidate_sv: &[u8], base_sv: &[u8]) -> Result<bool, SyncError> {
+    let candidate = yrs::StateVector::decode_v1(candidate_sv)
+        .map_err(|e| SyncError::Encoding(e.to_string()))?;
+    let base =
+        yrs::StateVector::decode_v1(base_sv).map_err(|e| SyncError::Encoding(e.to_string()))?;
+    for (client, &clock) in candidate.iter() {
+        if base.get(client) < clock {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// True if two v1-encoded state vectors share **no** client id — i.e. the two
+/// documents were constructed on entirely independent lineages.
+///
+/// This is the order-independent ADR-022 divergence signal: any healthy collab
+/// pair shares at least the owner's lineage client (the joiner adopted it on
+/// first join), so a *disjoint* client set means the nodes were built from
+/// scratch with the same id but incompatible lineages (the B-14 condition) —
+/// regardless of which side happens to win the YMap last-writer-wins.
+pub fn sv_clients_disjoint(a_sv: &[u8], b_sv: &[u8]) -> Result<bool, SyncError> {
+    let a = yrs::StateVector::decode_v1(a_sv).map_err(|e| SyncError::Encoding(e.to_string()))?;
+    let b = yrs::StateVector::decode_v1(b_sv).map_err(|e| SyncError::Encoding(e.to_string()))?;
+    for (client, _) in a.iter() {
+        if b.contains_client(client) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Materialized content from a KbNodeDoc — all fields extracted for FTS rebuild.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaterializedNode {
@@ -301,6 +341,19 @@ impl KbNodeDoc {
     pub fn state_vector(&self) -> Vec<u8> {
         let txn = self.doc.transact();
         txn.state_vector().encode_v1()
+    }
+
+    /// True if this document holds operations not yet covered by `remote_sv`
+    /// — i.e. `encode_diff(remote_sv)` would carry real (non-no-op) content.
+    ///
+    /// Format-independent: a yrs v1 update against a fully-covering state vector
+    /// still encodes to a small non-empty byte sequence (`[0, 0]`), so checking
+    /// `encode_diff(..).is_empty()` is wrong. We instead compare state vectors
+    /// per client: we are "ahead" iff some client's local clock exceeds what the
+    /// remote has seen. Used by ADR-022 reconcile to decide whether a local-ahead
+    /// push is actually needed.
+    pub fn has_ops_beyond(&self, remote_sv: &[u8]) -> Result<bool, SyncError> {
+        sv_has_ops_beyond(&self.state_vector(), remote_sv)
     }
 
     /// Extract all fields into a `MaterializedNode` for FTS5 rebuild.

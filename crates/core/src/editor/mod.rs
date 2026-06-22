@@ -338,20 +338,29 @@ impl Default for CollabState {
 }
 
 /// Derive a stable, unique yrs `client_id` for KB CRDT edits from this peer's
-/// durable collab identity fingerprint (ADR-020 B-16). FNV-1a 64-bit; never returns
-/// `0` (yrs sentinel) or `1` (the legacy single-peer default), so distinct
-/// identities map to distinct ids and "unset" stays distinguishable. Set once at
-/// startup into `CollabState::local_kb_client_id`.
+/// durable collab identity fingerprint (ADR-020 B-16). FNV-1a, folded into the
+/// **53-bit** range yrs permits for a `ClientID` (B-17); never returns `0` (yrs
+/// sentinel) or `1` (the legacy single-peer default), so distinct identities map
+/// to distinct ids and "unset" stays distinguishable. Set once at startup into
+/// `CollabState::local_kb_client_id`.
+///
+/// yrs only uses the low 53 bits of a client id (the top 11 are an internal
+/// tag): a full-u64 id panics in debug and *silently truncates* in release,
+/// which would let two fingerprints differing only above bit 53 collide on one
+/// yrs lineage — the very B-16 collision this derivation prevents. We xor-fold
+/// the high bits down rather than mask them off, so their entropy is retained.
 pub fn derive_kb_client_id(fingerprint: &str) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in fingerprint.as_bytes() {
         h ^= *b as u64;
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    if h == 0 || h == 1 {
+    // Fold bits [53..64) into the low 53 bits, then clamp to 53 bits.
+    let folded = (h ^ (h >> 53)) & ((1u64 << 53) - 1);
+    if folded == 0 || folded == 1 {
         2
     } else {
-        h
+        folded
     }
 }
 

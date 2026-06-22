@@ -272,6 +272,8 @@ Source: `shared/kb/src/lib.rs`
 | `StaleNode` | struct |
 | `KbHealthReport` | struct |
 | `KnowledgeBase` | struct |
+| `ReconcileAction` | enum |
+| `ReconcileOutcome` | struct |
 | `slugify` | fn |
 | `timestamp_id` | fn |
 

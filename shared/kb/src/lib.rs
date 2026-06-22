@@ -547,6 +547,39 @@ pub struct KnowledgeBase {
     tag_index: HashMap<String, HashSet<String>>,
 }
 
+/// What [`KnowledgeBase::reconcile_remote_node`] did, for the caller to act on
+/// (push the local-ahead diff, log a divergence, etc.). ADR-022.
+#[cfg(feature = "crdt")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconcileAction {
+    /// The node did not exist locally; it was created from the remote ops
+    /// (first-join lineage establishment).
+    Created,
+    /// The node existed; the remote diff was merged (no clobber).
+    Merged,
+    /// The node existed on an **incompatible lineage**: the remote sent ops we
+    /// lacked, but they did not merge (legacy pre-B-16 same-id collision). The
+    /// caller should fetch the remote's full state and `adopt_remote_node` to
+    /// establish a shared lineage. We do NOT replace here, so no durable local
+    /// edit is silently lost without the caller opting in.
+    DivergentLineage,
+}
+
+/// Outcome of an ADR-022 state-vector reconcile.
+#[cfg(feature = "crdt")]
+#[derive(Debug, Clone)]
+pub struct ReconcileOutcome {
+    /// Classification of how the merge resolved.
+    pub action: ReconcileAction,
+    /// Whether the local materialized content changed as a result of the merge.
+    pub content_changed: bool,
+    /// Ops the *remote* lacks (our local-ahead diff, computed against the
+    /// remote's state vector). `Some` iff non-empty — push these back to the
+    /// hub so a durable-but-unsynced local edit re-syncs without depending on
+    /// the pending queue surviving a crash.
+    pub local_ahead: Option<Vec<u8>>,
+}
+
 impl KnowledgeBase {
     pub fn new() -> Self {
         Self::default()
@@ -566,6 +599,19 @@ impl KnowledgeBase {
 
     pub fn get(&self, id: &str) -> Option<&Node> {
         self.nodes.get(id)
+    }
+
+    /// Iterate every node id in the KB. Enables callers (the disk-first loader,
+    /// the ADR-022 join flow gathering per-node state vectors, the collab
+    /// resubscribe pass) to enumerate stored nodes without reaching into internal
+    /// maps. Order is unspecified.
+    pub fn node_ids(&self) -> impl Iterator<Item = &String> {
+        self.nodes.keys()
+    }
+
+    /// Iterate every `(id, node)` pair in the KB. Order is unspecified.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Node)> {
+        self.nodes.iter()
     }
 
     /// Get a mutable reference to a node by ID.
@@ -825,6 +871,114 @@ impl KnowledgeBase {
             }
         }
         Ok(changed)
+    }
+
+    /// ADR-022: crash-safe, non-destructive (re)join reconcile for one node.
+    ///
+    /// Given the ops the remote says we lack (`remote_diff`, computed by the hub
+    /// via `encode_diff` against our state vector) and the remote's state vector
+    /// (`remote_sv`), this:
+    ///
+    /// 1. **Merges** `remote_diff` into the local doc (creating the node if we've
+    ///    never seen it) — it NEVER replaces an existing local node, so a durable
+    ///    local edit whose sync-intent was lost in a crash is preserved.
+    /// 2. Computes our **local-ahead** diff (`encode_diff(remote_sv)`) — the ops
+    ///    the remote lacks — and returns it for the caller to push back. This is
+    ///    what recovers a durable-but-unsynced edit on reconnect, independent of
+    ///    whether any pending-queue row survived.
+    ///
+    /// Contrast [`adopt_remote_node`](Self::adopt_remote_node) (blind replace),
+    /// which is correct only for a *brand-new* node (first-join lineage
+    /// establishment). When an existing node sits on an **incompatible lineage**
+    /// (legacy pre-B-16 same-id collision: the remote sent ops we lack but they
+    /// don't merge), we report [`ReconcileAction::DivergentLineage`] and leave
+    /// the local node untouched — the caller decides whether to fetch full state
+    /// and adopt, rather than this method silently clobbering local work.
+    #[cfg(feature = "crdt")]
+    pub fn reconcile_remote_node(
+        &mut self,
+        node_id: &str,
+        remote_diff: &[u8],
+        remote_sv: &[u8],
+    ) -> Result<ReconcileOutcome, mae_sync::SyncError> {
+        let existed = self.nodes.contains_key(node_id);
+        // Capture our pre-merge state vector — used to classify, BEFORE mutating,
+        // whether the remote genuinely held ops we lacked and whether our lineages
+        // are independent. Format-independent (compares SVs, not diff bytes).
+        let pre_sv = self.node_state_vector(node_id);
+
+        // Divergent-lineage detection (order-independent, pre-merge): the node
+        // pre-existed locally, the remote genuinely held ops we lacked, AND our
+        // two lineages share no common client — meaning the node was built from
+        // scratch on both sides with the same id but incompatible lineages (the
+        // B-14 condition). A healthy collab pair always shares the owner's lineage
+        // client (adopted on first join), so a disjoint client set is the precise
+        // signal — and it does NOT depend on which side wins the YMap LWW. Distinct
+        // from the lost-row case (there the remote is *behind* us → no new ops →
+        // Merged with a local-ahead push). On divergence we leave the local node
+        // UNTOUCHED so the caller can adopt full state without us first clobbering
+        // (or LWW-mangling) local content.
+        let diverged = match &pre_sv {
+            Some(pre) => {
+                existed
+                    && mae_sync::kb::sv_has_ops_beyond(remote_sv, pre)?
+                    && mae_sync::kb::sv_clients_disjoint(pre, remote_sv)?
+            }
+            None => false,
+        };
+        if diverged {
+            tracing::warn!(
+                node_id,
+                "ADR-022 reconcile: divergent lineage — independent same-id doc; \
+                 leaving local node untouched, caller should adopt full state to \
+                 establish a shared lineage"
+            );
+            return Ok(ReconcileOutcome {
+                action: ReconcileAction::DivergentLineage,
+                content_changed: false,
+                local_ahead: None,
+            });
+        }
+
+        // Merge (or create). apply_remote_update creates the node from the bytes
+        // when absent — for a brand-new node the "diff" is the full state.
+        let content_changed = self.apply_remote_update(node_id, remote_diff)?;
+
+        // Our local-ahead diff: the ops the remote does not yet have. Use a
+        // state-vector comparison (not `diff.is_empty()`, which never holds — a
+        // no-op v1 update still encodes to a couple of bytes) to decide whether a
+        // push is actually warranted.
+        let local_ahead = match self.nodes.get(node_id) {
+            Some(node) => {
+                let doc = node.to_crdt_doc()?;
+                if doc.has_ops_beyond(remote_sv)? {
+                    Some(doc.encode_diff(remote_sv)?)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
+        let action = if existed {
+            ReconcileAction::Merged
+        } else {
+            ReconcileAction::Created
+        };
+
+        tracing::debug!(
+            node_id,
+            ?action,
+            content_changed,
+            local_ahead = local_ahead.is_some(),
+            "ADR-022 reconcile_remote_node"
+        );
+
+        Ok(ReconcileOutcome {
+            action,
+            content_changed,
+            local_ahead,
+        })
     }
 
     /// Get the state vector for a node's CRDT document.
@@ -2620,6 +2774,101 @@ mod tests {
             "Bob Edit [BOB-LIVE-1]",
             "owner's node reflects the peer's edit after merge (bob→alice direction)"
         );
+    }
+
+    /// ADR-022 — `reconcile_remote_node` contract, exercised directly (the
+    /// N-peer harness covers it end-to-end; this pins the primitive's classifier
+    /// + local-ahead semantics at the unit layer).
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn reconcile_remote_node_lost_row_is_merged_with_local_ahead() {
+        let alice_cid: u64 = 0xA11CE;
+        let bob_cid: u64 = 0xB0B;
+
+        // Shared lineage: alice creates + shares; bob adopts (first join).
+        let mut alice = KnowledgeBase::new();
+        let base = alice
+            .upsert_with_crdt(Node::new("t:n", "v1", NodeKind::Note, "body"), alice_cid)
+            .unwrap();
+        let mut bob = KnowledgeBase::new();
+        bob.adopt_remote_node("t:n", &base).unwrap();
+
+        // Bob edits durably but the sync intent is LOST (never pushed). The hub
+        // (alice) is therefore BEHIND bob.
+        {
+            let mut n = bob.get("t:n").unwrap().clone();
+            n.title = "v2-unsynced".to_string();
+            bob.upsert_with_crdt(n, bob_cid).unwrap();
+        }
+
+        // Reconcile: the hub's diff against bob's SV is a no-op (hub behind), so
+        // bob keeps v2 (Merged, content unchanged) and reports local-ahead to push.
+        let alice_doc = alice.get("t:n").unwrap().to_crdt_doc().unwrap();
+        let bob_sv = bob.node_state_vector("t:n").unwrap();
+        let remote_diff = alice_doc.encode_diff(&bob_sv).unwrap();
+        let remote_sv = alice_doc.state_vector();
+        let outcome = bob
+            .reconcile_remote_node("t:n", &remote_diff, &remote_sv)
+            .unwrap();
+
+        assert_eq!(outcome.action, ReconcileAction::Merged);
+        assert!(
+            !outcome.content_changed,
+            "hub was behind — nothing to merge into bob"
+        );
+        assert_eq!(bob.get("t:n").unwrap().title, "v2-unsynced", "no clobber");
+        let local_ahead = outcome
+            .local_ahead
+            .expect("bob must report local-ahead ops to re-sync the lost edit");
+
+        // Pushing the local-ahead up converges the hub (crash-safety, no pending queue).
+        alice.apply_remote_update("t:n", &local_ahead).unwrap();
+        assert_eq!(alice.get("t:n").unwrap().title, "v2-unsynced");
+
+        // A second reconcile is now a clean no-op: caught up, no local-ahead.
+        let alice_doc = alice.get("t:n").unwrap().to_crdt_doc().unwrap();
+        let bob_sv = bob.node_state_vector("t:n").unwrap();
+        let outcome2 = bob
+            .reconcile_remote_node(
+                "t:n",
+                &alice_doc.encode_diff(&bob_sv).unwrap(),
+                &alice_doc.state_vector(),
+            )
+            .unwrap();
+        assert_eq!(outcome2.action, ReconcileAction::Merged);
+        assert!(
+            outcome2.local_ahead.is_none(),
+            "both sides caught up — no redundant push"
+        );
+    }
+
+    /// ADR-022 — divergent (independently-constructed) same-id lineages are
+    /// classified `DivergentLineage`, NOT silently clobbered.
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn reconcile_remote_node_detects_divergent_lineage() {
+        // Two peers independently build the same id with different lineages.
+        let mut alice = KnowledgeBase::new();
+        alice.upsert_with_crdt(Node::new("t:n", "alice", NodeKind::Note, "a"), 0xA11CE);
+        let mut bob = KnowledgeBase::new();
+        bob.upsert_with_crdt(Node::new("t:n", "bob", NodeKind::Note, "b"), 0xB0B);
+
+        let alice_doc = alice.get("t:n").unwrap().to_crdt_doc().unwrap();
+        let bob_sv = bob.node_state_vector("t:n").unwrap();
+        let outcome = bob
+            .reconcile_remote_node(
+                "t:n",
+                &alice_doc.encode_diff(&bob_sv).unwrap(),
+                &alice_doc.state_vector(),
+            )
+            .unwrap();
+        assert_eq!(
+            outcome.action,
+            ReconcileAction::DivergentLineage,
+            "incompatible same-id lineages must be flagged, not merged-away"
+        );
+        // Reconcile left bob's content intact (caller decides to adopt).
+        assert_eq!(bob.get("t:n").unwrap().title, "bob");
     }
 
     /// ADR-020 B-16 — where the hardcoded `client_id` ACTUALLY bites: CONCURRENT

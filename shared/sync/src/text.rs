@@ -23,10 +23,26 @@ pub(crate) fn new_doc() -> Doc {
     })
 }
 
+/// Clamp an arbitrary `u64` to the range yrs accepts for a `ClientID`.
+///
+/// yrs packs the top 11 bits of a `ClientID` as an internal tag, so only the
+/// low **53 bits** are usable. `ClientID::new` `debug_assert!`s this (panics in
+/// debug) and, in release, force-sets the tag bits via `value | MASK` — which
+/// are then stripped on readback, so a >53-bit id is *silently truncated to its
+/// low 53 bits*. Two ids differing only above bit 53 would therefore collide on
+/// the same effective yrs client (a B-16-class lineage collision). We clamp at
+/// this single boundary with the exact same low-53 truncation release-yrs
+/// already applies, so debug and release behave identically and no caller can
+/// trip the assert. Callers that need *distinct* ids should derive them already
+/// folded into 53 bits (see `derive_kb_client_id`).
+pub fn clamp_client_id_to_yrs(raw: u64) -> u64 {
+    raw & ((1u64 << 53) - 1)
+}
+
 /// Create a yrs Doc with a specific client ID and UTF-16 offset kind.
 pub(crate) fn new_doc_with_client_id(client_id: u64) -> Doc {
     Doc::with_options(yrs::Options {
-        client_id: ClientID::new(client_id),
+        client_id: ClientID::new(clamp_client_id_to_yrs(client_id)),
         offset_kind: OffsetKind::Utf16,
         ..Default::default()
     })
@@ -656,6 +672,27 @@ impl TextSync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B-17 regression: yrs `ClientID` is 53-bit; a full-u64 id panics in debug
+    /// and silently truncates in release. `clamp_client_id_to_yrs` must fold any
+    /// id into the safe range, and `new_doc_with_client_id` must never panic on a
+    /// huge id (debug == release behavior).
+    #[test]
+    fn client_id_clamped_to_yrs_53_bits() {
+        let mask = (1u64 << 53) - 1;
+        for raw in [0u64, 1, 2, mask, mask + 1, u64::MAX, 0xDEAD_BEEF_CAFE_F00D] {
+            let clamped = clamp_client_id_to_yrs(raw);
+            assert_eq!(clamped, raw & mask, "clamp must keep only the low 53 bits");
+            assert!(
+                clamped & (u64::MAX << 53) == 0,
+                "clamped id must fit 53 bits"
+            );
+            // Constructing a doc with the raw id must not panic (the bug) and must
+            // round-trip to the clamped value yrs actually stores.
+            let doc = new_doc_with_client_id(raw);
+            assert_eq!(doc.client_id().get(), clamped);
+        }
+    }
 
     /// Generate a realistic 32-bit client_id from (pid, buffer_index),
     /// mirroring `compute_client_id` in collab_bridge.rs.

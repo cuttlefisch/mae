@@ -689,6 +689,14 @@
           "kind": "struct"
         },
         {
+          "name": "ReconcileAction",
+          "kind": "enum"
+        },
+        {
+          "name": "ReconcileOutcome",
+          "kind": "struct"
+        },
+        {
           "name": "slugify",
           "kind": "fn"
         },
