@@ -1011,3 +1011,23 @@ to the store but **drops tags**. Either way tags are outside the CRDT sync path.
 apply-back, or only title/body? Fix direction: add tags (and any other metadata fields meant to sync)
 to the `KbNodeDoc` CRDT schema + the reconcile/apply path, mirroring body. **T5 verdict: body + title
 multi-field PASS; tags sub-case FAIL (B-18).**
+
+#### ⚠️ B-18 status: PROVISIONAL — step-3 execution was muddled (do NOT treat as confirmed yet)
+The step-3 (tags) run was **not clean**: alice "jumped the gun" / applied the tag change out of
+sequence (possibly bundled with step 1), so we can't be certain the `19:09:27` overview update was the
+isolated `t5tag` add vs an earlier overview edit. What IS solid: across the T5 window bob's `overview`
+tags never became `["collabtest","fixture","t5tag"]` (re-checked at log line 120 — still no `t5tag`).
+But to attribute that to a real tags-don't-sync bug we need a controlled pass.
+
+**Controlled re-run protocol (settles B-18):**
+1. **alice:** confirm `t5tag` IS on HER `overview` locally now (`kb_get overview`). Absent → the step
+   never landed (no bug, just re-do). Present → continue.
+2. **alice:** (re-)add `t5tag` cleanly to `overview`, nothing else.
+3. **bob:** watch for a fresh `received sync_update doc=kb:collabtest:overview` past log line 120 +
+   re-`kb_get overview`.
+4. **Verdict:** alice has `t5tag` locally **AND** a fresh update reaches bob **AND** bob still lacks it
+   ⇒ **B-18 CONFIRMED** (tags `YArray` outside CRDT sync). If bob gets `t5tag` ⇒ earlier miss was the
+   messy execution; **B-18 RETRACTED**, T5 fully PASS.
+
+Title + body multi-field results above stand (cleanly executed). Only the **tags** sub-case is open
+pending this controlled re-run.
