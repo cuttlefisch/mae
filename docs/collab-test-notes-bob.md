@@ -725,3 +725,32 @@ persisted-lineage, hardcoded client_id) is resolved for the **sequential two-pee
    simultaneous two-peer edits (latent, per alice's production-fidelity note).
 
 ▶ Holding for alice's B-12 fix, then resume with restart-survival + offline-merge + concurrent-edit.
+
+---
+
+## 2026-06-22 ~14:38 — B-12 deployed (daemon-side) — running the T1–T7 matrix. No bob rebuild.
+
+B-12 fix is **daemon-only** (`daemon/src/collab_handler.rs`); the pulled range `a49e54f..3a67a54`
+touched **no editor crates** → bob stays on the B-16 editor build (verified `git diff --stat …
+crates/ shared/` empty). New: ADR-021 (durable auditable membership/policy, compliance foundation).
+
+### ✅ T1 — B-12 owner-restart: membership preserved + bidirectional intact (PASS)
+alice restarted her daemon (now B-12 build). bob log, no manual intervention:
+```
+14:34:26 collab disconnected  reason="connection lost: Connection reset by peer (os error 54)"
+14:34:31 collab connected  peers=1
+14:34:31 reconnect: re-subscribing shared KBs  count=1
+14:34:31 joining KB collabtest
+14:34:31 KB join complete (merged)  node_count=3        ← NO pending, NO re-approve (B-12 ✅)
+```
+Previously every owner restart dropped bob to `pending` (manual re-approve). Now membership survives.
+Bidirectional re-verified post-restart:
+- **bob → alice:** `collabtest:beta` → `[BOB-T1-POSTRESTART]` — gate_hit → durable send rowid=5 →
+  **daemon confirmed applied**; alice confirmed her node updated.
+- **alice → bob:** `collabtest:alpha` → `[ALICE-T2-CHECK]` — bob `received sync_update` (wal_seq=1)
+  → `recv: applied remote kb update changed=true`; `kb_get` shows the slug.
+
+⇒ T1 GREEN. Membership durability + bidirectional sync both hold across an owner restart.
+
+### Remaining matrix (driving next): T2 restart-survival (bob), T3 offline-merge, T4 concurrent
+same-node, T5 body/multi-field, T6 daemon-restart survival, T7 roles/policy (viewer reject).
