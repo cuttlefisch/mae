@@ -854,3 +854,64 @@ time (no connection check); introspect now reports `pending_kb_updates = in-mem 
 
 ⇒ **Yellow flag CLOSED**: offline edits are durable across both reconnect AND a full editor restart,
 and now observable (`durable_pending_kb_updates`). T3 + T3b complete.
+
+### 🔬 T3c — non-graceful CRASH (`kill -9`): CHARACTERIZATION (this run = no clobber, but flush-window NOT stressed)
+Procedure per alice (observe, not pass/fail). bob offline-edited 3 nodes then the editor was
+`kill -9`'d and relaunched. Baseline (pre-T3c): alpha `[ALICE-T2-POSTRESTART]`, beta
+`[BOB-T3B-OFFLINE]`, overview `[ALICE-WHILE-BOB-OFFLINE]`.
+
+- **Steps:** disconnect → offline edits `alpha→[BOB-T3C-1]` (15:18:34, persisted to durable),
+  `beta→[BOB-T3C-2]` (15:18:39, persisted), `overview→[BOB-T3C-3]` (15:18:xx) → `kill -9` (PID 89584)
+  → relaunch (PID 90141, 15:19:18).
+
+**Observation matrix (bob side):**
+| Node | offline edit | Obs B: pending row survived crash | Obs C: reached alice | Obs D: post-reconnect local | clobbered? |
+|------|---|---|---|---|---|
+| alpha | `[BOB-T3C-1]` | ✅ drained rowid=9 | ✅ confirmed applied (9) | `[BOB-T3C-1]` | ❌ no |
+| beta | `[BOB-T3C-2]` | ✅ drained rowid=10 | ✅ confirmed applied (10) | `[BOB-T3C-2]` | ❌ no |
+| overview | `[BOB-T3C-3]` | ✅ drained rowid=11 | ✅ confirmed applied (11) | `[BOB-T3C-3]` | ❌ no |
+
+Post-crash relaunch log (all 3 rows survived + flushed BEFORE the adopt):
+```
+15:19:18 mae starting
+15:19:19 KB instance loaded from CozoDB nodes=3
+15:19:19 collab connected
+15:19:19 drain: send (durable)  alpha rowid=9 / beta rowid=10 / overview rowid=11    ← all 3 survived kill -9
+15:19:19 daemon confirmed applied  9 / 10 / 11
+15:19:19 ack removed  9 / 10 / 11                                                     ← .896–.922
+15:19:19 KB join complete (merged)                                                    ← .964 (adopt AFTER drain)
+```
+
+**Why no clobber THIS run (the mechanism):** the durable drain ran at `.842–.886` and acked by `.922`,
+**before** `KB join complete (merged)` at `.964`. So bob pushed his local-ahead edits to the daemon
+*first*; the subsequent adopt then pulled back the *same* (now-current) values → nothing to clobber.
+**Ordering (drain-before-adopt) is what protects against clobber when the pending intent survives.**
+
+#### ⚠️ Two caveats — the dangerous window was NOT actually exercised (design input for the fix)
+1. **Flush-window not stressed.** The `kill -9` was issued manually (>500ms after the last edit), so
+   sled had time to flush **all 3** pending rows — hence Obs B = all survived. We did **not** hit the
+   sub-~500ms async-flush window where a pending row could be lost. **The clobber path requires
+   Obs B to FAIL (intent lost) while content survives** — that combination never occurred here.
+2. **Auto-reconnect masked Obs A.** Reconnect fired ~0.25s after startup, draining before we could
+   snapshot pre-flush `durable_pending_kb_updates` or pre-adopt local content. (The drain log still
+   proves Obs B.)
+
+**The real risk to design for (task #38):** node *content* (`crdt_doc`) and the *pending-sync queue*
+are persisted separately and may have **different flush timing**. If a crash lands in the window where
+**content is durable but the pending row is not**, then on reconnect there's nothing to push, the
+adopt-on-join **replaces** the local node with the daemon's older snapshot → **silent loss of the
+local-ahead edit**. T3c did not reproduce this (timing too loose), so it remains a *latent* risk.
+
+**Recommended fix direction (independent of reproducing it):** make **adopt-on-join reconcile
+local-ahead content** instead of blind-replace — i.e. on rejoin, compute a state-vector diff /
+`reconcile_to` between the local node and the daemon snapshot and **push local-ahead changes up**
+(or merge) rather than overwriting. That makes content-durability sufficient on its own (the lost
+sync-intent row becomes recoverable from the durable content), closing the window regardless of the
+content-vs-queue flush race. Optionally also tighten durability (flush/fsync the pending write with
+the content write) so intent and content survive together.
+
+**To actually reproduce the window** (next characterization, bob-drivable): do the edit via MCP then
+`kill -9` **programmatically within the same step** (Bash kill immediately after the kb_update returns)
+to shrink the edit→crash gap toward the sled flush window; repeat a few times to catch a partial
+flush. Even then MCP round-trip (~100s ms) limits how tight we get — a true unit test of the
+content-durable/intent-lost state is the more reliable proof (suggest alice add one).
