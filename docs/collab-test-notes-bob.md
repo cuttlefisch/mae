@@ -1047,6 +1047,33 @@ broadcast payload is the *same* regardless of the tag change ⇒ the tag edit **
 title/body state → `changed=false` no-op on bob. So **tags are outside the CRDT sync scope** entirely
 (not a lineage/no-op-merge issue — the delta literally isn't in the doc).
 
+#### ⚠️ B-18 fix re-verify (build `5736599`/`97af88d`): tags STILL not converging alice→bob — likely alice send-side
+Both rebuilt expected. bob on `5736599`, connected + reconcile-joined. Re-ran the clean tags pass:
+- **alice → bob (`t5verify` add):** ❌ STILL no-op. bob log: `received sync_update doc=kb:collabtest:overview
+  wal_seq=1 update_b64_len=1628 → recv: applied … changed=false`; bob `overview` tags unchanged
+  `[collabtest,fixture]`. **`update_b64_len=1628` is byte-identical to the pre-fix runs** — alice's
+  broadcast carries the *same* title/body state, NO tag delta. ⇒ **alice's SEND path still omits tags.**
+- **bob → alice (`bobtag-verify` add, isolation test):** bob (on the fix build) set `beta` tags
+  `[collabtest,fixture,bobtag-verify]` → emitted `gate_hit → drain rowid=21 bytes=742 → daemon
+  confirmed applied`. The drain is **742 bytes vs ~596 for the earlier tag-less `beta` title/body
+  emit** — bob's fixed send path now carries the tag YArray. ▶ **ALICE: confirm you receive
+  `bobtag-verify` on `beta` with `changed=true`** — that proves bob's send-side fix works and isolates
+  the remaining gap to alice's side.
+
+**Hypotheses for alice (the alice→bob tag no-op):**
+1. **alice's editor isn't on `97af88d`+** (not rebuilt/relaunched on the fix) — most likely, given her
+   broadcast is byte-identical (1628) to pre-fix. The fix is send-side, so her emit must run the new
+   `set_tags`/`upsert_with_crdt` wiring.
+2. **alice's tag-add path bypasses the fixed `upsert_with_crdt`** — if she adds tags via a command/MCP
+   route that doesn't go through the patched upsert (e.g. a direct CozoDB write), the CRDT never gets
+   `set_tags`. Worth checking which path her tag-add uses vs bob's `kb_update` (MCP) which now works.
+
+▶ **Decisive checks:** (a) alice's build == `97af88d`+ and relaunched? (b) does alice receive bob's
+`bobtag-verify` (changed=true)? If yes to (b) but her own send still 1628/no-op → it's (2), her
+send path. If alice rebuilds and her `t5verify` then converges → it was (1).
+
+---
+
 ⇒ **B-18 CONFIRMED.** **T5 verdict: title ✅ + body ✅ (YText) PASS; tags ❌ (YArray) FAIL.** Fix:
 represent tags (and any other meant-to-sync metadata) as a CRDT field in `KbNodeDoc`
 (`shared/sync/src/kb.rs`) + wire them through emit (`kb_ops` upsert) and `reconcile_remote_node` /
