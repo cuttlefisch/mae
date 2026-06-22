@@ -942,7 +942,18 @@ impl Editor {
                 // falls back to the transient in-memory queue. Enqueuing to both
                 // (the old behaviour) caused every shared edit to be sent twice.
                 if let Some(ref store) = self.kb.store {
-                    let _ = store.push_pending_update(&kb_id, id, &update_bytes);
+                    // ADR-020: persist to the durable queue at EDIT time — including
+                    // while OFFLINE (no connection check here). This is the crash-
+                    // durability point (the row exists before any reconnect/drain);
+                    // logged so the offline enqueue is greppable, not invisible.
+                    match store.push_pending_update(&kb_id, id, &update_bytes) {
+                        Ok(()) => {
+                            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %id, bytes = update_bytes.len(), "edit: persisted to durable pending queue (survives offline + restart)")
+                        }
+                        Err(e) => {
+                            tracing::warn!(target: "kb_sync", kb_id = %kb_id, node_id = %id, error = %e, "edit: failed to persist durable pending update")
+                        }
+                    }
                 } else {
                     self.collab
                         .pending_kb_updates

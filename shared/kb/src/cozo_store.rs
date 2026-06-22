@@ -2740,10 +2740,23 @@ mod tests {
         assert_eq!(pending.len(), 2);
         assert_eq!(pending[0].node_id, "node-a");
 
+        // ADR-020 observability: count reflects the durable queue (what an offline
+        // edit lands in) — the seam the introspect `pending_kb_updates` reads.
+        assert_eq!(
+            store.count_pending_updates().unwrap(),
+            2,
+            "durable pending count must reflect un-acked offline edits"
+        );
+
         store.ack_pending_update(pending[0].rowid).unwrap();
         let remaining = store.drain_pending_updates().unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].node_id, "node-b");
+        assert_eq!(
+            store.count_pending_updates().unwrap(),
+            1,
+            "count decreases as the queue is acked"
+        );
     }
 
     #[test]

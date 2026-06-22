@@ -256,6 +256,15 @@ pub trait KbStore: Send + Sync {
     fn drain_pending_updates(&self) -> Result<Vec<PendingUpdate>, KbStoreError>;
     fn ack_pending_update(&self, id: i64) -> Result<(), KbStoreError>;
 
+    /// Count of durably-queued (un-acked) pending CRDT updates. ADR-020 observability:
+    /// lets the editor answer "do I have unsynced/offline edits?" — the in-memory
+    /// queue is empty when store-backed (B-16 single-source emit), so the durable
+    /// queue is the source of truth. Default impl reuses the non-destructive drain;
+    /// override with a `count(...)` query if it becomes hot.
+    fn count_pending_updates(&self) -> Result<usize, KbStoreError> {
+        Ok(self.drain_pending_updates()?.len())
+    }
+
     // --- Bulk operations ---
 
     fn load_all(&self) -> Result<Vec<Node>, KbStoreError>;

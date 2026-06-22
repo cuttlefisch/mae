@@ -427,6 +427,17 @@ fn build_collaboration_section(editor: &Editor) -> serde_json::Value {
         })
         .collect();
 
+    // ADR-020 observability: an edit to a shared node is persisted to the DURABLE
+    // SQLite pending queue at edit time (even offline) — the in-memory queue is empty
+    // when store-backed (B-16 single-source emit). Report both so a user/agent can
+    // answer "do I have unsynced offline edits?" (the in-mem count alone reads 0
+    // offline, which is misleading).
+    let durable_pending = editor
+        .kb
+        .store
+        .as_ref()
+        .and_then(|s| s.count_pending_updates().ok())
+        .unwrap_or(0);
     json!({
         "collab_status": collab_status,
         "collab_server": collab_server,
@@ -434,7 +445,9 @@ fn build_collaboration_section(editor: &Editor) -> serde_json::Value {
         "pending_collab_intent": editor.collab.pending_intent.is_some(),
         "kb_sync_mode": editor.collab.kb_sync_mode,
         "shared_kbs": shared_kbs,
-        "pending_kb_updates": editor.collab.pending_kb_updates.len(),
+        // Total unsynced edits = transient in-memory (no-store fallback) + durable queue.
+        "pending_kb_updates": editor.collab.pending_kb_updates.len() + durable_pending,
+        "durable_pending_kb_updates": durable_pending,
         "owning_instances": owning_instances,
     })
 }
