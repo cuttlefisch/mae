@@ -1116,6 +1116,46 @@ live tag adds converged ⇒ the fix is robust (not just a one-time reconcile-on-
 propagated → pre-restart content intact + advanced. **alice to confirm (a) WAL recovery count=4 and
 (d) `[B-T6-DURING]` on her `beta`** to close T6 fully. Then **T7** (roles/policy) is the last step.
 
+### ✅ T7 — roles / policy enforcement (ADR-018) — bob side PASS (alice to confirm T7.4 receive)
+- **T7.1:** alice set bob → **viewer** (owner-only member change; broadcast).
+- **T7.2 (viewer write → REJECTED):** bob edited `alpha → [B-T7-DENIED]`. bob log:
+  `gate → drain: send (durable) → written to wire → kb/node_update REJECTED by daemon →
+  kb/node_update failed — dropping`. bob's LOCAL `alpha` shows `[B-T7-DENIED]` (local CRDT applies)
+  but the write was **rejected server-side and dropped** (not stuck/retried). **alice confirmed her
+  `alpha` UNCHANGED (`[T6-CRASH]`, no `[B-T7-DENIED]`)** — viewer write blocked, never reached the hub. ✅
+- **T7.3:** alice restored bob → **editor** (broadcast).
+- **T7.4 (editor write → APPLIED):** bob edited `alpha → [B-T7-ALLOWED]`. bob log:
+  `gate → drain → written to wire → kb/node_update: daemon confirmed applied → ack removed` (no
+  rejection — clean contrast with T7.2). (alice to confirm her `alpha` = `[B-T7-ALLOWED]`, changed=true.)
+- **Sub-check (owner-only Manage):** bob (editor) attempted `kb_add_member collabtest <bob-fp> owner`
+  (self-elevation). Daemon **rejected**: `collab error: role 'editor' may not Manage KB 'collabtest'`.
+  No privilege change; membership unchanged. ✅ (Negative test — confirms ADR-018 Manage is owner-only.)
+
+⇒ **T7 bob-side PASS.** Role enforcement holds both ways (viewer-deny / editor-allow) **and** the
+Manage op is owner-only. Server-side complete-mediation per ADR-018 — the client optimistically queues
+but the **daemon decides** (a viewer/non-owner cannot smuggle a write or a membership change).
+
+---
+
+## 🎉 LIVE MATRIX COMPLETE — T1–T7 all PASS (bob side; alice cross-confirms)
+| Test | What | Verdict |
+|------|------|---------|
+| T1 | B-12 owner-restart (membership preserved + bidirectional) | ✅ |
+| T2 | restart-survival (disk-first reload + auto-rejoin) | ✅ |
+| T3 | offline-merge (durable queue flush on reconnect) | ✅ |
+| T3b | offline edit survives full editor restart | ✅ |
+| T3c-stress | `kill -9` crash-safety (ADR-022 reconcile) | ✅ |
+| T4 | concurrent same-node convergence (per-peer client_id) | ✅ byte-identical |
+| T5 | body + multi-field + tags | ✅ (tags via B-18 fix) |
+| T6 | daemon restart mid-session (WAL recovery) | ✅ (bob side) |
+| T7 | roles / policy enforcement (ADR-018) | ✅ (bob side) |
+
+Bugs found + fixed during the campaign: B-8 (emit notification→request), B-10 (disk-first loader),
+B-12 (owner re-share preserves membership), B-13 (member live-subscribe), B-14 (join adopt lineage),
+B-15 (chained-edit fields), B-16a/b (owner persisted lineage + per-peer client_id), B-17 (reconcile
+crash-safety), B-18 (tags YArray sync) + observability (durable_pending) + the auto-connect env-override
+precedence fix. Stage-1 collaborative KB sync validated end-to-end on two machines.
+
 ---
 
 ⇒ **B-18 CONFIRMED.** **T5 verdict: title ✅ + body ✅ (YText) PASS; tags ❌ (YArray) FAIL.** Fix:
