@@ -1111,3 +1111,12 @@ daemon: `kb/node_update` from a non-writer is rejected.)
   `executor/collab_exec.rs`), so alice drives it over MCP, no manual command-line entry. (Requires
   alice's editor **rebuilt** to expose the new tools — do this before T7; T4–T6 don't need it.)
   T4's forced concurrency uses the disconnect-edit-reconnect pattern (same as T3's offline edits).
+
+### ✅ T4 RESULT: PASS (alice + bob)
+Both disconnected, edited `alpha` title concurrently (alice `[A-T4]`, bob `[B-T4]`, shared base
+`[BOB-T3CS2-1]`), both reconnected. Daemon log (mark 2866): alice push `wal_seq=116`, bob push
+`wal_seq=120` + `kb/join reconcile_mode=true`. **Converged byte-identical on both machines:**
+`Collab Test Alpha [B-T4]Collab Test Alpha [A-T4]` (bob's then alice's full title, no space —
+concurrent full-replace interleave, deterministically ordered by client_id). **Both edits survived,
+single value, no split-brain** → the per-peer-client_id (B-16) guard holds live. Cross-checked
+alice `kb_get` == bob's recorded string (byte-for-byte).
