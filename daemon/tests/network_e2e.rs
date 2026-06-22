@@ -148,7 +148,6 @@ async fn tcp_initialize_and_ping() {
 
 #[tokio::test]
 async fn tcp_sync_update_roundtrip() {
-
     let Some(server) = spawn_server().await else {
         return;
     };
@@ -197,7 +196,6 @@ async fn tcp_sync_update_roundtrip() {
 
 #[tokio::test]
 async fn tcp_two_clients_converge() {
-
     let Some(server) = spawn_server().await else {
         return;
     };
@@ -261,7 +259,6 @@ async fn tcp_two_clients_converge() {
 
 #[tokio::test]
 async fn tcp_state_vector_diff_protocol() {
-
     let Some(server) = spawn_server().await else {
         return;
     };
@@ -311,7 +308,6 @@ async fn tcp_state_vector_diff_protocol() {
 
 #[tokio::test]
 async fn tcp_docs_list() {
-
     let Some(server) = spawn_server().await else {
         return;
     };
@@ -338,7 +334,6 @@ async fn tcp_docs_list() {
 
 #[tokio::test]
 async fn tcp_docs_stats() {
-
     let Some(server) = spawn_server().await else {
         return;
     };
@@ -397,7 +392,6 @@ async fn tcp_docs_stats() {
 
 #[tokio::test]
 async fn tcp_save_intent_ok() {
-
     let Some(server) = spawn_server().await else {
         return;
     };
@@ -466,7 +460,6 @@ async fn tcp_save_intent_ok() {
 
 #[tokio::test]
 async fn tcp_resync_protocol() {
-
     let Some(server) = spawn_server().await else {
         return;
     };
@@ -522,7 +515,6 @@ async fn tcp_resync_protocol() {
 
 #[tokio::test]
 async fn tcp_debug_endpoint() {
-
     let Some(server) = spawn_server().await else {
         return;
     };
