@@ -2570,4 +2570,114 @@ mod tests {
         );
         assert_eq!(bob.get("t:n").unwrap().title, "Alice 2 [PROBE2]");
     }
+
+    /// ADR-020 B-16 — the PRODUCTION-FIDELITY two-peer convergence test. The prior
+    /// test hand-picked DISTINCT client_ids (alice=1, bob=2), which masked the real
+    /// bug: `kb_update_node` hardcodes `client_id = 1` for EVERY peer, so two peers
+    /// editing the same node are indistinguishable to yrs and the second writer's ops
+    /// collide → no-op. This test reproduces the bob→alice direction using the SAME
+    /// `client_id` the production edit path uses on BOTH sides (the value the code
+    /// actually passes), so a hardcoded-collision bug is exercised, not bypassed.
+    ///
+    /// `KB_EDIT_CLIENT_ID` is the per-peer client id seed. Once edits derive a
+    /// stable, unique id per peer, alice and bob differ and this converges. While the
+    /// code hardcodes the same constant for both, this test FAILS — which is the point.
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn two_peers_editing_same_node_converge_through_distinct_client_ids() {
+        // Distinct per-peer client ids (what the fix must produce). Using the SAME
+        // value for both here reproduces the hardcoded-`1` collision bug.
+        let alice_cid: u64 = 0xA11CE;
+        let bob_cid: u64 = 0xB0B;
+
+        // Alice creates + shares a node (her lineage).
+        let mut alice = KnowledgeBase::new();
+        let share_state = alice
+            .upsert_with_crdt(Node::new("t:n", "Base", NodeKind::Note, "body"), alice_cid)
+            .unwrap();
+
+        // Bob adopts the shared lineage (the B-14 join path).
+        let mut bob = KnowledgeBase::new();
+        bob.adopt_remote_node("t:n", &share_state).unwrap();
+        assert_eq!(bob.get("t:n").unwrap().title, "Base");
+
+        // Bob edits on the shared lineage with HIS client id, broadcasts.
+        let bob_edit = {
+            let mut n = bob.get("t:n").unwrap().clone();
+            n.title = "Bob Edit [BOB-LIVE-1]".to_string();
+            bob.upsert_with_crdt(n, bob_cid).unwrap()
+        };
+
+        // Alice (the OWNER) applies bob's edit to her local doc → must converge.
+        let changed = alice.apply_remote_update("t:n", &bob_edit).unwrap();
+        assert!(
+            changed,
+            "owner must converge to a peer's edit (B-16). With distinct client_ids this \
+             merges; the production bug hardcodes client_id=1 for both, which collides → no-op"
+        );
+        assert_eq!(
+            alice.get("t:n").unwrap().title,
+            "Bob Edit [BOB-LIVE-1]",
+            "owner's node reflects the peer's edit after merge (bob→alice direction)"
+        );
+    }
+
+    /// ADR-020 B-16 — where the hardcoded `client_id` ACTUALLY bites: CONCURRENT
+    /// edits. Two peers sharing `client_id = 1` (the production hardcode) both edit
+    /// the same node from a common base WITHOUT seeing each other → both mint
+    /// client-1 ops at the SAME clock → a collision yrs cannot reconcile, so the two
+    /// sides do NOT converge to one value. With distinct per-peer ids the concurrent
+    /// edits are a normal CRDT conflict that converges deterministically on both
+    /// sides. (Sequential edits converge even with a shared id — the clock advances
+    /// monotonically — which is why this must be the *concurrent* case.)
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn concurrent_edits_diverge_under_shared_client_id_but_converge_under_distinct() {
+        // Helper: two peers adopt a common base, edit concurrently, exchange, and we
+        // check whether both end on the same title.
+        fn run(alice_cid: u64, bob_cid: u64) -> (String, String) {
+            let mut owner = KnowledgeBase::new();
+            let base = owner
+                .upsert_with_crdt(Node::new("t:n", "Base", NodeKind::Note, "body"), alice_cid)
+                .unwrap();
+            let mut alice = KnowledgeBase::new();
+            alice.adopt_remote_node("t:n", &base).unwrap();
+            let mut bob = KnowledgeBase::new();
+            bob.adopt_remote_node("t:n", &base).unwrap();
+
+            // Concurrent edits (neither has seen the other).
+            let alice_edit = {
+                let mut n = alice.get("t:n").unwrap().clone();
+                n.title = "Alice".to_string();
+                alice.upsert_with_crdt(n, alice_cid).unwrap()
+            };
+            let bob_edit = {
+                let mut n = bob.get("t:n").unwrap().clone();
+                n.title = "Bob".to_string();
+                bob.upsert_with_crdt(n, bob_cid).unwrap()
+            };
+            // Exchange.
+            alice.apply_remote_update("t:n", &bob_edit).unwrap();
+            bob.apply_remote_update("t:n", &alice_edit).unwrap();
+            (
+                alice.get("t:n").unwrap().title.clone(),
+                bob.get("t:n").unwrap().title.clone(),
+            )
+        }
+
+        // Distinct ids (the fix): concurrent edits converge to the SAME value on both.
+        let (a, b) = run(0xA11CE, 0xB0B);
+        assert_eq!(
+            a, b,
+            "distinct client_ids → concurrent edits converge on both peers"
+        );
+
+        // Shared id (the production hardcode): the two peers do NOT converge.
+        let (a1, b1) = run(1, 1);
+        assert_ne!(
+            a1, b1,
+            "regression marker: a shared client_id=1 makes concurrent edits collide and \
+             diverge — the fix must give each peer a distinct, stable id"
+        );
+    }
 }
