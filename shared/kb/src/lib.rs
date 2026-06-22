@@ -739,6 +739,14 @@ impl KnowledgeBase {
                     if doc.body() != node.body {
                         doc.set_body(&node.body);
                     }
+                    // B-18: tags are a synced `YArray` too — wire them like
+                    // title/body, else a tags-only edit never enters the CRDT and
+                    // peers no-op on apply (changed=false). The receive side
+                    // (`apply_crdt_doc` → `self.tags = doc.tags()`) already reads
+                    // them back; the send side was the gap.
+                    if doc.tags() != node.tags {
+                        doc.set_tags(&node.tags);
+                    }
                     doc
                 }
                 Err(_) => mae_sync::kb::KbNodeDoc::new_with_client_id(
@@ -2869,6 +2877,48 @@ mod tests {
         );
         // Reconcile left bob's content intact (caller decides to adopt).
         assert_eq!(bob.get("t:n").unwrap().title, "bob");
+    }
+
+    /// B-18 regression: a TAGS-only edit must enter the CRDT and converge on a
+    /// peer. Before the fix `upsert_with_crdt` only wrote title/body, so a tag
+    /// change produced a no-op CRDT update — the peer's apply was `changed=false`
+    /// and tags never synced (found live in T5: alice's `t5tag`/`t5clean` never
+    /// reached bob). Drives the real edit path on both ends.
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn upsert_with_crdt_syncs_tag_only_edits_to_a_peer() {
+        let owner_cid: u64 = 0xA11CE;
+
+        // Owner creates a node with initial tags + shares; peer adopts the lineage.
+        let mut owner = KnowledgeBase::new();
+        let share = {
+            let mut n = Node::new("t:n", "Title", NodeKind::Note, "body");
+            n.tags = vec!["collabtest".into(), "fixture".into()];
+            owner.upsert_with_crdt(n, owner_cid).unwrap()
+        };
+        let mut peer = KnowledgeBase::new();
+        peer.adopt_remote_node("t:n", &share).unwrap();
+        assert_eq!(peer.get("t:n").unwrap().tags, vec!["collabtest", "fixture"]);
+
+        // Owner adds a tag ONLY (title/body unchanged) — the exact B-18 case.
+        let tag_update = {
+            let mut n = owner.get("t:n").unwrap().clone();
+            n.tags = vec!["collabtest".into(), "fixture".into(), "t5tag".into()];
+            owner.upsert_with_crdt(n, owner_cid).unwrap()
+        };
+
+        // Peer applies → must converge on the new tag (pre-fix: changed=false, no t5tag).
+        let changed = peer.apply_remote_update("t:n", &tag_update).unwrap();
+        assert!(
+            changed,
+            "a tags-only edit must enter the CRDT and change the peer (B-18)"
+        );
+        assert_eq!(
+            peer.get("t:n").unwrap().tags,
+            vec!["collabtest", "fixture", "t5tag"],
+            "peer must converge on the owner's tag edit; title/body unchanged"
+        );
+        assert_eq!(peer.get("t:n").unwrap().title, "Title");
     }
 
     /// ADR-020 B-16 — where the hardcoded `client_id` ACTUALLY bites: CONCURRENT

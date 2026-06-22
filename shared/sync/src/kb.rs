@@ -269,6 +269,27 @@ impl KbNodeDoc {
         txn.encode_update_v1()
     }
 
+    /// Replace ALL tags with `tags` (clear + re-insert the `YArray`). Returns the
+    /// encoded update. This is the setter `upsert_with_crdt` needs for a wholesale
+    /// tag edit (e.g. `kb_update` with a new tags list) to enter the CRDT and
+    /// broadcast a delta — B-18: previously only `set_title`/`set_body` were wired,
+    /// so tag changes after node creation never synced (peer apply was a no-op).
+    /// Mirrors `set_title`'s clear-then-insert so the change chains on the lineage.
+    pub fn set_tags(&mut self, tags: &[String]) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map("node");
+        let mut txn = self.doc.transact_mut();
+        if let Some(Out::YArray(arr)) = root.get(&txn, TAGS_KEY) {
+            let len = arr.len(&txn);
+            if len > 0 {
+                arr.remove_range(&mut txn, 0, len);
+            }
+            for tag in tags {
+                arr.push_back(&mut txn, tag.as_str());
+            }
+        }
+        txn.encode_update_v1()
+    }
+
     /// Get links.
     pub fn links(&self) -> Vec<String> {
         let root = self.doc.get_or_insert_map("node");
@@ -1053,6 +1074,27 @@ mod tests {
         assert_eq!(node.body(), "Some body text");
         assert_eq!(node.tags(), vec!["tag1", "tag2"]);
         assert!(node.links().is_empty());
+    }
+
+    #[test]
+    fn set_tags_replaces_and_syncs() {
+        // B-18: set_tags produces a real CRDT delta that converges a peer's tags.
+        let mut owner = KbNodeDoc::new("n1", "T", "b", &["a".to_string(), "b".to_string()]);
+        // Peer shares the lineage (loaded from the owner's encoded state).
+        let mut peer = KbNodeDoc::from_bytes(&owner.encode()).unwrap();
+        let sv = peer.state_vector();
+        assert_eq!(peer.tags(), vec!["a", "b"]);
+
+        // Owner replaces the tag set → diff → peer applies → converges.
+        owner.set_tags(&["a".to_string(), "c".to_string()]);
+        assert_eq!(owner.tags(), vec!["a", "c"]);
+        let diff = owner.encode_diff(&sv).unwrap();
+        peer.apply_update(&diff).unwrap();
+        assert_eq!(
+            peer.tags(),
+            vec!["a", "c"],
+            "peer must converge on the owner's set_tags delta"
+        );
     }
 
     #[test]
