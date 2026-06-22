@@ -618,6 +618,72 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        ToolDefinition {
+            name: "kb_add_member".into(),
+            description: "Add a peer to a shared KB's membership, or change their role (owner-only, ADR-018). The peer is identified by its collab identity fingerprint. Controls who may join and write.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB identifier (e.g. 'collabtest')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "member".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Peer's collab identity fingerprint, e.g. 'SHA256:9xLh0...'".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "role".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Role for the peer (default 'editor'): 'viewer' = read-only, 'editor' = read+write, 'owner' = full control.".into(),
+                            enum_values: Some(vec![
+                                "viewer".into(),
+                                "editor".into(),
+                                "owner".into(),
+                            ]),
+                        },
+                    ),
+                ]),
+                required: vec!["kb_id".into(), "member".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_remove_member".into(),
+            description: "Remove a peer from a shared KB's membership (owner-only, ADR-018). The peer can no longer join or write; their local copy is unaffected.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB identifier (e.g. 'collabtest')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "member".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Peer's collab identity fingerprint to remove".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["kb_id".into(), "member".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Graph KB tools (v0.12.0) ---
         ToolDefinition {
             name: "kb_agenda".into(),

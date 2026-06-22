@@ -16,6 +16,8 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "kb_share" => execute_kb_share(editor, &call.arguments),
         "kb_join" => execute_kb_join(editor, &call.arguments),
         "kb_leave" => execute_kb_leave(editor, &call.arguments),
+        "kb_add_member" => execute_kb_add_member(editor, &call.arguments),
+        "kb_remove_member" => execute_kb_remove_member(editor, &call.arguments),
         _ => return None,
     };
     Some(result)
@@ -250,6 +252,64 @@ fn execute_kb_leave(editor: &mut Editor, args: &Value) -> Result<String, String>
     .to_string())
 }
 
+fn execute_kb_add_member(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let kb_id = args
+        .get("kb_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'kb_id' parameter")?
+        .to_string();
+    let member = args
+        .get("member")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'member' parameter (peer fingerprint)")?
+        .to_string();
+    // Default matches the `:kb-member-add` command (role optional → editor).
+    let role = args
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("editor")
+        .to_string();
+    editor.collab.pending_intent = Some(CollabIntent::KbAddMember {
+        kb_id: kb_id.clone(),
+        member: member.clone(),
+        role: role.clone(),
+    });
+    editor.set_status(format!("Adding '{member}' to KB '{kb_id}' as {role}..."));
+    Ok(serde_json::json!({
+        "action": "kb_add_member",
+        "kb_id": kb_id,
+        "member": member,
+        "role": role,
+        "message": format!("Membership change queued: '{member}' → {role} on KB '{kb_id}' (owner-only; applied by the daemon)"),
+    })
+    .to_string())
+}
+
+fn execute_kb_remove_member(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let kb_id = args
+        .get("kb_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'kb_id' parameter")?
+        .to_string();
+    let member = args
+        .get("member")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'member' parameter (peer fingerprint)")?
+        .to_string();
+    editor.collab.pending_intent = Some(CollabIntent::KbRemoveMember {
+        kb_id: kb_id.clone(),
+        member: member.clone(),
+    });
+    editor.set_status(format!("Removing '{member}' from KB '{kb_id}'..."));
+    Ok(serde_json::json!({
+        "action": "kb_remove_member",
+        "kb_id": kb_id,
+        "member": member,
+        "message": format!("Membership removal queued: '{member}' from KB '{kb_id}' (owner-only; applied by the daemon)"),
+    })
+    .to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,6 +458,59 @@ mod tests {
         assert!(matches!(
             &editor.collab.pending_intent,
             Some(CollabIntent::LeaveKb { kb_id }) if kb_id == "work-notes"
+        ));
+    }
+
+    #[test]
+    fn kb_add_member_sets_intent_with_role() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "kb_add_member",
+            json!({"kb_id": "collabtest", "member": "SHA256:bob", "role": "viewer"}),
+        );
+        let parsed: Value =
+            serde_json::from_str(&dispatch(&mut editor, &call).unwrap().unwrap()).unwrap();
+        assert_eq!(parsed["role"], "viewer");
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::KbAddMember { kb_id, member, role })
+                if kb_id == "collabtest" && member == "SHA256:bob" && role == "viewer"
+        ));
+    }
+
+    #[test]
+    fn kb_add_member_defaults_role_to_editor() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "kb_add_member",
+            json!({"kb_id": "collabtest", "member": "SHA256:bob"}),
+        );
+        dispatch(&mut editor, &call).unwrap().unwrap();
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::KbAddMember { role, .. }) if role == "editor"
+        ));
+    }
+
+    #[test]
+    fn kb_add_member_requires_member() {
+        let mut editor = Editor::new();
+        let call = make_call("kb_add_member", json!({"kb_id": "collabtest"}));
+        assert!(dispatch(&mut editor, &call).unwrap().is_err());
+    }
+
+    #[test]
+    fn kb_remove_member_sets_intent() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "kb_remove_member",
+            json!({"kb_id": "collabtest", "member": "SHA256:bob"}),
+        );
+        dispatch(&mut editor, &call).unwrap().unwrap();
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::KbRemoveMember { kb_id, member })
+                if kb_id == "collabtest" && member == "SHA256:bob"
         ));
     }
 

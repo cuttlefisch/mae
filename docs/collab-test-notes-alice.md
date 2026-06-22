@@ -1106,6 +1106,8 @@ daemon: `kb/node_update` from a non-writer is rejected.)
 - **bob:** the per-step edits, disconnect/connect, and his Obs (`kb_get`, `introspect`).
 - **alice (MCP-driven):** owner-side edits + membership commands, daemon-log marks + Obs C
   (received/applied/rejected), the daemon restart (T6), records verdicts here.
-- **Note (alice MCP):** `:kb-member-add` takes args, which `execute_command` can't pass — drive it
-  via `eval_scheme` (the underlying member-add Scheme fn) or the editor command line. T4's forced
-  concurrency uses the disconnect-edit-reconnect pattern (same as T3's offline edits).
+- **Note (alice MCP):** T7 membership is now **MCP-drivable** via the `kb_add_member` /
+  `kb_remove_member` tools (added 2026-06-22 — `crates/ai/src/tools/kb_tools.rs` +
+  `executor/collab_exec.rs`), so alice drives it over MCP, no manual command-line entry. (Requires
+  alice's editor **rebuilt** to expose the new tools — do this before T7; T4–T6 don't need it.)
+  T4's forced concurrency uses the disconnect-edit-reconnect pattern (same as T3's offline edits).
