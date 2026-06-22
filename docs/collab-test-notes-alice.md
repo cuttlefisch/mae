@@ -1172,3 +1172,28 @@ kills. **Residual (follow-up, not a defect):** `synchronous=NORMAL` fsyncs only 
 **power loss / OS crash** could lose the last few un-checkpointed commits — the daemon-side analog of the
 `crdt_doc` flush-on-write item; closing it = `synchronous=FULL` (fsync-per-commit, perf cost). Can't be
 exercised live without cutting power; tracked.
+
+### ✅ T7 RESULT: PASS — roles/policy enforcement (ADR-018), driven over MCP
+First live use of the `kb_add_member`/`kb_remove_member` MCP tools (built this session — AI-as-peer
+membership). Steps:
+1. **alice (MCP):** `kb_add_member collabtest <bob-fp> viewer` → daemon `kb membership change … add=true
+   role="viewer"`. Bob demoted.
+2. **bob (viewer):** edit `alpha → [B-T7-DENIED]` → daemon `kb/node_update DENIED reason=role 'viewer'
+   may not Edit KB 'collabtest'` (no `applied` line); alice `kb_get alpha` **unchanged** (`[T6-CRASH]`).
+   Viewer write rejected at the access gate, never reached the WAL or broadcast. ✅
+3. **alice (MCP):** `kb_add_member collabtest <bob-fp> editor` → daemon `role="editor"`. Restored.
+4. **bob (editor):** edit `alpha → [B-T7-ALLOWED]` → daemon applies + broadcasts → alice `kb_get alpha =
+   [B-T7-ALLOWED]`. ✅
+**⇒ T7 PASS. THE FULL T1–T7 MATRIX IS GREEN.**
+
+#### ⚠️ B-19 (SECURITY/integrity, reasoned from code — verify live): viewer's rejected edits cascade later
+A rejected write applies to the member's **local** crdt_doc first (editor applies locally, then sends)
+and is **NOT reverted** on denial; `KbUpdateFailed` only drops the durable pending-queue row (no retry).
+So via the queue there's no cascade — BUT the edit stays in the local crdt_doc (local-ahead of the hub),
+and the **ADR-022 reconcile on the next rejoin-as-editor pushes it** → all accumulated viewer-era edits
+apply **retroactively + silently** once granted. Risks: deferred privilege-escalation (owner never sees
+the staged edits at grant time); viewer-side divergence ("read-only" edits stick locally). **Fix dir:**
+revert-on-reject (roll back the local CRDT op when the daemon denies) so viewer = truly read-only; +
+client-side role awareness (defense-in-depth); OR explicit held-for-approval (ADR-021) if deferred edits
+are wanted. Targeted test to add: viewer edits → denied → granted editor → reconnect → assert NO silent
+cascade. (Doesn't block T7 — daemon enforcement is correct; this is the client-honors-rejection gap.)
