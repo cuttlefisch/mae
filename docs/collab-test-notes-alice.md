@@ -985,3 +985,49 @@ else **leave strict N-peer to CI** (the in-process harness covers N∈{2,3,5}).
 - **bob:** §0 build + §1 steps 1–7 (offline edits, the `kill -9`, relaunch, Obs A/B/D).
 - **alice (this session, MCP-driven):** §0 daemon rebuild+restart + baseline; the step-1 daemon-log
   mark; Obs C (received + converged); optional carol observer; records the verdict here.
+
+### ✅ T3c-stress RESULT: PASS (alice + bob), 2 runs, on `a8650ea8` (ADR-022 build)
+
+**§0 baseline (new build, both machines):** bob's reconnect logged `kb/join: complete
+reconcile_mode=true diff_count=3` — the ADR-022 SV-reconcile join is **live cross-machine**
+(bob sent per-node SVs, daemon replied with diffs, not full snapshots). Bidirectional
+confirmed: alice `alpha→[BASE-1]` (wal 105) reached bob; bob `beta→[BASE-2]` (wal 106)
+reached alice.
+
+**The crash test — bob edits 3 nodes offline → `kill -9` → relaunch → reconnect:**
+
+| Run | relaunch | slugs | daemon applied | converged on alice | clobber (bob Obs D) |
+|-----|----------|-------|----------------|--------------------|----|
+| 1 | auto-connected | `[BOB-T3CS-1/2/3]` | wal 107/108/109 | ✅ all 3 | ✅ none (green) |
+| 2 | offline (auto-connect off) | `[BOB-T3CS2-1/2/3]` | wal 110/111/112 | ✅ all 3 | ✅ none (green) |
+
+- **(a) No durable loss — PASS:** every offline edit survived the `kill -9` and converged on
+  alice in both runs (alice `kb_get` = the latest `[BOB-T3CS*-n]` on all three nodes).
+- **(b) No clobber — PASS:** bob's post-reconnect `kb_get` showed no reverts ("all green");
+  `[BASE-*]` and the chained edits all intact. The reconcile join **merged** on top of the
+  drained edits rather than replacing — the exact contrast with the old adopt-clobber.
+- **(c) Mechanism — both runs hit the *queue-survived* branch.** The daemon-log **ordering**
+  is the tell: in both runs the 3 `kb/node_update`s applied **before** the `kb/join` line →
+  the reconnect drained the surviving pending rows first, *then* the `reconcile_mode=true`
+  join ran and merged. So the pending rows flushed to sled before the manual `kill -9` both
+  times (sub-~500 ms edit→kill is hard to hit by hand). **The lost-row branch (row gone →
+  reconcile re-derives from durable `crdt_doc`) was NOT triggered live** — it stays
+  deterministically covered in CI (`kb_sync_n_peer_e2e::lost_row_reconcile_converges`,
+  `reconcile_remote_node_lost_row*`, and the daemon `kb_join_with_svs_returns_reconcile_diff`
+  e2e). The live run confirms the integrated *crash → converge, no clobber* behavior + that
+  the new reconcile join doesn't disturb the drain-first happy path.
+- **(d) Bounded — PASS:** each edit applied exactly once (wal monotonic, no dup/stuck rows).
+
+**New diagnostic (reusable):** the daemon-log order distinguishes the two recovery paths —
+node_updates **before** `kb/join: complete` = pending-queue drain (row survived);
+**after** it = SV-reconcile local-ahead re-derive (row lost). No editor-side timing capture
+needed to tell which fired.
+
+**Follow-ups surfaced:**
+- To exercise the **reconcile-only (lost-row)** path *live* on demand, we'd need to clear
+  bob's durable `pending_updates` between crash and reconnect — but it shares the sled DB
+  with content and `kb_raw_query` is read-only. A small **dev/test affordance** (a gated
+  "clear pending queue" command, or a `MAE_KB_DISABLE_PENDING_QUEUE` env for a run) would let
+  a live run force the reconcile path. Low priority — CI already proves it deterministically.
+- `crdt_doc` **flush-on-write** (task #39 split): the only residual loss window is content
+  that never flushed before a hard crash; neither reconcile nor queue can recover that.
