@@ -682,3 +682,46 @@ owner. ▶ Likely fix: the owner must also converge its local doc to the shared/
 (adopt/rebuild on share or on receive), OR fix B-12 so re-share CRDT-merges (preserving one lineage)
 instead of resetting it — which would remove the divergence at the source. Bob-side is fully proven;
 this is owner-side. Holding for alice's debug.
+
+---
+
+## 2026-06-22 ~14:17 — ✅✅✅ BIDIRECTIONAL Stage-1 KB sync CONFIRMED on B-16 build (`4a33016`/`1652fcf`)
+
+bob rebuilt from `4a33016`. New `client_id` derivation confirmed live at startup:
+`KB CRDT client_id derived from collab identity client_id=13578609092317110898` (no longer the
+hardcoded `1`). B-12 clobber recurred (auto-rejoin pending → alice re-approved → bob `kb_join` →
+`KB join complete (merged)` 14:16:41). Adopt snapped bob's `collabtest:beta` back to alice's fresh
+canonical lineage (plain `Collab Test Beta`, bob's old `[BOB-LIVE-1]` replaced).
+
+### ✅ Step 2 (bob → alice) NOW PASSES — owner-side merge works (B-16 fixed)
+bob edited `collabtest:beta` → `[BOB-LIVE-2]`. bob outbound (full ADR-020 pipeline):
+```
+14:17:09 broadcast-gate decision  node_id=collabtest:beta  sync_mode=on_save  gate_hit=true
+14:17:09 drain: send kb/node_update (durable)  rowid=4  bytes=565
+14:17:09 bg: written to wire (awaiting apply-ack)  req_id=15
+14:17:09 kb/node_update: daemon confirmed applied  rowid=Some(4)
+```
+**alice confirmed: her local `collabtest:beta` updated to `[BOB-LIVE-2]` with `changed=true`.** The
+B-16 canonical persisted share-lineage means alice's local doc shares bob's lineage → owner-side merge
+is a real change, not a no-op. B-16 closed.
+
+### 🎯 BIDIRECTIONAL Stage-1 = GREEN
+- **Step 1 (alice → bob):** ✅ adopt-on-join + live `changed=true` (`[B14-CONVERGE-1]`).
+- **Step 2 (bob → alice):** ✅ emit→daemon→owner-apply `changed=true` (`[BOB-LIVE-2]`).
+
+Full pipeline proven both ways: gate → durable queue → wire → daemon apply (ack-on-confirm) →
+broadcast → peer subscribe → adopt/shared-lineage → CRDT merge `changed=true`. The B-8→B-16 chain
+(emit notification-vs-request, member subscribe, member adopt-lineage, emit-chain stale fields, owner
+persisted-lineage, hardcoded client_id) is resolved for the **sequential two-peer** case.
+
+### Remaining for Stage-1 sign-off
+1. **B-12** (membership durability) — alice's restart/re-share clobbers membership (bob → pending each
+   round) AND historically reset the collection lineage. alice is fixing now (re-share must
+   CRDT-merge, not delete+replace). Until then every round needs a manual re-approve + re-join.
+2. **Restart-survival** — restart bob → joined nodes reload (disk-first) + edits still flow both ways.
+3. **Offline-merge** — edit while disconnected → merges on rejoin, not overwritten.
+4. **Main-thread stall during join** (6s→10s watchdog every join) — still present; perf item.
+5. **client_id collision under *concurrent* edits** — fix makes ids unique; still untested under true
+   simultaneous two-peer edits (latent, per alice's production-fidelity note).
+
+▶ Holding for alice's B-12 fix, then resume with restart-survival + offline-merge + concurrent-edit.
