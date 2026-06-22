@@ -1072,6 +1072,24 @@ Both rebuilt expected. bob on `5736599`, connected + reconcile-joined. Re-ran th
 `bobtag-verify` (changed=true)? If yes to (b) but her own send still 1628/no-op → it's (2), her
 send path. If alice rebuilds and her `t5verify` then converges → it was (1).
 
+#### ✅ B-18 FIX VERIFIED (alice→bob) — it was hypothesis #1 (alice was on an old build)
+alice rebuilt to `97af88d`+ and relaunched, then added tag `t5verify2` to `overview`. bob:
+```
+19:57:26 received sync_update doc=kb:collabtest:overview wal_seq=6 update_b64_len=1700  → changed=true
+```
+**Payload 1700 > the dead 1628** (now carries the tag YArray delta) and **`changed=true`** (no longer
+a no-op). bob `kb_get overview` tags = `[collabtest, fixture, t5tag, t5clean, t5fixed, t5verify2]` —
+`t5verify2` landed **AND all of alice's pre-fix tag adds (`t5tag`/`t5clean`/`t5fixed`) reconciled in**
+once her send path was fixed (the accumulated YArray converged). ⇒ **B-18 RESOLVED in alice→bob.**
+Root confirmed = hypothesis #1: alice had been on the pre-fix build (her broadcasts were byte-identical
+1628); the fix itself (`KbNodeDoc::set_tags` + `upsert_with_crdt` wiring) is correct.
+▶ **bob→alice still to confirm:** alice should see bob's `bobtag-verify` on `beta` (changed=true) to
+close the reverse direction → then **T5 tags FULL PASS**.
+
+**Second live confirm:** alice then added `t5landing` to `overview` → bob converged again →
+tags `[collabtest, fixture, t5tag, t5clean, t5fixed, t5verify2, t5landing]`. Two consecutive fresh
+live tag adds converged ⇒ the fix is robust (not just a one-time reconcile-on-join).
+
 ---
 
 ⇒ **B-18 CONFIRMED.** **T5 verdict: title ✅ + body ✅ (YText) PASS; tags ❌ (YArray) FAIL.** Fix:
