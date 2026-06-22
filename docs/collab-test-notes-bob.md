@@ -1089,6 +1089,32 @@ close the reverse direction → then **T5 tags FULL PASS**.
 **Second live confirm:** alice then added `t5landing` to `overview` → bob converged again →
 tags `[collabtest, fixture, t5tag, t5clean, t5fixed, t5verify2, t5landing]`. Two consecutive fresh
 live tag adds converged ⇒ the fix is robust (not just a one-time reconcile-on-join).
+⇒ **T5 FULL PASS** (title ✅ body ✅ tags ✅, both directions).
+
+### ✅ T6 — daemon restart mid-session — bob side PASS (alice to confirm WAL recovery + receive)
+- **T6.1 (pre-restart sync):** alice `alpha → [T6-PRE]` → bob received `changed=true`, `kb_get alpha`
+  showed `[T6-PRE]`. Pre-restart bidirectional confirmed.
+- **T6.2 (bob offline during outage):** bob `:collab-disconnect` (`status: disconnected`) → edited
+  `beta → [B-T6-DURING]` → log `edit: persisted to durable pending queue (survives offline + restart)`.
+  Stayed offline while alice restarted the daemon.
+- **T6.3 (alice restarts daemon):** graceful `kill -TERM` → relaunch on `0.0.0.0:9480`. (alice confirm
+  daemon log: `recovering collab documents … complete count=4` + `preserving membership (B-12)`.)
+- **T6.4 (bob reconnect):** `:collab-connect` →
+  `collab connected → drain: send kb/node_update (durable) [beta] → daemon confirmed applied → ack
+  removed → joining KB (ADR-022 reconcile) → KB join complete (merged)`.
+
+**bob-side results:**
+- **(b) reconnect:** ✅ reconcile-join completed, **no pending / no re-approve** — B-12 membership held
+  across the daemon restart (eager WAL recovery on the daemon side).
+- **(d) during-outage edit converged:** ✅ bob's `beta → [B-T6-DURING]` drained up on reconnect →
+  daemon confirmed applied (alice to confirm `beta` shows `[B-T6-DURING]`).
+- **(c) no loss / content advanced:** ✅ `alpha` moved forward to alice's post-restart edit
+  `[T6-CRASH]` (received via the reconnect reconcile — not reverted to an older value); `beta` retained
+  its body `[B-T5-BODY]` + tag `bobtag-verify` throughout. No data lost across the hub restart.
+
+⇒ **T6 bob-side PASS.** Hub restarted → both re-synced → offline-during-outage edit survived +
+propagated → pre-restart content intact + advanced. **alice to confirm (a) WAL recovery count=4 and
+(d) `[B-T6-DURING]` on her `beta`** to close T6 fully. Then **T7** (roles/policy) is the last step.
 
 ---
 
