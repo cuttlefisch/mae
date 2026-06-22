@@ -1164,3 +1164,27 @@ represent tags (and any other meant-to-sync metadata) as a CRDT field in `KbNode
 `kb_apply_remote_update` apply-back, mirroring how body is handled. Until then tag edits are
 local-only. (Severity: medium — content/title/body sync is the core; tags are metadata, but org
 `#+filetags`/agenda/kanban views depend on them, so collab KB workflows that key on tags will diverge.)
+
+---
+
+## ▶ NEXT LIVE TEST FOR BOB — Step 8 / B-19 (epoch fence, ADR-023)
+
+New build required (min commit `fac00959`): daemon epoch fence + editor epoch
+rotation. **The full procedure is [Step 8 in collab-testing-plan.md](collab-testing-plan.md#step-8--b-19-viewer-era-edits-must-not-cascade-on-grant-adr-023-epoch-fence).**
+
+TL;DR of what to run on E (bob), with alice (D) as owner:
+1. alice shares KB `default`; alice adds **bob as viewer** (`:kb-member-add default <bob-fp> viewer`).
+2. bob `:kb-join default`, then **edits a node** to `VIEWER-ERA-HIJACK` → daemon **denies**
+   (viewer); alice must NOT see it.
+3. alice **promotes bob to editor** (`:kb-member-add default <bob-fp> editor`).
+4. bob makes one more edit / reconnects so the pre-grant op is pushed → daemon must log
+   **`REBASE REQUIRED`** and bob's status says **"… NOT synced — reconnect and re-apply"**;
+   **alice still has no `VIEWER-ERA-HIJACK`** (the no-cascade assertion).
+5. bob reconnects + **re-applies** the edit (`POST-GRANT-EDIT`) → accepted + converges.
+
+**Report here:** paste the daemon `REBASE REQUIRED` line + bob's status line (step 4),
+confirm alice never saw the viewer-era value, and confirm the fresh post-grant edit
+converged (step 5). Flag immediately if a pre-grant edit *ever* appears on alice.
+
+> ⚠️ Verify running binary == new build first (the B-18 deploy gotcha):
+> `sha256sum /proc/$(pgrep -n mae)/exe` vs `sha256sum ./target/release/mae`.

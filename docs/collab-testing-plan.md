@@ -252,6 +252,60 @@ Launch `mae`. With `accept-new`, it connects + auto-pins (no prompt). Verify the
 - [ ] **Changed host key:** on D, delete `~/.local/share/mae/collab/id_ed25519` and restart the daemon (new identity). On E, reconnect → editor **aborts** with a host-key-changed error (MITM defense). Restore by re-pinning (delete E's `known_hosts` entry).
 - [ ] **Confidentiality:** on D, `sudo tcpdump -A -i any port 9480` during a key-mode session → shows TLS records, **not** plaintext JSON-RPC. (Contrast: a `psk`-mode session is plaintext.)
 
+### Step 8 — B-19: viewer-era edits must NOT cascade on grant (ADR-023 epoch fence)
+
+> **What we're proving.** A member who edits a node while a **viewer** (denied at the
+> daemon) must NOT have those pre-grant edits silently cascade to everyone once they
+> are later promoted to **editor**. The daemon's **epoch fence** rejects the pre-grant
+> lineage (`rebase required`); only fresh, current-epoch edits are accepted. The client
+> is assumed hostile, so this is enforced **daemon-side** — see ADR-023.
+>
+> **Min build:** commit `fac00959` or later (daemon fence + editor rotation). This is a
+> NEW build for both machines.
+
+> [!IMPORTANT]
+> **Verify the running binary == the new build before testing** (the deploy gotcha that
+> burned us on B-18): `sha256sum ./target/release/mae` vs the binary the running PID
+> actually exec'd — `sha256sum /proc/$(pgrep -n mae)/exe` (Linux) or re-`install` then
+> relaunch. A stale `~/.local/bin/mae` will silently "fail" the fix.
+
+**Roles:** D = **alice** (owner), E = **bob** (the promoted member). `<bob-fp>` is bob's
+authorized key fingerprint (`mae-daemon identity` on E, or `:collab-status`).
+
+1. **alice (D):** share a KB and note a node id. `:kb-share` (KB `default`), then make
+   sure a node exists (e.g. create/select `concept:probe`). Confirm bob is connected.
+2. **alice (D):** add bob as a **viewer** — `:kb-member-add default <bob-fp> viewer`.
+   Daemon log: `kb membership change member=… add=true`.
+3. **bob (E):** `:kb-join default` → succeeds (read-only). Open the node and **edit it**
+   (change the title/body to something unmistakable, e.g. `VIEWER-ERA-HIJACK`).
+   - [ ] The edit shows in **bob's local** buffer, but the daemon **denies** the write —
+         daemon log `kb/node_update denied` (viewer, least privilege). bob's status shows
+         the rejection. The divergent edit now lives **only** in bob's local copy.
+   - [ ] **alice (D)** does **NOT** see `VIEWER-ERA-HIJACK` (it never reached the daemon).
+4. **alice (D):** promote bob to **editor** — `:kb-member-add default <bob-fp> editor`
+   (a role *change* ⇒ the daemon bumps bob's authorization epoch).
+5. **bob (E):** trigger a sync of the pre-grant edit — either make **one more edit** to
+   the same node, or reconnect (`:collab-disconnect` then `:collab-connect`) so the
+   ADR-022 reconcile pushes bob's local-ahead. Observe the fence fire:
+   - [ ] **Daemon log:** `kb/node_update: REBASE REQUIRED (stale-epoch op fenced — B-19)`
+         (with `stale_client` ≠ `current_client`). The pre-grant op is **rejected**.
+   - [ ] **bob's status line:** `your earlier edit to <node> … was NOT synced — reconnect
+         and re-apply it`.
+   - [ ] **THE no-cascade assertion — alice (D)'s node value still does NOT contain
+         `VIEWER-ERA-HIJACK`.** The viewer-era lineage did not launder through the grant.
+6. **bob (E):** reconnect / `:kb-join default` (relearns epoch = 1), then **re-apply** the
+   edit fresh (type it again, e.g. `POST-GRANT-EDIT`).
+   - [ ] This edit **is accepted** and **converges on alice** — a legitimately-granted
+         editor can edit going forward (authored under the current-epoch client_id).
+   - [ ] *(Known limitation, by design)* bob's original pre-grant edit is **not**
+         auto-recovered — he re-makes it. Graceful auto-adopt+re-author is a tracked
+         follow-up; the security guarantee (no cascade) holds regardless. Confirm the
+         honest status message appeared rather than a silent drop.
+
+> **Report (bob):** for step 5, paste the daemon `REBASE REQUIRED` log line + bob's
+> status line, and confirm step 5's no-cascade check on alice's side. For step 6, confirm
+> the fresh edit converged. Flag anything where a pre-grant edit *did* appear on alice.
+
 ---
 
 ## Results checklist
@@ -269,6 +323,10 @@ Launch `mae`. With `accept-new`, it connects + auto-pins (no prompt). Verify the
 | 7a | Unauthorized peer rejected | ☐ |
 | 7b | Changed host key aborts | ☐ |
 | 7c | Traffic is TLS-encrypted (tcpdump) | ☐ |
+| 8a | Viewer edit denied at daemon; never reaches alice | ☐ |
+| 8b | After promotion, pre-grant op **fenced** (`REBASE REQUIRED`) — no cascade | ☐ |
+| 8c | bob's honest "not synced — re-apply" status shows (no silent drop) | ☐ |
+| 8d | Fresh post-grant edit accepted + converges on alice | ☐ |
 
 ---
 
