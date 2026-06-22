@@ -915,3 +915,39 @@ the content write) so intent and content survive together.
 to shrink the edit→crash gap toward the sled flush window; repeat a few times to catch a partial
 flush. Even then MCP round-trip (~100s ms) limits how tight we get — a true unit test of the
 content-durable/intent-lost state is the more reliable proof (suggest alice add one).
+
+### ✅ T3c-stress — `kill -9` crash on ADR-022 build (`a8650ea`): PASS (clean pre-connect capture)
+ADR-022 (`reconcile_remote_node` + SV-reconcile on every (re)join) landed — exactly the
+reconcile-on-adopt fix recommended above. Live signal confirmed: bob's join now logs
+`joining KB (ADR-022 reconcile) node_sv_count=3` → `join: registered first-class instance
+(reconciled)`. Baseline bidirectional re-confirmed on the new build (alice→bob `alpha=[BASE-1]`
+changed=true; bob→alice `beta=[BASE-2]` daemon confirmed applied).
+
+**Methodology fix — auto-connect was masking Obs A/B.** Two earlier `kill -9` runs (slugs
+`[BOB-T3C-*]`, `[BOB-T3CS-*]`) both PASSED (all 3 survived + flushed + no clobber) but the editor
+**auto-reconnected ~0.25s after startup**, draining before we could snapshot the post-crash
+pre-connect state. Root cause: the user's `~/.config/mae/init.scm` `(set-option! "collab_auto_connect"
+"true")` runs at startup and **overrides** `MAE_COLLAB_AUTO_CONNECT=false` (env is a default; the
+init.scm set-option wins). Fix for the test: set it `"false"` in init.scm (env var alone can't win),
+relaunch → editor starts `collab_status: "off"`, giving a clean capture window. (Restored to `"true"`
+after.) ⇒ **observation for alice:** `MAE_COLLAB_AUTO_CONNECT` does not override an explicit init.scm
+`set-option!` — if env-overridability is desired, env should win over config for this flag (or document it).
+
+**Clean run** (slugs `[BOB-T3CS2-*]`): disconnect → offline-edit alpha/beta/overview (3× `persisted
+to durable pending queue`) → **`kill -9` (PID 92520)** → relaunch with auto-connect OFF.
+- **Obs A (content, pre-connect):** `kb_get` → `alpha=[BOB-T3CS2-1]`, `beta=[BOB-T3CS2-2]`,
+  `overview=[BOB-T3CS2-3]` — **all 3 content edits survived the crash on disk** (disk-first loader).
+- **Obs B (intent, pre-connect):** `introspect` (`collab_status:"off"`) → **`durable_pending_kb_updates:
+  3`** — all 3 sync-intent rows survived the `kill -9`.
+- **Step 5 connect:** drain rowids 16/17/18 → `daemon confirmed applied` ×3 → `ack … removed` ×3 →
+  `joining KB (ADR-022 reconcile) node_sv_count=3` → `KB join complete (reconciled/merged)`.
+  Drain (`.416`) ran **before** reconcile-join (`.505`).
+- **Obs C (reached alice):** all 3 daemon-confirmed-applied (alice to confirm local `changed=true`).
+- **Obs D (no clobber):** post-connect `kb_get` titles intact (`[BOB-T3CS2-3]` etc.) — no revert.
+
+**PASS criteria:** (a) no durable loss — every Obs-A edit reached the daemon ✅; (b) no clobber — Obs D
+no revert ✅; (c) recovery path — **queue-driven** this run (Obs B=3 survived → replayed); the
+reconcile-from-content branch (Obs B=0) is the lost-row case, proven deterministically in-process
+(`kb_sync_n_peer_e2e::lost_row_reconcile_converges`), not reproduced live (queue held) ✅ either way;
+(d) bounded — 3 rowids acked once each, `durable_pending → 0` ✅. **No edit lost in Obs A** (residual
+flush-window edge not hit — kills were not within the sub-~500ms sled window). ⇒ **T3c-stress PASS**.
