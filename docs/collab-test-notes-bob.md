@@ -658,3 +658,27 @@ live merge changed=true (B-14/B-15) ✅. **Step 1 (alice → bob) = PASS.**
 subscribed the owner to its own node docs). Then restart-survival + offline-merge to close Stage 1.
 Still-open: B-12 (re-share clobbers membership + resets collection lineage; needs CRDT-merge share,
 not delete+replace) and the main-thread stall during join.
+
+### Step 2 (bob → alice) — emit GREEN at bob+daemon, ❌ owner-side merge fails (NEW B-16, provisional)
+bob edited `collabtest:beta` → `[BOB-LIVE-1]` via MCP `kb_update`. bob log (outbound):
+```
+13:18:50 kb edit: broadcast-gate decision   node_id=collabtest:beta  sync_mode=on_save  gate_hit=true
+13:18:51 drain: send kb/node_update (durable)  rowid=3  bytes=558
+13:18:51 bg: kb/node_update written to wire (awaiting apply-ack)  req_id=21
+13:18:51 kb/node_update: daemon confirmed applied  rowid=Some(3)
+```
+So the **full ADR-020 emit pipeline works from a guest**: gate fires (even under `on_save`),
+durable queue→send→**daemon confirmed applied** (ack-on-confirm). **alice reports the change reached
+the daemon but did NOT change her local node** (alice debugging owner-side).
+
+**B-16 (provisional) — owner-side receive/merge no-op (mirror of B-14, not covered by the B-14 fix).**
+Hypothesis: B-14's adopt re-establishes shared lineage on the **join** path
+(`kb_register_joined_instance`, member side). The **owner's local doc** never adopts. This round
+alice's re-share reset the collection to a **fresh lineage** (wal_seq=2). bob joined *after* and
+adopted the daemon's current lineage → bob↔daemon share lineage (emit applies). But alice's LOCAL
+`collabtest:beta` may still be on her pre-re-share lineage, so the daemon's broadcast of bob's edit
+no-ops against alice's divergent local doc — the same `changed=false` failure mode as B-14 but on the
+owner. ▶ Likely fix: the owner must also converge its local doc to the shared/daemon lineage
+(adopt/rebuild on share or on receive), OR fix B-12 so re-share CRDT-merges (preserving one lineage)
+instead of resetting it — which would remove the divergence at the source. Bob-side is fully proven;
+this is owner-side. Holding for alice's debug.
