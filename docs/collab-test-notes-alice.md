@@ -1138,6 +1138,14 @@ alice `kb_get` == bob's recorded string (byte-for-byte).
     `upsert_with_crdt`. Tests: mae-sync `set_tags` round-trip + mae-kb production-fidelity
     tag-only-edit-converges regression. **Links/meta** share the latent send-side gap (not in the
     active `kb_update` path — links derive from body text) → follow-up.
-  - **LIVE RE-VERIFY pending:** needs BOTH editors rebuilt (shared/sync+shared/kb changed) — re-run
-    the clean tags add after the rebuild; expect bob to converge. (Daemon doesn't need it — it relays
-    the bytes; the editor's send path is where the fix lives.)
+  - **✅ LIVE RE-VERIFY: PASS (both directions).** Two consecutive fresh tag adds (`t5verify2`,
+    `t5landing`) on alice's fix build both converged on bob with **`changed=true`** — and the daemon
+    `update_len` grew with each tag (1219 no-op → 1273 → 1306), the fingerprint of the YArray ops now
+    in the CRDT. All of alice's *pre-fix* tag adds (`t5tag/t5clean/t5fixed`) reconciled in too once her
+    send path was fixed. Reverse direction confirmed: alice's `beta` shows bob's `bobtag-verify`. ⇒
+    **B-18 RESOLVED live. T5 FULL PASS** (title ✅ body ✅ multi-field ✅ tags ✅).
+  - **⚠️ DEPLOY GOTCHA (cost a debug cycle):** the first re-verify "failed" because alice's *running*
+    editor was the stale **installed** `~/.local/bin/mae` (17:05), not the freshly-built
+    `target/release/mae` (21:26) — `make build` doesn't install. Caught by hashing `/proc/<pid>/exe`
+    vs the build. **Lesson: verify the RUNNING binary == the build (hash) before re-testing a fix**, and
+    install (or launch `target/release/mae`) after `make build`.
