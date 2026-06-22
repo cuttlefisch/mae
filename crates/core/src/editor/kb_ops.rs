@@ -434,7 +434,7 @@ impl Editor {
     pub fn kb_register_joined_instance(
         &mut self,
         kb_id: &str,
-        node_states: Vec<(String, Vec<u8>)>,
+        nodes: Vec<crate::editor::JoinedNode>,
     ) -> String {
         // Reuse the existing instance for this collab id (idempotent re-join).
         let uuid = self
@@ -470,26 +470,53 @@ impl Editor {
             }
         }
 
-        // In-memory instance: get-or-create, then ADOPT each node's CRDT lineage
-        // from the owner's snapshot (ADR-020 B-14). A plain CRDT *merge*
-        // (apply_remote_update) of two independently-constructed same-id docs
-        // no-ops — divergent yrs lineage means the owner's title/body YText is
-        // discarded by the map's last-writer-wins, so the joiner never sees the
-        // shared content. Adoption rebuilds the node from the owner's encoded state
-        // so both peers share one lineage and the owner's later edits merge as real
-        // changes. (Mirrors the text-buffer adopt-on-join model.)
+        // In-memory instance: get-or-create, then RECONCILE each node (ADR-022).
+        // The daemon sends an incremental diff (against the SV we supplied) plus
+        // its own SV: we MERGE the diff (never replace), so a durable-but-unsynced
+        // local edit survives the (re)join, and we collect our local-ahead diff to
+        // re-sync back up — the crash-safety path that does NOT depend on the
+        // pending-queue row surviving. Two cases fall back to a full-state adopt:
+        // a brand-new node (first join — `reconcile` Created via apply), and a
+        // divergent independent same-id lineage (B-14): there the daemon's "diff"
+        // against our disjoint SV is its full lineage, so adopting it establishes
+        // the shared lineage without clobbering (the node was never in sync). A
+        // pre-ADR-022 daemon sends no SV → legacy full-state adopt.
+        let mut local_ahead: Vec<(String, Vec<u8>)> = Vec::new();
         let merged: Vec<mae_kb::Node> = {
             let kb = self.kb.instances.entry(uuid.clone()).or_default();
-            let mut out = Vec::with_capacity(node_states.len());
-            for (node_id, state) in &node_states {
-                match kb.adopt_remote_node(node_id, state) {
-                    Ok(_changed) => {
-                        if let Some(n) = kb.get(node_id) {
-                            out.push(n.clone());
+            let mut out = Vec::with_capacity(nodes.len());
+            for jn in &nodes {
+                let applied = match &jn.daemon_sv {
+                    Some(daemon_sv) => match kb.reconcile_remote_node(&jn.id, &jn.bytes, daemon_sv)
+                    {
+                        Ok(outcome) => {
+                            if outcome.action == mae_kb::ReconcileAction::DivergentLineage {
+                                // The diff against our disjoint SV IS the daemon's
+                                // full lineage — adopt to establish a shared lineage.
+                                if let Err(e) = kb.adopt_remote_node(&jn.id, &jn.bytes) {
+                                    tracing::warn!(target: "kb_sync", node_id = %jn.id, error = %e, "join: divergent-lineage adopt failed — skipping");
+                                }
+                            } else if let Some(la) = outcome.local_ahead {
+                                local_ahead.push((jn.id.clone(), la));
+                            }
+                            true
                         }
-                    }
-                    Err(e) => {
-                        tracing::warn!(node_id = %node_id, error = %e, "join: failed to adopt node — skipping");
+                        Err(e) => {
+                            tracing::warn!(target: "kb_sync", node_id = %jn.id, error = %e, "join: reconcile failed — skipping");
+                            false
+                        }
+                    },
+                    None => match kb.adopt_remote_node(&jn.id, &jn.bytes) {
+                        Ok(_changed) => true,
+                        Err(e) => {
+                            tracing::warn!(target: "kb_sync", node_id = %jn.id, error = %e, "join: legacy full-state adopt failed — skipping");
+                            false
+                        }
+                    },
+                };
+                if applied {
+                    if let Some(n) = kb.get(&jn.id) {
+                        out.push(n.clone());
                     }
                 }
             }
@@ -500,6 +527,31 @@ impl Editor {
             for node in &merged {
                 if let Err(e) = store.update_node(node) {
                     tracing::warn!(node_id = %node.id, error = %e, "joined-KB instance write-through failed");
+                }
+            }
+        }
+
+        // ADR-022 crash-safety: re-sync any local-ahead edits the daemon lacked.
+        // These were re-derived from the durable crdt_doc during reconcile, so they
+        // are recovered even if the original pending-queue row was lost in a crash.
+        // Route them through the same durable pending queue the live edit path uses
+        // (single emit source); the post-(re)connect drain ships them to the daemon.
+        if !local_ahead.is_empty() {
+            tracing::info!(
+                target: "kb_sync", kb_id = %kb_id, count = local_ahead.len(),
+                "ADR-022 join: re-syncing recovered local-ahead edit(s) (crash-safe, independent of pending queue)"
+            );
+            for (node_id, bytes) in &local_ahead {
+                if let Some(ref store) = self.kb.store {
+                    if let Err(e) = store.push_pending_update(kb_id, node_id, bytes) {
+                        tracing::warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, error = %e, "join: failed to re-queue local-ahead update");
+                    }
+                } else {
+                    self.collab.pending_kb_updates.push((
+                        kb_id.to_string(),
+                        node_id.clone(),
+                        bytes.clone(),
+                    ));
                 }
             }
         }
@@ -537,7 +589,7 @@ impl Editor {
             }
         }
         self.kb.rebuild_query_layer();
-        tracing::debug!(target: "kb_sync", kb_id = %kb_id, uuid = %uuid, node_count = node_states.len(), merged = merged.len(), "join: registered first-class instance (merged)");
+        tracing::debug!(target: "kb_sync", kb_id = %kb_id, uuid = %uuid, node_count = nodes.len(), merged = merged.len(), "join: registered first-class instance (reconciled)");
         uuid
     }
 
@@ -574,6 +626,31 @@ impl Editor {
     /// skipped**: re-joining one's own primary produces a spurious pending
     /// request (and re-uploading thousands of nodes is wrong) — that was the
     /// "Collab Status pops up on launch" regression.
+    /// Gather this editor's per-node state vectors for a shared KB (ADR-022),
+    /// sent on (re)join so the daemon replies with incremental diffs and we
+    /// reconcile (merge, no clobber) rather than adopt a full snapshot. Empty if
+    /// we hold no local instance for `kb_id` (first-ever join → full state). This
+    /// is the durable-content side of crash-safety: the SVs are derived from the
+    /// persisted `crdt_doc`s, independent of any pending-queue row.
+    pub fn kb_join_node_svs(&self, kb_id: &str) -> Vec<(String, Vec<u8>)> {
+        let Some(inst) = self.kb.registry.find_by_collab_id(kb_id) else {
+            return Vec::new();
+        };
+        let Some(kb) = self.kb.instances.get(&inst.uuid) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (id, node) in kb.iter() {
+            match node.to_crdt_doc() {
+                Ok(doc) => out.push((id.clone(), doc.state_vector())),
+                Err(e) => {
+                    tracing::warn!(node_id = %id, error = %e, "kb_join_node_svs: skipping node with no CRDT doc")
+                }
+            }
+        }
+        out
+    }
+
     pub fn kb_resubscribe_intents(&self) -> Vec<crate::editor::CollabIntent> {
         use crate::editor::CollabIntent;
         let mut out = Vec::new();
@@ -585,7 +662,8 @@ impl Editor {
                 continue;
             };
             if inst.org_dir.as_os_str().is_empty() {
-                out.push(CollabIntent::JoinKb { kb_id });
+                let node_svs = self.kb_join_node_svs(&kb_id);
+                out.push(CollabIntent::JoinKb { kb_id, node_svs });
             } else {
                 out.push(CollabIntent::ShareKb {
                     kb_name: inst.name.clone(),
@@ -3303,8 +3381,16 @@ mod tests {
             )
             .unwrap();
 
-        let uuid = editor
-            .kb_register_joined_instance("ct", vec![("ct:overview".to_string(), state.clone())]);
+        let sv = remote.node_state_vector("ct:overview").unwrap();
+        let join_node = |bytes: Vec<u8>| {
+            vec![crate::editor::JoinedNode {
+                id: "ct:overview".to_string(),
+                bytes,
+                daemon_sv: Some(sv.clone()),
+            }]
+        };
+
+        let uuid = editor.kb_register_joined_instance("ct", join_node(state.clone()));
         assert!(
             editor.kb.instances[&uuid].get("ct:overview").is_some(),
             "first join creates the node in its instance"
@@ -3312,10 +3398,9 @@ mod tests {
         // Joined node lives in the instance, never primary.
         assert!(editor.kb.primary.get("ct:overview").is_none());
 
-        // Re-join with the same state — apply_remote_update MERGES (idempotent),
+        // Re-join with the same state — reconcile MERGES (idempotent),
         // does not crash, reuses the instance, keeps the node, no duplicate.
-        let uuid2 =
-            editor.kb_register_joined_instance("ct", vec![("ct:overview".to_string(), state)]);
+        let uuid2 = editor.kb_register_joined_instance("ct", join_node(state));
         assert_eq!(uuid2, uuid, "re-join reuses the same instance");
         assert!(editor.kb.instances[&uuid].get("ct:overview").is_some());
         assert_eq!(
@@ -3348,8 +3433,15 @@ mod tests {
                 2,
             )
             .unwrap();
-        let uuid =
-            editor.kb_register_joined_instance("ct", vec![("ct:overview".to_string(), state)]);
+        let sv = remote.node_state_vector("ct:overview").unwrap();
+        let uuid = editor.kb_register_joined_instance(
+            "ct",
+            vec![crate::editor::JoinedNode {
+                id: "ct:overview".to_string(),
+                bytes: state,
+                daemon_sv: Some(sv),
+            }],
+        );
 
         let db_path = {
             let inst = editor.kb.registry.find_by_uuid(&uuid).unwrap();
@@ -3496,7 +3588,7 @@ mod tests {
         assert!(
             intents
                 .iter()
-                .any(|i| matches!(i, CollabIntent::JoinKb { kb_id } if kb_id == "joined-kb")),
+                .any(|i| matches!(i, CollabIntent::JoinKb { kb_id, .. } if kb_id == "joined-kb")),
             "guest (empty org_dir) must re-JOIN"
         );
         assert!(
@@ -3508,7 +3600,7 @@ mod tests {
         assert!(
             !intents
                 .iter()
-                .any(|i| matches!(i, CollabIntent::JoinKb { kb_id } if kb_id == "default")),
+                .any(|i| matches!(i, CollabIntent::JoinKb { kb_id, .. } if kb_id == "default")),
             "primary KB must NOT be re-subscribed (the launch-popup bug)"
         );
     }

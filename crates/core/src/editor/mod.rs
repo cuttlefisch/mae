@@ -130,8 +130,15 @@ pub enum CollabIntent {
         kb_name: String,
         node_ids: Vec<String>,
     },
-    /// Join a shared KB from the server.
-    JoinKb { kb_id: String },
+    /// Join a shared KB from the server. `node_svs` carries this editor's
+    /// per-node state vectors (ADR-022) so the daemon can reply with an
+    /// incremental diff per node and the member reconciles instead of adopting a
+    /// full snapshot (crash-safe re-join). Empty on a first-ever join with no
+    /// local nodes — the daemon then sends full state.
+    JoinKb {
+        kb_id: String,
+        node_svs: Vec<(String, Vec<u8>)>,
+    },
     /// Leave (unsubscribe from) a shared KB.
     LeaveKb { kb_id: String },
     /// Add a peer (by principal/fingerprint) to a KB with a role (owner-only, ADR-018).
@@ -335,6 +342,21 @@ impl Default for CollabState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// A node delivered by the daemon on `kb/join` (ADR-022 reconcile).
+#[derive(Debug, Clone)]
+pub struct JoinedNode {
+    /// Bare KB node id.
+    pub id: String,
+    /// Bytes to merge into the local node: an incremental **diff** (reconcile
+    /// mode — the daemon sent only the ops we lacked) or the full **state**
+    /// (first time we've seen the node, or a pre-ADR-022 daemon).
+    pub bytes: Vec<u8>,
+    /// The daemon's state vector for this node. `Some` → reconcile (compute our
+    /// local-ahead diff against it and push back); `None` → a pre-ADR-022 daemon
+    /// that sent no SV, so fall back to a legacy full-state adopt.
+    pub daemon_sv: Option<Vec<u8>>,
 }
 
 /// Derive a stable, unique yrs `client_id` for KB CRDT edits from this peer's

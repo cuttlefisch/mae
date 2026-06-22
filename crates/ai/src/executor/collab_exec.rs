@@ -218,8 +218,10 @@ fn execute_kb_join(editor: &mut Editor, args: &Value) -> Result<String, String> 
         .and_then(|v| v.as_str())
         .ok_or("Missing required 'kb_id' parameter")?
         .to_string();
+    let node_svs = editor.kb_join_node_svs(&kb_id);
     editor.collab.pending_intent = Some(CollabIntent::JoinKb {
         kb_id: kb_id.clone(),
+        node_svs,
     });
     editor.set_status(format!("Joining shared KB '{}'...", kb_id));
     Ok(serde_json::json!({
@@ -374,7 +376,7 @@ mod tests {
         assert_eq!(parsed["kb_id"], "work-notes");
         assert!(matches!(
             &editor.collab.pending_intent,
-            Some(CollabIntent::JoinKb { kb_id }) if kb_id == "work-notes"
+            Some(CollabIntent::JoinKb { kb_id, .. }) if kb_id == "work-notes"
         ));
     }
 

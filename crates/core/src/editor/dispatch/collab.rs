@@ -92,8 +92,10 @@ impl Editor {
                     .kb
                     .active_instance_name()
                     .unwrap_or_else(|| "default".to_string());
+                let node_svs = self.kb_join_node_svs(&kb_id);
                 self.collab.pending_intent = Some(CollabIntent::JoinKb {
                     kb_id: kb_id.clone(),
+                    node_svs,
                 });
                 self.set_status(format!("Joining KB '{}'...", kb_id));
                 self.mark_full_redraw();

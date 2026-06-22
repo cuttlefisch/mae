@@ -1135,7 +1135,7 @@ fn kb_join_with_id_targets_that_kb() {
     assert!(
         matches!(
             &editor.collab.pending_intent,
-            Some(CollabIntent::JoinKb { kb_id }) if kb_id == "collabtest"
+            Some(CollabIntent::JoinKb { kb_id, .. }) if kb_id == "collabtest"
         ),
         "expected JoinKb for 'collabtest', got {:?}",
         editor.collab.pending_intent

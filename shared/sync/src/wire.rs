@@ -72,12 +72,28 @@ pub fn kb_share_request(
 }
 
 /// Build a `kb/join` JSON-RPC **request** (member joins a shared KB, pulling state).
-pub fn kb_join_request(id: u64, kb_id: &str) -> Value {
+///
+/// ADR-022: `node_svs` carries the member's per-node state vectors as
+/// `(node_id, sv_b64)` pairs so the daemon can reply with an SV **diff** (only
+/// the ops the member lacks) per node and the member can reconcile instead of
+/// blindly adopting a full snapshot — the crash-safe (re)join path. When empty,
+/// the `node_svs` key is omitted entirely, producing the exact pre-ADR-022 shape
+/// so an older daemon (or a first-ever join with no local nodes) still gets full
+/// state. The pairs use the canonical `{ "id", "sv" }` keys.
+pub fn kb_join_request(id: u64, kb_id: &str, node_svs: &[(String, String)]) -> Value {
+    let mut params = json!({ "kb_id": kb_id });
+    if !node_svs.is_empty() {
+        let svs: Vec<Value> = node_svs
+            .iter()
+            .map(|(node_id, sv_b64)| json!({ "id": node_id, "sv": sv_b64 }))
+            .collect();
+        params["node_svs"] = Value::Array(svs);
+    }
     json!({
         "jsonrpc": "2.0",
         "id": id,
         "method": "kb/join",
-        "params": { "kb_id": kb_id }
+        "params": params,
     })
 }
 
@@ -116,7 +132,7 @@ mod tests {
                 "AAEC",
                 &[("k:n".into(), "AAEC".into())],
             ),
-            kb_join_request(3, "k"),
+            kb_join_request(3, "k", &[]),
         ];
         for req in requests {
             let method = req["method"].as_str().unwrap_or("<none>").to_string();
@@ -129,5 +145,24 @@ mod tests {
                 "method '{method}' must be JSON-RPC 2.0"
             );
         }
+    }
+
+    /// ADR-022: `kb/join` omits `node_svs` when empty (exact pre-ADR-022 shape,
+    /// backward-compatible) and emits the canonical `{id, sv}` objects otherwise.
+    #[test]
+    fn kb_join_request_node_svs_shape() {
+        let empty = kb_join_request(1, "k", &[]);
+        assert!(
+            empty["params"].get("node_svs").is_none(),
+            "empty node_svs must be omitted (backward-compat): {empty}"
+        );
+
+        let with = kb_join_request(2, "k", &[("k:n1".into(), "AAEC".into())]);
+        let svs = with["params"]["node_svs"]
+            .as_array()
+            .expect("node_svs must be an array");
+        assert_eq!(svs.len(), 1);
+        assert_eq!(svs[0]["id"], "k:n1");
+        assert_eq!(svs[0]["sv"], "AAEC");
     }
 }

@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-use mae_core::{CollabIntent, CollabStatus, Editor};
+use mae_core::{CollabIntent, CollabStatus, Editor, JoinedNode};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
@@ -138,9 +138,12 @@ pub enum CollabCommand {
         collection_state: Vec<u8>,
         node_states: Vec<(String, Vec<u8>)>,
     },
-    /// Join a shared KB from the server.
+    /// Join a shared KB from the server. `node_svs` carries the member's per-node
+    /// state vectors (ADR-022) so the daemon replies with incremental diffs and
+    /// the member reconciles instead of adopting full snapshots.
     JoinKb {
         kb_id: String,
+        node_svs: Vec<(String, Vec<u8>)>,
     },
     /// Leave a shared KB.
     LeaveKb {
@@ -287,7 +290,8 @@ pub enum CollabEvent {
     KbJoined {
         kb_id: String,
         collection_state: Vec<u8>,
-        node_states: Vec<(String, Vec<u8>)>,
+        /// ADR-022: per-node reconcile payloads (diff-or-state + the daemon's SV).
+        nodes: Vec<JoinedNode>,
     },
     /// Left a shared KB.
     KbLeft {
@@ -563,7 +567,7 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
                 }
             }
         }
-        CollabIntent::JoinKb { kb_id } => CollabCommand::JoinKb { kb_id },
+        CollabIntent::JoinKb { kb_id, node_svs } => CollabCommand::JoinKb { kb_id, node_svs },
         CollabIntent::LeaveKb { kb_id } => CollabCommand::LeaveKb { kb_id },
         CollabIntent::KbAddMember {
             kb_id,
@@ -860,7 +864,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             let mut resubscribed = 0;
             for intent in editor.kb_resubscribe_intents() {
                 let key = match &intent {
-                    CollabIntent::JoinKb { kb_id } => kb_id.clone(),
+                    CollabIntent::JoinKb { kb_id, .. } => kb_id.clone(),
                     CollabIntent::ShareKb { kb_name, .. } => kb_name.clone(),
                     _ => continue,
                 };
@@ -1452,19 +1456,19 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
         CollabEvent::KbJoined {
             kb_id,
             collection_state,
-            node_states,
+            nodes,
         } => {
-            let node_count = node_states.len();
-            info!(kb = %kb_id, node_count, collection_bytes = collection_state.len(), "KB joined — merging into local store");
+            let node_count = nodes.len();
+            info!(kb = %kb_id, node_count, collection_bytes = collection_state.len(), "KB joined — reconciling into local store");
 
-            // ADR-019 + ADR-020: register the joined KB as a FIRST-CLASS federated
-            // instance (durable markers, addressable, in kb_instances) and MERGE the
-            // raw node CRDT states (apply_remote_update) rather than overwrite — so a
-            // member's offline/local edits survive a re-join. Per-node decode/merge
-            // errors are tolerated (skipped + warned) inside the helper.
-            let joined_node_ids: HashSet<String> =
-                node_states.iter().map(|(id, _)| id.clone()).collect();
-            editor.kb_register_joined_instance(&kb_id, node_states);
+            // ADR-019 + ADR-020 + ADR-022: register the joined KB as a FIRST-CLASS
+            // federated instance (durable markers, addressable, in kb_instances) and
+            // RECONCILE each node's CRDT state (state-vector diff + local-ahead push)
+            // rather than overwrite — so a member's offline/local edits survive a
+            // (re)join even if their pending-queue row was lost in a crash. Per-node
+            // decode/reconcile errors are tolerated (skipped + warned) inside the helper.
+            let joined_node_ids: HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
+            editor.kb_register_joined_instance(&kb_id, nodes);
             // Keep the transient index in sync as a cache.
             editor
                 .collab
@@ -2411,12 +2415,18 @@ async fn run_collab_task(
                                 }
                             }
                         }
-                        CollabCommand::JoinKb { kb_id } => {
-                            info!(kb = %kb_id, "joining KB");
+                        CollabCommand::JoinKb { kb_id, node_svs } => {
+                            info!(kb = %kb_id, node_sv_count = node_svs.len(), "joining KB (ADR-022 reconcile)");
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
                                 next_request_id += 1;
-                                let req = mae_sync::wire::kb_join_request(req_id, &kb_id);
+                                let svs_b64: Vec<(String, String)> = node_svs
+                                    .iter()
+                                    .map(|(id, sv)| {
+                                        (id.clone(), mae_sync::encoding::update_to_base64(sv))
+                                    })
+                                    .collect();
+                                let req = mae_sync::wire::kb_join_request(req_id, &kb_id, &svs_b64);
                                 let body = match serde_json::to_vec(&req) {
                                     Ok(b) => b,
                                     Err(e) => { error!("kb join serialize error: {e}"); continue; }
@@ -3336,17 +3346,32 @@ fn handle_response(
                     .and_then(|v| v.as_str())
                     .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())
                     .unwrap_or_default();
-                let node_states: Vec<(String, Vec<u8>)> = result
+                // ADR-022: each node carries the daemon's SV plus either an
+                // incremental `diff` (we sent an SV → reconcile) or a full `state`
+                // (first join / pre-ADR-022 daemon). `daemon_sv` is None only for an
+                // old daemon that omits `sv` → the member falls back to adopt.
+                let nodes: Vec<JoinedNode> = result
                     .and_then(|r| r.get("nodes"))
                     .and_then(|v| v.as_array())
                     .map(|arr| {
                         arr.iter()
                             .filter_map(|n| {
                                 let id = n.get("id")?.as_str()?.to_string();
-                                let state =
-                                    mae_sync::encoding::base64_to_update(n.get("state")?.as_str()?)
-                                        .ok()?;
-                                Some((id, state))
+                                // Prefer the incremental diff; fall back to full state.
+                                let bytes = n
+                                    .get("diff")
+                                    .and_then(|v| v.as_str())
+                                    .or_else(|| n.get("state").and_then(|v| v.as_str()))
+                                    .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())?;
+                                let daemon_sv = n
+                                    .get("sv")
+                                    .and_then(|v| v.as_str())
+                                    .and_then(|s| mae_sync::encoding::base64_to_update(s).ok());
+                                Some(JoinedNode {
+                                    id,
+                                    bytes,
+                                    daemon_sv,
+                                })
                             })
                             .collect()
                     })
@@ -3361,8 +3386,8 @@ fn handle_response(
                 if !shared_docs.contains(&coll_doc) {
                     shared_docs.push(coll_doc);
                 }
-                for (id, _) in &node_states {
-                    let node_doc = format!("kb:{id}");
+                for n in &nodes {
+                    let node_doc = format!("kb:{}", n.id);
                     if !shared_docs.contains(&node_doc) {
                         shared_docs.push(node_doc);
                     }
@@ -3372,7 +3397,7 @@ fn handle_response(
                     CollabEvent::KbJoined {
                         kb_id,
                         collection_state,
-                        node_states,
+                        nodes,
                     },
                 );
             }
@@ -3645,7 +3670,7 @@ async fn handle_disconnected_cmd(
                 },
             );
         }
-        CollabCommand::JoinKb { kb_id } => {
+        CollabCommand::JoinKb { kb_id, .. } => {
             try_send_evt(
                 evt_tx,
                 CollabEvent::Error {
@@ -5824,16 +5849,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         editor.data_dir_override = Some(tmp.clone());
 
-        // Create a CRDT node state for the join event.
+        // Create a CRDT node state + SV for the join event (ADR-022 reconcile).
         let doc = mae_sync::kb::KbNodeDoc::new("join-node-1", "Joined Title", "joined body", &[]);
         let state = doc.encode_state();
+        let sv = doc.state_vector();
 
         handle_collab_event(
             &mut editor,
             CollabEvent::KbJoined {
                 kb_id: "remote-kb".to_string(),
                 collection_state: vec![],
-                node_states: vec![("join-node-1".to_string(), state)],
+                nodes: vec![JoinedNode {
+                    id: "join-node-1".to_string(),
+                    bytes: state,
+                    daemon_sv: Some(sv),
+                }],
             },
         );
 

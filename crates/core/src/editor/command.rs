@@ -1138,8 +1138,10 @@ impl Editor {
                 // No-arg falls through to dispatch (active instance / picker).
                 if command == "kb-join" {
                     if let Some(kb_id) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                        let node_svs = self.kb_join_node_svs(kb_id);
                         self.collab.pending_intent = Some(super::CollabIntent::JoinKb {
                             kb_id: kb_id.to_string(),
+                            node_svs,
                         });
                         self.set_status(format!("Joining KB '{}'...", kb_id));
                         return true;

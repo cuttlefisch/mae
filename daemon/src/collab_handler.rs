@@ -1503,22 +1503,62 @@ async fn handle_doc_request_inner(
                 }
             };
 
+            // ADR-022: parse the member's per-node state vectors (optional). When
+            // present, reply with an incremental DIFF per node so the member can
+            // reconcile (merge, no clobber) instead of adopting a full snapshot.
+            // Absent (old editor, or a first-ever join) → full state, as before.
+            let member_svs: std::collections::HashMap<String, Vec<u8>> = params["node_svs"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|e| {
+                            let id = e["id"].as_str()?;
+                            let sv = base64_to_update(e["sv"].as_str()?).ok()?;
+                            Some((id.to_string(), sv))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let reconcile_mode = !member_svs.is_empty();
+
             // Fetch only the nodes listed in the collection (not all kb: docs).
             let mut nodes = Vec::new();
+            let mut diff_count = 0usize;
             for node_id in &node_ids {
                 let doc_name = format!("kb:{node_id}");
-                match doc_store.encode_state_and_sv(&doc_name).await {
-                    Ok((state, _sv)) => {
+                // Member sent an SV for this node → send only the ops it lacks.
+                let encoded = match member_svs.get(node_id) {
+                    Some(member_sv) => doc_store
+                        .encode_diff_and_sv(&doc_name, member_sv)
+                        .await
+                        .map(|(diff, sv)| (Some(diff), None, sv)),
+                    None => doc_store
+                        .encode_state_and_sv(&doc_name)
+                        .await
+                        .map(|(state, sv)| (None, Some(state), sv)),
+                };
+                match encoded {
+                    Ok((diff, state, sv)) => {
                         session_docs.insert(doc_name.clone());
                         let _ = doc_store.track_client_connect(&doc_name).await;
                         broadcaster
                             .lock()
                             .unwrap()
                             .subscribe_doc(session_id, &doc_name);
-                        nodes.push(serde_json::json!({
-                            "id": node_id,
-                            "state": update_to_base64(&state),
-                        }));
+                        // Always carry the daemon's SV so the member can compute its
+                        // local-ahead diff; carry `diff` (incremental) or `state`
+                        // (full) depending on whether the member sent an SV.
+                        let mut obj = serde_json::Map::new();
+                        obj.insert("id".into(), serde_json::json!(node_id));
+                        obj.insert("sv".into(), serde_json::json!(update_to_base64(&sv)));
+                        if let Some(diff) = diff {
+                            diff_count += 1;
+                            obj.insert("diff".into(), serde_json::json!(update_to_base64(&diff)));
+                        }
+                        if let Some(state) = state {
+                            obj.insert("state".into(), serde_json::json!(update_to_base64(&state)));
+                        }
+                        nodes.push(serde_json::Value::Object(obj));
                     }
                     Err(e) => {
                         warn!(session = session_id, doc = %doc_name, error = %e, "kb/join: failed to read node doc");
@@ -1526,7 +1566,11 @@ async fn handle_doc_request_inner(
                 }
             }
 
-            info!(session = session_id, kb_id = %kb_id, node_count = nodes.len(), "kb/join: complete");
+            info!(
+                session = session_id, kb_id = %kb_id, node_count = nodes.len(),
+                reconcile_mode, diff_count,
+                "kb/join: complete"
+            );
             JsonRpcResponse::success(
                 id,
                 serde_json::json!({

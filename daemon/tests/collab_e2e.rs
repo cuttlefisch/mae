@@ -268,8 +268,20 @@ impl Client {
     }
 
     /// Member joins a shared KB (subscribes to its node docs, pulls their state).
+    /// No `node_svs` → the daemon replies with full per-node state (the
+    /// pre-ADR-022 / first-join path; backward-compat).
     async fn kb_join(&mut self, kb_id: &str) -> serde_json::Value {
-        let msg = mae_sync::wire::kb_join_request(self.next_id, kb_id);
+        self.kb_join_with_svs(kb_id, &[]).await
+    }
+
+    /// ADR-022 reconcile join: send per-node state vectors so the daemon replies
+    /// with an incremental `diff` (+ its `sv`) per known node.
+    async fn kb_join_with_svs(
+        &mut self,
+        kb_id: &str,
+        node_svs: &[(String, String)],
+    ) -> serde_json::Value {
+        let msg = mae_sync::wire::kb_join_request(self.next_id, kb_id, node_svs);
         self.next_id += 1;
         self.send(&msg).await;
         self.recv().await
@@ -2299,5 +2311,99 @@ async fn kb_node_update_applies_and_broadcasts_to_peer() {
         bob_node.title(),
         "Edited [PROBE-RECV]",
         "bob's node must reflect alice's edit after applying the broadcast"
+    );
+}
+
+/// ADR-022: a `kb/join` carrying the member's per-node state vectors must get an
+/// incremental **diff** (+ the daemon's `sv`) per known node — the crash-safe
+/// reconcile path — while a plain join (no svs) still gets full **state**
+/// (backward-compat). Exercises the REAL daemon handler, not the editor model.
+#[tokio::test]
+async fn kb_join_with_svs_returns_reconcile_diff_else_full_state() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut bob = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut carol = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Alice shares a 1-node KB (v1).
+    let mut node = mae_sync::kb::KbNodeDoc::new("rk:n1", "V1", "body", &[]);
+    let node_state_v1 = node.encode_state();
+    let mut coll = mae_sync::kb::KbCollectionDoc::new("rk", "alice");
+    coll.add_node("rk:n1", "V1");
+    let share_resp = alice
+        .kb_share(
+            "rk",
+            &update_to_base64(&coll.encode_state()),
+            &[("rk:n1".to_string(), update_to_base64(&node_state_v1))],
+        )
+        .await;
+    assert!(
+        share_resp.get("error").is_none(),
+        "share failed: {share_resp}"
+    );
+
+    // Bob's local copy is v1; its state vector describes v1.
+    let bob_doc_v1 = mae_sync::kb::KbNodeDoc::from_bytes(&node_state_v1).unwrap();
+    let bob_sv_v1 = bob_doc_v1.state_vector();
+
+    // Alice advances the daemon to v2.
+    let update = node.set_title("V2 [reconcile]");
+    let upd_resp = alice.kb_node_update("rk", "rk:n1", &update).await;
+    assert_eq!(upd_resp["result"]["applied"], serde_json::json!(true));
+
+    // Bob joins WITH its v1 SV → daemon must return an incremental diff + sv.
+    let join = bob
+        .kb_join_with_svs("rk", &[("rk:n1".to_string(), update_to_base64(&bob_sv_v1))])
+        .await;
+    assert!(join.get("error").is_none(), "reconcile join failed: {join}");
+    let bnode = &join["result"]["nodes"][0];
+    assert_eq!(bnode["id"], serde_json::json!("rk:n1"));
+    assert!(
+        bnode.get("diff").and_then(|v| v.as_str()).is_some(),
+        "reconcile join must return an incremental `diff`: {join}"
+    );
+    assert!(
+        bnode.get("sv").and_then(|v| v.as_str()).is_some(),
+        "reconcile join must return the daemon's `sv`: {join}"
+    );
+    assert!(
+        bnode.get("state").is_none(),
+        "reconcile join sends `diff`, not full `state`: {join}"
+    );
+    // Bob applies the diff to its v1 copy → converges to v2.
+    let mut bob_doc = mae_sync::kb::KbNodeDoc::from_bytes(&node_state_v1).unwrap();
+    let diff = base64_to_update(bnode["diff"].as_str().unwrap()).unwrap();
+    bob_doc.apply_update(&diff).unwrap();
+    assert_eq!(
+        bob_doc.title(),
+        "V2 [reconcile]",
+        "bob converges via the diff"
+    );
+
+    // Carol joins WITHOUT svs (first-ever join) → full state, no diff (backward-compat).
+    let cjoin = carol.kb_join("rk").await;
+    assert!(cjoin.get("error").is_none(), "plain join failed: {cjoin}");
+    let cnode = &cjoin["result"]["nodes"][0];
+    assert!(
+        cnode.get("state").and_then(|v| v.as_str()).is_some(),
+        "plain join must return full `state`: {cjoin}"
+    );
+    assert!(
+        cnode.get("diff").is_none(),
+        "plain join must NOT return a `diff`: {cjoin}"
+    );
+    // The daemon now also carries `sv` on the full-state path (member can reconcile next time).
+    assert!(cnode.get("sv").and_then(|v| v.as_str()).is_some());
+    let carol_doc = mae_sync::kb::KbNodeDoc::from_bytes(
+        &base64_to_update(cnode["state"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        carol_doc.title(),
+        "V2 [reconcile]",
+        "carol gets the current v2 state"
     );
 }
