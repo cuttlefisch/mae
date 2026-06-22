@@ -2314,6 +2314,109 @@ async fn kb_node_update_applies_and_broadcasts_to_peer() {
     );
 }
 
+/// T5 / B-18 regression at the production-protocol layer: a node's TAGS (a yrs
+/// `YArray` — the field that silently did NOT sync before the B-18 fix) must
+/// round-trip through a REAL `kb/node_update` + broadcast exactly like title/body.
+#[tokio::test]
+async fn kb_node_tags_round_trip_through_daemon() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut bob = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    let mut node = mae_sync::kb::KbNodeDoc::new("tagkb:n1", "Title", "body", &[]);
+    let node_state = node.encode_state();
+    let mut coll = mae_sync::kb::KbCollectionDoc::new("tagkb", "alice");
+    coll.add_node("tagkb:n1", "Title");
+    alice
+        .kb_share(
+            "tagkb",
+            &update_to_base64(&coll.encode_state()),
+            &[("tagkb:n1".to_string(), update_to_base64(&node_state))],
+        )
+        .await;
+    bob.kb_join("tagkb").await;
+
+    // Alice sets the node's tags (the B-18 field) and syncs the delta.
+    let tags = vec!["rust".to_string(), "crdt".to_string()];
+    let update = node.set_tags(&tags);
+    let resp = alice.kb_node_update("tagkb", "tagkb:n1", &update).await;
+    assert_eq!(
+        resp["result"]["applied"],
+        serde_json::json!(true),
+        "tags update must be applied: {resp}"
+    );
+
+    // Bob receives the broadcast and applies it → his node carries the tags.
+    let notif = bob
+        .wait_for_notification("notifications/sync_update", 1000)
+        .await
+        .expect("bob must receive the tags broadcast");
+    let remote = base64_to_update(
+        notif["params"]["event"]["data"]["update_base64"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut bob_node = mae_sync::kb::KbNodeDoc::from_bytes(&node_state).unwrap();
+    bob_node.apply_update(&remote).unwrap();
+    assert_eq!(
+        bob_node.tags(),
+        tags,
+        "node tags (YArray) must CRDT-sync through the daemon — B-18 regression"
+    );
+}
+
+/// T6 at the KB layer: a `kb/node_update` applied before a daemon restart must be
+/// recovered from the WAL (snapshot + replay), so a peer connecting to the
+/// restarted daemon sees the edit — the durability contract validated live in T6.
+#[tokio::test]
+async fn kb_node_update_survives_daemon_restart() {
+    init_tracing();
+    let backend: Arc<dyn mae_daemon::storage::StorageBackend> =
+        Arc::new(SqliteBackend::open_memory().unwrap());
+    let store = Arc::new(DocStore::new(Arc::clone(&backend), 500));
+    let bc = test_broadcaster();
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    let mut node = mae_sync::kb::KbNodeDoc::new("durkb:n1", "Before", "body", &[]);
+    let node_state = node.encode_state();
+    let mut coll = mae_sync::kb::KbCollectionDoc::new("durkb", "alice");
+    coll.add_node("durkb:n1", "Before");
+    alice
+        .kb_share(
+            "durkb",
+            &update_to_base64(&coll.encode_state()),
+            &[("durkb:n1".to_string(), update_to_base64(&node_state))],
+        )
+        .await;
+
+    let update = node.set_title("After [B-T6]");
+    let resp = alice.kb_node_update("durkb", "durkb:n1", &update).await;
+    assert_eq!(
+        resp["result"]["applied"],
+        serde_json::json!(true),
+        "edit must be applied (and WAL-persisted) before restart: {resp}"
+    );
+
+    // "Restart" the daemon: drop the store + client, recreate from the same backend.
+    drop(alice);
+    drop(store);
+    let store2 = Arc::new(DocStore::new(backend, 500));
+    let bc2 = test_broadcaster();
+    let mut bob = Client::connect(Arc::clone(&store2), Arc::clone(&bc2)).await;
+
+    let recovered = bob.full_state("kb:durkb:n1").await;
+    let node2 = mae_sync::kb::KbNodeDoc::from_bytes(&recovered).unwrap();
+    assert_eq!(
+        node2.title(),
+        "After [B-T6]",
+        "kb/node_update must survive a daemon restart via WAL recovery"
+    );
+}
+
 /// ADR-022: a `kb/join` carrying the member's per-node state vectors must get an
 /// incremental **diff** (+ the daemon's `sv`) per known node — the crash-safe
 /// reconcile path — while a plain join (no svs) still gets full **state**
