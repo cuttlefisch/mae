@@ -951,3 +951,34 @@ reconcile-from-content branch (Obs B=0) is the lost-row case, proven determinist
 (`kb_sync_n_peer_e2e::lost_row_reconcile_converges`), not reproduced live (queue held) ✅ either way;
 (d) bounded — 3 rowids acked once each, `durable_pending → 0` ✅. **No edit lost in Obs A** (residual
 flush-window edge not hit — kills were not within the sub-~500ms sled window). ⇒ **T3c-stress PASS**.
+
+### T4 — concurrent same-node convergence (the per-peer client_id / B-16 guard, live) — bob side
+On build `7cf979b` (full parity w/ alice; incl. alice's `91a5201` env-override fix + the new
+`kb_add_member`/`kb_remove_member` tools). NB: `MAE_COLLAB_AUTO_CONNECT=false` is exported in bob's
+shell, and (post-`91a5201`) the **env override now wins over init.scm** — bob starts offline
+(`env MAE_COLLAB_AUTO_CONNECT override applied auto_connect=false`); I drive `:collab-connect` via MCP.
+That fix resolves the bob-reported auto-connect/init.scm precedence issue. ✅
+
+**Procedure:** both `:collab-disconnect` → concurrent same-node edits → both `:collab-connect`.
+- bob (offline): `alpha` title → `[B-T4]`; alice (offline): `alpha` title → `[A-T4]`.
+- bob reconnect: pushed `[B-T4]` (drain → daemon confirmed applied) + `joining KB (ADR-022 reconcile)
+  node_sv_count=3` → the join SV-diff merged alice's concurrent `[A-T4]` (came in via the reconcile
+  diff, not a separate `received sync_update`).
+
+**bob's converged `alpha` title (EXACT string — alice verify byte-for-byte):**
+```
+Collab Test Alpha [B-T4]Collab Test Alpha [A-T4]
+```
+(That is: `Collab Test Alpha [B-T4]` immediately followed by `Collab Test Alpha [A-T4]`, no space
+between `]` and `C`, single line.)
+
+**Analysis:** two concurrent *full-title replacements* on a YText merge so that BOTH inserts survive
+(each peer's delete only covered the chars present in its own base; the other's concurrently-inserted
+chars aren't deleted) → deterministic concatenation ordered by **per-peer client_id**. No edit lost,
+no split-brain. The old hardcoded `client_id=1` would have made the two peers' merges diverge — this
+is the live B-16 guard.
+
+**PASS criterion:** alice's `kb_get alpha` title must equal the string above **byte-for-byte** (same
+slugs, same order, same spacing). Match → **T4 PASS** (concurrent convergence, deterministic, no
+split-brain). Mismatch (reversed order / one slug only / a space inserted) → divergence to flag.
+▶ **ALICE: confirm your exact `alpha` title here.**
