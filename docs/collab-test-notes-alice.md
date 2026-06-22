@@ -820,6 +820,27 @@ Also live-validates the new observability (`durable_pending_kb_updates` ≥ 1 wh
 > the reliable durable-count capture is step 2 (offline). The crux (a) holds regardless: the edit made
 > before the quit must arrive at alice after the relaunch, proving the queue survived the restart.
 
+### ✅ T3b RESULT: PASS (alice + bob, on `6a1a5604`).
+The crux holds: bob edited `beta → [BOB-T3B-OFFLINE]` **while offline**, **quit + relaunched the
+editor**, reconnected → the durable pending row **survived the process restart** and flushed:
+daemon `session=8 kb/node_update received → applied wal_seq=92`; alice `recv: applied … changed=true`,
+`kb_get beta = [BOB-T3B-OFFLINE]`. Single flush (d); bob confirms the observability fix
+(`durable_pending_kb_updates ≥ 1` while offline). ⇒ offline edits are durable across a graceful
+editor restart.
+
+### ▶ NEXT: T3c — non-graceful CRASH durability (the harder, important case)
+T3b proves a **graceful** quit/relaunch. The open risk (user-flagged, task #38): a **hard crash**
+(`kill -9` / power loss) with many unsynced edits. Two layers:
+1. **Sled flush window:** the durable queue (sled backend) flushes ~every 500ms + on graceful drop;
+   a hard crash can lose the most-recent pending rows.
+2. **Deeper — reconnect-adopt clobber:** node *content* (crdt_doc) is persisted separately, so a
+   user's edits are mostly durable locally even if the sync intent is lost. BUT the B-14 adopt-on-join
+   REPLACES bob's local node with the daemon snapshot — so a local edit whose sync intent was lost in
+   the crash would be **clobbered by the older daemon state** on rejoin → silent loss at the sync layer.
+   Fix direction: on reconnect, reconcile local-ahead content UP (state-vector diff / re-emit the delta)
+   instead of blindly adopting. Test T3c: several offline edits → `kill -9` → relaunch → assert content
+   intact + still propagates + rejoin does not clobber local-newer edits.
+
 ### Known-open (not blocking the matrix)
 - B-12 idle-eviction edge: a collection evicted while everyone's offline, then re-shared, could still
   recreate (narrow) — closed properly by the ADR-021 durable audit record (tracked).
