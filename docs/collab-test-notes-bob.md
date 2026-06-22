@@ -754,3 +754,29 @@ Bidirectional re-verified post-restart:
 
 ### Remaining matrix (driving next): T2 restart-survival (bob), T3 offline-merge, T4 concurrent
 same-node, T5 body/multi-field, T6 daemon-restart survival, T7 roles/policy (viewer reject).
+
+### ✅ T2 — restart-survival (bob editor restart): PASS (pending alice's daemon-log confirm of the reverse edit)
+Pre-restart baseline (bob): `overview [ALICE-ADR019-PROP]`, `alpha [ALICE-T2-CHECK]`,
+`beta [BOB-T1-POSTRESTART]`; `kb_instances: collabtest 3 nodes dir=`.
+
+bob editor restarted. Startup log (no manual intervention — disk-load + AUTO rejoin):
+```
+14:40:19 KB instance loaded from CozoDB  name=collabtest  nodes=3  shared=true   ← disk-first reload (B-10)
+14:40:20 collab connected  peers=1
+14:40:20 joining KB collabtest                                                   ← AUTO rejoin (reconnect re-subscribe, not a manual kb_join)
+14:40:20 join: registered first-class instance (merged)  merged=3
+14:40:20 KB join complete (merged)  node_count=3                                 ← no pending (B-12 holds on bob restart)
+```
+- **(1) Disk-first durability:** 3 nodes reloaded from the dir-less CozoDB store BEFORE connecting.
+- **(2) Titles survived:** post-restart `kb_get` → `beta [BOB-T1-POSTRESTART]`, `alpha [ALICE-T2-CHECK]`
+  (match baseline).
+- **(3) Auto-rejoin, no pending:** the editor's own reconnect path issued the join; completed merged.
+  NB: the auto-rejoin/adopt overlaps the disk reload, so this run validates durability+rejoin together;
+  the *pure* offline-durability case is isolated in T3 (edit while `:collab-disconnect`).
+- **(4) bob → alice post-restart edit:** `beta` → `[BOB-T2-POSTRESTART]`:
+  `14:41:36 gate_hit=true → drain send (durable) rowid=6 → bg written to wire (req_id=14) →
+  kb/node_update: daemon confirmed applied rowid=Some(6)`.
+  ▶ **ALICE: verify in daemon log** — expect `kb/node_update received` + `applied wal_seq=…` for
+  `collabtest:beta` (the `[BOB-T2-POSTRESTART]` edit, req mapping rowid=6), and confirm your local
+  `beta` shows the slug `changed=true`. Then send `alice → bob` (`alpha → [ALICE-T2-POSTRESTART]`) so
+  bob confirms receive-after-restart.
