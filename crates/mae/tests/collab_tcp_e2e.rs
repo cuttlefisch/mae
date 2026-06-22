@@ -134,22 +134,21 @@ impl TcpClient {
         collection_state: &[u8],
         nodes: &[(&str, &[u8])],
     ) -> serde_json::Value {
-        let node_arr: Vec<serde_json::Value> = nodes
+        // Build via the SHARED wire builder, not a hand-rolled literal — so this
+        // e2e exercises the exact serialization production emits (ADR-020 B-8: the
+        // bug hid precisely because a hand-rolled test sent a different shape).
+        let nodes_b64: Vec<(String, String)> = nodes
             .iter()
-            .map(|(id, state)| serde_json::json!({ "id": id, "state": update_to_base64(state) }))
+            .map(|(id, state)| (id.to_string(), update_to_base64(state)))
             .collect();
-        let msg = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": self.next_id,
-            "method": "kb/share",
-            "params": {
-                "kb_id": kb_id,
-                "name": name,
-                "creator": creator,
-                "collection_state": update_to_base64(collection_state),
-                "nodes": node_arr,
-            }
-        });
+        let msg = mae_sync::wire::kb_share_request(
+            self.next_id,
+            kb_id,
+            name,
+            creator,
+            &update_to_base64(collection_state),
+            &nodes_b64,
+        );
         self.next_id += 1;
         self.send(&msg).await;
         let resp = self.recv().await;
@@ -159,12 +158,7 @@ impl TcpClient {
 
     /// Join a KB. Returns the response with collection_state and nodes.
     async fn kb_join(&mut self, kb_id: &str) -> serde_json::Value {
-        let msg = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": self.next_id,
-            "method": "kb/join",
-            "params": { "kb_id": kb_id }
-        });
+        let msg = mae_sync::wire::kb_join_request(self.next_id, kb_id, &[]);
         self.next_id += 1;
         self.send(&msg).await;
         self.recv().await
@@ -177,16 +171,12 @@ impl TcpClient {
         node_id: &str,
         update: &[u8],
     ) -> serde_json::Value {
-        let msg = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": self.next_id,
-            "method": "kb/node_update",
-            "params": {
-                "kb_id": kb_id,
-                "node_id": node_id,
-                "update": update_to_base64(update),
-            }
-        });
+        let msg = mae_sync::wire::kb_node_update_request(
+            self.next_id,
+            kb_id,
+            node_id,
+            &update_to_base64(update),
+        );
         self.next_id += 1;
         self.send(&msg).await;
         self.recv().await
