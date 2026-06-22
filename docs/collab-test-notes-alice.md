@@ -1031,3 +1031,81 @@ needed to tell which fired.
   a live run force the reconcile path. Low priority — CI already proves it deterministically.
 - `crdt_doc` **flush-on-write** (task #39 split): the only residual loss window is content
   that never flushed before a hard crash; neither reconcile nor queue can recover that.
+
+---
+
+## T4–T7 — live matrix: READY-TO-RUN (PASS/FAIL)
+
+Continues the matrix after T3c-stress PASS. **No rebuild needed** — both machines are on the
+ADR-022 build (`a8650ea8`+) from the T3c run; daemon up on `0.0.0.0:9480`, log
+`/tmp/mae-daemon-live.log`. KB = `collabtest` (nodes `alpha`/`beta`/`overview`), bob =
+`192.168.1.129`, fp `SHA256:9xLh0DWeeAi3hl2W7yudaE05aTHtYQpNUUyMWO+2CrI`; alice owner, fp
+`SHA256:+jBinAwoF1KCDqCw3TWb3T3L4xytAVKHofvTnLSn69k`.
+
+**§0 baseline (fast):** both connected (`:collab-connect`), bob joined (`:kb-join collabtest`
+→ daemon `reconcile_mode=true`). alice edits `alpha→[BASE]`, bob sees it; bob edits `beta→[BASE]`,
+alice sees it. alice marks a fresh daemon-log line before each T-step.
+
+### T4 — concurrent same-node convergence (the B-16 guard, live)
+**Goal:** two peers edit the SAME node concurrently → both converge to **one identical value**
+(distinct per-peer `client_id`; the old hardcoded `client_id=1` would diverge).
+1. **both:** `:collab-disconnect` (forces the edits to be genuinely concurrent — neither sees the
+   other before reconnect).
+2. **alice:** `alpha` title → `[A-T4]`. **bob:** `alpha` title → `[B-T4]`. (Same node, different
+   values, while both offline.)
+3. **both:** `:collab-connect` (order irrelevant). Each reconnect SV-reconciles + pushes local-ahead.
+4. **PASS:** after convergence, `kb_get alpha` title is **identical on alice and bob** (a
+   deterministic CRDT merge of the two — e.g. interleaved/one-wins-by-id; the *value* isn't
+   predicted, but it **must match** on both). No split-brain. Daemon log shows both `kb/node_update`
+   for `alpha` applied; each peer ends on the same materialized title.
+   - **FAIL signal:** alice shows `[A-T4]`, bob shows `[B-T4]` (or any divergence) → lineage/client_id
+     regression.
+
+### T5 — body + multi-field edits
+**Goal:** edits beyond the title (body uses a separate `YText`; tags a `YArray`) sync both ways,
+including a single edit touching multiple fields.
+1. **alice:** edit `alpha` **body** — append a sentinel line `[A-T5-BODY]`. → bob `kb_get alpha`
+   body contains `[A-T5-BODY]` (daemon `changed=true`).
+2. **bob:** edit `beta` **body** + **title** in one save (`title=[B-T5]`, body append `[B-T5-BODY]`).
+   → alice `kb_get beta` shows both the new title AND the body sentinel.
+3. **alice:** edit `overview` **tags** (add `t5tag`). → bob `kb_get overview` tags include `t5tag`.
+4. **PASS:** all three converge on the receiving peer — body, multi-field (title+body atomically),
+   and tags. No field "sticks" (the B-15 class — an edit that doesn't enter the CRDT).
+
+### T6 — daemon restart mid-session
+**Goal:** restart the hub while peers are connected → eager-recovery from WAL + auto-reconnect →
+sync resumes, pre-restart state intact, an edit made during the outage flushes on reconnect.
+1. **both:** confirm connected + synced (a quick `alpha→[T6-PRE]` from alice lands on bob).
+2. **bob (during what will be the outage):** `:collab-disconnect`, edit `beta→[B-T6-DURING]`
+   (durable, queued), stay offline.
+3. **alice:** restart the daemon (graceful `kill -TERM` → relaunch the ADR-022 `mae-daemon`,
+   same `0.0.0.0:9480`). Daemon log: `recovering collab documents … complete count=4` +
+   `preserving membership (B-12)`.
+4. **alice editor:** auto-reconnects (backoff) → daemon `peer=alice` + `kb/share`. **bob:**
+   `:collab-connect` → `reconcile_mode=true`; his `[B-T6-DURING]` drains up.
+5. **PASS:** (a) daemon recovered all 4 docs from WAL; (b) both peers reconnect; (c) pre-restart
+   content intact on both (`[T6-PRE]` not reverted); (d) bob's during-outage `beta→[B-T6-DURING]`
+   converges on alice after reconnect — no loss across the hub restart.
+
+### T7 — roles / policy enforcement (ADR-018)
+**Goal:** a viewer cannot write; restoring editor re-enables writes. (Membership is enforced at the
+daemon: `kb/node_update` from a non-writer is rejected.)
+1. **alice (owner):** `:kb-member-add collabtest SHA256:9xLh0DWeeAi3hl2W7yudaE05aTHtYQpNUUyMWO+2CrI viewer`
+   → daemon logs the membership update; broadcast.
+2. **bob:** edit `alpha title → [B-T7-DENIED]`. → daemon log: `kb/node_update … rejected`/access
+   denied for bob (viewer); **alice does NOT receive it** (`kb_get alpha` unchanged). bob may see a
+   permission error / the edit stays local-only.
+3. **alice:** restore — `:kb-member-add collabtest SHA256:9xLh0DWeeAi3hl2W7yudaE05aTHtYQpNUUyMWO+2CrI editor`.
+4. **bob:** edit `alpha title → [B-T7-ALLOWED]`. → now daemon **applies** + broadcasts; **alice
+   receives** `[B-T7-ALLOWED]`.
+5. **PASS:** the viewer write is rejected at the daemon (not reaching alice); after role restore the
+   write propagates. Membership change is owner-only (a bob-issued `:kb-member-add` must be rejected —
+   optional sub-check).
+
+### Roles & driving
+- **bob:** the per-step edits, disconnect/connect, and his Obs (`kb_get`, `introspect`).
+- **alice (MCP-driven):** owner-side edits + membership commands, daemon-log marks + Obs C
+  (received/applied/rejected), the daemon restart (T6), records verdicts here.
+- **Note (alice MCP):** `:kb-member-add` takes args, which `execute_command` can't pass — drive it
+  via `eval_scheme` (the underlying member-add Scheme fn) or the editor command line. T4's forced
+  concurrency uses the disconnect-edit-reconnect pattern (same as T3's offline edits).
