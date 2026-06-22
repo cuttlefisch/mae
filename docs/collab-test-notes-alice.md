@@ -828,18 +828,63 @@ daemon `session=8 kb/node_update received → applied wal_seq=92`; alice `recv: 
 (`durable_pending_kb_updates ≥ 1` while offline). ⇒ offline edits are durable across a graceful
 editor restart.
 
-### ▶ NEXT: T3c — non-graceful CRASH durability (the harder, important case)
-T3b proves a **graceful** quit/relaunch. The open risk (user-flagged, task #38): a **hard crash**
-(`kill -9` / power loss) with many unsynced edits. Two layers:
-1. **Sled flush window:** the durable queue (sled backend) flushes ~every 500ms + on graceful drop;
-   a hard crash can lose the most-recent pending rows.
-2. **Deeper — reconnect-adopt clobber:** node *content* (crdt_doc) is persisted separately, so a
-   user's edits are mostly durable locally even if the sync intent is lost. BUT the B-14 adopt-on-join
-   REPLACES bob's local node with the daemon snapshot — so a local edit whose sync intent was lost in
-   the crash would be **clobbered by the older daemon state** on rejoin → silent loss at the sync layer.
-   Fix direction: on reconnect, reconcile local-ahead content UP (state-vector diff / re-emit the delta)
-   instead of blindly adopting. Test T3c: several offline edits → `kill -9` → relaunch → assert content
-   intact + still propagates + rejoin does not clobber local-newer edits.
+## T3c — non-graceful CRASH (`kill -9`): CHARACTERIZATION procedure (observe, don't pass/fail)
+
+**Goal:** gather DATA (not a pass/fail) on what a hard crash does to unsynced edits, so we can design
+the fix from real observations on both sides. Three questions: (1) **content durability** — do bob's
+offline edits survive in his local KB after `kill -9`? (2) **sync-intent durability** — do the durable
+`pending_updates` rows survive? (3) **reconnect-adopt clobber** — for an edit whose content survived
+but whose sync-intent was lost, does the rejoin **overwrite** it with the daemon's older snapshot?
+
+**Why it matters (task #38):** node *content* (crdt_doc) is persisted separately from the pending-sync
+queue; the B-14 adopt-on-join *replaces* the local node with the daemon snapshot. So a durable-but-
+unsynced local edit could be silently clobbered on rejoin = lost work.
+
+**Prereq:** both editors on `6a1a5604`+ (durable-pending observability). alice tails the daemon log +
+marks a fresh baseline at step 5. **Probe slugs:** `[BOB-T3C-1]` (alpha), `[BOB-T3C-2]` (beta),
+`[BOB-T3C-3]` (overview) — three nodes so we see per-node behavior; do the last one+kill back-to-back
+to probe the sled flush window.
+
+### Steps (ordered)
+0. **Pre-check (both):** connected + synced; `kb_get` alpha/beta/overview match on both; bob
+   `introspect.collaboration` → `pending_kb_updates: 0`, `durable_pending_kb_updates: 0`.
+1. **bob:** `:collab-disconnect` → offline.
+2. **bob (offline):** edit, in quick succession — `alpha → [BOB-T3C-1]`, `beta → [BOB-T3C-2]`,
+   `overview → [BOB-T3C-3]`. Then **record**: bob `introspect` → `durable_pending_kb_updates` (expect
+   ≈ 3); bob `kb_get` each → confirm the three slugs locally. Daemon log: NO kb/node_update (offline).
+3. **bob:** **`kill -9`** the editor *immediately* after the last edit — `kill -9 $(pgrep -f 'bin/mae$')`
+   (NOT a graceful quit; no flush-on-drop).
+4. **bob:** relaunch the editor. **Before reconnect flushes** (best-effort), record:
+   - **Obs A — content durability:** `kb_get` alpha/beta/overview → which of `[BOB-T3C-1/2/3]` survived
+     locally (vs reverted to the pre-edit title)?
+   - **Obs B — sync-intent durability:** `introspect` → `durable_pending_kb_updates` = ? (how many
+     pending rows survived the crash). startup log: `KB instance loaded from CozoDB nodes=3`.
+5. **bob:** reconnect → re-join + drain. **alice marks a fresh daemon baseline here.**
+   - **Obs C — re-sync (alice):** daemon log — which `[BOB-T3C-*]` edits `received → applied`? alice
+     `kb_get` each → which converged on alice.
+   - **Obs D — clobber (bob):** AFTER reconnect, bob `kb_get` each again → did any node that showed a
+     `[BOB-T3C-*]` slug in **Obs A** now **revert** to an older value (clobbered by the rejoin adopt)?
+6. **Record the matrix from BOTH sides** (no pass/fail — this is the design input):
+
+   | Node | offline edit | Obs A: post-crash local (bob) | Obs B: pending survived? | Obs C: reached alice? | Obs D: post-reconnect local (bob) | clobbered? |
+   |------|-------------|-------------------------------|--------------------------|-----------------------|-----------------------------------|------------|
+   | alpha | `[BOB-T3C-1]` | ? | (part of B count) | ? | ? | ? |
+   | beta | `[BOB-T3C-2]` | ? | | ? | ? | ? |
+   | overview | `[BOB-T3C-3]` | ? | | ? | ? | ? |
+
+### Roles
+- **bob:** steps 1–5 + Obs A, B, D (local kb_get + introspect, pre- and post-reconnect).
+- **alice (this session):** fresh daemon baseline at step 5; Obs C (which edits reach the daemon +
+  alice's final converged state). Cross-check bob's Obs A/D against what the daemon received.
+
+### What the data tells us (fix design, AFTER observations)
+- If **Obs A = all survived** and **Obs D = none clobbered** and **Obs C = all reached alice** → the
+  current path is already crash-robust (sled flushed in time + drain recovered); document the window.
+- If **Obs A survived but Obs C missing + Obs D reverted** → confirms the **adopt-clobber**: fix =
+  adopt-on-join must reconcile local-ahead content up (state-vector diff / `reconcile_to`) before/instead
+  of replacing, and/or the drain must re-derive the sync delta from local-vs-daemon on reconnect.
+- If **Obs A itself lost edits** → the sled flush window dropped content; fix = flush-on-write / fsync
+  for the node-content + pending writes (durability tuning), independent of the adopt path.
 
 ### Known-open (not blocking the matrix)
 - B-12 idle-eviction edge: a collection evicted while everyone's offline, then re-shared, could still
