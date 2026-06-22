@@ -1293,13 +1293,30 @@ async fn handle_doc_request_inner(
                 None => collection_bytes,
             };
             let collection_doc = format!("kbc:{kb_id}");
-            if let Err(e) = doc_store
-                .share_doc(&collection_doc, &collection_bytes)
-                .await
-            {
-                return JsonRpcResponse::error(
-                    id,
-                    McpError::internal_error(format!("failed to share collection doc: {e}")),
+            // ADR-020 B-12: an owner reconnect/re-share must NOT clobber the daemon's
+            // authoritative collection. It holds the durable membership — approved
+            // members, roles, pending requests (set via kb/approve_member /
+            // kb/add_member) — that the owner's LOCAL collection copy does not carry,
+            // plus the collection's CRDT lineage. `share_doc` is destructive
+            // (delete+replace), so re-sharing the owner-only copy silently revoked
+            // every trusted member. PRESERVE an existing collection; create it only
+            // on the FIRST share. Membership changes flow through the dedicated
+            // member/approve/policy methods, never through re-share.
+            if !doc_store.has_doc(&collection_doc).await {
+                if let Err(e) = doc_store
+                    .share_doc(&collection_doc, &collection_bytes)
+                    .await
+                {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!("failed to share collection doc: {e}")),
+                    );
+                }
+            } else {
+                info!(
+                    session = session_id,
+                    kb_id = %kb_id,
+                    "kb/share: collection exists — preserving daemon-side membership (B-12)"
                 );
             }
             session_docs.insert(collection_doc.clone());
@@ -1332,7 +1349,23 @@ async fn handle_doc_request_inner(
                         }
                     };
                     let node_doc = format!("kb:{node_id}");
-                    if let Err(e) = doc_store.share_doc(&node_doc, &state_bytes).await {
+                    // ADR-020 B-12: MERGE onto an existing node instead of
+                    // delete+replace, so an owner re-share does not reset the node's
+                    // CRDT lineage or clobber peer edits the owner hasn't seen yet.
+                    // Post-B-16 the owner's lineage is stable + persisted, so this is
+                    // a clean idempotent merge. Create fresh only on the first share.
+                    let node_res = if doc_store.has_doc(&node_doc).await {
+                        doc_store
+                            .apply_update(&node_doc, &state_bytes, None)
+                            .await
+                            .map(|_| ())
+                    } else {
+                        doc_store
+                            .share_doc(&node_doc, &state_bytes)
+                            .await
+                            .map(|_| ())
+                    };
+                    if let Err(e) = node_res {
                         warn!(session = session_id, node_id, error = %e, "kb/share: failed to share node doc");
                         continue;
                     }
@@ -2341,6 +2374,72 @@ mod tests {
         assert!(
             stats["connected_clients"].as_u64().unwrap() >= 1,
             "resync must increment connected_clients, got: {stats}"
+        );
+    }
+
+    /// ADR-020 B-12: an owner reconnect/re-share must PRESERVE the daemon's
+    /// authoritative collection membership, not clobber it. `share_doc` was
+    /// destructive (delete+replace), so re-sharing the owner-only collection
+    /// silently revoked every approved member on each owner restart — unacceptable
+    /// for a trusted-peer system. The fix preserves an existing collection.
+    #[tokio::test]
+    async fn kb_share_preserves_membership_on_owner_reshare() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut sd = HashSet::new();
+
+        // First share: a collection that already carries an approved member.
+        let mut coll = KbCollectionDoc::new("testkb", "alice");
+        coll.add_node("testkb:n1", "T");
+        coll.upsert_member("SHA256:bob", "bob", SyncRole::Editor);
+        let share1 = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "kb/share",
+            "params": {
+                "kb_id": "testkb", "name": "testkb",
+                "collection_state": update_to_base64(&coll.encode_state()),
+                "nodes": []
+            }
+        });
+        handle_doc_request(
+            &share1.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            0,
+            &mut sd,
+        )
+        .await;
+        let c1 = load_collection(&store, "testkb").await.unwrap();
+        assert!(
+            c1.role_of("SHA256:bob").is_some(),
+            "bob is a member after the first share"
+        );
+
+        // Owner RE-SHARES an owner-only collection (no members) — the clobber input.
+        let owner_only = KbCollectionDoc::new("testkb", "alice");
+        let share2 = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "kb/share",
+            "params": {
+                "kb_id": "testkb", "name": "testkb",
+                "collection_state": update_to_base64(&owner_only.encode_state()),
+                "nodes": []
+            }
+        });
+        handle_doc_request(
+            &share2.to_string(),
+            &store,
+            &bc,
+            std::time::Instant::now(),
+            1,
+            &mut HashSet::new(),
+        )
+        .await;
+
+        // B-12: bob's membership must SURVIVE the re-share.
+        let c2 = load_collection(&store, "testkb").await.unwrap();
+        assert!(
+            c2.role_of("SHA256:bob").is_some(),
+            "B-12: owner re-share must preserve approved members, not silently revoke them"
         );
     }
 
