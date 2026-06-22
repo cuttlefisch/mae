@@ -708,6 +708,21 @@ Each: drive via MCP `kb_update` / editor; watch daemon log + the peer's `kb_get`
 T1 is happening now (alice restarting). Then work down T2–T7. Log each result here with the shared
 convention so we have a complete record for the write-up.
 
+### Results log
+- **T1 — B-12 owner-restart: ✅ PASS** (alice + bob confirmed). alice restart → daemon logged
+  `kb/share: collection exists — preserving daemon-side membership (B-12)`; bob auto-rejoin →
+  `kb/join: complete` (NO pending, NO re-approve). Bidirectional re-verified post-restart.
+- **T2 — restart-survival (bob editor restart): ✅ PASS** (cross-validated alice daemon log ⇄ bob startup log).
+  - bob startup: `KB instance loaded from CozoDB nodes=3 shared=true` (disk-first reload, B-10, despite
+    `dir=""`) → auto `joining KB` → `KB join complete (merged) node_count=3` (no pending, B-12 holds on
+    bob restart). Titles survived the restart (kb_get matched the pre-restart baseline).
+  - **bob→alice post-restart:** `beta → [BOB-T2-POSTRESTART]` (rowid=6) → daemon `received → applied
+    wal_seq=85`; alice `recv: applied … changed=true`, `kb_get` shows the slug.
+  - **alice→bob post-restart:** `alpha → [ALICE-T2-POSTRESTART]` → daemon `received → applied
+    wal_seq=86` → broadcast to bob (bob confirmed). Receive-after-restart works both ways.
+  - NB (bob): the restart's disk-reload overlaps the auto-rejoin/adopt, so T2 validates durability +
+    rejoin together; the **pure offline-durability** case is isolated in **T3** (edit while disconnected).
+
 ### Known-open (not blocking the matrix)
 - B-12 idle-eviction edge: a collection evicted while everyone's offline, then re-shared, could still
   recreate (narrow) — closed properly by the ADR-021 durable audit record (tracked).
