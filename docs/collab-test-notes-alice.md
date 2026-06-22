@@ -1149,3 +1149,26 @@ alice `kb_get` == bob's recorded string (byte-for-byte).
     `target/release/mae` (21:26) — `make build` doesn't install. Caught by hashing `/proc/<pid>/exe`
     vs the build. **Lesson: verify the RUNNING binary == the build (hash) before re-testing a fix**, and
     install (or launch `target/release/mae`) after `make build`.
+
+### ✅ T6 RESULT: PASS — **ungraceful (`kill -9`) daemon restart** (stronger than the planned graceful)
+**Pre-validation first:** the daemon is **WAL-first** (`DocStore::apply_update` → `storage.wal_append`
+INSERT, auto-commit, BEFORE the `applied`/ACK), `journal_mode=WAL` + `synchronous=NORMAL`. A process
+`kill -9` (not power loss) can't lose a committed WAL frame — it's `write()`n to the OS before the ACK,
+and the OS survives a process crash. So unlike the editor's sled flush-window (T3c), a daemon `kill -9`
+is safe by design. Confirmed live:
+1. **alice** edited `alpha → [T6-CRASH]` → daemon ACK `wal_seq=142`. **bob** offline with `beta →
+   [B-T6-DURING]` queued.
+2. **`kill -9`** the daemon (PID 2365110, dead in 0.3s) → relaunch.
+3. **(a) WAL crash-recovery ✅:** startup `recovering … count=4`, `recovered doc=kb:collabtest:alpha
+   wal_entries=1` (the un-checkpointed `[T6-CRASH]` replayed from the WAL tail), `recovery complete
+   count=4`. **An ACK'd update survived the ungraceful crash.**
+4. **(b) reconnect ✅:** alice auto-reconnected + re-shared (B-12 membership preserved); bob
+   `:collab-connect` → `reconcile_mode=true`.
+5. **(c) no clobber ✅:** alice `alpha=[T6-CRASH]` intact (recovered, not reverted).
+6. **(d) offline-edit-across-hub-crash converges ✅:** bob's `[B-T6-DURING]` drained up `wal_seq=146`
+   (before his join) → alice `kb_get beta = [B-T6-DURING]`. bob pulled the recovered `alpha=[T6-CRASH]`.
+**⇒ T6 FULL PASS (both ends).** The daemon's WAL-first/write-before-ACK design is crash-safe for process
+kills. **Residual (follow-up, not a defect):** `synchronous=NORMAL` fsyncs only at checkpoint, so a true
+**power loss / OS crash** could lose the last few un-checkpointed commits — the daemon-side analog of the
+`crdt_doc` flush-on-write item; closing it = `synchronous=FULL` (fsync-per-commit, perf cost). Can't be
+exercised live without cutting power; tracked.
