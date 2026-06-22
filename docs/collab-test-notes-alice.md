@@ -764,6 +764,62 @@ node `collabtest:overview` = `[ALICE-WHILE-BOB-OFFLINE]` (different nodes so nei
 - **bob:** steps 1, 2, 4 + verify (b) overview slug appears + his beta reached alice; report
   `pending_kb_updates` while offline (proves the durable queue held it).
 
+### ✅ T3 RESULT: PASS (alice + bob).
+- bob→alice flush (a): daemon `kb/node_update received → applied wal_seq=88`; alice `changed=true`,
+  `beta = [BOB-OFFLINE-1]`. alice→bob catch-up (b): bob `overview = [ALICE-WHILE-BOB-OFFLINE]`.
+  No revert (c): `alpha = [ALICE-T2-POSTRESTART]` control held. Single flush, acked once (d).
+- **bob yellow flag → FIXED (`6a1a5604`):** while offline, `introspect.pending_kb_updates` read **0**
+  even though the durable SQLite row exists (B-16 single-source leaves the in-mem Vec empty). Root
+  cause was **observability, not durability** — `kb_update_node` persists to the durable queue at
+  *edit time* with no connection check (crash-durable, modulo sled's ~500ms flush). Fix: introspect
+  now reports `pending_kb_updates = in-mem + durable` + a `durable_pending_kb_updates` breakdown
+  (new `KbStore::count_pending_updates`), and the offline enqueue is logged
+  (`edit: persisted to durable pending queue`). **Both editors must rebuild to `6a1a5604`+ to SEE the
+  new counts** (the durability itself already worked).
+
+---
+
+## T3b — offline-durability across an EDITOR RESTART: READY-TO-RUN procedure
+
+**Goal / what it proves:** an edit made **while offline survives a full PROCESS restart** of the
+editor (quit + relaunch), then flushes on reconnect — the strongest form of "never silently lose."
+Also live-validates the new observability (`durable_pending_kb_updates` ≥ 1 while offline / before flush).
+
+**Prereq:** both editors on **`6a1a5604`+** (`git pull && make build` → install → restart). alice tails
+`/tmp/mae-daemon-live.log`. **Probe slug:** bob `collabtest:beta` → `[BOB-T3B-OFFLINE]`.
+
+### Steps (ordered)
+0. **Pre-check (both):** connected + synced; `kb_get beta` matches on both. bob `introspect.collaboration`
+   → `pending_kb_updates: 0`, `durable_pending_kb_updates: 0`.
+1. **bob:** `:collab-disconnect` → offline (`collab_status` disconnected).
+2. **bob (offline):** edit `collabtest:beta` → `[BOB-T3B-OFFLINE]`.
+   - **Observability check (the fix):** bob `introspect.collaboration` → **`pending_kb_updates ≥ 1`** and
+     **`durable_pending_kb_updates ≥ 1`**. bob log: `edit: persisted to durable pending queue (survives
+     offline + restart)`. Daemon log: **no** `kb/node_update` for beta (still offline). **Tell alice "offline+edited".**
+3. **bob:** **QUIT the editor** (graceful exit) — while still offline. Do NOT reconnect first.
+4. **bob:** **relaunch** the editor. Startup loads collabtest from disk (B-10). **Before the post-restart
+   reconnect flushes** (may be fast — best-effort), `introspect` → `durable_pending_kb_updates ≥ 1`
+   (the queue **survived the process restart** — this is the crux). bob startup log:
+   `KB instance loaded from CozoDB nodes=3`.
+5. **bob:** reconnect (auto on launch, or `:collab-connect`) → durable queue flushes + auto-rejoin.
+6. **PASS criteria:**
+   - **(a) survives restart + flushes:** after relaunch, daemon logs `kb/node_update received …
+     node_id=collabtest:beta → applied wal_seq=…`; **alice** `recv: applied … changed=true`,
+     `kb_get beta = [BOB-T3B-OFFLINE]`. (The edit made before the quit reached alice after the restart.)
+   - **(b) durable visibility:** `durable_pending_kb_updates ≥ 1` observed while offline (step 2) and/or
+     post-relaunch-pre-flush (step 4); returns to 0 after the flush+ack.
+   - **(c) no loss:** beta = `[BOB-T3B-OFFLINE]` on both; no revert of other nodes.
+   - **(d) once:** beta flushes exactly once (single `received`; durable row acked once).
+
+### Roles
+- **bob:** steps 1–5 + the two observability captures (step 2 offline, step 4 post-relaunch).
+- **alice (this session):** mark a fresh daemon baseline at step 5; verify (a) the daemon received bob's
+  `[BOB-T3B-OFFLINE]` **after his relaunch** + alice applied `changed=true`, and (c)/(d).
+
+> Note on auto-connect: if bob's editor auto-connects on launch, step 4's pre-flush window is brief —
+> the reliable durable-count capture is step 2 (offline). The crux (a) holds regardless: the edit made
+> before the quit must arrive at alice after the relaunch, proving the queue survived the restart.
+
 ### Known-open (not blocking the matrix)
 - B-12 idle-eviction edge: a collection evicted while everyone's offline, then re-shared, could still
   recreate (narrow) — closed properly by the ADR-021 durable audit record (tracked).
