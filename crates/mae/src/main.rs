@@ -763,7 +763,7 @@ fn main() -> io::Result<()> {
         if let Some(dir) = mae_mcp::identity::default_collab_dir() {
             let label = editor.collab.user_name.clone();
             if let Ok(id) = mae_mcp::identity::Identity::load_or_generate(&dir, &label) {
-                let cid = mae_core::editor::derive_kb_client_id(&id.fingerprint());
+                let cid = mae_core::editor::derive_kb_client_id(&id.fingerprint(), 0);
                 editor.collab.local_kb_client_id = cid;
                 info!(
                     client_id = cid,

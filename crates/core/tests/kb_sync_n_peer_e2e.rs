@@ -39,7 +39,7 @@ impl Peer {
         let fingerprint = format!("ed25519:fingerprint-for-{name}");
         Peer {
             name: name.to_string(),
-            client_id: derive_kb_client_id(&fingerprint),
+            client_id: derive_kb_client_id(&fingerprint, 0),
             kb: KnowledgeBase::new(),
         }
     }

@@ -19,6 +19,31 @@ const TAGS_KEY: &str = "tags";
 const LINKS_KEY: &str = "links";
 const META_KEY: &str = "meta";
 
+/// Derive a stable yrs `client_id` for KB CRDT edits from a peer's durable collab
+/// identity `fingerprint` + its per-KB authorization `epoch` (ADR-020 B-16,
+/// ADR-023). FNV-1a over the fingerprint then the epoch, folded into the **53-bit**
+/// range yrs permits (B-17 — a full u64 panics in debug / silently truncates in
+/// release), never `0`/`1`. A role change bumps the epoch → a *different,
+/// unrelated* client_id, so the daemon can fence a member's pre-grant (stale-epoch)
+/// ops. Lives here (mae-sync) so both the editor and the daemon derive identically.
+pub fn derive_kb_client_id(fingerprint: &str, epoch: u64) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in fingerprint.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    for b in epoch.to_le_bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let folded = (h ^ (h >> 53)) & ((1u64 << 53) - 1);
+    if folded == 0 || folded == 1 {
+        2
+    } else {
+        folded
+    }
+}
+
 /// True if `candidate_sv` carries operations not covered by `base_sv` — i.e.
 /// some client's clock in `candidate_sv` exceeds what `base_sv` has seen.
 ///
@@ -57,6 +82,26 @@ pub fn sv_clients_disjoint(a_sv: &[u8], b_sv: &[u8]) -> Result<bool, SyncError> 
         }
     }
     Ok(true)
+}
+
+/// ADR-023: the set of client_ids that authored operations in `update` that are
+/// **not yet covered by `base_sv`** — i.e. the "new" ops a peer is contributing on
+/// top of the daemon's authoritative state. The daemon fences with this: every
+/// new-op author must equal the member's current-epoch client_id
+/// (`derive_kb_client_id(fp, epoch_now)`); a stale-epoch author means a pre-grant
+/// (or otherwise unauthorized) lineage and the write is rejected (`rebase required`).
+pub fn update_new_op_authors(update: &[u8], base_sv: &[u8]) -> Result<Vec<u64>, SyncError> {
+    let upd = yrs::Update::decode_v1(update).map_err(|e| SyncError::Encoding(e.to_string()))?;
+    let base =
+        yrs::StateVector::decode_v1(base_sv).map_err(|e| SyncError::Encoding(e.to_string()))?;
+    let upd_sv = upd.state_vector();
+    let mut out = Vec::new();
+    for (client, &clock) in upd_sv.iter() {
+        if base.get(client) < clock {
+            out.push(client.get());
+        }
+    }
+    Ok(out)
 }
 
 /// Materialized content from a KbNodeDoc — all fields extracted for FTS rebuild.
@@ -428,6 +473,12 @@ const COLL_POLICY_KEY: &str = "join_policy"; // restrictive|invite|permissive
 const COLL_PENDING_KEY: &str = "pending"; // YMap<fingerprint -> {label,requested_at}>
 const MEMBER_ROLE_KEY: &str = "role";
 const MEMBER_LABEL_KEY: &str = "label";
+/// ADR-023: per-member monotonic authorization epoch, bumped by the daemon on
+/// every role change for that member. Drives the epoch-fenced rebase: the KB
+/// client_id a member authors under is `derive_kb_client_id(fp, epoch)`, so a
+/// role change rotates it and the daemon can fence pre-grant (stale-epoch) ops.
+/// Stored as a decimal string (mirrors the role/label string fields).
+const MEMBER_EPOCH_KEY: &str = "epoch";
 const PENDING_AT_KEY: &str = "requested_at";
 
 /// Collection schema version. v2 = ADR-018 (principal-anchored owner/roles/policy).
@@ -894,33 +945,71 @@ impl KbCollectionDoc {
             root.insert(&mut txn, COLL_PENDING_KEY, MapPrelim::default());
         }
         let m = Self::member_roles_map(&root, &mut txn);
+        let prev_epoch = match m.get(&txn, principal) {
+            Some(Out::YMap(e)) => Self::entry_epoch(&e, &txn),
+            _ => 0,
+        };
         let entry = m.insert(&mut txn, principal, MapPrelim::default());
         entry.insert(&mut txn, MEMBER_ROLE_KEY, Role::Owner.as_str());
         entry.insert(&mut txn, MEMBER_LABEL_KEY, label);
+        entry.insert(&mut txn, MEMBER_EPOCH_KEY, (prev_epoch + 1).to_string());
         txn.encode_update_v1()
     }
 
+    /// Read the current epoch of a member entry (within an open txn). 0 if absent.
+    fn entry_epoch(entry: &MapRef, txn: &impl ReadTxn) -> u64 {
+        entry
+            .get(txn, MEMBER_EPOCH_KEY)
+            .map(|v| v.to_string(txn))
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0)
+    }
+
     /// Insert or update a member's role (keyed by principal; CRDT-safe LWW).
+    /// ADR-023: any call here is a role (re)assignment, so it **bumps the member's
+    /// authorization epoch** — rotating the KB client_id they must author under and
+    /// fencing their pre-grant lineage at the daemon.
     pub fn upsert_member(&mut self, principal: &str, label: &str, role: Role) -> Vec<u8> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let mut txn = self.doc.transact_mut();
         let m = Self::member_roles_map(&root, &mut txn);
+        // Preserve+bump the epoch across the entry replacement below.
+        let prev_epoch = match m.get(&txn, principal) {
+            Some(Out::YMap(e)) => Self::entry_epoch(&e, &txn),
+            _ => 0,
+        };
         let entry = m.insert(&mut txn, principal, MapPrelim::default());
         entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
         entry.insert(&mut txn, MEMBER_LABEL_KEY, label);
+        entry.insert(&mut txn, MEMBER_EPOCH_KEY, (prev_epoch + 1).to_string());
         txn.encode_update_v1()
     }
 
-    /// Update only the role of an existing member (no-op if absent).
+    /// Update only the role of an existing member (no-op if absent). Bumps the
+    /// member's authorization epoch (ADR-023).
     pub fn set_role(&mut self, principal: &str, role: Role) -> Vec<u8> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let mut txn = self.doc.transact_mut();
         if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
             if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
+                let next = Self::entry_epoch(&entry, &txn) + 1;
                 entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
+                entry.insert(&mut txn, MEMBER_EPOCH_KEY, next.to_string());
             }
         }
         txn.encode_update_v1()
+    }
+
+    /// The current authorization epoch of `principal` (ADR-023). 0 if not a member.
+    pub fn epoch_of(&self, principal: &str) -> u64 {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
+                return Self::entry_epoch(&entry, &txn);
+            }
+        }
+        0
     }
 
     /// Remove a member by principal.
@@ -981,9 +1070,14 @@ impl KbCollectionDoc {
             p.remove(&mut txn, principal);
         }
         let m = Self::member_roles_map(&root, &mut txn);
+        let prev_epoch = match m.get(&txn, principal) {
+            Some(Out::YMap(e)) => Self::entry_epoch(&e, &txn),
+            _ => 0,
+        };
         let entry = m.insert(&mut txn, principal, MapPrelim::default());
         entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
         entry.insert(&mut txn, MEMBER_LABEL_KEY, label.as_str());
+        entry.insert(&mut txn, MEMBER_EPOCH_KEY, (prev_epoch + 1).to_string());
         txn.encode_update_v1()
     }
 
@@ -1432,6 +1526,91 @@ mod tests {
             1,
             "no duplicate member"
         );
+    }
+
+    // ---- ADR-023 (B-19) epoch-fenced-rebase primitives ----
+
+    #[test]
+    fn member_epoch_bumps_on_each_role_assignment() {
+        // The daemon authors these ops, so the epoch is unforgeable by the client.
+        let mut coll = KbCollectionDoc::new("Test", "alice");
+        assert_eq!(coll.epoch_of("bob"), 0, "non-member starts at epoch 0");
+
+        coll.set_owner("alice", "alice");
+        assert_eq!(coll.epoch_of("alice"), 1, "owner seeded at epoch 1");
+
+        coll.upsert_member("bob", "bob", Role::Viewer);
+        assert_eq!(coll.epoch_of("bob"), 1, "first grant ⇒ epoch 1");
+
+        // The B-19 cascade vector: a role change. The epoch MUST advance so bob's
+        // post-grant client_id differs from his viewer-era one.
+        coll.set_role("bob", Role::Editor);
+        assert_eq!(coll.epoch_of("bob"), 2, "viewer→editor bumps the epoch");
+
+        coll.upsert_member("bob", "bob", Role::Viewer);
+        assert_eq!(coll.epoch_of("bob"), 3, "re-assignment keeps advancing");
+    }
+
+    #[test]
+    fn derive_kb_client_id_rotates_with_epoch_and_stays_53bit() {
+        let fp = "ed25519:AAAA";
+        let ids: Vec<u64> = (0..4).map(|e| derive_kb_client_id(fp, e)).collect();
+        // Distinct per epoch — a viewer-era op can never masquerade as current-epoch.
+        for (i, a) in ids.iter().enumerate() {
+            for b in &ids[i + 1..] {
+                assert_ne!(a, b, "epochs must yield distinct client_ids");
+            }
+        }
+        // B-17: yrs ClientID is 53-bit; never 0/1.
+        for id in &ids {
+            assert!(*id < (1u64 << 53), "client_id must fit yrs' 53 bits");
+            assert!(*id > 1, "client_id must avoid the reserved 0/1");
+        }
+        // Deterministic across the editor/daemon boundary.
+        assert_eq!(derive_kb_client_id(fp, 2), derive_kb_client_id(fp, 2));
+    }
+
+    #[test]
+    fn update_new_op_authors_flags_stale_epoch_lineage() {
+        // The daemon's fence in miniature: an owner-authored node is the canonical
+        // base; a viewer (old epoch) and a granted editor (new epoch) each author an
+        // edit. update_new_op_authors must attribute each update to its real author,
+        // so the daemon can reject the viewer-era lineage and accept only C_now.
+        let fp = "ed25519:bob";
+        let c_viewer = derive_kb_client_id(fp, 1); // pre-grant
+        let c_editor = derive_kb_client_id(fp, 2); // post-grant (C_now)
+
+        let base = KbNodeDoc::new_with_client_id("n1", "Original", "body", &[], 99);
+        let base_sv = base.state_vector();
+        let base_state = base.encode_state();
+
+        // Viewer-era edit (would be denied live, but lands in the local lineage).
+        let mut viewer = KbNodeDoc::from_bytes_with_client_id(&base_state, c_viewer).unwrap();
+        let viewer_update = viewer.set_title("hijacked");
+        let viewer_authors = update_new_op_authors(&viewer_update, &base_sv).unwrap();
+        assert_eq!(
+            viewer_authors,
+            vec![c_viewer],
+            "stale lineage is attributable"
+        );
+        assert!(
+            !viewer_authors.iter().all(|a| *a == c_editor),
+            "fence rejects: not every new op is from C_now"
+        );
+
+        // A fresh, current-epoch edit is accepted (every new op is C_now).
+        let mut editor = KbNodeDoc::from_bytes_with_client_id(&base_state, c_editor).unwrap();
+        let editor_update = editor.set_title("legit edit");
+        let editor_authors = update_new_op_authors(&editor_update, &base_sv).unwrap();
+        assert_eq!(editor_authors, vec![c_editor]);
+        assert!(
+            editor_authors.iter().all(|a| *a == c_editor),
+            "fence accepts: all new ops authored under C_now"
+        );
+
+        // Grandfathering: re-presenting only already-canonical ops flags no author.
+        let empty = update_new_op_authors(&base_state, &base.state_vector()).unwrap();
+        assert!(empty.is_empty(), "ops the daemon already has are not 'new'");
     }
 
     #[test]

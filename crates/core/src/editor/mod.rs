@@ -369,22 +369,13 @@ pub struct JoinedNode {
 /// yrs only uses the low 53 bits of a client id (the top 11 are an internal
 /// tag): a full-u64 id panics in debug and *silently truncates* in release,
 /// which would let two fingerprints differing only above bit 53 collide on one
-/// yrs lineage — the very B-16 collision this derivation prevents. We xor-fold
-/// the high bits down rather than mask them off, so their entropy is retained.
-pub fn derive_kb_client_id(fingerprint: &str) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in fingerprint.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    // Fold bits [53..64) into the low 53 bits, then clamp to 53 bits.
-    let folded = (h ^ (h >> 53)) & ((1u64 << 53) - 1);
-    if folded == 0 || folded == 1 {
-        2
-    } else {
-        folded
-    }
-}
+/// yrs lineage — the very B-16 collision this derivation prevents.
+///
+/// ADR-023: `epoch` is the member's per-KB authorization epoch (0 = primary /
+/// unscoped); a role change bumps it, rotating the client_id so the daemon can
+/// fence a member's pre-grant ops. The implementation lives in `mae-sync` so the
+/// daemon derives identically; re-exported here for the editor's call sites.
+pub use mae_sync::kb::derive_kb_client_id;
 
 /// State for an active note capture session (org-roam parity).
 /// Set when `kb_create_note_from_title` creates a note; cleared by
