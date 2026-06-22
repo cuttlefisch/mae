@@ -662,3 +662,54 @@ alice restart → re-share (canonical persisted lineage) → re-approve bob (B-1
 **bob edits `collabtest:beta` → alice's beta updates on screen (`changed=true` in alice's log)**. That
 closes **bidirectional** Stage-1 (modulo B-12 membership-durability + the next-step two-independent-
 peers e2e).
+
+---
+
+## 2026-06-22 ~16:32 — ✅ BIDIRECTIONAL GREEN + B-12 fixed — current state & remaining manual CRDT test matrix
+
+### What is DONE (live-validated on two machines)
+- **The entire KB-sync bug chain is fixed**: B-8 (emit) → B-13 (subscribe) → B-14 (join-adopt lineage)
+  → B-15 (chained-edit) → B-16a (owner persisted lineage) → B-16b (per-peer client_id) → **B-12**
+  (owner re-share preserves membership). All have production-fidelity unit tests.
+- **Bidirectional live propagation CONFIRMED** with content convergence:
+  - alice→bob: `collabtest:alpha` → `[B14-CONVERGE-1]` landed on bob (`changed=true`).
+  - bob→alice: `collabtest:beta` → `[BOB-LIVE-2]` landed on **alice** (`changed=true`).
+- Write-up: `docs/collab-kb-sync-testing-lessons.md` (bug chain + why tests missed them + e2e contract).
+  Compliance/RBAC direction: `docs/adr/021-membership-policy-compliance.md`.
+
+### Current deployed builds (branch `ca08e52a`)
+- **daemon**: B-12 build (pid up; eager-recovers all docs + membership from WAL on restart). `0.0.0.0:9480`.
+- **editors**: B-16 build on both. alice client_id derived from identity fingerprint; bob distinct.
+- Identity fingerprints unchanged → **no re-TOFU**. bob = `SHA256:9xLh0DWee…2CrI` (approved editor).
+
+### → BOB: pull + confirm you're current
+```sh
+git fetch && git pull          # → ca08e52a (or later)
+make build                     # GUI editor (you already have B-16; pull in case of newer)
+cp target/release/mae ~/.local/bin/mae.new && mv -f ~/.local/bin/mae.new ~/.local/bin/mae
+# restart editor with tracing: MAE_LOG=info,kb_sync=debug,collab=debug → /tmp/bob-collab.log
+```
+**B-12 is now deployed daemon-side** — so after alice restarts you should **stay an approved member
+(no `pending`, no re-approve)**. If you DO land pending, that's a B-12 regression to flag.
+
+### REMAINING manual test matrix (to finish validating the full CRDT feature)
+Each: drive via MCP `kb_update` / editor; watch daemon log + the peer's `kb_get`/screen + `changed` in logs.
+
+| # | Test | Steps | Expected |
+|---|------|-------|----------|
+| **T1** | **B-12 owner-restart (now)** | alice restart → re-share fires | bob **stays approved** (daemon log: `collection exists — preserving membership`); **no re-approve**; bidirectional still works |
+| **T2** | **Restart survival (B-10)** | restart bob's editor → `kb_instances` | joined `collabtest` reloads **3 nodes** from disk (dir=""); after re-join, edits still flow both ways |
+| **T3** | **Offline-merge** | bob disconnects (`:collab-disconnect`) → edits a node offline → reconnects | bob's offline edit **converges** on alice (and vice-versa) — no loss, `changed=true` on apply |
+| **T4** | **Concurrent same-node** | alice & bob edit the SAME node (e.g. `collabtest:alpha` title) within a second of each other | both converge to **one identical value** on both screens (per-peer client_id, B-16b) — no divergence |
+| **T5** | **Body + multi-field** | edit the **body** (not just title) of a node; verify propagation both ways | body change converges; title unaffected |
+| **T6** | **Daemon-restart survival** | restart the **daemon** (alice side) → editors reconnect | docs + **membership recover from WAL**; sync resumes; bob stays approved |
+| **T7** | **Roles/policy (ADR-018)** | alice `:kb-member-add collabtest <bob-fp> viewer` → bob edits a node | bob's edit **rejected** (read-only); restore editor role → edit allowed again |
+
+T1 is happening now (alice restarting). Then work down T2–T7. Log each result here with the shared
+convention so we have a complete record for the write-up.
+
+### Known-open (not blocking the matrix)
+- B-12 idle-eviction edge: a collection evicted while everyone's offline, then re-shared, could still
+  recreate (narrow) — closed properly by the ADR-021 durable audit record (tracked).
+- The two-independent-peers **automated** e2e (so CI catches this class, not just two machines) — next code task.
+- B-11 (`*Collab Status*` steals the dashboard on launch) — Stage-2 UX.
