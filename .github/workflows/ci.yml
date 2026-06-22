@@ -149,6 +149,10 @@ jobs:
         run: cd daemon && cargo test -- --test-threads=1 --nocapture
         timeout-minutes: 10
         env:
+          # MAE_TCP_E2E=1 un-skips network_e2e.rs (real-TCP daemon-spawn suite —
+          # the only e2e for sync/resync). Each test spawns an XDG-isolated daemon,
+          # so it composes with the in-process collab_e2e tests in this same run.
+          MAE_TCP_E2E: "1"
           RUST_LOG: "mae_daemon=debug,mae_sync=debug,warn"
       - name: TCP E2E tests (PSK auth + KB protocol)
         run: |
