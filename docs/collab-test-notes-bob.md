@@ -623,3 +623,38 @@ view to confirm the lineage divergence.
 
 ▶ **Step 1 (receive) status: still RED** — but advanced from "dropped" → "received+applied as no-op".
 The remaining blocker is B-14 (doc-lineage / no-op merge), not subscription.
+
+---
+
+## 2026-06-22 ~13:16 — ✅✅ STEP 1 (alice → bob RECEIVE) PASSES on B-14+B-15 build (`8d1e040`/`490d9a3`)
+
+bob rebuilt from `8d1e040`. B-12 clobber recurred (auto-rejoin pending → alice re-approved by
+fingerprint → bob `kb_join` → `KB join complete (merged)` 13:15:57).
+
+### ✅ Adopt-on-join (B-14) works — bob's titles snapped to alice's authoritative lineage
+Immediately post-join, `kb_get` on bob:
+- `collabtest:alpha` → `Collab Test Alpha [ALICE-RECV-PROBE-7]` (was plain `Collab Test Alpha`)
+- `collabtest:overview` → `Collab Test Fixture Overview [ALICE-ADR019-PROP]` (was bob's local
+  `[bob editor edit — ADR-019]` — bob's divergent local edit **replaced** by alice's lineage)
+
+So join now ADOPTS the owner's doc lineage (B-14 fix) instead of merging same-id siblings; bob
+converges to alice's current values for all nodes.
+
+### ✅ Live edit propagates with `changed=true` (the no-op B-14/B-15 is GONE)
+alice then made a fresh live edit to `collabtest:alpha`. bob log:
+```
+13:16:31 received sync_update notification  doc=kb:collabtest:alpha  wal_seq=2  update_b64_len=920
+13:16:31 recv: applied remote kb update     node_id=collabtest:alpha  owner=alice-fp  changed=true
+```
+`kb_get collabtest:alpha` → `Collab Test Alpha [B14-CONVERGE-1]`. **`changed=true`** — the merge is
+now a real change, not the prior no-op. Note `wal_seq` reset to 2 (alice re-shared on a fresh
+collection lineage this round — consistent with B-12 re-share being destructive; tracking).
+
+### Receive path verdict: GREEN end-to-end
+emit (B-8) ✅ · daemon delivery ✅ · member subscribe (B-13) ✅ · adopt-on-join lineage (B-14) ✅ ·
+live merge changed=true (B-14/B-15) ✅. **Step 1 (alice → bob) = PASS.**
+
+▶ Next: **Step 2 (bob → alice)** — bob edits a node; owner (alice) must receive it (the B-13 fix also
+subscribed the owner to its own node docs). Then restart-survival + offline-merge to close Stage 1.
+Still-open: B-12 (re-share clobbers membership + resets collection lineage; needs CRDT-merge share,
+not delete+replace) and the main-thread stall during join.
