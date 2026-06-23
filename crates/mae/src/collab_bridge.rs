@@ -17,6 +17,44 @@ use tracing::{debug, error, info, trace, warn};
 /// from `std::mem::forget`. The manager auto-unregisters its service on Drop.
 static MDNS_MANAGER: Mutex<Option<crate::mdns_discovery::MdnsManager>> = Mutex::new(None);
 
+/// Ensure the module-level mDNS manager is browsing for peers in the background,
+/// so `collab-discover` reads results instantly instead of blocking the main
+/// thread on a discovery sleep (CLAUDE.md #1). Idempotent: creates a browse-only
+/// manager on first call; starts the browse on an existing (register-only)
+/// manager. Best-effort — mDNS may be unavailable (no multicast).
+fn ensure_mdns_browsing() {
+    let Ok(mut guard) = MDNS_MANAGER.lock() else {
+        return;
+    };
+    match guard.as_mut() {
+        Some(mgr) => {
+            if !mgr.is_browsing() {
+                if let Err(e) = mgr.start_browse() {
+                    debug!(error = %e, "mDNS browse start failed");
+                }
+            }
+        }
+        None => match crate::mdns_discovery::MdnsManager::new() {
+            Ok(mut mgr) => {
+                if let Err(e) = mgr.start_browse() {
+                    debug!(error = %e, "mDNS browse start failed");
+                }
+                *guard = Some(mgr);
+            }
+            Err(e) => debug!(error = %e, "mDNS unavailable — discovery disabled"),
+        },
+    }
+}
+
+/// Snapshot of peers the background browse has discovered so far.
+fn mdns_discovered_peers() -> Vec<crate::mdns_discovery::DiscoveredPeer> {
+    MDNS_MANAGER
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|m| m.discovered_peers()))
+        .unwrap_or_default()
+}
+
 /// Compute a deterministic client_id for a buffer's yrs Doc.
 ///
 /// yrs v0.22 uses variable-length integer encoding in the v1 wire format.
@@ -474,7 +512,12 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
 
     let cmd = match intent {
         CollabIntent::StartServer => CollabCommand::StartServer,
-        CollabIntent::Connect { address } => CollabCommand::Connect { address },
+        CollabIntent::Connect { address } => {
+            // Start discovering LAN peers in the background so `collab-discover`
+            // has results ready (non-blocking — just spawns a browse thread).
+            ensure_mdns_browsing();
+            CollabCommand::Connect { address }
+        }
         CollabIntent::Disconnect => CollabCommand::Disconnect,
         CollabIntent::ShowStatus => CollabCommand::ShowStatus,
         CollabIntent::ShareBuffer { buffer_name } => {
@@ -651,48 +694,38 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             CollabCommand::KbAdoptNode { kb_id, node_id }
         }
         CollabIntent::DiscoverPeers => {
-            // mDNS discovery: browse for _mae-sync._tcp.local services.
-            match crate::mdns_discovery::MdnsManager::new() {
-                Ok(mut mgr) => {
-                    if let Err(e) = mgr.start_browse() {
-                        editor.set_status(format!("mDNS browse failed: {}", e));
-                    } else {
-                        // Give mDNS a moment to discover peers.
-                        std::thread::sleep(std::time::Duration::from_millis(1500));
-                        let peers = mgr.discovered_peers();
-                        if peers.is_empty() {
-                            editor.set_status("No MAE peers found on local network.");
-                        } else {
-                            let mut lines = vec![
-                                "Discovered MAE Peers".to_string(),
-                                "====================".to_string(),
-                                String::new(),
-                            ];
-                            for p in &peers {
-                                lines.push(format!(
-                                    "  {} — {} (v{}, {} KBs)",
-                                    p.user_name, p.address, p.version, p.kb_count
-                                ));
-                            }
-                            lines.push(String::new());
-                            lines.push(
-                                "Use :collab-connect <address> to connect to a peer.".to_string(),
-                            );
-                            let content = lines.join("\n");
-                            let idx = editor.find_or_create_buffer("*Collab Discover*", || {
-                                let mut buf = mae_core::buffer::Buffer::new();
-                                buf.name = "*Collab Discover*".to_string();
-                                buf
-                            });
-                            editor.buffers[idx].replace_contents(&content);
-                            editor.switch_to_buffer(idx);
-                            editor.set_status(format!("Found {} peer(s)", peers.len()));
-                        }
-                    }
+            // Read the BACKGROUND browse's current snapshot — never sleep on the
+            // main thread (#1). The browse runs persistently (started on connect /
+            // server-start / first discover), so results accumulate over time.
+            ensure_mdns_browsing();
+            let peers = mdns_discovered_peers();
+            if peers.is_empty() {
+                editor.set_status(
+                    "Discovering MAE peers… run :collab-discover again in a moment.".to_string(),
+                );
+            } else {
+                let mut lines = vec![
+                    "Discovered MAE Peers".to_string(),
+                    "====================".to_string(),
+                    String::new(),
+                ];
+                for p in &peers {
+                    lines.push(format!(
+                        "  {} — {} (v{}, {} KBs)",
+                        p.user_name, p.address, p.version, p.kb_count
+                    ));
                 }
-                Err(e) => {
-                    editor.set_status(format!("mDNS init failed: {}", e));
-                }
+                lines.push(String::new());
+                lines.push("Use :collab-connect <address> to connect to a peer.".to_string());
+                let content = lines.join("\n");
+                let idx = editor.find_or_create_buffer("*Collab Discover*", || {
+                    let mut buf = mae_core::buffer::Buffer::new();
+                    buf.name = "*Collab Discover*".to_string();
+                    buf
+                });
+                editor.buffers[idx].replace_contents(&content);
+                editor.switch_to_buffer(idx);
+                editor.set_status(format!("Found {} peer(s)", peers.len()));
             }
             return;
         }
@@ -1243,6 +1276,11 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                         warn!(error = %e, "mDNS registration failed");
                     } else {
                         info!(port, user, "mDNS service registered");
+                    }
+                    // Also browse so this host discovers peers (and `collab-discover`
+                    // reads results without blocking the main thread, #1).
+                    if let Err(e) = mgr.start_browse() {
+                        debug!(error = %e, "mDNS browse start failed");
                     }
                     // Store in module-level static so it lives for the editor's lifetime
                     // and auto-unregisters on drop (no memory leak).
