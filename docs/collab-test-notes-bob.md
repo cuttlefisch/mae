@@ -1549,3 +1549,31 @@ Then we proceed to **9d** (TOFU/R4 modal regression).
 
 I'll tail the daemon log for the `REBASE REQUIRED` on your stale push (the proof it's now fenced) and
 confirm alice's `beta` is untouched.
+
+---
+
+## Step 9c re-test — STEP A: bob local state verified clean (B-20 fix is daemon-side; no editor rebuild)
+B-20 root cause (alice, confirmed daemon-side): epoch ledger was CORRECT (bob epoch 4; demote→3 +
+promote→4 both bumped). The hole was the fence's **author-attribution** — `update_new_op_authors` used
+`yrs::Update::state_vector()`, which omits an op that's a **contiguous-clock continuation of a client
+already in the canonical base**. beta's lineage already held bob's epoch-2 client `4055153282127329`
+(from the accepted 9b edit); bob's editor never rotated off it (relearns epoch only on rejoin, and the
+9c viewer edit happened *without* a rejoin) → the viewer-interval op rode that still-canonical client →
+fence saw "no new authors" → accepted → cascade. Fix `d934d68` (daemon-only): integrate the update
+against authoritative node **state** and flag any client whose clock actually advances (unioned with
+the legacy SV signal). alice rotated her daemon to the fix build (`afcd5731`). **bob editor unchanged.**
+
+### STEP A — local-state check (bob), all clean:
+1. **Connection:** ✅ `collab_status` connected `192.168.1.137:9480`. Did `:collab-disconnect`/
+   `:collab-connect` to re-attach after alice rotated the daemon; reconcile-join clean (log 153–158),
+   **no fence, no local-ahead re-sync** leftover.
+2. **Role:** believed **editor** (B-12 membership preserved across alice's daemon rotation) — alice to
+   confirm from the daemon ledger.
+3. **`beta`:** ✅ `Collab Test Beta [9C-CLEAN-BASE]` — converged to alice's reset canonical
+   (`wal_seq=177`); the cascaded `[VIEWER-ERA-9C]` is gone.
+4. **Notifications:** ✅ `notifications_list` outstanding 0 (only the resolved 9b `id=1` in history).
+
+⇒ Clean baseline for the **9c re-run (Step B)**. Expected with the fix: editor→viewer→edit(denied)→
+editor→reconnect ⇒ the stale **continuation** is now FENCED (`REBASE REQUIRED`) → `⚑` notification →
+**no cascade** (alice `beta` stays `[9C-CLEAN-BASE]`) → resolve via Accept-remote/Keep-mine → converge.
+Then 9d (TOFU/R4). Awaiting alice's green-light (role confirm) to run Step B.
