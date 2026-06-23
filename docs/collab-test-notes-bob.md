@@ -1361,3 +1361,43 @@ bob is offline (`collab_status: off`, autoconnect env-disabled). bob's `collabte
 (3) confirm bob's current daemon role.** Then bob drives: surface the notification → Keep-mine
 (expect daemon `kb/node_fetch` + re-author under current epoch → converges on alice, badge clears) →
 re-fence + Accept-remote (local discarded, alice's version adopted) → R4 TOFU modal regression.
+
+---
+
+## ▶ ALICE'S ANSWERS — both concerns resolved; GO with Option A
+
+**(3) bob's daemon role — confirmed: `editor` on `collabtest` (epoch 2).** Last membership change
+`2026-06-23 09:05:21` (the Step-8 viewer→editor promotion); unchanged across both daemon restarts.
+
+**(1) Auto-enable decision — YES, and it's already done exactly as you recommended.** I added a
+**required/core module tier** (commit `9bbe2529`): a `required = true` manifest flag →
+auto-enabled regardless of the `(mae!)` block, unless explicitly `(package! "name" :disable #t)`.
+Doom's `core/` analog. `modules/notifications/module.toml` is now `required = true`. Principle: modules
+whose buffers/prompts are raised by **background events** (the attention bus) are required; user-initiated
+features (git-status, debug, agenda, file-tree) stay opt-in.
+- **Verified live on alice** (build `2a8bb7d7`): with **no init.scm change**, the `notifications` keymap
+  went **0 → 11 bindings** and `SPC n n` → `notifications-open` is bound. No more default-UX gap.
+- **bob:** your live-load works for this session. To get it natively, `git pull` (→ `9bbe2529`) + rebuild;
+  otherwise your `(load …autoloads.scm)` is equivalent for the run.
+
+**(2) Staging — go with Option A** (resolve your real stranded `beta`). It directly demonstrates the
+headline fix: you were literally stuck (8d) with `[POST-GRANT-EDIT]` carrying a stale-epoch op, and the
+bus unsticks you with your content preserved. Faster + more realistic than re-staging.
+
+### Run order (Option A)
+1. **bob:** `:collab-connect` → `:kb-join collabtest`. On the new build the ADR-022 reconcile re-pushes
+   your local-ahead `beta` ops; the stale **epoch-1** op trips the daemon fence (`REBASE REQUIRED`),
+   which R2 now raises as an **ActionRequired notification** (badge `⚑ 1`). *(If instead it surfaces via
+   the R5 divergent-on-join path, same resolution applies — either way you get a `*Notifications*` row.)*
+2. **bob:** `SPC n n` → `*Notifications*` → cursor on **`→ Keep-mine (re-author)`** → **Enter**.
+   Expect daemon **`kb/node_fetch`** for `collabtest:beta`, then your captured content re-authored under
+   epoch 2 → **converges on alice** (I'll confirm via `kb_get`), badge clears, row → resolved.
+3. **(9c Accept-remote)** alice resets bob→viewer, you edit `beta` (denied) → alice promotes→editor
+   (fresh fence) → in `*Notifications*` pick **`→ Accept-remote`** → your local discarded, alice's
+   version adopted (verify both sides match).
+4. **(9d TOFU / R4)** clear your `~/.local/share/mae/collab/known_hosts` entry + set
+   `collab_host_key_policy = "prompt"`, reconnect → an **"Action Required"** modal asks to trust the
+   daemon; **y** pins, **n** aborts. Same UX, new (bus) plumbing.
+
+**Report:** the daemon `REBASE REQUIRED` + `kb/node_fetch` lines, your Keep-mine re-author status, and
+whether the badge + `*Notifications*` rendered (you're TUI? GUI?). I confirm convergence on alice each step.
