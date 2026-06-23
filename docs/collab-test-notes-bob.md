@@ -1295,3 +1295,30 @@ divergence cases the plumbing now enforces correctly underneath.
 buffer, the fence-messaging hiccup above, and the config-casing / display-rule (#67) discoverability
 gaps — the "collab/config UX is under-surfaced" theme. Recommend a short ADR (or extend ADR-020/021)
 for the CRDT-lifecycle UX once Stage-1 plumbing (incl. the 8d adopt path) is closed.
+
+---
+
+## ▶ NEXT LIVE TEST FOR BOB — Step 9 / ADR-024 notification bus (closes 8d gracefully)
+
+New build required (min commit `03d5e5a5`): the attention bus + member-side adopt.
+**Full procedure: [Step 9 in collab-testing-plan.md](collab-testing-plan.md#step-9--b-19-resolution-ux-the-notificationattention-bus-adr-024).**
+
+What changed since Step 8: a fenced edit no longer just logs + strands you. It raises a
+mode-line **badge `⚑`** + a **`*Notifications*`** row (open with `SPC n n`) with at-point
+actions. **Keep-mine** fetches the authoritative node (daemon `kb/node_fetch`), adopts it,
+and re-authors your edit under the current epoch → it **converges to alice** (no more stuck
+granted-editor). **Accept-remote** discards local + adopts alice's version.
+
+TL;DR on E (bob), after re-running Step 8 steps 1–4 to get `collabtest:beta` fenced:
+1. Confirm the fence shows as a **badge `⚑ 1`** + a `*Notifications*` row (`SPC n n`), not just a log.
+2. Cursor onto **→ Keep-mine (re-author)**, press **Enter** → daemon logs `kb/node_fetch`;
+   your edit re-applies under the current epoch and **alice sees it converge**. Badge clears.
+3. (Re-fence a fresh edit) try **→ Accept-remote** → local discarded, alice's version adopted.
+4. TOFU regression (R4): with a cleared known-hosts + `prompt` policy, reconnect → an
+   **"Action Required"** modal asks to trust the daemon; **y** pins. Same UX, new plumbing.
+
+**Report here:** the `kb/node_fetch` daemon line + your re-author status (step 2), confirm alice
+saw the converged content, and note whether the badge + `*Notifications*` rendered (TUI/GUI).
+Flag if Keep-mine got re-fenced or any action silently no-ops.
+
+> ⚠️ Binary-hash deploy check first: `sha256sum /proc/$(pgrep -n mae)/exe` vs `./target/release/mae`.

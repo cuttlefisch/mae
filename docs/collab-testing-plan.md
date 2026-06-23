@@ -316,6 +316,51 @@ authorized key fingerprint (`mae-daemon identity` on E, or `:collab-status`).
 > status line, and confirm step 5's no-cascade check on alice's side. For step 6, confirm
 > the fresh edit converged. Flag anything where a pre-grant edit *did* appear on alice.
 
+### Step 9 — B-19 resolution UX: the notification/attention bus (ADR-024)
+
+> **What we're proving.** Step 8 showed a fenced edit is *safe* but the signal was a buried
+> log line and the granted editor was *stuck* (the 8d "known limitation"). ADR-024 fixes both:
+> a fenced edit now raises a **non-clobberable mode-line badge** (`⚑ N`) + a row in the
+> **`*Notifications*`** buffer with at-point actions that **adopt the authoritative version
+> and re-author your edit** — so a granted editor converges instead of being stuck. This is
+> the graceful close of 8d.
+>
+> **Min build:** commit `03d5e5a5` or later (R1–R5). NEW build for daemon + both editors.
+
+> [!IMPORTANT]
+> **Binary-hash deploy check first** (the recurring gotcha): `sha256sum /proc/$(pgrep -n mae)/exe`
+> vs `sha256sum ./target/release/mae`; same for the daemon. A stale binary will "fail" the test.
+
+Run **Step 8 steps 1–4 first** to get bob's edit fenced (alice resets bob→viewer, bob edits
+`collabtest:beta` to `VIEWER-ERA-HIJACK` denied, alice promotes bob→editor, bob's push is
+fenced). Then, instead of Step 8's manual re-apply, resolve it via the bus:
+
+1. **bob (E):** confirm the fence now surfaces as a **notification**, not just a log line:
+   - [ ] The mode-line shows an attention **badge `⚑ 1`** (worst-severity glyph + count).
+   - [ ] `SPC n n` (or `:notifications-open`) opens **`*Notifications*`** with a `collab`
+         category row: *"KB 'collabtest': edit to collabtest:beta fenced — not synced"* and three
+         indented actions: **→ Accept-remote / → Keep-mine (re-author) / → Stash externally**.
+2. **bob (E):** move the cursor onto **`→ Keep-mine (re-author)`** and press **Enter**.
+   - [ ] Daemon log shows **`kb/node_fetch`** for `collabtest:beta` (the adopt fetch).
+   - [ ] bob's editor adopts the authoritative node and re-applies his edit under the current
+         epoch — status/notification like *"Re-applied your edit to collabtest:beta…"*. No new
+         `REBASE REQUIRED` this time (it's authored under the current-epoch client_id).
+   - [ ] **alice (D):** `collabtest:beta` now **shows bob's re-authored content** — it
+         **converged** (the granted editor is no longer stuck — 8d closed gracefully).
+   - [ ] The `*Notifications*` row moves to **resolved** and the badge clears (`⚑` gone).
+3. **(Accept-remote path)** Re-fence a fresh edit (bob edits again pre-relearn, or repeat 8.3–8.5),
+   then in `*Notifications*` choose **→ Accept-remote**.
+   - [ ] bob's local copy is **discarded** and replaced by alice's authoritative version
+         (`kb/node_fetch` → adopt, no re-author). Both sides match.
+4. **(TOFU regression — R4)** Confirm the host-key trust prompt still works through the new bus:
+   on a fresh pin (clear bob's `~/.local/share/mae/collab/known_hosts` entry, set
+   `collab_host_key_policy = "prompt"`, reconnect) → a modal titled **"Action Required"** asks
+   *"Trust daemon at … ? [y/N]"*; **y** connects + pins, **n** aborts. Same behavior, new plumbing.
+
+> **Report (bob):** paste the `kb/node_fetch` daemon line + bob's re-author status for step 2,
+> and confirm alice saw the converged content. Note whether the badge + `*Notifications*` row
+> rendered correctly (TUI/GUI). Flag if Keep-mine got re-fenced, or if any action silently no-ops.
+
 ---
 
 ## Results checklist
@@ -337,6 +382,10 @@ authorized key fingerprint (`mae-daemon identity` on E, or `:collab-status`).
 | 8b | After promotion, pre-grant op **fenced** (`REBASE REQUIRED`) — no cascade | ☐ |
 | 8c | bob's honest "not synced — re-apply" status shows (no silent drop) | ☐ |
 | 8d | Fresh post-grant edit accepted + converges on alice | ☐ |
+| 9a | Fenced edit raises a mode-line badge `⚑` + a `*Notifications*` row (ADR-024) | ☐ |
+| 9b | **Keep-mine** → `kb/node_fetch` → adopt + re-author → **converges on alice** (8d closed) | ☐ |
+| 9c | **Accept-remote** → local discarded, alice's version adopted | ☐ |
+| 9d | TOFU host-key prompt still works through the bus ("Action Required" modal, y/N) | ☐ |
 
 ---
 
