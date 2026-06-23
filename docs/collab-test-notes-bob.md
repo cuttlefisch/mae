@@ -1442,3 +1442,53 @@ clear, actionable UI (no buried log). UX-hiccup + magit-buffer concerns from pri
 
 ### Next: 9c Accept-remote (alice reset→viewer → bob edit denied → promote→editor → fresh fence →
 Accept-remote → local discarded, alice's version adopted) + 9d TOFU/R4 modal.
+
+---
+
+## 🛑 Step 9c — B-19 CASCADE REPRODUCED LIVE (demote→re-promote path bypasses the epoch fence)
+**alice confirmed her `collabtest:beta` = `[VIEWER-ERA-9C]`** — a viewer-era edit cascaded through
+after re-promotion. This is the no-cascade guarantee failing in the demote→re-promote case (9a/9b
+fenced correctly; 9c did not). Filing as **B-20** (provisional — pending alice's daemon-side epoch
+confirmation).
+
+### Exact sequence (bob side, with timestamps/log)
+Starting state: after 9b Keep-mine, bob `beta = [POST-GRANT-EDIT]`, synced, authored under the
+**current epoch-2 client `4055153282127329`**. bob = editor.
+1. **alice demoted bob → viewer** (9c pre-step).
+2. **bob (viewer) edited `beta → [VIEWER-ERA-9C]`** → daemon **DENIED** at the role gate
+   (`role 'viewer' may not Edit KB 'collabtest'`, log 129–130) → dropped from the queue. The op stayed
+   **local-ahead** in bob's crdt_doc, authored under bob's then-current client.
+3. **alice promoted bob → editor.**
+4. **bob `:collab-disconnect`/`:collab-connect`** → `joining KB (ADR-022 reconcile)` →
+   `ADR-022 join: re-syncing recovered local-ahead edit(s) count=1` (log 138) →
+   `drain rowid=33 bytes=109` → **`kb/node_update: daemon confirmed applied rowid=33`** (log 143) →
+   `ack removed` (144). **No `REBASE REQUIRED`, no fence, no notification** (`notifications_list` still
+   only the resolved 9b id=1, outstanding 0).
+5. Result: bob `beta = [VIEWER-ERA-9C]`; **alice `beta = [VIEWER-ERA-9C]` (cascaded).**
+
+### Why it slipped the fence (hypothesis — needs alice daemon-side epoch state)
+The fence keys on **stale-epoch client_id**. In 9a the fenced op was from the *original* viewer era
+(client `8652327912337067`, epoch 1) — genuinely stale vs epoch 2 → fenced. In 9c, bob's
+`[VIEWER-ERA-9C]` op was authored under the **current epoch-2 client `4055153282127329`** (inherited
+from the 9b re-author). For the fence to catch a viewer-interval edit, the **demotion to viewer must
+establish an epoch boundary** (bump epoch / rotate bob's authoring client) so edits made while viewer
+become stale on re-promotion. Empirically that didn't happen across demote→viewer→(edit)→promote→editor
+— so the op was NOT stale → accepted → cascaded. ADR-023 says "a role change ⇒ bump epoch," but the
+**demotion path apparently doesn't bump (or doesn't rotate the member's client), leaving a hole.**
+
+### Contrast that DID work (so the fence logic is sound, the trigger coverage isn't)
+- 9a/9b: original-viewer-era op (epoch 1) vs epoch 2 → **fenced** → notification → Keep-mine converges. ✅
+- 9c: viewer-interval op authored under current epoch (no epoch boundary at demotion) → **not fenced** → cascade. ❌
+
+### What alice should confirm / where to look (owner + daemon side)
+- Daemon epoch ledger for `collabtest` + bob's principal: did the **viewer-reset (demote)** and the
+  **editor-promote** each bump bob's authorization epoch? (ADR-023 intends yes for any role change.)
+- If the demote did NOT bump (or only grants bump, not revokes), that's the gap: a revoke→regrant must
+  also rotate so viewer-interval edits are fenced. Fix dir: **bump epoch on EVERY role change (incl.
+  demotion/revoke)**, and/or have the member **rotate its authoring client on role-down** so any edit
+  attempted while restricted is stale-by-construction on re-grant.
+- Targeted regression to add: editor→viewer→edit(denied)→editor→reconnect ⇒ assert the
+  viewer-interval edit is **fenced** (not applied), mirroring 9a but via the demote path.
+
+⇒ **9c FAIL (cascade). 9d (TOFU/R4) deferred until B-20 understood.** Security-relevant — the headline
+B-19 guarantee holds for the original-grant path but **leaks on demote→re-promote**. Holding for alice.
