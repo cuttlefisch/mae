@@ -3423,6 +3423,20 @@ impl SchemeRuntime {
             },
         );
 
+        // (kb-sharing-status) — JSON snapshot of this peer's KB-sharing state
+        // (shared KBs with members + roles, policy, pending requests, my role +
+        // epoch, sync status). The SAME snapshot the `*KB Sharing*` buffer and
+        // the `kb_sharing_status` MCP tool expose (CLAUDE.md #3 the AI is a peer,
+        // #8 one builder). Re-captured each sync so it stays fresh. Returns a JSON
+        // string (parse it scheme-side); `{}` if serialization fails.
+        let kb_sharing_json = editor.kb_sharing_snapshot_json();
+        self.vm.register_fn(
+            "kb-sharing-status",
+            "JSON snapshot of this peer's KB-sharing state (members, roles, policy, pending, my role/epoch).",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::string(kb_sharing_json.clone())),
+        );
+
         // (collab-synced-buffers)
         let synced_names: Vec<String> = editor.collab.synced_buffers.iter().cloned().collect();
         self.vm.register_fn(
@@ -4698,6 +4712,28 @@ mod tests {
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         assert_eq!(rt.eval("*mode*").unwrap(), "normal");
+    }
+
+    #[test]
+    fn kb_sharing_status_primitive_returns_snapshot_json() {
+        // P0: users can script KB-sharing introspection — `(kb-sharing-status)`
+        // returns the same JSON snapshot the buffer + MCP tool expose.
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "mefp".to_string();
+        let coll = mae_sync::kb::KbCollectionDoc::new_owned("Team", "mefp", "me");
+        editor
+            .collab
+            .kb_collection_state
+            .insert("team".to_string(), coll.encode_state());
+        rt.inject_editor_state(&editor);
+        let json = rt.eval("(kb-sharing-status)").unwrap();
+        // The Scheme string is the JSON snapshot; it names our KB + owner role.
+        assert!(json.contains("\"team\""), "snapshot names the KB: {json}");
+        assert!(
+            json.contains("\"owner\""),
+            "snapshot shows the owner role: {json}"
+        );
     }
 
     #[test]

@@ -310,6 +310,10 @@ pub enum CollabEvent {
     KbShared {
         kb_id: String,
         node_count: usize,
+        /// Authoritative collection state from the daemon (post-set_owner /
+        /// preserved on re-share) — seeds the owner's local collection replica so
+        /// it can introspect its own KB's membership (C1 then keeps it fresh).
+        collection_state: Vec<u8>,
     },
     /// Joined a shared KB — carries collection + node states.
     KbJoined {
@@ -1525,8 +1529,33 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 .update(client_id, doc_id, state, color_index);
             editor.mark_full_redraw();
         }
-        CollabEvent::KbShared { kb_id, node_count } => {
+        CollabEvent::KbShared {
+            kb_id,
+            node_count,
+            collection_state,
+        } => {
             info!(kb = %kb_id, node_count, "KB shared successfully");
+            // OQ1 / introspection: seed the owner's local collection replica from
+            // the daemon's authoritative collection state so the owner can see its
+            // own KB's members/roles/policy in `kb_sharing_snapshot`. C1's
+            // `handle_kbc_membership_broadcast` then advances this replica on every
+            // membership change. Re-derive the owner's epoch from the same doc.
+            if !collection_state.is_empty() {
+                if let Ok(coll) = mae_sync::kb::KbCollectionDoc::from_bytes(&collection_state) {
+                    if !editor.collab.local_fingerprint.is_empty() {
+                        let epoch = coll.epoch_of(&editor.collab.local_fingerprint);
+                        if epoch == 0 {
+                            editor.collab.kb_epochs.remove(&kb_id);
+                        } else {
+                            editor.collab.kb_epochs.insert(kb_id.clone(), epoch);
+                        }
+                    }
+                }
+                editor
+                    .collab
+                    .kb_collection_state
+                    .insert(kb_id.clone(), collection_state);
+            }
             // Track which nodes are shared for continuous sync.
             // Get node IDs from the primary KB (or the named instance).
             let node_ids: HashSet<String> =
@@ -3647,7 +3676,19 @@ fn handle_response(
                     .and_then(|r| r.get("node_count"))
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as usize;
-                try_send_evt(evt_tx, CollabEvent::KbShared { kb_id, node_count });
+                let collection_state = result
+                    .and_then(|r| r.get("collection_state"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())
+                    .unwrap_or_default();
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::KbShared {
+                        kb_id,
+                        node_count,
+                        collection_state,
+                    },
+                );
             } else {
                 try_send_evt(
                     evt_tx,
@@ -4344,6 +4385,43 @@ pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kb_shared_seeds_owner_replica_for_introspection() {
+        // OQ1: on KbShared the owner seeds a local collection replica from the
+        // daemon's authoritative collection, so `kb_sharing_snapshot` can list its
+        // OWN KB's members (the owner is otherwise blind to its own KB).
+        use mae_sync::kb::KbCollectionDoc;
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "alicefp".to_string();
+
+        let coll = KbCollectionDoc::new_owned("Team", "alicefp", "alice");
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbShared {
+                kb_id: "team".to_string(),
+                node_count: 0,
+                collection_state: coll.encode_state(),
+            },
+        );
+
+        assert!(
+            editor.collab.kb_collection_state.contains_key("team"),
+            "owner replica seeded on share"
+        );
+        let snap = editor.kb_sharing_snapshot();
+        let kb = snap
+            .kbs
+            .iter()
+            .find(|k| k.id == "team")
+            .expect("kb present");
+        assert_eq!(kb.role_of_me.as_deref(), Some("owner"));
+        assert!(kb.is_owner);
+        assert!(
+            kb.members.iter().any(|m| m.is_me && m.role == "owner"),
+            "owner sees itself as a member of its own KB"
+        );
+    }
 
     #[test]
     fn kbc_broadcast_relearns_epoch_without_reconnect() {
@@ -6472,6 +6550,7 @@ mod tests {
             CollabEvent::KbShared {
                 kb_id: "default".to_string(),
                 node_count: 2,
+                collection_state: Vec::new(),
             },
         );
 
@@ -6544,6 +6623,7 @@ mod tests {
             CollabEvent::KbShared {
                 kb_id: "collabtest".to_string(),
                 node_count: 2,
+                collection_state: Vec::new(),
             },
         );
 
@@ -6607,6 +6687,7 @@ mod tests {
             CollabEvent::KbShared {
                 kb_id: "collabtest".to_string(),
                 node_count: 1,
+                collection_state: Vec::new(),
             },
         );
 

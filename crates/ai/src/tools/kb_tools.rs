@@ -568,6 +568,23 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         // --- KB sharing tools ---
         ToolDefinition {
+            name: "kb_sharing_status".into(),
+            description: "Introspect this peer's KB-sharing state: every shared/joined KB with its members + roles, join policy, pending requests, your own role and authorization epoch, and live sync status. Read-only; reflects this peer's local replica (the daemon is authoritative). Call this BEFORE managing membership so you know who is a member and what the fingerprints are.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "kb_id".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Optional: scope to a single KB by id/name (e.g. 'collabtest'). Omit for all shared/joined KBs.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "kb_share".into(),
             description: "Share a knowledge base for collaborative editing via the connected daemon. Shares all nodes in the named KB instance (NOT the active/default KB unless you name it).".into(),
             parameters: ToolParameters {

@@ -33,6 +33,7 @@ pub mod hooks;
 pub mod image_meta;
 pub mod input;
 pub mod kb_seed;
+pub mod kb_sharing;
 pub mod kb_view;
 pub mod keymap;
 pub mod keymap_registry;

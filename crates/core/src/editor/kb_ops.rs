@@ -1181,6 +1181,21 @@ impl Editor {
         Ok(())
     }
 
+    /// Build this peer's KB-sharing introspection snapshot — the single source of
+    /// truth shared by the `*KB Sharing*` buffer, the `kb_sharing_status` MCP tool,
+    /// and the `(kb-sharing-status)` Scheme primitive (CLAUDE.md #3, #8). Pure read
+    /// from local collection replicas; the daemon stays authoritative.
+    pub fn kb_sharing_snapshot(&self) -> crate::kb_sharing::KbSharingSnapshot {
+        crate::kb_sharing::build_snapshot(&self.collab)
+    }
+
+    /// The KB-sharing snapshot serialized to JSON — for the `(kb-sharing-status)`
+    /// Scheme primitive and the `kb_sharing_status` MCP tool (serde lives here in
+    /// mae-core, not in mae-scheme). `{}` if serialization fails.
+    pub fn kb_sharing_snapshot_json(&self) -> String {
+        serde_json::to_string(&self.kb_sharing_snapshot()).unwrap_or_else(|_| "{}".to_string())
+    }
+
     /// Show KB instances in a dedicated read-only buffer.
     pub fn show_kb_instances(&mut self) {
         let mut lines = vec![

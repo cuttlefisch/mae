@@ -159,6 +159,7 @@ Source: `crates/core/src/lib.rs`
 | `image_meta` | mod |
 | `input` | mod |
 | `kb_seed` | mod |
+| `kb_sharing` | mod |
 | `kb_view` | mod |
 | `keymap` | mod |
 | `keymap_registry` | mod |
@@ -569,6 +570,7 @@ Source: `shared/sync/src/lib.rs`
 | `buffer-string` | `crates/scheme/src/runtime.rs` |
 | `buffer-text` | `crates/scheme/src/runtime.rs` |
 | `collab-status` | `crates/scheme/src/runtime.rs` |
+| `kb-sharing-status` | `crates/scheme/src/runtime.rs` |
 | `collab-synced-buffers` | `crates/scheme/src/runtime.rs` |
 | `collab-confirmed-shares` | `crates/scheme/src/runtime.rs` |
 | `buffer-sync-enabled?` | `crates/scheme/src/runtime.rs` |

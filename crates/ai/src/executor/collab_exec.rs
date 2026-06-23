@@ -18,6 +18,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "kb_leave" => execute_kb_leave(editor, &call.arguments),
         "kb_add_member" => execute_kb_add_member(editor, &call.arguments),
         "kb_remove_member" => execute_kb_remove_member(editor, &call.arguments),
+        "kb_sharing_status" => execute_kb_sharing_status(editor, &call.arguments),
         _ => return None,
     };
     Some(result)
@@ -37,6 +38,20 @@ fn execute_collab_status(editor: &Editor) -> Result<String, String> {
         "server_address": address,
     })
     .to_string())
+}
+
+/// AI-peer introspection: this peer's full KB-sharing state (KBs, members +
+/// roles, policy, pending requests, my role/epoch, sync status). Read-only,
+/// built from local replicas — the same snapshot the `*KB Sharing*` buffer and
+/// the `(kb-sharing-status)` Scheme primitive show (CLAUDE.md #3 the AI is a
+/// peer, #8 shared computation). Optional `kb_id` scopes to one KB.
+fn execute_kb_sharing_status(editor: &Editor, args: &Value) -> Result<String, String> {
+    let snapshot = editor.kb_sharing_snapshot();
+    if let Some(kb_id) = args.get("kb_id").and_then(|v| v.as_str()) {
+        let entry = snapshot.kbs.iter().find(|k| k.id == kb_id);
+        return serde_json::to_string(&entry).map_err(|e| e.to_string());
+    }
+    serde_json::to_string(&snapshot).map_err(|e| e.to_string())
 }
 
 fn execute_collab_connect(editor: &mut Editor, args: &Value) -> Result<String, String> {
@@ -359,6 +374,38 @@ mod tests {
         let mut editor = Editor::new();
         let call = make_call("unknown_tool", json!({}));
         assert!(dispatch(&mut editor, &call).is_none());
+    }
+
+    #[test]
+    fn kb_sharing_status_returns_snapshot_json() {
+        // P0: the AI peer introspects KB-sharing state via the same snapshot the
+        // human sees. With no shared KBs the snapshot is well-formed and empty.
+        let mut editor = Editor::new();
+        let result = dispatch(&mut editor, &make_call("kb_sharing_status", json!({})))
+            .unwrap()
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.get("connection").is_some());
+        assert!(parsed["kbs"].as_array().unwrap().is_empty());
+
+        // Seed an owner replica → the tool reports the KB with the owner member.
+        let coll = mae_sync::kb::KbCollectionDoc::new_owned("Team", "mefp", "me");
+        editor.collab.local_fingerprint = "mefp".to_string();
+        editor
+            .collab
+            .kb_collection_state
+            .insert("team".to_string(), coll.encode_state());
+
+        let scoped = dispatch(
+            &mut editor,
+            &make_call("kb_sharing_status", json!({"kb_id": "team"})),
+        )
+        .unwrap()
+        .unwrap();
+        let kb: Value = serde_json::from_str(&scoped).unwrap();
+        assert_eq!(kb["id"], "team");
+        assert_eq!(kb["role_of_me"], "owner");
+        assert!(kb["is_owner"].as_bool().unwrap());
     }
 
     #[test]

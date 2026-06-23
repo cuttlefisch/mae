@@ -1394,12 +1394,22 @@ async fn handle_doc_request_inner(
             doc_store.set_kb_meta(&kb_id, meta).await;
 
             info!(session = session_id, kb_id = %kb_id, node_count, "kb/share: complete");
+            // Return the AUTHORITATIVE collection state (post-set_owner, or the
+            // preserved one on re-share — B-12) so the owner can seed a local
+            // collection replica and introspect its own KB's members/roles/policy
+            // on the same CRDT lineage future `kbc:` broadcasts advance (C1).
+            let owner_collection = doc_store
+                .encode_state_and_sv(&collection_doc)
+                .await
+                .map(|(state, _sv)| update_to_base64(&state))
+                .unwrap_or_default();
             JsonRpcResponse::success(
                 id,
                 serde_json::json!({
                     "kb_id": kb_id,
                     "shared": true,
                     "node_count": node_count,
+                    "collection_state": owner_collection,
                 }),
             )
         }

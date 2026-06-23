@@ -335,6 +335,10 @@
           "kind": "mod"
         },
         {
+          "name": "kb_sharing",
+          "kind": "mod"
+        },
+        {
           "name": "kb_view",
           "kind": "mod"
         },
@@ -1637,6 +1641,10 @@
     },
     {
       "name": "collab-status",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-sharing-status",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
