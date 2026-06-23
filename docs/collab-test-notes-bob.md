@@ -1755,3 +1755,46 @@ remove the `192.168.1.137:9480` line from known_hosts, (4) `:collab-connect` →
 modal** → run the **n-then-y** sequence above, (5) restore `collab_host_key_policy = "accept-new"` after.
 I'll tail the daemon for your reconnect/auth and confirm the pin re-appears. **This is GUI under `prompt`
 — exactly the path that deadlocked the TUI in #66; R4 should make it just work.**
+
+---
+
+## 🛑 Step 9d (TOFU/R4) — BLOCKED: runtime `collab_host_key_policy` change not honored by the connect path (B-21)
+Ran the green-lit setup (disconnect → `(set-option! "collab_host_key_policy" "prompt")` → remove the
+`192.168.1.137:9480` line from known_hosts → connect). **The modal never appeared** — bob connected and
+**auto-pinned under `accept-new`** both attempts:
+```
+pinned new daemon host key (accept-new)  addr=192.168.1.137:9480  fp=SHA256:07aWfiNGm690ZcPzxEWvCSTYgkIz+Dw7Db0RPOKK7Ls
+collab connected
+```
+- **Attempt 1 (15:44):** connect fired immediately after the `set-option!` → **apply race** (the
+  eval_scheme `set-option!` lands via the SharedState→`apply_to_editor` drain on the next tick; the
+  immediate `:collab-connect` read the pre-drain value). Minor / agent-timing — a human typing `:set`
+  then `:collab-connect` gets the tick between.
+- **Attempt 2 (15:46):** `get_option collab_host_key_policy` → **`"prompt"` (confirmed applied)** *before*
+  connecting, pin removed again → connect **STILL auto-pinned under `accept-new`**. **Not a race this
+  time.** ⇒ the connect path does **not** read the live/registry value for this option.
+
+### B-21 (finding): runtime set-option for `collab_host_key_policy` doesn't reach the connect-time verifier
+`get_option` reflects the change (`prompt`), but `resolve_client_transport`'s host-key verifier still
+used `accept-new` (the **init.scm config-load value**). So the policy is effectively **read once at
+config load**, and a runtime `:set` / `(set-option!)` updates the OptionRegistry but **not** the field
+the connect path consumes (`editor.collab.host_key_policy`). This contradicts the Q1 assumption ("rebuilt
+from the live field every connect"). Sibling symptom to the earlier auto-connect env-override gap (which
+alice fixed in `91a5201`) — same class: a collab option whose runtime mutation isn't propagated to the
+live struct the connect reads.
+- **Fix dir (alice):** on `set-option!`/`apply_to_editor` for `collab_host_key_policy` (and audit the
+  other `collab_*` options similarly), update `editor.collab.host_key_policy` so the next connect honors
+  it — OR have `resolve_client_transport` read the OptionRegistry directly at connect time. Then runtime
+  `:set` works as documented.
+
+### Impact on 9d + path forward
+- **9d's modal could NOT be exercised via runtime set-option.** To validate R4 now, bob must set
+  `collab_host_key_policy = "prompt"` in **init.scm** and **relaunch** (so the config-load value is
+  `prompt`), then clear the pin + connect → expect the modal. Alternatively, alice fixes B-21 first so the
+  runtime path works (cleaner — also closes the runtime-config gap).
+- **bob end state:** connected + correctly **re-pinned** (`192.168.1.137:9480 mae-ed25519 Ck5Um…`, whose
+  SHA256 = `07aW…7Ls` = alice's OOB fingerprint ✅). Registry policy set back to `accept-new`.
+  `known_hosts.bak` saved.
+▶ **alice: pick the 9d path** — (A) I set init.scm `prompt` + relaunch to test the modal now, or (B) you
+fix B-21 (runtime-honored) first, then we test the modal via runtime `:set` (and get the fix validated
+too). Recommend **B** (fixes a real config gap + still validates the modal).
