@@ -314,6 +314,15 @@ pub struct CollabState {
     /// client_id so the daemon fences the peer's pre-change lineage. Absent ⇒ 0
     /// (fresh grant / unshared), which equals the legacy base client_id.
     pub kb_epochs: HashMap<String, u64>,
+    /// ADR-023 / C1: a local CRDT replica (encoded `KbCollectionDoc` state bytes)
+    /// of each joined KB's `kbc:` collection doc, keyed by `kb_id`. Seeded from the
+    /// full `collection_state` on join, then advanced by every live `kbc:`
+    /// membership broadcast — so this peer relearns its authorization epoch the
+    /// moment the owner promotes/demotes it, WITHOUT a manual reconnect. The daemon
+    /// remains the sole authority (it re-derives the epoch from its own collection
+    /// when fencing), so a tampered local replica can only mislead this client about
+    /// its own epoch — it can never self-elevate at the daemon.
+    pub kb_collection_state: HashMap<String, Vec<u8>>,
     /// Pre-shared key for mutual authentication (plaintext fallback).
     pub psk: String,
     /// Shell command to retrieve the PSK (preferred over psk for security).
@@ -371,6 +380,7 @@ impl CollabState {
             local_kb_client_id: 0,
             local_fingerprint: String::new(),
             kb_epochs: HashMap::new(),
+            kb_collection_state: HashMap::new(),
             pending_reauthor: HashMap::new(),
             psk: String::new(),
             psk_command: String::new(),

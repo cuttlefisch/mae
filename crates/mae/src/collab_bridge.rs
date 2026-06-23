@@ -836,6 +836,70 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
 
 // --- Event handling (main thread) ---
 
+/// C1 (ADR-023): apply a live `kbc:` collection-doc broadcast to this peer's local
+/// collection replica and relearn its authorization epoch WITHOUT a reconnect.
+///
+/// The daemon broadcasts the KB's collection doc on every membership/role change.
+/// We hold a local CRDT replica (`kb_collection_state`) seeded from the join
+/// snapshot; applying the broadcast delta and re-deriving `epoch_of(fingerprint)`
+/// lets the very next node edit be authored under the rotated, current-epoch
+/// client_id — eliminating the manual reconnect the live two-machine test needed.
+///
+/// Security (CLAUDE.md #10): the daemon stays the sole authority — it re-derives
+/// each member's epoch from its OWN authoritative collection when fencing
+/// (B-19/B-20, untouched). This relearn is a pure client convenience: a tampered
+/// or stale local replica can only mislead THIS client about its own epoch, never
+/// self-elevate at the daemon. A client that ignores the relearn and keeps
+/// authoring under a stale epoch is still fenced.
+fn handle_kbc_membership_broadcast(editor: &mut Editor, kb_id: &str, update_bytes: &[u8]) {
+    // No baseline replica ⇒ we never joined this KB (or already left); a bare
+    // delta can't be applied to nothing.
+    let Some(base) = editor.collab.kb_collection_state.get(kb_id).cloned() else {
+        debug!(kb = %kb_id, "kbc broadcast for a KB with no local replica — ignoring");
+        return;
+    };
+    let mut coll = match mae_sync::kb::KbCollectionDoc::from_bytes(&base) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(kb = %kb_id, error = %e, "kbc broadcast: local replica decode failed");
+            return;
+        }
+    };
+    if let Err(e) = coll.apply_update(update_bytes) {
+        warn!(kb = %kb_id, error = %e, "kbc broadcast: apply_update failed");
+        return;
+    }
+    // Persist the advanced replica so the next broadcast composes on top of it.
+    editor
+        .collab
+        .kb_collection_state
+        .insert(kb_id.to_string(), coll.encode_state());
+
+    if editor.collab.local_fingerprint.is_empty() {
+        return; // no collab identity loaded ⇒ no epoch to relearn
+    }
+    let new_epoch = coll.epoch_of(&editor.collab.local_fingerprint);
+    let prev = editor.collab.kb_epochs.get(kb_id).copied().unwrap_or(0);
+    if new_epoch == prev {
+        return; // no authorization change for us
+    }
+    if new_epoch == 0 {
+        editor.collab.kb_epochs.remove(kb_id);
+    } else {
+        editor.collab.kb_epochs.insert(kb_id.to_string(), new_epoch);
+    }
+    info!(
+        kb = %kb_id, prev_epoch = prev, new_epoch,
+        "relearned KB authorization epoch from live membership broadcast (C1)"
+    );
+    editor.notify(mae_core::notifications::Notification::info(
+        "collab",
+        format!("KB '{kb_id}': your access changed — edits now use updated authorization"),
+    ));
+    editor.fire_hook("kb-epoch-changed");
+    refresh_collab_status_if_open(editor);
+}
+
 /// Handle an event from the collab background task — update editor state.
 pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
     match event {
@@ -982,7 +1046,13 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             update_bytes,
             wal_seq,
         } => {
-            if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
+            // C1: a `kbc:` broadcast is a KB collection-doc (membership/epoch)
+            // delta, NOT buffer text. Apply it to our local collection replica and
+            // relearn our authorization epoch live — no manual reconnect. It never
+            // maps to a buffer, so intercept it before the buffer lookup.
+            if let Some(kb_id) = doc_id.strip_prefix("kbc:") {
+                handle_kbc_membership_broadcast(editor, kb_id, &update_bytes);
+            } else if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
                 // Capture cursor char offsets for all windows viewing this buffer
                 // so we can restore them after the rope rebuild.
                 let window_cursors: Vec<(mae_core::WindowId, usize)> = editor
@@ -1548,6 +1618,14 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 }
             }
 
+            // C1: seed the local collection replica from the full join snapshot so
+            // subsequent live `kbc:` membership broadcasts can be applied as deltas
+            // and the epoch relearned without a reconnect.
+            editor
+                .collab
+                .kb_collection_state
+                .insert(kb_id.clone(), collection_state);
+
             info!(kb = %kb_id, node_count, "KB join complete (merged)");
             editor.set_status(format!("Joined KB '{}' ({} nodes)", kb_id, node_count));
             refresh_collab_status_if_open(editor);
@@ -1558,6 +1636,10 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             // Local KB nodes persist after leaving (local-first principle).
             // Only stop receiving further updates.
             editor.collab.shared_kbs.remove(&kb_id);
+            // C1: drop the collection replica + learned epoch — we no longer track
+            // this KB's membership (a later rejoin re-seeds from a fresh snapshot).
+            editor.collab.kb_collection_state.remove(&kb_id);
+            editor.collab.kb_epochs.remove(&kb_id);
             editor.set_status(format!("Left KB '{}' (local copy preserved)", kb_id));
             refresh_collab_status_if_open(editor);
             editor.mark_full_redraw();
@@ -4262,6 +4344,114 @@ pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kbc_broadcast_relearns_epoch_without_reconnect() {
+        // C1: a live `kbc:` collection-doc broadcast that changes THIS peer's role
+        // must update its learned authorization epoch in-place — no reconnect/
+        // re-join — so the next node edit authors under the rotated client_id.
+        use mae_sync::kb::{KbCollectionDoc, Role};
+
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "alicefp".to_string();
+
+        // Owner shares; Alice is granted (epoch 0 — a fresh grant doesn't bump).
+        let mut coll = KbCollectionDoc::new_owned("teamkb", "ownerfp", "Owner");
+        let _ = coll.upsert_member("alicefp", "Alice", Role::Editor);
+        // Seed Alice's local replica from the join snapshot.
+        editor
+            .collab
+            .kb_collection_state
+            .insert("teamkb".to_string(), coll.encode_state());
+        assert_eq!(coll.epoch_of("alicefp"), 0, "fresh grant is epoch 0");
+
+        // Owner demotes Alice (Editor → Viewer): a real role change → epoch bumps.
+        let demote_update = coll.set_role("alicefp", Role::Viewer);
+        assert_eq!(coll.epoch_of("alicefp"), 1, "role change bumps the epoch");
+
+        // The daemon broadcasts the delta as a `kbc:` RemoteUpdate.
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::RemoteUpdate {
+                doc_id: "kbc:teamkb".to_string(),
+                update_bytes: demote_update,
+                wal_seq: 1,
+            },
+        );
+
+        assert_eq!(
+            editor.collab.kb_epochs.get("teamkb").copied(),
+            Some(1),
+            "epoch relearned live from the broadcast — no reconnect needed"
+        );
+        assert!(
+            editor
+                .notifications
+                .feed()
+                .any(|n| n.source == "collab" && n.title.contains("access changed")),
+            "the user is informed their access changed"
+        );
+    }
+
+    #[test]
+    fn kbc_broadcast_cannot_self_elevate_other_members_change_is_ignored() {
+        // C1 security non-regression: the relearn derives epoch ONLY from the
+        // daemon-authored collection doc. A broadcast that changes a DIFFERENT
+        // member must not touch THIS peer's epoch — a client cannot synthesize an
+        // epoch bump for itself. (The daemon remains authoritative and fences a
+        // client that authors under a stale epoch regardless — see the daemon's
+        // viewer_era_* / stale_epoch_continuation_* tests, untouched by C1.)
+        use mae_sync::kb::{KbCollectionDoc, Role};
+
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "alicefp".to_string();
+
+        let mut coll = KbCollectionDoc::new_owned("teamkb", "ownerfp", "Owner");
+        let _ = coll.upsert_member("alicefp", "Alice", Role::Editor);
+        let _ = coll.upsert_member("bobfp", "Bob", Role::Editor);
+        editor
+            .collab
+            .kb_collection_state
+            .insert("teamkb".to_string(), coll.encode_state());
+
+        // Owner changes BOB's role (not Alice's).
+        let bob_update = coll.set_role("bobfp", Role::Viewer);
+        assert_eq!(coll.epoch_of("bobfp"), 1);
+        assert_eq!(coll.epoch_of("alicefp"), 0, "Alice's epoch is unchanged");
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::RemoteUpdate {
+                doc_id: "kbc:teamkb".to_string(),
+                update_bytes: bob_update,
+                wal_seq: 1,
+            },
+        );
+
+        // Alice's epoch stays at 0 — she gained nothing from Bob's change.
+        assert!(
+            editor.collab.kb_epochs.get("teamkb").copied().unwrap_or(0) == 0,
+            "a change to another member must not alter this peer's epoch"
+        );
+    }
+
+    #[test]
+    fn kbc_broadcast_for_unjoined_kb_is_ignored() {
+        // C1: a `kbc:` broadcast for a KB we hold no replica of (never joined, or
+        // already left) is safely ignored — a bare delta can't apply to nothing.
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "alicefp".to_string();
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::RemoteUpdate {
+                doc_id: "kbc:ghost-kb".to_string(),
+                update_bytes: vec![1, 2, 3],
+                wal_seq: 1,
+            },
+        );
+        assert!(editor.collab.kb_epochs.is_empty());
+        assert!(editor.collab.kb_collection_state.is_empty());
+    }
 
     #[test]
     fn kb_node_adopted_keep_mine_reauthors_over_authoritative() {
