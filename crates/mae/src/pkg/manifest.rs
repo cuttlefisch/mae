@@ -39,6 +39,13 @@ pub struct ModuleIdentity {
     pub mae_version: String,
     #[serde(default)]
     pub category: String,
+    /// A **required** (core) module: auto-enabled regardless of the `(mae!)` block,
+    /// unless explicitly disabled via `(package! "name" :disable #t)`. Doom's `core/`
+    /// analog — for cross-cutting features whose buffers/prompts can be raised by
+    /// *background* events (so their keybindings must always be present), e.g. the
+    /// `notifications` attention bus. Optional, user-initiated features stay opt-in.
+    #[serde(default)]
+    pub required: bool,
     /// URL for docs or project homepage.
     #[serde(default)]
     pub homepage: String,
@@ -168,6 +175,23 @@ name = "dashboard"
         assert!(m.dependencies.is_empty());
         assert_eq!(m.entry.init, "init.scm");
         assert_eq!(m.entry.autoloads, "autoloads.scm");
+        // `required` defaults false — modules are opt-in unless they opt into core.
+        assert!(!m.module.required);
+    }
+
+    #[test]
+    fn parse_required_core_module() {
+        let toml = r#"
+[module]
+name = "notifications"
+category = "tools"
+required = true
+"#;
+        let m = ModuleManifest::from_str(toml, Path::new("test")).unwrap();
+        assert!(
+            m.module.required,
+            "a core module opts into auto-enable via `required = true`"
+        );
     }
 
     #[test]

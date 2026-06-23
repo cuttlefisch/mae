@@ -1199,6 +1199,31 @@ pub fn load_modules(
         }
     }
 
+    // Auto-enable REQUIRED (core) modules regardless of the `(mae!)` block — Doom's
+    // `core/` analog — UNLESS explicitly disabled via `(package! "name" :disable #t)`.
+    // These are cross-cutting features whose buffers/prompts are raised by
+    // *background* events (so their keybindings must always be present), e.g. the
+    // `notifications` attention bus. User-initiated features (git-status, debug, …)
+    // stay opt-in. (Without a `(mae!)` block the enable-all path already includes them.)
+    {
+        let disabled: std::collections::HashSet<String> = scheme
+            .declared_packages()
+            .into_iter()
+            .filter(|p| p.disable)
+            .map(|p| p.name)
+            .collect();
+        for d in &all_modules {
+            let module = &d.manifest;
+            if module.module.required
+                && !enabled.contains_key(module.name())
+                && !disabled.contains(module.name())
+            {
+                info!("auto-enabling {} (required/core module)", module.name());
+                enabled.insert(module.name().to_string(), vec![]);
+            }
+        }
+    }
+
     // Expand the dependency closure of every enabled module (e.g. a declared or
     // auto-enabled keymap flavor pulls in the shared `keymap-leader`) so the
     // resolver never fails on an unlisted-but-required dependency.
