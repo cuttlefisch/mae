@@ -835,6 +835,18 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     format!("Trust daemon at {addr}?"),
                 )
                 .body(format!("{fingerprint}  (first connect — accept & pin?)"))
+                // B-22c: explicit bus actions so the prompt is answerable via
+                // `notify_resolve` / the `*Notifications*` row (headless/agent parity,
+                // and a working answer path while the GUI modal paint is fixed), in
+                // addition to the modal y/n keypress — both send on the reply channel.
+                .action(
+                    "Accept & pin",
+                    mae_core::notifications::NotifCommand::Reply(true),
+                )
+                .action(
+                    "Reject",
+                    mae_core::notifications::NotifCommand::Reply(false),
+                )
                 .blocking(mae_core::notifications::NotifReply::Bool(reply)),
             );
             editor.mark_full_redraw();

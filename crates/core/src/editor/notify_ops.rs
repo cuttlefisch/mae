@@ -73,6 +73,39 @@ impl super::Editor {
             None => return false,
         };
         let ran = match cmd {
+            // B-22c: answer a BlockingReply notification over the bus — send on the
+            // parked reply channel, close the modal if it's this one, resolve. Lets
+            // the host-key TOFU prompt be answered via `notify_resolve` / the
+            // `*Notifications*` row without depending on the GUI modal painting (and
+            // gives headless/agent parity).
+            NotifCommand::Reply(answer) => {
+                match self.pending_notif_reply.take() {
+                    Some((rid, reply)) if rid == id => match reply {
+                        crate::notifications::NotifReply::Bool(tx) => {
+                            let _ = tx.send(answer);
+                        }
+                        crate::notifications::NotifReply::Text(tx) => {
+                            let _ = tx.send(if answer {
+                                "y".to_string()
+                            } else {
+                                String::new()
+                            });
+                        }
+                    },
+                    // A different notification's reply is parked — leave it.
+                    other => self.pending_notif_reply = other,
+                }
+                // Tear down the modal dialog if it belongs to this notification.
+                if matches!(
+                    self.mini_dialog.as_ref().map(|d| &d.context),
+                    Some(crate::command_palette::MiniDialogContext::Notification { notif_id }) if *notif_id == id
+                ) {
+                    self.mini_dialog = None;
+                }
+                self.notifications.resolve(id, Resolution::Replied);
+                self.refresh_notifications_buffer();
+                return true;
+            }
             NotifCommand::Command(name) => self.execute_command(&name),
             NotifCommand::AdoptRemote { kb_id, node_id } => {
                 self.notify_collab_adopt_remote(&kb_id, &node_id)
@@ -443,6 +476,36 @@ mod tests {
         ));
         // The reply channel is parked for the key handler to answer.
         assert!(ed.pending_notif_reply.is_some());
+    }
+
+    /// B-22c: a `Reply` action answers a BlockingReply notification over the bus
+    /// (sends on the parked channel, closes the modal, resolves) — so MCP /
+    /// `*Notifications*` can answer the host-key prompt without a GUI keypress.
+    #[test]
+    fn reply_action_answers_blocking_notification_over_bus() {
+        use crate::notifications::{NotifCommand, NotifReply, Notification};
+        let (tx, rx) = std::sync::mpsc::channel::<bool>();
+        let mut ed = Editor::new();
+        let id = ed.notify(
+            Notification::action_required("collab", "Trust daemon at host?")
+                .body("SHA256:abc…")
+                .action("Accept & pin", NotifCommand::Reply(true))
+                .action("Reject", NotifCommand::Reply(false))
+                .blocking(NotifReply::Bool(tx)),
+        );
+        assert!(ed.mini_dialog.is_some(), "modal opened");
+        assert_eq!(ed.notifications.outstanding_count(), 1);
+
+        // Run action 0 (Accept) via the bus — sends `true`, closes the modal, resolves.
+        assert!(ed.notify_run_action(id, 0));
+        assert_eq!(
+            rx.recv(),
+            Ok(true),
+            "Accept sends true on the reply channel"
+        );
+        assert!(ed.mini_dialog.is_none(), "modal torn down after bus answer");
+        assert!(ed.pending_notif_reply.is_none(), "reply consumed");
+        assert_eq!(ed.notifications.outstanding_count(), 0, "resolved");
     }
 
     #[test]

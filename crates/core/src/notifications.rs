@@ -117,6 +117,11 @@ pub enum NotifCommand {
     KeepMine { kb_id: String, node_id: String },
     /// Collab: export the diverged node externally, then adopt authoritative.
     StashExternally { kb_id: String, node_id: String },
+    /// Answer a `BlockingReply` notification (e.g. the host-key TOFU prompt) over
+    /// the bus by sending this boolean on its reply channel — so headless/MCP
+    /// (`notify_resolve`) and the `*Notifications*` row can answer a modal without
+    /// a GUI keypress (B-22c). For a `Text` reply, `true`→"y", `false`→"".
+    Reply(bool),
 }
 
 /// A labelled at-point action on a notification.
