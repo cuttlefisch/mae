@@ -166,6 +166,7 @@ Source: `crates/core/src/lib.rs`
 | `lock_stats` | mod |
 | `lsp_intent` | mod |
 | `messages` | mod |
+| `notifications` | mod |
 | `options` | mod |
 | `project` | mod |
 | `render_common` | mod |

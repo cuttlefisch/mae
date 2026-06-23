@@ -29,6 +29,7 @@ mod markdown_ops;
 mod marks;
 mod mouse_ops;
 mod multicursor;
+mod notify_ops;
 mod option_ops;
 mod org_ops;
 pub mod perf;
@@ -813,6 +814,12 @@ pub struct Editor {
     /// Reply channel for a pending TOFU host-key prompt (the collab task blocks
     /// on it). Set when a `PeerKeyAccept` dialog is shown; consumed on answer.
     pub pending_host_key_reply: Option<std::sync::mpsc::Sender<bool>>,
+    /// ADR-024 attention bus — background subsystems raise notifications here;
+    /// routed by severity to status / badge / modal / `*Notifications*` buffer.
+    pub notifications: crate::notifications::NotificationCenter,
+    /// Reply channel for a pending `BlockingReply` notification routed to a modal
+    /// (generalizes `pending_host_key_reply`). `(notif_id, reply)`; consumed on answer.
+    pub pending_notif_reply: Option<(u64, crate::notifications::NotifReply)>,
     /// LSP state: intent queues, completion, hover, peek, symbols, diagnostics.
     pub lsp: LspContext,
     /// Shell/terminal intent queue and cached state.
@@ -1189,6 +1196,8 @@ impl Editor {
             command_palette: None,
             mini_dialog: None,
             pending_host_key_reply: None,
+            notifications: crate::notifications::NotificationCenter::new(),
+            pending_notif_reply: None,
             lsp: LspContext::new(),
             shell: ShellIntents::default(),
             pending_buffer_removals: Vec::new(),

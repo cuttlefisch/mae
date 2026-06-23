@@ -363,6 +363,10 @@
           "kind": "mod"
         },
         {
+          "name": "notifications",
+          "kind": "mod"
+        },
+        {
           "name": "options",
           "kind": "mod"
         },

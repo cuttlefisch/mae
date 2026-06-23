@@ -1,5 +1,12 @@
 use crate::options::{parse_option_bool, parse_option_int};
 
+/// Parse a `notify_route_*` option value into a notification [`Surface`].
+fn parse_notify_surface(value: &str) -> Result<crate::notifications::Surface, String> {
+    crate::notifications::Surface::parse(value).ok_or_else(|| {
+        format!("Invalid notify surface '{value}' (expected status|badge|modal|buffer|silent)")
+    })
+}
+
 impl super::Editor {
     pub fn set_local_option(&mut self, name: &str, value: &str) -> Result<String, String> {
         let def_name = self
@@ -179,6 +186,18 @@ impl super::Editor {
             "daemon_socket" => self.kb.daemon_socket.display().to_string(),
             "daemon_cache_size" => self.kb.daemon_cache_size.to_string(),
             "fill_column" => self.fill_column.to_string(),
+            "notify_route_info" => self.notifications.route_info.as_str().to_string(),
+            "notify_route_success" => self.notifications.route_success.as_str().to_string(),
+            "notify_route_warning" => self.notifications.route_warning.as_str().to_string(),
+            "notify_route_error" => self.notifications.route_error.as_str().to_string(),
+            "notify_route_action_required" => self
+                .notifications
+                .route_action_required
+                .as_str()
+                .to_string(),
+            "notify_badge_min_severity" => {
+                self.notifications.badge_min_severity.as_str().to_string()
+            }
             _ => return None,
         };
         Some((value, def))
@@ -735,6 +754,26 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.fill_column = v.clamp(20, 200);
+            }
+            "notify_route_info" => self.notifications.route_info = parse_notify_surface(value)?,
+            "notify_route_success" => {
+                self.notifications.route_success = parse_notify_surface(value)?
+            }
+            "notify_route_warning" => {
+                self.notifications.route_warning = parse_notify_surface(value)?
+            }
+            "notify_route_error" => self.notifications.route_error = parse_notify_surface(value)?,
+            "notify_route_action_required" => {
+                self.notifications.route_action_required = parse_notify_surface(value)?
+            }
+            "notify_badge_min_severity" => {
+                self.notifications.badge_min_severity =
+                    crate::notifications::Severity::parse(value).ok_or_else(|| {
+                        format!(
+                            "Invalid severity '{}' (expected info|success|warning|error|action-required)",
+                            value
+                        )
+                    })?
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
