@@ -135,7 +135,7 @@ grep -E '^(ok|not ok|#|1\.\.)' "$WORK/tap.out" || true
 echo "--- daemon auth ---"
 grep -iE 'mTLS client authenticated|authenticated peer' "$WORK/daemon.log" | tail -2 || true
 
-# --- Verdict: the daemon must have authenticated the peer, and no test failed ---
+# --- Verdict (positive path): the daemon must have authenticated the peer ---
 if ! grep -q 'mTLS client authenticated' "$WORK/daemon.log"; then
   echo "FAIL: daemon never authenticated an mTLS peer"; exit 1
 fi
@@ -146,3 +146,35 @@ if ! grep -qE '# .*0 failed' "$WORK/tap.out"; then
   echo "FAIL: did not see a clean TAP summary"; exit 1
 fi
 echo "PASS: trusted-peer mTLS collab e2e"
+
+# --- Negative scenario: UNAUTHORIZED peer must be rejected at the mTLS boundary.
+# A second editor with its OWN identity that is NOT in the daemon's
+# authorized_keys attempts to connect. The daemon must NOT authenticate it — we
+# assert the authenticated-peer count does not increase (robust to the exact
+# rustls rejection string). This is the e2e counterpart to the unit-level
+# `mtls_unauthorized_client_rejected` (shared/mcp/src/tls.rs). ---
+AUTH_BEFORE="$(grep -c 'mTLS client authenticated' "$WORK/daemon.log" || true)"
+mkdir -p "$WORK"/{cli2/.config/mae,cli2/.local/share}
+cli2_env() { HOME="$WORK/cli2" XDG_CONFIG_HOME="$WORK/cli2/.config" XDG_DATA_HOME="$WORK/cli2/.local/share" "$@"; }
+# Generate the rogue identity but DO NOT authorize it on the daemon.
+cli2_env "$MAE_BIN" --collab-identity >/dev/null 2>&1
+cp "$WORK/cli/.config/mae/init.scm" "$WORK/cli2/.config/mae/init.scm"
+cat > "$WORK/scen/rogue.scm" <<EOF
+(load "$WORK/scen/helpers.scm")
+(describe-group "unauthorized peer is rejected"
+  (lambda ()
+    (it-test "attempts to connect (expected to be refused)"
+      (lambda () #t))))
+EOF
+set +e
+cli2_env env MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
+  ${TIMEOUT_BIN:+$TIMEOUT_BIN 20} "$MAE_BIN" --test "$WORK/scen/rogue.scm" > "$WORK/tap2.out" 2> "$WORK/cli2.log"
+set -e
+sleep 0.5
+AUTH_AFTER="$(grep -c 'mTLS client authenticated' "$WORK/daemon.log" || true)"
+if [ "$AUTH_AFTER" != "$AUTH_BEFORE" ]; then
+  echo "FAIL: daemon authenticated an UNAUTHORIZED peer (before=$AUTH_BEFORE after=$AUTH_AFTER)"
+  exit 1
+fi
+echo "PASS: unauthorized peer rejected at the mTLS boundary"
+echo "PASS: collab mTLS e2e (trusted + unauthorized)"

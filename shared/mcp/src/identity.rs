@@ -781,6 +781,69 @@ mod tests {
     }
 
     #[test]
+    fn file_verifier_aborts_on_changed_key_without_overwriting_pin() {
+        // A4 / TOFU integrity: once a daemon host key is pinned, a DIFFERENT key
+        // for the same address (a MITM / key-substitution) must be rejected AND
+        // must NOT overwrite the trusted pin — otherwise an attacker could
+        // silently re-pin and impersonate the daemon thereafter.
+        let dir = std::env::temp_dir().join(format!("mae-mitm-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("known_hosts");
+
+        let genuine = Identity::generate("daemon").public();
+        let attacker = Identity::generate("mitm").public();
+        let addr = "10.0.0.9:9473";
+
+        // First contact under accept-new pins the genuine key.
+        let v = FileHostKeyVerifier::new(path.clone(), HostKeyPolicy::AcceptNew);
+        assert!(
+            v.verify(addr, &genuine),
+            "first-use accept-new pins + trusts"
+        );
+
+        // The attacker presents a different key for the same address → rejected.
+        assert!(
+            !v.verify(addr, &attacker),
+            "a changed host key must be rejected (MITM defense)"
+        );
+
+        // The pin on disk is STILL the genuine key — not silently overwritten.
+        let kh = KnownHosts::load(&path);
+        assert_eq!(
+            kh.get(addr).unwrap().to_bytes(),
+            genuine.to_bytes(),
+            "the trusted pin must survive a rejected key-change attempt"
+        );
+        // And the genuine key still verifies afterwards.
+        assert!(
+            v.verify(addr, &genuine),
+            "genuine key still trusted after the attack"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_verifier_strict_rejects_unknown_host() {
+        // Strict policy never auto-pins: an unknown (unpinned) host is rejected,
+        // and nothing is written to known_hosts.
+        let dir = std::env::temp_dir().join(format!("mae-strict-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("known_hosts");
+        let server = Identity::generate("daemon").public();
+        let v = FileHostKeyVerifier::new(path.clone(), HostKeyPolicy::Strict);
+        assert!(
+            !v.verify("h:9473", &server),
+            "strict policy rejects an unpinned host (no TOFU)"
+        );
+        assert!(
+            KnownHosts::load(&path).get("h:9473").is_none(),
+            "strict policy must not pin anything"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn authorized_keys_add_authorize_revoke() {
         let dir = std::env::temp_dir().join(format!("mae-ak-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
