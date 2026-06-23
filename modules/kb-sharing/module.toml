@@ -1,0 +1,13 @@
+[module]
+name = "kb-sharing"
+version = "0.1.0"
+description = "*KB Sharing* management buffer keybindings + SPC C K m leader (collab)"
+mae_version = ">=0.13.0"
+category = "tools"
+# Core feature: collaborative KB management. The *KB Sharing* buffer + its leader
+# entry must always be present so users can view/manage shared KBs without setup.
+# Auto-enabled regardless of the (mae!) block; opt out with (package! "kb-sharing" :disable #t).
+required = true
+
+[entry]
+autoloads = "autoloads.scm"

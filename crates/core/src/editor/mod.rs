@@ -17,6 +17,7 @@ pub(crate) mod help_ops;
 mod hook_ops;
 mod jumps;
 pub(crate) mod kb_ops;
+mod kb_sharing_ops;
 pub mod kb_state;
 mod keymaps;
 mod lsp_actions;

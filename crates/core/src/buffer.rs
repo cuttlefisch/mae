@@ -79,6 +79,9 @@ pub enum BufferKind {
     /// `*Notifications*` attention buffer (ADR-024) — magit-style list of
     /// outstanding + recently-resolved notifications with at-point actions.
     Notifications,
+    /// `*KB Sharing*` management buffer — magit-style list of shared/joined KBs
+    /// with members, roles, policy, and pending requests + at-point actions.
+    KbSharing,
 }
 
 impl BufferKind {
@@ -1577,6 +1580,14 @@ impl Buffer {
 
     pub fn notif_view_mut(&mut self) -> Option<&mut crate::notifications_view::NotifView> {
         self.view.notif_view_mut()
+    }
+
+    pub fn kb_sharing_view(&self) -> Option<&crate::kb_sharing::KbSharingView> {
+        self.view.kb_sharing_view()
+    }
+
+    pub fn kb_sharing_view_mut(&mut self) -> Option<&mut crate::kb_sharing::KbSharingView> {
+        self.view.kb_sharing_view_mut()
     }
 
     pub fn visual(&self) -> Option<&VisualBuffer> {

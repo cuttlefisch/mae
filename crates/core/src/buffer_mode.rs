@@ -81,6 +81,7 @@ impl BufferMode for BufferKind {
             Self::ShellSelect => "Shell Select",
             Self::Modules => "Modules",
             Self::Notifications => "Notifications",
+            Self::KbSharing => "KB Sharing",
         }
     }
 
@@ -88,6 +89,7 @@ impl BufferMode for BufferKind {
         match self {
             Self::GitStatus => Some("git-status"),
             Self::Notifications => Some("notifications"),
+            Self::KbSharing => Some("kb-sharing"),
             Self::FileTree => Some("file-tree"),
             Self::Kb => Some("help"),
             Self::Debug => Some("debug"),

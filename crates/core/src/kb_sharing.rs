@@ -14,6 +14,8 @@
 //! `kbc:` delta that C1 applies to the replica, so the local view tracks the
 //! authoritative one without polling.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 
 use crate::editor::CollabState;
@@ -251,6 +253,310 @@ fn connection_info(collab: &CollabState) -> ConnectionInfo {
     }
 }
 
+// --- `*KB Sharing*` buffer view model (P1) ---------------------------------
+//
+// A magit-style interactive buffer (mirrors `notifications_view` / `git_status`):
+// a flat `Vec` of semantic lines + a fold map, built from a [`KbSharingSnapshot`].
+// At-point dispatch maps the cursor row → (kb_id, optional fingerprint) → action.
+
+/// Semantic line type for the `*KB Sharing*` buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KbSharingLineKind {
+    /// Top "KB Sharing" header.
+    Header,
+    /// Connection status line.
+    ConnectionLine,
+    /// A foldable KB heading (folds its members + pending).
+    KbHeader { kb_id: String },
+    /// "Your role: …" line.
+    RoleLine { kb_id: String },
+    /// "Policy: …" line (owner action: set-policy).
+    PolicyLine { kb_id: String },
+    /// "Members (N):" subheading.
+    MembersHeader { kb_id: String },
+    /// A member row (owner actions: promote/demote/remove; anyone: copy-fp).
+    Member { kb_id: String, fingerprint: String },
+    /// "Pending requests (N):" subheading.
+    PendingHeader { kb_id: String },
+    /// A pending-request row (owner actions: approve/deny).
+    Pending { kb_id: String, fingerprint: String },
+    /// Blank separator / non-actionable info.
+    Blank,
+}
+
+/// A line in the `*KB Sharing*` buffer mapped to its KB / member / action.
+#[derive(Debug, Clone)]
+pub struct KbSharingLine {
+    pub text: String,
+    pub kind: KbSharingLineKind,
+}
+
+impl KbSharingLine {
+    pub fn blank() -> Self {
+        KbSharingLine {
+            text: String::new(),
+            kind: KbSharingLineKind::Blank,
+        }
+    }
+
+    /// The KB id this line acts on, if any.
+    pub fn kb_id(&self) -> Option<&str> {
+        match &self.kind {
+            KbSharingLineKind::KbHeader { kb_id }
+            | KbSharingLineKind::RoleLine { kb_id }
+            | KbSharingLineKind::PolicyLine { kb_id }
+            | KbSharingLineKind::MembersHeader { kb_id }
+            | KbSharingLineKind::Member { kb_id, .. }
+            | KbSharingLineKind::PendingHeader { kb_id }
+            | KbSharingLineKind::Pending { kb_id, .. } => Some(kb_id),
+            _ => None,
+        }
+    }
+
+    /// The member/pending fingerprint this line acts on, if any.
+    pub fn fingerprint(&self) -> Option<&str> {
+        match &self.kind {
+            KbSharingLineKind::Member { fingerprint, .. }
+            | KbSharingLineKind::Pending { fingerprint, .. } => Some(fingerprint),
+            _ => None,
+        }
+    }
+}
+
+/// Type-safe fold key — the `*KB Sharing*` buffer folds each KB, and within a KB
+/// its members and pending sections.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CollapseKey {
+    Kb(String),
+    Members(String),
+    Pending(String),
+}
+
+/// Structured state for the `*KB Sharing*` buffer. Carries the [`KbSharingSnapshot`]
+/// so at-point dispatch can resolve action context (e.g. is this peer the owner,
+/// what is a member's current role).
+#[derive(Debug, Clone, Default)]
+pub struct KbSharingView {
+    pub lines: Vec<KbSharingLine>,
+    pub collapsed: HashMap<CollapseKey, bool>,
+    pub snapshot: Option<KbSharingSnapshot>,
+}
+
+impl KbSharingView {
+    pub fn new() -> Self {
+        KbSharingView::default()
+    }
+
+    pub fn line_at(&self, row: usize) -> Option<&KbSharingLine> {
+        self.lines.get(row)
+    }
+
+    /// Toggle collapse state for a key (default expanded).
+    pub fn toggle(&mut self, key: CollapseKey) {
+        let collapsed = self.collapsed.entry(key).or_insert(false);
+        *collapsed = !*collapsed;
+    }
+
+    pub fn is_collapsed(&self, key: &CollapseKey) -> bool {
+        self.collapsed.get(key).copied().unwrap_or(false)
+    }
+
+    /// The fold key for a line, if it is a foldable header. A KB header folds the
+    /// whole KB; the members/pending subheadings fold their own sections.
+    pub fn collapse_key_for_line(line: &KbSharingLine) -> Option<CollapseKey> {
+        match &line.kind {
+            KbSharingLineKind::KbHeader { kb_id } => Some(CollapseKey::Kb(kb_id.clone())),
+            KbSharingLineKind::MembersHeader { kb_id } => Some(CollapseKey::Members(kb_id.clone())),
+            KbSharingLineKind::PendingHeader { kb_id } => Some(CollapseKey::Pending(kb_id.clone())),
+            _ => None,
+        }
+    }
+
+    /// Look up this peer's entry for `kb_id` in the captured snapshot (for action
+    /// guards — e.g. only the owner may manage members).
+    pub fn entry_for(&self, kb_id: &str) -> Option<&KbSharingEntry> {
+        self.snapshot
+            .as_ref()
+            .and_then(|s| s.kbs.iter().find(|k| k.id == kb_id))
+    }
+}
+
+/// Build the `*KB Sharing*` view (lines + rope text) from a snapshot, preserving
+/// the given fold state. Pure → unit-testable. Section layout per KB:
+/// ```text
+/// ▾ KB: Team Notes  [owner · invite · synced]
+///     Your role: owner (epoch 0)
+///     Policy: invite
+///     Members (2):
+///       alice (SHA256:ab…cd) — owner  (you)
+///       bob   (SHA256:9x…h0) — editor
+///     Pending (1):
+///       carol (SHA256:c1…f2)  — requested 2026-06-23
+/// ```
+pub fn build_view(
+    snapshot: &KbSharingSnapshot,
+    collapsed: &HashMap<CollapseKey, bool>,
+) -> (KbSharingView, String) {
+    let mut view = KbSharingView::new();
+    view.collapsed = collapsed.clone();
+    let mut text = String::new();
+    let mut push = |view: &mut KbSharingView, line: KbSharingLine| {
+        text.push_str(&line.text);
+        text.push('\n');
+        view.lines.push(line);
+    };
+
+    push(
+        &mut view,
+        KbSharingLine {
+            text: "KB Sharing".to_string(),
+            kind: KbSharingLineKind::Header,
+        },
+    );
+    let conn = &snapshot.connection;
+    let conn_text = if conn.connected {
+        format!(
+            "  Connected to {} — {} peer(s)",
+            conn.address, conn.peer_count
+        )
+    } else {
+        format!("  {} ({})", conn.status, conn.address)
+    };
+    push(
+        &mut view,
+        KbSharingLine {
+            text: conn_text,
+            kind: KbSharingLineKind::ConnectionLine,
+        },
+    );
+    push(&mut view, KbSharingLine::blank());
+
+    if snapshot.kbs.is_empty() {
+        push(
+            &mut view,
+            KbSharingLine {
+                text: "  (no shared or joined KBs — :kb-share <name> to share one)".to_string(),
+                kind: KbSharingLineKind::Blank,
+            },
+        );
+        return (view, text);
+    }
+
+    for kb in &snapshot.kbs {
+        let kb_collapsed = view.is_collapsed(&CollapseKey::Kb(kb.id.clone()));
+        let marker = if kb_collapsed { '\u{25B8}' } else { '\u{25BE}' }; // ▸ / ▾
+        let role = kb.role_of_me.as_deref().unwrap_or("not a member");
+        let sync = if kb.sync_state.subscribed {
+            "synced"
+        } else {
+            "offline"
+        };
+        push(
+            &mut view,
+            KbSharingLine {
+                text: format!(
+                    "{marker} KB: {}  [{} · {} · {}]",
+                    kb.name, role, kb.policy, sync
+                ),
+                kind: KbSharingLineKind::KbHeader {
+                    kb_id: kb.id.clone(),
+                },
+            },
+        );
+        if kb_collapsed {
+            continue;
+        }
+
+        push(
+            &mut view,
+            KbSharingLine {
+                text: format!("    Your role: {role} (epoch {})", kb.my_epoch),
+                kind: KbSharingLineKind::RoleLine {
+                    kb_id: kb.id.clone(),
+                },
+            },
+        );
+        push(
+            &mut view,
+            KbSharingLine {
+                text: format!("    Policy: {}", kb.policy),
+                kind: KbSharingLineKind::PolicyLine {
+                    kb_id: kb.id.clone(),
+                },
+            },
+        );
+
+        // Members section.
+        let members_collapsed = view.is_collapsed(&CollapseKey::Members(kb.id.clone()));
+        let m_marker = if members_collapsed {
+            '\u{25B8}'
+        } else {
+            '\u{25BE}'
+        };
+        push(
+            &mut view,
+            KbSharingLine {
+                text: format!("  {m_marker} Members ({}):", kb.members.len()),
+                kind: KbSharingLineKind::MembersHeader {
+                    kb_id: kb.id.clone(),
+                },
+            },
+        );
+        if !members_collapsed {
+            for m in &kb.members {
+                let you = if m.is_me { "  (you)" } else { "" };
+                push(
+                    &mut view,
+                    KbSharingLine {
+                        text: format!("      {} — {}{you}", m.display, m.role),
+                        kind: KbSharingLineKind::Member {
+                            kb_id: kb.id.clone(),
+                            fingerprint: m.fingerprint.clone(),
+                        },
+                    },
+                );
+            }
+        }
+
+        // Pending section (only when there are requests).
+        if !kb.pending.is_empty() {
+            let pending_collapsed = view.is_collapsed(&CollapseKey::Pending(kb.id.clone()));
+            let p_marker = if pending_collapsed {
+                '\u{25B8}'
+            } else {
+                '\u{25BE}'
+            };
+            push(
+                &mut view,
+                KbSharingLine {
+                    text: format!("  {p_marker} Pending ({}):", kb.pending.len()),
+                    kind: KbSharingLineKind::PendingHeader {
+                        kb_id: kb.id.clone(),
+                    },
+                },
+            );
+            if !pending_collapsed {
+                for p in &kb.pending {
+                    push(
+                        &mut view,
+                        KbSharingLine {
+                            text: format!("      {} — requested {}", p.display, p.requested_at),
+                            kind: KbSharingLineKind::Pending {
+                                kb_id: kb.id.clone(),
+                                fingerprint: p.fingerprint.clone(),
+                            },
+                        },
+                    );
+                }
+            }
+        }
+        push(&mut view, KbSharingLine::blank());
+    }
+
+    view.snapshot = Some(snapshot.clone());
+    (view, text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,5 +669,73 @@ mod tests {
         assert_eq!(snap.kbs[0].id, "ghost");
         assert_eq!(snap.kbs[0].role_of_me, None);
         assert!(snap.kbs[0].members.is_empty());
+    }
+
+    // --- buffer view model ---
+
+    fn owner_snapshot() -> KbSharingSnapshot {
+        let mut coll = KbCollectionDoc::new_owned("Team Notes", "alicefp", "alice");
+        let _ = coll.upsert_member("bobfp", "bob", Role::Editor);
+        let _ = coll.add_pending("carolfp", "carol", "2026-06-23");
+        let mut s = CollabState::new();
+        s.local_fingerprint = "alicefp".to_string();
+        s.kb_collection_state
+            .insert("team".to_string(), coll.encode_state());
+        s.shared_kbs.insert("team".to_string(), Default::default());
+        build_snapshot(&s)
+    }
+
+    #[test]
+    fn view_lays_out_kb_members_and_pending_with_action_targets() {
+        let snap = owner_snapshot();
+        let (view, text) = build_view(&snap, &HashMap::new());
+
+        // The KB header, a member row for bob, and a pending row for carol exist.
+        assert!(text.contains("KB: Team Notes"));
+        assert!(text.contains("Members ("));
+        assert!(text.contains("Pending ("));
+
+        let member = view
+            .lines
+            .iter()
+            .find(|l| matches!(&l.kind, KbSharingLineKind::Member { fingerprint, .. } if fingerprint == "bobfp"))
+            .expect("bob member row");
+        assert_eq!(member.kb_id(), Some("team"));
+        assert_eq!(member.fingerprint(), Some("bobfp"));
+
+        let pending = view
+            .lines
+            .iter()
+            .find(|l| matches!(&l.kind, KbSharingLineKind::Pending { fingerprint, .. } if fingerprint == "carolfp"))
+            .expect("carol pending row");
+        assert_eq!(pending.fingerprint(), Some("carolfp"));
+
+        // The captured snapshot resolves owner context for action guards.
+        assert!(view.entry_for("team").unwrap().is_owner);
+    }
+
+    #[test]
+    fn folding_a_kb_hides_its_member_rows() {
+        let snap = owner_snapshot();
+        let mut collapsed = HashMap::new();
+        collapsed.insert(CollapseKey::Kb("team".to_string()), true);
+        let (_view, text) = build_view(&snap, &collapsed);
+        // KB header still present, but member rows hidden.
+        assert!(text.contains("KB: Team Notes"));
+        assert!(!text.contains("bob (SHA256"));
+    }
+
+    #[test]
+    fn members_header_is_a_fold_key() {
+        let line = KbSharingLine {
+            text: "x".into(),
+            kind: KbSharingLineKind::MembersHeader {
+                kb_id: "team".into(),
+            },
+        };
+        assert_eq!(
+            KbSharingView::collapse_key_for_line(&line),
+            Some(CollapseKey::Members("team".into()))
+        );
     }
 }

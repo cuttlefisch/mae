@@ -94,6 +94,10 @@ fn refresh_collab_status_if_open(editor: &mut Editor) {
             .reconnect_intents
             .push_back(CollabIntent::ShowStatus);
     }
+    // P1: the *KB Sharing* management buffer reflects the same membership state,
+    // so repaint it on every collab event (share/join/leave + live kbc:
+    // membership broadcasts) — a remote promote/demote/approve shows up live.
+    editor.refresh_kb_sharing_buffer();
 }
 
 // --- Command / Event types ---

@@ -114,6 +114,8 @@ impl DisplayPolicy {
                 direction: SplitDirection::Horizontal,
                 ratio: 0.4,
             },
+            // *KB Sharing* management buffer — full focused window (like git-status).
+            BufferKind::KbSharing => DisplayAction::ReplaceFocused,
         }
     }
 
