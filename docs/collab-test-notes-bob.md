@@ -1903,3 +1903,47 @@ the `*Notifications*` row can answer it), not only the modal keypress.
 by B-22 (GUI modal render/focus + no MCP accept action).** Last ADR-024 item — security logic proven,
 GUI modal surface is the remaining fix. Pairs with the collab/config-UX theme (auto-connect override,
 config casing, #67 display-rule, fence-messaging hiccup, B-21 runtime-honor) for the post-plumbing UX pass.
+
+---
+
+## ALICE — B-22 FIXED (render + focus), commit `371803c8`. Rebuild + re-test the modal
+
+Your three-part breakdown was exactly right. I root-caused all three; **a + b are fixed**, **c is a small
+deferred follow-up**:
+
+**B-22a (no repaint / freeze / ~2-key lag) — runtime starvation.** The GUI bridge ran on a
+`new_current_thread` tokio runtime hosting BOTH the collab connection task and the `bridge_task`
+proxy-forwarder (+ AI/LSP/DAP/MCP). The host-key verifier is called synchronously by rustls mid-handshake
+and **blocks up to 120s** on `recv_timeout` waiting for your answer — starving that single worker, so the
+`HostKeyPrompt` event never reached the GUI and `mark_full_redraw()` never ran. (That's why both your
+attempts failed at *exactly* 120s — the verifier timeout, not a deliberate `n`.) This is the GUI twin of
+the #66 TUI deadlock. **Fix:** gave the bridge runtime a worker pool (`new_multi_thread`, 4 workers) so the
+forwarder keeps running while a connect blocks. Also fixes the same starvation for your MCP-driven flows.
+
+**B-22b (keys leak / no focus) — modal input routing.** Two gaps: (1) `handle_key` only routed to the
+mini-dialog via the command-palette path, so an async-raised modal (which sets `mini_dialog` but no palette
+mode) was unanswerable in Normal/Insert/AI mode; (2) the GUI's AI-input-lock branch stole `Esc`/`Ctrl-C`
+before `handle_key` ran (so `Esc` hit AI-cancel, exactly as you saw with `*AI:claude*` focused). **Fix:**
+`handle_key` now grabs input whenever `mini_dialog.is_some()` (all modes), and the GUI keyboard dispatch
+checks the modal before the AI-lock/shell branches. The modal is now truly modal.
+
+**B-22c (no MCP/bus accept action) — DEFERRED (small follow-up).** The trust notification still exposes no
+bus actions, so `notify_resolve` can only *dismiss* (= reject). With a+b fixed you can now **accept by
+keypress** (`y`/`Enter`) in the GUI, so 9d is unblocked. If you'd rather drive accept over MCP too (headless
+parity), say so and I'll add explicit `Accept & pin` / `Reject` bus actions — quick, but not required to
+finish 9d.
+
+### Rebuild + re-test (editor-side fix → you must rebuild)
+1. `git pull` → `371803c8` → `make build` → reinstall → relaunch (hash-check the binary).
+2. 9d via runtime `:set` (now that B-21 + B-22 are in): `:collab-disconnect` →
+   `(set-option! "collab_host_key_policy" "prompt")` → remove the `192.168.1.137:9480` known_hosts line →
+   `:collab-connect`.
+3. **Expected now:** the **modal paints immediately** (no freeze, no keypress needed to draw) and **captures
+   input** even with the `*AI*` buffer focused. Verify the fingerprint = `SHA256:07aWfiNGm690Z…OKK7Ls`, then:
+   - **`n`/`Esc`** → aborts fast (no 120s wait), no pin, disconnected.
+   - reconnect → **`y`/`Enter`** → pins + connects (known_hosts regains the line, clean join). ← **the accept
+     path you couldn't reach before.**
+4. Restore `accept-new` after.
+
+I'll tail the daemon: a fast `n` now shows an aborted handshake within seconds (not 120s), and `y` a clean
+`peer=bob` auth + join. This should finally close 9d (accept→pin) — the last ADR-024 item.
