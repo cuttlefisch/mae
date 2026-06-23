@@ -1322,3 +1322,42 @@ saw the converged content, and note whether the badge + `*Notifications*` render
 Flag if Keep-mine got re-fenced or any action silently no-ops.
 
 > ⚠️ Binary-hash deploy check first: `sha256sum /proc/$(pgrep -n mae)/exe` vs `./target/release/mae`.
+
+---
+
+## Step 9 / ADR-024 — bob on new build (`37e1823`): ready, but two concerns for alice before we test
+
+**Build verified:** bob's MCP server now exposes the ADR-024 tools (`notifications_list`,
+`notify_run_action`, `notify_resolve`, `command_notifications_open`, …) — only present in this build —
+and `target/release/mae` == `~/.local/bin/mae` (hash-identical). Notification bus live:
+`notifications_list` → `{outstanding: 0}` clean baseline.
+
+### ⚠️ Concern 1 — the `notifications` MODULE is NOT auto-enabled (default-UX gap)
+`list_modules` shows 14 loaded; **`notifications` is not among them.** The core attention bus + badge +
+`*Notifications*` view are in the kernel (hence the MCP tools work), but `modules/notifications/`
+(which wires the **`SPC n n` leader entry** + the buffer-local keymap: `Enter`→`notify-run-action`,
+`d`→dismiss, `Tab`→fold, parented on `navigation`) only loads if declared in the user's `(mae! …)`.
+bob's `mae!` doesn't include it, so **a default user gets the bus/badge but no `SPC n n` and no buffer
+keybindings.** Since ADR-024 frames the attention bus as core UX, this likely wants to be
+**auto-enabled / in the default preset** (like `dashboard`/`file-tree`), not opt-in.
+- **For this session** I loaded the autoloads live (`(load ".../modules/notifications/autoloads.scm")`
+  → void) so `SPC n n` + the keymap work now without a relaunch. Not persisted.
+- ▶ **alice: decide** — auto-enable `notifications` by default (recommended), or have users opt in via
+  `mae!`? If opt-in, the Step-9 plan / docs should say to add it. If default, add to the kernel default
+  module set. (Either way bob can test now via the live-load + MCP tools.)
+
+### ⚠️ Concern 2 — staging: bob has a LEFTOVER fenced `beta` from Step 8 (pick A or B)
+bob is offline (`collab_status: off`, autoconnect env-disabled). bob's `collabtest:beta` is still
+`[POST-GRANT-EDIT]` locally, carrying the **stale-epoch op** from Step 8, and bob is currently an
+**editor** on the daemon (last session's promotion — alice please confirm). Two ways to stage Step 9:
+- **Option A (faster, real divergence):** bob `:collab-connect` + `:kb-join collabtest` now → on the new
+  build R5 (no-silent-overwrite) + R2 (fenced-edit notification) should surface the pre-existing fenced
+  `beta` as an **ADR-024 notification** → we drive Keep-mine / Accept-remote directly. Exercises the
+  exact "stranded divergent edit" case with no re-staging.
+- **Option B (clean, per plan):** alice resets bob → **viewer**, we re-run Step 8 1–4 to stage a fresh
+  fence, then resolve.
+
+▶ **alice: tell us (1) auto-enable decision for the notifications module, (2) staging A or B, and
+(3) confirm bob's current daemon role.** Then bob drives: surface the notification → Keep-mine
+(expect daemon `kb/node_fetch` + re-author under current epoch → converges on alice, badge clears) →
+re-fence + Accept-remote (local discarded, alice's version adopted) → R4 TOFU modal regression.
