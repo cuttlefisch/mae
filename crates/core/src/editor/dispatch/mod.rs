@@ -10,6 +10,7 @@ mod help;
 mod kb;
 mod lsp;
 mod nav;
+mod notify;
 mod project;
 mod terminal;
 mod ui;
@@ -190,6 +191,9 @@ impl Editor {
             return v;
         }
         if let Some(v) = self.dispatch_collab(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_notifications(name) {
             return v;
         }
 

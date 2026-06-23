@@ -108,6 +108,12 @@ impl DisplayPolicy {
             BufferKind::ShellSelect => DisplayAction::ReplaceFocused,
             // Module list/detail replaces focused (like git-status)
             BufferKind::Modules => DisplayAction::ReplaceFocused,
+            // *Notifications* attention buffer — bottom 40% panel, reuse if open,
+            // so the user can act on items while keeping their work in view.
+            BufferKind::Notifications => DisplayAction::ReuseOrSplit {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.4,
+            },
         }
     }
 

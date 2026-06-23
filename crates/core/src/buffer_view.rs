@@ -9,6 +9,7 @@ use crate::debug_view::DebugView;
 use crate::file_tree::FileTree;
 use crate::git_status::GitStatusView;
 use crate::kb_view::KbView;
+use crate::notifications_view::NotifView;
 use crate::visual_buffer::VisualBuffer;
 
 #[derive(Debug)]
@@ -29,6 +30,8 @@ pub enum BufferView {
     FileTree(Box<FileTree>),
     /// Agenda view state.
     Agenda(Box<AgendaView>),
+    /// `*Notifications*` attention-buffer state (ADR-024).
+    Notifications(Box<NotifView>),
 }
 
 impl BufferView {
@@ -126,6 +129,20 @@ impl BufferView {
     pub fn agenda_view_mut(&mut self) -> Option<&mut AgendaView> {
         match self {
             BufferView::Agenda(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    pub fn notif_view(&self) -> Option<&NotifView> {
+        match self {
+            BufferView::Notifications(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    pub fn notif_view_mut(&mut self) -> Option<&mut NotifView> {
+        match self {
+            BufferView::Notifications(n) => Some(n),
             _ => None,
         }
     }

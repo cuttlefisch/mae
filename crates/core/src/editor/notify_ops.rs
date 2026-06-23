@@ -94,11 +94,192 @@ impl super::Editor {
         r
     }
 
-    /// Refresh the `*Notifications*` buffer if it's currently displayed. Wired in
-    /// Phase 3 (the magit-style buffer); a no-op until then.
+    /// Open (or refresh + focus) the magit-style `*Notifications*` buffer.
+    pub fn notifications_open(&mut self) {
+        let (view, text) = self.build_notif_view();
+        let buf_name = "*notifications*";
+        let idx = if let Some(i) = self.find_buffer_by_name(buf_name) {
+            self.buffers[i] = crate::buffer::Buffer::new();
+            self.buffers[i].name = buf_name.to_string();
+            self.buffers[i].kind = crate::buffer::BufferKind::Notifications;
+            i
+        } else {
+            let mut buf = crate::buffer::Buffer::new();
+            buf.name = buf_name.to_string();
+            buf.kind = crate::buffer::BufferKind::Notifications;
+            self.buffers.push(buf);
+            self.buffers.len() - 1
+        };
+        self.buffers[idx].view = crate::buffer_view::BufferView::Notifications(Box::new(view));
+        self.buffers[idx].insert_text_at(0, &text);
+        self.buffers[idx].read_only = true;
+        self.buffers[idx].modified = false;
+        let prev = self.active_buffer_idx();
+        self.vi.alternate_buffer_idx = Some(prev);
+        self.display_buffer(idx);
+        self.set_mode(crate::Mode::Normal);
+    }
+
+    /// Rebuild the `*Notifications*` buffer in place if it is currently open, so
+    /// the list stays in sync as notifications are raised/resolved. Preserves the
+    /// per-category fold state and clamps any showing window's cursor.
     pub(crate) fn refresh_notifications_buffer(&mut self) {
-        // Phase 3 will rebuild the buffer view here. Until the buffer exists, the
-        // badge (Phase 2) and the status toast are the surfaces.
+        let Some(idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.kind == crate::buffer::BufferKind::Notifications)
+        else {
+            return;
+        };
+        let (view, text) = self.build_notif_view();
+        self.buffers[idx].read_only = false;
+        let end = self.buffers[idx].rope().len_chars();
+        self.buffers[idx].delete_range(0, end);
+        self.buffers[idx].insert_text_at(0, &text);
+        self.buffers[idx].read_only = true;
+        self.buffers[idx].modified = false;
+        self.buffers[idx].view = crate::buffer_view::BufferView::Notifications(Box::new(view));
+        let last = self.buffers[idx].display_line_count().saturating_sub(1);
+        for win in self.window_mgr.iter_windows_mut() {
+            if win.buffer_idx == idx && win.cursor_row > last {
+                win.cursor_row = last;
+            }
+        }
+        self.mark_full_redraw();
+    }
+
+    /// Build the `*Notifications*` view model + rope text from the
+    /// NotificationCenter, grouped by category (source) with at-point action rows.
+    /// Preserves the fold state of any currently-open buffer.
+    fn build_notif_view(&self) -> (crate::notifications_view::NotifView, String) {
+        use crate::notifications::Severity;
+        use crate::notifications_view::{CollapseKey, NotifLine, NotifLineKind, NotifView};
+
+        let prev_collapsed = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == crate::buffer::BufferKind::Notifications)
+            .and_then(|b| b.notif_view())
+            .map(|v| v.collapsed.clone())
+            .unwrap_or_default();
+
+        let glyph = |s: Severity| match s {
+            Severity::ActionRequired => '\u{2691}', // ⚑
+            Severity::Error => '\u{2716}',          // ✖
+            Severity::Warning => '\u{26A0}',        // ⚠
+            Severity::Success => '\u{2714}',        // ✔
+            Severity::Info => '\u{2139}',           // ℹ
+        };
+
+        let mut view = NotifView::new();
+        view.collapsed = prev_collapsed;
+        let mut text = String::new();
+        let push = |view: &mut NotifView, text: &mut String, line: NotifLine| {
+            text.push_str(&line.text);
+            text.push('\n');
+            view.lines.push(line);
+        };
+
+        let items = self.notifications.active_sorted();
+        let outstanding = self.notifications.outstanding_count();
+        push(
+            &mut view,
+            &mut text,
+            NotifLine {
+                text: format!("Notifications — {outstanding} outstanding"),
+                kind: NotifLineKind::Header,
+                category: None,
+            },
+        );
+        push(&mut view, &mut text, NotifLine::blank());
+
+        if items.is_empty() {
+            push(
+                &mut view,
+                &mut text,
+                NotifLine {
+                    text: "  (nothing demands your attention)".to_string(),
+                    kind: NotifLineKind::Blank,
+                    category: None,
+                },
+            );
+            return (view, text);
+        }
+
+        // Group by category (source), preserving active_sorted order.
+        let mut categories: Vec<&'static str> = Vec::new();
+        for n in &items {
+            if !categories.contains(&n.source) {
+                categories.push(n.source);
+            }
+        }
+
+        for cat in categories {
+            let collapsed = view.is_collapsed(&CollapseKey::Category(cat.to_string()));
+            let marker = if collapsed { '\u{25B8}' } else { '\u{25BE}' }; // ▸ / ▾
+            push(
+                &mut view,
+                &mut text,
+                NotifLine {
+                    text: format!("{marker} {cat}"),
+                    kind: NotifLineKind::CategoryHeader(cat.to_string()),
+                    category: Some(cat.to_string()),
+                },
+            );
+            if collapsed {
+                continue;
+            }
+            for n in items.iter().filter(|n| n.source == cat) {
+                if n.resolved.is_some() {
+                    push(
+                        &mut view,
+                        &mut text,
+                        NotifLine {
+                            text: format!("    \u{2713} {} (resolved)", n.title),
+                            kind: NotifLineKind::ResolvedItem { notif_id: n.id },
+                            category: Some(cat.to_string()),
+                        },
+                    );
+                    continue;
+                }
+                push(
+                    &mut view,
+                    &mut text,
+                    NotifLine {
+                        text: format!("  {} {}", glyph(n.severity), n.title),
+                        kind: NotifLineKind::Item { notif_id: n.id },
+                        category: Some(cat.to_string()),
+                    },
+                );
+                if let Some(body) = &n.body {
+                    push(
+                        &mut view,
+                        &mut text,
+                        NotifLine {
+                            text: format!("      {body}"),
+                            kind: NotifLineKind::Blank,
+                            category: Some(cat.to_string()),
+                        },
+                    );
+                }
+                for (i, action) in n.actions.iter().enumerate() {
+                    push(
+                        &mut view,
+                        &mut text,
+                        NotifLine {
+                            text: format!("      \u{2192} {}", action.label), // →
+                            kind: NotifLineKind::ActionRow {
+                                notif_id: n.id,
+                                action_idx: i,
+                            },
+                            category: Some(cat.to_string()),
+                        },
+                    );
+                }
+            }
+            push(&mut view, &mut text, NotifLine::blank());
+        }
+        (view, text)
     }
 
     // --- Collab resolution verbs (real implementations land in Phase 5) ---
@@ -161,5 +342,41 @@ mod tests {
         let mut ed = Editor::new();
         let id = ed.notify(Notification::action_required("collab", "x").key("k"));
         assert!(!ed.notify_run_action(id, 9));
+    }
+
+    #[test]
+    fn notifications_buffer_lists_items_and_actions() {
+        use crate::notifications::NotifCommand;
+        let mut ed = Editor::new();
+        ed.notify(
+            Notification::action_required("collab", "edit fenced")
+                .key("collab:fence:kb:n1")
+                .body("authored before your access changed")
+                .action(
+                    "Accept-remote",
+                    NotifCommand::AdoptRemote {
+                        kb_id: "kb".into(),
+                        node_id: "n1".into(),
+                    },
+                ),
+        );
+        ed.notifications_open();
+        let idx = ed
+            .find_buffer_by_name("*notifications*")
+            .expect("*notifications* buffer created");
+        assert_eq!(
+            ed.buffers[idx].kind,
+            crate::buffer::BufferKind::Notifications
+        );
+        let text: String = ed.buffers[idx].rope().chars().collect();
+        assert!(text.contains("edit fenced"), "item title shown: {text:?}");
+        assert!(text.contains("Accept-remote"), "action row shown: {text:?}");
+        assert!(text.contains("collab"), "category header shown: {text:?}");
+        // The view model carries an Item + an ActionRow row.
+        let view = ed.buffers[idx].notif_view().expect("notif view");
+        assert!(view.lines.iter().any(|l| matches!(
+            l.kind,
+            crate::notifications_view::NotifLineKind::ActionRow { .. }
+        )));
     }
 }

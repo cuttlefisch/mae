@@ -167,6 +167,7 @@ Source: `crates/core/src/lib.rs`
 | `lsp_intent` | mod |
 | `messages` | mod |
 | `notifications` | mod |
+| `notifications_view` | mod |
 | `options` | mod |
 | `project` | mod |
 | `render_common` | mod |
@@ -578,7 +579,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (522 built-in)
+## Commands (526 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -707,6 +708,10 @@ Source: `shared/sync/src/lib.rs`
 | `window-move-down` | Move window down (SPC w J) |
 | `focus-next-window` | Cycle focus to next window (SPC w w) |
 | `view-messages` | Show *Messages* log buffer |
+| `notifications-open` | Open the *Notifications* attention buffer |
+| `notify-run-action` | Run the action under the cursor in *Notifications* (Enter) |
+| `notify-dismiss` | Dismiss the notification under the cursor (d) |
+| `notify-toggle-fold` | Fold/unfold the notification category under the cursor (Tab) |
 | `dashboard` | Show the startup dashboard |
 | `toggle-scratch-buffer` | Toggle the scratch buffer (SPC x) |
 | `command-palette` | Search and run any command |

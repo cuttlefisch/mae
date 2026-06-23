@@ -415,6 +415,23 @@ impl CommandRegistry {
 
         // Diagnostics
         reg.register_builtin("view-messages", "Show *Messages* log buffer");
+        // ADR-024 notification / attention bus.
+        reg.register_builtin(
+            "notifications-open",
+            "Open the *Notifications* attention buffer",
+        );
+        reg.register_builtin(
+            "notify-run-action",
+            "Run the action under the cursor in *Notifications* (Enter)",
+        );
+        reg.register_builtin(
+            "notify-dismiss",
+            "Dismiss the notification under the cursor (d)",
+        );
+        reg.register_builtin(
+            "notify-toggle-fold",
+            "Fold/unfold the notification category under the cursor (Tab)",
+        );
 
         // Dashboard / scratch
         reg.register_builtin("dashboard", "Show the startup dashboard");

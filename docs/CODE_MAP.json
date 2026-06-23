@@ -367,6 +367,10 @@
           "kind": "mod"
         },
         {
+          "name": "notifications_view",
+          "kind": "mod"
+        },
+        {
           "name": "options",
           "kind": "mod"
         },
@@ -2173,6 +2177,22 @@
     {
       "name": "view-messages",
       "doc": "Show *Messages* log buffer"
+    },
+    {
+      "name": "notifications-open",
+      "doc": "Open the *Notifications* attention buffer"
+    },
+    {
+      "name": "notify-run-action",
+      "doc": "Run the action under the cursor in *Notifications* (Enter)"
+    },
+    {
+      "name": "notify-dismiss",
+      "doc": "Dismiss the notification under the cursor (d)"
+    },
+    {
+      "name": "notify-toggle-fold",
+      "doc": "Fold/unfold the notification category under the cursor (Tab)"
     },
     {
       "name": "dashboard",

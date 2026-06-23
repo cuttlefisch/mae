@@ -76,6 +76,9 @@ pub enum BufferKind {
     /// Module list/detail buffer — `:describe-module` output.
     /// Read-only, Enter navigates to module detail.
     Modules,
+    /// `*Notifications*` attention buffer (ADR-024) — magit-style list of
+    /// outstanding + recently-resolved notifications with at-point actions.
+    Notifications,
 }
 
 impl BufferKind {
@@ -1566,6 +1569,14 @@ impl Buffer {
 
     pub fn git_status_view_mut(&mut self) -> Option<&mut GitStatusView> {
         self.view.git_status_mut()
+    }
+
+    pub fn notif_view(&self) -> Option<&crate::notifications_view::NotifView> {
+        self.view.notif_view()
+    }
+
+    pub fn notif_view_mut(&mut self) -> Option<&mut crate::notifications_view::NotifView> {
+        self.view.notif_view_mut()
     }
 
     pub fn visual(&self) -> Option<&VisualBuffer> {

@@ -41,6 +41,7 @@ pub mod lock_stats;
 pub mod lsp_intent;
 pub mod messages;
 pub mod notifications;
+pub mod notifications_view;
 pub mod options;
 pub mod project;
 pub mod render_common;

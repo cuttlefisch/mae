@@ -147,6 +147,7 @@ pub fn kind_selector(kind: BufferKind) -> &'static str {
         BufferKind::Demo => "demo",
         BufferKind::ShellSelect => "shell-select",
         BufferKind::Modules => "modules",
+        BufferKind::Notifications => "notifications",
     }
 }
 

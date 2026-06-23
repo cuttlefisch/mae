@@ -80,12 +80,14 @@ impl BufferMode for BufferKind {
             Self::Demo => "Demo",
             Self::ShellSelect => "Shell Select",
             Self::Modules => "Modules",
+            Self::Notifications => "Notifications",
         }
     }
 
     fn keymap_name(&self) -> Option<&'static str> {
         match self {
             Self::GitStatus => Some("git-status"),
+            Self::Notifications => Some("notifications"),
             Self::FileTree => Some("file-tree"),
             Self::Kb => Some("help"),
             Self::Debug => Some("debug"),
@@ -111,6 +113,9 @@ impl BufferMode for BufferKind {
             Self::FileTree => Some("Press ? for key help"),
             Self::Agenda => Some("Enter: goto  q: close  r: refresh  /: filter"),
             Self::ShellSelect => Some("v to select, y to yank, q/Esc to exit, ? for help"),
+            Self::Notifications => {
+                Some("Enter: run action  d: dismiss  r: refresh  Tab: fold  q: close  ?: help")
+            }
             _ => None,
         }
     }
@@ -154,6 +159,7 @@ impl BufferMode for BufferKind {
                 | Self::Diff
                 | Self::Agenda
                 | Self::Modules
+                | Self::Notifications
         )
     }
 
