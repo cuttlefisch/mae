@@ -505,7 +505,35 @@ impl Renderer for GuiRenderer {
         let mut all_layouts: HashMap<mae_core::WindowId, layout::FrameLayout> = HashMap::new();
 
         // Check for fullscreen overlays first.
-        if editor.file_picker.is_some() {
+        //
+        // A blocking/confirm mini-dialog (e.g. the async-raised host-key TOFU prompt)
+        // is a true modal: it must paint on TOP of any view/overlay, mirroring the
+        // input side (B-22b) where it captures all keys whenever `mini_dialog.is_some()`.
+        // Previously the overlay was only drawn via the command-palette branch, so an
+        // async modal that set `mini_dialog` but NOT `command_palette` painted frames
+        // with no dialog (B-22a). Checking it first keeps render priority == input
+        // priority for modals.
+        if editor.mini_dialog.is_some() {
+            debug!("render: mini_dialog modal overlay");
+            render_window_area(
+                canvas,
+                editor,
+                &syntax_spans,
+                shells,
+                0,
+                0,
+                cols,
+                window_height,
+                &mut all_layouts,
+                &mut layout_time_us,
+                &mut draw_time_us,
+                wrc,
+            );
+            status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
+            status_render::render_command_line(canvas, editor, cmd_row, cols);
+            // render_command_palette draws the mini-dialog (it checks mini_dialog first).
+            popup_render::render_command_palette(canvas, editor, cols, rows);
+        } else if editor.file_picker.is_some() {
             debug!("render: file_picker overlay");
             render_window_area(
                 canvas,

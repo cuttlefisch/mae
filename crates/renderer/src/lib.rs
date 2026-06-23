@@ -217,7 +217,25 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
 
     let editor: &Editor = editor;
 
-    if editor.file_picker.is_some() {
+    // A blocking/confirm mini-dialog (e.g. the async-raised host-key TOFU prompt) is a
+    // true modal: draw it on TOP of any view/overlay, mirroring the GUI (B-22a) and the
+    // input dispatch (B-22b) which both prioritize `mini_dialog.is_some()`. Previously
+    // the TUI drew the dialog only inside the command-palette branch, so an async modal
+    // that set `mini_dialog` without `command_palette` rendered no dialog.
+    if editor.mini_dialog.is_some() {
+        let chunks = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+        render_window_area(frame, chunks[0], editor, &syntax_spans, shells);
+        status_render::render_status_bar(frame, chunks[1], editor);
+        status_render::render_command_line(frame, chunks[2], editor);
+        // render_command_palette draws the mini-dialog (it checks mini_dialog first).
+        popup_render::render_command_palette(frame, area, editor);
+    } else if editor.file_picker.is_some() {
         let chunks = Layout::vertical([
             Constraint::Min(1),
             Constraint::Length(1),
