@@ -1696,16 +1696,7 @@ async fn bridge_task(
                 if proxy.send_event(MaeEvent::McpToolRequest(ev)).is_err() { break; }
             }
             Some(ev) = collab_rx.recv() => {
-                // B-22a diagnostic: trace the host-key prompt from forwarder →
-                // main-thread delivery → paint to find where the modal stalls.
-                let is_hkp = matches!(ev, collab_bridge::CollabEvent::HostKeyPrompt { .. });
-                if is_hkp {
-                    tracing::info!(target: "b22a", "1.bridge_task: HostKeyPrompt off collab_rx → proxy.send_event");
-                }
                 if proxy.send_event(MaeEvent::CollabEvent(ev)).is_err() { break; }
-                if is_hkp {
-                    tracing::info!(target: "b22a", "2.bridge_task: proxy.send_event(HostKeyPrompt) -> Ok (winit should wake)");
-                }
             }
             _ = shell_interval.tick() => {
                 if shell_active.load(Relaxed) {
@@ -2443,10 +2434,6 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // B-22a diagnostic: a real frame is painting — note if a modal is up.
-                if self.editor.mini_dialog.is_some() {
-                    tracing::info!(target: "b22a", "6.RedrawRequested: PAINTING a frame with modal pending");
-                }
                 let render_start = std::time::Instant::now();
                 if let Err(e) = self
                     .renderer
@@ -2710,17 +2697,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
         if self.dirty {
             let elapsed = self.last_render.elapsed();
             let frame_budget = std::time::Duration::from_micros(16_667);
-            // B-22a diagnostic: while a modal is pending, trace whether about_to_wait
-            // requests a redraw now or defers to the frame boundary.
-            if self.editor.mini_dialog.is_some() {
-                tracing::info!(target: "b22a", dirty = self.dirty, input_dirty = self.input_dirty,
-                    elapsed_us = elapsed.as_micros() as u64,
-                    "4.about_to_wait: dirty with modal pending");
-            }
             if self.input_dirty || elapsed >= frame_budget {
-                if self.editor.mini_dialog.is_some() {
-                    tracing::info!(target: "b22a", "5.about_to_wait: request_redraw() NOW (modal pending)");
-                }
                 self.renderer.request_redraw();
                 self.input_dirty = false;
             } else {

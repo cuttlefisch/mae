@@ -825,8 +825,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             fingerprint,
             reply,
         } => {
-            // B-22a diagnostic: main thread received the prompt (proxy → user_event).
-            tracing::info!(target: "b22a", "3.handle_collab_event: HostKeyPrompt RECEIVED on main thread — raising modal");
+            tracing::debug!(target: "collab", addr = %addr, "host-key TOFU prompt raised (awaiting trust decision)");
             // ADR-017 TOFU, now via the ADR-024 bus: a BlockingReply notification
             // routes to a modal; the y/n answer in apply_mini_dialog sends back on
             // `reply` (unblocking the connection task). One consumer of the generic
@@ -2098,8 +2097,18 @@ impl mae_mcp::identity::HostKeyVerifier for PromptingHostKeyVerifier {
                     return false;
                 }
                 match reply_rx.recv_timeout(self.timeout) {
-                    Ok(true) => kh.pin(addr, server_pub).is_ok(),
-                    _ => false,
+                    Ok(true) => {
+                        tracing::debug!(target: "collab", addr, fp = %server_pub.fingerprint(), "host-key trusted by user — pinning");
+                        kh.pin(addr, server_pub).is_ok()
+                    }
+                    Ok(false) => {
+                        tracing::debug!(target: "collab", addr, "host-key rejected by user — aborting");
+                        false
+                    }
+                    Err(_) => {
+                        tracing::debug!(target: "collab", addr, "host-key prompt timed out — aborting");
+                        false
+                    }
                 }
             }
         }
