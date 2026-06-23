@@ -2003,3 +2003,40 @@ so the MiniDialog overlay never gets a frame *during* the window when it actuall
 only paint *after* it's already answered — i.e. never usefully. Fix must get a redraw/frame to run
 **while** the prompt is pending (e.g. raise the prompt + request paint on the GUI thread and let the
 verifier await asynchronously, rather than blocking a thread the paint pass depends on).
+
+#### B-22a — code trace (bob): the modal DOES reuse MiniDialog; the bug is repaint-scheduling, not an ad-hoc modal
+bob-user asked whether the TOFU modal reuses the verified `MiniDialog` (principle #7). **It does** —
+traced on `ffa90d1`:
+- `collab_bridge.rs:823-841` `handle_collab_event(HostKeyPrompt)` → `editor.notify(action_required(...)
+  .blocking(NotifReply::Bool(reply)))` → **`editor.mark_full_redraw()`**. Comment: "routes to a modal;
+  the y/n answer in `apply_mini_dialog` sends back on `reply`." No bespoke field.
+- The blocking notification becomes a `MiniDialog`: `command_palette.rs` has
+  `MiniDialogContext::Notification` → `MiniDialogKind::Confirm` → title **"Action Required"**. So it's the
+  same well-verified component, answered via `apply_mini_dialog`. ✅ (your hypothesis confirmed)
+
+**So why doesn't it paint?** The dirty→redraw wiring *looks* correct on paper:
+- GUI `user_event(MaeEvent::CollabEvent)` (`main.rs:2049-2052`) calls `handle_collab_event` **and sets
+  `self.dirty = true`**.
+- `about_to_wait` (`main.rs:2475`) gates `self.renderer.request_redraw()` on `self.dirty`
+  (`main.rs:2688-2705`, 60fps frame-cap).
+- `mark_full_redraw()` is also called in `handle_collab_event`.
+
+⇒ On paper: HostKeyPrompt → proxy → `user_event` → `self.dirty=true` → `about_to_wait` → `request_redraw`
+→ paint. Yet live it **does not paint until a keypress** (and recovers fully once resolved). So the bug is
+**NOT** a missing MiniDialog reuse and **NOT** a missing dirty flag — it's subtler. Candidate roots for
+alice to instrument (winit/GUI owner):
+1. **The `CollabEvent::HostKeyPrompt` isn't delivered to `user_event` until a later input event** — i.e.
+   the bridge-forwarder/proxy wakeup still doesn't fire *while the rustls verifier blocks* (residual
+   starvation despite the 4-worker pool, or `proxy.send_event` not waking winit out of `Wait`). A keypress
+   then wakes the loop and the buffered event + redraw flush together. **This best fits "only on keypress"
+   + "unfreezes when modal gone."**
+2. `about_to_wait` runs but the frame-cap `WaitUntil` wakeup never fires while blocked, so `request_redraw`
+   is deferred indefinitely until an input event.
+3. The paint runs but the MiniDialog overlay draw is skipped for the `Notification` confirm context.
+- **Disambiguating experiment (cheap):** log on entry to `user_event(CollabEvent::HostKeyPrompt)` with a
+  timestamp. If that line only appears *after* the keypress (not when the prompt is raised) → root #1
+  (delivery/wakeup). If it appears immediately but no frame draws → #2/#3 (render pass). One log line
+  decides it.
+- **Orthogonal unblock:** land **B-22c** (give the trust notification explicit `Accept & pin`/`Reject` bus
+  actions) so 9d's accept path is verifiable via `notify_resolve`/`*Notifications*` regardless of the GUI
+  paint — both finishes 9d now and gives headless/agent parity.
