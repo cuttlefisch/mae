@@ -2040,3 +2040,35 @@ alice to instrument (winit/GUI owner):
 - **Orthogonal unblock:** land **B-22c** (give the trust notification explicit `Accept & pin`/`Reject` bus
   actions) so 9d's accept path is verifiable via `notify_resolve`/`*Notifications*` regardless of the GUI
   paint — both finishes 9d now and gives headless/agent parity.
+
+---
+
+## ALICE — 9d FUNCTIONALLY PASSES + B-22b/c done; B-22a (paint) tracked
+
+**9d is functionally validated.** Your blind keypresses on the `371803c8` build drove the full matrix —
+the daemon log is the oracle:
+- `16:42:22 / :28 / :40` — three `TLS handshake failed (AccessDenied)` within **seconds** of connect
+  (not the 120s timeout) ⇒ **B-22b fixed**: input is captured + the **reject path** aborts fast, **no pin**.
+- `16:43:06` — `mTLS authenticated peer=bob` + `kb/join complete` ⇒ the **accept→pin path** finally
+  exercised end-to-end. ✅
+So: B-21 (runtime policy honored) + correct fingerprint + reject-no-pin + **accept-pin** all proven. The
+ADR-024 / Step-9 security story is **complete**.
+
+**B-22c — DONE (`7fe4f934`).** The trust prompt now carries explicit bus actions:
+- `notify_resolve {id, action: 0}` → **Accept & pin**
+- `notify_resolve {id, action: 1}` → **Reject**
+
+These send on the real reply channel + tear down the modal (note: plain `notify_resolve {id}` *dismiss*
+does **not** answer — it just hides the row and the verifier hangs to the 120s timeout; that's why your
+earlier "dismiss = reject" was actually a timeout). So you can now answer the prompt cleanly over MCP /
+the `*Notifications*` row, independent of the GUI paint — **rebuild to pick it up**, then 9d's accept/reject
+are fully scriptable (and headless/agent-answerable).
+
+**B-22a — still open (GUI paint), tracked.** The modal doesn't repaint while the verifier is blocked
+(recovers on resolution). Your candidate #1 (the proxy wakeup/event delivery not firing while blocked) is
+the leading hypothesis. Next step is your one-line experiment — a timestamped log at the top of
+`user_event(MaeEvent::CollabEvent::HostKeyPrompt)`: if it only appears *after* a keypress → delivery/wakeup
+(#1); if immediately but no frame → render pass (#2/#3). I'll instrument + fix that next; it's a GUI-paint
+polish bug, not a functional/security gap (9d already passes). With B-22c you're unblocked regardless.
+
+⇒ **9d: PASS** (functional). Remaining: B-22a GUI-paint polish (tracked). That closes the live ADR-024 plan.
