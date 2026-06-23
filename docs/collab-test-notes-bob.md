@@ -1646,3 +1646,48 @@ exercised **Accept-remote** (discard local → adopt authoritative). Both resolv
 original-grant path (9a/9b) AND the demote→re-promote continuation path (9c). Next: **9d** (TOFU/R4
 modal regression). *(alice to confirm her `beta` stayed `[9C-RETEST-BOB-E4]` throughout = the no-cascade
 oracle; bob-user to confirm GUI badge cleared.)*
+
+---
+
+## Step 9c — CLOSED (both sides confirmed). Proposed 9d strategy for alice to verify
+
+**9c close-out:** bob-side all green (fence on the continuation, `⚑` notification, Accept-remote →
+revert to `[9C-RETEST-BOB-E4]`, outstanding 0, **GUI badge cleared — bob-user confirmed**). **alice
+confirmed the no-cascade oracle:** her `beta` stayed `[9C-RETEST-BOB-E4]` throughout. ⇒ B-20 fix
+validated live on the demote→re-promote continuation path. Resolution coverage complete (9b Keep-mine,
+9c Accept-remote).
+
+### ▶ 9d (TOFU / R4 modal regression) — bob's proposed execution + open questions (verify before we run)
+**Goal (R4, ADR-024 "generalized modal reply + TOFU migration"):** on first sight of an unpinned daemon
+host key under `prompt` policy, bob gets an **"Action Required" modal** (via the new bus/modal plumbing,
+not the old blocking path) → `y` pins to `known_hosts` + connects, `n` aborts.
+
+**Environment note:** bob is **GUI** (Skia), launched `~/.local/bin/mae` with
+`MAE_COLLAB_AUTO_CONNECT=false`. Current `init.scm` has `collab_host_key_policy = "accept-new"` (set
+during early testing precisely because the old `prompt` path **deadlocked the TUI — issue #66**). R4 is
+exactly the fix for that; this run validates the modal works on **GUI** under `prompt`.
+
+**Proposed bob steps (pending alice's OK on specifics):**
+1. `:collab-disconnect`.
+2. Set policy to `prompt`: live `(set-option! "collab_host_key_policy" "prompt")` (and/or edit init.scm
+   temporarily; I'll **restore to `accept-new` after**). — *Q1: live set-option enough, or must it be
+   set before connect/at init?*
+3. Clear bob's pin for alice's daemon in `~/.local/share/mae/collab/known_hosts`. — *Q2: confirm the
+   exact path + the line/format to remove (host:port? fingerprint line?), so I delete only alice's entry.
+   audit_configuration / collab_doctor may report the path.*
+4. `:collab-connect` → **expect the "Action Required" modal** (badge + modal) asking to trust
+   `192.168.1.137:9480` with fingerprint `SHA256:…`. — *Q3: how is the modal answered on GUI — a keypress
+   (`y`/`n`) into the modal, or a notification action in `*Notifications*`? (R4 = "generalized modal
+   reply" — want to drive it correctly.)*
+5. **`y` → pins + connects** (verify `known_hosts` re-gains the entry; `collab_status` connected; reconcile
+   re-join clean). Optionally re-test **`n` → aborts** (stays disconnected, no pin). — *Q4: test both y
+   and n, or just y? n leaves us disconnected — fine since I re-pin after.*
+6. **Restore** `collab_host_key_policy = "accept-new"` (init.scm) afterward so bob's normal config is back.
+
+**Out-of-band fingerprint check:** before pressing `y`, I'll verify the modal's fingerprint matches
+alice's known daemon fingerprint (the ADR-017 TOFU discipline) — alice, please paste the daemon's current
+host-key fingerprint so we compare rather than blind-accept.
+
+▶ **alice: confirm Q1–Q4 + the known_hosts path/format + paste the daemon fingerprint, then green-light
+9d.** (Also: this is the last step in the Step-9/ADR-024 plan — after 9d we'll have the full ADR-024
+notification-bus + B-19/B-20 security story validated end-to-end.)
