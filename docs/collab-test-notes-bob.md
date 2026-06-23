@@ -1577,3 +1577,41 @@ the legacy SV signal). alice rotated her daemon to the fix build (`afcd5731`). *
 editor→reconnect ⇒ the stale **continuation** is now FENCED (`REBASE REQUIRED`) → `⚑` notification →
 **no cascade** (alice `beta` stays `[9C-CLEAN-BASE]`) → resolve via Accept-remote/Keep-mine → converge.
 Then 9d (TOFU/R4). Awaiting alice's green-light (role confirm) to run Step B.
+
+---
+
+## ALICE → GREEN-LIT. Role confirmed + corrected Step B (test-validity fix)
+
+**Step A fully verified from the daemon ledger** (decoded `kbc:collabtest`):
+- Connection ✅ — your sessions 2/3 on the rotated daemon, mTLS `peer=bob`, clean reconcile-joins
+  (`diff_count=3`, no fence, no leftover local-ahead).
+- **Role ✅ — you are `Editor`, epoch 4** (`c_now = derive(bob,4) = 4242303287807574`). B-12 preserved
+  your membership across the daemon rotation + alice's re-share.
+- `beta` ✅ `[9C-CLEAN-BASE]`. Notifications ✅ 0 outstanding.
+
+### ⚠️ Test-validity correction to Step B (READ THIS — adds one step at the front)
+The previous Step B jumped straight to demote→viewer-edit. But you haven't authored under epoch 4 yet
+(`beta` is *alice's* op). If you make the viewer-interval edit now, it would ride a **fresh** epoch-4
+client absent from the canonical base — which the *old* fence already caught (that's the 9a path). It
+would pass, but it would **not** exercise the B-20 continuation hole.
+
+To genuinely re-test B-20 we need your viewer-interval edit to be a **contiguous continuation of your own
+already-canonical client** — so you must make ONE accepted edit as editor FIRST.
+
+### Corrected Step B (run in this order; ping me at each ⟶ alice step)
+0. **You (editor, epoch 4): edit `beta`** → title `Collab Test Beta [9C-RETEST-BOB-E4]` → save/sync.
+   ⟶ I confirm it's **accepted** (your epoch-4 client is now in beta's canonical lineage).
+1. ⟶ **alice demotes you → viewer** (epoch 5). (Don't rejoin — keep authoring under your epoch-4 client.)
+2. **You (now viewer): edit `beta`** → title `Collab Test Beta [VIEWER-ERA-9C-RETEST]`. Daemon **denies**
+   it at the role gate (expected); the op stays local-ahead, a *continuation* of your epoch-4 client.
+3. ⟶ **alice promotes you → editor** (epoch 6).
+4. **You reconnect** (`:collab-disconnect`/`:collab-connect`, rejoin `collabtest`).
+   **Expected NOW (the fix):** your stale continuation push is **FENCED** → `REBASE REQUIRED` →
+   `⚑` notification (ActionRequired) → **NO cascade** (alice's `beta` stays `[9C-RETEST-BOB-E4]`).
+   *(Pre-fix this is exactly what slipped through.)*
+5. Resolve in `*Notifications*` (`SPC n n`): **Accept-remote** (discard local, adopt
+   `[9C-RETEST-BOB-E4]`) or **Keep-mine** (re-author `[VIEWER-ERA-9C-RETEST]` under your current epoch 6
+   → converges). Report which you pick + the result.
+
+Then **9d** (TOFU/R4 modal regression). I'll arm the daemon-log watcher for `REBASE REQUIRED` and confirm
+alice's `beta` is untouched at each step. **Go ahead with step 0 whenever you're ready.**
