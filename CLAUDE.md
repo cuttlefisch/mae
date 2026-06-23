@@ -320,9 +320,18 @@ Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (
 | `collab_doctor` | Run connectivity diagnostics |
 | `collab_list` | List shared documents on the server |
 | `collab_discover` | Discover MAE peers via mDNS |
+| `kb_sharing_status` | Introspect KBs + members/roles/policy/pending/my-role (call before managing) |
 | `kb_share` | Share a KB for collaborative editing |
 | `kb_join` | Join a shared KB from the server |
 | `kb_leave` | Leave a shared KB (local copy preserved) |
+| `kb_add_member` / `kb_remove_member` | Add/remove a member by fingerprint (owner-only) |
+| `kb_approve` | Approve a pending join request as a role (owner-only) |
+| `kb_set_policy` | Set join policy: restrictive\|invite\|permissive (owner-only) |
+
+KB-sharing lifecycle is also first-class in Scheme: `(kb-share)`, `(kb-join)`,
+`(kb-leave)`, `(kb-add-member)`, `(kb-remove-member)`, `(kb-approve)`,
+`(kb-set-policy)`, `(kb-sharing-status)`. The `*KB Sharing*` buffer (`SPC C K m`),
+the Scheme primitive, and the MCP tool all read the same introspection snapshot.
 
 ### Buffer / Editor
 

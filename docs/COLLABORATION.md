@@ -120,6 +120,9 @@ which is being retired. Secrets (PSKs) never go in `config.toml`; see §8/§10.
 | `collab-tls` | bool | `true` | Use mTLS in key mode (false = plaintext KeyAuth fallback). |
 | `collab-psk` | string | `""` | PSK (plaintext fallback — prefer a keystore/command). |
 | `collab-psk-command` | string | `""` | Command that prints the PSK (e.g. `pass show mae/key`). |
+| `collab-auto-share` | bool | `false` | Auto-share new buffers when connected. |
+| `collab-kb-sync-mode` | string | `on_save` | KB sync trigger: `manual` (`:kb-sync`) or `on_save`. |
+| `collab-fence-resolution` | string | `prompt` | On a fenced edit ("rebase required"): `prompt` (ask) or `auto` (adopt + re-author in background). |
 
 Set + persist at runtime (writes `init.scm`):
 
@@ -132,10 +135,16 @@ Set + persist at runtime (writes `init.scm`):
 Or directly in `init.scm`:
 
 ```scheme
+;; --- Collaboration: connect on startup, trusted-peer mode ---
 (set-option! "collab-server-address" "192.168.1.10:9473")
 (set-option! "collab-auto-connect" "true")
-(set-option! "collab-auth-mode" "key")   ; trusted-peer mode (§10)
+(set-option! "collab-auth-mode" "key")            ; trusted-peer mode (§10)
+(set-option! "collab-fence-resolution" "auto")    ; resolve access-change fences silently
 ```
+
+Then, once connected, share a KB from the `*KB Sharing*` buffer (`SPC C K m`),
+the `:kb-share <name>` command, or the `(kb-share "team-notes")` Scheme primitive
+(re-sharing is idempotent — the daemon preserves existing membership).
 
 ### Environment Variables
 
@@ -733,6 +742,96 @@ unambiguous).
 A non-owner cannot escalate via a raw collection write — the daemon owner-gates raw
 `kbc:` updates (membership-smuggling defense). The model follows NIST RBAC + Google
 Zanzibar/ReBAC + OWASP authorization (see [ADR-018](adr/018-identity-anchored-kb-access-control.md)).
+
+### The `*KB Sharing*` management buffer (recommended)
+
+Press **`SPC C K m`** (or `:kb-sharing`) to open a magit-style management buffer
+that shows every shared/joined KB with its members, roles, join policy, pending
+requests, and your own role/epoch — and lets you act **at point** so you never
+type a fingerprint by hand:
+
+```
+KB Sharing
+  Connected to 127.0.0.1:9473 — 2 peer(s)
+
+▾ KB: Team Notes  [owner · invite · synced]
+    Your role: owner (epoch 0)
+    Policy: invite
+  ▾ Members (2):
+      alice (SHA256:ab12…cd) — owner  (you)
+      bob   (SHA256:9xLh…0p) — editor
+  ▾ Pending (1):
+      carol (SHA256:c1f2…9a) — requested 2026-06-23
+```
+
+| Key | On a… | Action |
+|-----|-------|--------|
+| `a` / `d` | pending row | approve (as editor) / deny |
+| `e` / `v` / `o` | member row | set role to editor / viewer / owner |
+| `x` | member row | remove member |
+| `y` | member row | copy full fingerprint to clipboard |
+| `p` | KB header | cycle join policy (restrictive → invite → permissive) |
+| `L` | KB header | leave the KB (local copy preserved) |
+| `Tab` | header | fold / unfold |
+| `g r` | anywhere | refresh |
+
+The buffer **repaints live**: when the owner promotes/demotes/approves a peer, the
+change appears on every connected member without a reconnect. New join requests
+also raise a **notification** (badge + `*Notifications*`), so the owner isn't blind
+with the buffer closed. Running `:kb-approve <kb>` / `:kb-member-add <kb>` **without**
+a fingerprint just opens this buffer to pick at point.
+
+The buffer, the `(kb-sharing-status)` Scheme primitive, and the `kb_sharing_status`
+MCP tool all read the **same** snapshot — the human and the AI peer see identical
+state (it is your peer's local replica; the daemon stays authoritative).
+
+### Scripting and AI peers
+
+Every lifecycle action is a first-class Scheme primitive **and** an MCP tool — the
+user and the AI agent are peers calling the same intents:
+
+```scheme
+(kb-share "team-notes")                  ; share a KB
+(kb-join "team-notes")                   ; join one
+(kb-add-member "team-notes" "SHA256:…" "editor")
+(kb-approve "team-notes" "SHA256:…" "editor")   ; approve a pending request
+(kb-set-policy "team-notes" "permissive")
+(kb-remove-member "team-notes" "SHA256:…")
+(kb-leave "team-notes")
+(kb-sharing-status)                      ; → JSON snapshot of all shared/joined KBs
+```
+
+The AI agent drives the same lifecycle via MCP (`kb_share`, `kb_join`, `kb_leave`,
+`kb_add_member`, `kb_remove_member`, `kb_approve`, `kb_set_policy`) and introspects
+via **`kb_sharing_status`** — call it before managing membership to read the roster
+and the pending fingerprints. The agent's local replica can only mislead itself; the
+daemon re-derives authorization from its own collection, so an agent cannot
+self-elevate.
+
+### When your access changes ("rebase required")
+
+Membership roles carry a per-member **authorization epoch** (ADR-023). When an owner
+changes your role, the daemon **rotates** the identity your edits are authored under
+and **fences** any edit you made under the old role ("rebase required") — this is the
+security guarantee that a viewer's pre-grant edits can't silently cascade once you're
+promoted. Your editor **relearns** the new epoch automatically from the membership
+broadcast (no reconnect needed), so your *next* edit is accepted.
+
+If an edit you made just before the change was fenced, MAE surfaces a
+`*Notifications*` item with three choices:
+
+- **Accept-remote** — replace your copy with the current shared version (your edit is dropped).
+- **Keep-mine** — re-apply your edit on top of the current version (it converges).
+- **Stash externally** — save your version to a separate file first.
+
+Set **`collab_fence_resolution = auto`** (default `prompt`) to have MAE resolve this
+in the background (keep-mine: adopt + re-author) without asking.
+
+### Discovering peers
+
+`:collab-discover` (`SPC C P`) finds MAE daemons on your LAN via mDNS and lists their
+shared KBs; `:collab-list` shows the shared documents on the daemon you're connected
+to. To join manually: connect (`:collab-connect`), then `:kb-join <name>`.
 
 ### Validate it
 
