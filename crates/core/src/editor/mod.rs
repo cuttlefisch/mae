@@ -324,6 +324,13 @@ pub struct CollabState {
     /// Host-key (daemon identity) trust policy in key mode:
     /// "prompt" (interactive TOFU) | "accept-new" | "strict".
     pub host_key_policy: String,
+    /// Cross-thread live mirror of `host_key_policy` for the background collab
+    /// task's host-key verifier (B-21). The verifier is built once at collab-task
+    /// setup but holds a clone of this `Arc` and reads it at verify-time, so a
+    /// runtime `:set collab-host-key-policy` / `(set-option! …)` takes effect on
+    /// the NEXT connect with no relaunch. Kept in sync with `host_key_policy`
+    /// (the canonical option value used by get/set_option).
+    pub host_key_policy_live: std::sync::Arc<std::sync::Mutex<String>>,
     /// Use native mTLS in key mode (recommended). When false, the plaintext
     /// JSON KeyAuth handshake is used.
     pub tls: bool,
@@ -369,6 +376,7 @@ impl CollabState {
             psk_command: String::new(),
             auth_mode: "psk".to_string(),
             host_key_policy: "prompt".to_string(),
+            host_key_policy_live: std::sync::Arc::new(std::sync::Mutex::new("prompt".to_string())),
             tls: true,
         }
     }

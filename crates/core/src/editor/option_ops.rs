@@ -724,7 +724,13 @@ impl super::Editor {
             },
             "collab_host_key_policy" => match value {
                 "prompt" | "accept-new" | "strict" => {
-                    self.collab.host_key_policy = value.to_string()
+                    self.collab.host_key_policy = value.to_string();
+                    // B-21: propagate to the live cell the background collab task's
+                    // host-key verifier reads, so the change is honored on the next
+                    // connect without a relaunch.
+                    if let Ok(mut p) = self.collab.host_key_policy_live.lock() {
+                        *p = value.to_string();
+                    }
                 }
                 _ => {
                     return Err(format!(

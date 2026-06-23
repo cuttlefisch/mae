@@ -1830,25 +1830,26 @@ fn resolve_client_transport(
                 .unwrap_or_else(|| "mae-editor".to_string());
             match mae_mcp::identity::Identity::load_or_generate(&dir, &label) {
                 Ok(id) => {
-                    let policy = mae_mcp::identity::HostKeyPolicy::from_str_opt(
-                        &editor.collab.host_key_policy,
-                    );
                     let known_hosts = dir.join("known_hosts");
-                    // `prompt` → interactive TOFU; otherwise the non-interactive
-                    // accept-new / strict file verifier.
+                    // B-21: the verifier reads the LIVE policy at verify-time (via the
+                    // shared cell), so a runtime `:set collab-host-key-policy` is honored
+                    // on the next connect without a relaunch — the transport is otherwise
+                    // built once at collab-task setup and cached. Seed the cell from the
+                    // current option value (covers config-load paths that set the field
+                    // directly), then hand the verifier a clone of the Arc. We always use
+                    // the prompting verifier because it is the only one that CAN prompt;
+                    // it dispatches on the live policy (accept-new → pin, strict → reject,
+                    // prompt → ask the user).
+                    if let Ok(mut p) = editor.collab.host_key_policy_live.lock() {
+                        *p = editor.collab.host_key_policy.clone();
+                    }
                     let verifier: std::sync::Arc<dyn mae_mcp::identity::HostKeyVerifier> =
-                        if policy == mae_mcp::identity::HostKeyPolicy::Prompt {
-                            std::sync::Arc::new(PromptingHostKeyVerifier {
-                                known_hosts,
-                                evt_tx: evt_tx.clone(),
-                                timeout: std::time::Duration::from_secs(120),
-                            })
-                        } else {
-                            std::sync::Arc::new(mae_mcp::identity::FileHostKeyVerifier::new(
-                                known_hosts,
-                                policy,
-                            ))
-                        };
+                        std::sync::Arc::new(PromptingHostKeyVerifier {
+                            known_hosts,
+                            evt_tx: evt_tx.clone(),
+                            timeout: std::time::Duration::from_secs(120),
+                            policy: editor.collab.host_key_policy_live.clone(),
+                        });
                     let identity = std::sync::Arc::new(id);
                     return if editor.collab.tls {
                         ClientTransport::KeyTls { identity, verifier }
@@ -2000,10 +2001,18 @@ impl ClientTransport {
 /// A `HostKeyVerifier` that prompts the user interactively (TOFU) for an unknown
 /// daemon identity, via a round-trip to the main thread. A previously pinned key
 /// that matches is accepted silently; a CHANGED key is rejected (MITM defense).
+/// The editor's host-key verifier. Unlike the non-interactive
+/// `FileHostKeyVerifier`, this one can prompt — and it reads the trust policy
+/// from a **live** shared cell at verify-time (B-21), so a runtime
+/// `:set collab-host-key-policy` is honored on the next connect (the transport
+/// is built once at collab-task setup and cached). Dispatches on the live policy:
+/// `accept-new` → pin on first use, `strict` → reject unknown, `prompt` → ask.
 struct PromptingHostKeyVerifier {
     known_hosts: std::path::PathBuf,
     evt_tx: mpsc::Sender<CollabEvent>,
     timeout: std::time::Duration,
+    /// Live mirror of `collab_host_key_policy` (shared with the editor).
+    policy: std::sync::Arc<std::sync::Mutex<String>>,
 }
 
 impl std::fmt::Debug for PromptingHostKeyVerifier {
@@ -2014,30 +2023,71 @@ impl std::fmt::Debug for PromptingHostKeyVerifier {
     }
 }
 
+impl PromptingHostKeyVerifier {
+    /// The current trust policy (read live each verify so runtime changes apply).
+    fn current_policy(&self) -> mae_mcp::identity::HostKeyPolicy {
+        let s = self
+            .policy
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_else(|_| "prompt".to_string());
+        mae_mcp::identity::HostKeyPolicy::from_str_opt(&s)
+    }
+}
+
 impl mae_mcp::identity::HostKeyVerifier for PromptingHostKeyVerifier {
     fn verify(&self, addr: &str, server_pub: &mae_mcp::identity::PublicKey) -> bool {
         let mut kh = mae_mcp::identity::KnownHosts::load(&self.known_hosts);
         if let Some(pinned) = kh.get(addr) {
-            return pinned.to_bytes() == server_pub.to_bytes();
-        }
-        // Unknown host — ask the user (the connection task blocks here; the main
-        // UI thread is separate, so no deadlock).
-        let (reply_tx, reply_rx) = std::sync::mpsc::channel::<bool>();
-        if self
-            .evt_tx
-            .try_send(CollabEvent::HostKeyPrompt {
-                addr: addr.to_string(),
-                fingerprint: server_pub.fingerprint(),
-                reply: reply_tx,
-            })
-            .is_err()
-        {
-            warn!("host-key prompt could not be delivered; rejecting");
+            // Known host: pin-match (MITM defense) regardless of policy.
+            if pinned.to_bytes() == server_pub.to_bytes() {
+                return true;
+            }
+            tracing::error!(
+                addr,
+                expected = %pinned.fingerprint(),
+                got = %server_pub.fingerprint(),
+                "daemon host key CHANGED — aborting (possible MITM)"
+            );
             return false;
         }
-        match reply_rx.recv_timeout(self.timeout) {
-            Ok(true) => kh.pin(addr, server_pub).is_ok(),
-            _ => false,
+        // Unknown host — dispatch on the LIVE policy.
+        match self.current_policy() {
+            mae_mcp::identity::HostKeyPolicy::AcceptNew => match kh.pin(addr, server_pub) {
+                Ok(_) => {
+                    info!(addr, fp = %server_pub.fingerprint(), "pinned new daemon host key (accept-new)");
+                    true
+                }
+                Err(e) => {
+                    warn!(addr, error = %e, "failed to pin host key");
+                    false
+                }
+            },
+            mae_mcp::identity::HostKeyPolicy::Strict => {
+                warn!(addr, fp = %server_pub.fingerprint(), "unknown host key rejected (strict)");
+                false
+            }
+            mae_mcp::identity::HostKeyPolicy::Prompt => {
+                // Ask the user (the connection task blocks here; the main UI thread
+                // is separate, so no deadlock).
+                let (reply_tx, reply_rx) = std::sync::mpsc::channel::<bool>();
+                if self
+                    .evt_tx
+                    .try_send(CollabEvent::HostKeyPrompt {
+                        addr: addr.to_string(),
+                        fingerprint: server_pub.fingerprint(),
+                        reply: reply_tx,
+                    })
+                    .is_err()
+                {
+                    warn!("host-key prompt could not be delivered; rejecting");
+                    return false;
+                }
+                match reply_rx.recv_timeout(self.timeout) {
+                    Ok(true) => kh.pin(addr, server_pub).is_ok(),
+                    _ => false,
+                }
+            }
         }
     }
 }
@@ -4163,6 +4213,7 @@ mod tests {
         let v = PromptingHostKeyVerifier {
             known_hosts: kh,
             evt_tx: tx,
+            policy: std::sync::Arc::new(std::sync::Mutex::new("prompt".to_string())),
             timeout: std::time::Duration::from_millis(50),
         };
         assert!(
@@ -4184,6 +4235,7 @@ mod tests {
         let v = PromptingHostKeyVerifier {
             known_hosts: kh,
             evt_tx: tx,
+            policy: std::sync::Arc::new(std::sync::Mutex::new("prompt".to_string())),
             timeout: std::time::Duration::from_millis(50),
         };
         // A DIFFERENT key for the same addr → abort (no prompt).
@@ -4202,6 +4254,7 @@ mod tests {
         let v = PromptingHostKeyVerifier {
             known_hosts: kh.clone(),
             evt_tx: tx,
+            policy: std::sync::Arc::new(std::sync::Mutex::new("prompt".to_string())),
             timeout: std::time::Duration::from_secs(5),
         };
         // verify() blocks until the (simulated) user answers via the event reply.
@@ -4234,6 +4287,7 @@ mod tests {
         let v = PromptingHostKeyVerifier {
             known_hosts: kh.clone(),
             evt_tx: tx,
+            policy: std::sync::Arc::new(std::sync::Mutex::new("prompt".to_string())),
             timeout: std::time::Duration::from_secs(5),
         };
         let handle = std::thread::spawn(move || v.verify("d:9473", &server));
@@ -4245,6 +4299,58 @@ mod tests {
             KnownHosts::load(&kh).get("d:9473").is_none(),
             "rejected host must not be pinned"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// B-21 regression: a runtime `collab_host_key_policy` change is honored by the
+    /// SAME verifier instance at verify-time (the verifier/transport is built once
+    /// at collab-task setup and cached, so it must read the live policy cell).
+    #[test]
+    fn host_key_policy_change_honored_at_verify_time_b21() {
+        use mae_mcp::identity::{HostKeyVerifier, Identity, KnownHosts};
+        let dir = tofu_dir("b21");
+        let kh = dir.join("known_hosts");
+        let policy = std::sync::Arc::new(std::sync::Mutex::new("accept-new".to_string()));
+        let (tx, mut rx) = mpsc::channel::<CollabEvent>(8);
+        let v = PromptingHostKeyVerifier {
+            known_hosts: kh.clone(),
+            evt_tx: tx,
+            policy: policy.clone(),
+            timeout: std::time::Duration::from_secs(5),
+        };
+        // accept-new: an unknown host is pinned WITHOUT prompting.
+        let a = Identity::generate("daemon-a").public();
+        assert!(v.verify("a:9473", &a), "accept-new pins unknown host");
+        assert!(rx.try_recv().is_err(), "accept-new must NOT prompt");
+        assert_eq!(
+            KnownHosts::load(&kh).get("a:9473").unwrap().to_bytes(),
+            a.to_bytes()
+        );
+
+        // Flip the LIVE policy to `prompt` — the SAME verifier must now ASK on a new
+        // host instead of auto-pinning (the B-21 fix: no rebuild/relaunch needed).
+        *policy.lock().unwrap() = "prompt".to_string();
+        let b = Identity::generate("daemon-b").public();
+        let b_bytes = b.to_bytes();
+        let handle = std::thread::spawn(move || v.verify("b:9473", &b));
+        match rx
+            .blocking_recv()
+            .expect("prompt event after runtime policy change")
+        {
+            CollabEvent::HostKeyPrompt {
+                reply, fingerprint, ..
+            } => {
+                assert!(fingerprint.starts_with("SHA256:"));
+                reply.send(false).unwrap(); // decline
+            }
+            other => panic!("expected HostKeyPrompt after policy→prompt, got {other:?}"),
+        }
+        assert!(!handle.join().unwrap(), "declined prompt → not verified");
+        assert!(
+            KnownHosts::load(&kh).get("b:9473").is_none(),
+            "declined host must not be pinned"
+        );
+        let _ = b_bytes; // (only needed to move `b` into the thread)
         let _ = std::fs::remove_dir_all(&dir);
     }
 
