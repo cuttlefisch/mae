@@ -729,6 +729,54 @@ pub fn execute_read_messages(editor: &Editor, args: &serde_json::Value) -> Resul
     }
 }
 
+/// ADR-024: list outstanding + recently-resolved notifications as JSON.
+pub fn execute_notifications_list(editor: &Editor) -> Result<String, String> {
+    let items: Vec<serde_json::Value> = editor
+        .notifications
+        .active_sorted()
+        .iter()
+        .map(|n| {
+            serde_json::json!({
+                "id": n.id,
+                "severity": n.severity.as_str(),
+                "source": n.source,
+                "title": n.title,
+                "body": n.body,
+                "resolved": n.resolved.is_some(),
+                "actions": n.actions.iter().enumerate()
+                    .map(|(i, a)| serde_json::json!({ "index": i, "label": a.label }))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let out = serde_json::json!({
+        "outstanding": editor.notifications.outstanding_count(),
+        "notifications": items,
+    });
+    serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
+}
+
+/// ADR-024: resolve a notification — run an action by index, or dismiss it.
+pub fn execute_notify_resolve(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_u64())
+        .ok_or("Missing required 'id' parameter")?;
+    if let Some(action) = args.get("action").and_then(|v| v.as_u64()) {
+        if editor.notify_run_action(id, action as usize) {
+            Ok(serde_json::json!({ "id": id, "action": action, "ran": true }).to_string())
+        } else {
+            Err(format!("notification {id} has no action at index {action}"))
+        }
+    } else {
+        let dismissed = editor.dismiss_notification(id);
+        Ok(serde_json::json!({ "id": id, "dismissed": dismissed }).to_string())
+    }
+}
+
 pub fn execute_editor_save_state(editor: &mut Editor) -> Result<String, String> {
     let depth = editor.save_state();
     let buf_names: Vec<&str> = editor.buffers.iter().map(|b| b.name.as_str()).collect();

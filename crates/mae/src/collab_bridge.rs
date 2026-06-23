@@ -1611,10 +1611,42 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             let is_rebase = message.contains("rebase required");
             if is_rebase {
                 warn!(target: "kb_sync", kb = %kb_id, node = %node_id, error = %message, "kb/node_update fenced (stale-epoch) — pre-grant edit not synced (B-19)");
-                editor.set_status(format!(
-                    "KB '{kb_id}': your earlier edit to {node_id} was made before your \
-                     access changed and was NOT synced — reconnect and re-apply it"
-                ));
+                // ADR-024 R2: raise an actionable, non-clobberable notification (badge
+                // + *Notifications* row) instead of a status line that gets drowned out.
+                // The actions invoke the R1 adopt-and-re-author round-trip.
+                use mae_core::notifications::{NotifCommand, Notification};
+                editor.notify(
+                    Notification::action_required(
+                        "collab",
+                        format!("KB '{kb_id}': edit to {node_id} fenced — not synced"),
+                    )
+                    .key(format!("collab:fence:{kb_id}:{node_id}"))
+                    .body(
+                        "Your edit was authored before your access changed. Adopt the \
+                         current version, keep yours (re-author), or stash it.",
+                    )
+                    .action(
+                        "Accept-remote (clobber local)",
+                        NotifCommand::AdoptRemote {
+                            kb_id: kb_id.clone(),
+                            node_id: node_id.clone(),
+                        },
+                    )
+                    .action(
+                        "Keep-mine (re-author)",
+                        NotifCommand::KeepMine {
+                            kb_id: kb_id.clone(),
+                            node_id: node_id.clone(),
+                        },
+                    )
+                    .action(
+                        "Stash externally",
+                        NotifCommand::StashExternally {
+                            kb_id: kb_id.clone(),
+                            node_id: node_id.clone(),
+                        },
+                    ),
+                );
             } else {
                 warn!(target: "kb_sync", kb = %kb_id, node = %node_id, error = %message, "kb/node_update failed — dropping");
                 editor.set_status(format!("KB sync rejected for {node_id}: {message}"));
