@@ -2117,3 +2117,52 @@ Checkpoints: `1/2` forwarder sent → `3` main-thread received → `4/5` redraw 
 
 One paste decides it; then I land the targeted fix + rip out the instrumentation. (Meanwhile B-22c already
 lets you answer via `notify_resolve {id, action:0|1}` regardless.)
+
+---
+
+## ✅ B-22a EXPERIMENT — DECISIVE: the frame paints, the modal OVERLAY is skipped (render-path bug, not delivery)
+Ran alice's `b22a` instrumented experiment (`fe14986`, target `b22a`, launched
+`MAE_LOG=b22a=info,collab=info 2>/tmp/mae-b22a.log`). Connect at 19:12:06; **no keyboard/mouse touched**
+during observation; modal **never** appeared (waited 25s). First (clean) connect cycle's checkpoints:
+```
+17:12:11.627  1.bridge_task: HostKeyPrompt off collab_rx → proxy.send_event
+17:12:11.627  2.bridge_task: proxy.send_event(HostKeyPrompt) → Ok
+17:12:11.633  3.handle_collab_event: HostKeyPrompt RECEIVED on main thread — raising modal   (+6.7ms)
+17:12:11.633  4.about_to_wait: dirty, modal pending  (input_dirty=FALSE)
+17:12:11.650  5.about_to_wait: request_redraw() NOW
+17:12:11.650  6.RedrawRequested: PAINTING a frame with modal pending                          (+23ms)
+```
+**All six checkpoints fire within ~24ms of connect, with NO keypress** (`input_dirty=false`), and they
+**repeat every ~150ms** thereafter. So:
+- proxy **does** wake winit (3 fires +6.7ms, unprompted) — **delivery/wakeup is NOT the bug** (my earlier
+  leading hypothesis #1 is **refuted**).
+- `request_redraw` fires (5) and **a frame is painted (6)** — repeatedly, no input. Not #2 either.
+
+⇒ Per alice's matrix this is the **last case: "6 fires (paint runs) but the modal is invisible → the
+render pass draws the frame but SKIPS the modal overlay for the Notification-confirm context."** The paint
+pipeline is healthy end-to-end; the **MiniDialog overlay simply isn't drawn in the painted frame.** The
+"freeze" was perceptual — frames *are* painting every ~150ms, but nothing visibly changes because the only
+thing that should (the modal) is omitted.
+
+### Likely root (mirror of the B-22b input bug, on the render side)
+B-22b found `handle_key` only routed to the mini-dialog via the **command-palette path** (fixed to check
+`mini_dialog.is_some()` in all modes). The **render pass almost certainly has the same gate**: it draws the
+mini-dialog overlay only when in command-palette/command mode, **not whenever `mini_dialog.is_some()`**. The
+async-raised Notification-confirm modal sets `mini_dialog` but **not** the palette mode → the overlay-draw
+is skipped even though the frame paints. **Fix dir:** in the GUI render, draw the `mini_dialog` overlay
+whenever `mini_dialog.is_some()` (any mode) — the render-side twin of the B-22b `handle_key` fix. Look at
+the GUI draw path that gates the MiniDialog/command-palette overlay on palette/command mode.
+
+### Status
+- **B-22a:** root-caused (render skips overlay) — handed to alice (GUI render owner) with the exact log +
+  fix direction. Not delivery/wakeup; it's the overlay-draw gate.
+- **B-22c:** confirmed in — the trust notifications now carry `[0] Accept & pin / [1] Reject` actions
+  (`notify_resolve {id, action}`), so the flow is answerable over MCP/`*Notifications*` regardless of the
+  GUI paint. (NB: the repeated freeze/reject cycles in this run were reconnect-backoff re-prompts; each
+  painted frames sans overlay → user rejected via keypress.)
+- **9d:** functionally PASS (B-21 + correct-fp + reject-no-pin + accept-pin, per alice's daemon oracle).
+  B-22a is GUI-paint polish on top.
+- **Process note:** an agent `set-option!`→immediate `:collab-connect` still races the apply-drain (the
+  connect read the pre-drain policy once during restore → an extra prompt). B-21 honors the *live* value,
+  but the registry→live-cell update lands on the next tick — verify via `get_option` before connecting.
+- **bob restored:** connected, re-pinned (`07aW…7Ls`), policy `accept-new`, temp backups removed.
