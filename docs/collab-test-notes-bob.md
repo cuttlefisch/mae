@@ -1194,3 +1194,42 @@ converged (step 5). Flag immediately if a pre-grant edit *ever* appears on alice
 
 > ⚠️ Verify running binary == new build first (the B-18 deploy gotcha):
 > `sha256sum /proc/$(pgrep -n mae)/exe` vs `sha256sum ./target/release/mae`.
+
+---
+
+## Step 8 / B-19 epoch fence (ADR-023) — LIVE, bob side (steps 2–4 PASS; UX hiccup flagged)
+Build `98c6368` (B-19 daemon fence + editor epoch rotation). KB `collabtest`, node `collabtest:beta`,
+bob fp `SHA256:9xLh0DWee…2CrI`. bob manual-connect (autoconnect off). alice pre-step: reset bob→viewer.
+
+- **Step 2 — viewer write denied (8a):** bob `:collab-connect` + `:kb-join collabtest` (as viewer) →
+  edited `beta → [VIEWER-ERA-HIJACK]`. Daemon: `kb/node_update REJECTED … "role 'viewer' may not Edit
+  KB 'collabtest'"` → bob `failed — dropping`. The op now lives **only in bob's local crdt_doc**
+  (local-ahead; the B-19 staged-edit condition). alice confirmed beta has NO `[VIEWER-ERA-HIJACK]`. ✅
+- **Step 3:** alice promoted bob → **editor** (epoch bump).
+- **Step 4 — pre-grant op FENCED on reconnect (8b):** bob `:collab-disconnect`/`:collab-connect` →
+  `joining KB (ADR-022 reconcile)` → `ADR-022 join: re-syncing recovered local-ahead edit(s) count=1`
+  (the staged viewer-era op) → `drain rowid=26` → **daemon REJECTED:**
+  `rebase required: node 'collabtest:beta' carries an op from stale-epoch client 8652327912337067
+  (current-epoch author 4055153282127329, epoch 2); adopt authoritative state and re-author the edit`.
+  bob: `kb/node_update fenced (stale-epoch) — pre-grant edit not synced (B-19)`. The viewer-era lineage
+  did **not** cascade through the grant. (no-cascade — alice to confirm her beta still clean.)
+- **8c — honest signal (not silent):** ✅ bob emits an explicit `fenced … not synced (B-19)` WARN; the
+  edit is not silently dropped at the protocol level.
+
+### ⚠️ UX HICCUP (tracked for CRDT-lifecycle UX review, post-plumbing)
+The B-19 fence is correct at the **protocol** level, but the **user-facing messaging is weak**:
+- The fence surfaces as a `*Messages*` **WARN log** (`kb/node_update fenced (stale-epoch) — pre-grant
+  edit not synced (B-19)`), not a prominent, actionable notice. The plan's intended status-line
+  ("your earlier edit to <node> … was NOT synced — reconnect and re-apply it") was **not observably
+  surfaced** to the user — info-level `[status]` was drowned by unrelated terminal-spinner updates,
+  and nothing modal/sticky told the user "your edit is stranded; re-apply it."
+- **Risk:** a real user whose edit is fenced sees their local copy showing the edit (`[VIEWER-ERA-HIJACK]`
+  locally) but it silently never reaches peers — and the only signal is a buried log line. They'd
+  believe it synced. This is the human-facing half of B-19: the security guarantee holds, but the
+  **"your work didn't sync, here's what to do"** affordance is missing/weak.
+- **For the UX review (whole CRDT lifecycle, not just B-19):** define how to surface — fenced/rejected
+  edits (role-denied, stale-epoch), offline-pending (`durable_pending`), reconcile/adopt outcomes
+  ("X edits re-synced"), and connection state — as clear, actionable, non-log UI (status bar /
+  notification / a per-buffer collab indicator), distinct from the developer log stream. Pairs with
+  the config-casing + display-rule (#67) discoverability gaps as the "collab/config UX is
+  under-surfaced" theme. Plumbing first, then this.
