@@ -2792,6 +2792,57 @@ mod tests {
         tmp
     }
 
+    /// B5 / B-6 (CLAUDE.md #13): the primary KB data dir — the parent of the
+    /// `primary.cozo` store the editor opens at startup — MUST be XDG-first on
+    /// EVERY platform: `XDG_DATA_HOME/mae`, else `$HOME/.local/share/mae` — never
+    /// `dirs::data_dir()` (which is `~/Library/Application Support` on macOS and
+    /// would (a) break `XDG_DATA_HOME` test isolation and (b) split data from the
+    /// ADR-019 registry markers, breaking restart survival). This locks the
+    /// cf673b7c fix so a future change can't silently reintroduce `dirs::data_dir`.
+    #[test]
+    fn mae_data_dir_is_xdg_first_not_platform_native() {
+        let mut editor = Editor::new();
+        editor.data_dir_override = None; // exercise the real env-based resolution
+
+        let orig_xdg = std::env::var_os("XDG_DATA_HOME");
+        let orig_home = std::env::var_os("HOME");
+        let tmp = TempDir::new().unwrap();
+
+        // 1) XDG_DATA_HOME set → honored verbatim (joined with "mae").
+        std::env::set_var("XDG_DATA_HOME", tmp.path());
+        assert_eq!(
+            editor.mae_data_dir(),
+            Some(tmp.path().join("mae")),
+            "XDG_DATA_HOME must be honored on all platforms"
+        );
+
+        // 2) No XDG_DATA_HOME → ~/.local/share/mae (NOT a platform-native dir).
+        std::env::remove_var("XDG_DATA_HOME");
+        std::env::set_var("HOME", tmp.path());
+        let resolved = editor.mae_data_dir().expect("HOME-based path");
+        assert_eq!(
+            resolved,
+            tmp.path().join(".local").join("share").join("mae"),
+            "fallback must be ~/.local/share/mae, never ~/Library/Application Support"
+        );
+        assert!(
+            !resolved
+                .to_string_lossy()
+                .contains("Library/Application Support"),
+            "must never resolve to the macOS platform-native data dir"
+        );
+
+        // Restore env so sibling tests are unaffected.
+        match orig_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
     #[test]
     fn open_file_at_path_detects_language() {
         let dir = TempDir::new().unwrap();
