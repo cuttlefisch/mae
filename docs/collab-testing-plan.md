@@ -272,29 +272,39 @@ Launch `mae`. With `accept-new`, it connects + auto-pins (no prompt). Verify the
 **Roles:** D = **alice** (owner), E = **bob** (the promoted member). `<bob-fp>` is bob's
 authorized key fingerprint (`mae-daemon identity` on E, or `:collab-status`).
 
-1. **alice (D):** share a KB and note a node id. `:kb-share` (KB `default`), then make
-   sure a node exists (e.g. create/select `concept:probe`). Confirm bob is connected.
-2. **alice (D):** add bob as a **viewer** — `:kb-member-add default <bob-fp> viewer`.
-   Daemon log: `kb membership change member=… add=true`.
-3. **bob (E):** `:kb-join default` → succeeds (read-only). Open the node and **edit it**
-   (change the title/body to something unmistakable, e.g. `VIEWER-ERA-HIJACK`).
+> **This session's concrete values** (substitute if yours differ):
+> - **KB:** `collabtest` · **edit target node:** `collabtest:beta` (nodes: `alpha`/`beta`/`overview`).
+> - **`<bob-fp>` = `SHA256:9xLh0DWeeAi3hl2W7yudaE05aTHtYQpNUUyMWO+2CrI`** (alice = `SHA256:+jBin…`).
+> - **bob connects MANUALLY** (autoconnect disabled) — after launch bob runs `:collab-connect`,
+>   then `:kb-join collabtest`. This is deliberate, for granular control over the timing below.
+
+> [!NOTE]
+> **Pre-step (alice) — reset bob to viewer.** From prior T7 runs bob is a **leftover editor**
+> on `collabtest`. Start the exploit from a clean viewer state: `:kb-member-add collabtest <bob-fp> viewer`.
+> (Downgrade editor→viewer is itself a role change ⇒ the daemon bumps bob's epoch — expected.)
+
+1. **alice (D):** KB `collabtest` is already shared; pick the target node `collabtest:beta`.
+   Ensure bob is connected (he triggers `:collab-connect` manually) and has done the Pre-step reset.
+2. **alice (D):** confirm bob is a **viewer** — daemon log `kb membership change … role="viewer"`.
+3. **bob (E):** `:collab-connect` then `:kb-join collabtest` → succeeds (read-only). Open
+   `collabtest:beta` and **edit it** to something unmistakable, e.g. `VIEWER-ERA-HIJACK`.
    - [ ] The edit shows in **bob's local** buffer, but the daemon **denies** the write —
          daemon log `kb/node_update denied` (viewer, least privilege). bob's status shows
          the rejection. The divergent edit now lives **only** in bob's local copy.
    - [ ] **alice (D)** does **NOT** see `VIEWER-ERA-HIJACK` (it never reached the daemon).
-4. **alice (D):** promote bob to **editor** — `:kb-member-add default <bob-fp> editor`
-   (a role *change* ⇒ the daemon bumps bob's authorization epoch).
+4. **alice (D):** promote bob to **editor** — `:kb-member-add collabtest <bob-fp> editor`
+   (a role *change* ⇒ the daemon bumps bob's authorization epoch again).
 5. **bob (E):** trigger a sync of the pre-grant edit — either make **one more edit** to
-   the same node, or reconnect (`:collab-disconnect` then `:collab-connect`) so the
+   `collabtest:beta`, or reconnect (`:collab-disconnect` then `:collab-connect`) so the
    ADR-022 reconcile pushes bob's local-ahead. Observe the fence fire:
    - [ ] **Daemon log:** `kb/node_update: REBASE REQUIRED (stale-epoch op fenced — B-19)`
          (with `stale_client` ≠ `current_client`). The pre-grant op is **rejected**.
-   - [ ] **bob's status line:** `your earlier edit to <node> … was NOT synced — reconnect
-         and re-apply it`.
-   - [ ] **THE no-cascade assertion — alice (D)'s node value still does NOT contain
+   - [ ] **bob's status line:** `your earlier edit to collabtest:beta … was NOT synced —
+         reconnect and re-apply it`.
+   - [ ] **THE no-cascade assertion — alice (D)'s `collabtest:beta` still does NOT contain
          `VIEWER-ERA-HIJACK`.** The viewer-era lineage did not launder through the grant.
-6. **bob (E):** reconnect / `:kb-join default` (relearns epoch = 1), then **re-apply** the
-   edit fresh (type it again, e.g. `POST-GRANT-EDIT`).
+6. **bob (E):** reconnect (`:collab-connect`) + `:kb-join collabtest` (relearns the new epoch),
+   then **re-apply** the edit fresh (type it again, e.g. `POST-GRANT-EDIT`).
    - [ ] This edit **is accepted** and **converges on alice** — a legitimately-granted
          editor can edit going forward (authored under the current-epoch client_id).
    - [ ] *(Known limitation, by design)* bob's original pre-grant edit is **not**
