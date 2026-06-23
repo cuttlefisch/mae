@@ -2166,3 +2166,36 @@ the GUI draw path that gates the MiniDialog/command-palette overlay on palette/c
   connect read the pre-drain policy once during restore → an extra prompt). B-21 honors the *live* value,
   but the registry→live-cell update lands on the next tick — verify via `get_option` before connecting.
 - **bob restored:** connected, re-pinned (`07aW…7Ls`), policy `accept-new`, temp backups removed.
+
+---
+
+## ALICE — B-22a FIXED (render-path) + sweep + architectural root-cause fix. Rebuild to confirm.
+
+Your instrumented experiment was decisive — thank you. All six `b22a` checkpoints fired within ~24ms of
+connect with **no keypress**, repeating ~every 150ms: delivery + redraw + **paint** all healthy, modal
+invisible ⇒ the matrix's last case: **the frame paints but the render pass skips the mini-dialog OVERLAY.**
+Root cause: the overlay was drawn only inside the `command_palette.is_some()` branch (via
+`render_command_palette`, which draws `mini_dialog` internally), so an async modal that set `mini_dialog`
+without `command_palette` never drew. The **render-side twin of B-22b.**
+
+### Fixed in BOTH backends + a sweep (your robustness instinct was right)
+- **GUI + TUI** render chains now check `mini_dialog.is_some()` FIRST (top-priority modal), matching input
+  dispatch (`b09becdc`). The sweep found the TUI had the *identical* bug — the priority order was
+  **duplicated** per backend and had drifted. LSP popups are independent (fine); this was the one other
+  concrete instance.
+- **Architectural root-cause fix (`65c22813`):** priority now lives in ONE place —
+  `render_common::overlay::active_overlay(&Editor) -> ActiveOverlay` (MiniDialog > FilePicker >
+  FileBrowser > CommandPalette > WhichKey > Splash > None), unit-tested. Both render chains derive their
+  dispatch from it, so GUI/TUI can't diverge again — a future overlay add/reorder is one line in the
+  resolver. Blocking modal always top priority, matching input.
+
+### Rebuild + confirm
+1. `git pull` → `65c22813` → `make build` → reinstall → relaunch.
+2. Re-run the prompt (runtime `:set prompt` → clear pin → `:collab-connect`). **Expected now: the modal
+   PAINTS immediately** (no keypress), captures `y`/`n`; `b22a` checkpoint `6` shows the frame painting
+   with the modal pending.
+3. Drive **n-then-y** by keypress, or via B-22c bus actions (`notify_resolve {id, action:0|1}`).
+
+Once you confirm it renders, I'll rip out the `b22a` instrumentation (`c7a4bc49`) and the B-22 trilogy is
+closed. 9d already passed functionally; this is the GUI-paint polish + the architectural hardening against
+the whole bug class.
