@@ -135,6 +135,12 @@ of these is now caught in CI without a two-machine run:
 | Step 7a unauthorized peer rejected | `mtls_unauthorized_client_rejected` + `collab-mtls-e2e.sh` unauthorized scenario | unit/e2e |
 | TOFU MITM: changed host key rejected, pin not overwritten | `file_verifier_aborts_on_changed_key_without_overwriting_pin` | unit |
 | TOFU host-key prompt plumbing (R4) | `PromptingHostKeyVerifier` tests (collab_bridge) | unit |
+| **KB-sharing UX** — introspection snapshot (owner/joined/pending/role/epoch) | `kb_sharing.rs` builder tests + `kb_shared_seeds_owner_replica_for_introspection` | unit |
+| KB-sharing introspection at parity (user + AI) | `kb_sharing_status` MCP test + `(kb-sharing-status)` scheme round-trip | unit |
+| `*KB Sharing*` buffer layout + fold + at-point actions | `kb_sharing.rs` view tests + `dispatch::kb_sharing` (approve/role/policy/guard/non-owner) | unit |
+| Scheme/MCP lifecycle parity (share/join/add/approve/policy/leave) | `kb_lifecycle_primitives_queue_collab_intents` + `kb_approve_and_set_policy_queue_intents` | unit |
+| Owner notified of new pending request; fence auto vs prompt | `owner_notified_of_new_pending_join_request` + `fence_{auto_resolution,prompt_raises}` | unit |
+| Daemon membership/policy enforcement (policies, owner-only add+set_policy, approve, fence, owner-binding) | daemon `restrictive/invite/permissive_*`, `only_owner_manages_members`, `pending_then_approve_allows_join`, `stale_epoch_continuation_*` | unit |
 
 **Residual (stays manual / CI-gated two-machine):** the *live two-editor*
 fence→resolve orchestration end-to-end (Steps 8–9 as one run) — its pieces are

@@ -3742,6 +3742,22 @@ mod tests {
         )
         .await;
         assert!(denied.error.is_some(), "non-owner must not manage members");
+
+        // bob (editor, non-owner) likewise cannot change the join policy — the
+        // same owner-only Manage gate (kb_access) covers set_policy.
+        let policy_denied = dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            Some(&fp("bob")),
+            kb_policy_msg("kbm3", "permissive"),
+            &mut docs,
+        )
+        .await;
+        assert!(
+            policy_denied.error.is_some(),
+            "non-owner must not change the join policy"
+        );
     }
 
     #[tokio::test]
