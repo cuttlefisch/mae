@@ -365,4 +365,39 @@ mod tests {
             other => panic!("expected ShareBuffer intent, got: {other:?}"),
         }
     }
+
+    /// C2 (collab test-gap plan): `:collab-connect` must use the server address
+    /// set by `(set-option!)` in the SAME breath — no tick / apply-drain wait, no
+    /// manual `(get-option)` poll. `set_option` writes `collab.server_address`
+    /// synchronously and the connect dispatch reads it live, so the address the
+    /// connect intent carries is always the latest value. Guards against a future
+    /// change that snapshots/caches the address at task-setup time instead.
+    #[test]
+    fn collab_connect_reads_server_address_live_no_drain() {
+        let mut editor = Editor::new();
+        editor
+            .set_option("collab_server_address", "10.0.0.9:9999")
+            .unwrap();
+        // Dispatch immediately — no event-loop tick / option drain in between.
+        assert_eq!(editor.dispatch_collab("collab-connect"), Some(true));
+        match editor.collab.pending_intent {
+            Some(CollabIntent::Connect { ref address }) => {
+                assert_eq!(
+                    address, "10.0.0.9:9999",
+                    "connect must use the just-set address, not a stale snapshot"
+                );
+            }
+            ref other => panic!("expected Connect intent, got: {other:?}"),
+        }
+
+        // A second change is likewise reflected with no wait.
+        editor
+            .set_option("collab-server-address", "host.example:1234")
+            .unwrap();
+        editor.dispatch_collab("collab-connect");
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::Connect { ref address }) if address == "host.example:1234"
+        ));
+    }
 }

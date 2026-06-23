@@ -6,3 +6,12 @@
 pub mod collab_handler;
 pub mod doc_store;
 pub mod storage;
+
+/// Short git SHA of this build (`-dirty` if the tree had uncommitted changes,
+/// "unknown" if built outside a git checkout). Set by `build.rs`. Reported in
+/// the startup log, `--version`, and the `$/debug` response so an editor's
+/// `collab-doctor` can detect an editor↔daemon build mismatch across machines.
+pub const BUILD_SHA: &str = match option_env!("MAE_BUILD_SHA") {
+    Some(s) => s,
+    None => "unknown",
+};

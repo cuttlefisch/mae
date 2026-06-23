@@ -39,6 +39,16 @@ use mae_renderer::Renderer;
 use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, warn};
 
+/// Short git SHA of this build (`-dirty` if the working tree had uncommitted
+/// changes, "unknown" if built outside a git checkout). Set by `build.rs`. Used
+/// in the startup log, `--version`, and `collab-doctor` so a running editor can
+/// be pinned to an exact commit across machines (the cross-machine deploy
+/// discipline the live two-machine test depends on).
+pub(crate) const BUILD_SHA: &str = match option_env!("MAE_BUILD_SHA") {
+    Some(s) => s,
+    None => "unknown",
+};
+
 use bootstrap::{init_logging, load_history, load_init_file, setup_ai, setup_dap, setup_lsp};
 use terminal_loop::{cleanup_stale_mcp_sockets, run_headless_self_test, run_terminal_loop};
 
@@ -168,7 +178,11 @@ fn main() -> io::Result<()> {
     let log_handle = message_log.handle();
     init_logging(log_handle);
 
-    info!(version = env!("CARGO_PKG_VERSION"), "mae starting");
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        build = BUILD_SHA,
+        "mae starting"
+    );
 
     // Sync PATH from user's shell (login/interactive) so we can find binaries
     // even when launched from a desktop environment with a minimal PATH.
@@ -187,7 +201,7 @@ fn main() -> io::Result<()> {
 
     let args: Vec<String> = std::env::args().collect(); // Handle --version / --help / --init-config before the terminal UI starts.
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("mae {}", env!("CARGO_PKG_VERSION"));
+        println!("mae {} ({})", env!("CARGO_PKG_VERSION"), BUILD_SHA);
         return Ok(());
     }
     // `mae upgrade` owns its own flags (incl. `--help`), so route it before the

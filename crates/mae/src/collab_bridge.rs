@@ -4149,9 +4149,33 @@ pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
         lines.push(format!("\u{2713} State server reachable ({})", ctx.address));
         lines.push("\u{2713} Protocol: JSON-RPC 2.0 (Content-Length framing)".to_string());
         lines.push(format!(
-            "\u{2713} Client version: {}",
-            env!("CARGO_PKG_VERSION")
+            "\u{2713} Client version: {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            crate::BUILD_SHA
         ));
+
+        // Cross-machine build check: the daemon reports its own version + build
+        // in `$/debug`. Surface both and warn on a mismatch — the "are we on the
+        // same commit?" question the live two-machine test kept asking by hand.
+        if let Some(ref debug_val) = ctx.server_debug {
+            let server_ver = debug_val.get("version").and_then(|v| v.as_str());
+            let server_build = debug_val.get("build").and_then(|v| v.as_str());
+            if let Some(ver) = server_ver {
+                match server_build {
+                    Some(build) => lines.push(format!("\u{2713} Server version: {ver} ({build})")),
+                    None => lines.push(format!("\u{2713} Server version: {ver}")),
+                }
+            }
+            if let Some(build) = server_build {
+                if build != "unknown" && crate::BUILD_SHA != "unknown" && build != crate::BUILD_SHA
+                {
+                    lines.push(format!(
+                        "\u{26a0} Build mismatch: editor {} vs daemon {} — rebuild/redeploy both to the same commit",
+                        crate::BUILD_SHA, build
+                    ));
+                }
+            }
+        }
 
         // Latency
         match ctx.ping_latency_ms {
@@ -4238,6 +4262,92 @@ pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_sha_is_populated() {
+        // C3 smoke test: build.rs must embed a non-empty build identifier.
+        assert!(!crate::BUILD_SHA.is_empty());
+    }
+
+    #[test]
+    fn doctor_reports_build_and_warns_on_mismatch() {
+        // C3: collab-doctor surfaces the daemon's build and flags an
+        // editor↔daemon build mismatch — the "same commit?" check the live
+        // two-machine test ran by hand.
+        let ctx_match = DoctorContext {
+            address: "127.0.0.1:9473".to_string(),
+            connected: true,
+            server_debug: Some(serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "build": crate::BUILD_SHA,
+            })),
+            ping_latency_ms: Some(1),
+            synced_info: vec![],
+        };
+        let lines = build_doctor_lines(&ctx_match).join("\n");
+        assert!(
+            lines.contains("Server version:"),
+            "doctor must report the server version/build:\n{lines}"
+        );
+        assert!(
+            !lines.contains("Build mismatch"),
+            "matching builds must not warn:\n{lines}"
+        );
+
+        let ctx_mismatch = DoctorContext {
+            server_debug: Some(serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "build": "deadbeefcafe",
+            })),
+            ..ctx_match
+        };
+        let lines = build_doctor_lines(&ctx_mismatch).join("\n");
+        assert!(
+            lines.contains("Build mismatch"),
+            "a differing daemon build must warn:\n{lines}"
+        );
+    }
+
+    #[test]
+    fn resolve_transport_reads_credentials_live_no_cache() {
+        // C2 (collab test-gap plan): the connect transport is resolved from the
+        // LIVE editor options (the OptionRegistry-backed `collab.*` fields), with
+        // no read-site cache — so `(set-option!)` then a (re)resolve picks up the
+        // new value with no tick in between. (The transport is built once at
+        // collab-task setup and cached for the task's lifetime; the security-
+        // critical runtime-changeable field — host-key policy — is kept live via
+        // `host_key_policy_live`. A full per-connect transport rebuild on a
+        // runtime auth_mode/tls change is a separate, deferred follow-up.)
+        let (tx, _rx) = mpsc::channel::<CollabEvent>(8);
+        let mut editor = Editor::new();
+        // PSK mode keeps this filesystem-free (no identity load).
+        editor.set_option("collab_auth_mode", "psk").unwrap();
+
+        editor.set_option("collab_psk", "first").unwrap();
+        let t1 = resolve_client_transport(&editor, &tx);
+        assert_eq!(
+            t1.plain_psk(),
+            Some("first"),
+            "transport must reflect the freshly-set PSK"
+        );
+
+        editor.set_option("collab_psk", "second").unwrap();
+        let t2 = resolve_client_transport(&editor, &tx);
+        assert_eq!(
+            t2.plain_psk(),
+            Some("second"),
+            "a re-resolve reads the live PSK — no read-site cache (no apply-drain wait)"
+        );
+
+        // Switching auth_mode away from key/psk is likewise read live: "none"
+        // still resolves to a Plain transport built from current options.
+        editor.set_option("collab_auth_mode", "none").unwrap();
+        let t3 = resolve_client_transport(&editor, &tx);
+        assert!(
+            t3.plain_psk().is_some(),
+            "auth_mode is read live at resolve time"
+        );
+    }
 
     #[test]
     fn epoch_fence_rejection_classified_from_daemon_message() {

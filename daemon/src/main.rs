@@ -31,6 +31,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+use mae_daemon::BUILD_SHA;
 
 /// The collab listener's authentication provider, resolved once at startup and
 /// cloned (Arc-backed) per connection.
@@ -58,7 +59,7 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("mae-daemon {VERSION}");
+        println!("mae-daemon {VERSION} ({BUILD_SHA})");
         return;
     }
 
@@ -132,7 +133,7 @@ async fn main() {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&config.log_level));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    tracing::info!(version = VERSION, "mae-daemon starting");
+    tracing::info!(version = VERSION, build = BUILD_SHA, "mae-daemon starting");
 
     // Initialize KB store with SQLite backend
     let data_dir = config.effective_data_dir();

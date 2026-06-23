@@ -1171,6 +1171,7 @@ async fn handle_doc_request_inner(
                     "documents": names.len(),
                     "doc_stats": doc_stats,
                     "version": env!("CARGO_PKG_VERSION"),
+                    "build": crate::BUILD_SHA,
                     "uptime_secs": uptime_secs,
                     "connection_count": connection_count,
                 }),
@@ -2370,6 +2371,14 @@ mod tests {
             "should include connection_count"
         );
         assert!(result.get("version").is_some(), "should include version");
+        // C3: the build SHA lets an editor's collab-doctor detect an
+        // editor↔daemon build mismatch across machines.
+        let build = result
+            .get("build")
+            .and_then(|v| v.as_str())
+            .expect("$/debug should include the build SHA");
+        assert!(!build.is_empty(), "build SHA must be populated");
+        assert_eq!(build, crate::BUILD_SHA);
         assert!(
             result.get("documents").is_some(),
             "should include document count"
