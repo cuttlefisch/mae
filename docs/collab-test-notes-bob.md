@@ -2238,3 +2238,40 @@ the backend draw of the dialog box) — a single place to compute the box size f
 - **9d:** PASS (accept→pin now exercised with a *visible* modal; reject + B-21 + correct-fp all previously
   proven). Remaining polish: B-23 sizing.
 - **bob restored:** connected, pinned (correct key), policy `accept-new`, backups removed.
+
+### B-23 — STRUCTURAL fix recommendation (content-adaptive MiniDialog sizing, shared across backends)
+Code-located the truncation; it's a shared-geometry gap (principle #8), not a host-key-specific issue —
+**every** MiniDialog with a long title/body/field clips the same way. Both backends hard-code the box:
+- **GUI** `crates/gui/src/popup_render.rs:928-929` (`render_mini_dialog`):
+  `dialog_width = 50.min(cols-4)`, `dialog_height = (4 + dialog.fields.len()).min(rows-2)`.
+- **TUI** `crates/renderer/src/popup_render.rs:628-629` (`render_mini_dialog`): the **identical**
+  `50`-col / `4 + fields.len()` formula, **duplicated**.
+- Neither measures the **title** or the **body** (the Confirm/Notification body — e.g. the ~70-char
+  `SHA256:…  (first connect — accept & pin?)`); only `fields` count toward height, and width is the fixed
+  `50`. ⇒ the fingerprint overflows the 50-col box and is **clipped**; with no fields the body may not be
+  budgeted height at all.
+- `render_common::overlay` unified overlay **priority** (`active_overlay`) but not **geometry** — so the
+  size math stayed duplicated + content-blind.
+
+**Recommended structural fix (one shared computation, both backends consume it — same pattern as
+`active_overlay`):**
+1. Add `render_common::overlay::mini_dialog_layout(dialog, max_cols, max_rows) -> DialogLayout`
+   (width, height, and **wrapped** body/title line lists). Compute width = `max(title_w, max wrapped
+   body line, max field "label: value" width, actions-row width) + padding`, **clamped** to `max_cols -
+   margin`. Compute height = borders + title + wrapped-body lines + fields + (actions row if any),
+   clamped to `max_rows - margin`. **Wrap** long content (word- or hard-wrap the fingerprint) rather than
+   clip; if it still exceeds max, scroll/ellipsize as a last resort (but a SHA256 line fits a normal
+   window when wrapped).
+2. **GUI `render_mini_dialog` + TUI `render_mini_dialog`** both call `mini_dialog_layout` for the box
+   dims and draw the returned wrapped lines (drop the local `50`/`4+fields` constants). Unit-test the
+   layout (e.g. long body wraps to N lines; width grows to content; clamps to screen) — like the
+   `active_overlay` resolver test.
+3. Covers ALL MiniDialog kinds (EditLink / Confirm / SingleInput / Notification / SetupCollab* / OrgSetTags
+   / …), so no dialog truncates again — the geometry twin of the priority unification.
+
+**Security note:** for the host-key TOFU specifically, the **full fingerprint MUST be fully visible**
+before accept (OOB compare is the entire point) — content-adaptive sizing + wrapping guarantees that.
+(This run the pinned key was correct by independent check, but the UX can't rely on luck.)
+
+⇒ Handed to alice as the structural B-23 fix. 9d remains a PASS (accept→pin with a now-visible modal);
+B-23 is the sizing/readability polish that makes the TOFU verification trustworthy + fixes all dialogs.
