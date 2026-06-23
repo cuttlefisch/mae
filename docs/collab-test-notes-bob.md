@@ -2199,3 +2199,42 @@ without `command_palette` never drew. The **render-side twin of B-22b.**
 Once you confirm it renders, I'll rip out the `b22a` instrumentation (`c7a4bc49`) and the B-22 trilogy is
 closed. 9d already passed functionally; this is the GUI-paint polish + the architectural hardening against
 the whole bug class.
+
+---
+
+## ✅ B-22a CONFIRMED FIXED (modal renders) + 🛑 NEW B-23: modal doesn't size to contents (fingerprint truncated)
+Rebuilt on `f526aef` (unified `active_overlay` resolver, both backends). Re-ran the prompt (runtime
+`:set prompt` — **get_option-verified applied before connect** this time → no apply-race → single prompt) →
+clear pin → `:collab-connect`.
+
+### ✅ B-22a FIXED — the modal RENDERS
+bob-user: *"modal fired and i accepted the key this time."* The dialog painted on its own (no keypress) —
+`b22a` checkpoints 1→6 fired ~3.5ms after connect (`input_dirty=false`), and **the overlay is now visible**
+(the `active_overlay` MiniDialog-top-priority fix worked). Accept→pin→connect end-to-end with a *visible*
+modal:
+```
+17:51:13 collab connected  peers=1
+17:51:13 KB join complete (merged)  node_count=3
+```
+known_hosts re-pinned the **correct** key `192.168.1.137:9480 mae-ed25519 Ck5Um…` (= `07aW…7Ls`, OOB
+match — independently verified, so no harm despite the truncation below). ⇒ B-22a closed; the B-22 trilogy
+(a render / b focus / c bus-actions) is functionally complete.
+
+### 🛑 B-23 (NEW, security-relevant UX) — modal overlay doesn't adapt to content size; fingerprint cut off
+bob-user: *"the text was cut off, the modal did not adapt to contents size correctly so i could not see the
+entire key."* The MiniDialog renders at a fixed/under-sized box and **truncates the body**, so the full
+`SHA256:…` fingerprint isn't visible. **Security impact:** TOFU's whole point is reading + comparing the
+*entire* fingerprint OOB before trusting; a truncated key means the user accepts having seen only part of
+it (this run the pinned key was correct by independent check, but the UX can't guarantee that). **Fix dir:**
+size the dialog box to its content (measure title+body+actions, grow width/height to fit, within screen
+bounds) and/or wrap the fingerprint onto its own full-width line; for over-long content, wrap rather than
+clip. Likely in the MiniDialog/overlay render geometry (now centralized via `render_common::overlay` /
+the backend draw of the dialog box) — a single place to compute the box size from content.
+
+### Status
+- **B-22a:** ✅ fixed (modal renders, both backends, unified resolver). **B-22b/c:** ✅ done.
+- **B-23:** modal content-sizing/truncation — new, handed to alice; security-relevant (full fingerprint must
+  be readable). Pairs with the collab/config-UX theme.
+- **9d:** PASS (accept→pin now exercised with a *visible* modal; reject + B-21 + correct-fp all previously
+  proven). Remaining polish: B-23 sizing.
+- **bob restored:** connected, pinned (correct key), policy `accept-new`, backups removed.
