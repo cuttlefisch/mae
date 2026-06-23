@@ -1262,3 +1262,36 @@ adopt/rebase command. Likely fix: rejoin/reconcile must, on a `rebase required` 
 local node from the authoritative state (dropping the stale-epoch op) and let the user re-author** —
 i.e. implement the graceful auto-adopt so 8d is reachable. bob `beta` is `[POST-GRANT-EDIT]` locally,
 fenced/unsynced; alice's `beta` unchanged (no hijack, no post-grant — correct).
+
+### 💡 UX STORY (proposal, for the CRDT-lifecycle UX review) — magit-style conflict/divergence buffer
+The 8d blocker + the earlier fence UX hiccup point at a missing **member-side resolution surface**.
+Today a fenced/divergent local edit is invisible-but-stuck: it shows in the local node, never syncs,
+and the only signal is a buried `*Messages*` WARN. The proper fix isn't just a better toast — it's a
+**first-class "collab changes" buffer** (magit / `git status` model; aligns with the ADR-020 §UX
+`*KB Sharing*` direction) that makes divergence explicit and **actionable per-change**.
+
+**Proposed buffer (each pending/diverged change is a hunk-like row with at-point actions):**
+- **Accept remote (clobber local)** — adopt the authoritative state for this node, dropping the local
+  stale-epoch op. This is the concrete "adopt authoritative state" trigger the daemon's `rebase
+  required` error currently asks for but which has no UI today.
+- **Re-author / keep mine** — take the local value forward: adopt authoritative first, then re-apply
+  the local edit as a fresh current-epoch op (the graceful auto-adopt+re-author path) → converges.
+- **Save to external node / branch** — preserve the diverged local content elsewhere (export to a new
+  node or a scratch/org file) so fenced work isn't lost when the user accepts remote. Addresses the
+  "viewer-era edit stuck locally" data-preservation concern from B-19.
+- **(later) per-field / per-hunk** granularity for title/body/tags, like magit hunk staging.
+
+**Categories the buffer should surface** (the whole lifecycle, not just B-19 fences):
+fenced-by-epoch (B-19), role-denied (viewer), offline-pending (`durable_pending`), reconcile/adopt
+outcomes ("N edits re-synced / M fenced"), and connection/role state — each with a clear status and an
+action, distinct from the developer log stream.
+
+**Why it matters:** "accept remote and clobber" vs "keep mine (re-author)" vs "stash externally" is a
+genuine **user decision** that MAE currently makes implicitly (silent merge / silent fence). A peer/
+member ("bob-type") user needs to see and decide. This is the UX backbone for the membership-gated +
+divergence cases the plumbing now enforces correctly underneath.
+
+▶ **Owner+peer design item** (not blocking the plumbing tests). Pairs with: ADR-020 §UX `*KB Sharing*`
+buffer, the fence-messaging hiccup above, and the config-casing / display-rule (#67) discoverability
+gaps — the "collab/config UX is under-surfaced" theme. Recommend a short ADR (or extend ADR-020/021)
+for the CRDT-lifecycle UX once Stage-1 plumbing (incl. the 8d adopt path) is closed.
