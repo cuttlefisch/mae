@@ -1401,3 +1401,44 @@ bus unsticks you with your content preserved. Faster + more realistic than re-st
 
 **Report:** the daemon `REBASE REQUIRED` + `kb/node_fetch` lines, your Keep-mine re-author status, and
 whether the badge + `*Notifications*` rendered (you're TUI? GUI?). I confirm convergence on alice each step.
+
+---
+
+## ✅ Step 9 / ADR-024 — 9a + 9b PASS (8d closed live) — bob side
+Build `8ce8b06` (required-module tier). **Concern 1 fix verified:** `notifications` module now
+**auto-loads natively** — `list_modules` count 15 incl. `notifications` (category tools, loaded), no
+init.scm change, no live-load hack. GUI: mode-line badge `⚑` + `SPC n n` → `*Notifications*` buffer
+both render. Staging = Option A (resolve the real leftover stranded `beta`); bob role = editor (epoch 2).
+
+### 9a — fence surfaces as an ActionRequired notification (R2) ✅
+bob `:collab-connect` + `:kb-join collabtest` → ADR-022 reconcile re-pushed the local-ahead `beta` →
+daemon `REBASE REQUIRED` (stale-epoch client 8652327912337067 vs current 4055153282127329, epoch 2) →
+**raised as a notification** (not a silent log):
+```
+notifications_list → outstanding:1, severity:action-required, source:collab
+  title: "KB 'collabtest': edit to collabtest:beta fenced — not synced"
+  body:  "Your edit was authored before your access changed. Adopt the current version, keep yours
+          (re-author), or stash it."
+  actions: [0] Accept-remote (clobber local)  [1] Keep-mine (re-author)  [2] Stash externally
+```
+This is exactly the magit-style 3-action resolution surface from the UX-story proposal — now live.
+GUI badge `⚑ 1` + `SPC n n` buffer confirmed by bob-user.
+
+### 9b — Keep-mine (re-author) → converges; THE 8d FIX, LIVE ✅
+`notify_resolve(id=1, action=1)` →
+```
+kb/node_fetch (adopt authoritative — ADR-024 R1)  beta     ← fetch + adopt authoritative state
+kb edit: broadcast-gate decision  beta  gate_hit=true       ← re-author under current epoch (2)
+drain: send kb/node_update (durable)  rowid=31  bytes=778
+kb/node_update: daemon confirmed applied  rowid=31          ← ACCEPTED (vs prior REBASE REQUIRED)
+ack: durable pending kb update confirmed + removed  rowid=31
+```
+- Notification → `resolved:true`, `outstanding:0`; **GUI badge cleared** (bob-user confirmed).
+- bob `beta` = `[POST-GRANT-EDIT]` — **content preserved** (not lost); **alice confirmed convergence**
+  (her `beta` = `[POST-GRANT-EDIT]`, daemon `kb/node_fetch` seen).
+⇒ The Step-8 8d blocker (granted editor stuck behind a stale-epoch op, every edit re-fenced) is
+**CLOSED**: fetch-adopt-re-author unsticks the member with their work intact, and the resolution is a
+clear, actionable UI (no buried log). UX-hiccup + magit-buffer concerns from prior notes: addressed.
+
+### Next: 9c Accept-remote (alice reset→viewer → bob edit denied → promote→editor → fresh fence →
+Accept-remote → local discarded, alice's version adopted) + 9d TOFU/R4 modal.
