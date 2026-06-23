@@ -685,4 +685,88 @@ mod tests {
             "heading_scale_h1"
         );
     }
+
+    #[test]
+    fn no_duplicate_canonical_option_names() {
+        // CLAUDE.md #7: the OptionRegistry is the single source of truth for
+        // user-visible config. A duplicate canonical name means `find()` silently
+        // shadows one definition (last-write-wins on `:set-save` persistence).
+        let reg = OptionRegistry::new();
+        let mut seen = std::collections::HashSet::new();
+        for opt in reg.list() {
+            assert!(
+                seen.insert(opt.name.as_ref()),
+                "duplicate canonical option name: {}",
+                opt.name
+            );
+        }
+    }
+
+    #[test]
+    fn snake_case_options_expose_kebab_case_alias() {
+        // Invariant guard: every snake_case canonical name (`collab_x`, `foo_bar`)
+        // must also resolve under its kebab-case spelling (`collab-x`, `foo-bar`),
+        // because Scheme's `(set-option! …)` and the `:set` command accept the
+        // hyphenated form. A new `opt!` that forgets the alias regresses the
+        // config surface uniformly across the editor; this catches it at compile-
+        // adjacent test time rather than in a live session. (Verifies the whole
+        // registry, with the security/connect-critical `collab_*` keys as the
+        // motivating case — see B2 in the collab test-gap plan.)
+        let reg = OptionRegistry::new();
+        for opt in reg.list() {
+            if !opt.name.contains('_') {
+                continue;
+            }
+            let kebab = opt.name.replace('_', "-");
+            let found = reg.find(&kebab);
+            assert!(
+                found.is_some(),
+                "option `{}` has no kebab-case alias `{}`",
+                opt.name,
+                kebab
+            );
+            assert_eq!(
+                found.unwrap().name,
+                opt.name,
+                "kebab alias `{}` resolves to `{}`, not its own canonical `{}`",
+                kebab,
+                found.unwrap().name,
+                opt.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_collab_option_has_kebab_alias_and_config_key() {
+        // Connect-critical + security-relevant collab keys specifically: each must
+        // carry both its kebab alias (Scheme/`:set` access) and a `config_key`
+        // (so `:set-save` persists it to init.scm). Without the config_key a
+        // collab setting can be set live but silently fails to survive a restart.
+        let reg = OptionRegistry::new();
+        let collab: Vec<_> = reg
+            .list()
+            .iter()
+            .filter(|o| o.name.starts_with("collab_"))
+            .collect();
+        assert!(
+            collab.len() >= 10,
+            "expected the full collab option set, found {}",
+            collab.len()
+        );
+        for opt in collab {
+            let kebab = opt.name.replace('_', "-");
+            assert_eq!(
+                reg.find(&kebab).map(|o| o.name.as_ref()),
+                Some(opt.name.as_ref()),
+                "collab option `{}` missing kebab alias `{}`",
+                opt.name,
+                kebab
+            );
+            assert!(
+                opt.config_key.is_some(),
+                "collab option `{}` has no config_key (not :set-save persistable)",
+                opt.name
+            );
+        }
+    }
 }

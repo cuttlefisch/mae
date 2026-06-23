@@ -515,6 +515,50 @@ fn focus_window_at_switches() {
 }
 
 #[test]
+fn click_in_right_split_lands_at_window_local_column() {
+    // Regression (I-3): a left-click delivered in absolute screen coordinates to
+    // a non-primary split pane must resolve to a window-LOCAL buffer column.
+    // Before the fix, `handle_mouse_click_inner` subtracted only the gutter (not
+    // the pane's screen origin), so a click in the right pane landed ~40 columns
+    // too far right and clamped to end-of-line.
+    let mut editor = Editor::new();
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    editor.last_layout_area = area;
+
+    // Second buffer with known single-line content so columns are meaningful.
+    let mut buf = crate::buffer::Buffer::new();
+    buf.replace_contents("0123456789abcdef");
+    editor.buffers.push(buf);
+    let right_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+
+    // Vertical 50/50 split of width 80 → right pane origin x = 40. Focus it (as
+    // the backends do on click), then click at absolute (row 1, col 48).
+    // Gutter for a 1-line buffer = max(2)+1 = 3. Fixed: 48 − origin 40 − gutter 3
+    // = window-local text column 5. Buggy: 48 − 3 = 45, clamped to line end (15).
+    assert!(editor.focus_window_at(48, 1));
+    assert_eq!(editor.window_mgr.focused_id(), right_id);
+    editor.handle_mouse_click(1, 48, crate::input::MouseButton::Left);
+
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(
+        win.cursor_row, 0,
+        "click on first content row → buffer row 0"
+    );
+    assert_eq!(
+        win.cursor_col, 5,
+        "click must map to window-local column 5, not the clamped end-of-line"
+    );
+}
+
+#[test]
 fn focus_window_at_same_window_noop() {
     let mut editor = Editor::new();
     let area = crate::window::Rect {

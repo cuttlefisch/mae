@@ -46,6 +46,25 @@ fn compute_client_id(buffer_idx: usize) -> u64 {
     }
 }
 
+/// Marker the daemon embeds in an epoch-fence rejection's error message
+/// (daemon/src/collab_handler.rs:1780). This is the editor↔daemon contract: a
+/// `kb/node_update` rejected with this text was authored under a stale,
+/// pre-grant authorization epoch (ADR-023) and can never be accepted as-is.
+/// Matched as a substring because the daemon appends node-specific detail.
+const EPOCH_FENCE_MARKER: &str = "rebase required";
+
+/// True if a daemon `kb/node_update` rejection is the epoch fence firing.
+///
+/// Centralizing the contract string here (instead of an inline `contains` at the
+/// call site) means a daemon-side reword can't silently downgrade fence
+/// rejections into a generic "sync failed" status line — which would drop the
+/// actionable ADR-024 notification and reopen the B-19 silent-cascade UX gap.
+/// The producer side is guarded by the daemon's `viewer_era_*` /
+/// `stale_epoch_continuation_*` tests; this is the consumer-side guard.
+fn is_epoch_fence_rejection(message: &str) -> bool {
+    message.contains(EPOCH_FENCE_MARKER)
+}
+
 /// Capacity for the command channel (main thread -> collab background task).
 const COLLAB_CMD_CHANNEL_CAP: usize = 256;
 /// Capacity for the event channel (collab background task -> main thread).
@@ -1626,7 +1645,7 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             // user their pre-grant edit was not synced and must be re-applied. (The
             // graceful auto-adopt + re-author under the current epoch is tracked as a
             // follow-up; it needs a targeted node-adopt primitive.)
-            let is_rebase = message.contains("rebase required");
+            let is_rebase = is_epoch_fence_rejection(&message);
             if is_rebase {
                 warn!(target: "kb_sync", kb = %kb_id, node = %node_id, error = %message, "kb/node_update fenced (stale-epoch) — pre-grant edit not synced (B-19)");
                 // ADR-024 R2: raise an actionable, non-clobberable notification (badge
@@ -1636,12 +1655,15 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 editor.notify(
                     Notification::action_required(
                         "collab",
-                        format!("KB '{kb_id}': edit to {node_id} fenced — not synced"),
+                        format!("KB '{kb_id}': your edit to {node_id} wasn't synced"),
                     )
                     .key(format!("collab:fence:{kb_id}:{node_id}"))
                     .body(
-                        "Your edit was authored before your access changed. Adopt the \
-                         current version, keep yours (re-author), or stash it.",
+                        "You edited this node before your access to the KB changed, so the \
+                         server rejected the edit. Choose what to do: Accept-remote replaces \
+                         your copy with the current shared version (your edit is lost); \
+                         Keep-mine re-applies your edit on top of the current version; Stash \
+                         externally saves your version to a separate file first.",
                     )
                     .action(
                         "Accept-remote (clobber local)",
@@ -4216,6 +4238,34 @@ pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn epoch_fence_rejection_classified_from_daemon_message() {
+        // Editor↔daemon contract (B-19 regression guard): the daemon embeds
+        // "rebase required" in an epoch-fence rejection (collab_handler.rs:1780,
+        // node-specific detail appended). The editor MUST still classify such a
+        // message as a fence so it raises the actionable ADR-024 notification
+        // rather than a generic status line. If the daemon reword breaks this,
+        // BOTH the daemon's producer-side tests and this consumer-side test fail,
+        // forcing the marker to be updated in lockstep.
+        let daemon_msg = "rebase required: node 'concept:beta' carries an op from a stale epoch";
+        assert!(
+            is_epoch_fence_rejection(daemon_msg),
+            "daemon fence message must classify as an epoch fence"
+        );
+        // The bare marker (and embedded anywhere) classifies.
+        assert!(is_epoch_fence_rejection(EPOCH_FENCE_MARKER));
+        assert!(is_epoch_fence_rejection(&format!(
+            "error: {EPOCH_FENCE_MARKER} (node x)"
+        )));
+        // Unrelated rejections must NOT be mistaken for a fence (else a real sync
+        // error would be silently swallowed into the adopt/keep-mine UX).
+        assert!(!is_epoch_fence_rejection(
+            "kb sync rejected: node not found"
+        ));
+        assert!(!is_epoch_fence_rejection("connection reset"));
+        assert!(!is_epoch_fence_rejection(""));
+    }
 
     fn tofu_dir(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("mae-tofu-{tag}-{}", std::process::id()));

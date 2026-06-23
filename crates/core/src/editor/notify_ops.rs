@@ -543,6 +543,97 @@ mod tests {
         ));
     }
 
+    /// A2a: the R2 fenced-edit notification (as `collab_bridge` raises it) carries the
+    /// three resolution actions in order [Accept-remote, Keep-mine, Stash], and
+    /// dispatching them via `notify_run_action(idx)` drives the correct collab intent —
+    /// Keep-mine captures fields for re-author, Accept-remote does not. This guards the
+    /// notification→action→intent wiring the manual Step-9 run exercised by hand.
+    #[test]
+    fn fence_notification_actions_dispatch_to_correct_intents() {
+        use crate::editor::CollabIntent;
+        use crate::notifications::{NotifCommand, NotificationBuilder};
+
+        // Mirror of collab_bridge.rs's R2 builder (KbUpdateFailed fenced branch).
+        fn fence_notif(kb: &str, node: &str) -> NotificationBuilder {
+            Notification::action_required(
+                "collab",
+                format!("KB '{kb}': edit to {node} fenced — not synced"),
+            )
+            .key(format!("collab:fence:{kb}:{node}"))
+            .body("authored before your access changed")
+            .action(
+                "Accept-remote (clobber local)",
+                NotifCommand::AdoptRemote {
+                    kb_id: kb.to_string(),
+                    node_id: node.to_string(),
+                },
+            )
+            .action(
+                "Keep-mine (re-author)",
+                NotifCommand::KeepMine {
+                    kb_id: kb.to_string(),
+                    node_id: node.to_string(),
+                },
+            )
+            .action(
+                "Stash externally",
+                NotifCommand::StashExternally {
+                    kb_id: kb.to_string(),
+                    node_id: node.to_string(),
+                },
+            )
+        }
+
+        // Keep-mine (action index 1): captures local fields for re-author + enqueues adopt.
+        let mut ed = Editor::new();
+        let mut node = mae_kb::Node::new("n1", "Local Title", mae_kb::NodeKind::Note, "local body");
+        node.tags = vec!["t1".to_string()];
+        ed.kb.primary.insert(node);
+        let id = ed.notify(fence_notif("kbx", "n1"));
+        assert_eq!(
+            ed.notifications.outstanding_count(),
+            1,
+            "fence is action-required"
+        );
+        assert!(
+            ed.notifications.action(id, 0).is_some()
+                && ed.notifications.action(id, 1).is_some()
+                && ed.notifications.action(id, 2).is_some(),
+            "the fence notification carries all three resolution actions"
+        );
+        assert!(ed.notify_run_action(id, 1), "Keep-mine [1] runs");
+        let key = ("kbx".to_string(), "n1".to_string());
+        assert!(
+            ed.collab.pending_reauthor.contains_key(&key),
+            "Keep-mine captured the local fields for re-author"
+        );
+        assert!(matches!(
+            ed.collab.pending_intent,
+            Some(CollabIntent::KbAdoptNode { .. })
+        ));
+        assert_eq!(
+            ed.notifications.outstanding_count(),
+            0,
+            "resolved after acting"
+        );
+
+        // Accept-remote (action index 0): enqueues adopt WITHOUT capturing for re-author.
+        let mut ed2 = Editor::new();
+        ed2.kb
+            .primary
+            .insert(mae_kb::Node::new("n1", "T", mae_kb::NodeKind::Note, "b"));
+        let id2 = ed2.notify(fence_notif("kbx", "n1"));
+        assert!(ed2.notify_run_action(id2, 0), "Accept-remote [0] runs");
+        assert!(
+            ed2.collab.pending_reauthor.is_empty(),
+            "Accept-remote does NOT capture for re-author (discard-local)"
+        );
+        assert!(matches!(
+            ed2.collab.pending_intent,
+            Some(CollabIntent::KbAdoptNode { .. })
+        ));
+    }
+
     #[test]
     fn notifications_buffer_lists_items_and_actions() {
         use crate::notifications::NotifCommand;

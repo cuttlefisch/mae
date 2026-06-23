@@ -3528,6 +3528,87 @@ mod tests {
         );
     }
 
+    /// B3 (collab test-gap plan): a joined KB instance must SURFACE to the user.
+    /// After `kb_register_joined_instance`, the node resolves via federated get
+    /// WITH its instance name attached (non-null), federated search attributes the
+    /// hit to the joined instance (not the primary KB), and the instance appears
+    /// in the user-facing `*KB Instances*` list. Guards the "joined KB is invisible
+    /// after join" regression class — the surfacing the live two-machine test did
+    /// by hand each iteration.
+    #[test]
+    fn joined_instance_surfaces_in_list_get_and_search() {
+        let mut editor = Editor::new();
+        let _dirs = with_test_dirs(&mut editor);
+
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let state = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new(
+                    "shared:alpha",
+                    "Findme Title",
+                    mae_kb::NodeKind::Note,
+                    "searchable body",
+                ),
+                2,
+            )
+            .unwrap();
+        let sv = remote.node_state_vector("shared:alpha").unwrap();
+
+        let uuid = editor.kb_register_joined_instance(
+            "team-kb",
+            vec![crate::editor::JoinedNode {
+                id: "shared:alpha".to_string(),
+                bytes: state,
+                daemon_sv: Some(sv),
+            }],
+        );
+
+        // 1) Federated get resolves the node WITH a non-null instance attribution,
+        //    and the node never leaks into the primary KB.
+        let (inst_name, node) = editor
+            .kb_federated_get("shared:alpha")
+            .expect("joined node must resolve via federated get");
+        assert_eq!(node.id, "shared:alpha");
+        assert_eq!(
+            inst_name.as_deref(),
+            Some("team-kb"),
+            "federated get must attribute the joined node to its instance"
+        );
+        assert!(
+            editor.kb.primary.get("shared:alpha").is_none(),
+            "joined nodes never pollute the primary KB"
+        );
+
+        // 2) Federated search attributes the hit to the joined instance.
+        let hits = editor.kb_federated_search("Findme");
+        let hit = hits
+            .iter()
+            .find(|(_, n)| n.id == "shared:alpha")
+            .expect("joined node must be findable via federated search");
+        assert_eq!(
+            hit.0.as_deref(),
+            Some("team-kb"),
+            "search hit must carry the joined instance name, not None (local)"
+        );
+
+        // 3) The instance surfaces in the user-facing *KB Instances* list.
+        editor.show_kb_instances();
+        let listing = editor
+            .buffers
+            .iter()
+            .find(|b| b.name == "*KB Instances*")
+            .map(|b| b.rope().to_string())
+            .expect("show_kb_instances must create the *KB Instances* buffer");
+        assert!(
+            listing.contains("team-kb"),
+            "joined KB name must appear in *KB Instances*:\n{listing}"
+        );
+        assert!(
+            listing.contains(&uuid),
+            "the instance uuid must appear in *KB Instances*:\n{listing}"
+        );
+    }
+
     /// ADR-020 Phase 3 (B-10): a joined instance persists its nodes to a durable
     /// CozoDB store with a real `db_path` that a fresh open + load_all reloads —
     /// the foundation of restart survival (the startup loader reads this back).

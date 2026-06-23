@@ -3434,6 +3434,11 @@ mod tests {
         // THE EXPLOIT: bob re-pushes his VIEWER-ERA op (still authored under epoch 0).
         // The role gate now passes (he is an editor), but the EPOCH FENCE must reject
         // it — the op is from his stale, pre-grant client_id.
+        //
+        // Strong no-cascade oracle: snapshot the canonical state BEFORE the fenced push
+        // and assert it is BYTE-IDENTICAL after — a fenced op must perturb the
+        // authoritative node by exactly zero bytes (stronger than a substring check).
+        let (before, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
         let resp = dispatch_as(
             &store,
             &bc,
@@ -3453,8 +3458,13 @@ mod tests {
             "viewer-era lineage must be fenced on grant; got: {msg:?}"
         );
 
-        // NO CASCADE: the node's canonical content never contains the viewer-era edit.
+        // NO CASCADE: the canonical state is byte-identical (and, redundantly, never
+        // contains the viewer-era edit).
         let (state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+        assert_eq!(
+            state, before,
+            "a fenced op must leave the canonical node byte-identical (no cascade)"
+        );
         let canonical = TextSync::from_state(&state).unwrap().content();
         assert!(
             !canonical.contains("VIEWER-ERA"),
@@ -3598,8 +3608,14 @@ mod tests {
             "stale-epoch continuation must be fenced (B-20); got: {msg:?}"
         );
 
-        // NO CASCADE: the canonical content never gains the viewer-interval edit.
+        // NO CASCADE: the canonical state is byte-identical to before the fenced push
+        // (`canonical_state` was captured just above to build the continuation), and
+        // never gains the viewer-interval edit.
         let (state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+        assert_eq!(
+            state, canonical_state,
+            "a fenced continuation must leave the canonical node byte-identical (no cascade)"
+        );
         let canonical = TextSync::from_state(&state).unwrap().content();
         assert!(
             !canonical.contains("VIEWER-ERA-CONT"),

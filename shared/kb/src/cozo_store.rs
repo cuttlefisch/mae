@@ -1153,16 +1153,30 @@ impl KbStore for CozoKbStore {
     }
 
     fn load_all(&self) -> Result<Vec<Node>, KbStoreError> {
-        let result = self
-            .run_immut(
-                r#"?[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
+        let query = r#"?[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
                     aliases_json, properties_json, crdt_doc, has_crdt]
                     := *nodes{id, title, kind, body, tags_json, todo_state, priority, source, source_version,
                               aliases_json, properties_json, crdt_doc, has_crdt},
                     title != ""
-                    :order id"#,
-            )
-            .map_err(cozo_err)?;
+                    :order id"#;
+        // B-5: a malformed / short-arity stored row (e.g. one left by an older
+        // schema version or a previously-broken write path) makes the ENTIRE cozo
+        // query fail at bind time ("tuple bound by variable 'title' is too short")
+        // — before the per-row skip loop below ever runs. Propagating that error
+        // here previously aborted the caller (e.g. `kb_join`) and, on the main
+        // thread, tripped the 10s stall watchdog. Degrade to an empty load (logged
+        // at ERROR for repair visibility) so the editor keeps running: this is the
+        // same observable state as a genuinely empty store, which every caller
+        // already handles, and strictly safer than a hard error. (Moving this
+        // query off the UI thread is the deeper concurrency-#1 fix, tracked
+        // separately.)
+        let result = match self.run_immut(query) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(error = %e, "KB store: node load query failed — returning empty load (store may need repair); editor continues without stalling");
+                return Ok(Vec::new());
+            }
+        };
 
         let mut nodes = Vec::with_capacity(result.rows.len());
         for row in &result.rows {
@@ -2779,6 +2793,40 @@ mod tests {
         store.save_all(&[&n1, &n2]).unwrap();
         let loaded = store.load_all().unwrap();
         assert_eq!(loaded.len(), 2);
+    }
+
+    #[test]
+    fn load_all_tolerates_query_bind_failure() {
+        // B-5 regression: a stored `nodes` relation left at an older / shorter
+        // arity (here a 2-column stand-in for the production "tuple bound by
+        // variable 'title' is too short" artifact) makes the full 13-column load
+        // query fail at bind time — BEFORE the per-row skip loop runs. A hard Err
+        // here previously aborted `kb_join` and tripped the 10s main-thread stall
+        // watchdog. The store must degrade to an empty load and keep running.
+        let (_tmp, store) = make_store();
+        // Replace `nodes` with a relation the full load query cannot bind, and
+        // populate one row (simulates the migration / broken-write artifact on
+        // disk that the production "tuple too short" error came from). The FTS
+        // index must be dropped first — a relation with indices attached can't be
+        // replaced.
+        store
+            .run_mut("::fts drop nodes:fts")
+            .expect("drop fts index");
+        store
+            .run_mut(
+                r#"?[id, title] <- [["bad", "x"]]
+                   :replace nodes {id: String => title: String}"#,
+            )
+            .expect("replace schema with short-arity row");
+
+        // Must be Ok (degraded), never Err, and must not panic.
+        let loaded = store
+            .load_all()
+            .expect("load_all must degrade to Ok on a query bind failure, not Err");
+        assert!(
+            loaded.is_empty(),
+            "a load query that cannot bind degrades to an empty result"
+        );
     }
 
     #[test]

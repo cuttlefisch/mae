@@ -34,6 +34,27 @@ impl super::Editor {
         self.lsp.hover_popup = None;
         self.lsp.code_action_menu = None;
 
+        // Absolute screen cells → window-local. Both the GUI cell-grid fallback
+        // and the TUI mouse path hand us coordinates measured from the screen
+        // origin, but the positioning math below (and the shell branch) is
+        // window-local: row 0 is the focused pane's top border, col 0 its left
+        // edge. Subtract the focused pane's layout origin so a click in a
+        // non-primary split (origin x>0 / y>0) lands on the right cell. One
+        // shared translation, not per-backend (CLAUDE.md #8). The GUI
+        // pixel-precise path resolves the position before this and never
+        // reaches here; a single window's origin is (0,0), so this is identity.
+        let (row, col) = {
+            let focused = self.window_mgr.focused_id();
+            let (ox, oy) = self
+                .window_mgr
+                .layout_rects(self.last_layout_area)
+                .into_iter()
+                .find(|(id, _)| *id == focused)
+                .map(|(_, r)| (r.x, r.y))
+                .unwrap_or((0, 0));
+            window_relative(ox, oy, row, col)
+        };
+
         // Shell buffers: route to pending_shell_click for the binary to drain.
         // Subtract window border offset (1 row top, 1 col left).
         let active = self.active_buffer_idx();
@@ -800,5 +821,59 @@ impl super::Editor {
         let moved = self.handle_mouse_scroll_pixels(delta_px);
         self.window_mgr.set_focused(original);
         moved
+    }
+}
+
+/// Translate absolute screen cell coordinates into coordinates relative to a
+/// window whose top-left origin is at (`win_x`, `win_y`).
+///
+/// `handle_mouse_click_inner` treats its `row`/`col` as **window-local** (row 0
+/// is the window's top border, col 0 its left edge), then subtracts gutter +
+/// scroll. The GUI absolute-coordinate fallback (`crates/mae/src/main.rs`) hands
+/// it cell coordinates measured from the *screen* origin, so without this
+/// translation a click in any non-primary split pane (origin x>0 / y>0) lands at
+/// the wrong column/row. Saturating so a click exactly on the origin border maps
+/// to 0 rather than underflowing.
+///
+/// Pure + backend-agnostic by design (CLAUDE.md #8): the single source of truth
+/// for the screen→window coordinate transform, unit-tested below. The
+/// pixel-precise GUI path (`FrameLayout::pixel_to_buffer_position`) already
+/// accounts for pane origin and does not use this.
+pub fn window_relative(win_x: u16, win_y: u16, row: usize, col: usize) -> (usize, usize) {
+    (
+        row.saturating_sub(win_y as usize),
+        col.saturating_sub(win_x as usize),
+    )
+}
+
+#[cfg(test)]
+mod window_relative_tests {
+    use super::window_relative;
+
+    #[test]
+    fn primary_pane_origin_is_identity() {
+        // A pane anchored at the screen origin: coordinates pass through unchanged.
+        assert_eq!(window_relative(0, 0, 5, 12), (5, 12));
+    }
+
+    #[test]
+    fn split_pane_origin_is_subtracted() {
+        // Vertical split: right pane starts at column 40. A click at absolute
+        // column 52 / row 7 must resolve to window-local (7, 12), not (7, 52) —
+        // the bug that placed the cursor ~40 columns too far right.
+        assert_eq!(window_relative(40, 0, 7, 52), (7, 12));
+    }
+
+    #[test]
+    fn horizontal_split_origin_is_subtracted() {
+        // Horizontal split: bottom pane starts at row 20.
+        assert_eq!(window_relative(0, 20, 23, 4), (3, 4));
+    }
+
+    #[test]
+    fn click_above_or_left_of_origin_saturates_to_zero() {
+        // A click landing before the pane origin (e.g. on the divider) clamps to
+        // 0 on each axis instead of underflowing.
+        assert_eq!(window_relative(40, 20, 18, 30), (0, 0));
     }
 }
