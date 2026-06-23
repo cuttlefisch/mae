@@ -1991,3 +1991,15 @@ correct key (`192.168.1.137:9480 mae-ed25519 Ck5Um…` = `07aW…7Ls`; `collab_s
 saved. ⇒ **9d still NOT closed:** accept path blocked on B-22a (modal doesn't render → user can't verify
 the fingerprint). Recommend alice (1) finish the render fix, and/or (2) land B-22c (bus accept action) so
 accept is verifiable+answerable without depending on the GUI paint.
+
+#### B-22a addendum (bob-user) — the stall is CONFINED to the pending-prompt window
+*"The UI is no longer frozen once the (unrendered) modal is gone."* ⇒ the freeze/non-render is **scoped
+to the interval the host-key prompt is outstanding**, and the GUI **recovers fully the moment it's
+resolved**. So it's not a general render regression — it's specifically that **the GUI render loop is not
+pumping a repaint while the synchronous rustls verifier is blocked waiting for the answer.** The
+multi-thread runtime shortened the block but the **GUI/paint path is still gated on prompt resolution**,
+so the MiniDialog overlay never gets a frame *during* the window when it actually needs to be visible
+(input is still serviced enough to capture the keypress, but no full redraw runs). Net: the dialog can
+only paint *after* it's already answered — i.e. never usefully. Fix must get a redraw/frame to run
+**while** the prompt is pending (e.g. raise the prompt + request paint on the GUI thread and let the
+verifier await asynchronously, rather than blocking a thread the paint pass depends on).
