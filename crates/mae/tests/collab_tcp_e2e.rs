@@ -1336,3 +1336,96 @@ async fn tcp_psk_no_auth_client_rejected() {
         }
     }
 }
+
+/// Join `kb_id` and return the raw state bytes for `node_id` from the response.
+async fn join_node_state(client: &mut TcpClient, kb_id: &str, node_id: &str) -> Vec<u8> {
+    let resp = client.kb_join(kb_id).await;
+    assert!(resp.get("error").is_none(), "join failed: {resp}");
+    let nodes = resp["result"]["nodes"]
+        .as_array()
+        .expect("nodes should be an array");
+    let n = nodes
+        .iter()
+        .find(|n| n["id"].as_str() == Some(node_id))
+        .unwrap_or_else(|| panic!("node {node_id} not in join response: {resp}"));
+    base64_to_update(n["state"].as_str().unwrap()).unwrap()
+}
+
+/// A5 — concurrent convergence over a REAL daemon (T1/T4 cross-ref). Two peers
+/// concurrently edit DISJOINT fields of the same KB node (owner→title,
+/// peer→body) derived from the same base. The daemon merges both into its
+/// authoritative per-node doc, and two fresh joiners read back a BYTE-IDENTICAL
+/// state carrying BOTH edits — the CRDT guarantee (CLAUDE.md #11) end-to-end
+/// through TCP framing + base64 + the daemon's authoritative doc, not just an
+/// in-process `KnowledgeBase` merge (kb_sync_n_peer_e2e.rs covers those).
+#[tokio::test]
+#[ignore]
+async fn tcp_kb_two_peers_concurrent_converge() {
+    if !should_run() {
+        return;
+    }
+    let (_server, addr, _tmp) = spawn_server().await;
+
+    let mut owner = TcpClient::connect(&addr).await;
+    let mut peer = TcpClient::connect(&addr).await;
+
+    // Owner shares a KB with one node.
+    let (coll_state, node_states) = make_test_kb(
+        "converge-kb",
+        "Converge",
+        "alice",
+        &[("n1", "Base Title", "base body", &["t"])],
+    );
+    let nodes_ref: Vec<(&str, &[u8])> = node_states
+        .iter()
+        .map(|(id, s)| (id.as_str(), s.as_slice()))
+        .collect();
+    owner
+        .kb_share("converge-kb", "Converge", "alice", &coll_state, &nodes_ref)
+        .await;
+
+    // Peer joins (membership + subscription).
+    let join = peer.kb_join("converge-kb").await;
+    assert!(join.get("error").is_none(), "peer join failed: {join}");
+
+    // CONCURRENT, disjoint-field edits derived from the SAME base node state.
+    let mut node_owner = KbNodeDoc::from_bytes(&node_states[0].1).unwrap();
+    let update_title = node_owner.set_title("Alice Title");
+    let mut node_peer = KbNodeDoc::from_bytes(&node_states[0].1).unwrap();
+    let update_body = node_peer.set_body("Bob Body");
+
+    let r1 = owner
+        .kb_node_update("converge-kb", "n1", &update_title)
+        .await;
+    assert!(r1.get("error").is_none(), "owner title update failed: {r1}");
+    let r2 = peer.kb_node_update("converge-kb", "n1", &update_body).await;
+    assert!(
+        r2.get("error").is_none(),
+        "peer body update failed (fenced?): {r2}"
+    );
+
+    // Two fresh joiners read the merged authoritative state.
+    let mut c = TcpClient::connect(&addr).await;
+    let mut d = TcpClient::connect(&addr).await;
+    let state_c = join_node_state(&mut c, "converge-kb", "n1").await;
+    let state_d = join_node_state(&mut d, "converge-kb", "n1").await;
+
+    // Byte-identical authoritative convergence.
+    assert_eq!(
+        state_c, state_d,
+        "two fresh joiners must receive byte-identical authoritative node state"
+    );
+
+    // Both concurrent edits survived the CRDT merge.
+    let merged = KbNodeDoc::from_bytes(&state_c).unwrap();
+    assert_eq!(
+        merged.title(),
+        "Alice Title",
+        "owner's concurrent title edit converged"
+    );
+    assert_eq!(
+        merged.body(),
+        "Bob Body",
+        "peer's concurrent body edit converged"
+    );
+}

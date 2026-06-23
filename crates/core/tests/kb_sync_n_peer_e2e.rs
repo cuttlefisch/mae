@@ -21,6 +21,26 @@
 //! `lost_row_adopt_clobbers_documents_the_bug` (blind adopt loses the durable
 //! edit) and `lost_row_reconcile_converges` (ADR-022 reconcile recovers it).
 
+//! ## Manual T-matrix cross-reference
+//!
+//! These in-process tests map onto the manual two-machine validation steps so a
+//! regression here points straight at the live scenario it stands in for:
+//!
+//! * **T1 (share → bidirectional propagate):** `share_join_bidirectional_{2,3,5}_peers`
+//! * **T2 (concurrent disjoint edits merge):** `concurrent_edits_converge_{2,3,5}_peers`
+//! * **T3 (offline edit → reconnect flush):** `offline_edit_merges_on_reconnect`
+//! * **T3b (offline edit survives restart):** `offline_edit_survives_restart_then_reconnects`
+//! * **T3c (crash-lost row clobber vs ADR-022 reconcile):**
+//!   `lost_row_adopt_clobbers_documents_the_bug` / `lost_row_reconcile_converges`
+//! * **T4 (divergent independent same-id lineage repair):** `divergent_lineage_detected_and_reconciled`
+//! * **T5 (distinct, wire-safe per-peer client ids):** `derived_client_ids_are_distinct_and_safe`
+//!
+//! The complementary **real-daemon** convergence check (the same T1/T2 concurrent
+//! merge, but end-to-end over TCP framing + base64 + the daemon's authoritative
+//! per-node doc) lives in `crates/mae/tests/collab_tcp_e2e.rs::tcp_kb_two_peers_concurrent_converge`
+//! (MAE_TCP_E2E-gated). T6/T7 (daemon power-loss durability, mDNS/LAN discovery)
+//! stay manual — see `docs/collab-testing-plan.md`.
+
 use mae_core::editor::derive_kb_client_id;
 use mae_kb::{KnowledgeBase, Node, NodeKind, ReconcileAction};
 

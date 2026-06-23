@@ -4264,6 +4264,119 @@ mod tests {
     use super::*;
 
     #[test]
+    fn kb_node_adopted_keep_mine_reauthors_over_authoritative() {
+        // A2b: the bridge half of the R1 adopt-and-re-author round-trip. After a
+        // fence, keep-mine captured the user's fields into `pending_reauthor`; when
+        // the daemon's authoritative node state arrives (KbNodeAdopted, the reply
+        // to kb/node_fetch), `handle_collab_event` must (1) replace the local node
+        // with the authoritative state, then (2) re-apply the kept edit on top so
+        // it converges as a fresh, authorized op — and consume the pending entry.
+        let mut editor = Editor::new();
+        // Local node carries the pre-fence (stale) content.
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:beta",
+            "STALE LOCAL",
+            mae_kb::NodeKind::Note,
+            "stale local body",
+        ));
+        // Keep-mine already captured the user's edit for re-author.
+        editor.collab.pending_reauthor.insert(
+            ("teamkb".to_string(), "concept:beta".to_string()),
+            mae_core::editor::ReauthorFields {
+                title: "MY KEPT TITLE".to_string(),
+                body: "my kept body".to_string(),
+                tags: vec!["mine".to_string()],
+            },
+        );
+
+        // The daemon's authoritative state for the node (a different lineage/value).
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let state_bytes = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new(
+                    "concept:beta",
+                    "AUTHORITATIVE",
+                    mae_kb::NodeKind::Note,
+                    "authoritative body",
+                ),
+                7,
+            )
+            .unwrap();
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbNodeAdopted {
+                kb_id: "teamkb".to_string(),
+                node_id: "concept:beta".to_string(),
+                state_bytes,
+            },
+        );
+
+        // The pending re-author entry is consumed.
+        assert!(
+            editor.collab.pending_reauthor.is_empty(),
+            "pending_reauthor must be consumed after adopt"
+        );
+        // The node materializes to the kept edit, re-authored over the
+        // authoritative base (not the stale local, not the bare authoritative).
+        let node = editor
+            .kb
+            .primary
+            .get("concept:beta")
+            .expect("node present after adopt");
+        assert_eq!(node.title, "MY KEPT TITLE");
+        assert_eq!(node.body, "my kept body");
+        assert_eq!(node.tags, vec!["mine".to_string()]);
+    }
+
+    #[test]
+    fn kb_node_adopted_accept_remote_takes_authoritative_value() {
+        // A2b (accept-remote): with NO pending_reauthor entry, KbNodeAdopted
+        // replaces the local node with the authoritative state and discards the
+        // local edit — no re-author.
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:beta",
+            "STALE LOCAL",
+            mae_kb::NodeKind::Note,
+            "stale local body",
+        ));
+
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let state_bytes = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new(
+                    "concept:beta",
+                    "AUTHORITATIVE",
+                    mae_kb::NodeKind::Note,
+                    "authoritative body",
+                ),
+                7,
+            )
+            .unwrap();
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbNodeAdopted {
+                kb_id: "teamkb".to_string(),
+                node_id: "concept:beta".to_string(),
+                state_bytes,
+            },
+        );
+
+        let node = editor
+            .kb
+            .primary
+            .get("concept:beta")
+            .expect("node present after adopt");
+        assert_eq!(
+            node.title, "AUTHORITATIVE",
+            "accept-remote takes the daemon value"
+        );
+        assert_eq!(node.body, "authoritative body");
+    }
+
+    #[test]
     fn build_sha_is_populated() {
         // C3 smoke test: build.rs must embed a non-empty build identifier.
         assert!(!crate::BUILD_SHA.is_empty());
