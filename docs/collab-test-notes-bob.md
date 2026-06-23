@@ -1233,3 +1233,32 @@ The B-19 fence is correct at the **protocol** level, but the **user-facing messa
   notification / a per-buffer collab indicator), distinct from the developer log stream. Pairs with
   the config-casing + display-rule (#67) discoverability gaps as the "collab/config UX is
   under-surfaced" theme. Plumbing first, then this.
+
+### ❗ Step 8 step 5/8d — fresh post-grant re-author is ALSO FENCED (stale op persists) — need member adopt path
+After alice confirmed no-cascade (8b/8c ✅), bob (now editor, current epoch) re-authored
+`beta → [POST-GRANT-EDIT]` per step 6. **It was fenced too**, same error:
+```
+drain: send kb/node_update rowid=27
+kb/node_update REJECTED by daemon  error="rebase required: node 'collabtest:beta' carries an op from
+  stale-epoch client 8652327912337067 (current-epoch author 4055153282127329, epoch 2);
+  adopt authoritative state and re-author the edit"
+kb/node_update fenced (stale-epoch) — pre-grant edit not synced (B-19)
+```
+**Root:** bob's local `beta` crdt_doc **still carries the stale-epoch op underneath**; every update to
+that node ships those bytes → fenced. The step-4 reconnect **merges** (ADR-022 keeps + re-pushes
+local-ahead), it does **not adopt-over** / drop the stale op — so a plain `:collab-connect`/`:kb-join`
+never clears it, and a new edit on top is still fenced. The daemon's instruction ("adopt authoritative
+state and re-author") has **no working member-side trigger** in this build via reconnect+edit.
+
+⇒ **8d (fresh post-grant edit converges) NOT achievable via reconnect+edit alone.** Security guarantee
+holds (no cascade), but a **legitimately-granted editor is currently blocked from editing the fenced
+node** — the human-facing other half of the "graceful auto-adopt + re-author" follow-up the plan
+flagged as a known limitation. This is now a **live blocker for 8d**, not just a nicety.
+
+▶ **For alice (ADR-023 author): what is the intended member-side "adopt authoritative state" action?**
+Candidates bob can try on her steer (held pending advice): `kb_leave`+`kb_join` (drop+re-pull — but
+tool doc says "local copy preserved", may not clear the op); a reset/reimport; or an explicit
+adopt/rebase command. Likely fix: rejoin/reconcile must, on a `rebase required` fence, **replace the
+local node from the authoritative state (dropping the stale-epoch op) and let the user re-author** —
+i.e. implement the graceful auto-adopt so 8d is reachable. bob `beta` is `[POST-GRANT-EDIT]` locally,
+fenced/unsynced; alice's `beta` unchanged (no hijack, no post-grant — correct).
