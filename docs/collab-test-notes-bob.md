@@ -1492,3 +1492,60 @@ become stale on re-promotion. Empirically that didn't happen across demote→vie
 
 ⇒ **9c FAIL (cascade). 9d (TOFU/R4) deferred until B-20 understood.** Security-relevant — the headline
 B-19 guarantee holds for the original-grant path but **leaks on demote→re-promote**. Holding for alice.
+
+---
+
+## ALICE RESPONSE — B-20 root-caused + FIXED (commit `d934d687`)
+
+Great catch. Your instinct was right that viewer-interval edits weren't stale-by-construction — but I
+decoded the live daemon's persisted `kbc:collabtest` + `kb:collabtest:beta` and the **mechanism is
+different** from the filing:
+
+- **The epoch ledger is CORRECT.** `epoch_of(bob) = 4` on the daemon — the demote (→3) AND re-promote
+  (→4) both bumped. So "the demote doesn't bump" is **not** the bug; no epoch/revoke change is needed.
+- **The hole is the fence's author-attribution.** `update_new_op_authors` used
+  `yrs::Update::state_vector()`, which **omits an op that is a contiguous-clock CONTINUATION of a client
+  already in the canonical base.** beta's lineage already held bob's **epoch-2 client**
+  (`4055153282127329`) from the *accepted* 9b edit; bob's editor never rotated off it (it relearns epoch
+  only on rejoin, and the viewer edit happened without a rejoin), so the viewer-interval op rode that
+  *still-canonical* client → fence saw "no new authors" → accepted. 9a fenced only because its op rode a
+  **fresh** epoch-1 client absent from the base.
+
+**Fix (daemon-side — the security boundary):** `update_new_op_authors(update, base_state)` now integrates
+the update against the authoritative node **state** and flags any client whose clock actually advances
+(unioned with the legacy SV signal — never fences *fewer* ops than before). Two regressions, both proven
+to FAIL pre-fix: a mae-sync unit + a daemon e2e driving the full 9c vector.
+
+### ⚠️ Do you need to rebuild? NO — not the editor.
+The fix is **100% daemon-side** — `update_new_op_authors` is called **only by the daemon** (the fence),
+never by any editor crate. The daemon is *alice's* (the one you connect to over mTLS), and I've already
+**rotated it to the fix build** (hash `afcd5731`). Your editor is unchanged by B-20; stay on your current
+required-module build. `git pull` is **optional** (just for these notes + the regression tests).
+**You only need to reconnect.**
+
+### STEP A — verify your local state + report back (before we test)
+Please confirm and paste:
+1. **Connection:** `collab_status` → connected to alice's daemon (`…:9480`)? (you may need to
+   `:collab-disconnect` → `:collab-connect` since I rotated the daemon under you).
+2. **Your role:** are you still **editor** on `collabtest`? (alice re-shared on reconnect; the B-12 guard
+   should have preserved your membership — confirm.)
+3. **Your `beta`:** `kb_get collabtest:beta` → what does the **title** show? alice reset the canonical to
+   **`Collab Test Beta [9C-CLEAN-BASE]`** (applied `wal_seq=177`). If yours still reads `[VIEWER-ERA-9C]`,
+   reconnect/rejoin (and Accept-remote if a divergence notification appears) until it converges to
+   `[9C-CLEAN-BASE]`.
+4. **Notifications:** `notifications_list` → anything outstanding? (note the id/severity of anything there.)
+
+Send those 4 and I'll green-light the 9c re-run.
+
+### STEP B — 9c re-run (fix validation, after Step A is clean)
+With you = editor + `beta` = `[9C-CLEAN-BASE]` + synced: ping me →
+1. I demote you → **viewer**.
+2. You edit `beta` → a **FRESH** marker `[VIEWER-ERA-9C-RETEST]` (denied at the role gate — expected).
+3. I re-promote you → **editor**.
+4. You **reconnect**. **Expected NOW (the fix):** the daemon **FENCES** your stale continuation
+   (`REBASE REQUIRED`) → `⚑` notification → **no cascade** (alice's `beta` stays `[9C-CLEAN-BASE]`).
+5. Resolve via **Accept-remote** (or **Keep-mine** to re-author under your current epoch) → converge.
+Then we proceed to **9d** (TOFU/R4 modal regression).
+
+I'll tail the daemon log for the `REBASE REQUIRED` on your stale push (the proof it's now fenced) and
+confirm alice's `beta` is untouched.
