@@ -17,6 +17,7 @@ impl super::Editor {
         let severity = builder.severity;
         let source = builder.source;
         let title = builder.title.clone();
+        let body = builder.body.clone();
 
         // Mirror to the *Messages* log so `read_messages` / the AI see the feed.
         self.message_log
@@ -32,12 +33,24 @@ impl super::Editor {
                 self.status_msg = title;
             }
             Surface::Modal => {
-                self.status_msg = title;
                 if let Some(r) = reply {
+                    // A blocking prompt: open a confirm dialog whose y/N answer is
+                    // sent on the reply channel (`pending_notif_reply`). Generalizes
+                    // the bespoke TOFU host-key prompt.
+                    let question = match &body {
+                        Some(b) => format!("{title}\n  {b}\n[y/N]"),
+                        None => format!("{title} [y/N]"),
+                    };
+                    self.mini_dialog = Some(crate::command_palette::MiniDialogState::confirm(
+                        question,
+                        crate::command_palette::MiniDialogContext::Notification { notif_id: id },
+                    ));
                     self.pending_notif_reply = Some((id, r));
+                    self.mark_full_redraw();
+                } else {
+                    // No reply channel (a non-blocking item routed to Modal) — toast.
+                    self.status_msg = title;
                 }
-                // The MiniDialog surface is wired in Phase 4; until then the toast
-                // + the parked reply are the behavior.
             }
             Surface::Silent => {}
         }
@@ -406,6 +419,30 @@ mod tests {
         let mut ed = Editor::new();
         let id = ed.notify(Notification::action_required("collab", "x").key("k"));
         assert!(!ed.notify_run_action(id, 9));
+    }
+
+    #[test]
+    fn blocking_reply_opens_modal_with_notification_context() {
+        use crate::notifications::{NotifReply, Notification};
+        let (tx, _rx) = std::sync::mpsc::channel::<bool>();
+        let mut ed = Editor::new();
+        let id = ed.notify(
+            Notification::action_required("collab", "Trust daemon at host?")
+                .body("SHA256:abc…")
+                .blocking(NotifReply::Bool(tx)),
+        );
+        // A modal dialog is open carrying the generic Notification context (the
+        // generalized successor to the bespoke TOFU prompt).
+        let dlg = ed
+            .mini_dialog
+            .as_ref()
+            .expect("modal opened for BlockingReply");
+        assert!(matches!(
+            dlg.context,
+            crate::command_palette::MiniDialogContext::Notification { notif_id } if notif_id == id
+        ));
+        // The reply channel is parked for the key handler to answer.
+        assert!(ed.pending_notif_reply.is_some());
     }
 
     #[test]

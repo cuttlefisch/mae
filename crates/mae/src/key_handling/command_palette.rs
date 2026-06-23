@@ -278,10 +278,19 @@ fn handle_mini_dialog(editor: &mut Editor, key: KeyEvent) {
     if is_confirm {
         match key.code {
             KeyCode::Esc | KeyCode::Char('n') => {
-                // A pending TOFU host-key prompt: reject (only set for PeerKeyAccept).
-                if let Some(reply) = editor.pending_host_key_reply.take() {
-                    let _ = reply.send(false);
-                    editor.set_status("Host key rejected — connection aborted");
+                // A pending BlockingReply notification (e.g. the TOFU host-key
+                // prompt, ADR-024): answer "no" on its reply channel + resolve.
+                if let Some((id, notif_reply)) = editor.pending_notif_reply.take() {
+                    match notif_reply {
+                        mae_core::notifications::NotifReply::Bool(tx) => {
+                            let _ = tx.send(false);
+                        }
+                        mae_core::notifications::NotifReply::Text(tx) => {
+                            let _ = tx.send(String::new());
+                        }
+                    }
+                    editor.resolve_notification(id, mae_core::notifications::Resolution::Replied);
+                    editor.set_status("Declined");
                 } else {
                     editor.set_status("Cancelled");
                 }
@@ -567,12 +576,21 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
                 editor.set_status("Buffer no longer exists".to_string());
             }
         }
-        MiniDialogContext::PeerKeyAccept { addr, fingerprint } => {
-            // TOFU accept: unblock the connection task to pin + proceed.
-            if let Some(reply) = editor.pending_host_key_reply.take() {
-                let _ = reply.send(true);
+        MiniDialogContext::Notification { notif_id } => {
+            // ADR-024 BlockingReply accept (e.g. TOFU host-key): answer "yes" on the
+            // notification's reply channel (unblocks the waiting task) + resolve.
+            let id = *notif_id;
+            if let Some((_id, notif_reply)) = editor.pending_notif_reply.take() {
+                match notif_reply {
+                    mae_core::notifications::NotifReply::Bool(tx) => {
+                        let _ = tx.send(true);
+                    }
+                    mae_core::notifications::NotifReply::Text(tx) => {
+                        let _ = tx.send("y".to_string());
+                    }
+                }
             }
-            editor.set_status(format!("Trusted {addr} ({fingerprint}) — pinned"));
+            editor.resolve_notification(id, mae_core::notifications::Resolution::Replied);
         }
         MiniDialogContext::RevertBuffer { buf_idx } => {
             let buf_idx = *buf_idx;

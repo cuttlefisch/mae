@@ -825,13 +825,18 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             fingerprint,
             reply,
         } => {
-            // Stash the reply channel; the y/n answer in apply_mini_dialog sends it
-            // back to the (blocked) connection task. ADR-017 TOFU.
-            editor.pending_host_key_reply = Some(reply);
-            editor.mini_dialog = Some(mae_core::command_palette::MiniDialogState::confirm(
-                format!("Trust daemon at {addr}?\n  {fingerprint}\n(first connect — accept & pin?) [y/N]"),
-                mae_core::command_palette::MiniDialogContext::PeerKeyAccept { addr, fingerprint },
-            ));
+            // ADR-017 TOFU, now via the ADR-024 bus: a BlockingReply notification
+            // routes to a modal; the y/n answer in apply_mini_dialog sends back on
+            // `reply` (unblocking the connection task). One consumer of the generic
+            // mechanism — no bespoke `pending_host_key_reply` field anymore.
+            editor.notify(
+                mae_core::notifications::Notification::action_required(
+                    "collab",
+                    format!("Trust daemon at {addr}?"),
+                )
+                .body(format!("{fingerprint}  (first connect — accept & pin?)"))
+                .blocking(mae_core::notifications::NotifReply::Bool(reply)),
+            );
             editor.mark_full_redraw();
         }
         CollabEvent::Connected {

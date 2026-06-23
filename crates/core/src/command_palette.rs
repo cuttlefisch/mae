@@ -152,10 +152,12 @@ pub enum MiniDialogContext {
         address: String,
     },
     SetupKbNotesDir,
-    /// TOFU: accept (and pin) a daemon's host key on first connect (ADR-017).
-    PeerKeyAccept {
-        addr: String,
-        fingerprint: String,
+    /// ADR-024: a `BlockingReply` notification routed to a modal — the y/N answer
+    /// is sent on the notification's reply channel (`pending_notif_reply`). The
+    /// generalized successor to the bespoke TOFU `PeerKeyAccept` prompt (ADR-017):
+    /// the host-key trust prompt is now just one consumer of this mechanism.
+    Notification {
+        notif_id: u64,
     },
 }
 
@@ -178,7 +180,7 @@ impl MiniDialogState {
         match self.kind {
             MiniDialogKind::EditLink => "Edit Link",
             MiniDialogKind::Confirm => match &self.context {
-                MiniDialogContext::PeerKeyAccept { .. } => "Trust Daemon Key?",
+                MiniDialogContext::Notification { .. } => "Action Required",
                 _ => "Confirm",
             },
             MiniDialogKind::SingleInput => match &self.context {

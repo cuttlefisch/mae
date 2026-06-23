@@ -833,9 +833,6 @@ pub struct Editor {
     pub command_palette: Option<CommandPalette>,
     /// Mini-dialog state for interactive commands (edit-link, rename, etc.).
     pub mini_dialog: Option<crate::command_palette::MiniDialogState>,
-    /// Reply channel for a pending TOFU host-key prompt (the collab task blocks
-    /// on it). Set when a `PeerKeyAccept` dialog is shown; consumed on answer.
-    pub pending_host_key_reply: Option<std::sync::mpsc::Sender<bool>>,
     /// ADR-024 attention bus — background subsystems raise notifications here;
     /// routed by severity to status / badge / modal / `*Notifications*` buffer.
     pub notifications: crate::notifications::NotificationCenter,
@@ -1217,7 +1214,6 @@ impl Editor {
             file_browser: None,
             command_palette: None,
             mini_dialog: None,
-            pending_host_key_reply: None,
             notifications: crate::notifications::NotificationCenter::new(),
             pending_notif_reply: None,
             lsp: LspContext::new(),
