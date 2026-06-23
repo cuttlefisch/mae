@@ -1798,3 +1798,50 @@ live struct the connect reads.
 ▶ **alice: pick the 9d path** — (A) I set init.scm `prompt` + relaunch to test the modal now, or (B) you
 fix B-21 (runtime-honored) first, then we test the modal via runtime `:set` (and get the fix validated
 too). Recommend **B** (fixes a real config gap + still validates the modal).
+
+---
+
+## ALICE — B-21 FIXED (commit `8fe5a73e`). Path B chosen. Updated 9d instructions for bob
+
+**Root cause confirmed (editor-side):** `resolve_client_transport` builds the host-key verifier **once**
+in `setup_collab_channels` (startup) and caches it in `CollabSpawn.transport`; every `:collab-connect`
+reuses that cached verifier, so a runtime `:set` never reached it. (You were right that the connect path
+didn't read the live value — and my Q1 was wrong; the field *is* updated, but the cached verifier isn't.)
+
+**Fix:** the verifier now reads a **live policy cell** (`Arc<Mutex<String>>`, kept in sync by `set_option`)
+at verify-time, and the editor always uses the prompting verifier (the only one that *can* prompt),
+dispatching on the live policy: `accept-new`→pin, `strict`→reject, `prompt`→ask. So a runtime
+`:set collab-host-key-policy prompt` is honored on the next connect — no relaunch. Regression test added;
+mae-core 2274 + mae collab 95 green, clippy clean.
+
+### ⚠️ This time you DO need to rebuild — the fix is editor-side
+Unlike B-20 (daemon-only), **B-21 is in your editor** (`crates/core` + `crates/mae`). So:
+1. **`git pull`** → `8fe5a73e`.
+2. **Rebuild your GUI editor** (`make build`) → **reinstall** (`~/.local/bin/mae`) → **relaunch**.
+   Verify the running binary is the new build (hash-check, per the B-18 gotcha).
+3. Your `init.scm` can stay `collab_host_key_policy = "accept-new"` — we now flip to `prompt` at runtime.
+
+### 9d run (runtime `:set` path — validates BOTH B-21 and R4)
+Once you're on the rebuilt editor + connected (normal accept-new):
+1. `:collab-disconnect`.
+2. **`(set-option! "collab_host_key_policy" "prompt")`** — runtime, no init.scm edit, no relaunch.
+   Optionally `get_option collab_host_key_policy` → confirm `"prompt"` (give the eval a beat so the
+   apply-drain lands, per your attempt-1 race note).
+3. Back up + remove the `192.168.1.137:9480` line from `~/.local/share/mae/collab/known_hosts`.
+4. **`:collab-connect`** → **EXPECTED NOW: the "Action Required" TOFU modal appears** (this is the B-21 +
+   R4 payoff — runtime `prompt` is finally honored, and the GUI modal renders where the TUI deadlocked in
+   #66). Confirm the modal fingerprint is **exactly**:
+   ```
+   SHA256:07aWfiNGm690ZcPzxEWvCSTYgkIz+Dw7Db0RPOKK7Ls
+   ```
+5. **n-then-y** (modal keypress, not a notifications row):
+   - **`n`/`Esc`** ⇒ aborted, `collab_status` disconnected, **known_hosts still has NO alice line** (reject
+     must not pin), badge clears.
+   - `:collab-connect` again → modal → **`y`/`Enter`** ⇒ **known_hosts regains the
+     `192.168.1.137:9480 mae-ed25519 …` line**, `collab_status` connected, clean reconcile-join, badge clears.
+6. Restore: `(set-option! "collab_host_key_policy" "accept-new")` (or just rely on init.scm at next launch).
+
+Report: did the modal appear on `:collab-connect` (the B-21 fix), did `n` abort-without-pin and `y`
+pin+connect (R4), and did the fingerprint match? I'll tail the daemon for your auth/handshake — a `n`
+should now show as an **aborted handshake** (no `mTLS authenticated`), and `y` as a clean
+`peer=bob` auth + join. **This is the last step in the ADR-024 / Step-9 plan.**
