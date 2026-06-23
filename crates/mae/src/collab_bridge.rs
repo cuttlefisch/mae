@@ -873,6 +873,12 @@ fn handle_kbc_membership_broadcast(editor: &mut Editor, kb_id: &str, update_byte
             return;
         }
     };
+    // Pending requests present BEFORE this broadcast (to detect new arrivals).
+    let prev_pending: std::collections::HashSet<String> =
+        mae_sync::kb::KbCollectionDoc::from_bytes(&base)
+            .map(|c| c.pending().into_iter().map(|p| p.fingerprint).collect())
+            .unwrap_or_default();
+
     if let Err(e) = coll.apply_update(update_bytes) {
         warn!(kb = %kb_id, error = %e, "kbc broadcast: apply_update failed");
         return;
@@ -882,6 +888,33 @@ fn handle_kbc_membership_broadcast(editor: &mut Editor, kb_id: &str, update_byte
         .collab
         .kb_collection_state
         .insert(kb_id.to_string(), coll.encode_state());
+
+    // Any membership change repaints the *KB Sharing* buffer (remote
+    // promote/demote/approve/join shows live), even when our own epoch is
+    // unchanged.
+    editor.refresh_kb_sharing_buffer();
+
+    // P4: surface NEW join requests to the owner as an actionable notification,
+    // so the owner isn't blind to pending requests with the buffer closed.
+    let me = editor.collab.local_fingerprint.clone();
+    if !me.is_empty() && coll.role_of(&me) == Some(mae_sync::kb::Role::Owner) {
+        for req in coll.pending() {
+            if !prev_pending.contains(&req.fingerprint) {
+                let who = mae_core::kb_sharing::format_peer(&req.label, &req.fingerprint);
+                editor.notify(
+                    mae_core::notifications::Notification::action_required(
+                        "collab",
+                        format!("KB '{kb_id}': join request from {who}"),
+                    )
+                    .key(format!("collab:pending:{kb_id}:{}", req.fingerprint))
+                    .body(
+                        "A peer asked to join this KB. Open *KB Sharing* (SPC C K m) to \
+                         approve (a) or deny (d), or use :kb-approve.",
+                    ),
+                );
+            }
+        }
+    }
 
     if editor.collab.local_fingerprint.is_empty() {
         return; // no collab identity loaded ⇒ no epoch to relearn
@@ -1763,10 +1796,32 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             let is_rebase = is_epoch_fence_rejection(&message);
             if is_rebase {
                 warn!(target: "kb_sync", kb = %kb_id, node = %node_id, error = %message, "kb/node_update fenced (stale-epoch) — pre-grant edit not synced (B-19)");
+                use mae_core::notifications::{NotifCommand, Notification};
+                // P4: `collab_fence_resolution = auto` resolves the fence in the
+                // background — adopt the authoritative state + re-author the local
+                // edit under the current epoch (the keep-mine path), no prompt.
+                // Default `prompt` keeps the user in the loop (#10).
+                if editor.collab.fence_resolution == "auto" {
+                    if editor.notify_collab_keep_mine(&kb_id, &node_id) {
+                        editor.notify(Notification::info(
+                            "collab",
+                            format!(
+                                "KB '{kb_id}': access changed — re-applying your edit to {node_id} under updated authorization"
+                            ),
+                        ));
+                    }
+                    if let Some(rowid) = rowid {
+                        editor.collab.inflight_kb_updates.remove(&rowid);
+                        if let Some(ref store) = editor.kb.store {
+                            let _ = store.ack_pending_update(rowid);
+                        }
+                    }
+                    editor.mark_full_redraw();
+                    return;
+                }
                 // ADR-024 R2: raise an actionable, non-clobberable notification (badge
                 // + *Notifications* row) instead of a status line that gets drowned out.
                 // The actions invoke the R1 adopt-and-re-author round-trip.
-                use mae_core::notifications::{NotifCommand, Notification};
                 editor.notify(
                     Notification::action_required(
                         "collab",
@@ -4389,6 +4444,97 @@ pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fence_auto_resolution_reauthors_in_background_without_prompt() {
+        // P4: collab_fence_resolution = "auto" resolves a fenced edit silently —
+        // captures the local edit for re-author (keep-mine) and queues the adopt,
+        // with NO action-required prompt (an Info notice instead).
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "mefp".to_string();
+        editor.collab.fence_resolution = "auto".to_string();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:beta",
+            "My Title",
+            mae_kb::NodeKind::Note,
+            "my body",
+        ));
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbUpdateFailed {
+                kb_id: "team".to_string(),
+                node_id: "concept:beta".to_string(),
+                rowid: None,
+                message: "rebase required: node 'concept:beta' carries a stale-epoch op"
+                    .to_string(),
+            },
+        );
+
+        // Keep-mine captured the edit for re-author + queued the adopt round-trip.
+        assert!(editor
+            .collab
+            .pending_reauthor
+            .contains_key(&("team".to_string(), "concept:beta".to_string())));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(mae_core::CollabIntent::KbAdoptNode { .. })
+        ));
+        // No action-required prompt was raised (auto = no user interruption).
+        assert_eq!(editor.notifications.outstanding_count(), 0);
+    }
+
+    #[test]
+    fn fence_prompt_raises_action_required_by_default() {
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "mefp".to_string();
+        // default fence_resolution == "prompt"
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbUpdateFailed {
+                kb_id: "team".to_string(),
+                node_id: "concept:beta".to_string(),
+                rowid: None,
+                message: "rebase required: stale".to_string(),
+            },
+        );
+        assert_eq!(editor.notifications.outstanding_count(), 1);
+        assert!(editor.collab.pending_reauthor.is_empty());
+    }
+
+    #[test]
+    fn owner_notified_of_new_pending_join_request() {
+        // P4: when the owner's replica advances with a NEW pending request, raise
+        // an action-required notification so the owner isn't blind.
+        use mae_sync::kb::KbCollectionDoc;
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "alicefp".to_string();
+        let mut coll = KbCollectionDoc::new_owned("Team", "alicefp", "alice");
+        editor
+            .collab
+            .kb_collection_state
+            .insert("team".to_string(), coll.encode_state());
+
+        // A peer's join request arrives as a kbc: broadcast.
+        let update = coll.add_pending("carolfp", "carol", "2026-06-23");
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::RemoteUpdate {
+                doc_id: "kbc:team".to_string(),
+                update_bytes: update,
+                wal_seq: 1,
+            },
+        );
+
+        assert!(
+            editor
+                .notifications
+                .active_sorted()
+                .iter()
+                .any(|n| n.source == "collab" && n.title.contains("join request")),
+            "owner is notified of the pending request"
+        );
+    }
 
     #[test]
     fn kb_shared_seeds_owner_replica_for_introspection() {

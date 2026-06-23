@@ -371,7 +371,7 @@ impl super::Editor {
 
     /// Keep-mine: capture the local edit, adopt authoritative, then re-author the
     /// captured content under the current epoch so it converges as a fresh op.
-    pub(crate) fn notify_collab_keep_mine(&mut self, kb_id: &str, node_id: &str) -> bool {
+    pub fn notify_collab_keep_mine(&mut self, kb_id: &str, node_id: &str) -> bool {
         if let Some(fields) = self.kb_capture_fields(node_id) {
             self.collab
                 .pending_reauthor

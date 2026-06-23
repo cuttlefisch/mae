@@ -448,6 +448,10 @@ impl OptionRegistry {
                 opt!("collab_tls", &["collab-tls"],
                     "Use native mTLS in key mode (recommended; false = plaintext JSON KeyAuth)",
                     OptionKind::Bool, "true", Some("collaboration.tls"), &[]),
+                opt!("collab_fence_resolution", &["collab-fence-resolution"],
+                    "How to resolve an epoch-fenced KB edit ('rebase required'): prompt (ask via the *Notifications* bus) or auto (adopt authoritative + re-author in the background)",
+                    OptionKind::String, "prompt", Some("collaboration.fence_resolution"),
+                    &["prompt", "auto"]),
 
                 // --- Notifications / attention bus (ADR-024) ---
                 opt!("notify_route_info", &["notify-route-info"],

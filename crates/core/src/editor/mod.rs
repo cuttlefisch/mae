@@ -318,6 +318,10 @@ pub struct CollabState {
     pub shared_kbs: HashMap<String, HashSet<String>>,
     /// KB sync mode: "manual" (explicit :kb-sync), "on_save" (auto on node edit).
     pub kb_sync_mode: String,
+    /// Epoch-fence resolution: "prompt" (raise the ADR-024 Accept/Keep/Stash
+    /// notification — default, keeps the user in the loop) or "auto" (adopt the
+    /// authoritative version + re-author the local edit in the background).
+    pub fence_resolution: String,
     /// Pending KB node updates to send (accumulated between ticks). Transient
     /// fallback used only when there is no durable store; store-backed updates
     /// live in the SQLite pending queue (ADR-020 single-source emit).
@@ -411,6 +415,7 @@ impl CollabState {
             last_awareness_sent: std::time::Instant::now(),
             shared_kbs: HashMap::new(),
             kb_sync_mode: KB_SYNC_MODE_DEFAULT.to_string(),
+            fence_resolution: "prompt".to_string(),
             pending_kb_updates: Vec::new(),
             inflight_kb_updates: std::collections::HashSet::new(),
             local_kb_client_id: 0,

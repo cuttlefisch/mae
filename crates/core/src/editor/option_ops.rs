@@ -171,6 +171,7 @@ impl super::Editor {
             "collab_save_on_remote_update" => self.collab.save_on_remote_update.to_string(),
             "collab_heartbeat_interval" => self.collab.heartbeat_interval.to_string(),
             "collab_kb_sync_mode" => self.collab.kb_sync_mode.clone(),
+            "collab_fence_resolution" => self.collab.fence_resolution.clone(),
             "collab_psk" => {
                 if self.collab.psk.is_empty() {
                     String::new()
@@ -704,6 +705,15 @@ impl super::Editor {
                 _ => {
                     return Err(format!(
                         "Invalid kb_sync_mode: '{}' (expected 'manual' or 'on_save')",
+                        value
+                    ))
+                }
+            },
+            "collab_fence_resolution" => match value {
+                "prompt" | "auto" => self.collab.fence_resolution = value.to_string(),
+                _ => {
+                    return Err(format!(
+                        "Invalid collab_fence_resolution: '{}' (expected 'prompt' or 'auto')",
                         value
                     ))
                 }
