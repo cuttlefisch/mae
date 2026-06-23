@@ -142,6 +142,16 @@ pub fn handle_key(
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
     pending_interactive_event: &mut Option<PendingInteractiveEvent>,
 ) {
+    // A blocking/confirm mini-dialog (e.g. the host-key TOFU prompt, ADR-024 R4)
+    // captures ALL input until answered — route to it before any mode, AI, or
+    // conversation handling, in every mode (not just command-palette). Without
+    // this, an async-raised modal (e.g. raised while the *AI* buffer is focused)
+    // is unanswerable and keys leak to the underlying buffer (B-22).
+    if editor.mini_dialog.is_some() {
+        command_palette::handle_command_palette_mode(editor, scheme, key);
+        return;
+    }
+
     // Double Esc to cancel AI
     if key.code == KeyCode::Esc && editor.ai.streaming {
         let now = std::time::Instant::now();

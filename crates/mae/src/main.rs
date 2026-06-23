@@ -1207,7 +1207,17 @@ fn main() -> io::Result<()> {
     // Build the tokio runtime manually. The GUI path needs the event loop
     // on the main thread (winit requirement) with tokio on a background
     // thread. The terminal path runs tokio on the main thread as before.
-    let rt = tokio::runtime::Builder::new_current_thread()
+    //
+    // B-22: use a MULTI-threaded pool. The host-key TOFU verifier is called
+    // synchronously by rustls mid-handshake and blocks (up to 120s) waiting for
+    // the user's prompt answer. On a single-threaded runtime that one worker is
+    // also the `bridge_task` forwarder (and MCP/AI/LSP/DAP), so the blocking wait
+    // starved it — the `HostKeyPrompt` event never reached the GUI/MCP and the
+    // modal never rendered (the GUI twin of the #66 TUI deadlock). A small worker
+    // pool lets the forwarder keep running on another worker while a connect
+    // blocks on the prompt, so the modal surfaces and the answer flows back.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
         .enable_all()
         .build()
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -2152,7 +2162,19 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.alt_held,
                     self.shift_held,
                 ) {
-                    if self.editor.ai.input_lock != mae_core::InputLock::None {
+                    if self.editor.mini_dialog.is_some() {
+                        // A blocking modal (e.g. host-key TOFU prompt) captures input
+                        // before AI-input-lock / shell routing — otherwise Esc/Ctrl-C
+                        // leak to AI-cancel and the modal is unanswerable (B-22).
+                        key_handling::handle_key_from_keypress(
+                            &mut self.editor,
+                            &mut self.scheme,
+                            kp,
+                            &mut self.pending_keys,
+                            &self.ai_command_tx,
+                            &mut self.pending_interactive_event,
+                        );
+                    } else if self.editor.ai.input_lock != mae_core::InputLock::None {
                         if kp.key == mae_core::Key::Escape
                             || (kp.key == mae_core::Key::Char('c') && kp.ctrl)
                         {
