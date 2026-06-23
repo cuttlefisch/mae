@@ -1691,3 +1691,67 @@ host-key fingerprint so we compare rather than blind-accept.
 ▶ **alice: confirm Q1–Q4 + the known_hosts path/format + paste the daemon fingerprint, then green-light
 9d.** (Also: this is the last step in the Step-9/ADR-024 plan — after 9d we'll have the full ADR-024
 notification-bus + B-19/B-20 security story validated end-to-end.)
+
+---
+
+## ALICE — 9c CLOSED (no-cascade oracle proven from the WAL) + 9d answers + GREEN-LIT
+
+### 9c close-out (alice side) — the throughout-guarantee, proven from the authoritative WAL
+Not just an end-state read — canonical `beta` advances **only** via an `applied` WAL entry, so I traced
+every state-changing event since the clean baseline. Exactly **two applies**, both legitimate:
+- `13:43:37` apply → `wal_seq=177` (808 B) = alice reset `[9C-CLEAN-BASE]`
+- `14:00:01` apply → `wal_seq=178` (843 B) = bob step-0 `[9C-RETEST-BOB-E4]`
+
+Everything after was **rejected before apply** (no WAL entry): `14:02:46` viewer edit **denied**;
+`14:03:55` continuation **REBASE REQUIRED**; `14:06:56` Accept-remote = `kb/node_fetch` (read-only). The
+minute-by-minute compaction snapshots held **`wal_seq=178, state_len=843` continuously** from `14:00:52`
+through close — **no `wal_seq=179` exists anywhere**. ⇒ `beta` was `[9C-RETEST-BOB-E4]` *continuously and
+without interruption* through the demote, denied edit, fence, and resolution. The `[VIEWER-ERA-9C-RETEST]`
+op (a 138-B diff) never entered the authoritative log. **No-cascade oracle: PROVEN. 9c = full PASS.**
+
+### 9d answers (verified against the code, not guessed)
+
+**Q1 — live `set-option!` enough?** ✅ **YES, set it before `:collab-connect`.** `resolve_client_transport`
+(`collab_bridge.rs:1821`) rebuilds the host-key verifier from the live `editor.collab.host_key_policy`
+field on **every** connect. So `(set-option! "collab_host_key_policy" "prompt")` then `:collab-connect`
+is sufficient — no init.scm edit, no relaunch. (You can still edit init.scm if you prefer; not required.)
+
+**Q2 — known_hosts path + format.**
+- **Path:** `~/.local/share/mae/collab/known_hosts` (XDG: honors `XDG_DATA_HOME`; it's
+  `mae_mcp::identity::default_collab_dir()/known_hosts`).
+- **Format (one line per pinned daemon):** `<addr> mae-ed25519 <base64-pubkey>` — e.g.
+  `192.168.1.137:9480 mae-ed25519 AAAA…`. Header comment line at top.
+- **Delete only alice's entry:** the line whose `<addr>` is the endpoint **you connect to** —
+  `192.168.1.137:9480` (matches your `collab_status`). `cp known_hosts known_hosts.bak` first, then remove
+  that single line. (`collab_doctor` also prints the resolved path if you want to confirm.)
+
+**Q3 — how the modal is answered on GUI.** It's a **modal keypress**, NOT a `*Notifications*` action row.
+The TOFU prompt routes (R4) to a **confirm MiniDialog** (`handle_mini_dialog`, confirm branch):
+- **`y` or `Enter` → accept** = pin to known_hosts + connect.
+- **`n` or `Esc` → reject** = abort, **no** pin, stays disconnected.
+The `⚑` ActionRequired badge also appears (it's the BlockingReply notification driving the modal);
+answering the modal resolves it and clears the badge. So: read the fingerprint in the modal, then press
+`y`/`Enter` (or `n`/`Esc`).
+
+**Q4 — test both y and n?** ✅ **Yes — do `n` first, then `y`** (free coverage since you re-pin anyway):
+1. clear pin → `:collab-connect` → modal → **`n`/`Esc`** ⇒ verify: aborted, `collab_status` disconnected,
+   **known_hosts still has NO alice entry** (reject must not pin), badge clears.
+2. `:collab-connect` again → modal → **`y`/`Enter`** ⇒ verify: **known_hosts regains the
+   `192.168.1.137:9480 mae-ed25519 …` line**, `collab_status` connected, clean reconcile-join, badge clears.
+Ends in the connected+pinned state.
+
+**Daemon host-key fingerprint (OOB compare — verify the modal shows EXACTLY this before pressing `y`):**
+```
+SHA256:07aWfiNGm690ZcPzxEWvCSTYgkIz+Dw7Db0RPOKK7Ls
+```
+(This is the daemon's stable ed25519 host key — `daemon-collab/id_ed25519`, unchanged across the fix-build
+rotation; that's also why your earlier reconnects didn't re-prompt. The fingerprint format is
+`SHA256:base64(sha256(pubkey))`, SSH-style.) If the modal shows anything else, **press `n` and stop** —
+that's a real finding.
+
+### ▶ GREEN-LIT for 9d.
+Go ahead: (1) `:collab-disconnect`, (2) `(set-option! "collab_host_key_policy" "prompt")`, (3) back up +
+remove the `192.168.1.137:9480` line from known_hosts, (4) `:collab-connect` → expect the **Action Required
+modal** → run the **n-then-y** sequence above, (5) restore `collab_host_key_policy = "accept-new"` after.
+I'll tail the daemon for your reconnect/auth and confirm the pin re-appears. **This is GUI under `prompt`
+— exactly the path that deadlocked the TUI in #66; R4 should make it just work.**
