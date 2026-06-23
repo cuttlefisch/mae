@@ -166,6 +166,12 @@ pub enum CollabIntent {
         node_id: String,
         update: Vec<u8>,
     },
+    /// ADR-024 R1: fetch a node's authoritative state from the daemon and ADOPT it
+    /// locally (drop the stale-epoch divergence that the daemon fenced), so a
+    /// legitimately-granted member can resume editing. If a `pending_reauthor`
+    /// entry exists for `(kb_id, node_id)`, the adopted node is then re-authored
+    /// under the current epoch (the graceful keep-mine path).
+    KbAdoptNode { kb_id: String, node_id: String },
     /// Discover peers on the local network via mDNS.
     DiscoverPeers,
 }
@@ -199,6 +205,15 @@ pub struct ShellIntents {
     pub viewports: HashMap<usize, Vec<String>>,
     /// Cached current working directories, keyed by buffer index.
     pub viewport_cwds: HashMap<usize, String>,
+}
+
+/// Node field values captured for an ADR-024 keep-mine resolution (re-applied
+/// after adopting authoritative state, under the current epoch).
+#[derive(Debug, Clone)]
+pub struct ReauthorFields {
+    pub title: String,
+    pub body: String,
+    pub tags: Vec<String>,
 }
 
 /// Collaborative editing state extracted from Editor.
@@ -282,6 +297,12 @@ pub struct CollabState {
     /// node collide in yrs' clock space and diverge. `0` = unset (no collab identity
     /// loaded) → `kb_local_client_id()` falls back to a legacy default.
     pub local_kb_client_id: u64,
+    /// ADR-024 R1: node field values captured for the **keep-mine** resolution,
+    /// keyed by `(kb_id, node_id)`. Captured BEFORE a `KbAdoptNode` (since adopt
+    /// overwrites the local doc); the `KbNodeAdopted` handler re-applies them under
+    /// the current epoch after adopt, then removes the entry. Absent = accept-remote
+    /// (discard local).
+    pub pending_reauthor: HashMap<(String, String), ReauthorFields>,
     /// This peer's own collab principal (key fingerprint) — the identity the daemon
     /// authorizes against. Stored so KB node ops can be re-derived under a rotated
     /// authorization epoch (ADR-023). Empty when no collab identity is loaded.
@@ -343,6 +364,7 @@ impl CollabState {
             local_kb_client_id: 0,
             local_fingerprint: String::new(),
             kb_epochs: HashMap::new(),
+            pending_reauthor: HashMap::new(),
             psk: String::new(),
             psk_command: String::new(),
             auth_mode: "psk".to_string(),

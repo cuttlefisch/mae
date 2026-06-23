@@ -149,6 +149,12 @@ pub enum CollabCommand {
     LeaveKb {
         kb_id: String,
     },
+    /// ADR-024 R1: fetch a single node's authoritative state from the daemon so the
+    /// editor can adopt it (drop a fenced stale-epoch op) + re-author.
+    KbAdoptNode {
+        kb_id: String,
+        node_id: String,
+    },
     /// Send a KB node update to the server (continuous sync).
     /// `pending_rowid` is the durable SQLite queue row this update came from
     /// (`Some` when store-backed); the row is acked only after the daemon confirms
@@ -328,6 +334,14 @@ pub enum CollabEvent {
         node_id: String,
         rowid: Option<i64>,
         message: String,
+    },
+    /// ADR-024 R1: the daemon returned a node's authoritative state in response to
+    /// `kb/node_fetch`. The editor adopts it (dropping a fenced stale-epoch op) and,
+    /// if a `pending_reauthor` entry exists, re-applies the kept edit (keep-mine).
+    KbNodeAdopted {
+        kb_id: String,
+        node_id: String,
+        state_bytes: Vec<u8>,
     },
 }
 
@@ -606,6 +620,9 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             update,
             pending_rowid: None,
         },
+        CollabIntent::KbAdoptNode { kb_id, node_id } => {
+            CollabCommand::KbAdoptNode { kb_id, node_id }
+        }
         CollabIntent::DiscoverPeers => {
             // mDNS discovery: browse for _mae-sync._tcp.local services.
             match crate::mdns_discovery::MdnsManager::new() {
@@ -792,6 +809,7 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::ShareKb { .. } => "share-kb",
         CollabCommand::JoinKb { .. } => "join-kb",
         CollabCommand::LeaveKb { .. } => "leave-kb",
+        CollabCommand::KbAdoptNode { .. } => "kb-adopt-node",
         CollabCommand::KbNodeUpdate { .. } => "kb-node-update",
         CollabCommand::KbMember { .. } => "kb-member",
     }
@@ -1608,6 +1626,57 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 }
             }
         }
+        CollabEvent::KbNodeAdopted {
+            kb_id,
+            node_id,
+            state_bytes,
+        } => {
+            // ADR-024 R1: replace the local node with the daemon's authoritative
+            // state (dropping the fenced stale-epoch op), then — if keep-mine
+            // captured the user's edit — re-apply it under the current epoch so it
+            // converges as a fresh, authorized op.
+            match editor.kb_adopt_node(&node_id, &state_bytes) {
+                Ok(_) => {
+                    let kept = editor
+                        .collab
+                        .pending_reauthor
+                        .remove(&(kb_id.clone(), node_id.clone()));
+                    if let Some(f) = kept {
+                        match editor.kb_update_node(
+                            &node_id,
+                            Some(&f.title),
+                            Some(&f.body),
+                            Some(f.tags),
+                        ) {
+                            Ok(()) => {
+                                editor.notify(mae_core::notifications::Notification::success(
+                                    "collab",
+                                    format!(
+                                        "Re-applied your edit to {node_id} under current access"
+                                    ),
+                                ));
+                            }
+                            Err(e) => {
+                                editor.set_status(format!("Re-author failed for {node_id}: {e}"))
+                            }
+                        }
+                    } else {
+                        editor.notify(mae_core::notifications::Notification::success(
+                            "collab",
+                            format!("Adopted authoritative {node_id} (local changes discarded)"),
+                        ));
+                    }
+                    editor.mark_full_redraw();
+                }
+                Err(e) => {
+                    editor
+                        .collab
+                        .pending_reauthor
+                        .remove(&(kb_id, node_id.clone()));
+                    editor.set_status(format!("Adopt failed for {node_id}: {e}"));
+                }
+            }
+        }
     }
 }
 
@@ -1826,6 +1895,11 @@ pub(crate) enum PendingResponseKind {
     },
     KbJoin {
         kb_id: String,
+    },
+    /// ADR-024 R1: response to `kb/node_fetch` — carries `{state, sv}` to adopt.
+    KbAdoptNode {
+        kb_id: String,
+        node_id: String,
     },
     KbLeave {
         kb_id: String,
@@ -2470,6 +2544,28 @@ async fn run_collab_task(
                                 };
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
                                     pending_responses.insert(req_id, PendingResponseKind::KbJoin { kb_id });
+                                }
+                            }
+                        }
+                        CollabCommand::KbAdoptNode { kb_id, node_id } => {
+                            info!(kb = %kb_id, node = %node_id, "kb/node_fetch (adopt authoritative — ADR-024 R1)");
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req =
+                                    mae_sync::wire::kb_node_fetch_request(req_id, &kb_id, &node_id);
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        error!("kb node_fetch serialize error: {e}");
+                                        continue;
+                                    }
+                                };
+                                if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    pending_responses.insert(
+                                        req_id,
+                                        PendingResponseKind::KbAdoptNode { kb_id, node_id },
+                                    );
                                 }
                             }
                         }
@@ -3347,6 +3443,41 @@ fn handle_response(
                 );
             }
         }
+        PendingResponseKind::KbAdoptNode { kb_id, node_id } => {
+            // ADR-024 R1: response to kb/node_fetch → adopt the authoritative state.
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("fetch failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("KB '{kb_id}': could not fetch {node_id} to adopt: {msg}"),
+                    },
+                );
+            } else if let Some(state) = result
+                .and_then(|r| r.get("state"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())
+            {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::KbNodeAdopted {
+                        kb_id,
+                        node_id,
+                        state_bytes: state,
+                    },
+                );
+            } else {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("KB '{kb_id}': empty state for {node_id} (cannot adopt)"),
+                    },
+                );
+            }
+        }
         PendingResponseKind::KbJoin { kb_id } => {
             // Distinguish denied / pending / joined so the editor stops showing
             // "Joined (0 nodes)" for all three outcomes (B-1). Daemon shapes:
@@ -3712,6 +3843,16 @@ async fn handle_disconnected_cmd(
                 evt_tx,
                 CollabEvent::Error {
                     message: format!("Not connected \u{2014} cannot join KB '{}'", kb_id),
+                },
+            );
+        }
+        CollabCommand::KbAdoptNode { kb_id, node_id } => {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
+                    message: format!(
+                        "Not connected \u{2014} cannot adopt {node_id} in KB '{kb_id}'"
+                    ),
                 },
             );
         }

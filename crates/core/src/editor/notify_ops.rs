@@ -282,23 +282,87 @@ impl super::Editor {
         (view, text)
     }
 
-    // --- Collab resolution verbs (real implementations land in Phase 5) ---
+    // --- Collab divergence resolution verbs (ADR-024 R1) ---
+    //
+    // Each enqueues a `KbAdoptNode` intent: the bridge fetches the daemon's
+    // authoritative node state and the `KbNodeAdopted` handler adopts it (dropping
+    // the fenced stale-epoch op). Keep-mine additionally captures the local field
+    // values into `pending_reauthor` BEFORE adopting, so they're re-applied under
+    // the current epoch afterwards (adopt overwrites the local doc).
 
-    pub(crate) fn notify_collab_adopt_remote(&mut self, _kb_id: &str, node_id: &str) -> bool {
-        self.set_status(format!("Adopt-remote for {node_id}: not yet implemented"));
-        false
+    /// Capture a node's current local field values (for keep-mine / stash).
+    fn kb_capture_fields(&self, node_id: &str) -> Option<crate::editor::ReauthorFields> {
+        let owner = self.kb_owner_of(node_id)?;
+        let node = match &owner {
+            None => self.kb.primary.get(node_id)?,
+            Some(uuid) => self.kb.instances.get(uuid)?.get(node_id)?,
+        };
+        Some(crate::editor::ReauthorFields {
+            title: node.title.clone(),
+            body: node.body.clone(),
+            tags: node.tags.clone(),
+        })
     }
-    pub(crate) fn notify_collab_keep_mine(&mut self, _kb_id: &str, node_id: &str) -> bool {
-        self.set_status(format!(
-            "Keep-mine (re-author) for {node_id}: not yet implemented"
-        ));
-        false
+
+    fn enqueue_adopt(&mut self, kb_id: &str, node_id: &str) {
+        self.collab.pending_intent = Some(crate::editor::CollabIntent::KbAdoptNode {
+            kb_id: kb_id.to_string(),
+            node_id: node_id.to_string(),
+        });
     }
-    pub(crate) fn notify_collab_stash_externally(&mut self, _kb_id: &str, node_id: &str) -> bool {
+
+    /// Accept-remote: adopt authoritative state, discarding the local divergence.
+    pub(crate) fn notify_collab_adopt_remote(&mut self, kb_id: &str, node_id: &str) -> bool {
+        self.collab
+            .pending_reauthor
+            .remove(&(kb_id.to_string(), node_id.to_string()));
+        self.enqueue_adopt(kb_id, node_id);
         self.set_status(format!(
-            "Stash-externally for {node_id}: not yet implemented"
+            "Adopting authoritative {node_id} (discarding local)…"
         ));
-        false
+        true
+    }
+
+    /// Keep-mine: capture the local edit, adopt authoritative, then re-author the
+    /// captured content under the current epoch so it converges as a fresh op.
+    pub(crate) fn notify_collab_keep_mine(&mut self, kb_id: &str, node_id: &str) -> bool {
+        if let Some(fields) = self.kb_capture_fields(node_id) {
+            self.collab
+                .pending_reauthor
+                .insert((kb_id.to_string(), node_id.to_string()), fields);
+        }
+        self.enqueue_adopt(kb_id, node_id);
+        self.set_status(format!(
+            "Re-applying your {node_id} edit under current access…"
+        ));
+        true
+    }
+
+    /// Stash-externally: preserve the diverged content in a scratch buffer, then
+    /// adopt authoritative (discard the local divergence from the synced node).
+    pub(crate) fn notify_collab_stash_externally(&mut self, kb_id: &str, node_id: &str) -> bool {
+        if let Some(fields) = self.kb_capture_fields(node_id) {
+            let name = format!("*stash:{node_id}*");
+            let body = format!(
+                "Stashed local copy of {node_id} (not synced)\n\
+                 Title: {}\nTags: {}\n\n{}\n",
+                fields.title,
+                fields.tags.join(", "),
+                fields.body
+            );
+            let i = self.find_or_create_buffer(&name, crate::buffer::Buffer::new);
+            self.buffers[i].name = name;
+            self.buffers[i].replace_contents(&body);
+        }
+        // Discard the local divergence from the synced node (like accept-remote).
+        self.collab
+            .pending_reauthor
+            .remove(&(kb_id.to_string(), node_id.to_string()));
+        self.enqueue_adopt(kb_id, node_id);
+        self.set_status(format!(
+            "Stashed {node_id} to a scratch buffer; adopting authoritative…"
+        ));
+        true
     }
 }
 
@@ -342,6 +406,41 @@ mod tests {
         let mut ed = Editor::new();
         let id = ed.notify(Notification::action_required("collab", "x").key("k"));
         assert!(!ed.notify_run_action(id, 9));
+    }
+
+    #[test]
+    fn keep_mine_captures_fields_then_enqueues_adopt() {
+        use crate::editor::CollabIntent;
+        let mut ed = Editor::new();
+        let mut node = mae_kb::Node::new("n1", "Local Title", mae_kb::NodeKind::Note, "local body");
+        node.tags = vec!["t1".to_string()];
+        ed.kb.primary.insert(node);
+
+        // Keep-mine captures the local fields BEFORE adopt + enqueues the round-trip.
+        assert!(ed.notify_collab_keep_mine("kbx", "n1"));
+        let key = ("kbx".to_string(), "n1".to_string());
+        let f = ed
+            .collab
+            .pending_reauthor
+            .get(&key)
+            .expect("fields captured");
+        assert_eq!(f.title, "Local Title");
+        assert_eq!(f.body, "local body");
+        assert_eq!(f.tags, vec!["t1".to_string()]);
+        assert!(matches!(
+            ed.collab.pending_intent,
+            Some(CollabIntent::KbAdoptNode { .. })
+        ));
+
+        // Accept-remote captures nothing (discard) but still enqueues the adopt.
+        ed.collab.pending_reauthor.clear();
+        ed.collab.pending_intent = None;
+        assert!(ed.notify_collab_adopt_remote("kbx", "n1"));
+        assert!(ed.collab.pending_reauthor.is_empty());
+        assert!(matches!(
+            ed.collab.pending_intent,
+            Some(CollabIntent::KbAdoptNode { .. })
+        ));
     }
 
     #[test]

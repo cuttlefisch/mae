@@ -409,7 +409,7 @@ impl Editor {
     /// a federated instance. Used so writes (update/delete) resolve nodes the
     /// same way reads do — i.e. across `primary` ∪ `instances` — instead of
     /// primary-only (I-9).
-    fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {
+    pub(crate) fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {
         if self.kb.primary.contains(id) {
             return Some(None);
         }
@@ -899,6 +899,39 @@ impl Editor {
             return self.kb_local_client_id();
         }
         crate::editor::derive_kb_client_id(&self.collab.local_fingerprint, epoch)
+    }
+
+    /// ADR-024 R1: replace a node's local CRDT doc with the daemon's authoritative
+    /// `state`, DROPPING any divergent (fenced stale-epoch) local ops, then persist.
+    /// This is the member-side "adopt authoritative state" the daemon's `rebase
+    /// required` error asks for — the editor can't self-adopt because its local doc
+    /// still carries the rejected op. Routes to the node's owning KB (instance or
+    /// primary); falls back to primary if the node isn't found locally.
+    pub fn kb_adopt_node(&mut self, node_id: &str, state: &[u8]) -> Result<bool, String> {
+        let owner = self.kb_owner_of(node_id).unwrap_or(None);
+        let changed = match &owner {
+            None => self.kb.primary.adopt_remote_node(node_id, state),
+            Some(uuid) => self
+                .kb
+                .instances
+                .get_mut(uuid)
+                .ok_or_else(|| format!("no KB instance {uuid}"))?
+                .adopt_remote_node(node_id, state),
+        }
+        .map_err(|e| e.to_string())?;
+        let node = match &owner {
+            None => self.kb.primary.get(node_id).cloned(),
+            Some(uuid) => self
+                .kb
+                .instances
+                .get(uuid)
+                .and_then(|k| k.get(node_id))
+                .cloned(),
+        };
+        if let Some(n) = node {
+            self.kb_persist_node_in(&owner, &n);
+        }
+        Ok(changed)
     }
 
     /// ADR-020 B-16: establish + persist a canonical CRDT lineage for every node

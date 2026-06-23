@@ -505,8 +505,8 @@ async fn handle_doc_notification_inner(
         // otherwise be silently dropped (exactly the ADR-020 B-8 kb/node_update bug).
         // Make it LOUD so the next such regression is caught immediately, not chased.
         "sync/update" | "sync/full_state" | "sync/state_vector" | "sync/share" | "sync/resync"
-        | "kb/node_update" | "kb/share" | "kb/join" | "kb/leave" | "kb/add_member"
-        | "kb/remove_member" | "kb/approve_member" | "kb/set_policy" => {
+        | "kb/node_update" | "kb/node_fetch" | "kb/share" | "kb/join" | "kb/leave"
+        | "kb/add_member" | "kb/remove_member" | "kb/approve_member" | "kb/set_policy" => {
             warn!(
                 session = session_id,
                 method,
@@ -1581,6 +1581,73 @@ async fn handle_doc_request_inner(
                     "nodes": nodes,
                 }),
             )
+        }
+
+        // ADR-024 R1: fetch a single node's authoritative state so a fenced member
+        // can ADOPT it (drop its stale-epoch divergence, ADR-023) + re-author. The
+        // editor's local doc still carries the rejected op, so it cannot self-adopt.
+        "kb/node_fetch" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            let node_id = match params["node_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'node_id' field".to_string()),
+                    );
+                }
+            };
+            info!(session = session_id, kb_id = %kb_id, node_id = %node_id, "kb/node_fetch");
+
+            // Read access suffices (members only — a non-member is denied).
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Read).await {
+                Ok(AccessDecision::Allow) | Ok(AccessDecision::AllowAutoJoin) => {}
+                Ok(AccessDecision::Deny(msg)) | Err(msg) => {
+                    warn!(session = session_id, kb_id = %kb_id, reason = %msg, "kb/node_fetch denied");
+                    return JsonRpcResponse::error(id, McpError::internal_error(msg));
+                }
+                Ok(_) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!("cannot read KB '{kb_id}'")),
+                    );
+                }
+            }
+
+            let node_doc = format!("kb:{node_id}");
+            match doc_store.encode_state_and_sv(&node_doc).await {
+                Ok((state, sv)) => {
+                    // Keep the member live-subscribed to this node going forward.
+                    if session_docs.insert(node_doc.clone()) {
+                        let _ = doc_store.track_client_connect(&node_doc).await;
+                        broadcaster
+                            .lock()
+                            .unwrap()
+                            .subscribe_doc(session_id, &node_doc);
+                    }
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({
+                            "kb_id": kb_id,
+                            "node_id": node_id,
+                            "state": update_to_base64(&state),
+                            "sv": update_to_base64(&sv),
+                        }),
+                    )
+                }
+                Err(e) => JsonRpcResponse::error(
+                    id,
+                    McpError::internal_error(format!("node fetch failed for '{node_id}': {e}")),
+                ),
+            }
         }
 
         "kb/node_update" => {
@@ -3431,6 +3498,55 @@ mod tests {
             .is_some(),
             "re-sent stale-epoch op stays fenced"
         );
+    }
+
+    /// ADR-024 R1: `kb/node_fetch` returns a node's authoritative state+sv to a
+    /// member (for adopt-and-re-author) and denies a non-member.
+    #[tokio::test]
+    async fn kb_node_fetch_serves_members_denies_nonmembers() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kbnf",
+            "alice",
+            &mut docs,
+        )
+        .await;
+        let fetch = serde_json::json!({
+            "jsonrpc":"2.0","id":1,"method":"kb/node_fetch",
+            "params":{"kb_id":"kbnf","node_id":"concept:n"}});
+
+        // Owner (a member) gets state + sv.
+        let resp = dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            fetch.clone(),
+            &mut docs,
+        )
+        .await;
+        assert!(resp.error.is_none(), "owner fetch ok: {:?}", resp.error);
+        let result = resp.result.expect("result present");
+        assert!(result.get("state").and_then(|v| v.as_str()).is_some());
+        assert!(result.get("sv").and_then(|v| v.as_str()).is_some());
+
+        // A non-member is denied.
+        let denied = dispatch_as(
+            &store,
+            &bc,
+            Some("carol"),
+            Some(&fp("carol")),
+            fetch,
+            &mut docs,
+        )
+        .await;
+        assert!(denied.error.is_some(), "non-member fetch must be denied");
     }
 
     #[tokio::test]

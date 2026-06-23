@@ -80,6 +80,18 @@ pub fn kb_share_request(
 /// the `node_svs` key is omitted entirely, producing the exact pre-ADR-022 shape
 /// so an older daemon (or a first-ever join with no local nodes) still gets full
 /// state. The pairs use the canonical `{ "id", "sv" }` keys.
+/// Build a `kb/node_fetch` JSON-RPC **request** — fetch a single node's
+/// authoritative state so a fenced member can ADOPT it (drop its stale-epoch
+/// divergence, ADR-023) and re-author. Reply carries `{ state, sv }` (base64).
+pub fn kb_node_fetch_request(id: u64, kb_id: &str, node_id: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "kb/node_fetch",
+        "params": { "kb_id": kb_id, "node_id": node_id },
+    })
+}
+
 pub fn kb_join_request(id: u64, kb_id: &str, node_svs: &[(String, String)]) -> Value {
     let mut params = json!({ "kb_id": kb_id });
     if !node_svs.is_empty() {
