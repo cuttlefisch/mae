@@ -1845,3 +1845,61 @@ Report: did the modal appear on `:collab-connect` (the B-21 fix), did `n` abort-
 pin+connect (R4), and did the fingerprint match? I'll tail the daemon for your auth/handshake — a `n`
 should now show as an **aborted handshake** (no `mTLS authenticated`), and `y` as a clean
 `peer=bob` auth + join. **This is the last step in the ADR-024 / Step-9 plan.**
+
+---
+
+## Step 9d (TOFU/R4) — B-21 fix CONFIRMED, but 🛑 NEW B-22: GUI TOFU modal doesn't render or capture focus
+On the B-21-fix build (`e5538ae`). Staged: offline → runtime `(set-option! "collab_host_key_policy"
+"prompt")` (confirmed `get_option` = `prompt` *before* connect) → removed the `192.168.1.137:9480` pin →
+`:collab-connect`.
+
+### ✅ B-21 FIXED (runtime policy now honored) + correct fingerprint
+The connect **blocked on the prompt instead of auto-pinning** (the old bug) and raised a bus
+notification:
+```
+notifications_list → outstanding 1, severity action-required, source collab, actions: []
+  title: "Trust daemon at 192.168.1.137:9480?"
+  body:  "SHA256:07aWfiNGm690ZcPzxEWvCSTYgkIz+Dw7Db0RPOKK7Ls  (first connect — accept & pin?)"
+```
+Fingerprint = alice's OOB value **exactly**. ⇒ runtime `:set collab_host_key_policy prompt` is honored
+at connect time (B-21 closed), and the trust gate presents the right key.
+
+### ✅ Reject path correct (via bus resolve)
+`notify_resolve(id=1)` (dismiss = reject) → handshake **aborted** (`collab_status: off`, peer 0),
+**known_hosts stayed empty — NO pin** (reject must not trust). Correct security behavior.
+
+### 🛑 B-22 — the R4 GUI TOFU modal is invisible AND unresponsive (UI defect; bob-user observed)
+With the prompt outstanding, the GUI was **broken for the modal**:
+1. **No repaint on raise** — the modal never drew; the GUI **only redraws on a keypress**, and even then
+   lags **~2 keystrokes** behind. The blocking-reply raise doesn't request a frame/damage, so the user is
+   *blocked-but-blind* (connection parked on a modal they can't see).
+2. **No input-focus capture** — keypresses **leak to the underlying buffer**: with the `*AI:claude*`
+   buffer focused, hitting `Esc` triggered Claude commands instead of answering/dismissing the dialog.
+   The "modal" isn't modal.
+⇒ A real user can neither see nor answer the GUI TOFU prompt. This is the **GUI sibling of #66** (the TUI
+deadlock R4 was meant to fix) — R4 fixed the *plumbing* (B-21: policy honored; correct fingerprint;
+reject logic) but the **GUI render/focus path for the blocking modal is broken**.
+
+### Round 2 (accept/`y`) — UN-TESTABLE this build (no working accept path)
+The bus notification exposed **`actions: []`** → the only MCP lever is `dismiss` (= reject); there is
+**no `accept`/pin action over MCP**. Accept is *only* the modal `y`/`Enter` keypress — which the broken
+GUI can't deliver (invisible + no focus). So the **accept→pin path could not be exercised**. Suggest
+alice add, alongside the GUI fix: a bus **accept action** on the trust notification (so headless/agent +
+the `*Notifications*` row can answer it), not only the modal keypress.
+
+### Fix directions (alice / GUI)
+- **Render:** raising a BlockingReply/MiniDialog must request a redraw (mark frame damage / wake the
+  render loop) so the modal paints immediately, not on the next incidental input.
+- **Focus:** the modal must **grab input focus** (capture keys, suppress underlying-buffer/keymap
+  dispatch) while active — otherwise keys leak (e.g., to the Claude shell buffer).
+- **Headless/agent parity:** give the trust prompt explicit bus **actions** (`Accept & pin` / `Reject`)
+  so it's answerable via `notify_resolve(action=…)` and the `*Notifications*` buffer, not modal-only.
+
+### bob restored to working state
+`(set-option! "collab_host_key_policy" "accept-new")` → `:collab-connect` → auto-pinned
+`07aW…7Ls` (OOB-verified) → connected + reconcile-joined; known_hosts re-pinned. Temp backups removed.
+
+⇒ **9d verdict:** B-21 (runtime policy) + correct-fingerprint + reject-logic ✅; **accept-via-UI blocked
+by B-22 (GUI modal render/focus + no MCP accept action).** Last ADR-024 item — security logic proven,
+GUI modal surface is the remaining fix. Pairs with the collab/config-UX theme (auto-connect override,
+config casing, #67 display-rule, fence-messaging hiccup, B-21 runtime-honor) for the post-plumbing UX pass.
