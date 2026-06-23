@@ -2308,3 +2308,45 @@ per-frame render probes** (hot-path; their question is settled + now guarded by 
 tests). So we keep traceability without the throwaway target or render-loop spam.
 
 ⇒ With B-23, the whole TOFU/R4 flow is functional **and** legible. 9d PASS stands; the modal arc is closed.
+
+---
+
+## ✅✅ B-23 FIXED + 9d (TOFU/R4) FULL PASS — the B-22/B-23 modal arc is CLOSED
+Rebuilt on `a66449f` (`render_common::dialog::mini_dialog_layout`, shared content-adaptive sizing). Re-ran
+the prompt (runtime `:set prompt` — get_option-verified → no apply-race → single prompt → clear pin →
+`:collab-connect`), then drove **both** paths through the now-fully-rendered modal:
+
+- **B-23 ✅ — bob-user: "saw the full dialogue contents correctly."** The modal sizes to its content and the
+  **entire `SHA256:07aWfiNGm690ZcPzxEWvCSTYgkIz+Dw7Db0RPOKK7Ls` is readable** (no clipping) — so the OOB
+  compare before accept is now trustworthy. Shared `mini_dialog_layout` (geometry twin of `active_overlay`)
+  works across backends.
+- **Reject (`n`) ✅** — `18:14:42 TLS handshake failed: ApplicationVerificationFailure` (aborted in seconds,
+  **no pin**).
+- **Accept (`y`) ✅** — `18:14:52 collab connected` + `KB join complete (merged)`; known_hosts re-pinned the
+  correct key `192.168.1.137:9480 mae-ed25519 Ck5Um…` (= `07aW…7Ls`, OOB match).
+
+⇒ **9d / TOFU / R4 = FULL PASS**, end to end, via a modal that **renders (B-22a) + captures input (B-22b) +
+sizes to content/readable (B-23) + is bus-answerable (B-22c)**. Reject-no-pin and accept-pin both proven
+with the full fingerprint visible.
+
+### The complete security-arc, validated live (B-19 → B-23)
+| Bug | What | Status |
+|-----|------|--------|
+| B-19 | viewer-era edit cascades on grant (epoch fence) | ✅ fixed + verified (9a/9b) |
+| B-20 | continuation rides canonical client → cascade on demote→re-promote | ✅ fixed + verified (9c) |
+| B-21 | runtime `collab_host_key_policy` not honored by connect | ✅ fixed + verified |
+| B-22a | TOFU modal doesn't render (paint runs, overlay skipped) | ✅ fixed (unified `active_overlay`) |
+| B-22b | modal doesn't capture input focus | ✅ fixed |
+| B-22c | no MCP/bus accept action | ✅ fixed (`notify_resolve {id,action}`) |
+| B-23 | modal doesn't size to content → fingerprint truncated | ✅ fixed (shared `mini_dialog_layout`) |
+
+ADR-024 notification-bus + the membership-gated write-access security story (ADR-018/023) are **validated
+end-to-end on two machines**. Step-9 is complete.
+
+### Remaining (housekeeping, per alice's plan — not blockers)
+- Instrumentation cleanup: convert the `b22a` diagnostic into permanent `collab`-target host-key lifecycle
+  tracing + remove the per-frame render probes (settled + now guarded by `active_overlay`/`dialog` tests).
+- The earlier collab/config-UX theme items (auto-connect override [fixed], config casing, #67 display-rule
+  discoverability, fence-messaging) for the post-plumbing UX pass.
+
+**bob state:** connected, pinned (correct key), policy restored to `accept-new`, temp backups removed.
