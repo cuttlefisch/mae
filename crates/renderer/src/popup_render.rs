@@ -625,11 +625,17 @@ fn render_mini_dialog(
     editor: &Editor,
     dialog: &mae_core::command_palette::MiniDialogState,
 ) {
-    let dialog_width = 50u16.min(area.width.saturating_sub(4));
-    let dialog_height = (4 + dialog.fields.len() as u16).min(area.height.saturating_sub(2));
-    let x = area.x + (area.width.saturating_sub(dialog_width)) / 2;
-    let y = area.y + (area.height.saturating_sub(dialog_height)) / 2;
-    let popup_area = Rect::new(x, y, dialog_width, dialog_height);
+    // Content-adaptive geometry (B-23): the box grows to fit its title/body/fields
+    // and wraps long content (e.g. the host-key fingerprint) instead of clipping.
+    // Shared with the GUI via `render_common::dialog` so the two can't diverge.
+    use mae_core::render_common::dialog::{mini_dialog_layout, DialogLine};
+    let layout = mini_dialog_layout(dialog, area.width as usize, area.height as usize);
+    let popup_area = Rect::new(
+        area.x + layout.col as u16,
+        area.y + layout.row as u16,
+        layout.width as u16,
+        layout.height as u16,
+    );
 
     frame.render_widget(ratatui::widgets::Clear, popup_area);
 
@@ -646,37 +652,28 @@ fn render_mini_dialog(
     let prompt_style = ts(editor, "ui.popup.key");
     let selected_style = ts(editor, "ui.selection");
 
-    for (i, field) in dialog.fields.iter().enumerate() {
-        if i as u16 >= inner.height.saturating_sub(1) {
+    for (i, line) in layout.lines.iter().enumerate() {
+        if i as u16 >= inner.height {
             break;
         }
-        let is_active = i == dialog.active_field;
         let row_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
-
-        let label = format!("{}: ", field.label);
-        let display_value = if field.value.is_empty() {
-            &field.placeholder
-        } else {
-            &field.value
+        let (text, style) = match line {
+            DialogLine::Text(t) => (t.clone(), text_style),
+            DialogLine::Hint(h) => (h.clone(), prompt_style),
+            DialogLine::Field {
+                label,
+                value,
+                placeholder,
+                active,
+                ..
+            } => {
+                let display_value = if value.is_empty() { placeholder } else { value };
+                let cursor = if *active { "│" } else { "" };
+                let style = if *active { selected_style } else { text_style };
+                (format!("{label}: {display_value}{cursor}"), style)
+            }
         };
-        let cursor = if is_active { "│" } else { "" };
-        let line_text = format!("{}{}{}", label, display_value, cursor);
-
-        let style = if is_active {
-            selected_style
-        } else {
-            text_style
-        };
-        let line = Line::styled(line_text, style);
-        frame.render_widget(Paragraph::new(line), row_area);
-    }
-
-    // Footer hint
-    let footer_row = dialog.fields.len() as u16;
-    if footer_row < inner.height {
-        let hint = "Tab: next  Enter: apply  Esc: cancel";
-        let hint_area = Rect::new(inner.x, inner.y + footer_row, inner.width, 1);
-        frame.render_widget(Paragraph::new(Line::styled(hint, prompt_style)), hint_area);
+        frame.render_widget(Paragraph::new(Line::styled(text, style)), row_area);
     }
 }
 

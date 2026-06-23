@@ -9,6 +9,7 @@ pub mod collab_colors;
 pub mod color;
 pub mod debug;
 pub mod diagnostics;
+pub mod dialog;
 pub mod file_tree;
 pub mod git_status;
 pub mod gutter;
