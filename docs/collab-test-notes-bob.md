@@ -1947,3 +1947,47 @@ finish 9d.
 
 I'll tail the daemon: a fast `n` now shows an aborted handshake within seconds (not 120s), and `y` a clean
 `peer=bob` auth + join. This should finally close 9d (accept→pin) — the last ADR-024 item.
+
+---
+
+## Step 9d re-test (B-22 fix build `5337cb5`) — ⚠️ B-22b FIXED, but B-22a (render) STILL BROKEN
+Staged: offline → runtime `(set-option! "collab_host_key_policy" "prompt")` (get_option confirmed
+`prompt`) → removed `192.168.1.137:9480` pin → `:collab-connect`. Prompt fired (bus notification id=1,
+correct fp `07aW…7Ls`) — B-21 still good.
+
+### ✅ B-22b (input focus) — FIXED
+bob-user confirms the modal **now captures input** even with the `*AI:claude*` buffer focused — keys no
+longer leak to AI-cancel/shell. The handle_key/AI-lock routing fix works.
+
+### 🛑 B-22a (render) — STILL BROKEN (modal captures input but does NOT paint)
+bob-user: *"frozen again for a second, looks like the modal was capturing input but not rendering."* The
+multi-thread-runtime fix **reduced** the freeze (was a hard ~120s verifier-timeout starvation; now only
+"a second"), so starvation is better — **but the modal itself still never renders.** The user was
+**blind**: couldn't see the dialog or the fingerprint, pressed keys without seeing. So the redraw for the
+async-raised `HostKeyPrompt`/MiniDialog is still not happening (mark_full_redraw / dialog paint not
+triggered on the GUI thread), independent of the runtime-starvation reduction.
+
+### Consequence — accept→pin "worked" but could NOT be cleanly validated (security-UX hole)
+Because the user pressed blindly across attempts, the net result is bob **connected + pinned** to the
+correct key (`192.168.1.137:9480 mae-ed25519 Ck5Um…` = `07aW…7Ls`; `collab_status: connected`). But:
+- An earlier attempt logged `TLS handshake failed: invalid peer certificate: ApplicationVerificationFailure`
+  (a reject), then a later blind `y` accepted+pinned+connected — we can't attribute keys to intent.
+- **The core problem: a user cannot SEE the fingerprint before trusting.** "Accept" only succeeded via a
+  blind keypress = trusting an unseen key. That defeats the TOFU verification purpose. So **9d accept→pin
+  is NOT validated as a usable flow** even though the plumbing accepts.
+
+### What's proven vs still open
+- ✅ B-21 (runtime policy honored), correct fingerprint surfaced (bus), reject aborts w/o pin, B-22b focus.
+- 🛑 **B-22a render still open** — the modal must actually paint (fingerprint visible) for 9d to be a real
+  pass. Fix dir: ensure the async `HostKeyPrompt` path triggers a GUI redraw/frame-damage that draws the
+  MiniDialog overlay — the runtime fix shortened the freeze but didn't wire the dialog's paint. Possibly
+  the dialog is drawn only on a render pass that isn't requested when the prompt is raised off the
+  handshake thread.
+- (B-22c MCP/bus accept action still deferred — would also let us validate accept headlessly, sidestepping
+  the GUI render entirely; worth reconsidering given render is still flaky.)
+
+### bob state
+`collab_status: connected`, pinned to the correct OOB key; policy restored to `accept-new`. known_hosts.bak
+saved. ⇒ **9d still NOT closed:** accept path blocked on B-22a (modal doesn't render → user can't verify
+the fingerprint). Recommend alice (1) finish the render fix, and/or (2) land B-22c (bus accept action) so
+accept is verifiable+answerable without depending on the GUI paint.
