@@ -1750,20 +1750,23 @@ async fn handle_doc_request_inner(
                     }
                 };
                 let c_now = derive_kb_client_id(principal, epoch_now);
-                // The daemon's authoritative SV for this node — ops it already holds
-                // are grandfathered; only ops *beyond* it are fenced.
-                let base_sv = match doc_store.encode_state_and_sv(&node_doc).await {
-                    Ok((_, sv)) => sv,
+                // The daemon's authoritative STATE for this node — ops it already
+                // holds are grandfathered; only ops *beyond* it are fenced. We need
+                // the full state (not just the SV) so the fence can detect a
+                // contiguous-clock continuation of an already-canonical client (B-20),
+                // which the incoming update's own SV would hide.
+                let base_state = match doc_store.encode_state_and_sv(&node_doc).await {
+                    Ok((state, _sv)) => state,
                     Err(e) => {
                         return JsonRpcResponse::error(
                             id,
                             McpError::internal_error(format!(
-                                "node SV lookup failed for '{node_id}': {e}"
+                                "node state lookup failed for '{node_id}': {e}"
                             )),
                         );
                     }
                 };
-                match update_new_op_authors(&update_bytes, &base_sv) {
+                match update_new_op_authors(&update_bytes, &base_state) {
                     Ok(authors) => {
                         if let Some(stale) = authors.iter().find(|a| **a != c_now) {
                             warn!(
@@ -3497,6 +3500,126 @@ mod tests {
             .error
             .is_some(),
             "re-sent stale-epoch op stays fenced"
+        );
+    }
+
+    /// B-20 regression (the live 9c cascade): a stale-epoch op that is a
+    /// *contiguous-clock continuation* of a client already canonical in the node
+    /// must still be fenced. Distinct from B-19's fresh-lineage case — here bob has
+    /// a PRIOR ACCEPTED edit, so his client is in the base; the pre-fix fence (which
+    /// keyed on the incoming update's own state vector) missed the continuation and
+    /// let it cascade.
+    #[tokio::test]
+    async fn stale_epoch_continuation_of_canonical_client_is_fenced() {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            "kbx",
+            "alice",
+            &mut docs,
+        )
+        .await;
+
+        // bob added directly as EDITOR (fresh grant ⇒ epoch 0) and makes an ACCEPTED
+        // edit, so his epoch-0 client becomes part of the node's canonical lineage.
+        dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&fp("alice")),
+            kb_member_msg("kb/add_member", "kbx", &fp("bob"), Some("editor")),
+            &mut docs,
+        )
+        .await;
+        assert!(
+            dispatch_as(
+                &store,
+                &bc,
+                Some("bob"),
+                Some(&fp("bob")),
+                kb_node_update_msg_as("kbx", &fp("bob"), 0, "ACCEPTED-EDIT"),
+                &mut docs
+            )
+            .await
+            .error
+            .is_none(),
+            "bob's epoch-0 edit is accepted and becomes canonical"
+        );
+
+        // Owner DEMOTES bob → viewer (epoch 1) then RE-PROMOTES → editor (epoch 2).
+        // bob's editor never rotated off the epoch-0 client (no rejoin), mirroring 9c.
+        for role in ["viewer", "editor"] {
+            assert!(
+                dispatch_as(
+                    &store,
+                    &bc,
+                    Some("alice"),
+                    Some(&fp("alice")),
+                    kb_member_msg("kb/add_member", "kbx", &fp("bob"), Some(role)),
+                    &mut docs
+                )
+                .await
+                .error
+                .is_none(),
+                "owner role change to {role} applies"
+            );
+        }
+
+        // THE EXPLOIT: bob authors a CONTINUATION under his now-stale epoch-0 client,
+        // chained onto the canonical state (not a fresh lineage). Role gate passes
+        // (he is an editor); the epoch fence must still reject it.
+        let (canonical_state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+        let cid0 = derive_kb_client_id(&fp("bob"), 0);
+        let mut ts = TextSync::from_state_with_client_id(&canonical_state, cid0).unwrap();
+        let cont_update = ts.insert(0, "VIEWER-ERA-CONT ");
+        let cont_msg = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/node_update",
+            "params":{"kb_id":"kbx","node_id":"concept:n","update":update_to_base64(&cont_update)}});
+        let resp = dispatch_as(
+            &store,
+            &bc,
+            Some("bob"),
+            Some(&fp("bob")),
+            cont_msg,
+            &mut docs,
+        )
+        .await;
+        let msg = resp
+            .error
+            .as_ref()
+            .map(|e| e.message.clone())
+            .unwrap_or_default();
+        assert!(
+            resp.error.is_some() && msg.contains("rebase required"),
+            "stale-epoch continuation must be fenced (B-20); got: {msg:?}"
+        );
+
+        // NO CASCADE: the canonical content never gains the viewer-interval edit.
+        let (state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+        let canonical = TextSync::from_state(&state).unwrap().content();
+        assert!(
+            !canonical.contains("VIEWER-ERA-CONT"),
+            "stale continuation must not cascade; canonical = {canonical:?}"
+        );
+
+        // bob CAN still converge by re-authoring under his CURRENT epoch (2).
+        assert!(
+            dispatch_as(
+                &store,
+                &bc,
+                Some("bob"),
+                Some(&fp("bob")),
+                kb_node_update_msg_as("kbx", &fp("bob"), 2, "REAUTHORED"),
+                &mut docs
+            )
+            .await
+            .error
+            .is_none(),
+            "a fresh current-epoch (2) edit is accepted"
         );
     }
 

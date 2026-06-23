@@ -85,23 +85,53 @@ pub fn sv_clients_disjoint(a_sv: &[u8], b_sv: &[u8]) -> Result<bool, SyncError> 
 }
 
 /// ADR-023: the set of client_ids that authored operations in `update` that are
-/// **not yet covered by `base_sv`** — i.e. the "new" ops a peer is contributing on
-/// top of the daemon's authoritative state. The daemon fences with this: every
-/// new-op author must equal the member's current-epoch client_id
+/// **not yet covered by `base_state`** — i.e. the "new" ops a peer is contributing
+/// on top of the daemon's authoritative node STATE. The daemon fences with this:
+/// every new-op author must equal the member's current-epoch client_id
 /// (`derive_kb_client_id(fp, epoch_now)`); a stale-epoch author means a pre-grant
 /// (or otherwise unauthorized) lineage and the write is rejected (`rebase required`).
-pub fn update_new_op_authors(update: &[u8], base_sv: &[u8]) -> Result<Vec<u64>, SyncError> {
-    let upd = yrs::Update::decode_v1(update).map_err(|e| SyncError::Encoding(e.to_string()))?;
-    let base =
-        yrs::StateVector::decode_v1(base_sv).map_err(|e| SyncError::Encoding(e.to_string()))?;
-    let upd_sv = upd.state_vector();
-    let mut out = Vec::new();
-    for (client, &clock) in upd_sv.iter() {
-        if base.get(client) < clock {
-            out.push(client.get());
+///
+/// Takes the full authoritative **state** (not merely its state vector) because a
+/// naive `Update::state_vector()` comparison has a blind spot (B-20): an op that is
+/// a *contiguous-clock continuation* of a client already present in the base does
+/// **not** appear in the incoming update's own state vector, so a member who keeps
+/// authoring under a still-canonical client_id (e.g. they never rotated off it after
+/// a demotion) could append post-demotion edits and slip the fence. Detecting that
+/// requires integrating the update against the real state and observing which
+/// clients' clocks actually advanced. We do exactly that, then UNION the legacy
+/// `Update::state_vector()` signal so we never fence *fewer* ops than before
+/// (independent/divergent lineages whose ops can't integrate into the base stay
+/// caught).
+pub fn update_new_op_authors(update: &[u8], base_state: &[u8]) -> Result<Vec<u64>, SyncError> {
+    let mut authors = std::collections::BTreeSet::new();
+
+    // Primary signal — apply-and-diff against the authoritative state. Integrating
+    // the update reveals contiguous continuations of an already-known client (the
+    // B-20 vector) that the update's own SV omits, as well as fresh clients whose
+    // ops depend only on the base.
+    let mut doc = KbNodeDoc::from_bytes(base_state)?;
+    let before = yrs::StateVector::decode_v1(&doc.state_vector())
+        .map_err(|e| SyncError::Encoding(e.to_string()))?;
+    doc.apply_update(update)?;
+    let after = yrs::StateVector::decode_v1(&doc.state_vector())
+        .map_err(|e| SyncError::Encoding(e.to_string()))?;
+    for (client, &clock) in after.iter() {
+        if before.get(client) < clock {
+            authors.insert(client.get());
         }
     }
-    Ok(out)
+
+    // Defense in depth — the legacy signal. Catches ops from an independent lineage
+    // that do NOT integrate into the base (they remain pending, so apply-and-diff
+    // wouldn't advance the SV), preserving the pre-B-20 fencing for that case.
+    let upd = yrs::Update::decode_v1(update).map_err(|e| SyncError::Encoding(e.to_string()))?;
+    for (client, &clock) in upd.state_vector().iter() {
+        if before.get(client) < clock {
+            authors.insert(client.get());
+        }
+    }
+
+    Ok(authors.into_iter().collect())
 }
 
 /// Materialized content from a KbNodeDoc — all fields extracted for FTS rebuild.
@@ -1627,13 +1657,12 @@ mod tests {
         let c_editor = derive_kb_client_id(fp, 1); // post-grant, viewer→editor (C_now)
 
         let base = KbNodeDoc::new_with_client_id("n1", "Original", "body", &[], 99);
-        let base_sv = base.state_vector();
         let base_state = base.encode_state();
 
         // Viewer-era edit (would be denied live, but lands in the local lineage).
         let mut viewer = KbNodeDoc::from_bytes_with_client_id(&base_state, c_viewer).unwrap();
         let viewer_update = viewer.set_title("hijacked");
-        let viewer_authors = update_new_op_authors(&viewer_update, &base_sv).unwrap();
+        let viewer_authors = update_new_op_authors(&viewer_update, &base_state).unwrap();
         assert_eq!(
             viewer_authors,
             vec![c_viewer],
@@ -1647,7 +1676,7 @@ mod tests {
         // A fresh, current-epoch edit is accepted (every new op is C_now).
         let mut editor = KbNodeDoc::from_bytes_with_client_id(&base_state, c_editor).unwrap();
         let editor_update = editor.set_title("legit edit");
-        let editor_authors = update_new_op_authors(&editor_update, &base_sv).unwrap();
+        let editor_authors = update_new_op_authors(&editor_update, &base_state).unwrap();
         assert_eq!(editor_authors, vec![c_editor]);
         assert!(
             editor_authors.iter().all(|a| *a == c_editor),
@@ -1655,8 +1684,47 @@ mod tests {
         );
 
         // Grandfathering: re-presenting only already-canonical ops flags no author.
-        let empty = update_new_op_authors(&base_state, &base.state_vector()).unwrap();
+        let empty = update_new_op_authors(&base_state, &base_state).unwrap();
         assert!(empty.is_empty(), "ops the daemon already has are not 'new'");
+    }
+
+    /// B-20 regression: a stale-epoch op that is a *contiguous-clock continuation*
+    /// of a client already present in the canonical base must still be fenced.
+    ///
+    /// Live 9c: bob (editor, epoch 2) makes an accepted edit, so his epoch-2 client
+    /// becomes canonical. He is demoted to viewer then re-promoted to editor (epoch
+    /// jumps to 4), but his editor never rotated off the epoch-2 client (no rejoin),
+    /// so a viewer-interval edit rides that *still-canonical* client. Because the
+    /// op merely extends an existing lineage, the incoming update's own state vector
+    /// omits it — the pre-fix fence saw "no new authors" and let it cascade. The
+    /// fix integrates the update against the authoritative state and catches the
+    /// clock advance.
+    #[test]
+    fn update_new_op_authors_flags_contiguous_stale_continuation() {
+        let fp = "ed25519:bob";
+        let c_e2 = derive_kb_client_id(fp, 2); // canonical via an accepted edit (9b)
+        let c_now = derive_kb_client_id(fp, 4); // current epoch after demote->promote
+
+        // Owner seeds the node; bob (epoch 2) makes the accepted edit -> the daemon's
+        // authoritative state now contains bob's epoch-2 client.
+        let owner = KbNodeDoc::new_with_client_id("n", "Original", "body", &[], 999_111);
+        let mut bob = KbNodeDoc::from_bytes_with_client_id(&owner.encode_state(), c_e2).unwrap();
+        let accepted = bob.set_title("POST-GRANT-EDIT");
+        let mut daemon = KbNodeDoc::from_bytes(&owner.encode_state()).unwrap();
+        daemon.apply_update(&accepted).unwrap();
+        let base_state = daemon.encode_state(); // authoritative state the fence sees
+
+        // bob (still epoch 2) appends a viewer-interval edit -> contiguous extension.
+        let stale_update = bob.set_title("VIEWER-ERA");
+        let authors = update_new_op_authors(&stale_update, &base_state).unwrap();
+        assert!(
+            authors.contains(&c_e2),
+            "the contiguous stale-epoch continuation must be attributable (B-20)"
+        );
+        assert!(
+            authors.iter().any(|a| *a != c_now),
+            "fence MUST reject: a stale-epoch (c_e2) author is present though c_now is epoch 4"
+        );
     }
 
     #[test]
