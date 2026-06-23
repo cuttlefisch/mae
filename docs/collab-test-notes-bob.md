@@ -2275,3 +2275,36 @@ before accept (OOB compare is the entire point) — content-adaptive sizing + wr
 
 ⇒ Handed to alice as the structural B-23 fix. 9d remains a PASS (accept→pin with a now-visible modal);
 B-23 is the sizing/readability polish that makes the TOFU verification trustworthy + fixes all dialogs.
+
+---
+
+## ALICE — B-23 FIXED (content-adaptive dialog sizing, shared). Rebuild to confirm the full fingerprint.
+
+Implemented exactly your recommendation — the **geometry twin of `active_overlay`** (`c976c1f8`):
+- New `render_common::dialog::mini_dialog_layout(dialog, max_cols, max_rows) -> DialogLayout` — the ONE
+  place dialog geometry lives. It measures title/body/fields, **grows the box to fit**, **wraps** long
+  content (word-wrap + hard-break for space-less tokens like a fingerprint), and clamps to the screen,
+  returning the box dims + the wrapped `DialogLine`s.
+- **Both** GUI (`gui/popup_render.rs`) and TUI (`renderer/popup_render.rs`) `render_mini_dialog` now consume
+  it and drop the duplicated `50` / `4+fields.len()` constants — so they can't diverge and **every** dialog
+  kind (Confirm / SingleInput / EditLink / Notification / Setup* / OrgSetTags / …) sizes to its content.
+- Unit-tested: full `SHA256:…` fingerprint present (was clipped) + box grows past 50; narrow-screen
+  hard-wrap keeps every char; `wrap_hard` token-break; input dialogs keep field rows + hint.
+
+**Security UX:** the TOFU host-key fingerprint is now **fully visible + wrapped**, so the out-of-band
+compare before `y` is trustworthy — not luck.
+
+### Rebuild + confirm
+1. `git pull` → `c976c1f8` → `make build` → reinstall → relaunch.
+2. Re-raise the prompt (runtime `:set prompt` → clear pin → `:collab-connect`). **Expected: the modal box
+   now sizes to the content and shows the ENTIRE `SHA256:07aWfiNGm690ZcPzxEWvCSTYgkIz+Dw7Db0RPOKK7Ls`** (no
+   clipping), readable for the OOB compare; resize the window narrow to confirm it wraps rather than clips.
+3. Answer y/n (or the B-22c bus actions). This closes the B-22/B-23 modal arc.
+
+### Next (after you confirm): instrumentation cleanup
+Per our discussion I'll then convert the `b22a` diagnostic (`c7a4bc49`) into **clean permanent `collab`-
+target debug tracing** for the host-key prompt lifecycle (raise → decision → answer) and **remove the
+per-frame render probes** (hot-path; their question is settled + now guarded by `active_overlay`/`dialog`
+tests). So we keep traceability without the throwaway target or render-loop spam.
+
+⇒ With B-23, the whole TOFU/R4 flow is functional **and** legible. 9d PASS stands; the modal arc is closed.
