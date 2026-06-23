@@ -16,6 +16,7 @@ pub mod hover;
 pub mod kb;
 pub mod messages;
 pub mod notifications;
+pub mod overlay;
 pub mod shell;
 pub mod spans;
 pub mod splash;

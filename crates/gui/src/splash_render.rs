@@ -17,8 +17,6 @@ use unicode_width::UnicodeWidthStr;
 use crate::canvas::SkiaCanvas;
 use crate::theme;
 
-pub use mae_core::render_common::splash::should_show_splash;
-
 /// A line within a splash section.
 struct SplashLine {
     text: String,
