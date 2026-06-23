@@ -1292,6 +1292,34 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "kb-share",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-join",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-leave",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-add-member",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-remove-member",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-approve",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-set-policy",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "kb-remove-link!",
       "source": "crates/scheme/src/runtime.rs"
     },

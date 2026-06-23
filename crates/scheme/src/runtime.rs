@@ -118,6 +118,9 @@ struct SharedState {
     pending_kb_meta_adds: Vec<(String, String, String)>,
     /// Pending KB meta-member removals: (meta_id, member_id).
     pending_kb_meta_removes: Vec<(String, String)>,
+    /// Pending KB collaboration lifecycle actions from `(kb-share)` etc. — lowered
+    /// to `CollabIntent`s editor-side via `Editor::queue_kb_collab_action`.
+    pending_kb_collab_actions: Vec<mae_core::KbCollabAction>,
     /// Pending buffer creation: (name).
     pending_create_buffer: Option<String>,
     /// Pending buffer kill by name.
@@ -1501,6 +1504,144 @@ impl SchemeRuntime {
                 let dst = arg_string(args, 1, "kb-add-link!")?;
                 let rel = arg_string(args, 2, "kb-add-link!")?;
                 s.lock().unwrap().pending_kb_links.push((src, dst, rel));
+                Ok(Value::Void)
+            },
+        );
+
+        // --- KB collaboration lifecycle (first-class, route through CollabIntent) ---
+
+        // (kb-share [KB-NAME]) — share a KB (default = primary).
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-share",
+            "Share a knowledge base for collaborative editing (default: primary KB)",
+            Arity::Variadic(0),
+            move |args: &[Value]| {
+                let kb_name = if args.is_empty() {
+                    mae_core::KB_DEFAULT_NAME.to_string()
+                } else {
+                    arg_string(args, 0, "kb-share")?
+                };
+                s.lock()
+                    .unwrap()
+                    .pending_kb_collab_actions
+                    .push(mae_core::KbCollabAction::Share { kb_name });
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-join KB-ID) — join a shared KB.
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-join",
+            "Join a shared knowledge base from the daemon",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let kb_id = arg_string(args, 0, "kb-join")?;
+                s.lock()
+                    .unwrap()
+                    .pending_kb_collab_actions
+                    .push(mae_core::KbCollabAction::Join { kb_id });
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-leave KB-ID) — leave a shared KB (local copy preserved).
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-leave",
+            "Leave a shared knowledge base (local copy preserved)",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let kb_id = arg_string(args, 0, "kb-leave")?;
+                s.lock()
+                    .unwrap()
+                    .pending_kb_collab_actions
+                    .push(mae_core::KbCollabAction::Leave { kb_id });
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-add-member KB-ID FINGERPRINT [ROLE]) — owner-only.
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-add-member",
+            "Add a peer to a shared KB by fingerprint with a role (default editor; owner-only)",
+            Arity::Variadic(2),
+            move |args: &[Value]| {
+                let kb_id = arg_string(args, 0, "kb-add-member")?;
+                let member = arg_string(args, 1, "kb-add-member")?;
+                let role = if args.len() > 2 {
+                    arg_string(args, 2, "kb-add-member")?
+                } else {
+                    "editor".to_string()
+                };
+                s.lock().unwrap().pending_kb_collab_actions.push(
+                    mae_core::KbCollabAction::AddMember {
+                        kb_id,
+                        member,
+                        role,
+                    },
+                );
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-remove-member KB-ID FINGERPRINT) — owner-only.
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-remove-member",
+            "Remove a peer from a shared KB by fingerprint (owner-only)",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let kb_id = arg_string(args, 0, "kb-remove-member")?;
+                let member = arg_string(args, 1, "kb-remove-member")?;
+                s.lock()
+                    .unwrap()
+                    .pending_kb_collab_actions
+                    .push(mae_core::KbCollabAction::RemoveMember { kb_id, member });
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-approve KB-ID FINGERPRINT [ROLE]) — approve a pending join (owner-only).
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-approve",
+            "Approve a pending join request by fingerprint at a role (default editor; owner-only)",
+            Arity::Variadic(2),
+            move |args: &[Value]| {
+                let kb_id = arg_string(args, 0, "kb-approve")?;
+                let principal = arg_string(args, 1, "kb-approve")?;
+                let role = if args.len() > 2 {
+                    arg_string(args, 2, "kb-approve")?
+                } else {
+                    "editor".to_string()
+                };
+                s.lock().unwrap().pending_kb_collab_actions.push(
+                    mae_core::KbCollabAction::Approve {
+                        kb_id,
+                        principal,
+                        role,
+                    },
+                );
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-set-policy KB-ID POLICY) — restrictive|invite|permissive (owner-only).
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-set-policy",
+            "Set a shared KB's join policy: restrictive | invite | permissive (owner-only)",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let kb_id = arg_string(args, 0, "kb-set-policy")?;
+                let policy = arg_string(args, 1, "kb-set-policy")?;
+                s.lock()
+                    .unwrap()
+                    .pending_kb_collab_actions
+                    .push(mae_core::KbCollabAction::SetPolicy { kb_id, policy });
                 Ok(Value::Void)
             },
         );
@@ -3758,6 +3899,12 @@ impl SchemeRuntime {
             debug!(id = %id, "kb node registered from scheme");
         }
 
+        // Apply KB collaboration lifecycle actions from `(kb-share)` etc. — lowered
+        // to the SAME CollabIntent the commands + MCP tools use.
+        for action in state.pending_kb_collab_actions.drain(..) {
+            editor.queue_kb_collab_action(action);
+        }
+
         // Apply typed link additions from (kb-add-link! SRC DST REL_TYPE)
         if let Some(ref store) = editor.kb.store {
             for (src, dst, rel_type) in state.pending_kb_links.drain(..) {
@@ -4712,6 +4859,40 @@ mod tests {
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         assert_eq!(rt.eval("*mode*").unwrap(), "normal");
+    }
+
+    #[test]
+    fn kb_lifecycle_primitives_queue_collab_intents() {
+        // P2: first-class `(kb-…)` primitives route through the SAME CollabIntent
+        // the commands + MCP tools use (no execute-ex strings).
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+
+        rt.eval("(kb-add-member \"team\" \"SHA256:bob\" \"viewer\")")
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(mae_core::CollabIntent::KbAddMember { kb_id, member, role })
+                if kb_id == "team" && member == "SHA256:bob" && role == "viewer"
+        ));
+
+        editor.collab.pending_intent = None;
+        rt.eval("(kb-set-policy \"team\" \"permissive\")").unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(mae_core::CollabIntent::KbSetPolicy { kb_id, policy })
+                if kb_id == "team" && policy == "permissive"
+        ));
+
+        editor.collab.pending_intent = None;
+        rt.eval("(kb-leave \"team\")").unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(mae_core::CollabIntent::LeaveKb { kb_id }) if kb_id == "team"
+        ));
     }
 
     #[test]

@@ -88,7 +88,7 @@ pub use editor::{
     is_builtin_node, BlameEntry, BlameOverlay, CaptureState, CodeActionItem, CodeActionMenu,
     CollabIntent, CollabStatus, CompletionItem, Diagnostic, DiagnosticSeverity, DiagnosticStore,
     DocumentHighlightRange, EditRecord, Editor, HighlightKind, HoverPopup, InputLock, JoinedNode,
-    LspLocation, LspRange, LspServerInfo, LspServerStatus, PeekReferenceLocation,
+    KbCollabAction, LspLocation, LspRange, LspServerInfo, LspServerStatus, PeekReferenceLocation,
     PeekReferencesState, PeekState, SignatureHelpInfo, SignatureHelpState, SymbolOutlineEntry,
     SymbolOutlineState, DEFAULT_COLLAB_ADDRESS, DEFAULT_COLLAB_PORT, KB_DEFAULT_NAME,
     KB_SYNC_MODE_DEFAULT,

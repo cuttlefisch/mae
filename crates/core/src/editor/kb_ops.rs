@@ -1181,6 +1181,51 @@ impl Editor {
         Ok(())
     }
 
+    /// Queue a KB collaboration lifecycle action as a `CollabIntent` for the
+    /// binary's collab bridge to drain — the single typed path the Scheme
+    /// primitives (`(kb-share)` …) route through, so they reuse the SAME intent
+    /// the commands + MCP tools use (no `(execute-ex …)` string building; #3, #7).
+    /// `Join` computes its node state-vectors editor-side (ADR-022).
+    pub fn queue_kb_collab_action(&mut self, action: crate::editor::KbCollabAction) {
+        use crate::editor::{CollabIntent, KbCollabAction};
+        let intent = match action {
+            KbCollabAction::Share { kb_name } => CollabIntent::ShareKb {
+                kb_name,
+                node_ids: vec![],
+            },
+            KbCollabAction::Join { kb_id } => {
+                let node_svs = self.kb_join_node_svs(&kb_id);
+                CollabIntent::JoinKb { kb_id, node_svs }
+            }
+            KbCollabAction::Leave { kb_id } => CollabIntent::LeaveKb { kb_id },
+            KbCollabAction::AddMember {
+                kb_id,
+                member,
+                role,
+            } => CollabIntent::KbAddMember {
+                kb_id,
+                member,
+                role,
+            },
+            KbCollabAction::RemoveMember { kb_id, member } => {
+                CollabIntent::KbRemoveMember { kb_id, member }
+            }
+            KbCollabAction::Approve {
+                kb_id,
+                principal,
+                role,
+            } => CollabIntent::KbApprove {
+                kb_id,
+                principal,
+                role,
+            },
+            KbCollabAction::SetPolicy { kb_id, policy } => {
+                CollabIntent::KbSetPolicy { kb_id, policy }
+            }
+        };
+        self.collab.pending_intent = Some(intent);
+    }
+
     /// Build this peer's KB-sharing introspection snapshot — the single source of
     /// truth shared by the `*KB Sharing*` buffer, the `kb_sharing_status` MCP tool,
     /// and the `(kb-sharing-status)` Scheme primitive (CLAUDE.md #3, #8). Pure read

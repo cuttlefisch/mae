@@ -120,8 +120,13 @@ impl Editor {
                 let kb_id = parts.next().unwrap_or("").to_string();
                 let member = parts.next().unwrap_or("").to_string();
                 let role = parts.next().unwrap_or("editor").to_string();
-                if kb_id.is_empty() || member.is_empty() {
-                    self.set_status(format!("usage: :{name} <kb-id> <fingerprint> [role]"));
+                if member.is_empty() {
+                    // No fingerprint to type by hand → open the *KB Sharing* buffer,
+                    // where members are picked at-point (the canonical pick surface).
+                    self.open_kb_sharing();
+                    self.set_status(
+                        "Pick a member in *KB Sharing* (e/v/o = role, x = remove)".to_string(),
+                    );
                     return Some(true);
                 }
                 let add = name == "kb-member-add";
@@ -151,8 +156,14 @@ impl Editor {
                 let kb_id = parts.next().unwrap_or("").to_string();
                 let principal = parts.next().unwrap_or("").to_string();
                 let role = parts.next().unwrap_or("editor").to_string();
-                if kb_id.is_empty() || principal.is_empty() {
-                    self.set_status("usage: :kb-approve <kb-id> <fingerprint> [role]".to_string());
+                if principal.is_empty() {
+                    // No fingerprint to type by hand → open the *KB Sharing* buffer,
+                    // where pending requests are approved at-point (a = approve).
+                    self.open_kb_sharing();
+                    self.set_status(
+                        "Pick a pending request in *KB Sharing* (a = approve, d = deny)"
+                            .to_string(),
+                    );
                     return Some(true);
                 }
                 self.set_status(format!("Approving '{principal}' for KB '{kb_id}'..."));

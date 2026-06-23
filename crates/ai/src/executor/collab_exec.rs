@@ -18,6 +18,8 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "kb_leave" => execute_kb_leave(editor, &call.arguments),
         "kb_add_member" => execute_kb_add_member(editor, &call.arguments),
         "kb_remove_member" => execute_kb_remove_member(editor, &call.arguments),
+        "kb_approve" => execute_kb_approve(editor, &call.arguments),
+        "kb_set_policy" => execute_kb_set_policy(editor, &call.arguments),
         "kb_sharing_status" => execute_kb_sharing_status(editor, &call.arguments),
         _ => return None,
     };
@@ -325,6 +327,74 @@ fn execute_kb_remove_member(editor: &mut Editor, args: &Value) -> Result<String,
     .to_string())
 }
 
+/// Approve a pending join request as `role` (owner-only, ADR-018). Use
+/// `kb_sharing_status` first to read the pending requests' fingerprints.
+fn execute_kb_approve(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let kb_id = args
+        .get("kb_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'kb_id' parameter")?
+        .to_string();
+    let principal = args
+        .get("member")
+        .or_else(|| args.get("principal"))
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'member' parameter (pending peer fingerprint)")?
+        .to_string();
+    let role = args
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("editor")
+        .to_string();
+    editor.collab.pending_intent = Some(CollabIntent::KbApprove {
+        kb_id: kb_id.clone(),
+        principal: principal.clone(),
+        role: role.clone(),
+    });
+    editor.set_status(format!(
+        "Approving '{principal}' for KB '{kb_id}' as {role}..."
+    ));
+    Ok(serde_json::json!({
+        "action": "kb_approve",
+        "kb_id": kb_id,
+        "member": principal,
+        "role": role,
+        "message": format!("Approval queued: '{principal}' → {role} on KB '{kb_id}' (owner-only; applied by the daemon)"),
+    })
+    .to_string())
+}
+
+/// Set a KB's join policy: restrictive | invite | permissive (owner-only, ADR-018).
+fn execute_kb_set_policy(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let kb_id = args
+        .get("kb_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'kb_id' parameter")?
+        .to_string();
+    let policy = args
+        .get("policy")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'policy' parameter (restrictive|invite|permissive)")?
+        .to_string();
+    if !matches!(policy.as_str(), "restrictive" | "invite" | "permissive") {
+        return Err(format!(
+            "Invalid policy '{policy}' (expected restrictive, invite, or permissive)"
+        ));
+    }
+    editor.collab.pending_intent = Some(CollabIntent::KbSetPolicy {
+        kb_id: kb_id.clone(),
+        policy: policy.clone(),
+    });
+    editor.set_status(format!("Setting KB '{kb_id}' join policy to {policy}..."));
+    Ok(serde_json::json!({
+        "action": "kb_set_policy",
+        "kb_id": kb_id,
+        "policy": policy,
+        "message": format!("Policy change queued: KB '{kb_id}' → {policy} (owner-only; applied by the daemon)"),
+    })
+    .to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,6 +444,50 @@ mod tests {
         let mut editor = Editor::new();
         let call = make_call("unknown_tool", json!({}));
         assert!(dispatch(&mut editor, &call).is_none());
+    }
+
+    #[test]
+    fn kb_approve_and_set_policy_queue_intents() {
+        let mut editor = Editor::new();
+        let r = dispatch(
+            &mut editor,
+            &make_call(
+                "kb_approve",
+                json!({"kb_id": "team", "member": "SHA256:carol"}),
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(parsed["action"], "kb_approve");
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::KbApprove { kb_id, principal, role })
+                if kb_id == "team" && principal == "SHA256:carol" && role == "editor"
+        ));
+
+        dispatch(
+            &mut editor,
+            &make_call(
+                "kb_set_policy",
+                json!({"kb_id": "team", "policy": "permissive"}),
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::KbSetPolicy { kb_id, policy })
+                if kb_id == "team" && policy == "permissive"
+        ));
+
+        // An invalid policy is rejected.
+        let bad = dispatch(
+            &mut editor,
+            &make_call("kb_set_policy", json!({"kb_id": "team", "policy": "bogus"})),
+        )
+        .unwrap();
+        assert!(bad.is_err());
     }
 
     #[test]

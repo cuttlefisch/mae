@@ -100,6 +100,41 @@ impl CollabStatus {
 ///
 /// The binary drains `editor.pending_collab_intent` each tick, similar to
 /// `pending_lsp_requests` and `pending_dap_intents`.
+/// A KB-sharing lifecycle action requested from a high-level surface (the Scheme
+/// primitives). [`Editor::queue_kb_collab_action`] lowers it to the matching
+/// [`CollabIntent`] (computing editor-side data like `Join` state-vectors), so all
+/// three actors — command, MCP tool, Scheme — share one intent path (#3, #7).
+#[derive(Debug, Clone)]
+pub enum KbCollabAction {
+    Share {
+        kb_name: String,
+    },
+    Join {
+        kb_id: String,
+    },
+    Leave {
+        kb_id: String,
+    },
+    AddMember {
+        kb_id: String,
+        member: String,
+        role: String,
+    },
+    RemoveMember {
+        kb_id: String,
+        member: String,
+    },
+    Approve {
+        kb_id: String,
+        principal: String,
+        role: String,
+    },
+    SetPolicy {
+        kb_id: String,
+        policy: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum CollabIntent {
     /// Start a local daemon process.

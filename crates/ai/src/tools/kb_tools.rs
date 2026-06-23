@@ -701,6 +701,72 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        ToolDefinition {
+            name: "kb_approve".into(),
+            description: "Approve a pending join request on a shared KB, granting the peer membership at a role (owner-only, ADR-018). Under the 'invite' policy, non-members' joins become pending until approved. Use kb_sharing_status first to read the pending fingerprints.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB identifier (e.g. 'collabtest')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "member".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Pending peer's collab identity fingerprint to approve".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "role".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Role to grant (default 'editor')".into(),
+                            enum_values: Some(vec!["owner".into(), "editor".into(), "viewer".into()]),
+                        },
+                    ),
+                ]),
+                required: vec!["kb_id".into(), "member".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_set_policy".into(),
+            description: "Set a shared KB's join policy (owner-only, ADR-018): 'restrictive' (only explicitly-added members), 'invite' (joins become pending → approve), or 'permissive' (any authenticated peer auto-joins as viewer).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB identifier (e.g. 'collabtest')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "policy".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Join policy".into(),
+                            enum_values: Some(vec![
+                                "restrictive".into(),
+                                "invite".into(),
+                                "permissive".into(),
+                            ]),
+                        },
+                    ),
+                ]),
+                required: vec!["kb_id".into(), "policy".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Graph KB tools (v0.12.0) ---
         ToolDefinition {
             name: "kb_agenda".into(),
