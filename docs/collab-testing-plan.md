@@ -120,6 +120,30 @@ make test-collab-e2e-all           # both
 **Pass:** all green; the e2e scripts print `PASS:`. (CI runs the same two scripts
 against release artifacts in the `e2e` job.)
 
+### Automated coverage map (manual flows → tests)
+
+This workstream automated the manually-run validations below. A regression in any
+of these is now caught in CI without a two-machine run:
+
+| Manual flow (this doc) | Automated by | Tier |
+|---|---|---|
+| Step 8 fence is *safe* (no cascade; canonical node byte-identical) | daemon `viewer_era_edits_do_not_cascade_on_grant` / `stale_epoch_continuation_of_canonical_client_is_fenced` (byte-identical oracle) | unit |
+| Step 9 fence → `*Notifications*` row + 3 actions; Keep-mine re-authors, Accept-remote discards | editor `fence_notification_actions_dispatch_to_correct_intents` (notify_ops) + `kb_node_adopted_{keep_mine_reauthors,accept_remote_takes_authoritative}` (collab_bridge) | unit |
+| Editor↔daemon `rebase required` contract | `epoch_fence_rejection_classified_from_daemon_message` | unit |
+| Step 8 step 6 manual reconnect-to-relearn-epoch | **C1** `kbc_broadcast_relearns_epoch_without_reconnect` (now automatic in-product) + no-self-elevate guard | unit |
+| T1/T2 concurrent two-peer convergence (byte-identical) | `tcp_kb_two_peers_concurrent_converge` (real daemon) + `kb_sync_n_peer_e2e` (in-process T1–T5) | e2e/unit |
+| Step 7a unauthorized peer rejected | `mtls_unauthorized_client_rejected` + `collab-mtls-e2e.sh` unauthorized scenario | unit/e2e |
+| TOFU MITM: changed host key rejected, pin not overwritten | `file_verifier_aborts_on_changed_key_without_overwriting_pin` | unit |
+| TOFU host-key prompt plumbing (R4) | `PromptingHostKeyVerifier` tests (collab_bridge) | unit |
+
+**Residual (stays manual / CI-gated two-machine):** the *live two-editor*
+fence→resolve orchestration end-to-end (Steps 8–9 as one run) — its pieces are
+unit-covered above, but the full offline-edit→reconnect→fence→Keep-mine→converge
+sequence across two real editors is exercised by the Tier-2 manual run (the
+deterministic trigger is the **offline edit** in Step 8.5, since C1 now makes the
+honest online path relearn the epoch and *not* fence). Also manual: GUI badge /
+`*Notifications*` pixels, tcpdump TLS-encryption, real cross-machine LAN/mDNS.
+
 ---
 
 ## Tier 1 — Single-host manual smoke (~5 min)
@@ -254,6 +278,14 @@ Launch `mae`. With `accept-new`, it connects + auto-pins (no prompt). Verify the
 
 ### Step 8 — B-19: viewer-era edits must NOT cascade on grant (ADR-023 epoch fence)
 
+> [!NOTE]
+> **Now automated (unit):** the fence's *safety* — no cascade + the canonical node
+> stays byte-identical across a fenced push — is asserted by the daemon
+> `viewer_era_edits_do_not_cascade_on_grant` / `stale_epoch_continuation_*` tests.
+> The manual Step-8.6 reconnect-to-relearn-epoch is now **automatic in-product**
+> (C1, `kbc_broadcast_relearns_epoch_without_reconnect`). This live run remains the
+> end-to-end check; the **offline edit** in 8.5 is the deterministic fence trigger.
+
 > **What we're proving.** A member who edits a node while a **viewer** (denied at the
 > daemon) must NOT have those pre-grant edits silently cascade to everyone once they
 > are later promoted to **editor**. The daemon's **epoch fence** rejects the pre-grant
@@ -317,6 +349,15 @@ authorized key fingerprint (`mae-daemon identity` on E, or `:collab-status`).
 > the fresh edit converged. Flag anything where a pre-grant edit *did* appear on alice.
 
 ### Step 9 — B-19 resolution UX: the notification/attention bus (ADR-024)
+
+> [!NOTE]
+> **Now automated (unit):** the resolution *logic* — fenced edit → `*Notifications*`
+> row with the three actions in order, Keep-mine captures fields + re-authors over
+> the authoritative state, Accept-remote discards — is asserted by
+> `fence_notification_actions_dispatch_to_correct_intents` (notify_ops) and
+> `kb_node_adopted_{keep_mine_reauthors,accept_remote_takes_authoritative}`
+> (collab_bridge). This live run remains the badge/`*Notifications*` **pixel** +
+> cross-editor convergence check.
 
 > **What we're proving.** Step 8 showed a fenced edit is *safe* but the signal was a buried
 > log line and the granted editor was *stuck* (the 8d "known limitation"). ADR-024 fixes both:
