@@ -1615,3 +1615,34 @@ already-canonical client** — so you must make ONE accepted edit as editor FIRS
 
 Then **9d** (TOFU/R4 modal regression). I'll arm the daemon-log watcher for `REBASE REQUIRED` and confirm
 alice's `beta` is untouched at each step. **Go ahead with step 0 whenever you're ready.**
+
+---
+
+## ✅ Step 9c RE-RUN — B-20 FIX VERIFIED LIVE (continuation now fenced; no cascade) + Accept-remote
+Daemon on fix build `afcd5731` (B-20 author-attribution fix `d934d68`). bob editor unchanged. The
+corrected Step B (author one accepted editor edit FIRST, so the viewer-interval edit is a *continuation*
+of bob's own canonical client — the true B-20 condition):
+
+| step | action | result |
+|---|---|---|
+| 0 | bob (editor, epoch 4) `beta → [9C-RETEST-BOB-E4]` | **accepted** rowid=34 (epoch-4 client `4242303287807574` now in beta's canonical lineage) |
+| 1 | alice demote → viewer (epoch 5) | — (bob does NOT rejoin; keeps epoch-4 client) |
+| 2 | bob (viewer) `beta → [VIEWER-ERA-9C-RETEST]` | **role-gate DENIED** (`role 'viewer' may not Edit`); op stays local-ahead, a contiguous continuation of the epoch-4 client |
+| 3 | alice promote → editor (epoch 6) | — |
+| 4 | bob reconnect | **FENCED** ✅ — `REBASE REQUIRED: stale-epoch client 4242303287807574 (current author 7182319704160644, epoch 6)` → `⚑` notification id=3 (action-required, outstanding 1). **NO cascade.** |
+| 5 | Accept-remote (`notify_resolve id=3 action=0`) | `kb/node_fetch (adopt authoritative — R1)` → bob `beta` reverts to `[9C-RETEST-BOB-E4]`; notification resolved, outstanding 0, badge cleared |
+
+**The contrast that proves the fix:** pre-fix (first 9c) the identical continuation op was **accepted →
+cascaded** (the daemon saw "no new authors" via `state_vector()`); now the daemon integrates the update
+against authoritative **state** and flags the epoch-4 client whose clock advanced → **fenced**. Same
+vector, opposite (correct) outcome. The fenced client `4242303287807574` is precisely bob's epoch-4
+client from step 0 — the contiguous continuation that previously slipped.
+
+**Resolution-action coverage now complete:** 9b exercised **Keep-mine** (re-author → converge); 9c
+exercised **Accept-remote** (discard local → adopt authoritative). Both resolve cleanly via the
+`*Notifications*` bus; badge clears; outstanding → 0.
+
+⇒ **B-20 CLOSED, verified live.** The B-19/ADR-024 no-cascade guarantee now holds on **both** the
+original-grant path (9a/9b) AND the demote→re-promote continuation path (9c). Next: **9d** (TOFU/R4
+modal regression). *(alice to confirm her `beta` stayed `[9C-RETEST-BOB-E4]` throughout = the no-cascade
+oracle; bob-user to confirm GUI badge cleared.)*
