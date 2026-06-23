@@ -2072,3 +2072,48 @@ the leading hypothesis. Next step is your one-line experiment — a timestamped 
 polish bug, not a functional/security gap (9d already passes). With B-22c you're unblocked regardless.
 
 ⇒ **9d: PASS** (functional). Remaining: B-22a GUI-paint polish (tracked). That closes the live ADR-024 plan.
+
+---
+
+## ALICE — B-22a instrumentation shipped (`c7a4bc49`). Bob: run this one experiment
+
+I added 6 timestamped checkpoints (tracing target **`b22a`**) along the whole path
+forwarder → main-thread delivery → redraw-request → paint, so one run pinpoints the stall.
+
+**Key insight that shapes the experiment:** the bridge task sends an `IdleTick` via the *same*
+`proxy.send_event` **every 100ms**. So if the proxy wakes winit *at all*, the modal should paint within
+~100ms of the prompt — **with no keypress**. That's why you must **NOT touch keyboard or mouse** during the
+observation window: we're testing whether it paints on its own.
+
+### Setup
+1. `git pull` → `c7a4bc49` → `make build` → reinstall.
+2. Launch the GUI **from a terminal with stderr captured + the b22a target enabled**:
+   ```
+   MAE_LOG=b22a=info,collab=info ~/.local/bin/mae 2>/tmp/mae-b22a.log
+   ```
+   (If you normally launch differently, just ensure `MAE_LOG=b22a=info` is set and stderr → a file.)
+
+### The experiment (do NOT touch kbd/mouse after step 4 until step 6)
+1. `:collab-disconnect`
+2. `(set-option! "collab_host_key_policy" "prompt")`
+3. remove the `192.168.1.137:9480` line from `~/.local/share/mae/collab/known_hosts`
+4. `:collab-connect`
+5. **WAIT ~10 s. Do not press any key, do not move the mouse over the window.** Watch the screen: does the
+   modal appear on its own? (Note the wall-clock when you connected.)
+6. Now press **`n`** to abort. Then `cat /tmp/mae-b22a.log` and paste me the `b22a` lines (with their
+   timestamps) + roughly when you pressed `n`.
+
+### Interpretation (what the log sequence proves)
+Checkpoints: `1/2` forwarder sent → `3` main-thread received → `4/5` redraw requested → `6` frame painted.
+- **1,2,3,(4/5),6 all fire within ~100ms of connect, modal visible** → it now works (the multi-thread fix
+  + an incidental wake did it); B-22a closed.
+- **1,2 fire immediately but `3` only after you press `n`** → `proxy.send_event` isn't waking winit out of
+  `ControlFlow::Wait` (delivery/wakeup bug). Fix = force a wake on collab events.
+- **1,2 don't fire until you press `n`** → the bridge forwarder is still starved (residual; runtime/await).
+- **3 fires immediately, `5` (request_redraw) fires, but `6` (paint) doesn't until `n`** → redraw requested
+  but `RedrawRequested` isn't serviced while blocked (frame-cap/control-flow bug).
+- **`6` fires (paint runs) but the modal is invisible on screen** → the render pass draws the frame but
+  skips the modal overlay for the Notification confirm (render-path bug).
+
+One paste decides it; then I land the targeted fix + rip out the instrumentation. (Meanwhile B-22c already
+lets you answer via `notify_resolve {id, action:0|1}` regardless.)
