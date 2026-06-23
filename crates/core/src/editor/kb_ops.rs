@@ -482,6 +482,10 @@ impl Editor {
         // the shared lineage without clobbering (the node was never in sync). A
         // pre-ADR-022 daemon sends no SV → legacy full-state adopt.
         let mut local_ahead: Vec<(String, Vec<u8>)> = Vec::new();
+        // ADR-024 R5: nodes where adopting the remote lineage would overwrite
+        // DIFFERENT local content (unsynced work) — surfaced for resolution instead
+        // of silently clobbered.
+        let mut divergent_conflicts: Vec<String> = Vec::new();
         let merged: Vec<mae_kb::Node> = {
             let kb = self.kb.instances.entry(uuid.clone()).or_default();
             let mut out = Vec::with_capacity(nodes.len());
@@ -492,8 +496,24 @@ impl Editor {
                         Ok(outcome) => {
                             if outcome.action == mae_kb::ReconcileAction::DivergentLineage {
                                 // The diff against our disjoint SV IS the daemon's
-                                // full lineage — adopt to establish a shared lineage.
-                                if let Err(e) = kb.adopt_remote_node(&jn.id, &jn.bytes) {
+                                // full lineage — adopting establishes a shared lineage.
+                                // ADR-024 R5 (hybrid no-silent-overwrite): if the local
+                                // content DIFFERS from the authoritative version, adopting
+                                // would lose the user's unsynced edits — defer + surface a
+                                // resolution. If identical, it's a harmless lineage repair.
+                                let local_differs = kb.get(&jn.id).is_some_and(|local| {
+                                    mae_sync::kb::KbNodeDoc::from_bytes(&jn.bytes)
+                                        .map(|remote| {
+                                            local.title != remote.title()
+                                                || local.body != remote.body()
+                                                || local.tags != remote.tags()
+                                        })
+                                        .unwrap_or(false)
+                                });
+                                if local_differs {
+                                    // Preserve local until the user resolves (no clobber).
+                                    divergent_conflicts.push(jn.id.clone());
+                                } else if let Err(e) = kb.adopt_remote_node(&jn.id, &jn.bytes) {
                                     tracing::warn!(target: "kb_sync", node_id = %jn.id, error = %e, "join: divergent-lineage adopt failed — skipping");
                                 }
                             } else if let Some(la) = outcome.local_ahead {
@@ -554,6 +574,48 @@ impl Editor {
                     ));
                 }
             }
+        }
+
+        // ADR-024 R5: for each node where the (re)join would have overwritten
+        // DIFFERENT local content, raise an actionable notification (badge +
+        // *Notifications* row) instead of silently clobbering. The local copy was
+        // preserved above; the actions run the same adopt-and-re-author flow (R1).
+        for node_id in &divergent_conflicts {
+            tracing::warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, "join: divergent local content preserved — surfacing resolution (ADR-024 R5)");
+            self.notify(
+                crate::notifications::Notification::action_required(
+                    "collab",
+                    format!(
+                        "KB '{kb_id}': {node_id} diverged — your local version differs from remote"
+                    ),
+                )
+                .key(format!("collab:diverge:{kb_id}:{node_id}"))
+                .body(
+                    "Reconnecting found a different remote version. Adopt remote \
+                     (discard local), keep yours (re-author), or stash it.",
+                )
+                .action(
+                    "Accept-remote (clobber local)",
+                    crate::notifications::NotifCommand::AdoptRemote {
+                        kb_id: kb_id.to_string(),
+                        node_id: node_id.clone(),
+                    },
+                )
+                .action(
+                    "Keep-mine (re-author)",
+                    crate::notifications::NotifCommand::KeepMine {
+                        kb_id: kb_id.to_string(),
+                        node_id: node_id.clone(),
+                    },
+                )
+                .action(
+                    "Stash externally",
+                    crate::notifications::NotifCommand::StashExternally {
+                        kb_id: kb_id.to_string(),
+                        node_id: node_id.clone(),
+                    },
+                ),
+            );
         }
 
         // Durable registry marker (idempotent).
