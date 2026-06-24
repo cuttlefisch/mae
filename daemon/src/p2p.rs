@@ -19,9 +19,16 @@
 //! `authorized_keys` gate land in the following Phase-1 steps, gated behind the
 //! `collab.p2p` config (#94).
 
+use std::sync::Arc;
+use std::time::Instant;
+
 use iroh::endpoint::presets;
 use iroh::{Endpoint, RelayMode, SecretKey};
-use mae_mcp::identity::Identity;
+use mae_daemon::collab_handler;
+use mae_daemon::doc_store::DocStore;
+use mae_mcp::broadcast::SharedBroadcaster;
+use mae_mcp::identity::{AuthorizedKeys, Identity, PeerIdentity, PublicKey};
+use tracing::{info, warn};
 
 /// ALPN for the MAE collab mesh protocol over iroh/QUIC.
 pub const MAE_ALPN: &[u8] = b"mae-sync/0";
@@ -43,6 +50,106 @@ pub async fn bind_endpoint(
         .await
 }
 
+/// Resolve a connecting peer's **verified** Ed25519 key (`remote_id()`) to a
+/// `PeerIdentity`, or `None` if it is not present in `authorized_keys`.
+///
+/// THIS is the mesh access gate (ADR-025). iroh/QUIC authenticates *which* key
+/// dialed us — the connection is cryptographically bound to the peer's secret
+/// key — but, unlike the rustls mTLS path (where an unknown client cert is
+/// rejected during the handshake by the `ClientAuthSource` verifier), iroh
+/// completes the handshake for **any** peer that speaks our ALPN. Membership is
+/// therefore ours to enforce here. Label/fingerprint resolution mirrors the
+/// mTLS path's `peer_identity_from_tls` so attribution + KB membership see the
+/// same identity regardless of transport.
+pub(crate) fn authorize_peer(
+    pubkey: [u8; 32],
+    authorized: &AuthorizedKeys,
+) -> Option<PeerIdentity> {
+    let entry = authorized.authorize_full(&pubkey)?;
+    let fingerprint = entry.fingerprint();
+    let label = entry
+        .label
+        .as_deref()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| fingerprint.clone());
+    Some(PeerIdentity {
+        label,
+        fingerprint,
+        pubkey,
+    })
+}
+
+/// Accept loop for the mesh endpoint. Each inbound connection is gated on its
+/// `remote_id()` being in `authorized_keys` (see [`authorize_peer`]); authorized
+/// peers are handed to the **same** `handle_client_authenticated` the editor's
+/// local socket and the TCP collab listener use, over the bidirectional stream
+/// the peer opens — the QUIC `RecvStream`/`SendStream` drop straight into the
+/// existing Content-Length framing (proven by `two_endpoints_round_trip_*`).
+///
+/// This is the Phase-1 transport adapter: one bi stream per connection, request/
+/// response like the TCP path. Mesh multiplexing/gossip is Phase 2 (#89).
+#[allow(dead_code)] // wired into daemon startup behind `collab.p2p` (#94)
+pub async fn serve(
+    endpoint: Endpoint,
+    authorized: Arc<AuthorizedKeys>,
+    doc_store: Arc<DocStore>,
+    broadcaster: SharedBroadcaster,
+    start_time: Instant,
+) {
+    while let Some(incoming) = endpoint.accept().await {
+        let authorized = Arc::clone(&authorized);
+        let doc_store = Arc::clone(&doc_store);
+        let broadcaster = broadcaster.clone();
+        tokio::spawn(async move {
+            // Complete the QUIC handshake.
+            let conn = match incoming.accept() {
+                Ok(accepting) => match accepting.await {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        warn!(error = %e, "mesh connection failed to establish");
+                        return;
+                    }
+                },
+                Err(e) => {
+                    warn!(error = %e, "mesh accept rejected");
+                    return;
+                }
+            };
+
+            // Gate on the peer's verified key being authorized.
+            let pubkey = *conn.remote_id().as_bytes();
+            let Some(peer) = authorize_peer(pubkey, &authorized) else {
+                let fp = PublicKey::from_bytes(&pubkey, None)
+                    .map(|k| k.fingerprint())
+                    .unwrap_or_default();
+                warn!(fingerprint = %fp, "rejecting mesh peer absent from authorized_keys");
+                conn.close(1u32.into(), b"unauthorized");
+                return;
+            };
+            info!(peer = %peer.label, "mesh peer authenticated");
+
+            // The dialing peer opens one bi stream; feed it to the shared handler.
+            let (send, recv) = match conn.accept_bi().await {
+                Ok(streams) => streams,
+                Err(e) => {
+                    warn!(peer = %peer.label, error = %e, "mesh peer opened no stream");
+                    return;
+                }
+            };
+            collab_handler::handle_client_authenticated(
+                tokio::io::BufReader::new(recv),
+                send,
+                peer,
+                doc_store,
+                broadcaster,
+                start_time,
+            )
+            .await;
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,6 +169,37 @@ mod tests {
             "iroh endpoint identity must equal the daemon's Ed25519 trusted-peer key"
         );
         ep.close().await;
+    }
+
+    /// The mesh access gate (ADR-025): a key in `authorized_keys` resolves to a
+    /// real, principal-bearing `PeerIdentity`; any other key is rejected — even
+    /// though iroh would have happily completed the QUIC handshake for it. Uses
+    /// freshly generated keys + their real fingerprints (no hardcoded values).
+    #[test]
+    fn authorize_peer_admits_only_authorized_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let ak_path = dir.path().join("authorized_keys");
+
+        let trusted = Identity::generate("peer-a");
+        let trusted_pub = trusted.public().to_bytes();
+        let mut ak = AuthorizedKeys::load(&ak_path);
+        ak.add(PublicKey::from_bytes(&trusted_pub, Some("peer-a".to_string())).unwrap())
+            .unwrap();
+
+        // Authorized → admitted, carrying its label + a real principal (the
+        // fingerprint), exactly like the mTLS path.
+        let peer = authorize_peer(trusted_pub, &ak).expect("trusted key is admitted");
+        assert_eq!(peer.label, "peer-a");
+        assert_eq!(peer.pubkey, trusted_pub);
+        assert!(peer.is_authenticated());
+        assert_eq!(peer.principal(), Some(peer.fingerprint.as_str()));
+
+        // A different, untrusted key → rejected by the gate.
+        let stranger = Identity::generate("stranger").public().to_bytes();
+        assert!(
+            authorize_peer(stranger, &ak).is_none(),
+            "a key absent from authorized_keys must be rejected by the mesh gate"
+        );
     }
 
     /// End-to-end transport proof: two endpoints connect over iroh and round-trip a
