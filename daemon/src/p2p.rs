@@ -80,7 +80,7 @@ pub(crate) fn relay_mode_from_config(relay: &str) -> Result<RelayMode, String> {
 /// Rewrite an unspecified bind IP (`0.0.0.0` / `[::]`) to loopback so the socket
 /// is actually dialable when it lands in a ticket's direct-address hints or a
 /// relay-less local dial.
-fn loopback_if_unspecified(mut sa: SocketAddr) -> SocketAddr {
+pub(crate) fn loopback_if_unspecified(mut sa: SocketAddr) -> SocketAddr {
     if sa.ip().is_unspecified() {
         sa.set_ip(if sa.is_ipv4() {
             Ipv4Addr::LOCALHOST.into()

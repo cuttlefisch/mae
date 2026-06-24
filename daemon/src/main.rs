@@ -12,6 +12,7 @@
 //! collaboration, and services that outlive the editor session.
 
 mod config;
+mod dialer;
 mod handler;
 pub mod hygiene;
 mod p2p;
