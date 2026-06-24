@@ -72,6 +72,8 @@ pub struct CollabConfig {
     pub sync: SyncConfig,
     /// Authentication configuration.
     pub auth: AuthConfig,
+    /// P2P daemon-mesh configuration (ADR-025).
+    pub p2p: P2pConfig,
 }
 
 impl Default for CollabConfig {
@@ -82,6 +84,32 @@ impl Default for CollabConfig {
             storage: StorageConfig::default(),
             sync: SyncConfig::default(),
             auth: AuthConfig::default(),
+            p2p: P2pConfig::default(),
+        }
+    }
+}
+
+/// P2P daemon-mesh configuration (ADR-025). Opt-in. The mesh reuses the
+/// `[collab.auth]` key-mode Ed25519 identity as its node identity, so a peer's
+/// iroh `EndpointId` is exactly its `authorized_keys` principal — there is no
+/// separate P2P identity to manage.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct P2pConfig {
+    /// Join the iroh P2P mesh (alongside the TCP listener). Requires
+    /// `collab.auth.mode = "key"` — the mesh has no PSK/anonymous path.
+    pub enabled: bool,
+    /// Relay selection: `"default"` (public n0 relays — global discovery + NAT
+    /// hole-punch), `"disabled"` (LAN/direct only, the mDNS fast-path), or a
+    /// self-hosted relay URL.
+    pub relay: String,
+}
+
+impl Default for P2pConfig {
+    fn default() -> Self {
+        P2pConfig {
+            enabled: false,
+            relay: "default".to_string(),
         }
     }
 }
@@ -385,6 +413,22 @@ impl DaemonConfig {
             );
         }
 
+        if c.p2p.enabled {
+            // The mesh authenticates peers by their Ed25519 key (reusing the
+            // key-mode trusted-peer identity), so it has no PSK/anonymous path.
+            if c.auth.mode != "key" {
+                issues.push(format!(
+                    "collab.p2p.enabled = true requires collab.auth.mode = 'key' (the mesh \
+                     authenticates peers by their Ed25519 key; mode is '{}')",
+                    c.auth.mode
+                ));
+            }
+            // Catch a malformed relay early (same parse used at activation).
+            if let Err(e) = crate::p2p::relay_mode_from_config(&c.p2p.relay) {
+                issues.push(e);
+            }
+        }
+
         issues
     }
 }
@@ -438,5 +482,39 @@ mod tests {
     fn check_collab_valid_default() {
         let config = DaemonConfig::default();
         assert!(config.check_collab().is_empty());
+    }
+
+    #[test]
+    fn p2p_disabled_by_default() {
+        let config = DaemonConfig::default();
+        assert!(!config.collab.p2p.enabled);
+        assert_eq!(config.collab.p2p.relay, "default");
+    }
+
+    #[test]
+    fn p2p_enabled_requires_key_mode() {
+        let mut config = DaemonConfig::default();
+        config.collab.p2p.enabled = true;
+        // Default auth mode is "none" → the mesh has no way to authenticate peers.
+        let issues = config.check_collab();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("collab.auth.mode = 'key'")),
+            "enabling the mesh without key-mode auth must be flagged; got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn p2p_rejects_malformed_relay() {
+        let mut config = DaemonConfig::default();
+        config.collab.p2p.enabled = true;
+        config.collab.auth.mode = "key".to_string();
+        config.collab.p2p.relay = "not a relay".to_string();
+        let issues = config.check_collab();
+        assert!(
+            issues.iter().any(|i| i.contains("collab.p2p.relay")),
+            "a malformed relay value must be flagged; got: {issues:?}"
+        );
     }
 }
