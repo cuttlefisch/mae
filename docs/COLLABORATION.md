@@ -460,7 +460,7 @@ MAE preserves sync state during disconnection and reconciles on reconnect.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `collab_reconnect_interval` | `5` | Base reconnect interval (seconds) |
-| `collab_reconnect_backoff_factor` | `1.5` | Exponential backoff multiplier |
+| `collab_reconnect_backoff_factor` | `2` | Exponential backoff multiplier (integer) |
 
 ---
 
@@ -503,7 +503,7 @@ AI: [calls collab_doctor or issues $/debug via sync transport]
 | No peers visible | Wrong `collab-server-address` | Check all clients use same address |
 | Stale state after restart | WAL replay needed | Automatic; check logs for errors |
 | Slow sync | Peer write timeout | Increase `collab-write-timeout-ms` |
-| WAL grows unbounded | Compaction threshold too high | Lower `collab-wal-threshold` |
+| WAL grows unbounded | Compaction threshold too high | Lower `compact_threshold` (or `max_wal_entries`) in `daemon.toml` |
 
 ### WAL Integrity
 

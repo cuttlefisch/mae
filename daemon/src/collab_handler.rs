@@ -196,7 +196,7 @@ async fn run_session<R, W>(
 
     // Subscribe with empty subs — client opts in later.
     let mut event_rx = {
-        let mut bc = broadcaster.lock().unwrap();
+        let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
         bc.subscribe(session_id, vec![])
     };
 
@@ -259,7 +259,7 @@ async fn run_session<R, W>(
                 if msg.contains("\"initialize\"") {
                     if let Some(ref mut result) = response.result {
                         if let Some(info) = result.get_mut("serverInfo") {
-                            let mut bc = broadcaster.lock().unwrap();
+                            let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
                             let count = bc.client_count().saturating_sub(1);
                             info["connections"] = serde_json::json!(count);
                             // Notify existing clients about the new peer.
@@ -331,7 +331,7 @@ async fn run_session<R, W>(
         if doc_store.is_sharer(doc_name, session_id).await {
             debug!(session = session_id, doc = %doc_name, "disconnect: was sharer, broadcasting SharerLeft");
             doc_store.clear_sharer(doc_name).await;
-            let mut bc = broadcaster.lock().unwrap();
+            let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
             let remaining = bc.client_count().saturating_sub(1);
             bc.broadcast_except(
                 &EditorEvent::SharerLeft {
@@ -346,7 +346,7 @@ async fn run_session<R, W>(
 
     // Broadcast PeerLeft to remaining clients.
     {
-        let mut bc = broadcaster.lock().unwrap();
+        let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
         let remaining = bc.client_count().saturating_sub(1); // exclude this session (about to unsubscribe)
         bc.broadcast_except(
             &EditorEvent::PeerLeft {
@@ -454,7 +454,7 @@ async fn handle_doc_notification_inner(
             // Track doc for cleanup and doc-scoped broadcast filtering.
             session_docs.insert(doc_name.clone());
             {
-                let mut bc = broadcaster.lock().unwrap();
+                let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
                 bc.subscribe_doc(session_id, &doc_name);
                 bc.broadcast_except(
                     &EditorEvent::AwarenessUpdate {
@@ -587,14 +587,17 @@ async fn persist_and_broadcast_collection(
         .apply_update(&collection_doc, update, None)
         .await
         .map_err(|e| format!("failed to persist collection: {e}"))?;
-    broadcaster.lock().unwrap().broadcast_except(
-        &EditorEvent::SyncUpdate {
-            buffer_name: collection_doc,
-            update_base64: update_to_base64(update),
-            wal_seq: result.wal_seq,
-        },
-        session_id,
-    );
+    broadcaster
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .broadcast_except(
+            &EditorEvent::SyncUpdate {
+                buffer_name: collection_doc,
+                update_base64: update_to_base64(update),
+                wal_seq: result.wal_seq,
+            },
+            session_id,
+        );
     Ok(result.wal_seq)
 }
 
@@ -787,7 +790,7 @@ async fn handle_doc_request_inner(
                 Ok(result) => {
                     // Broadcast to other subscribers (skip sender to avoid echo).
                     {
-                        let mut bc = broadcaster.lock().unwrap();
+                        let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
                         bc.broadcast_except(
                             &EditorEvent::SyncUpdate {
                                 buffer_name: doc_name.clone(),
@@ -823,7 +826,7 @@ async fn handle_doc_request_inner(
             // Track doc for cleanup and doc-scoped broadcast filtering.
             session_docs.insert(doc_name.clone());
             {
-                let mut bc = broadcaster.lock().unwrap();
+                let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
                 bc.subscribe_doc(session_id, &doc_name);
                 bc.broadcast_except(
                     &EditorEvent::AwarenessUpdate {
@@ -1003,7 +1006,10 @@ async fn handle_doc_request_inner(
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
             match doc_store.doc_stats(&doc_name).await {
                 Ok(stats) => {
-                    let connection_count = broadcaster.lock().unwrap().client_count();
+                    let connection_count = broadcaster
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .client_count();
                     JsonRpcResponse::success(
                         id,
                         serde_json::json!({
@@ -1064,7 +1070,7 @@ async fn handle_doc_request_inner(
 
             // Broadcast save_committed to peers (excluding the saver).
             {
-                let mut bc = broadcaster.lock().unwrap();
+                let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
                 bc.broadcast_except(
                     &EditorEvent::SaveCommitted {
                         doc: doc_name.clone(),
@@ -1090,7 +1096,7 @@ async fn handle_doc_request_inner(
             session_docs.insert(doc_name.clone());
             broadcaster
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .subscribe_doc(session_id, &doc_name);
             let update_b64 = match params["update"].as_str() {
                 Some(s) => s,
@@ -1119,7 +1125,7 @@ async fn handle_doc_request_inner(
                     doc_store.set_sharer_session(&doc_name, session_id).await;
                     // Broadcast to all OTHER subscribers (not the sharer).
                     {
-                        let mut bc = broadcaster.lock().unwrap();
+                        let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
                         bc.broadcast_except(
                             &EditorEvent::SyncUpdate {
                                 buffer_name: doc_name.clone(),
@@ -1164,7 +1170,10 @@ async fn handle_doc_request_inner(
                 }
             }
             let uptime_secs = start_time.elapsed().as_secs();
-            let connection_count = broadcaster.lock().unwrap().client_count();
+            let connection_count = broadcaster
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .client_count();
             JsonRpcResponse::success(
                 id,
                 serde_json::json!({
@@ -1198,7 +1207,7 @@ async fn handle_doc_request_inner(
             session_docs.insert(doc_name.clone());
             broadcaster
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .subscribe_doc(session_id, &doc_name);
 
             // Store metadata as a simple JSON doc (not a full CRDT — lightweight registry).
@@ -1291,7 +1300,14 @@ async fn handle_doc_request_inner(
                         coll.set_owner(principal, &owner_label);
                         coll.encode_state()
                     }
-                    Err(_) => collection_bytes,
+                    Err(e) => {
+                        warn!(
+                            kb_id = %kb_id,
+                            error = %e,
+                            "kb/share: owner-binding decode failed; using client collection unbound"
+                        );
+                        collection_bytes
+                    }
                 },
                 None => collection_bytes,
             };
@@ -1328,7 +1344,7 @@ async fn handle_doc_request_inner(
             let _ = doc_store.track_client_connect(&collection_doc).await;
             broadcaster
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .subscribe_doc(session_id, &collection_doc);
 
             // Store each node doc.
@@ -1499,7 +1515,7 @@ async fn handle_doc_request_inner(
             let _ = doc_store.track_client_connect(&collection_doc).await;
             broadcaster
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .subscribe_doc(session_id, &collection_doc);
 
             // Parse collection to get the list of node IDs belonging to this KB.
@@ -1821,7 +1837,7 @@ async fn handle_doc_request_inner(
                 Ok(result) => {
                     // Broadcast to other subscribers of the collection.
                     {
-                        let mut bc = broadcaster.lock().unwrap();
+                        let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
                         bc.broadcast_except(
                             &EditorEvent::SyncUpdate {
                                 buffer_name: node_doc.clone(),
@@ -2092,16 +2108,30 @@ async fn handle_doc_request_inner(
             let node_ids: Vec<String> = match doc_store.encode_state_and_sv(&collection_doc).await {
                 Ok((state, _sv)) => match KbCollectionDoc::from_bytes(&state) {
                     Ok(coll) => coll.list_nodes().into_iter().map(|(id, _)| id).collect(),
-                    Err(_) => Vec::new(),
+                    Err(e) => {
+                        warn!(
+                            kb_id = %kb_id,
+                            error = %e,
+                            "kb/leave: collection decode failed; no nodes to unsubscribe"
+                        );
+                        Vec::new()
+                    }
                 },
-                Err(_) => Vec::new(),
+                Err(e) => {
+                    debug!(
+                        kb_id = %kb_id,
+                        error = %e,
+                        "kb/leave: collection state unavailable; no nodes to unsubscribe"
+                    );
+                    Vec::new()
+                }
             };
 
             // Unsubscribe from collection doc.
             session_docs.remove(&collection_doc);
             broadcaster
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .unsubscribe_doc(session_id, &collection_doc);
 
             // Unsubscribe only from this KB's node docs.
@@ -2172,7 +2202,7 @@ async fn handle_sync_tool(
             let client_id = arguments["client_id"].as_u64();
             match doc_store.apply_update(&doc, &update_bytes, client_id).await {
                 Ok(result) => {
-                    let mut bc = broadcaster.lock().unwrap();
+                    let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
                     bc.broadcast(&EditorEvent::SyncUpdate {
                         buffer_name: doc.clone(),
                         update_base64: update_to_base64(&result.update),

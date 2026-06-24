@@ -15,6 +15,7 @@ pub mod git_status;
 pub mod gutter;
 pub mod hover;
 pub mod kb;
+pub mod kb_sharing;
 pub mod messages;
 pub mod notifications;
 pub mod overlay;

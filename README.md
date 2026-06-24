@@ -184,7 +184,24 @@ Most AI behavior is configured in `init.scm` (see [Configuration](#configuration
 not config.toml. Provider-aware prompt tuning is automatic — Gemini gets explicit
 JSON examples, DeepSeek gets anti-looping guardrails.
 
-### First Steps
+### First 10 Minutes
+
+A guided path for a brand-new user — copy-paste in order:
+
+1. **Generate config** — `mae --init-config` (runs a short wizard; safe defaults).
+2. **Open and edit** — `mae README.md`, press `i` to insert, type, `Esc`, then `:w` to save.
+3. **Make your first AI call** — `export ANTHROPIC_API_KEY=sk-ant-...`, relaunch, press
+   `SPC a p`, and ask *"explain the function under my cursor."*
+4. **Find your way around** — `SPC SPC` opens the command palette (fuzzy-search every
+   command); every leader key shows a which-key menu, so just press `SPC` and read.
+5. **Learn interactively** — `:tutor` for the 13-lesson tutorial, or `SPC h h` for the
+   help knowledge base.
+6. **(Optional) Share a KB** — start a daemon (`mae-daemon`), then `SPC C K m` opens the
+   `*KB Sharing*` management buffer. See [docs/COLLABORATION.md](docs/COLLABORATION.md).
+
+If anything in this list doesn't work as written, that's a bug — please file it.
+
+### First Steps (key reference)
 
 1. `:tutor` — interactive tutorial (13 lessons: vim, beginner, AI tracks)
 2. `SPC SPC` — command palette (fuzzy search all commands)
@@ -193,6 +210,24 @@ JSON examples, DeepSeek gets anti-looping guardrails.
 5. `SPC a a` — launch AI agent in embedded shell
 6. `SPC a p` — start an AI conversation
 7. `:self-test` — verify AI integration
+
+### Drive MAE with Your Coding Agent
+
+MAE's core thesis is that the AI is a *peer actor*, not a plugin — your external
+coding agent (Claude Code, etc.) can drive the editor through the **same** tools the
+built-in agent uses, over MCP. A running MAE exposes 135+ tools on a per-process Unix
+socket; the `mae-mcp-shim` binary bridges MCP-over-stdio to that socket:
+
+```sh
+# Point your agent's MCP config at the shim; it auto-discovers /tmp/mae-{PID}.sock
+mae-mcp-shim
+```
+
+Day-one tools worth knowing: `introspect` (editor state snapshot), `execute_command`
+(run any command), `kb_search` / `lsp_definition` (navigate code semantically), and
+`kb_sharing_status` (introspect shared-KB membership/roles before managing). The full
+tool catalog and selection guidance live in
+[CLAUDE.md](CLAUDE.md#developing-mae-inside-mae-mcp-tools).
 
 ### Configuration
 
