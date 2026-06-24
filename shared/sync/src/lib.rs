@@ -6,6 +6,7 @@
 pub mod awareness;
 pub mod encoding;
 pub mod kb;
+pub mod membership;
 pub mod text;
 pub mod wire;
 

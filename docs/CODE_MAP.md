@@ -399,6 +399,7 @@ Source: `shared/sync/src/lib.rs`
 | `awareness` | mod |
 | `encoding` | mod |
 | `kb` | mod |
+| `membership` | mod |
 | `text` | mod |
 | `wire` | mod |
 | `SyncError` | enum |

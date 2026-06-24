@@ -984,6 +984,10 @@
           "kind": "mod"
         },
         {
+          "name": "membership",
+          "kind": "mod"
+        },
+        {
           "name": "text",
           "kind": "mod"
         },

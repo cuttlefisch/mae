@@ -258,6 +258,23 @@ mod tests {
         ep.close().await;
     }
 
+    /// SECURITY: the membership principal (`mae_sync::membership::fingerprint_of`)
+    /// MUST equal the mcp identity fingerprint byte-for-byte, or signed membership
+    /// ops would name a principal the access gate can't match. Guards the
+    /// STANDARD_NO_PAD base64 + SHA256 format agreement across the two crates.
+    #[test]
+    fn membership_fingerprint_matches_mcp_identity() {
+        for label in ["alice", "bob", "owner-x"] {
+            let id = Identity::generate(label);
+            let pk = id.public().to_bytes();
+            assert_eq!(
+                mae_sync::membership::fingerprint_of(&pk),
+                id.fingerprint(),
+                "membership principal must equal the mcp identity fingerprint"
+            );
+        }
+    }
+
     /// The `collab.p2p.relay` config string maps to the right `RelayMode`, and a
     /// non-keyword non-URL value is a reported error (not a silent fallback).
     #[test]
