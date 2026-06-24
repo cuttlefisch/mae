@@ -1264,14 +1264,20 @@ async fn viewer_era_edits_do_not_cascade_on_grant() {
         "pre-grant edit must not cascade; canonical = {canonical:?}"
     );
 
-    // bob CAN make a fresh, current-epoch (epoch 1) edit — that is accepted.
+    // bob CAN make a fresh, current-epoch edit — that is accepted. Post-promotion
+    // his epoch is an unpredictable token (#72), so read it from the collection
+    // rather than assuming the old prev+1 value.
+    let (kbc_state, _) = store.encode_state_and_sv("kbc:kbx").await.unwrap();
+    let bob_epoch = KbCollectionDoc::from_bytes(&kbc_state)
+        .unwrap()
+        .epoch_of(&fp("bob"));
     assert!(
         dispatch_as(
             &store,
             &bc,
             Some("bob"),
             Some(&fp("bob")),
-            kb_node_update_msg_as("kbx", &fp("bob"), 1, "FRESH"),
+            kb_node_update_msg_as("kbx", &fp("bob"), bob_epoch, "FRESH"),
             &mut docs
         )
         .await
@@ -1415,20 +1421,25 @@ async fn stale_epoch_continuation_of_canonical_client_is_fenced() {
         "stale continuation must not cascade; canonical = {canonical:?}"
     );
 
-    // bob CAN still converge by re-authoring under his CURRENT epoch (2).
+    // bob CAN still converge by re-authoring under his CURRENT epoch — now an
+    // unpredictable token (#72), read from the collection rather than assumed.
+    let (kbc_state, _) = store.encode_state_and_sv("kbc:kbx").await.unwrap();
+    let bob_epoch = KbCollectionDoc::from_bytes(&kbc_state)
+        .unwrap()
+        .epoch_of(&fp("bob"));
     assert!(
         dispatch_as(
             &store,
             &bc,
             Some("bob"),
             Some(&fp("bob")),
-            kb_node_update_msg_as("kbx", &fp("bob"), 2, "REAUTHORED"),
+            kb_node_update_msg_as("kbx", &fp("bob"), bob_epoch, "REAUTHORED"),
             &mut docs
         )
         .await
         .error
         .is_none(),
-        "a fresh current-epoch (2) edit is accepted"
+        "a fresh current-epoch edit is accepted"
     );
 }
 

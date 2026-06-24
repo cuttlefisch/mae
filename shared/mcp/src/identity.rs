@@ -231,6 +231,14 @@ impl Identity {
         self.signing.sign(msg).to_bytes().to_vec()
     }
 
+    /// The raw 32-byte Ed25519 secret seed. Used to construct an iroh `SecretKey`
+    /// (P2P mesh, ADR-025 / #88) so the daemon's mesh node identity IS its
+    /// trusted-peer key — a peer's `EndpointId` is exactly the `authorized_keys`
+    /// principal, with no separate P2P identity to manage.
+    pub fn secret_bytes(&self) -> [u8; 32] {
+        self.signing.to_bytes()
+    }
+
     /// PKCS#8 DER encoding of the private key (for building a TLS keypair).
     pub fn pkcs8_der(&self) -> Result<Vec<u8>, String> {
         use ed25519_dalek::pkcs8::EncodePrivateKey;

@@ -147,9 +147,14 @@ fn kbc_broadcast_relearns_epoch_without_reconnect() {
         .insert("teamkb".to_string(), coll.encode_state());
     assert_eq!(coll.epoch_of("alicefp"), 0, "fresh grant is epoch 0");
 
-    // Owner demotes Alice (Editor → Viewer): a real role change → epoch bumps.
+    // Owner demotes Alice (Editor → Viewer): a real role change → epoch bumps to
+    // an unpredictable token (#72), so capture it rather than assume prev+1.
     let demote_update = coll.set_role("alicefp", Role::Viewer);
-    assert_eq!(coll.epoch_of("alicefp"), 1, "role change bumps the epoch");
+    let alice_epoch = coll.epoch_of("alicefp");
+    assert_ne!(
+        alice_epoch, 0,
+        "role change bumps the epoch off the sentinel"
+    );
 
     // The daemon broadcasts the delta as a `kbc:` RemoteUpdate.
     handle_collab_event(
@@ -163,7 +168,7 @@ fn kbc_broadcast_relearns_epoch_without_reconnect() {
 
     assert_eq!(
         editor.collab.kb_epochs.get("teamkb").copied(),
-        Some(1),
+        Some(alice_epoch),
         "epoch relearned live from the broadcast — no reconnect needed"
     );
     assert!(
@@ -198,7 +203,11 @@ fn kbc_broadcast_cannot_self_elevate_other_members_change_is_ignored() {
 
     // Owner changes BOB's role (not Alice's).
     let bob_update = coll.set_role("bobfp", Role::Viewer);
-    assert_eq!(coll.epoch_of("bobfp"), 1);
+    assert_ne!(
+        coll.epoch_of("bobfp"),
+        0,
+        "Bob's role change advances his epoch"
+    );
     assert_eq!(coll.epoch_of("alicefp"), 0, "Alice's epoch is unchanged");
 
     handle_collab_event(

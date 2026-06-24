@@ -155,12 +155,20 @@ All phases below are COMPLETE. See ROADMAP.md for granular milestone details.
 | 7. Documentation | Help system (862 KB nodes), tutorials, `:describe-configuration` | — |
 | 8. GUI Backend | winit + Skia, inline images, multi-cursor, magit-style git | 2,629 |
 
-**Current:** v0.14.0 pending (PR #69) — collaborative **KB sharing** is now user-ready: trusted-peer mTLS
-auth, per-KB membership/roles/policy (Owner/Editor/Viewer, ADR-018), epoch-fenced write access (ADR-023),
-the ADR-024 attention bus, a magit-style `*KB Sharing*` management buffer (`SPC C K m`), and full
-introspection + lifecycle parity across the human (buffer + Scheme `(kb-…)` primitives) and the AI peer
-(`kb_sharing_status` + lifecycle MCP tools). See `docs/COLLABORATION.md`.
-**Next:** crypto-deps bump (hmac/sha2/rand alignment), hosted-edit (ADR-020 D1), ADR-021 audit log.
+**Current:** v0.14.0 released — collaborative **KB sharing** is user-ready: trusted-peer mTLS auth, per-KB
+membership/roles/policy (Owner/Editor/Viewer, ADR-018), epoch-fenced write access (ADR-023), the ADR-024
+attention bus, a magit-style `*KB Sharing*` management buffer (`SPC C K m`), and full introspection +
+lifecycle parity across the human (buffer + Scheme `(kb-…)` primitives) and the AI peer (`kb_sharing_status`
++ lifecycle MCP tools). See `docs/COLLABORATION.md`.
+
+**Next — P2P decentralized KB sync** (multi-session/multi-machine initiative): a **daemon mesh** so global
+peers maintain shared KBs with **no central server**. Design = **ADR-025** (iroh QUIC transport, Ed25519
+node IDs reuse trusted-peer fingerprints, + config/install/activation), **ADR-026** (peer-verifiable
+signed, hash-chained membership + signed ops + peer-enforced epoch fence), **ADR-027** (observability built
+alongside). **Tracker: issue #96**; ADR PR **#95**; phased epics #88–#94. **Pre-work first** (chosen
+sequence): #70 split the oversized collab files, settle crypto-deps (#87/#51), then #72 (epoch hardening —
+hard prereq for Phase 4). E2E content encryption + leaderless auth-DAG are deferred. Also still pending:
+hosted-edit (ADR-020 D1).
 
 ## Key Design Decisions Already Made
 
@@ -415,7 +423,7 @@ Events carry version numbers for ordering. Slow clients are dropped, not blocked
 
 ### Architecture Decision Records
 ADRs live in `docs/adr/` and as KB concept nodes (`concept:adr-*`).
-See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine), ADR-007 (save coordination), ADR-008 (CRDT target metrics).
+See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine), ADR-007 (save coordination), ADR-008 (CRDT target metrics), ADR-014 (binary architecture — editor + daemon workspaces), ADR-017/018 (asymmetric peer auth + identity-anchored access control), ADR-019/020/022/023 (durable / replicated / crash-safe sync + epoch-fenced write access), ADR-024 (notification attention bus), and the **P2P daemon-mesh trio ADR-025/026/027** (iroh transport / peer-verifiable signed-hash-chained integrity / collaboration observability).
 
 ### Sync Engine (yrs — Accepted)
 Collaborative state uses **yrs** (Yjs Rust port, YATA algorithm). Decision rationale:
