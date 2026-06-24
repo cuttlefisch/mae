@@ -20,7 +20,7 @@
 use crate::kb::Role;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The membership change an op performs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -217,11 +217,21 @@ pub struct ValidMember {
 /// 4. **attenuation** — a grant cannot exceed the author's own role;
 /// 5. **timebox** — an op past `expires_at` (relative to `now`) never takes effect.
 ///
-/// **Scope (slice 2b-3):** deterministic causal replay over the op tree with the
-/// above gates + straightforward removal. The p2panda-auth **strong-removal**
-/// resolver (invalidating actions *concurrent* with a removal, mutual-removal,
-/// transitive cascade, higher-hash tiebreak) layers on in slice 2b-4; quorum
-/// governance + the local blocklist in 2b-5b.
+/// **Resolver (slice 2b-4 — p2panda-auth "strong removal", implemented verbatim,
+/// NOT invented):** validity is a *fixpoint* over the op tree, so concurrent
+/// conflicts resolve deterministically and identically on every peer:
+/// - a **removal/revoke** of `S` invalidates `S`'s actions that are *concurrent*
+///   with the removal, **transitively** (their dependents cascade out);
+/// - **mutual removal** (A removes B ∥ B removes A) ⇒ **both removals apply** (a
+///   removal is never undone by a concurrent counter-removal), their other
+///   concurrent actions invalidated;
+/// - **re-add** ⇒ valid again, but pre-removal concurrent ops stay invalid (a
+///   later re-admit causally dominates the removal);
+/// - **removal dominates** a concurrent role-change of the same subject;
+/// - the tiebreak for a genuine same-target conflict is the **higher `chain_hash`**
+///   (deterministic + Sybil-resistant) — explicitly *not* seniority or wall-clock.
+///
+/// Quorum governance + the local blocklist layer on in slice 2b-5b.
 pub fn derive_valid_members(
     ops: &[SignedMembershipOp],
     anchor_owner_pubkey: &[u8; 32],
@@ -229,12 +239,12 @@ pub fn derive_valid_members(
 ) -> BTreeMap<String, ValidMember> {
     // 1. Keep only cryptographically-valid records (sig + author↔key binding),
     //    indexed by chain_hash for tree traversal.
-    let valid: Vec<&SignedMembershipOp> = ops.iter().filter(|o| o.verify_signed()).collect();
+    let crypto: Vec<&SignedMembershipOp> = ops.iter().filter(|o| o.verify_signed()).collect();
     let by_hash: BTreeMap<String, &SignedMembershipOp> =
-        valid.iter().map(|o| (o.chain_hash(), *o)).collect();
+        crypto.iter().map(|o| (o.chain_hash(), *o)).collect();
 
     // 2. Anchor: the genesis op is a self-admit signed by the external trust root.
-    let genesis_hash = match valid.iter().find(|o| {
+    let genesis_hash = match crypto.iter().find(|o| {
         o.op.prev_hash.is_empty()
             && o.op.action == MembershipAction::Admit
             && o.op.subject == o.op.author
@@ -245,88 +255,209 @@ pub fn derive_valid_members(
     };
     let owner_principal = by_hash[&genesis_hash].op.subject.clone();
 
-    // 3. Deterministic causal order over the tree rooted at the anchored genesis.
+    // 3. Deterministic causal order + each op's strict ancestor set (the op tree is
+    //    single-parent via prev_hash, so ancestors are a linear chain to genesis).
     let order = causal_order(&by_hash, &genesis_hash);
+    let anc: BTreeMap<String, BTreeSet<String>> = order
+        .iter()
+        .map(|h| (h.clone(), ancestors(&by_hash, h)))
+        .collect();
 
-    // 4. Fold each op against the running member set, gated by capability.
-    let mut members: BTreeMap<String, ValidMember> = BTreeMap::new();
-    for hash in order {
-        let op = &by_hash[&hash].op;
-        // Timebox: an expired op never takes effect (on any peer).
+    // 4. Validity fixpoint. `valid` shrinks monotonically (removing an op only ever
+    //    removes more), so the loop converges. An op survives iff:
+    //    (b) its author held the capability in the op's *own valid causal past*; and
+    //    (c) it is not a non-removal action by a member who is concurrently removed
+    //        by a *valid* removal — the strong-removal rule. Removals are exempt
+    //        from (c), so mutual removals both stand.
+    let mut valid: BTreeSet<String> = order.iter().cloned().collect();
+    loop {
+        let mut next: BTreeSet<String> = BTreeSet::new();
+        for h in &order {
+            let op = &by_hash[h].op;
+            if op.expires_at.is_some_and(|exp| now >= exp) {
+                continue; // timebox — never takes effect
+            }
+            if *h == genesis_hash {
+                next.insert(h.clone());
+                continue;
+            }
+            // (b) capability judged on the op's valid causal past (M_P).
+            let mp = membership_at(&by_hash, &order, &valid, &anc, &anc[h], &genesis_hash, now);
+            if !authorized(&mp, op, &owner_principal) {
+                continue;
+            }
+            // (c) strong concurrent removal: a non-removal op by S dies if some
+            //     valid removal of S is concurrent with it (neither is the other's
+            //     ancestor). Ops in the removal's past survive; a removal itself is
+            //     exempt (mutual removal ⇒ both apply).
+            if !is_removal(op.action) {
+                let killed = order.iter().any(|rh| {
+                    if rh == h || !valid.contains(rh) {
+                        return false;
+                    }
+                    let r = &by_hash[rh].op;
+                    is_removal(r.action)
+                        && r.subject == op.author
+                        && !anc[rh].contains(h) // op not in the removal's past …
+                        && !anc[h].contains(rh) // … and removal not in op's past ⇒ concurrent
+                });
+                if killed {
+                    continue;
+                }
+            }
+            next.insert(h.clone());
+        }
+        if next == valid {
+            break;
+        }
+        valid = next;
+    }
+
+    // 5. Build the final member map from the surviving ops (removal-dominant; a
+    //    causally-later re-admit wins; higher-hash SetRole wins concurrent ties).
+    build_members(&by_hash, &order, &valid, &anc, &genesis_hash, now)
+}
+
+/// Strict ancestors of `h` (its causal past, excluding `h`): walk the `prev_hash`
+/// chain up to and including genesis. Single-parent links ⇒ a linear chain.
+fn ancestors(by_hash: &BTreeMap<String, &SignedMembershipOp>, h: &str) -> BTreeSet<String> {
+    let mut set = BTreeSet::new();
+    let mut cur = by_hash
+        .get(h)
+        .map(|r| r.op.prev_hash.clone())
+        .unwrap_or_default();
+    while !cur.is_empty() {
+        if !set.insert(cur.clone()) {
+            break; // defensive cycle guard (a well-formed log is acyclic)
+        }
+        cur = match by_hash.get(&cur) {
+            Some(r) => r.op.prev_hash.clone(),
+            None => break,
+        };
+    }
+    set
+}
+
+fn is_removal(action: MembershipAction) -> bool {
+    matches!(action, MembershipAction::Remove | MembershipAction::Revoke)
+}
+
+/// Whether `op`'s author held the capability to perform it, given the membership
+/// `mp` derived from the op's valid causal past. Owner or a delegated inviter may
+/// `Admit` (attenuated: cannot grant above the author's own role); only the owner
+/// may `SetRole`/`Remove`/`Revoke` in single-owner governance, and the owner is
+/// never removable via the chain (quorum + blocklist relax this in 2b-5b).
+fn authorized(mp: &BTreeMap<String, ValidMember>, op: &MembershipOp, owner: &str) -> bool {
+    let author = match mp.get(&op.author) {
+        Some(a) => a,
+        None => return false,
+    };
+    match op.action {
+        MembershipAction::Admit => {
+            if author.role != Role::Owner && !author.can_invite {
+                return false;
+            }
+            author.role.includes(op.role.unwrap_or(Role::Viewer))
+        }
+        MembershipAction::SetRole => author.role == Role::Owner && mp.contains_key(&op.subject),
+        MembershipAction::Remove | MembershipAction::Revoke => {
+            author.role == Role::Owner && op.subject != owner && mp.contains_key(&op.subject)
+        }
+    }
+}
+
+/// Membership as of one op's causal position — the final member map over just the
+/// **valid ancestors** of that op (its causal past, a linear chain). Used to judge
+/// capability (b). Passes the full `anc` map through so removal-dominance and
+/// SetRole overlays resolve correctly within the restricted ancestor set.
+#[allow(clippy::too_many_arguments)]
+fn membership_at(
+    by_hash: &BTreeMap<String, &SignedMembershipOp>,
+    order: &[String],
+    valid: &BTreeSet<String>,
+    anc: &BTreeMap<String, BTreeSet<String>>,
+    target_anc: &BTreeSet<String>,
+    genesis_hash: &str,
+    now: u64,
+) -> BTreeMap<String, ValidMember> {
+    let sub: BTreeSet<String> = valid.intersection(target_anc).cloned().collect();
+    build_members(by_hash, order, &sub, anc, genesis_hash, now)
+}
+
+/// Construct the member map from a set of already-validated ops, in causal order.
+/// Removal-dominant per p2panda-auth: a principal is present iff some valid `Admit`
+/// of them is **not** overridden by a valid removal outside that admit's causal
+/// past (so a concurrent/later removal wins, but a causally-later *re-admit*
+/// supersedes the removal). Roles overlay causally-later valid `SetRole`s (higher
+/// `chain_hash` wins concurrent ties via `order`).
+fn build_members(
+    by_hash: &BTreeMap<String, &SignedMembershipOp>,
+    order: &[String],
+    valid: &BTreeSet<String>,
+    anc: &BTreeMap<String, BTreeSet<String>>,
+    genesis_hash: &str,
+    now: u64,
+) -> BTreeMap<String, ValidMember> {
+    let in_admit_past =
+        |admit: &str, other: &str| anc.get(admit).map(|s| s.contains(other)).unwrap_or(false);
+    let mut out: BTreeMap<String, ValidMember> = BTreeMap::new();
+    for h in order {
+        if !valid.contains(h) {
+            continue;
+        }
+        let op = &by_hash[h].op;
+        let is_genesis = h == genesis_hash;
+        if !(is_genesis || op.action == MembershipAction::Admit) {
+            continue;
+        }
+        let principal = op.subject.clone();
+        // Is this admit overridden by a valid removal of the same principal that is
+        // not in the admit's causal past? (Removal dominates concurrent/later.)
+        let dominated = order.iter().any(|rh| {
+            if !valid.contains(rh) {
+                return false;
+            }
+            let r = &by_hash[rh].op;
+            is_removal(r.action) && r.subject == principal && !in_admit_past(h, rh)
+        });
+        if dominated {
+            continue;
+        }
+        let role = op.role.unwrap_or(if is_genesis {
+            Role::Owner
+        } else {
+            Role::Viewer
+        });
+        let mut entry = ValidMember {
+            principal: principal.clone(),
+            role,
+            can_invite: is_genesis || op.can_invite,
+            invited_by: op.author.clone(),
+            epoch: op.epoch,
+        };
+        // Overlay causally-later valid SetRoles (causal order ⇒ higher hash last).
+        for sh in order {
+            if !valid.contains(sh) {
+                continue;
+            }
+            let s = &by_hash[sh].op;
+            if s.action == MembershipAction::SetRole
+                && s.subject == principal
+                && anc.get(sh).map(|a| a.contains(h)).unwrap_or(false)
+            {
+                if let Some(nr) = s.role {
+                    entry.role = nr;
+                    entry.epoch = s.epoch;
+                }
+            }
+        }
+        // Timebox on the establishing admit.
         if op.expires_at.is_some_and(|exp| now >= exp) {
             continue;
         }
-        // Genesis: the owner self-admit roots the member set (always may invite).
-        if hash == genesis_hash {
-            members.insert(
-                op.subject.clone(),
-                ValidMember {
-                    principal: op.subject.clone(),
-                    role: op.role.unwrap_or(Role::Owner),
-                    can_invite: true,
-                    invited_by: op.author.clone(),
-                    epoch: op.epoch,
-                },
-            );
-            continue;
-        }
-        // The author must currently be a member (their key established by the op
-        // that admitted them).
-        let author = match members.get(&op.author) {
-            Some(a) => a.clone(),
-            None => continue,
-        };
-        match op.action {
-            MembershipAction::Admit => {
-                // Capability: owner or a delegated inviter.
-                if author.role != Role::Owner && !author.can_invite {
-                    continue;
-                }
-                let granted = op.role.unwrap_or(Role::Viewer);
-                // Attenuation: cannot grant above your own role.
-                if !author.role.includes(granted) {
-                    continue;
-                }
-                // can_invite is delegable only by an owner or an existing inviter.
-                let can_invite = op.can_invite && (author.role == Role::Owner || author.can_invite);
-                members.insert(
-                    op.subject.clone(),
-                    ValidMember {
-                        principal: op.subject.clone(),
-                        role: granted,
-                        can_invite,
-                        invited_by: op.author.clone(),
-                        epoch: op.epoch,
-                    },
-                );
-            }
-            MembershipAction::SetRole => {
-                // Management is owner-only in single-owner governance (delegated
-                // admins + quorum arrive in 2b-5b).
-                if author.role != Role::Owner {
-                    continue;
-                }
-                if let Some(m) = members.get_mut(&op.subject) {
-                    if let Some(new_role) = op.role {
-                        m.role = new_role;
-                        m.epoch = op.epoch;
-                    }
-                }
-            }
-            MembershipAction::Remove | MembershipAction::Revoke => {
-                if author.role != Role::Owner {
-                    continue;
-                }
-                // The owner is not removable via the chain in single-owner
-                // governance (quorum owner-removal + blocklist arrive in 2b-5b).
-                if op.subject == owner_principal {
-                    continue;
-                }
-                members.remove(&op.subject);
-            }
-        }
+        out.insert(principal, entry); // causal order ⇒ a later re-admit wins
     }
-    members
+    out
 }
 
 /// Deterministic causal (topological) order of the op tree rooted at `genesis`.
@@ -336,7 +467,6 @@ pub fn derive_valid_members(
 /// order ops arrived in. Ops **not** reachable from the anchored genesis (orphans
 /// with a dangling `prev_hash`, or a forged second root) are never emitted.
 fn causal_order(by_hash: &BTreeMap<String, &SignedMembershipOp>, genesis: &str) -> Vec<String> {
-    use std::collections::BTreeSet;
     let mut emitted: BTreeSet<String> = BTreeSet::new();
     let mut order: Vec<String> = Vec::new();
     loop {
@@ -845,5 +975,234 @@ mod tests {
         // Same ops, reversed arrival order ⇒ identical derived state.
         let reversed = derive_valid_members(&[admit_bob, admit_alice, g], &owner.pubkey, 100);
         assert_eq!(forward, reversed);
+    }
+
+    // --- strong-removal resolver (slice 2b-4) ---
+    //
+    // NOTE: mutual removal (A removes B ∥ B removes A ⇒ both apply) needs two
+    // members with removal authority, which single-owner governance does not allow
+    // (only the owner removes, and the owner is irrevocable via the chain). That
+    // oracle lives with the quorum-governance slice (2b-5b), where multiple admins
+    // exist. The cases below are all expressible under single-owner governance.
+
+    #[test]
+    fn strong_removal_invalidates_concurrent_actions_transitively() {
+        let owner = id(1);
+        let alice = id(2);
+        let x = id(3);
+        let y = id(4);
+        let g = genesis(&owner);
+        // Owner admits alice as an editor WITH the invite capability.
+        let admit_alice = make(
+            &owner,
+            MembershipAction::Admit,
+            &alice.fp,
+            Some(Role::Editor),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        // CONCURRENT branches off admit_alice:
+        //  (1) alice admits x (and delegates can_invite to x);
+        //  (2) owner removes alice.
+        let admit_x = make(
+            &alice,
+            MembershipAction::Admit,
+            &x.fp,
+            Some(Role::Editor),
+            true,
+            None,
+            &admit_alice.chain_hash(),
+        );
+        let remove_alice = make(
+            &owner,
+            MembershipAction::Remove,
+            &alice.fp,
+            None,
+            false,
+            None,
+            &admit_alice.chain_hash(),
+        );
+        // x (had it been valid) admits y — causally after admit_x.
+        let admit_y = make(
+            &x,
+            MembershipAction::Admit,
+            &y.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &admit_x.chain_hash(),
+        );
+        let ops = [g, admit_alice, admit_x, remove_alice, admit_y];
+        let m = derive_valid_members(&ops, &owner.pubkey, 100);
+        assert!(m.contains_key(&owner.fp), "owner stays");
+        assert!(!m.contains_key(&alice.fp), "alice removed");
+        assert!(
+            !m.contains_key(&x.fp),
+            "x's admission is concurrent with alice's removal ⇒ invalidated"
+        );
+        assert!(
+            !m.contains_key(&y.fp),
+            "y depends on x's invalidated admission ⇒ transitive cascade"
+        );
+
+        // Determinism: the same ops in a different arrival order derive identically.
+        let mut shuffled = ops.to_vec();
+        shuffled.rotate_left(2);
+        shuffled.reverse();
+        assert_eq!(derive_valid_members(&shuffled, &owner.pubkey, 100), m);
+    }
+
+    #[test]
+    fn re_add_restores_member_but_old_concurrent_ops_stay_fenced() {
+        let owner = id(1);
+        let bob = id(2);
+        let carol = id(3);
+        let g = genesis(&owner);
+        let admit_bob = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        // CONCURRENT off admit_bob: bob admits carol ∥ owner removes bob.
+        let admit_carol = make(
+            &bob,
+            MembershipAction::Admit,
+            &carol.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        let remove_bob = make(
+            &owner,
+            MembershipAction::Remove,
+            &bob.fp,
+            None,
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        // Owner re-admits bob AFTER the removal (causally dominates it).
+        let readd_bob = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &remove_bob.chain_hash(),
+        );
+        let m = derive_valid_members(
+            &[g, admit_bob, admit_carol, remove_bob, readd_bob],
+            &owner.pubkey,
+            100,
+        );
+        assert!(m.contains_key(&bob.fp), "bob re-added");
+        assert_eq!(m[&bob.fp].role, Role::Viewer, "re-add sets the new role");
+        assert!(
+            !m.contains_key(&carol.fp),
+            "carol's pre-removal concurrent admission stays fenced after re-add"
+        );
+    }
+
+    #[test]
+    fn concurrent_set_role_resolves_by_higher_chain_hash() {
+        let owner = id(1);
+        let bob = id(2);
+        let g = genesis(&owner);
+        let admit_bob = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        // Two CONCURRENT role changes of bob (owner-authored), to distinct roles.
+        let set_viewer = make(
+            &owner,
+            MembershipAction::SetRole,
+            &bob.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        let set_owner = make(
+            &owner,
+            MembershipAction::SetRole,
+            &bob.fp,
+            Some(Role::Owner),
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        // The higher chain_hash deterministically wins (not seniority/clock).
+        let expected = if set_owner.chain_hash() > set_viewer.chain_hash() {
+            Role::Owner
+        } else {
+            Role::Viewer
+        };
+        let m = derive_valid_members(
+            &[
+                g.clone(),
+                admit_bob.clone(),
+                set_viewer.clone(),
+                set_owner.clone(),
+            ],
+            &owner.pubkey,
+            100,
+        );
+        assert_eq!(m[&bob.fp].role, expected, "higher-hash SetRole wins");
+
+        // Independent of arrival order.
+        let m2 = derive_valid_members(&[set_owner, g, set_viewer, admit_bob], &owner.pubkey, 100);
+        assert_eq!(m2[&bob.fp].role, expected);
+    }
+
+    #[test]
+    fn removal_dominates_a_concurrent_role_change() {
+        let owner = id(1);
+        let bob = id(2);
+        let g = genesis(&owner);
+        let admit_bob = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        // Concurrent: owner demotes bob ∥ owner removes bob. Removal must win.
+        let set_viewer = make(
+            &owner,
+            MembershipAction::SetRole,
+            &bob.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        let remove_bob = make(
+            &owner,
+            MembershipAction::Remove,
+            &bob.fp,
+            None,
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        let m = derive_valid_members(&[g, admit_bob, set_viewer, remove_bob], &owner.pubkey, 100);
+        assert!(
+            !m.contains_key(&bob.fp),
+            "removal dominates the concurrent role change"
+        );
     }
 }
