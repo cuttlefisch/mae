@@ -16,6 +16,7 @@ mod handler;
 pub mod hygiene;
 mod p2p;
 mod scheduler;
+mod ticket;
 
 use config::DaemonConfig;
 use handler::DaemonState;

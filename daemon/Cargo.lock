@@ -2543,6 +2543,7 @@ version = "0.14.0"
 dependencies = [
  "async-trait",
  "cozo",
+ "data-encoding",
  "dirs",
  "hex",
  "iroh",
