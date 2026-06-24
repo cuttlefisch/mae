@@ -150,6 +150,34 @@ impl MembershipOp {
     }
 }
 
+/// A [`MembershipOp`] together with its signature + the author's public key — one
+/// record in the collection's signed op-log (ADR-026). `author_pubkey` is stored
+/// so any peer can verify the signature locally without an external lookup; it is
+/// bound to `op.author` via the fingerprint check in [`verify_signed`](Self::verify_signed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignedMembershipOp {
+    pub op: MembershipOp,
+    pub sig: Vec<u8>,
+    pub author_pubkey: [u8; 32],
+}
+
+impl SignedMembershipOp {
+    /// This record's hash — its key in the op-log and the `prev_hash` of any op
+    /// that builds on it.
+    pub fn chain_hash(&self) -> String {
+        self.op.chain_hash(&self.sig)
+    }
+
+    /// Verify the record's signature **and** that the signing key belongs to the
+    /// claimed author: `fingerprint_of(author_pubkey) == op.author` AND the
+    /// signature verifies. This is the per-record cryptographic check; capability,
+    /// timebox, revocation, and the resolver are layered on in `derive_valid_members`.
+    pub fn verify_signed(&self) -> bool {
+        self.op.fingerprint_matches(&self.author_pubkey)
+            && self.op.verify(&self.sig, &self.author_pubkey)
+    }
+}
+
 /// The `SHA256:<base64>` fingerprint of an Ed25519 public key — the membership
 /// **principal**. Matches `mae_mcp::identity::PublicKey::fingerprint()` so a
 /// member's principal is identical whether derived here or there.
@@ -263,5 +291,40 @@ mod tests {
         // The next op linking to this one carries h1 as prev_hash.
         let next = sample_op(&h1);
         assert_eq!(next.prev_hash, h1);
+    }
+
+    #[test]
+    fn signed_record_verifies_and_binds_author_to_key() {
+        let secret = [7u8; 32];
+        let pubkey = SigningKey::from_bytes(&secret).verifying_key().to_bytes();
+        let mut op = sample_op("");
+        op.author = fingerprint_of(&pubkey); // author principal = the signer's key
+        let sig = op.sign(&secret);
+        let rec = SignedMembershipOp {
+            op: op.clone(),
+            sig: sig.clone(),
+            author_pubkey: pubkey,
+        };
+        assert!(
+            rec.verify_signed(),
+            "correctly-signed, author-bound record verifies"
+        );
+        assert_eq!(rec.chain_hash(), op.chain_hash(&sig));
+
+        // A record claiming a pubkey that doesn't match its `author` principal is
+        // rejected even before the signature check (fingerprint binding).
+        let other = SigningKey::from_bytes(&[9u8; 32])
+            .verifying_key()
+            .to_bytes();
+        let mismatched = SignedMembershipOp {
+            author_pubkey: other,
+            ..rec.clone()
+        };
+        assert!(!mismatched.verify_signed());
+
+        // A tampered op (with the original sig) fails the signature check.
+        let mut tampered = rec.clone();
+        tampered.op.role = Some(Role::Owner);
+        assert!(!tampered.verify_signed());
     }
 }
