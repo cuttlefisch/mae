@@ -128,7 +128,7 @@ Background daemon for KB persistence and multi-machine collaborative editing.
 
 **Join-save model:** Joined buffers have no local file path by default. Users use `:saveas` to persist locally. `collab_auto_resolve_paths` enables prompted project-root mapping. Server-side suffix matching resolves bare filenames.
 
-**Persistent doc_id:** MAE's doc_ids persist across sessions (unique in the industry). Enables asynchronous collaboration — documents survive host disconnection. P2P collaboration via mDNS is planned.
+**Persistent doc_id:** MAE's doc_ids persist across sessions (unique in the industry). Enables asynchronous collaboration — documents survive host disconnection. mDNS LAN peer discovery is implemented (`collab_discover`); direct daemon-less P2P transport is still planned.
 
 **Editor commands:** `collab-start` (SPC C s), `collab-connect` (SPC C c), `collab-share` (SPC C S), `collab-join` (SPC C j), `collab-status` (SPC C i), `collab-doctor` (SPC C D)
 
