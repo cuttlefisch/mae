@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### CI
+
+- Stop recompiling the mae crate for the install-artifacts step ([4af6daa](https://github.com/cuttlefisch/mae/commit/4af6daa7fd22d1528032099b959bf33398fb94bd))
+- Keep the cheap mae-mcp build (shim) in the artifacts step ([443a608](https://github.com/cuttlefisch/mae/commit/443a6083cbcc4f52e32f028764f00043f06ae6d8))
+- *(deps)* Bump actions/checkout ([256400b](https://github.com/cuttlefisch/mae/commit/256400b9572aa4513e15cc7ffe2db372c61de586))
+
+### Documentation
+
+- *(adr)* P2P daemon-mesh design — ADR-025/026/027 (transport, integrity, observability) ([76a87c2](https://github.com/cuttlefisch/mae/commit/76a87c2401f729ecb73974f07209a3a2e532590d))
+- *(adr)* P2P config/install/activation (ADR-025) + epic #94 ([8a82b20](https://github.com/cuttlefisch/mae/commit/8a82b2094061235781df505cfa2770a7b4c106a6))
+- *(claude)* Point status + ADR index at the P2P daemon-mesh initiative ([061f175](https://github.com/cuttlefisch/mae/commit/061f175e258545852548b47180b9a747c2a941b4))
+
+### Features
+
+- *(collab)* Epoch-fence hardening — unpredictable token + persist across remove/re-add (#72) ([a08141e](https://github.com/cuttlefisch/mae/commit/a08141eb5d5749442e935a9e93684a8c645cddef))
+- *(p2p)* Iroh transport foundation — validated endpoint from trusted-peer identity (#88) ([6bbe95a](https://github.com/cuttlefisch/mae/commit/6bbe95a39208d1e22eeba2a79753c5fabb0b9f5d))
+- *(p2p)* Mesh accept loop + authorized_keys gate (P1/#88) ([2a384a3](https://github.com/cuttlefisch/mae/commit/2a384a39e7f9500cdd5d1cad9331c1f01fea740d))
+- *(p2p)* Activate the mesh from daemon startup behind [collab.p2p] (P1/#94) ([c922155](https://github.com/cuttlefisch/mae/commit/c92215560d708e85a9d1fa3e3006515a1b739921))
+
+### Miscellaneous
+
+- *(deps)* Coordinated RustCrypto realignment + rand 0.10 (#87, #51) ([b48c371](https://github.com/cuttlefisch/mae/commit/b48c37142291ade3b955d21146fba2171952290d))
+
+### Refactor
+
+- *(collab)* Extract oversized inline test modules to sibling files (#70) ([d4a171a](https://github.com/cuttlefisch/mae/commit/d4a171aaed9b3596a726795beb1655a2ad43e302))
+
+### Testing
+
+- *(p2p)* Prove iroh streams round-trip Content-Length framing (P1/#88) ([da16471](https://github.com/cuttlefisch/mae/commit/da16471af659eacfac43c0fc0c2b5bc13f1f7519))
+
+### Style
+
+- *(collab)* Drop leading blank line in collab_handler_tests.rs (fmt --check) ([70f20c2](https://github.com/cuttlefisch/mae/commit/70f20c29c3a69b92e0b4b3a6c12b538eaa389ae2))
+
+## [0.14.0] - 2026-06-24
+
 ### Bug Fixes
 
 - *(collab)* Re-stamp KB creator to authenticated identity + two-editor membership e2e ([8ebf673](https://github.com/cuttlefisch/mae/commit/8ebf673a4fc661dcd36d759dd461828724279c13))
@@ -210,6 +247,7 @@ All notable changes to this project will be documented in this file.
 - *(collab)* Retire B-22a instrumentation → clean collab-target host-key lifecycle tracing ([0f3750e](https://github.com/cuttlefisch/mae/commit/0f3750e9e40ef78f673c8fc488fda76017d8756c))
 - *(deps)* Bump safe Rust dependencies (supersedes #68's non-crypto bumps) ([91be0a9](https://github.com/cuttlefisch/mae/commit/91be0a9a0d3754865ffc4af6013ee679c7dba855))
 - *(skills)* Share the comprehensive /mae-audit command with all contributors ([e4a7a9e](https://github.com/cuttlefisch/mae/commit/e4a7a9e189d60e160852a4e5be5250f989e1c946))
+- Bump version to 0.14.0 ([aeb1cdc](https://github.com/cuttlefisch/mae/commit/aeb1cdce17d228701073148545e7ed9e44f1dadf))
 
 ### Refactor
 
