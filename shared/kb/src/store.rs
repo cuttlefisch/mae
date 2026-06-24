@@ -117,7 +117,7 @@ impl NodeVersion {
         use sha2::{Digest, Sha256};
         let canonical = format!("{title}|{body}|{tags_json}|{todo_state}|{priority}");
         let hash = Sha256::digest(canonical.as_bytes());
-        format!("{hash:x}")
+        hex::encode(hash)
     }
 
     /// Verify this version's content_hash matches its fields.

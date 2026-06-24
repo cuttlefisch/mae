@@ -198,7 +198,7 @@ pub struct Identity {
 impl Identity {
     /// Generate a fresh random identity.
     pub fn generate(label: &str) -> Self {
-        use rand::RngCore;
+        use rand::Rng;
         let mut secret = [0u8; 32];
         rand::rng().fill_bytes(&mut secret);
         let signing = SigningKey::from_bytes(&secret);

@@ -280,7 +280,7 @@ impl Editor {
                         use sha2::{Digest, Sha256};
                         let mut hasher = Sha256::new();
                         hasher.update(content.as_bytes());
-                        let content_hash = format!("{:x}", hasher.finalize());
+                        let content_hash = hex::encode(hasher.finalize());
                         self.collab.pending_intent = Some(super::CollabIntent::SaveCollab {
                             doc_id: doc_id.clone(),
                             content_hash,

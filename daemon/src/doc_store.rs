@@ -355,7 +355,7 @@ impl DocStore {
         let content = doc.sync.content();
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(hex::encode(hasher.finalize()))
     }
 
     /// Check if a client's expected hash matches the server's current content hash.
@@ -371,7 +371,7 @@ impl DocStore {
         let content = doc.sync.content();
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
-        let server_hash = format!("{:x}", hasher.finalize());
+        let server_hash = hex::encode(hasher.finalize());
         if server_hash == expected_hash {
             doc.save_epoch += 1;
             Ok(SaveIntentResult::Ok {
@@ -1233,7 +1233,7 @@ mod tests {
         let hash = {
             let mut h = Sha256::new();
             h.update(content.as_bytes());
-            format!("{:x}", h.finalize())
+            hex::encode(h.finalize())
         };
 
         let result = store.check_save_intent("doc1", &hash).await.unwrap();
