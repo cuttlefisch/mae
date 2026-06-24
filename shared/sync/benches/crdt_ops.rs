@@ -1,5 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use mae_sync::text::TextSync;
+use std::hint::black_box;
 
 fn bench_crdt_creation(c: &mut Criterion) {
     c.bench_function("textsync_new_empty", |b| {
