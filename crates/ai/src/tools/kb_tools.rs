@@ -602,6 +602,23 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             permission: Some(PermissionTier::Write),
         },
         ToolDefinition {
+            name: "kb_share_p2p".into(),
+            description: "Mint a shareable P2P join ticket (a 'magnet link', mae://join/…) for a KB so a remote peer can join the daemon mesh with no central server. Returns the ticket string in the result; hand it to a collaborator who runs kb_join / `kb-join <ticket>`. Requires the daemon to have P2P enabled (`mae setup-collab --p2p`).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "kb_id".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "KB instance to share (default: the active/primary KB). Alias: kb_name.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
             name: "kb_join".into(),
             description: "Join a shared KB from the connected daemon. Downloads all nodes and enables continuous sync.".into(),
             parameters: ToolParameters {

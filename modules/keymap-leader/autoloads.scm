@@ -220,6 +220,7 @@
 (define-key "leader" "C K j" "kb-join")
 (define-key "leader" "C K l" "kb-leave")
 (define-key "leader" "C K r" "kb-list-remote")
+(define-key "leader" "C K p" "kb-share-p2p")
 
 ;;; ── Shared `navigation` context ──────────────────────────────────────────
 ;;; Flavor-independent bindings for read-only nav buffers (dashboard, file tree,

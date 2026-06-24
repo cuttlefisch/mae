@@ -85,6 +85,37 @@ impl Editor {
                 self.mark_full_redraw();
                 Some(true)
             }
+            "kb-share-p2p" => {
+                // P2P "magnet link" mint. Unlike kb-share (queued over the collab
+                // TCP stream), this is a SYNCHRONOUS daemon control-socket call
+                // that returns the ticket immediately (ADR-025 §"Driving
+                // surfaces" — same backend as the Scheme primitive + MCP tool).
+                let kb_id = self
+                    .kb
+                    .active_instance_name()
+                    .unwrap_or_else(|| "default".to_string());
+                match self.kb.share_p2p(&kb_id) {
+                    Ok(ticket) => {
+                        // Surface via the attention bus → mirrored to *Messages*
+                        // so both the human and the AI peer can copy the full link
+                        // (the status line would truncate it).
+                        self.notify(
+                            crate::notifications::Notification::success(
+                                "collab",
+                                format!("P2P join link ready for KB '{kb_id}'"),
+                            )
+                            .body(format!(
+                                "Share with a peer (they run kb-join / kb_join):\n{ticket}"
+                            ))
+                            .key(format!("p2p-share:{kb_id}")),
+                        );
+                        self.set_status(format!("P2P join link for '{kb_id}' → *Messages*"));
+                    }
+                    Err(e) => self.set_status(format!("kb-share-p2p: {e}")),
+                }
+                self.mark_full_redraw();
+                Some(true)
+            }
             "kb-join" => {
                 // Join a KB — SPC-key dispatch uses active name or "default".
                 // :kb-join <id> is handled in command.rs before reaching here.

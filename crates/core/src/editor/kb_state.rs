@@ -157,6 +157,13 @@ impl KbContext {
         self.daemon_control.is_some()
     }
 
+    /// A clone of the injected daemon control channel, if any. Lets other
+    /// subsystems (e.g. the Scheme runtime's `SharedState`) drive the same backend
+    /// off the editor thread.
+    pub fn daemon_control(&self) -> Option<Arc<dyn DaemonControl>> {
+        self.daemon_control.clone()
+    }
+
     /// Mint a P2P join ticket ("magnet link") for `kb_id` over the daemon control
     /// channel. The **single backend** behind the `kb-share-p2p` command, the
     /// `(kb-share-p2p)` Scheme primitive, and the `kb_share_p2p` MCP tool — so

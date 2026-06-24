@@ -1296,6 +1296,10 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "kb-share-p2p",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "kb-join",
       "source": "crates/scheme/src/runtime.rs"
     },

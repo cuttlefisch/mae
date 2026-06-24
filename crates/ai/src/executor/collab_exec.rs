@@ -14,6 +14,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "collab_list" => execute_collab_list(editor),
         "collab_discover" => execute_collab_discover(editor),
         "kb_share" => execute_kb_share(editor, &call.arguments),
+        "kb_share_p2p" => execute_kb_share_p2p(editor, &call.arguments),
         "kb_join" => execute_kb_join(editor, &call.arguments),
         "kb_leave" => execute_kb_leave(editor, &call.arguments),
         "kb_add_member" => execute_kb_add_member(editor, &call.arguments),
@@ -227,6 +228,32 @@ fn execute_kb_share(editor: &mut Editor, args: &Value) -> Result<String, String>
         "kb_name": kb_name,
         "node_count": count,
         "message": format!("KB share intent queued for '{}' ({} nodes)", kb_name, count),
+    })
+    .to_string())
+}
+
+fn execute_kb_share_p2p(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    // Same single backend as the `kb-share-p2p` command + `(kb-share-p2p)` Scheme
+    // primitive (ADR-025 §"Driving surfaces"): a synchronous daemon control call
+    // that mints a shareable join "magnet link". The AI peer gets the ticket back
+    // directly, so it can hand it to a collaborator with no CLI step.
+    let kb_id = args
+        .get("kb_id")
+        .or_else(|| args.get("kb_name"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .or_else(|| editor.kb.active_instance_name())
+        .unwrap_or_else(|| mae_core::KB_DEFAULT_NAME.to_string());
+
+    let ticket = editor.kb.share_p2p(&kb_id)?;
+    editor.set_status(format!("Minted P2P join link for '{kb_id}'"));
+    Ok(serde_json::json!({
+        "action": "share_kb_p2p",
+        "kb_id": kb_id,
+        "ticket": ticket,
+        "message": format!(
+            "P2P join link for '{kb_id}'. Share it with a peer; they run kb_join / `kb-join <ticket>`."
+        ),
     })
     .to_string())
 }

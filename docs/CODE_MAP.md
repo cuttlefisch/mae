@@ -483,6 +483,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-raw-query` | `crates/scheme/src/runtime.rs` |
 | `kb-add-link!` | `crates/scheme/src/runtime.rs` |
 | `kb-share` | `crates/scheme/src/runtime.rs` |
+| `kb-share-p2p` | `crates/scheme/src/runtime.rs` |
 | `kb-join` | `crates/scheme/src/runtime.rs` |
 | `kb-leave` | `crates/scheme/src/runtime.rs` |
 | `kb-add-member` | `crates/scheme/src/runtime.rs` |

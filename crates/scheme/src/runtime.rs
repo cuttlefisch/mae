@@ -121,6 +121,10 @@ struct SharedState {
     /// Pending KB collaboration lifecycle actions from `(kb-share)` etc. — lowered
     /// to `CollabIntent`s editor-side via `Editor::queue_kb_collab_action`.
     pending_kb_collab_actions: Vec<mae_core::KbCollabAction>,
+    /// Daemon control channel (cloned from `editor.kb` on each state sync) so
+    /// synchronous-return primitives like `(kb-share-p2p)` can drive the same
+    /// backend as the command + MCP tool (ADR-025 §"Driving surfaces").
+    daemon_control: Option<std::sync::Arc<dyn mae_core::DaemonControl>>,
     /// Pending buffer creation: (name).
     pending_create_buffer: Option<String>,
     /// Pending buffer kill by name.
@@ -1527,6 +1531,40 @@ impl SchemeRuntime {
                     .pending_kb_collab_actions
                     .push(mae_core::KbCollabAction::Share { kb_name });
                 Ok(Value::Void)
+            },
+        );
+
+        // (kb-share-p2p [KB-ID]) — mint a shareable P2P join ticket ("magnet
+        // link") and RETURN it (mae://join/…). Unlike (kb-share) this is a
+        // synchronous daemon control-socket call, so it returns the ticket string
+        // directly. Same single backend as the kb-share-p2p command + kb_share_p2p
+        // MCP tool (ADR-025 §"Driving surfaces").
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-share-p2p",
+            "Mint a P2P join ticket (magnet link) for a KB and return the mae://join/… string (default: primary KB).",
+            Arity::Variadic(0),
+            move |args: &[Value]| {
+                let kb_id = if args.is_empty() {
+                    mae_core::KB_DEFAULT_NAME.to_string()
+                } else {
+                    arg_string(args, 0, "kb-share-p2p")?
+                };
+                // Clone the Arc out before the blocking call so the SharedState
+                // lock is not held across daemon I/O.
+                let control = s.lock().unwrap().daemon_control.clone();
+                match control {
+                    Some(c) => c
+                        .mint_p2p_ticket(&kb_id)
+                        .map(Value::string)
+                        .map_err(|e| LispError::user(e, vec![])),
+                    None => Err(LispError::user(
+                        "not connected to a daemon — start one and enable P2P with \
+                         `mae setup-collab --p2p`"
+                            .to_string(),
+                        vec![],
+                    )),
+                }
             },
         );
 
@@ -3038,6 +3076,10 @@ impl SchemeRuntime {
     /// Inject read-only buffer information as Scheme globals.
     /// Call this before eval to give Scheme access to current editor state.
     pub fn inject_editor_state(&mut self, editor: &Editor) {
+        // Keep the daemon control channel current so `(kb-share-p2p)` drives the
+        // live backend (cheap Arc clone; None when no daemon is wired).
+        self.shared.lock().unwrap().daemon_control = editor.kb.daemon_control();
+
         let buf = editor.active_buffer();
         let win = editor.window_mgr.focused_window();
 
