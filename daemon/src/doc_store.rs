@@ -76,6 +76,12 @@ pub struct DocStore {
     /// daemon signs membership ops for KBs it owns (`signer.fingerprint() == owner`)
     /// into the op-log; absent (psk/none) ⇒ legacy unsigned membership only.
     signer: std::sync::OnceLock<Arc<mae_mcp::identity::Identity>>,
+    /// Per-KB external trust anchor (ADR-026): the owner pubkey a peer verifies the
+    /// op-log genesis against, set for a KB JOINED from a relay we don't trust (the
+    /// join-ticket node-id, registered by the dialer). When present, `kb_access`
+    /// derives membership from the signed op-log instead of the relay-supplied
+    /// `member_roles`. Owned KBs need no anchor (the daemon is itself the authority).
+    kb_anchors: RwLock<HashMap<String, [u8; 32]>>,
 }
 
 /// Result of applying an update.
@@ -98,6 +104,7 @@ impl DocStore {
             max_document_size_bytes: 0,
             kb_metas: RwLock::new(HashMap::new()),
             signer: std::sync::OnceLock::new(),
+            kb_anchors: RwLock::new(HashMap::new()),
         }
     }
 
@@ -110,6 +117,21 @@ impl DocStore {
     /// The daemon's signing identity, if running in key-auth mode.
     pub fn signer(&self) -> Option<&Arc<mae_mcp::identity::Identity>> {
         self.signer.get()
+    }
+
+    /// Register the external trust anchor (owner pubkey) for a KB joined from a
+    /// relay (ADR-026) — the join-ticket node-id. `kb_access` then derives that KB's
+    /// membership from the signed op-log instead of trusting the relay's copy.
+    pub async fn set_kb_anchor(&self, kb_id: &str, owner_pubkey: [u8; 32]) {
+        self.kb_anchors
+            .write()
+            .await
+            .insert(kb_id.to_string(), owner_pubkey);
+    }
+
+    /// The external trust anchor for `kb_id`, if one is registered (joined KBs).
+    pub async fn kb_anchor(&self, kb_id: &str) -> Option<[u8; 32]> {
+        self.kb_anchors.read().await.get(kb_id).copied()
     }
 
     /// Set maximum documents allowed in memory. 0 = unlimited.

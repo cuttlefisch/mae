@@ -19,7 +19,7 @@ use mae_sync::kb::{
     derive_kb_client_id, update_new_op_authors, JoinPolicy, KbCollectionDoc, Role as SyncRole,
     Transport,
 };
-use mae_sync::membership::MembershipAction;
+use mae_sync::membership::{derive_valid_members, MembershipAction};
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -725,7 +725,18 @@ async fn kb_access(
         None => return Ok(AccessDecision::Allow),
     };
     let coll = load_collection(doc_store, kb_id).await?;
-    let role = coll.role_of(principal);
+    // ADR-026: for a KB JOINED from a relay we don't trust, an external anchor (the
+    // join-ticket node-id) is registered — derive membership from the SIGNED op-log
+    // rather than the relay-supplied `member_roles`. Owned / un-anchored KBs keep
+    // the locally-authoritative legacy `member_roles` (the daemon owns that state).
+    let role = match doc_store.kb_anchor(kb_id).await {
+        Some(anchor) if coll.oplog_head().is_some() => {
+            derive_valid_members(&coll.oplog_ops(), &anchor, now_unix())
+                .get(principal)
+                .map(|m| m.role)
+        }
+        _ => coll.role_of(principal),
+    };
     // Per-KB transport policy (ADR-018/025): a KB is reachable over a transport
     // only if its policy exposes it there — EXCEPT the owner, who always reaches
     // their own KB (e.g. their local editor over the hub socket) and is the one who

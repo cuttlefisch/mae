@@ -2548,3 +2548,94 @@ async fn approve_member_signs_oplog_for_owned_kb() {
     assert_eq!(members[&bob].role, SyncRole::Editor);
     assert_eq!(members[&bob].invited_by, owner_fp);
 }
+
+#[tokio::test]
+async fn kb_access_derives_from_oplog_when_anchored() {
+    use mae_mcp::identity::Identity;
+
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+
+    let id = Identity::generate("daemon");
+    let owner_fp = id.fingerprint();
+    let owner_pubkey = id.public().to_bytes();
+    store.set_signer(Arc::new(id));
+
+    // Owner shares + adds bob (editor) ⇒ a signed op-log.
+    kb_share_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        "kbanc",
+        "owner",
+        &mut docs,
+    )
+    .await;
+    let bob = fp("bob");
+    dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        kb_member_msg("kb/add_member", "kbanc", &bob, Some("editor")),
+        &mut docs,
+    )
+    .await;
+
+    // Register the external anchor (what the dialer does for a JOINED KB), so
+    // kb_access derives membership from the signed op-log, not member_roles.
+    store.set_kb_anchor("kbanc", owner_pubkey).await;
+
+    let access = |p: String, op: KbOp| {
+        let store = Arc::clone(&store);
+        async move { kb_access(&store, "kbanc", Some(&p), op, Transport::Hub).await }
+    };
+    assert!(
+        matches!(
+            access(owner_fp.clone(), KbOp::Manage).await,
+            Ok(AccessDecision::Allow)
+        ),
+        "owner derives Manage from the op-log"
+    );
+    assert!(
+        matches!(
+            access(bob.clone(), KbOp::Edit).await,
+            Ok(AccessDecision::Allow)
+        ),
+        "bob (editor) derives Edit"
+    );
+    assert!(
+        matches!(
+            access(bob.clone(), KbOp::Manage).await,
+            Ok(AccessDecision::Deny(_))
+        ),
+        "editor may not Manage"
+    );
+    assert!(
+        matches!(
+            access(fp("carol"), KbOp::Edit).await,
+            Ok(AccessDecision::Deny(_))
+        ),
+        "non-member denied"
+    );
+
+    // Remove bob (signed Remove); the derived gate now denies him.
+    dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        kb_member_msg("kb/remove_member", "kbanc", &bob, None),
+        &mut docs,
+    )
+    .await;
+    assert!(
+        matches!(
+            access(bob.clone(), KbOp::Edit).await,
+            Ok(AccessDecision::Deny(_))
+        ),
+        "removed member denied via derived membership"
+    );
+}
