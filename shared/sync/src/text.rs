@@ -893,7 +893,7 @@ mod tests {
 
     #[test]
     fn stress_convergence() {
-        use rand::Rng;
+        use rand::RngExt;
 
         // Create doc 0 with content, rest empty — then sync
         let mut docs: Vec<TextSync> = Vec::new();
