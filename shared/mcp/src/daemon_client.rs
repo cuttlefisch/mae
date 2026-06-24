@@ -125,6 +125,22 @@ impl DaemonClient {
         }
     }
 
+    /// Mint a P2P join ticket ("magnet link") for `kb_id` via the daemon's
+    /// `p2p/mint_ticket` control method, returning the `mae://join/…` string.
+    /// Shared by the editor's `DaemonControl` impl and the `mae` CLI so both
+    /// drive the identical backend (ADR-025 §"Driving surfaces").
+    pub fn mint_p2p_ticket(&mut self, kb_id: &str) -> Result<String, DaemonClientError> {
+        let result = self.call("p2p/mint_ticket", json!({ "kb_id": kb_id }))?;
+        result
+            .get("ticket")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| DaemonClientError::RpcError {
+                code: -32603,
+                message: "daemon p2p/mint_ticket returned no ticket".to_string(),
+            })
+    }
+
     fn call_inner(&mut self, method: &str, params: &Value) -> Result<Value, DaemonClientError> {
         self.ensure_connected()?;
 

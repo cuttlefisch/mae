@@ -158,6 +158,22 @@ fn apply_collab_launch_overrides(editor: &mut Editor, connect_addr: Option<&str>
 /// the GUI path can use winit's `EventLoop::run_app()` on the main thread
 /// (required by Wayland/macOS compositors) with tokio on a background thread.
 ///
+/// Binary-side [`mae_core::DaemonControl`] impl: a [`DaemonClient`] behind a
+/// `Mutex` (the trait method is `&self`, but `DaemonClient::call` needs `&mut
+/// self`). Injected into `editor.kb` so the editor's P2P share surfaces reach the
+/// daemon control socket without `mae-core` depending on `mae-mcp`.
+struct DaemonControlClient(std::sync::Mutex<mae_mcp::daemon_client::DaemonClient>);
+
+impl mae_core::DaemonControl for DaemonControlClient {
+    fn mint_p2p_ticket(&self, kb_id: &str) -> Result<String, String> {
+        self.0
+            .lock()
+            .map_err(|_| "daemon control channel is poisoned".to_string())?
+            .mint_p2p_ticket(kb_id)
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// Emacs lesson: Emacs's event loop is synchronous and single-threaded.
 /// Retrofitting concurrency required 23,901 commits across 3 GC branches.
 /// We use async from day one so the AI agent can operate as a peer.
@@ -1168,6 +1184,18 @@ fn main() -> io::Result<()> {
                 editor
                     .kb
                     .set_daemon_query_layer(Some(std::sync::Arc::new(lru)));
+
+                // Wire a second client as the control channel for P2P lifecycle
+                // ops (ticket mint/join) — the first was consumed by the LRU layer.
+                let mut control = mae_mcp::daemon_client::DaemonClient::new(&socket);
+                match control.connect() {
+                    Ok(()) => editor.kb.set_daemon_control(Some(std::sync::Arc::new(
+                        DaemonControlClient(std::sync::Mutex::new(control)),
+                    ))),
+                    Err(e) => {
+                        warn!(error = %e, "daemon control channel unavailable (P2P share disabled)")
+                    }
+                }
             }
             Err(e) => {
                 warn!(
