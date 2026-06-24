@@ -15,7 +15,7 @@ jobs:
     name: Build linux-x86_64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history for changelog
 
@@ -65,7 +65,7 @@ jobs:
     name: Build linux-x86_64-gui
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -130,7 +130,7 @@ jobs:
     name: Build macos-aarch64
     runs-on: macos-latest  # Apple Silicon M-series
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -294,7 +294,7 @@ jobs:
     needs: [build-linux, build-linux-gui, build-macos-arm]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
