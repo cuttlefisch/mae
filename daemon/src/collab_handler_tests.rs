@@ -2298,3 +2298,83 @@ async fn transport_policy_gate() {
         AccessDecision::Allow
     );
 }
+
+#[tokio::test]
+async fn kb_share_sets_and_widens_transport_policy() {
+    use mae_sync::kb::TransportPolicy;
+
+    fn share_msg(kb_id: &str, owner_label: &str, transport: &str) -> serde_json::Value {
+        let coll = KbCollectionDoc::new_owned(kb_id, "", owner_label);
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "kb/share",
+            "params": {
+                "kb_id": kb_id, "name": kb_id, "creator": owner_label,
+                "collection_state": update_to_base64(&coll.encode_state()),
+                "nodes": [], "transport": transport,
+            }
+        })
+    }
+
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let owner = fp("owner");
+
+    // First share over p2p ⇒ P2p-only (NOT widened with the conservative Hub default).
+    let resp = dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner),
+        share_msg("kbx", "owner", "p2p"),
+        &mut HashSet::new(),
+    )
+    .await;
+    assert!(resp.error.is_none(), "kb/share p2p: {:?}", resp.error);
+    assert_eq!(
+        load_coll(&store, "kbx").await.transport_policy(),
+        TransportPolicy::P2p
+    );
+
+    // The owner re-shares over hub ⇒ exposure WIDENS to Both (preserving p2p).
+    let resp = dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner),
+        share_msg("kbx", "owner", "hub"),
+        &mut HashSet::new(),
+    )
+    .await;
+    assert!(
+        resp.error.is_none(),
+        "kb/share hub re-share: {:?}",
+        resp.error
+    );
+    assert_eq!(
+        load_coll(&store, "kbx").await.transport_policy(),
+        TransportPolicy::Both
+    );
+
+    // A KB shared with no transport param defaults to Hub-only.
+    let resp = dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner),
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "kb/share",
+            "params": {
+                "kb_id": "kbhub", "name": "kbhub", "creator": "owner",
+                "collection_state": update_to_base64(&KbCollectionDoc::new_owned("kbhub", "", "owner").encode_state()),
+                "nodes": [],
+            }
+        }),
+        &mut HashSet::new(),
+    )
+    .await;
+    assert!(resp.error.is_none(), "kb/share default: {:?}", resp.error);
+    assert_eq!(
+        load_coll(&store, "kbhub").await.transport_policy(),
+        TransportPolicy::Hub
+    );
+}

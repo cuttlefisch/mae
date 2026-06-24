@@ -1383,6 +1383,36 @@ async fn handle_doc_request_inner(
                 .unwrap_or_else(|e| e.into_inner())
                 .subscribe_doc(session_id, &collection_doc);
 
+            // Transport exposure (ADR-018/025): the `transport` param (hub|p2p|both,
+            // default hub) WIDENS the KB's policy from its stored value, so a first
+            // p2p-share is P2p-only while `kb-share` + `kb-share-p2p` becomes Both
+            // (unlike membership, transport is owner-set metadata — safe on
+            // re-share). This is how `kb-share-p2p` *establishes* a mesh-exposed KB.
+            let requested_transport = params["transport"]
+                .as_str()
+                .and_then(mae_sync::kb::TransportPolicy::parse)
+                .unwrap_or(mae_sync::kb::TransportPolicy::Hub);
+            if let Ok(mut coll) = load_collection(doc_store, &kb_id).await {
+                let raw = coll.transport_policy_raw();
+                let new = raw.map_or(requested_transport, |c| c.union(requested_transport));
+                if Some(new) != raw {
+                    let update = coll.set_transport_policy(new);
+                    if let Err(e) = persist_and_broadcast_collection(
+                        doc_store,
+                        broadcaster,
+                        session_id,
+                        &kb_id,
+                        &update,
+                    )
+                    .await
+                    {
+                        warn!(kb_id = %kb_id, error = %e, "kb/share: failed to set transport policy");
+                    } else {
+                        info!(kb_id = %kb_id, transport = %new.as_str(), "kb/share: transport exposure set");
+                    }
+                }
+            }
+
             // Store each node doc.
             let nodes = params["nodes"].as_array();
             let mut node_count: u64 = 0;

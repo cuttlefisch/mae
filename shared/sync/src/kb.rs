@@ -664,6 +664,17 @@ impl TransportPolicy {
             _ => TransportPolicy::Both,
         }
     }
+    /// The union of two exposure policies (`Hub ∪ P2p = Both`). Used to widen a
+    /// KB's exposure when it is (re-)shared over an additional transport.
+    pub fn union(self, other: TransportPolicy) -> TransportPolicy {
+        use TransportPolicy::*;
+        match (self, other) {
+            (Both, _) | (_, Both) => Both,
+            (Hub, Hub) => Hub,
+            (P2p, P2p) => P2p,
+            _ => Both,
+        }
+    }
 }
 
 /// A KB member: the principal (key fingerprint), its role, and a display label.
@@ -1010,12 +1021,18 @@ impl KbCollectionDoc {
     /// The KB's transport-exposure policy (ADR-018/025). **Absent ⇒ Hub** — a
     /// hub-shared KB is not mesh-reachable until explicitly p2p-shared.
     pub fn transport_policy(&self) -> TransportPolicy {
+        self.transport_policy_raw().unwrap_or_default()
+    }
+
+    /// The transport policy as STORED — `None` when never explicitly set (vs an
+    /// explicit `Hub`). `kb/share` widens from this so a never-shared KB shared
+    /// over p2p becomes P2p-only, while a hub share + a p2p re-share become Both.
+    pub fn transport_policy_raw(&self) -> Option<TransportPolicy> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let txn = self.doc.transact();
         root.get(&txn, COLL_TRANSPORT_POLICY_KEY)
             .map(|v| v.to_string(&txn))
             .and_then(|s| TransportPolicy::parse(&s))
-            .unwrap_or_default()
     }
 
     /// Pending join requests (invite policy).
@@ -2063,6 +2080,32 @@ mod tests {
         coll.set_transport_policy(TransportPolicy::Both);
         assert_eq!(coll.transport_policy(), TransportPolicy::Both);
         assert!(coll.transport_policy().allows(Transport::P2p));
+    }
+
+    #[test]
+    fn transport_policy_raw_and_union_widening() {
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
+        // Never set ⇒ raw None (distinct from an explicit Hub), effective Hub.
+        assert_eq!(coll.transport_policy_raw(), None);
+        assert_eq!(coll.transport_policy(), TransportPolicy::Hub);
+
+        // First share over p2p ⇒ P2p-only (set, not unioned with the Hub default).
+        coll.set_transport_policy(TransportPolicy::P2p);
+        assert_eq!(coll.transport_policy_raw(), Some(TransportPolicy::P2p));
+
+        // A later hub re-share widens P2p ∪ Hub ⇒ Both.
+        let widened = coll.transport_policy().union(TransportPolicy::Hub);
+        assert_eq!(widened, TransportPolicy::Both);
+
+        // union algebra.
+        assert_eq!(
+            TransportPolicy::Hub.union(TransportPolicy::Hub),
+            TransportPolicy::Hub
+        );
+        assert_eq!(
+            TransportPolicy::Both.union(TransportPolicy::P2p),
+            TransportPolicy::Both
+        );
     }
 
     #[test]
