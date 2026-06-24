@@ -21,16 +21,19 @@
 //! activated from daemon startup behind `[collab.p2p]`. The outbound peer dialer
 //! + gossip/anti-entropy mesh land in Phase 2 (#89).
 
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
 
 use iroh::endpoint::presets;
-use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl, SecretKey};
+use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr};
 use mae_daemon::collab_handler;
 use mae_daemon::doc_store::DocStore;
 use mae_mcp::broadcast::SharedBroadcaster;
 use mae_mcp::identity::{AuthorizedKeys, Identity, PeerIdentity, PublicKey};
 use tracing::{info, warn};
+
+use crate::ticket::JoinTicket;
 
 /// ALPN for the MAE collab mesh protocol over iroh/QUIC.
 pub const MAE_ALPN: &[u8] = b"mae-sync/0";
@@ -72,6 +75,36 @@ pub(crate) fn relay_mode_from_config(relay: &str) -> Result<RelayMode, String> {
                 )
             }),
     }
+}
+
+/// Rewrite an unspecified bind IP (`0.0.0.0` / `[::]`) to loopback so the socket
+/// is actually dialable when it lands in a ticket's direct-address hints or a
+/// relay-less local dial.
+#[allow(dead_code)] // used by mint_ticket (below) + the connectivity test
+fn loopback_if_unspecified(mut sa: SocketAddr) -> SocketAddr {
+    if sa.ip().is_unspecified() {
+        sa.set_ip(if sa.is_ipv4() {
+            Ipv4Addr::LOCALHOST.into()
+        } else {
+            Ipv6Addr::LOCALHOST.into()
+        });
+    }
+    sa
+}
+
+/// Mint a shareable [`JoinTicket`] for `kb_id` from this mesh endpoint's current
+/// address — its node-id plus whatever relay + direct addresses iroh currently
+/// knows (`endpoint.addr()`), augmented with the bound UDP sockets so a LAN /
+/// relay-disabled endpoint still carries a dialable direct address. Synchronous
+/// and non-blocking (never calls `online()`), so it is safe on a request path.
+#[allow(dead_code)] // wired into the `p2p/mint_ticket` collab method next (#101)
+pub fn mint_ticket(endpoint: &Endpoint, kb_id: impl Into<String>) -> JoinTicket {
+    let mut addr = endpoint.addr();
+    for sa in endpoint.bound_sockets() {
+        addr.addrs
+            .insert(TransportAddr::Ip(loopback_if_unspecified(sa)));
+    }
+    JoinTicket::new(addr, kb_id)
 }
 
 /// Resolve a connecting peer's **verified** Ed25519 key (`remote_id()`) to a
@@ -216,6 +249,37 @@ mod tests {
         );
     }
 
+    /// `mint_ticket` yields a shareable ticket whose node-id is this endpoint's
+    /// trusted-peer key, carries the KB-id, and includes a dialable direct address
+    /// (from the bound sockets even with no relay), round-tripping as text.
+    #[tokio::test]
+    async fn mint_ticket_carries_identity_kb_and_a_dialable_addr() {
+        let id = Identity::generate("owner");
+        let endpoint = bind_endpoint(&id, RelayMode::Disabled).await.unwrap();
+
+        let ticket = mint_ticket(&endpoint, "concept:architecture");
+
+        // Node-id == the endpoint identity (the principal a joiner verifies).
+        assert_eq!(ticket.node_id(), endpoint.id());
+        assert_eq!(ticket.kb_id, "concept:architecture");
+        // At least one direct address, none left unspecified (all dialable).
+        let has_dialable = ticket
+            .endpoint
+            .addrs
+            .iter()
+            .any(|a| matches!(a, TransportAddr::Ip(sa) if !sa.ip().is_unspecified()));
+        assert!(
+            has_dialable,
+            "ticket carries a dialable direct address: {:?}",
+            ticket.endpoint.addrs
+        );
+        // Text round-trip is stable.
+        let parsed: JoinTicket = ticket.to_string().parse().unwrap();
+        assert_eq!(parsed, ticket);
+
+        endpoint.close().await;
+    }
+
     /// The mesh access gate (ADR-025): a key in `authorized_keys` resolves to a
     /// real, principal-bearing `PeerIdentity`; any other key is rejected — even
     /// though iroh would have happily completed the QUIC handshake for it. Uses
@@ -254,8 +318,7 @@ mod tests {
     /// `authorized_keys` gate input).
     #[tokio::test]
     async fn two_endpoints_round_trip_a_framed_message() {
-        use iroh::{EndpointAddr, TransportAddr};
-        use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+        use iroh::EndpointAddr;
         use std::time::Duration;
         use tokio::io::BufReader;
 
@@ -269,24 +332,15 @@ mod tests {
         // `RelayMode::Disabled` there is no relay home and DNS/Pkarr discovery
         // never resolves on localhost, so `online()`/`addr()` would block forever
         // (a 20-min hang in CI). Instead, hand the connector the acceptor's bound
-        // UDP socket(s) directly, rewriting the unspecified bind IP (0.0.0.0 / [::])
-        // to loopback so it is actually dialable. Compute this BEFORE moving the
-        // acceptor into the accept task.
+        // UDP socket(s) directly, rewriting the unspecified bind IP to loopback so
+        // it is actually dialable. Compute this BEFORE moving the acceptor into the
+        // accept task.
         let acc_addr = EndpointAddr::from_parts(
             acceptor.id(),
             acceptor
                 .bound_sockets()
                 .into_iter()
-                .map(|mut sa: SocketAddr| {
-                    if sa.ip().is_unspecified() {
-                        sa.set_ip(if sa.is_ipv4() {
-                            Ipv4Addr::LOCALHOST.into()
-                        } else {
-                            Ipv6Addr::LOCALHOST.into()
-                        });
-                    }
-                    TransportAddr::Ip(sa)
-                }),
+                .map(|sa| TransportAddr::Ip(loopback_if_unspecified(sa))),
         );
 
         // Acceptor: accept one connection, read a framed message, echo it back.
