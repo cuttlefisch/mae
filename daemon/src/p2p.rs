@@ -15,15 +15,17 @@
 //! - `RelayMode::{Default, Custom(RelayMap), Disabled}` covers public relay,
 //!   self-hosted relay, and LAN-only (mDNS) — the relay self-host story.
 //!
-//! This slice provides endpoint construction. The accept loop, peer dialer, and
-//! `authorized_keys` gate land in the following Phase-1 steps, gated behind the
-//! `collab.p2p` config (#94).
+//! Phase 1 (#88/#94) provides endpoint construction ([`bind_endpoint`]), the
+//! accept loop ([`serve`]) with the `authorized_keys` access gate
+//! ([`authorize_peer`]), and relay selection ([`relay_mode_from_config`]),
+//! activated from daemon startup behind `[collab.p2p]`. The outbound peer dialer
+//! + gossip/anti-entropy mesh land in Phase 2 (#89).
 
 use std::sync::Arc;
 use std::time::Instant;
 
 use iroh::endpoint::presets;
-use iroh::{Endpoint, RelayMode, SecretKey};
+use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl, SecretKey};
 use mae_daemon::collab_handler;
 use mae_daemon::doc_store::DocStore;
 use mae_mcp::broadcast::SharedBroadcaster;
@@ -36,7 +38,6 @@ pub const MAE_ALPN: &[u8] = b"mae-sync/0";
 /// Bind an iroh endpoint whose node identity is the daemon's Ed25519 trusted-peer
 /// key. `relay_mode` selects public relays (`Default`), a self-hosted relay map
 /// (`Custom`), or LAN-only with no relay (`Disabled`).
-#[allow(dead_code)] // wired into the accept loop + dialer in the next Phase-1 step
 pub async fn bind_endpoint(
     identity: &Identity,
     relay_mode: RelayMode,
@@ -48,6 +49,29 @@ pub async fn bind_endpoint(
         .relay_mode(relay_mode)
         .bind()
         .await
+}
+
+/// Map the `collab.p2p.relay` config string to an iroh [`RelayMode`]:
+/// - `"default"` → the public n0 relays (global discovery + NAT hole-punch);
+/// - `"disabled"` → no relay; direct/LAN only (the mDNS fast-path);
+/// - anything else → a self-hosted relay URL (`RelayMode::Custom`).
+///
+/// Returns a human-readable error (surfaced by `--check-config` and at startup)
+/// when a non-keyword value is not a valid relay URL.
+pub(crate) fn relay_mode_from_config(relay: &str) -> Result<RelayMode, String> {
+    match relay {
+        "default" => Ok(RelayMode::Default),
+        "disabled" => Ok(RelayMode::Disabled),
+        url => url
+            .parse::<RelayUrl>()
+            .map(|u| RelayMode::Custom(RelayMap::from(u)))
+            .map_err(|e| {
+                format!(
+                    "invalid collab.p2p.relay {url:?}: expected 'default', 'disabled', or a \
+                     relay URL ({e})"
+                )
+            }),
+    }
 }
 
 /// Resolve a connecting peer's **verified** Ed25519 key (`remote_id()`) to a
@@ -89,7 +113,6 @@ pub(crate) fn authorize_peer(
 ///
 /// This is the Phase-1 transport adapter: one bi stream per connection, request/
 /// response like the TCP path. Mesh multiplexing/gossip is Phase 2 (#89).
-#[allow(dead_code)] // wired into daemon startup behind `collab.p2p` (#94)
 pub async fn serve(
     endpoint: Endpoint,
     authorized: Arc<AuthorizedKeys>,
@@ -169,6 +192,28 @@ mod tests {
             "iroh endpoint identity must equal the daemon's Ed25519 trusted-peer key"
         );
         ep.close().await;
+    }
+
+    /// The `collab.p2p.relay` config string maps to the right `RelayMode`, and a
+    /// non-keyword non-URL value is a reported error (not a silent fallback).
+    #[test]
+    fn relay_mode_config_mapping() {
+        assert!(matches!(
+            relay_mode_from_config("default"),
+            Ok(RelayMode::Default)
+        ));
+        assert!(matches!(
+            relay_mode_from_config("disabled"),
+            Ok(RelayMode::Disabled)
+        ));
+        assert!(matches!(
+            relay_mode_from_config("https://relay.example.org"),
+            Ok(RelayMode::Custom(_))
+        ));
+        assert!(
+            relay_mode_from_config("not a relay").is_err(),
+            "a non-keyword, non-URL value must be a reported error"
+        );
     }
 
     /// The mesh access gate (ADR-025): a key in `authorized_keys` resolves to a

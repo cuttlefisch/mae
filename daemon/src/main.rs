@@ -276,6 +276,51 @@ async fn main() {
 }
 
 /// Spawn the collab TCP server (absorbed from mae-state-server).
+/// Launch the P2P mesh endpoint (ADR-025 / #88).
+///
+/// Reuses the key-mode daemon `identity` as the iroh node identity (so a peer's
+/// `EndpointId` is exactly its `authorized_keys` principal) and the same
+/// `authorized` set as the TCP listener's access gate, sharing `doc_store` +
+/// `broadcaster` so mesh peers and local clients see one document set.
+/// Best-effort: a bad relay config or a bind failure disables the mesh but
+/// leaves the rest of the daemon running.
+async fn spawn_p2p_mesh(
+    p2p: &config::P2pConfig,
+    identity: &mae_mcp::identity::Identity,
+    authorized: Arc<mae_mcp::identity::AuthorizedKeys>,
+    doc_store: Arc<doc_store::DocStore>,
+    broadcaster: SharedBroadcaster,
+    start_time: std::time::Instant,
+) {
+    let relay_mode = match p2p::relay_mode_from_config(&p2p.relay) {
+        Ok(mode) => mode,
+        Err(e) => {
+            error!(error = %e, "P2P mesh disabled: invalid relay configuration");
+            return;
+        }
+    };
+    let endpoint = match p2p::bind_endpoint(identity, relay_mode).await {
+        Ok(ep) => ep,
+        Err(e) => {
+            error!(error = %e, "P2P mesh disabled: failed to bind iroh endpoint");
+            return;
+        }
+    };
+    info!(
+        fingerprint = %identity.fingerprint(),
+        relay = %p2p.relay,
+        authorized = authorized.len(),
+        "P2P mesh endpoint bound (ADR-025); accepting authorized peers"
+    );
+    tokio::spawn(p2p::serve(
+        endpoint,
+        authorized,
+        doc_store,
+        broadcaster,
+        start_time,
+    ));
+}
+
 async fn spawn_collab_server(config: &DaemonConfig) {
     let collab = &config.collab;
 
@@ -299,6 +344,8 @@ async fn spawn_collab_server(config: &DaemonConfig) {
             .with_max_document_size(collab.sync.max_document_size_bytes),
     );
     let broadcaster: SharedBroadcaster = Arc::new(std::sync::Mutex::new(EventBroadcaster::new()));
+    // Shared by the TCP listener and the P2P mesh so both report the same uptime.
+    let server_start_time = std::time::Instant::now();
 
     // Recover documents from storage
     match backend.list_documents().await {
@@ -400,6 +447,22 @@ async fn spawn_collab_server(config: &DaemonConfig) {
                 return;
             }
             let authorized = Arc::new(authorized);
+
+            // P2P mesh (ADR-025 / #88): reuse this key-mode identity as the iroh
+            // node identity and gate inbound peers on the same authorized_keys
+            // set, sharing the doc_store + broadcaster with the TCP listener.
+            if collab.p2p.enabled {
+                spawn_p2p_mesh(
+                    &collab.p2p,
+                    &identity,
+                    Arc::clone(&authorized),
+                    Arc::clone(&doc_store),
+                    broadcaster.clone(),
+                    server_start_time,
+                )
+                .await;
+            }
+
             if collab.auth.tls {
                 // I-10: the verifier reloads `authorized_keys` per handshake
                 // (mtime-gated), so `mae-daemon authorize`/`revoke` take effect
@@ -461,7 +524,6 @@ async fn spawn_collab_server(config: &DaemonConfig) {
         }
     };
 
-    let server_start_time = std::time::Instant::now();
     info!(
         bind = %collab.bind,
         data_dir = %collab_data_dir.display(),
