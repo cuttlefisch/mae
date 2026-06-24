@@ -69,14 +69,15 @@ jobs:
         if: matrix.step == 'fmt'
         run: cargo fmt --all --check
 
-      # Build remaining binaries + manual KB for downstream jobs.
-      # cargo test --release already compiled most deps — this is incremental.
-      - name: Build install artifacts
+      # `cargo test --workspace --release --features gui` above already compiled
+      # every workspace binary (mae, mae-mcp-shim, build-manual-kb) into
+      # target/release/. Reuse them directly. The previous `cargo build` (without
+      # --features gui) re-resolved features and recompiled the entire `mae` crate
+      # from scratch to produce a binary that already existed — pure waste on the
+      # critical path that gates every artifact-consuming downstream job.
+      - name: Generate manual KB (reuse test-compiled binary)
         if: matrix.toolchain == 'stable' && matrix.step == 'test'
-        run: |
-          cargo build --release --package mae-mcp
-          cargo build --release --package mae --bin build-manual-kb
-          ./target/release/build-manual-kb assets/mae-manual.cozo
+        run: ./target/release/build-manual-kb assets/mae-manual.cozo
 
       - name: Stage editor artifacts
         if: matrix.toolchain == 'stable' && matrix.step == 'test'
