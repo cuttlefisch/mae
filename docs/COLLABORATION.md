@@ -59,24 +59,27 @@ mae-daemon
 mae
 ```
 
-In each MAE instance, configure via `config.toml` (recommended):
-
-```toml
-# In ~/.config/mae/config.toml:
-[collaboration]
-server_address = "127.0.0.1:9473"
-auto_connect = true
-user_name = "alice"
-```
-
-Or via Scheme (runtime):
+In each MAE instance, configure via `init.scm` (the primary config surface):
 
 ```scheme
+;; In ~/.config/mae/init.scm:
 (set-option! "collab-server-address" "127.0.0.1:9473")
 (set-option! "collab-auto-connect" "true")
+(set-option! "collab-user-name" "alice")
 ```
 
-Or use the interactive commands: `SPC C s` (start server), `SPC C c` (connect).
+Or persist at runtime (`:set` + `:set-save` writes `init.scm`):
+
+```
+:set collab-server-address 127.0.0.1:9473
+:set collab-auto-connect true
+:set-save
+```
+
+The legacy `config.toml` `[collaboration]` block is still read as bootstrap, but
+it is being retired — prefer `init.scm`.
+
+Or use the interactive commands: `SPC C s` (start daemon), `SPC C c` (connect).
 
 ### Workflow C — Collaborative (multi-user, LAN/VPN)
 
@@ -85,18 +88,25 @@ Or use the interactive commands: `SPC C s` (start server), `SPC C c` (connect).
 mae-daemon --bind 0.0.0.0:9473
 ```
 
-Each client (`config.toml` or `init.scm`):
+Each client (`init.scm`) — use **`key` mode** (trusted-peer mTLS) for any non-loopback setup:
 
-```toml
-[collaboration]
-server_address = "192.168.1.10:9473"
-auto_connect = true
-user_name = "bob"
+```scheme
+(set-option! "collab-server-address" "192.168.1.10:9473")
+(set-option! "collab-auto-connect" "true")
+(set-option! "collab-user-name" "bob")
+(set-option! "collab-auth-mode" "key")   ; trusted-peer mTLS — recommended (§10)
 ```
 
-> **Security:** PSK mutual authentication (HMAC-SHA256) is required since v0.11.0.
-> Set `collab_psk` on both server and all clients. For untrusted networks, use a VPN.
-> See [Security](#8-security) below.
+The one-command path is `mae setup-collab --server 192.168.1.10:9473` (generates
+your Ed25519 identity, writes these options, and prints the `mae-daemon authorize`
+line for the admin — see §10).
+
+> **Security:** auth is not required for loopback, but for multi-user/LAN/VPN use
+> **`key` mode** (Ed25519 trusted-peer mTLS), which encrypts and authenticates each
+> peer. The daemon's `auth.mode` defaults to `none`; set it to `key` (recommended)
+> or `psk`. If you use `psk`, supply the secret via `collab-psk-command` — never a
+> plaintext `collab-psk` in `config.toml`. For untrusted networks, add a VPN.
+> See [Security](#8-security) and §10 below.
 
 ---
 
@@ -121,7 +131,7 @@ which is being retired. Secrets (PSKs) never go in `config.toml`; see §8/§10.
 | `collab-psk` | string | `""` | PSK (plaintext fallback — prefer a keystore/command). |
 | `collab-psk-command` | string | `""` | Command that prints the PSK (e.g. `pass show mae/key`). |
 | `collab-auto-share` | bool | `false` | Auto-share new buffers when connected. |
-| `collab-kb-sync-mode` | string | `on_save` | KB sync trigger: `manual` (`:kb-sync`) or `on_save`. |
+| `collab-kb-sync-mode` | string | `on_save` | KB sync trigger: `manual` (sync explicitly with `:collab-sync`, `SPC C y`) or `on_save`. |
 | `collab-fence-resolution` | string | `prompt` | On a fenced edit ("rebase required"): `prompt` (ask) or `auto` (adopt + re-author in background). |
 
 Set + persist at runtime (writes `init.scm`):
@@ -327,8 +337,12 @@ sudo iptables -A INPUT -p tcp --dport 9473 -j ACCEPT
 
 ### Security Warnings
 
-> **PSK authentication is required.** Both server and clients must share the
-> same `collab_psk` (HMAC-SHA256). Connections without a valid PSK are rejected.
+> **Authenticate any non-loopback deployment.** The daemon's `auth.mode` defaults
+> to `none` (suitable only for trusted loopback). For LAN/VPN/multi-user use, set
+> **`key` mode** (Ed25519 trusted-peer mTLS — §10): it encrypts and mutually
+> authenticates each peer. PSK (`psk` mode, HMAC-SHA256) is an alternative; supply
+> the secret via `collab-psk-command` — **never** a plaintext `collab-psk` in
+> `config.toml`.
 
 Recommendations:
 - **Local only**: Use the default `127.0.0.1` binding (no firewall needed).
@@ -356,10 +370,10 @@ From inside MAE: `SPC C D` (`:collab-doctor`) or `mae doctor` from the CLI.
 
 | Key | Command | Description |
 |-----|---------|-------------|
-| `SPC C s` | `:collab-start-server` | Start a local daemon process |
+| `SPC C s` | `:collab-start` | Start a local daemon process |
 | `SPC C c` | `:collab-connect` | Connect to configured server |
 | `SPC C d` | `:collab-disconnect` | Disconnect from current server |
-| `SPC C S` | `:collab-share-buffer` | Share active buffer with connected peers |
+| `SPC C S` | `:collab-share` | Share active buffer with connected peers |
 | `SPC C i` | `:collab-status` | Show connection info, peers, shared docs |
 | `:collab-doctor` | — | Comprehensive diagnostic report |
 | `:collab-status` | — | Live connection state (also available as `SPC C i`) |

@@ -909,7 +909,7 @@ impl super::Editor {
         lines.push(
             "Use :set <option> <value> to change, :set <option> to toggle booleans.".to_string(),
         );
-        lines.push("Use :set-save <option> [value] to persist to config.toml.".to_string());
+        lines.push("Use :set-save <option> [value] to persist to init.scm.".to_string());
         lines.push("Use :describe-option <name> or SPC h o for documentation.".to_string());
 
         let content = lines.join("\n");

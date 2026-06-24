@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.12.0 · **Tests:** 5,863+ passing · **Status:** Alpha — Phases 1-13 complete. v0.12.0: CozoDB-primary graph KB with typed relationships, meta-nodes, versioning, agenda queries, HNSW embeddings, federated query layer.
+**Current version:** v0.13.12 (v0.14.0 pending) · **Status:** Alpha — Phases 1-13 complete. v0.13.x: binary architecture split into editor + daemon workspaces with separate `Cargo.lock` files (ADR-014), `mae-daemon` for persistent KB + collaborative editing. v0.14.0 (pending): collaborative **KB sharing** is user-ready — trusted-peer mTLS, per-KB roles/policy/membership, mDNS discovery.
 
 ---
 
@@ -19,6 +19,8 @@
 | 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, noweb, tangle, KB federation |
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
 | 11. Module System | ✅ Complete | 9 modules extracted (Doom model), `module.toml` manifests, `mae pkg` CLI, flags, live reload |
+| 12. RAG Groundwork | ✅ Complete | CozoDB-primary graph KB, typed relationships, meta-nodes, versioning, agenda queries, HNSW embeddings, federated query layer |
+| 13. Scheme Runtime | ✅ Complete | Purpose-built R7RS-small VM (replaces Steel), 261 stdlib fns, hygienic macros, module system, call/cc, in-process LSP + DAP for Scheme |
 
 ---
 
@@ -117,7 +119,7 @@
   - `docs/metadata` endpoint added to daemon ✅
   - `WalEntry::client_id` stored but never read for audit/attribution (deferred — needs Phase F auth)
   - `StorageError::Io` variant reserved but unused (pluggable backends — by design)
-- [ ] **State server v2** (Phase F): Auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Completed: awareness protocol ✅, per-user undo ✅ (yrs `UndoManager`), git-based identity ✅, heartbeat/keepalive ✅, buffer status indicators ✅, Bugs 2-4 ✅ *(8de53b8)*, PSK mutual auth ✅ *(fffa39f)*, KB protocol handlers ✅ *(fffa39f)*, **KB sharing E2E** ✅ (bridge + continuous sync + offline + mDNS). Next: SSH key exchange, msgpack wire format.
+- [ ] **State server v2** (Phase F): Auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Completed: awareness protocol ✅, per-user undo ✅ (yrs `UndoManager`), git-based identity ✅, heartbeat/keepalive ✅, buffer status indicators ✅, Bugs 2-4 ✅ *(8de53b8)*, PSK mutual auth ✅ *(fffa39f)*, KB protocol handlers ✅ *(fffa39f)*, **KB sharing E2E** ✅ (bridge + continuous sync + offline + mDNS), **SSH/Ed25519 trusted-peer mTLS** ✅ (ADR-017). Next: msgpack wire format, OAuth/OIDC.
   - **SSH Key Exchange Authentication** (deferred from v0.11.0):
     - Ed25519 keypair generation + TOFU trust store (`~/.config/mae/trusted_keys.toml`)
     - `SshAuth` provider implementing existing `AuthProvider` trait (`crates/sync/src/auth.rs`)
@@ -204,9 +206,9 @@ The KB had a dual source of truth problem: org files re-parsed on startup, SQLit
 - [x] **Phase 7**: Internal KB link preservation in `rewrite_links_with_types()`, fragment stripping in link storage, GUI heading underline scale fix.
 
 #### Future
-- [ ] **GraphRAG live pipeline** (v0.14.0): Embedding generation (provider trait: OpenAI, Ollama, local), background indexing, AI context injection.
+- [ ] **GraphRAG live pipeline** (future): Embedding generation (provider trait: OpenAI, Ollama, local), background indexing, AI context injection.
 - [x] **AI hygiene daemon** (v0.13.0): Deterministic KB quality assessment — orphan detection, broken links, kind/namespace mismatches, missing metadata. CozoDB `hygiene_suggestions` relation with CRUD. Scheduler integration for periodic scans. JSON-RPC API (scan, report, accept, dismiss). AI-powered inference (link type suggestions) planned for v0.14.0.
-- [ ] **GUI view rendering** (v0.14.0): Kanban board, sprint view, timeline — drag-drop, swimlanes.
+- [ ] **GUI view rendering** (future): Kanban board, sprint view, timeline — drag-drop, swimlanes.
 
 ### Phase 13: MAE Scheme Runtime (v0.12.0)
 
@@ -425,7 +427,7 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [ ] **Ad-hoc solution review**: Thorough code review for hardcoded values, duplicated logic between TUI/GUI, and workarounds that should be proper abstractions — in prep for server-client architecture.
 - [ ] **Which-key idle delay**: Wire `which-key-idle-delay` option to event loop timer (default 0ms = immediate).
 - [ ] **Which-key floating popup mode**: Option to render which-key as a centered floating popup (like find-file/command-palette) instead of docked to bottom. Controlled by a `which-key-display` option (`docked` | `floating`).
-- [ ] **Scheme configurability audit**: Audit ALL OptionRegistry entries for missing `config_key` (prevents `:set-save` persistence). Verify every option round-trips through config.toml. Document full option surface in `:help concept:options` KB node.
+- [ ] **Scheme configurability audit**: Audit ALL OptionRegistry entries for missing `config_key` (prevents `:set-save` persistence). Verify every option round-trips through `:set-save` persistence to `init.scm` (the primary config surface). Document full option surface in `:help concept:options` KB node.
 - [x] **Performance regression testing**: Criterion benchmark suite for buffer_ops + crdt_ops. `make bench/bench-save/bench-compare`. *(0829dd5)*
 - [ ] **KB search scoping**: Allow per-project KB search that excludes MAE internal nodes (scheme:*, cmd:*, option:*). Add `kb_search_scope` option: `"all"` (default), `"user"` (exclude internal), `"project"` (only project-registered KBs). AI tools respect scope; `:help` always searches all.
 - [ ] **KB node visibility**: Add `visibility` property to nodes: `public` (default), `internal` (MAE system nodes), `private` (user personal notes). Internal nodes hidden from user-facing search unless explicitly queried with `:help` or `kb_get` by ID.
@@ -476,7 +478,7 @@ Items E1–E8 track open design questions and planned improvements for the colla
   - P2P-KB: KB node replication ✅, link graph merge (future)
   - P2P-Internet: WebRTC/QUIC NAT traversal
   - P2P-E2E: End-to-end encryption (Noise protocol)
-  - Remaining: wire mDNS into collab-start/collab-discover commands, WebRTC, E2E encryption
+  - Remaining: WebRTC/QUIC NAT traversal, E2E encryption
 
 - [ ] **E7. Operation-based version control** *(Future)*
   Inspired by Zed DeltaDB ($32M Series B) — every keystroke tracked, character-level permalinks. yrs already stores operations; annotate with timestamp/user_id/commit message. Timeline scrubber UI showing who changed what.

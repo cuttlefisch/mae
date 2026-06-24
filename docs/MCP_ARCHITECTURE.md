@@ -6,8 +6,8 @@
 
 MAE exposes its editor tools via the **Model Context Protocol (MCP)** — a JSON-RPC 2.0-based protocol for AI tool calling. Three components form the MCP subsystem:
 
-1. **Server** (`mae-mcp`, `lib.rs`) — accepts connections from MCP clients over a Unix domain socket, dispatches tool calls to the editor.
-2. **Client** (`mae-mcp`, `client.rs`) — connects to *external* MCP servers (e.g., filesystem, GitHub) via stdio transport.
+1. **Server** (`mae-mcp`, `shared/mcp/src/lib.rs`) — accepts connections from MCP clients over a Unix domain socket, dispatches tool calls to the editor.
+2. **Client** (`mae-mcp`, `shared/mcp/src/client.rs`) — connects to *external* MCP servers (e.g., filesystem, GitHub) via stdio transport.
 3. **Shim** (`mae-mcp-shim`) — bridges stdio ↔ Unix socket so tools like Claude Code can connect.
 
 ```
@@ -57,7 +57,7 @@ Client → Server:  tools/list, tools/call, etc.
 Key points:
 - `notifications/initialized` is a **notification** (no `id` field, no response expected). Per JSON-RPC 2.0 spec, notifications MUST NOT have an `id`.
 - For backward compatibility, the server also handles `notifications/initialized` as a request (with `id`) in `handle_request()`, but the proper path is the notification handler in `handle_client()`.
-- The protocol version constant is `PROTOCOL_VERSION` in `protocol.rs` (currently `"2024-11-05"`).
+- The protocol version constant is `PROTOCOL_VERSION` in `protocol.rs` (currently `"2025-11-25"`). The server negotiates against a fallback list — `["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]` — so older clients still connect.
 
 ## Method Catalog
 
@@ -181,8 +181,8 @@ Event types: `buffer_edit`, `cursor_move`, `diagnostics`, `mode_change`, `buffer
 
 - **Unix socket permissions**: standard filesystem permissions (owner-only by default)
 - **MCP socket**: no per-client auth (Unix permissions only, local use)
-- **Collab TCP**: PSK mutual auth (HMAC-SHA256) since v0.11.0; no TLS (plaintext)
-- **Auth roadmap**: ✅ PSK → SSH key exchange → OAuth/OIDC (via `initialize` params extension)
+- **Collab TCP**: auth mode is selectable via `collab_auth_mode` = `none` | `psk` | `key`. `key` mode uses native mutual-TLS (TLS 1.3, Ed25519 peer identity, pubkey pinning — `shared/mcp/src/tls.rs`, ADR-017). `psk` mode is PSK mutual auth (HMAC-SHA256) over plaintext TCP. `none` is for loopback/local use only.
+- **Auth roadmap**: ✅ PSK → ✅ Ed25519 trusted-peer mTLS (delivered, ADR-017) → OAuth/OIDC (via `initialize` params extension)
 - **Transcripts**: stored in `~/.local/share/mae/transcripts/` — contain raw tool output (no secret scrubbing)
 - **Shell blocklist**: substring-based, bypassable — defense in depth, not a sandbox
 
@@ -190,10 +190,10 @@ Event types: `buffer_edit`, `cursor_move`, `diagnostics`, `mode_change`, `buffer
 
 | File | Role |
 |------|------|
-| `crates/mcp/src/lib.rs` | Server: listener, client handler, request dispatch, `read_message`/`write_framed` |
-| `crates/mcp/src/client.rs` | Client: connect to external MCP servers via stdio |
-| `crates/mcp/src/client_mgr.rs` | Client manager: lifecycle for multiple external servers |
-| `crates/mcp/src/protocol.rs` | JSON-RPC types, `PROTOCOL_VERSION` constant, error codes |
-| `crates/mcp/src/session.rs` | `ClientSession` struct, idle tracking |
-| `crates/mcp/src/broadcast.rs` | `SharedBroadcaster`, event types, subscription filtering |
-| `crates/mcp/src/shim.rs` | `mae-mcp-shim` binary |
+| `shared/mcp/src/lib.rs` | Server: listener, client handler, request dispatch, `read_message`/`write_framed` |
+| `shared/mcp/src/client.rs` | Client: connect to external MCP servers via stdio |
+| `shared/mcp/src/client_mgr.rs` | Client manager: lifecycle for multiple external servers |
+| `shared/mcp/src/protocol.rs` | JSON-RPC types, `PROTOCOL_VERSION` constant, error codes |
+| `shared/mcp/src/session.rs` | `ClientSession` struct, idle tracking |
+| `shared/mcp/src/broadcast.rs` | `SharedBroadcaster`, event types, subscription filtering |
+| `shared/mcp/src/shim.rs` | `mae-mcp-shim` binary |

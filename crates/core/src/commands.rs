@@ -1060,7 +1060,7 @@ impl CommandRegistry {
         );
         reg.register_builtin(
             "set-save",
-            "Set an option and persist to config.toml (:set-save <key> [value])",
+            "Set an option and persist to init.scm (:set-save <key> [value])",
         );
 
         // Buffer operations (expanded)

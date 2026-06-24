@@ -3336,7 +3336,7 @@
     },
     {
       "name": "set-save",
-      "doc": "Set an option and persist to config.toml (:set-save <key> [value])"
+      "doc": "Set an option and persist to init.scm (:set-save <key> [value])"
     },
     {
       "name": "kill-other-buffers",

@@ -997,7 +997,7 @@ Source: `shared/sync/src/lib.rs`
 | `keymap-set-flavor` | Switch keymap flavor live (:keymap-set-flavor <name>; no arg toggles doom/nonmodal) |
 | `choose-keymap-flavor` | Open the guided keybindings picker (modal vs non-modal, with descriptions) |
 | `kb-set-search-scope` | Choose the default KB search scope (all / local / remote / instance) |
-| `set-save` | Set an option and persist to config.toml (:set-save <key> [value]) |
+| `set-save` | Set an option and persist to init.scm (:set-save <key> [value]) |
 | `kill-other-buffers` | Close all buffers except current (SPC b o) |
 | `save-all-buffers` | Save all modified buffers (SPC b S) |
 | `revert-buffer` | Reload buffer from disk (SPC b r) |

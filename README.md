@@ -106,6 +106,7 @@ mae (binary)
  ├── mae-daemon        Background daemon — KB persistence, collab sync, WAL persistence
  ├── mae-babel       Org-babel executor — 12 languages, persistent sessions, language backends
  ├── mae-export      Org/Markdown export — HTML, Markdown, TOC, syntax highlighting
+ ├── mae-canvas      Visual buffer (diagrams, drawings)
  ├── mae-snippets    YASnippet-style templates — tab-stops, mirrors, transforms
  ├── mae-format      Formatter bridge — prettier, black, rustfmt (complements LSP format)
  ├── mae-make        Build runner — Makefile/Cargo.toml/package.json detection
@@ -169,7 +170,8 @@ export GEMINI_API_KEY=...              # Gemini           — https://aistudio.g
 export DEEPSEEK_API_KEY=...            # DeepSeek         — https://platform.deepseek.com/api_keys
 ```
 
-For persistent settings, add to `~/.config/mae/config.toml`:
+To persist the startup AI bootstrap (provider/model/credentials only — read before
+the Scheme runtime starts), add it to `~/.config/mae/config.toml`:
 
 ```toml
 [ai]
@@ -180,7 +182,7 @@ model = "claude-sonnet-4-20250514"     # any supported model name
 # editor = "claude"                    # CLI command for SPC a a (AI agent shell)
 ```
 
-Most AI behavior is configured in `init.scm` (see [Configuration](#configuration)),
+All other AI behavior is configured in `init.scm` (see [Configuration](#configuration)),
 not config.toml. Provider-aware prompt tuning is automatic — Gemini gets explicit
 JSON examples, DeepSeek gets anti-looping guardrails.
 
@@ -231,13 +233,16 @@ tool catalog and selection guidance live in
 
 ### Configuration
 
-MAE has two config files — `config.toml` for static settings and `init.scm`
-for everything else:
+`init.scm` is MAE's **primary configuration surface** — options
+(`(set-option!)` / `:set` / `:set-save`), keybindings, module selection
+(`(mae!)`), and hooks live here, and `:set-save` writes here. `config.toml` is a
+narrow **legacy bootstrap** read at startup *before* the Scheme runtime; it is
+being retired — prefer init.scm for new settings:
 
 | File | Role | Format |
 |------|------|--------|
-| `~/.config/mae/config.toml` | Provider credentials, LSP server paths, performance knobs | TOML (static, declarative) |
-| `~/.config/mae/init.scm` | Modules, keybindings, options, hooks, packages, custom commands | Scheme (programmatic, live-reloadable) |
+| `~/.config/mae/init.scm` | **Primary.** Modules, keybindings, options, hooks, packages, custom commands | Scheme (programmatic, live-reloadable) |
+| `~/.config/mae/config.toml` | *Legacy bootstrap* (being retired): AI provider/model, theme/font, LSP server paths, performance, daemon/collab connection — parsed before the Scheme runtime | TOML (static, declarative) |
 | `.mae/init.scm` (per-project) | Project-local overrides, loaded after user config | Scheme |
 
 **`init.scm` is the primary user config.** It's a real Scheme program, not a
@@ -264,8 +269,10 @@ settings file:
 (add-hook! "before-save" "lsp-format")
 ```
 
-**`config.toml` is for provider/credential plumbing** that doesn't belong in
-version-controlled Scheme. `mae --init-config` generates both files with a
+**`config.toml` is the legacy startup bootstrap** for provider/credential
+plumbing that doesn't belong in version-controlled Scheme — and never in
+plaintext config.toml either; use `api_key_command`. It is being retired; prefer
+init.scm for new settings. `mae --init-config` generates both files with a
 guided wizard.
 
 Useful commands:
@@ -290,14 +297,16 @@ mae pkg sync            # synchronize module state
 mae pkg create mymod    # scaffold a new module from template
 ```
 
-**19 built-in modules** by category:
+**25 built-in modules** by category:
 
 | Category | Modules |
 |----------|---------|
-| UI | `dashboard`, `file-tree` |
+| Keymap | `keymap-doom`, `keymap-leader`, `keymap-nonmodal` |
+| UI | `dashboard`, `file-tree`, `notifications` |
 | Editor | `surround`, `marks-jumps`, `search`, `registers`, `macros`, `multicursor`, `tables` |
-| Tools | `snippets`, `format`, `make`, `lookup`, `spell` |
-| Lang | `lang-python`, `lang-rust`, `lang-go`, `lang-javascript`, `lang-cc` |
+| Tools | `snippets`, `format`, `make`, `lookup`, `spell`, `debug` |
+| Markup | `org`, `markdown`, `agenda`, `dailies` |
+| Collab | `git-status`, `kb-sharing` |
 
 Enable modules with `+flag` syntax in `init.scm`. See [Extension Guide](docs/EXTENSION_GUIDE.md)
 for authoring custom modules.

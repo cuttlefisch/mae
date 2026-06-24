@@ -5,19 +5,14 @@
 ## Keymap Flavors
 
 MAE supports keybinding "flavors" — selectable base keymap sets controlled by the
-`keymap_flavor` option (default: `"doom"`). Set via `:set keymap_flavor doom` or
-`config.toml`:
-
-```toml
-[editor]
-keymap_flavor = "doom"
-```
+`keymap_flavor` option (default: `"doom"`). Configure it in `init.scm` (the primary
+config surface) with `(set-option! "keymap_flavor" "doom")`, or at runtime with
+`:set keymap_flavor doom` followed by `:set-save` to persist it. (`config.toml` is a
+narrow legacy bootstrap being retired and has no `keymap_flavor` field.)
 
 Available flavors:
 - **doom** (default) — SPC leader key, vi motions, operator-pending, Doom Emacs-style groups
-- **vim-pure** — vi motions + operators, no SPC leader (use `:` commands instead) *(planned)*
-- **emacs** — Non-modal, C-x prefix tree, M-x command palette *(planned)*
-- **minimal** — Arrow-only navigation, function key toolbar *(planned)*
+- **nonmodal** — Non-modal/CUA bindings (`default_mode=insert`), `C-;` enters the leader keypad
 
 ---
 

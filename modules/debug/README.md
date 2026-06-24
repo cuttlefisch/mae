@@ -7,7 +7,7 @@ Debug panel keybindings and SPC d leader.
 | Field | Value |
 |-------|-------|
 | Category | tools |
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Dependencies | None |
 
 ## Keybindings
@@ -28,7 +28,7 @@ Debug panel keybindings and SPC d leader.
 | `S` | `debug-step-out` | Step out |
 | `?` | `show-buffer-keys` | Show all keybindings |
 
-### Normal mode (SPC d leader)
+### Leader bindings (`SPC d`)
 
 | Key | Command | Description |
 |-----|---------|-------------|
@@ -48,4 +48,4 @@ Debug panel keybindings and SPC d leader.
 
 ## Configuration
 
-No module-specific options. DAP adapter paths are configured via environment variables (`MAE_DAP_LLDB`, `MAE_DAP_CODELLDB`, `MAE_DAP_DEBUGPY`) or in `config.toml`.
+No module-specific options. DAP adapter paths are configured via environment variables (`MAE_DAP_LLDB`, `MAE_DAP_CODELLDB`, `MAE_DAP_DEBUGPY`).
