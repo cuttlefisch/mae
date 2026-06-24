@@ -455,6 +455,11 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
             }
             let authorized = Arc::new(authorized);
 
+            // ADR-026: install the daemon identity as the membership signer, so the
+            // mutation handlers sign + append op-log entries for KBs this daemon
+            // owns. Only key mode signs; psk/none keep the legacy unsigned path.
+            doc_store.set_signer(Arc::clone(&identity));
+
             // P2P mesh (ADR-025 / #88): reuse this key-mode identity as the iroh
             // node identity and gate inbound peers on the same authorized_keys
             // set, sharing the doc_store + broadcaster with the TCP listener.

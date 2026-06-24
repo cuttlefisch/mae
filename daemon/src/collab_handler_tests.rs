@@ -2378,3 +2378,119 @@ async fn kb_share_sets_and_widens_transport_policy() {
         TransportPolicy::Hub
     );
 }
+
+// --- ADR-026 signed membership op-log (slice 2b-6) ---
+
+#[tokio::test]
+async fn add_member_signs_oplog_for_owned_kb() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::membership::derive_valid_members;
+
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+
+    // The daemon's signing identity == the KB owner (the seam where the daemon
+    // signs membership ops). Use a REAL key so fingerprints + signatures verify.
+    let id = Identity::generate("daemon");
+    let owner_fp = id.fingerprint();
+    let owner_pubkey = id.public().to_bytes();
+    store.set_signer(Arc::new(id));
+
+    // Owner shares the KB (authenticated as the signer's principal), then adds bob.
+    let resp = kb_share_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        "kbsig",
+        "owner",
+        &mut docs,
+    )
+    .await;
+    assert!(resp.error.is_none(), "share: {:?}", resp.error);
+
+    let bob = fp("bob");
+    let resp = dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        kb_member_msg("kb/add_member", "kbsig", &bob, Some("editor")),
+        &mut docs,
+    )
+    .await;
+    assert!(resp.error.is_none(), "add_member: {:?}", resp.error);
+
+    // The op-log carries the genesis owner self-admit + the signed admit of bob;
+    // every record verifies, and a peer derives owner+bob anchored on the owner key
+    // — without trusting the relay (ADR-026).
+    let coll = load_coll(&store, "kbsig").await;
+    let ops = coll.oplog_ops();
+    assert_eq!(ops.len(), 2, "genesis + admit");
+    assert!(ops.iter().all(|o| o.verify_signed()), "all records verify");
+
+    let members = derive_valid_members(&ops, &owner_pubkey, 0);
+    assert_eq!(members.len(), 2);
+    assert_eq!(members[&owner_fp].role, SyncRole::Owner);
+    assert_eq!(members[&bob].role, SyncRole::Editor);
+    assert_eq!(members[&bob].invited_by, owner_fp, "owner admitted bob");
+
+    // A different anchor (a relay's forged collection) derives nothing.
+    let stranger = Identity::generate("stranger").public().to_bytes();
+    assert!(derive_valid_members(&ops, &stranger, 0).is_empty());
+
+    // Removing bob appends a signed Remove; the peer no longer derives bob.
+    let resp = dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        kb_member_msg("kb/remove_member", "kbsig", &bob, None),
+        &mut docs,
+    )
+    .await;
+    assert!(resp.error.is_none(), "remove_member: {:?}", resp.error);
+    let coll = load_coll(&store, "kbsig").await;
+    let members = derive_valid_members(&coll.oplog_ops(), &owner_pubkey, 0);
+    assert!(
+        !members.contains_key(&bob),
+        "bob removed in the derived set"
+    );
+    assert!(members.contains_key(&owner_fp));
+}
+
+#[tokio::test]
+async fn add_member_unsigned_without_a_signer() {
+    // No signer (psk/none mode) ⇒ the legacy member_roles path only; no op-log.
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+    let owner = fp("alice");
+    kb_share_as(
+        &store,
+        &bc,
+        Some("alice"),
+        Some(&owner),
+        "kbu",
+        "alice",
+        &mut docs,
+    )
+    .await;
+    dispatch_as(
+        &store,
+        &bc,
+        Some("alice"),
+        Some(&owner),
+        kb_member_msg("kb/add_member", "kbu", &fp("bob"), Some("editor")),
+        &mut docs,
+    )
+    .await;
+    let coll = load_coll(&store, "kbu").await;
+    assert_eq!(coll.oplog_len(), 0, "no signer ⇒ no signed op-log");
+    assert_eq!(
+        coll.role_of(&fp("bob")),
+        Some(SyncRole::Editor),
+        "legacy path"
+    );
+}

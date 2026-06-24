@@ -72,6 +72,10 @@ pub struct DocStore {
     max_document_size_bytes: usize,
     /// KB metadata registry (kb_id → metadata JSON).
     kb_metas: RwLock<HashMap<String, serde_json::Value>>,
+    /// The daemon's signing identity (ADR-026), set in key-auth mode. Present ⇒ the
+    /// daemon signs membership ops for KBs it owns (`signer.fingerprint() == owner`)
+    /// into the op-log; absent (psk/none) ⇒ legacy unsigned membership only.
+    signer: std::sync::OnceLock<Arc<mae_mcp::identity::Identity>>,
 }
 
 /// Result of applying an update.
@@ -93,7 +97,19 @@ impl DocStore {
             max_wal_entries: 0,
             max_document_size_bytes: 0,
             kb_metas: RwLock::new(HashMap::new()),
+            signer: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Install the daemon's signing identity (ADR-026). Called once at startup in
+    /// key-auth mode; idempotent (a second call is ignored).
+    pub fn set_signer(&self, identity: Arc<mae_mcp::identity::Identity>) {
+        let _ = self.signer.set(identity);
+    }
+
+    /// The daemon's signing identity, if running in key-auth mode.
+    pub fn signer(&self) -> Option<&Arc<mae_mcp::identity::Identity>> {
+        self.signer.get()
     }
 
     /// Set maximum documents allowed in memory. 0 = unlimited.

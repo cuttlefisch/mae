@@ -19,6 +19,7 @@ use mae_sync::kb::{
     derive_kb_client_id, update_new_op_authors, JoinPolicy, KbCollectionDoc, Role as SyncRole,
     Transport,
 };
+use mae_sync::membership::MembershipAction;
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -620,12 +621,90 @@ async fn persist_and_broadcast_collection(
 
 /// A coarse monotonic-ish timestamp (unix seconds) for pending-request ordering.
 fn now_stamp() -> String {
+    now_unix().to_string()
+}
+
+/// Unix seconds (0 on a pre-epoch clock).
+fn now_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-        .to_string()
+}
+
+/// Mirror a membership mutation into the KB's **signed op-log** (ADR-026), so peers
+/// can verify membership without trusting a relay. A no-op unless this daemon owns
+/// the KB — i.e. its key-mode signer's fingerprint equals the collection owner; the
+/// relay/hub (psk/none) path stays unsigned. Seeds the genesis owner self-admit
+/// first if the log is empty, then appends the op for `subject`, persisting +
+/// broadcasting each. The `epoch` is read back from the legacy `member_roles`
+/// mutation the caller already applied, so derived and legacy epochs agree.
+///
+/// Best-effort: a signing/persist failure is logged, never fatal — the legacy
+/// `member_roles` map remains authoritative until `kb_access` switches to derived
+/// membership (slice 2b-6c).
+#[allow(clippy::too_many_arguments)]
+async fn append_signed_membership(
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    session_id: u64,
+    kb_id: &str,
+    coll: &mut KbCollectionDoc,
+    action: MembershipAction,
+    subject: &str,
+    role: Option<SyncRole>,
+    can_invite: bool,
+    expires_at: Option<u64>,
+) {
+    let Some(signer) = doc_store.signer() else {
+        return;
+    };
+    let owner = coll.owner();
+    if owner.is_empty() || signer.fingerprint() != owner {
+        return; // not an owned KB — the relay/hub path stays unsigned
+    }
+    let secret = signer.secret_bytes();
+    let pubkey = signer.public().to_bytes();
+    let now = now_unix();
+
+    // Seed the genesis owner self-admit (the anchored root) if the log is empty.
+    if coll.oplog_head().is_none() {
+        let g = coll.build_membership_op(
+            kb_id,
+            MembershipAction::Admit,
+            &owner,
+            Some(SyncRole::Owner),
+            true,
+            &owner,
+            now,
+            None,
+            0,
+        );
+        let gsig = g.sign(&secret);
+        let gupdate = coll.append_signed_op(&g, &gsig, &pubkey);
+        if let Err(e) =
+            persist_and_broadcast_collection(doc_store, broadcaster, session_id, kb_id, &gupdate)
+                .await
+        {
+            warn!(kb_id = %kb_id, error = %e, "failed to persist membership genesis op");
+            return;
+        }
+    }
+
+    // The op mirroring this mutation, authored by the owner (the daemon signs as
+    // owner). Epoch = the value the legacy mutation just assigned to `subject`.
+    let epoch = coll.epoch_of(subject);
+    let op = coll.build_membership_op(
+        kb_id, action, subject, role, can_invite, &owner, now, expires_at, epoch,
+    );
+    let sig = op.sign(&secret);
+    let update = coll.append_signed_op(&op, &sig, &pubkey);
+    if let Err(e) =
+        persist_and_broadcast_collection(doc_store, broadcaster, session_id, kb_id, &update).await
+    {
+        warn!(kb_id = %kb_id, error = %e, "failed to persist signed membership op");
+    }
 }
 
 /// ADR-018 complete-mediation access engine: every KB operation routes through
@@ -1986,6 +2065,25 @@ async fn handle_doc_request_inner(
             .await
             {
                 Ok(_) => {
+                    // ADR-026: mirror the change into the signed op-log (owned KBs).
+                    let (action, signed_role) = if add {
+                        (MembershipAction::Admit, Some(role))
+                    } else {
+                        (MembershipAction::Remove, None)
+                    };
+                    append_signed_membership(
+                        doc_store,
+                        broadcaster,
+                        session_id,
+                        &kb_id,
+                        &mut coll,
+                        action,
+                        &member,
+                        signed_role,
+                        false,
+                        None,
+                    )
+                    .await;
                     info!(session = session_id, kb_id = %kb_id, member = %member, add, role = role.as_str(), "kb membership change");
                     JsonRpcResponse::success(
                         id,
