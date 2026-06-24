@@ -63,6 +63,27 @@ Every KB operation routes through one decision; no bypass.
 A raw `kbc:` collection write (`sync/update`) is owner-only (membership-smuggling
 defense). Owner/membership/policy mutate only via the gated `kb/*` methods.
 
+### Per-KB transport policy (P2P mesh — ADR-025)
+
+`kb_access` gains a second dimension: the connection's **transport** (`Hub` for
+the v0.14 TCP listener, `P2p` for the iroh mesh) is checked against the KB's
+`transport_policy ∈ {Hub, P2p, Both}` (a new `KbCollectionDoc` key) **in addition
+to** the role/policy table above. A KB is reachable over a transport only if its
+policy exposes it there.
+
+- **Absent ⇒ Hub-only** (conservative): enabling the mesh never silently exposes
+  an existing hub share; a KB is mesh-reachable only once explicitly p2p-shared.
+  Local-only KBs have no collection doc, so they carry no policy and are
+  unreachable over any transport.
+- **Owner-bypass** (correctness): the owner always reaches their own KB regardless
+  of transport — otherwise a p2p-only KB would lock the owner out over their local
+  editor's hub socket. Non-owner members + would-be joiners are transport-gated
+  (a non-member's join over a non-exposed transport is denied *before* join policy).
+- `transport_policy` is owner-set metadata (gated `Manage`), so `kb/share` **widens**
+  it from the stored value (`transport_policy_raw()` distinguishes "never set" from
+  an explicit Hub): a first p2p-share is `P2p`, while `kb-share` then `kb-share-p2p`
+  becomes `Both`. Unlike membership (B-12 preserves it), transport is safe on re-share.
+
 ## Proven-architecture grounding
 
 This is the canonical document-sharing model, not an ad-hoc design — we inherit its

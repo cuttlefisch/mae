@@ -115,6 +115,29 @@ same `authorized_keys`/membership (`KbCollectionDoc`, ADR-018)**. Consequences t
   presently requires `collab.enabled = true`. "Both" is fully supported; mesh-only (hub off) is a small
   follow-up refactor, out of scope here.
 
+## Mesh access gate — live-reload + configurable connection-trust
+
+The accept gate (`p2p::serve` / `resolve_mesh_peer`) has two properties beyond the Phase-1
+identity check:
+
+- **Live-reload (I-10).** `serve` is passed the `authorized_keys` **path** and re-reads it on
+  **every accept** (not a startup snapshot), mirroring the TLS path's `ReloadingAuthorizedKeys`.
+  So `mae-daemon authorize`/`revoke` — and the Phase-2 TOFU/approve flow that adds a peer to
+  `authorized_keys` on join — take effect on the running mesh with no restart. Fail-secure: a
+  missing/unreadable file loads empty ⇒ deny.
+- **Configurable connection-trust** — `collab.p2p.connection_gate ∈ {authorized_keys, open}`
+  (the user's "config between hard-rejection and the invite/approve flow"):
+  - `authorized_keys` (**default**, security-forward): hard-reject any peer not already in
+    `authorized_keys` at connect — an admin-managed closed mesh.
+  - `open`: admit any iroh-authenticated peer to *connect* (we always know *who* via the verified
+    `remote_id`) with a **bare-fingerprint** identity; per-KB access stays fully mediated by
+    `kb_access` (membership + JoinPolicy), so an unknown peer gets a connection but no KB access
+    it isn't entitled to. Enables the frictionless magnet-link join. The default stays closed
+    until the pending-approve + signed-invite handling (ADR-026) lands.
+
+Transport is necessary, never sufficient: every applied op/membership change still passes the
+ADR-018 gate (incl. the per-KB transport policy) + ADR-026 verification.
+
 ## Driving surfaces — CLI, editor & AI-peer parity
 
 Every P2P lifecycle action MUST be drivable from **all** of the surfaces below, so a
