@@ -77,6 +77,17 @@ is rejected again (its new ops are still from the stale client_id). Re-making co
 just an editor making current edits (allowed + auditable) — the dangerous property, silent bulk laundering
 of a pre-grant lineage, is gone.
 
+> **Mesh extension (ADR-026).** This mechanism is *server-authoritative* — enforced only on the daemon
+> that owns the doc. In the P2P daemon mesh (ADR-025), a relaying peer is **not** trusted, so ADR-026
+> makes the same fence **peer-enforceable**: each member's epoch lives in the **signed membership op-log**
+> (so it is unforgeable by a relay, not just by a client), and any receiving peer re-applies the *exact*
+> `derive_kb_client_id(fingerprint, epoch)` rule locally before accepting an op. The epoch-advance triggers
+> here (role change ⇒ advance; fresh grant ⇒ epoch 0) and the rebase semantics are unchanged — ADR-026
+> only moves *where* they are enforced (daemon-only → every peer). **#72** (unpredictable, daemon-issued
+> epoch token, the documented "epoch not persisted across remove/re-add" hardening above) is a **hard
+> prerequisite** for the peer-side fence: a guessable epoch lets an attacker precompute a future-epoch
+> client_id and defeat a peer's fence just as it would the daemon's.
+
 ## Adversarial exploit-path review
 
 - **Backdating via signing** → why capability-signing was rejected (above).

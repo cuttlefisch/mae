@@ -212,6 +212,25 @@ routing hints churn on a DHCP-lease renewal or ISP reassignment. Continuity come
    membership loss; the mesh must not drop members on disconnect. (A *key* change is the only thing that
    needs action — the Phase-5 signed old→new rotation link — because an IP change needs nothing.)
 
+**Mobility — frequent network switching (laptop: work → café → home).** A traveling peer changes
+IP/NAT/relay several times a day and is offline between hops. The design makes this **smooth** *and*
+keeps it **secure**, with no shortcut at the security boundary:
+
+- **Smooth (the sync layer).** Identity is the stable node-id; only routing churns, so each hop just
+  triggers a **Pkarr republish** (short discovery TTL so peers find the new address fast) and, where direct
+  paths die mid-hop, falls back to the **home relay rendezvous** while iroh re-hole-punches. Edits made on
+  the train (no connectivity) queue locally — yrs is the source of truth — and converge on reconnect via
+  **SV-reconcile anti-entropy (ADR-022)**: no spinner, automatic. Reconnect uses **bounded exponential
+  backoff**, so unstable café wifi flapping up/down doesn't thrash the dialer; the relay path covers the gap.
+- **Secure (re-established on *every* reconnect — never bypassed).** Each reconnect, on *every* network,
+  redoes the full iroh QUIC/TLS handshake (`remote_id()` re-verified against `authorized_keys`), passes the
+  **live-reloaded mesh gate** (the gate re-reads `authorized_keys` per accept — §Mesh access gate), and
+  re-derives membership via `derive_valid_members` (ADR-026). **Consequence that matters: a revoke/removal
+  that happened while the laptop was offline is enforced on its very next connect** — the offline window
+  cannot be used to slip past a revocation, replay a stale grant (epoch fence + invite timebox), or revive
+  a removed peer. A network switch is *never* an authentication event in the attacker's favor: changing
+  networks grants nothing that being on the original network wouldn't.
+
 ## Adversarial / robustness review
 
 - **Untrusted/revoked peer dials in** → rejected at the iroh-identity↔`authorized_keys` check (same
