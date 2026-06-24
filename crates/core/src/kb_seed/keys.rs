@@ -27,8 +27,11 @@ See [[key:leader-keys]] for the full SPC leader reference.\n\n\
 See also: [[index]], [[concept:mode]]\n";
 
 pub(super) const KEY_LEADER: &str = "** SPC Leader Bindings (Doom Emacs style)\n\n\
-MAE uses `SPC` as leader in normal mode, organized into 14 groups.\n\
-Press `SPC` to see the which-key popup showing available sub-keys.\n\n\
+These bindings live in the shared `leader` keymap (the single source of truth for the\n\
+which-key menu) and appear in every keymap flavor. The default `doom` flavor opens the\n\
+keypad with `SPC` in normal mode; the `nonmodal` (CUA) flavor opens it with `C-;` in\n\
+insert mode. Switch flavors live with `:keymap-set-flavor <name>`.\n\
+Press the leader key to see the which-key popup showing available sub-keys.\n\n\
 *** SPC SPC — Command Palette\n\
 Fuzzy-search all commands (like Doom's `M-x` or VSCode's `Ctrl-Shift-P`).\n\n\
 *** SPC / — Project Search\n\

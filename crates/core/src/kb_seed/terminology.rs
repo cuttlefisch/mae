@@ -54,8 +54,14 @@ pub fn install_terminology_nodes(kb: &mut KnowledgeBase) {
             "term:keymap",
             "Keymap",
             "A named set of keybindings with an optional parent for fallback lookup. \
-             MAE has keymaps for each mode (normal, insert, visual, command) plus \
-             buffer-kind overlays (help, git-status, file-tree, org, markdown).",
+             The kernel defines only vi-modal primitives per mode (normal, insert, \
+             visual, command) plus buffer-kind overlays (help, git-status, file-tree, \
+             org, markdown) — it binds NO SPC leader keys. The shared `leader` keymap \
+             is the single source of truth for the which-key menu; flavor modules \
+             (`doom` = modal default, `nonmodal` = CUA) wire an entry into it. Switch \
+             flavors live with `:keymap-set-flavor <name>`. Scheme API: \
+             `(define-key MAP KEY CMD)`, `(set-group-name MAP PREFIX LABEL)`, \
+             `(define-keymap NAME PARENT)`, `(undefine-key! MAP KEY)`.",
         ),
         (
             "term:hook",
@@ -125,16 +131,22 @@ pub fn install_terminology_nodes(kb: &mut KnowledgeBase) {
         (
             "term:leader-key",
             "Leader Key",
-            "SPC in normal mode — the prefix key for command sequences. Inspired by \
-             Doom Emacs. SPC f f = find file, SPC b s = switch buffer, SPC h = help, \
-             SPC a = AI agent, etc.",
+            "The entry into the transient which-key keypad, which resolves keys \
+             against the shared `leader` keymap (the single source of truth). The \
+             entry binding is flavor-specific: the default `doom` flavor binds SPC in \
+             normal mode (Doom Emacs style — SPC f f = find file, SPC b s = switch \
+             buffer, SPC h = help, SPC a = AI agent), while `nonmodal` (CUA) binds \
+             `C-;` in insert mode. Leader bindings live in the `leader` keymap and \
+             appear in every flavor's keypad.",
         ),
         (
             "term:provider",
             "Provider",
-            "An AI API backend: Claude, OpenAI, Gemini, or DeepSeek. Configured in \
-             config.toml under `[ai]`. The provider determines the model, API format, \
-             and capabilities available to the AI agent.",
+            "An AI API backend: Claude, OpenAI, Gemini, or DeepSeek. Selected at startup \
+             via the `[ai]` bootstrap in config.toml (the narrow legacy bootstrap that \
+             carries provider/model + API key, e.g. `api_key_command`), or via an \
+             environment API key. The provider determines the model, API format, and \
+             capabilities available to the AI agent.",
         ),
         (
             "term:profile",
@@ -148,8 +160,11 @@ pub fn install_terminology_nodes(kb: &mut KnowledgeBase) {
             "Tier",
             "AI permission level controlling what actions the agent can take. Tiers: \
              ReadOnly (read buffers, navigate), Write (edit buffers, create files), \
-             Shell (execute shell commands), Privileged (all operations). Set via \
-             config.toml or `MAE_AI_PERMISSIONS` env var.",
+             Shell (execute shell commands), Privileged (all operations). The tier is \
+             the `ai_tier` OptionRegistry option: set it via `(set-option! \"ai_tier\" \
+             \"<tier>\")` in init.scm or `:set ai_tier <tier>` at runtime (persist with \
+             `:set-save`). The `MAE_AI_PERMISSIONS` env var and the `[ai] \
+             auto_approve_tier` config.toml key are alternatives.",
         ),
     ];
 

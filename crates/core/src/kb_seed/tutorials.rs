@@ -365,10 +365,16 @@ configuring either one.\n\n\
 ## 1. Prerequisites\n\n\
 You need a running MAE instance (you're reading this, so you have one) \
 and an API key from at least one provider.\n\n\
-## 2. Locate your config\n\n\
-MAE stores configuration at `~/.config/mae/config.toml` (or \
-`$XDG_CONFIG_HOME/mae/config.toml`). Edit it with `SPC f c` or \
-`:edit-config`.\n\n\
+## 2. Where config lives\n\n\
+MAE's primary config surface is **`~/.config/mae/init.scm`** (Scheme): \
+keybindings, `(mae!)` module selection, hooks, and every editor option via \
+`(set-option!)` / `:set` / `:set-save` (the latter persists into init.scm). \
+A narrow **`config.toml`** (a legacy bootstrap being retired) still holds the \
+handful of startup-only settings the wizard needs: AI provider/model/key, \
+theme/font, LSP paths, and daemon/collab connection. AI provider config is \
+one of those legitimate config.toml settings, so that's where this guide \
+puts it. Open config.toml with `SPC f P` (`:edit-settings`); open init.scm \
+with `SPC f c` (`:edit-config`).\n\n\
 If this is your first launch, the **setup wizard** runs automatically \
 and handles provider selection, model, and API key.\n\n\
 **Checkpoint:** `:describe-configuration` shows config file path and load status.\n\n\
@@ -546,32 +552,43 @@ Note the host's IP address:\n\
 - Linux: `hostname -I`\n\
 - macOS: `ipconfig getifaddr en0`\n\n\
 **Checkpoint:** Server logs \"listening on 0.0.0.0:9473\".\n\n\
-## 3. Set a shared secret (PSK)\n\n\
-On **both machines**, add to `~/.config/mae/config.toml`:\n\
-```toml\n\
-[collaboration]\n\
-psk = \"your-shared-secret-here\"\n\
+## 3. Authenticate (trusted-peer `key` mode — recommended)\n\n\
+MAE supports three auth modes — `none`, `psk`, and `key`. The recommended \
+mode is **`key`**: each editor has an Ed25519 identity and the daemon trusts \
+explicitly authorized peers over mTLS (no shared secret to leak). On **each \
+client machine**, run:\n\
+```bash\n\
+mae setup-collab --server <host-ip>:9473\n\
+```\n\
+This generates the editor's identity and writes the `collab-auth-mode` / \
+`collab-server-address` options into `init.scm` for you. (Pass `--ssh-key \
+~/.ssh/id_ed25519` to reuse an existing SSH key.) Print a client's public \
+identity with:\n\
+```bash\n\
+mae --collab-identity\n\
+```\n\
+Then authorize each client on the **host machine**:\n\
+```bash\n\
+mae-daemon authorize <pubkey-line>   # paste the line from --collab-identity\n\
 ```\n\n\
-Both machines MUST use the same PSK. For production use, prefer:\n\
-```toml\n\
-psk_command = \"pass show mae/collab-psk\"\n\
-```\n\n\
-The server also needs the PSK in its config \
-(`~/.config/mae/daemon.toml`):\n\
-```toml\n\
-psk = \"your-shared-secret-here\"\n\
-```\n\n\
-**Checkpoint:** `:describe-configuration` shows `collab_psk: set`.\n\n\
+**Checkpoint:** `:describe-configuration` shows `collab_auth_mode: key`; \
+`mae-daemon authorized` lists each client.\n\n\
+> Secrets are never stored in plaintext config. If you must use the legacy \
+> symmetric `psk` mode, set `collab-auth-mode` to `psk` and supply the key via \
+> `(set-option! \"collab-psk-command\" \"pass show mae/collab-psk\")` (or `mae \
+> setup-collab` in key mode and skip PSK entirely) — never a plaintext \
+> `collab-psk` in config.toml.\n\n\
 ## 4. Connect from the second machine\n\n\
 ```\n\
 :collab-connect <host-ip>:9473\n\
 ```\n\n\
-Or configure auto-connect in `config.toml`:\n\
-```toml\n\
-[collaboration]\n\
-server_address = \"<host-ip>:9473\"\n\
-auto_connect = true\n\
-```\n\n\
+`mae setup-collab` already set the address; to also connect automatically on \
+startup, add to `init.scm`:\n\
+```scheme\n\
+(set-option! \"collab-server-address\" \"<host-ip>:9473\")\n\
+(set-option! \"collab-auto-connect\" \"true\")\n\
+```\n\
+(or `:set collab-auto-connect true` then `:set-save` to persist).\n\n\
 **Checkpoint:** `:collab-status` shows `connected`, peer count >= 1.\n\n\
 ## 5. Share a buffer\n\n\
 On either machine, open a file and run `:collab-share`. \
@@ -593,7 +610,8 @@ other within 1 second. Create a KB node on one machine:\n\
 ## 8. Troubleshooting\n\n\
 Run `:collab-doctor` for comprehensive diagnostics. Common issues:\n\
 - **\"connection refused\"** — firewall blocking port 9473, or server not running\n\
-- **\"auth failed\"** — PSK mismatch between machines\n\
+- **\"auth failed\"** — in `key` mode the client isn't authorized yet (run \
+`mae-daemon authorize`); in `psk` mode the keys don't match\n\
 - **\"timeout\"** — wrong IP address, or machines not on same network\n\n\
 Open firewall if needed:\n\
 - macOS: allow in System Settings > Network > Firewall\n\
