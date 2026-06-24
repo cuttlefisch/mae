@@ -522,6 +522,7 @@ const COLL_MEMBER_ROLES_KEY: &str = "member_roles"; // YMap<fingerprint -> {role
 const COLL_POLICY_KEY: &str = "join_policy"; // restrictive|invite|permissive
 const COLL_PENDING_KEY: &str = "pending"; // YMap<fingerprint -> {label,requested_at}>
 const COLL_RETIRED_KEY: &str = "retired"; // YMap<fingerprint -> last epoch> (#72 tombstone)
+const COLL_TRANSPORT_POLICY_KEY: &str = "transport_policy"; // hub|p2p|both (absent ⇒ hub)
 const MEMBER_ROLE_KEY: &str = "role";
 const MEMBER_LABEL_KEY: &str = "label";
 /// ADR-023: per-member monotonic authorization epoch, bumped by the daemon on
@@ -598,6 +599,69 @@ impl JoinPolicy {
             "invite" => Some(JoinPolicy::Invite),
             "permissive" => Some(JoinPolicy::Permissive),
             _ => None,
+        }
+    }
+}
+
+/// The transport a connection arrived on — the input to per-KB transport-policy
+/// enforcement (ADR-018/025). The hub TCP listener and the iroh mesh tag their
+/// connections so `kb_access` can apply [`TransportPolicy`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Transport {
+    /// The v0.14 hub TCP listener.
+    Hub,
+    /// The iroh P2P mesh.
+    P2p,
+}
+
+/// Which transport(s) a shared KB is exposed over (ADR-018/025). **Absent ⇒ Hub**
+/// (conservative: enabling the mesh never silently exposes an existing hub share;
+/// a KB is mesh-reachable only once it is explicitly p2p-shared). Local-only KBs
+/// have no collection doc, so they carry no policy and are never reachable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TransportPolicy {
+    /// Hub TCP listener only (the conservative default).
+    #[default]
+    Hub,
+    /// P2P mesh only.
+    P2p,
+    /// Both transports.
+    Both,
+}
+
+impl TransportPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TransportPolicy::Hub => "hub",
+            TransportPolicy::P2p => "p2p",
+            TransportPolicy::Both => "both",
+        }
+    }
+    pub fn parse(s: &str) -> Option<TransportPolicy> {
+        match s {
+            "hub" => Some(TransportPolicy::Hub),
+            "p2p" => Some(TransportPolicy::P2p),
+            "both" => Some(TransportPolicy::Both),
+            _ => None,
+        }
+    }
+    /// Whether this policy exposes the KB over `transport`.
+    pub fn allows(self, transport: Transport) -> bool {
+        matches!(
+            (self, transport),
+            (TransportPolicy::Both, _)
+                | (TransportPolicy::Hub, Transport::Hub)
+                | (TransportPolicy::P2p, Transport::P2p)
+        )
+    }
+    /// Widen this policy to also expose `transport` (idempotent). Mixing the two
+    /// transports yields `Both`. Used by `kb-share` / `kb-share-p2p`.
+    pub fn with(self, transport: Transport) -> TransportPolicy {
+        match (self, transport) {
+            (TransportPolicy::Both, _)
+            | (TransportPolicy::Hub, Transport::Hub)
+            | (TransportPolicy::P2p, Transport::P2p) => self,
+            _ => TransportPolicy::Both,
         }
     }
 }
@@ -943,6 +1007,17 @@ impl KbCollectionDoc {
             .unwrap_or_default()
     }
 
+    /// The KB's transport-exposure policy (ADR-018/025). **Absent ⇒ Hub** — a
+    /// hub-shared KB is not mesh-reachable until explicitly p2p-shared.
+    pub fn transport_policy(&self) -> TransportPolicy {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        root.get(&txn, COLL_TRANSPORT_POLICY_KEY)
+            .map(|v| v.to_string(&txn))
+            .and_then(|s| TransportPolicy::parse(&s))
+            .unwrap_or_default()
+    }
+
     /// Pending join requests (invite policy).
     pub fn pending(&self) -> Vec<PendingRequest> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
@@ -1158,6 +1233,14 @@ impl KbCollectionDoc {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let mut txn = self.doc.transact_mut();
         root.insert(&mut txn, COLL_POLICY_KEY, policy.as_str());
+        txn.encode_update_v1()
+    }
+
+    /// Set the KB's transport-exposure policy (owner-only at the gate).
+    pub fn set_transport_policy(&mut self, policy: TransportPolicy) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        root.insert(&mut txn, COLL_TRANSPORT_POLICY_KEY, policy.as_str());
         txn.encode_update_v1()
     }
 
@@ -1926,6 +2009,60 @@ mod tests {
         assert_eq!(coll.join_policy(), JoinPolicy::Invite);
         coll.set_join_policy(JoinPolicy::Restrictive);
         assert_eq!(coll.join_policy(), JoinPolicy::Restrictive);
+    }
+
+    #[test]
+    fn transport_policy_logic() {
+        // Round-trip.
+        for p in [
+            TransportPolicy::Hub,
+            TransportPolicy::P2p,
+            TransportPolicy::Both,
+        ] {
+            assert_eq!(TransportPolicy::parse(p.as_str()), Some(p));
+        }
+        assert_eq!(TransportPolicy::parse("nonsense"), None);
+
+        // allows(): the exposure matrix.
+        assert!(TransportPolicy::Hub.allows(Transport::Hub));
+        assert!(!TransportPolicy::Hub.allows(Transport::P2p));
+        assert!(TransportPolicy::P2p.allows(Transport::P2p));
+        assert!(!TransportPolicy::P2p.allows(Transport::Hub));
+        assert!(TransportPolicy::Both.allows(Transport::Hub));
+        assert!(TransportPolicy::Both.allows(Transport::P2p));
+
+        // with(): widening is idempotent; mixing transports ⇒ Both.
+        assert_eq!(
+            TransportPolicy::Hub.with(Transport::Hub),
+            TransportPolicy::Hub
+        );
+        assert_eq!(
+            TransportPolicy::Hub.with(Transport::P2p),
+            TransportPolicy::Both
+        );
+        assert_eq!(
+            TransportPolicy::P2p.with(Transport::Hub),
+            TransportPolicy::Both
+        );
+        assert_eq!(
+            TransportPolicy::Both.with(Transport::Hub),
+            TransportPolicy::Both
+        );
+    }
+
+    #[test]
+    fn collection_transport_policy_defaults_to_hub() {
+        // Conservative default: a freshly-shared (or pre-feature) KB is Hub-only —
+        // NOT exposed to the mesh until explicitly p2p-shared.
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
+        assert_eq!(coll.transport_policy(), TransportPolicy::Hub);
+        assert!(coll.transport_policy().allows(Transport::Hub));
+        assert!(!coll.transport_policy().allows(Transport::P2p));
+
+        // Opt into the mesh.
+        coll.set_transport_policy(TransportPolicy::Both);
+        assert_eq!(coll.transport_policy(), TransportPolicy::Both);
+        assert!(coll.transport_policy().allows(Transport::P2p));
     }
 
     #[test]
