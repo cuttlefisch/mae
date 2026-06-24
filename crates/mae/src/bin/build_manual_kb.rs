@@ -181,7 +181,7 @@ fn compute_db_checksum(path: &PathBuf) -> String {
         hasher.update(&data);
     }
 
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 fn collect_files_recursive(dir: &std::path::Path, out: &mut Vec<PathBuf>) {

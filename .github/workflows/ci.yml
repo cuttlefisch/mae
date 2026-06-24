@@ -69,13 +69,19 @@ jobs:
         if: matrix.step == 'fmt'
         run: cargo fmt --all --check
 
-      # Build remaining binaries + manual KB for downstream jobs.
-      # cargo test --release already compiled most deps — this is incremental.
-      - name: Build install artifacts
+      # `cargo test --workspace --release --features gui` above already compiled
+      # `mae` and `build-manual-kb` into target/release/ — so we run build-manual-kb
+      # directly instead of the old `cargo build --bin build-manual-kb` (no
+      # --features gui), which re-resolved features and recompiled the entire `mae`
+      # crate from scratch to produce a binary that already existed (the waste this
+      # removes, on the critical path that gates downstream artifact jobs).
+      # The mae-mcp build stays: it's the only way the shim lands at
+      # target/release/mae-mcp-shim, and it's cheap (mae-mcp is feature-independent
+      # and already compiled by the test step — this just links the shim).
+      - name: Build install artifacts (reuse test-compiled binaries)
         if: matrix.toolchain == 'stable' && matrix.step == 'test'
         run: |
           cargo build --release --package mae-mcp
-          cargo build --release --package mae --bin build-manual-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
 
       - name: Stage editor artifacts

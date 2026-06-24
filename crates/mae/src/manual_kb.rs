@@ -209,7 +209,7 @@ pub fn compute_db_checksum(path: &Path) -> String {
         hasher.update(&data);
     }
 
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 fn collect_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
