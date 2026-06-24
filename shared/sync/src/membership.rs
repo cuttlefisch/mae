@@ -202,6 +202,44 @@ pub struct ValidMember {
     pub epoch: u64,
 }
 
+/// What happens to a removed inviter's downstream members (ADR-026 §A3 cascade).
+/// The strong-removal resolver already invalidates a member's actions *concurrent*
+/// with their removal; this per-KB policy governs members the inviter validly
+/// admitted *before* their removal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum InviterRemovalPolicy {
+    /// Keep members the inviter admitted before removal; only drop invites not yet
+    /// effective. In the pure membership op-log there is no separate "pending"
+    /// state (the hub `pending` map is orthogonal), so this is operationally
+    /// equivalent to [`Retain`](Self::Retain) — and it is the conservative default.
+    #[default]
+    PendingOnly,
+    /// Removing an inviter transitively removes their whole invite subtree
+    /// (delegated-trust revocation): every member whose `invited_by` chain passes
+    /// through a non-member is dropped.
+    CascadeAll,
+    /// Keep every member the inviter validly admitted before their removal.
+    Retain,
+}
+
+impl InviterRemovalPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InviterRemovalPolicy::PendingOnly => "pending_only",
+            InviterRemovalPolicy::CascadeAll => "cascade_all",
+            InviterRemovalPolicy::Retain => "retain",
+        }
+    }
+    pub fn parse(s: &str) -> Option<InviterRemovalPolicy> {
+        match s {
+            "pending_only" => Some(InviterRemovalPolicy::PendingOnly),
+            "cascade_all" => Some(InviterRemovalPolicy::CascadeAll),
+            "retain" => Some(InviterRemovalPolicy::Retain),
+            _ => None,
+        }
+    }
+}
+
 /// Derive the current valid membership by replaying the signed op-log against the
 /// **external trust anchor** (ADR-026 §A1–A3). Pure + deterministic: every honest
 /// peer that holds the same ops derives the identical map, with no coordinator and
@@ -232,10 +270,31 @@ pub struct ValidMember {
 ///   (deterministic + Sybil-resistant) — explicitly *not* seniority or wall-clock.
 ///
 /// Quorum governance + the local blocklist layer on in slice 2b-5b.
+///
+/// Uses the default [`InviterRemovalPolicy`] (`PendingOnly`); call
+/// [`derive_valid_members_with`] to choose the inviter-removal cascade policy.
 pub fn derive_valid_members(
     ops: &[SignedMembershipOp],
     anchor_owner_pubkey: &[u8; 32],
     now: u64,
+) -> BTreeMap<String, ValidMember> {
+    derive_valid_members_with(
+        ops,
+        anchor_owner_pubkey,
+        now,
+        InviterRemovalPolicy::default(),
+    )
+}
+
+/// As [`derive_valid_members`], with an explicit inviter-removal cascade `policy`
+/// (ADR-026 §A3). `CascadeAll` transitively drops any member whose `invited_by`
+/// chain passes through a non-member once the resolver has settled; `PendingOnly`
+/// (default) and `Retain` keep validly-admitted members.
+pub fn derive_valid_members_with(
+    ops: &[SignedMembershipOp],
+    anchor_owner_pubkey: &[u8; 32],
+    now: u64,
+    policy: InviterRemovalPolicy,
 ) -> BTreeMap<String, ValidMember> {
     // 1. Keep only cryptographically-valid records (sig + author↔key binding),
     //    indexed by chain_hash for tree traversal.
@@ -315,7 +374,31 @@ pub fn derive_valid_members(
 
     // 5. Build the final member map from the surviving ops (removal-dominant; a
     //    causally-later re-admit wins; higher-hash SetRole wins concurrent ties).
-    build_members(&by_hash, &order, &valid, &anc, &genesis_hash, now)
+    let mut members = build_members(&by_hash, &order, &valid, &anc, &genesis_hash, now);
+
+    // 6. Inviter-removal cascade (ADR-026 §A3). `CascadeAll` transitively drops any
+    //    member whose inviter is no longer present — delegated-trust revocation
+    //    reaching members admitted *before* the inviter's removal (the resolver
+    //    already handled those admitted *concurrently* with it). The owner is
+    //    self-invited, so it roots the tree and is never cascaded. `PendingOnly`
+    //    (default) and `Retain` keep validly-admitted members as-is.
+    if policy == InviterRemovalPolicy::CascadeAll {
+        loop {
+            let present: BTreeSet<String> = members.keys().cloned().collect();
+            let orphans: Vec<String> = members
+                .values()
+                .filter(|m| m.principal != owner_principal && !present.contains(&m.invited_by))
+                .map(|m| m.principal.clone())
+                .collect();
+            if orphans.is_empty() {
+                break;
+            }
+            for o in orphans {
+                members.remove(&o);
+            }
+        }
+    }
+    members
 }
 
 /// Strict ancestors of `h` (its causal past, excluding `h`): walk the `prev_hash`
@@ -1204,5 +1287,83 @@ mod tests {
             !m.contains_key(&bob.fp),
             "removal dominates the concurrent role change"
         );
+    }
+
+    // --- inviter-removal cascade policy (slice 2b-5) ---
+
+    #[test]
+    fn inviter_removal_cascade_policy_governs_pre_removal_subtree() {
+        let owner = id(1);
+        let alice = id(2);
+        let bob = id(3);
+        let carol = id(4);
+        let g = genesis(&owner);
+        // Linear chain — each admit is causally BEFORE alice's removal (so the
+        // strong-removal resolver keeps them; only the cascade policy decides).
+        let admit_alice = make(
+            &owner,
+            MembershipAction::Admit,
+            &alice.fp,
+            Some(Role::Editor),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        let admit_bob = make(
+            &alice,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            true, // bob may invite further (depth-2 subtree)
+            None,
+            &admit_alice.chain_hash(),
+        );
+        let admit_carol = make(
+            &bob,
+            MembershipAction::Admit,
+            &carol.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        let remove_alice = make(
+            &owner,
+            MembershipAction::Remove,
+            &alice.fp,
+            None,
+            false,
+            None,
+            &admit_carol.chain_hash(),
+        );
+        let ops = [g, admit_alice, admit_bob, admit_carol, remove_alice];
+
+        // PendingOnly (default) + Retain: bob & carol were validly admitted before
+        // alice's removal, so they stay; only alice is gone.
+        for policy in [
+            InviterRemovalPolicy::PendingOnly,
+            InviterRemovalPolicy::Retain,
+        ] {
+            let m = derive_valid_members_with(&ops, &owner.pubkey, 100, policy);
+            assert!(!m.contains_key(&alice.fp), "{policy:?}: alice removed");
+            assert!(m.contains_key(&bob.fp), "{policy:?}: bob retained");
+            assert!(m.contains_key(&carol.fp), "{policy:?}: carol retained");
+        }
+        // The 3-arg entry point uses the default (PendingOnly).
+        assert!(derive_valid_members(&ops, &owner.pubkey, 100).contains_key(&bob.fp));
+
+        // CascadeAll: removing alice transitively drops her whole invite subtree.
+        let cascade =
+            derive_valid_members_with(&ops, &owner.pubkey, 100, InviterRemovalPolicy::CascadeAll);
+        assert!(!cascade.contains_key(&alice.fp));
+        assert!(
+            !cascade.contains_key(&bob.fp),
+            "cascade drops direct invitee"
+        );
+        assert!(
+            !cascade.contains_key(&carol.fp),
+            "cascade is transitive through the subtree"
+        );
+        assert!(cascade.contains_key(&owner.fp), "owner is never cascaded");
     }
 }
