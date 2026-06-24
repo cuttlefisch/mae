@@ -20,6 +20,7 @@
 use crate::kb::Role;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 /// The membership change an op performs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +78,12 @@ pub struct MembershipOp {
     pub issued_at: u64,
     /// Expiry (unix seconds); `None` = no timebox.
     pub expires_at: Option<u64>,
+    /// The ADR-023 authorization **epoch** this op assigns to `subject` — *signed*,
+    /// so every peer derives the *same* epoch (a per-peer random token would break
+    /// convergence). A fresh grant stays at epoch 0; a role change / re-admit carries
+    /// the daemon's unpredictable `fresh_epoch_token()` (#72), chosen at authoring
+    /// time. Peers read this to compute `derive_kb_client_id` for the content fence.
+    pub epoch: u64,
     /// Hex of the previous op's [`chain_hash`](Self::chain_hash); `""` = genesis.
     pub prev_hash: String,
 }
@@ -104,6 +111,7 @@ impl MembershipOp {
             &mut b,
             &self.expires_at.map(|e| e.to_string()).unwrap_or_default(),
         );
+        field(&mut b, &self.epoch.to_string());
         field(&mut b, &self.prev_hash);
         b
     }
@@ -178,6 +186,180 @@ impl SignedMembershipOp {
     }
 }
 
+/// A member as **derived** from the signed op-log (ADR-026) — never read as a
+/// stored verdict. Carries the current role, the delegable invite capability, the
+/// `invited_by` provenance, and the ADR-023 authorization `epoch` (for the content
+/// fence). Every honest peer derives the identical set via [`derive_valid_members`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidMember {
+    pub principal: String,
+    pub role: Role,
+    /// Whether this member may delegate invites (UCAN `can_invite` capability).
+    pub can_invite: bool,
+    /// The principal that admitted this member (the owner is self-admitted).
+    pub invited_by: String,
+    /// ADR-023 authorization epoch assigned by the latest authorizing op.
+    pub epoch: u64,
+}
+
+/// Derive the current valid membership by replaying the signed op-log against the
+/// **external trust anchor** (ADR-026 §A1–A3). Pure + deterministic: every honest
+/// peer that holds the same ops derives the identical map, with no coordinator and
+/// without trusting a relay. An op contributes only if every check passes:
+/// 1. **anchor** — the genesis op is a self-admit signed by `anchor_owner_pubkey`
+///    (the owner pubkey for an owned KB / the join-ticket node-id for a joined one);
+///    no valid genesis ⇒ no members;
+/// 2. **signature + binding** — `verify_signed()` (sig valid AND
+///    `fingerprint_of(author_pubkey) == author`);
+/// 3. **capability** — the author is a current member with the needed capability
+///    (owner or `can_invite` to admit; owner to change-role/remove in single-owner
+///    governance);
+/// 4. **attenuation** — a grant cannot exceed the author's own role;
+/// 5. **timebox** — an op past `expires_at` (relative to `now`) never takes effect.
+///
+/// **Scope (slice 2b-3):** deterministic causal replay over the op tree with the
+/// above gates + straightforward removal. The p2panda-auth **strong-removal**
+/// resolver (invalidating actions *concurrent* with a removal, mutual-removal,
+/// transitive cascade, higher-hash tiebreak) layers on in slice 2b-4; quorum
+/// governance + the local blocklist in 2b-5b.
+pub fn derive_valid_members(
+    ops: &[SignedMembershipOp],
+    anchor_owner_pubkey: &[u8; 32],
+    now: u64,
+) -> BTreeMap<String, ValidMember> {
+    // 1. Keep only cryptographically-valid records (sig + author↔key binding),
+    //    indexed by chain_hash for tree traversal.
+    let valid: Vec<&SignedMembershipOp> = ops.iter().filter(|o| o.verify_signed()).collect();
+    let by_hash: BTreeMap<String, &SignedMembershipOp> =
+        valid.iter().map(|o| (o.chain_hash(), *o)).collect();
+
+    // 2. Anchor: the genesis op is a self-admit signed by the external trust root.
+    let genesis_hash = match valid.iter().find(|o| {
+        o.op.prev_hash.is_empty()
+            && o.op.action == MembershipAction::Admit
+            && o.op.subject == o.op.author
+            && &o.author_pubkey == anchor_owner_pubkey
+    }) {
+        Some(g) => g.chain_hash(),
+        None => return BTreeMap::new(), // no trusted root ⇒ no members
+    };
+    let owner_principal = by_hash[&genesis_hash].op.subject.clone();
+
+    // 3. Deterministic causal order over the tree rooted at the anchored genesis.
+    let order = causal_order(&by_hash, &genesis_hash);
+
+    // 4. Fold each op against the running member set, gated by capability.
+    let mut members: BTreeMap<String, ValidMember> = BTreeMap::new();
+    for hash in order {
+        let op = &by_hash[&hash].op;
+        // Timebox: an expired op never takes effect (on any peer).
+        if op.expires_at.is_some_and(|exp| now >= exp) {
+            continue;
+        }
+        // Genesis: the owner self-admit roots the member set (always may invite).
+        if hash == genesis_hash {
+            members.insert(
+                op.subject.clone(),
+                ValidMember {
+                    principal: op.subject.clone(),
+                    role: op.role.unwrap_or(Role::Owner),
+                    can_invite: true,
+                    invited_by: op.author.clone(),
+                    epoch: op.epoch,
+                },
+            );
+            continue;
+        }
+        // The author must currently be a member (their key established by the op
+        // that admitted them).
+        let author = match members.get(&op.author) {
+            Some(a) => a.clone(),
+            None => continue,
+        };
+        match op.action {
+            MembershipAction::Admit => {
+                // Capability: owner or a delegated inviter.
+                if author.role != Role::Owner && !author.can_invite {
+                    continue;
+                }
+                let granted = op.role.unwrap_or(Role::Viewer);
+                // Attenuation: cannot grant above your own role.
+                if !author.role.includes(granted) {
+                    continue;
+                }
+                // can_invite is delegable only by an owner or an existing inviter.
+                let can_invite = op.can_invite && (author.role == Role::Owner || author.can_invite);
+                members.insert(
+                    op.subject.clone(),
+                    ValidMember {
+                        principal: op.subject.clone(),
+                        role: granted,
+                        can_invite,
+                        invited_by: op.author.clone(),
+                        epoch: op.epoch,
+                    },
+                );
+            }
+            MembershipAction::SetRole => {
+                // Management is owner-only in single-owner governance (delegated
+                // admins + quorum arrive in 2b-5b).
+                if author.role != Role::Owner {
+                    continue;
+                }
+                if let Some(m) = members.get_mut(&op.subject) {
+                    if let Some(new_role) = op.role {
+                        m.role = new_role;
+                        m.epoch = op.epoch;
+                    }
+                }
+            }
+            MembershipAction::Remove | MembershipAction::Revoke => {
+                if author.role != Role::Owner {
+                    continue;
+                }
+                // The owner is not removable via the chain in single-owner
+                // governance (quorum owner-removal + blocklist arrive in 2b-5b).
+                if op.subject == owner_principal {
+                    continue;
+                }
+                members.remove(&op.subject);
+            }
+        }
+    }
+    members
+}
+
+/// Deterministic causal (topological) order of the op tree rooted at `genesis`.
+/// Each op links to exactly one parent via `prev_hash`, so the reachable set is a
+/// tree; nodes are emitted parent-before-child, concurrent siblings in ascending
+/// `chain_hash` order — so every honest peer replays identically regardless of the
+/// order ops arrived in. Ops **not** reachable from the anchored genesis (orphans
+/// with a dangling `prev_hash`, or a forged second root) are never emitted.
+fn causal_order(by_hash: &BTreeMap<String, &SignedMembershipOp>, genesis: &str) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut emitted: BTreeSet<String> = BTreeSet::new();
+    let mut order: Vec<String> = Vec::new();
+    loop {
+        // Every not-yet-emitted node whose parent is already emitted (genesis has
+        // no parent) — one causal "generation" per pass.
+        let mut ready: Vec<String> = by_hash
+            .keys()
+            .filter(|h| !emitted.contains(*h))
+            .filter(|h| h.as_str() == genesis || emitted.contains(&by_hash[*h].op.prev_hash))
+            .cloned()
+            .collect();
+        if ready.is_empty() {
+            break;
+        }
+        ready.sort(); // ascending chain_hash — deterministic sibling tiebreak
+        for h in ready {
+            emitted.insert(h.clone());
+            order.push(h);
+        }
+    }
+    order
+}
+
 /// The `SHA256:<base64>` fingerprint of an Ed25519 public key — the membership
 /// **principal**. Matches `mae_mcp::identity::PublicKey::fingerprint()` so a
 /// member's principal is identical whether derived here or there.
@@ -206,6 +388,7 @@ mod tests {
             author: "SHA256:owner".into(),
             issued_at: 1_700_000_000,
             expires_at: Some(1_700_086_400),
+            epoch: 0,
             prev_hash: prev_hash.into(),
         }
     }
@@ -243,6 +426,10 @@ mod tests {
 
         let mut t = op.clone();
         t.can_invite = true; // self-grant the invite capability
+        assert!(!t.verify(&sig, &pubkey));
+
+        let mut t = op.clone();
+        t.epoch = 42; // bump the authorization epoch to fence a member
         assert!(!t.verify(&sig, &pubkey));
     }
 
@@ -326,5 +513,337 @@ mod tests {
         let mut tampered = rec.clone();
         tampered.op.role = Some(Role::Owner);
         assert!(!tampered.verify_signed());
+    }
+
+    // --- derive_valid_members (slice 2b-3) ---
+
+    /// A test identity: signing seed, public key, and principal fingerprint.
+    struct Id {
+        secret: [u8; 32],
+        pubkey: [u8; 32],
+        fp: String,
+    }
+    fn id(seed: u8) -> Id {
+        let secret = [seed; 32];
+        let pubkey = SigningKey::from_bytes(&secret).verifying_key().to_bytes();
+        let fp = fingerprint_of(&pubkey);
+        Id { secret, pubkey, fp }
+    }
+
+    /// Build + sign a membership op authored by `author`, linked to `prev`.
+    #[allow(clippy::too_many_arguments)]
+    fn make(
+        author: &Id,
+        action: MembershipAction,
+        subject: &str,
+        role: Option<Role>,
+        can_invite: bool,
+        expires_at: Option<u64>,
+        prev: &str,
+    ) -> SignedMembershipOp {
+        let op = MembershipOp {
+            kb_id: "KB".into(),
+            action,
+            subject: subject.into(),
+            role,
+            can_invite,
+            author: author.fp.clone(),
+            issued_at: 1,
+            expires_at,
+            epoch: 0,
+            prev_hash: prev.into(),
+        };
+        let sig = op.sign(&author.secret);
+        SignedMembershipOp {
+            op,
+            sig,
+            author_pubkey: author.pubkey,
+        }
+    }
+
+    /// Genesis = the owner self-admit (the anchored root of every valid log).
+    fn genesis(owner: &Id) -> SignedMembershipOp {
+        make(
+            owner,
+            MembershipAction::Admit,
+            &owner.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            "",
+        )
+    }
+
+    #[test]
+    fn derive_owner_genesis_admits_the_owner() {
+        let owner = id(1);
+        let g = genesis(&owner);
+        let m = derive_valid_members(&[g], &owner.pubkey, 100);
+        assert_eq!(m.len(), 1);
+        let o = &m[&owner.fp];
+        assert_eq!(o.role, Role::Owner);
+        assert!(o.can_invite);
+        assert_eq!(o.invited_by, owner.fp);
+    }
+
+    #[test]
+    fn derive_anchor_mismatch_returns_empty() {
+        let owner = id(1);
+        let stranger = id(2);
+        let g = genesis(&owner);
+        // The genesis is real + self-signed, but the verifier's anchor is a
+        // DIFFERENT key (a relay shipping a self-attested collection). No root.
+        let m = derive_valid_members(&[g], &stranger.pubkey, 100);
+        assert!(
+            m.is_empty(),
+            "genesis not signed by the anchor ⇒ no members"
+        );
+    }
+
+    #[test]
+    fn derive_valid_inviter_chain_admits_transitively() {
+        let owner = id(1);
+        let alice = id(2);
+        let bob = id(3);
+        let g = genesis(&owner);
+        // Owner admits alice as an editor WITH the invite capability.
+        let admit_alice = make(
+            &owner,
+            MembershipAction::Admit,
+            &alice.fp,
+            Some(Role::Editor),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        // Alice (a delegated inviter) admits bob as a viewer.
+        let admit_bob = make(
+            &alice,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &admit_alice.chain_hash(),
+        );
+        let m = derive_valid_members(&[g, admit_alice, admit_bob], &owner.pubkey, 100);
+        assert_eq!(m.len(), 3);
+        assert_eq!(m[&alice.fp].role, Role::Editor);
+        assert!(m[&alice.fp].can_invite);
+        assert_eq!(m[&bob.fp].role, Role::Viewer);
+        assert_eq!(m[&bob.fp].invited_by, alice.fp, "provenance recorded");
+    }
+
+    #[test]
+    fn derive_op_by_a_non_member_is_ignored() {
+        let owner = id(1);
+        let mallory = id(9);
+        let g = genesis(&owner);
+        // Mallory self-signs an admit making herself owner — but she is not a
+        // member, and her op isn't the anchored genesis, so it contributes nothing.
+        let forged = make(
+            &mallory,
+            MembershipAction::Admit,
+            &mallory.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        let m = derive_valid_members(&[g, forged], &owner.pubkey, 100);
+        assert_eq!(m.len(), 1);
+        assert!(!m.contains_key(&mallory.fp));
+    }
+
+    #[test]
+    fn derive_attenuation_blocks_granting_above_yourself() {
+        let owner = id(1);
+        let alice = id(2);
+        let bob = id(3);
+        let g = genesis(&owner);
+        // Alice is an editor-with-invite.
+        let admit_alice = make(
+            &owner,
+            MembershipAction::Admit,
+            &alice.fp,
+            Some(Role::Editor),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        // Alice tries to admit bob as OWNER — above her own role ⇒ rejected.
+        let over_grant = make(
+            &alice,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Owner),
+            false,
+            None,
+            &admit_alice.chain_hash(),
+        );
+        let m = derive_valid_members(&[g, admit_alice, over_grant], &owner.pubkey, 100);
+        assert!(!m.contains_key(&bob.fp), "over-attenuated grant absent");
+    }
+
+    #[test]
+    fn derive_expired_op_does_not_take_effect() {
+        let owner = id(1);
+        let bob = id(3);
+        let g = genesis(&owner);
+        let admit_bob = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            Some(50), // expires at t=50
+            &g.chain_hash(),
+        );
+        let ops = [g, admit_bob];
+        // Before expiry bob is a member; at/after expiry he is not.
+        assert!(derive_valid_members(&ops, &owner.pubkey, 49).contains_key(&bob.fp));
+        assert!(!derive_valid_members(&ops, &owner.pubkey, 50).contains_key(&bob.fp));
+    }
+
+    #[test]
+    fn derive_owner_removes_a_member() {
+        let owner = id(1);
+        let bob = id(3);
+        let g = genesis(&owner);
+        let admit_bob = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let remove_bob = make(
+            &owner,
+            MembershipAction::Remove,
+            &bob.fp,
+            None,
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        let m = derive_valid_members(&[g, admit_bob, remove_bob], &owner.pubkey, 100);
+        assert!(!m.contains_key(&bob.fp), "removed member dropped");
+        assert!(m.contains_key(&owner.fp));
+    }
+
+    #[test]
+    fn derive_inviter_cannot_remove_in_single_owner_governance() {
+        let owner = id(1);
+        let alice = id(2);
+        let bob = id(3);
+        let g = genesis(&owner);
+        let admit_alice = make(
+            &owner,
+            MembershipAction::Admit,
+            &alice.fp,
+            Some(Role::Editor),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        let admit_bob = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &admit_alice.chain_hash(),
+        );
+        // Alice (delegated inviter, not owner) tries to remove bob — management is
+        // owner-only in single-owner governance, so the removal is ignored.
+        let alice_removes_bob = make(
+            &alice,
+            MembershipAction::Remove,
+            &bob.fp,
+            None,
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        let m = derive_valid_members(
+            &[g, admit_alice, admit_bob, alice_removes_bob],
+            &owner.pubkey,
+            100,
+        );
+        assert!(m.contains_key(&bob.fp), "non-owner removal has no effect");
+    }
+
+    #[test]
+    fn derive_owner_is_not_removable_via_the_chain() {
+        let owner = id(1);
+        let g = genesis(&owner);
+        // Even an owner-authored remove of the owner is a no-op (single-owner).
+        let remove_owner = make(
+            &owner,
+            MembershipAction::Remove,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let m = derive_valid_members(&[g, remove_owner], &owner.pubkey, 100);
+        assert!(m.contains_key(&owner.fp), "owner survives a remove op");
+    }
+
+    #[test]
+    fn derive_orphan_op_with_dangling_prev_is_excluded() {
+        let owner = id(1);
+        let bob = id(3);
+        let g = genesis(&owner);
+        // An admit whose prev_hash points nowhere is unreachable from genesis.
+        let orphan = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            "deadbeefdeadbeef",
+        );
+        let m = derive_valid_members(&[g, orphan], &owner.pubkey, 100);
+        assert!(!m.contains_key(&bob.fp), "orphan op never applied");
+    }
+
+    #[test]
+    fn derive_is_independent_of_input_order() {
+        let owner = id(1);
+        let alice = id(2);
+        let bob = id(3);
+        let g = genesis(&owner);
+        let admit_alice = make(
+            &owner,
+            MembershipAction::Admit,
+            &alice.fp,
+            Some(Role::Editor),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        let admit_bob = make(
+            &alice,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &admit_alice.chain_hash(),
+        );
+        let forward = derive_valid_members(
+            &[g.clone(), admit_alice.clone(), admit_bob.clone()],
+            &owner.pubkey,
+            100,
+        );
+        // Same ops, reversed arrival order ⇒ identical derived state.
+        let reversed = derive_valid_members(&[admit_bob, admit_alice, g], &owner.pubkey, 100);
+        assert_eq!(forward, reversed);
     }
 }

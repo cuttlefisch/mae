@@ -540,6 +540,7 @@ const OP_CAN_INVITE_KEY: &str = "can_invite"; // "1"|"0"
 const OP_AUTHOR_KEY: &str = "author"; // issuer principal (= signer fingerprint)
 const OP_ISSUED_KEY: &str = "issued_at"; // unix seconds (decimal)
 const OP_EXPIRES_KEY: &str = "expires_at"; // unix seconds (decimal); "" = no timebox
+const OP_EPOCH_KEY: &str = "epoch"; // ADR-023 authorization epoch assigned to subject (decimal)
 const OP_PREV_KEY: &str = "prev_hash"; // chain_hash of the author's view-head ("" = genesis)
 const OP_SIG_KEY: &str = "sig"; // hex(64-byte Ed25519 signature)
 const OP_PUBKEY_KEY: &str = "author_pubkey"; // hex(32-byte Ed25519 public key)
@@ -1378,6 +1379,9 @@ impl KbCollectionDoc {
                 author: get(OP_AUTHOR_KEY)?,
                 issued_at: get(OP_ISSUED_KEY)?.parse::<u64>().ok()?,
                 expires_at,
+                epoch: get(OP_EPOCH_KEY)
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0),
                 prev_hash: get(OP_PREV_KEY).unwrap_or_default(),
             },
             sig,
@@ -1447,6 +1451,7 @@ impl KbCollectionDoc {
         author: &str,
         issued_at: u64,
         expires_at: Option<u64>,
+        epoch: u64,
     ) -> MembershipOp {
         MembershipOp {
             kb_id: kb_id.to_string(),
@@ -1457,6 +1462,7 @@ impl KbCollectionDoc {
             author: author.to_string(),
             issued_at,
             expires_at,
+            epoch,
             prev_hash: self.oplog_head().unwrap_or_default(),
         }
     }
@@ -1501,6 +1507,7 @@ impl KbCollectionDoc {
             OP_EXPIRES_KEY,
             op.expires_at.map(|e| e.to_string()).unwrap_or_default(),
         );
+        rec.insert(&mut txn, OP_EPOCH_KEY, op.epoch.to_string());
         rec.insert(&mut txn, OP_PREV_KEY, op.prev_hash.as_str());
         rec.insert(&mut txn, OP_SIG_KEY, hex::encode(sig));
         rec.insert(&mut txn, OP_PUBKEY_KEY, hex::encode(author_pubkey));
@@ -2408,6 +2415,7 @@ mod tests {
             &owner_fp,
             1000,
             None,
+            0,
         );
         assert_eq!(op.prev_hash, "", "genesis op has empty prev_hash");
         let sig = op.sign(&secret);
@@ -2450,6 +2458,7 @@ mod tests {
             &owner_fp,
             1,
             None,
+            0,
         );
         let gsig = g.sign(&osec);
         coll.append_signed_op(&g, &gsig, &opub);
@@ -2466,6 +2475,7 @@ mod tests {
             &owner_fp,
             2,
             None,
+            0,
         );
         assert_eq!(a.prev_hash, ghash, "second op chains off genesis");
         let asig = a.sign(&osec);
@@ -2494,6 +2504,7 @@ mod tests {
             &owner_fp,
             1,
             None,
+            0,
         );
         let gsig = g.sign(&osec);
         base.append_signed_op(&g, &gsig, &opub);
@@ -2511,6 +2522,7 @@ mod tests {
             &owner_fp,
             2,
             None,
+            0,
         );
         let sx = opx.sign(&osec);
         let ux = a.append_signed_op(&opx, &sx, &opub);
@@ -2523,6 +2535,7 @@ mod tests {
             &owner_fp,
             3,
             None,
+            0,
         );
         let sy = opy.sign(&osec);
         let uy = b.append_signed_op(&opy, &sy, &opub);
@@ -2555,6 +2568,7 @@ mod tests {
             &owner_fp,
             1,
             None,
+            0,
         );
         let sig = op.sign(&osec);
         coll.append_signed_op(&op, &sig, &mpub); // wrong pubkey stored
