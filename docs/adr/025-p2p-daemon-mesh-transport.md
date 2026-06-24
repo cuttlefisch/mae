@@ -101,6 +101,36 @@ of the mesh machinery starts (zero overhead). `mae-daemon doctor` reports P2P st
 discovery, relay reachability, peer count) — the ADR-027 visibility surface, available at the CLI for
 headless deployments.
 
+## Driving surfaces — CLI, editor & AI-peer parity
+
+Every P2P lifecycle action MUST be drivable from **all** of the surfaces below, so a
+human can work from the editor *or* the shell and an **AI peer can drive the whole
+flow with no CLI access** (principle #3 — the AI is a peer, not a plugin). This
+extends the v0.14 KB-sharing parity (Scheme `(kb-…)` primitives + `kb_*` MCP tools +
+the `*KB Sharing*` buffer) to the mesh.
+
+For each action — **enable** (`setup-collab --p2p`), **share / mint a join ticket**,
+**join from a ticket**, **approve a pending join**, **leave**, **status** — four
+surfaces sit over **one** backend:
+
+| Surface | Form |
+|---|---|
+| CLI | `mae setup-collab --p2p`; `mae-daemon` control verbs |
+| Editor command | leader keymap (`SPC C K …`) + the magit-style `*KB Sharing*` buffer |
+| Scheme primitive | `(kb-share-p2p …)`, `(kb-join-ticket …)`, `(kb-p2p-status)` … |
+| MCP tool (AI peer) | `kb_share` (p2p), `kb_join`, `kb_approve`, `kb_p2p_status` … |
+
+**DRY / single source of truth (#8):** all four resolve to the **same daemon control
+method** over the existing Unix control socket (e.g. `p2p/mint_ticket`,
+`p2p/join_ticket`). The editor command, the Scheme primitive, and the MCP tool are
+thin shims over **one** editor-side action that issues the `DaemonClient` call; the
+CLI issues the same JSON-RPC directly. No surface carries logic the others lack —
+adding an action is one backend method + four trivial bindings, so the human and the
+AI peer can never diverge. Authorization for mint/join is the **daemon owner's**
+(local control socket); remote trust stays at the mesh accept-gate + pending-approve.
+The read/introspection half of parity (the `*Mesh*` buffer, `collab-doctor`,
+`kb_sharing_status` mesh fields) is ADR-027.
+
 ## Discovery, join tickets & connectivity lifecycle
 
 **Identity-addressed, never IP-addressed.** A peer is its **node-id** (the Ed25519 fingerprint, =
@@ -192,3 +222,7 @@ addr loss); a dial to a hint whose `remote_id()` ≠ the expected/authorized nod
 identity-over-address — extends the Phase-1 `authorize_peer`/`remote_id` tests); a member persists across a
 disconnect **and** a simulated address change, reconnecting by node-id and converging via SV-reconcile
 without re-approval (proves membership ≠ connectivity); idle *document* eviction does not drop membership.
+
+Surface parity: each lifecycle action resolves to the same daemon control method regardless of surface —
+a test drives mint/join via the control method directly and asserts the Scheme primitive + MCP tool reach
+the identical backend (no surface-specific logic); CLI and editor paths issue the same JSON-RPC.
