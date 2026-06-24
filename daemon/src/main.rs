@@ -14,6 +14,7 @@
 mod config;
 mod handler;
 pub mod hygiene;
+mod p2p;
 mod scheduler;
 
 use config::DaemonConfig;
