@@ -505,12 +505,20 @@ Items E1–E8 track open design questions and planned improvements for the colla
   - 8 E2E TCP tests, 8 continuous sync tests, 3 offline tests, 5 status tests ✅
   - `collab_kb_sync_mode` option: "manual" | "on_save" ✅
 
-- [ ] **E6b. Peer-to-Peer collaborative editing** *(Future)*
-  - P2P-LAN: mDNS discovery + symmetric TCP. Transport layer already generic (`AsyncWrite`/`AsyncBufRead`). mDNS module implemented ✅
-  - P2P-KB: KB node replication ✅, link graph merge (future)
-  - P2P-Internet: WebRTC/QUIC NAT traversal
-  - P2P-E2E: End-to-end encryption (Noise protocol)
-  - Remaining: WebRTC/QUIC NAT traversal, E2E encryption
+- [ ] **E6b. Peer-to-Peer collaborative editing** *(In design — ADR-025/026/027)*
+  - **Design accepted:** daemon-mediated mesh (every peer runs a daemon). Transport = **iroh**
+    (QUIC + NAT hole-punch + relay, Ed25519 node IDs reuse trusted-peer fingerprints) — ADR-025.
+    Integrity = **signed hash-chained membership + signed ops + peer-enforceable epoch fence**
+    (peers verify without trusting a relay; documented path to a leaderless capability/auth-DAG) —
+    ADR-026. **Observability** (mesh tracing/metrics/`*Mesh*` buffer) built alongside — ADR-027.
+  - P2P-LAN: mDNS discovery ✅ stays the LAN fast-path; global discovery via iroh DNS/Pkarr.
+  - P2P-KB: KB node replication ✅; link-graph merge (future).
+  - **Prerequisite:** #72 (unpredictable epoch token) — required for peer-side fencing.
+  - **Phased epics:** P1 iroh transport adapter · P2 daemon-as-peer mesh + gossip/anti-entropy ·
+    P3 signed hash-chained membership · P4 signed ops + peer-enforced fence · P5 key/auth rotation
+    + revocation · P6 mesh visibility hardening.
+  - **Deferred:** P2P-E2E end-to-end content encryption (Noise) — own ADR/phase; leaderless
+    auth-DAG (research). NAT traversal handled by iroh (no bespoke WebRTC/QUIC stack).
 
 - [ ] **E7. Operation-based version control** *(Future)*
   Inspired by Zed DeltaDB ($32M Series B) — every keystroke tracked, character-level permalinks. yrs already stores operations; annotate with timestamp/user_id/commit message. Timeline scrubber UI showing who changed what.
