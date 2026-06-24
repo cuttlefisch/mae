@@ -2245,6 +2245,20 @@ async fn handle_doc_request_inner(
             .await
             {
                 Ok(_) => {
+                    // ADR-026: an approval is a signed Admit in the op-log.
+                    append_signed_membership(
+                        doc_store,
+                        broadcaster,
+                        session_id,
+                        &kb_id,
+                        &mut coll,
+                        MembershipAction::Admit,
+                        &principal,
+                        Some(role),
+                        false,
+                        None,
+                    )
+                    .await;
                     info!(session = session_id, kb_id = %kb_id, principal = %principal, role = role.as_str(), "kb/approve_member: complete");
                     JsonRpcResponse::success(
                         id,

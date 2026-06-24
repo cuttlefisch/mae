@@ -2494,3 +2494,57 @@ async fn add_member_unsigned_without_a_signer() {
         "legacy path"
     );
 }
+
+#[tokio::test]
+async fn approve_member_signs_oplog_for_owned_kb() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::membership::derive_valid_members;
+
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+
+    let id = Identity::generate("daemon");
+    let owner_fp = id.fingerprint();
+    let owner_pubkey = id.public().to_bytes();
+    store.set_signer(Arc::new(id));
+
+    kb_share_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        "kbap",
+        "owner",
+        &mut docs,
+    )
+    .await;
+    // bob requests to join (invite default ⇒ pending), owner approves as editor.
+    let bob = fp("bob");
+    dispatch_as(
+        &store,
+        &bc,
+        Some("bob"),
+        Some(&bob),
+        kb_join_msg("kbap"),
+        &mut docs,
+    )
+    .await;
+    let ok = dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        kb_approve_msg("kbap", &bob, Some("editor")),
+        &mut docs,
+    )
+    .await;
+    assert!(ok.error.is_none(), "approve: {:?}", ok.error);
+
+    // The approval is a signed Admit: a peer derives owner + the approved member.
+    let coll = load_coll(&store, "kbap").await;
+    let members = derive_valid_members(&coll.oplog_ops(), &owner_pubkey, 0);
+    assert_eq!(members.len(), 2);
+    assert_eq!(members[&bob].role, SyncRole::Editor);
+    assert_eq!(members[&bob].invited_by, owner_fp);
+}
