@@ -44,6 +44,26 @@ pub fn derive_kb_client_id(fingerprint: &str, epoch: u64) -> u64 {
     }
 }
 
+/// A fresh, **unpredictable** authorization-epoch token (#72). Issued by the
+/// daemon (the sole author of membership mutations) when a member's epoch must
+/// advance — a role change, or a re-grant of a previously-removed member. Unlike
+/// a `prev+1` counter, a malicious client cannot precompute
+/// `derive_kb_client_id(fp, future_epoch)` and back-date viewer-era ops under the
+/// future editor client_id (the ADR-023 "pre-rotation" attack). Non-zero so it
+/// never collides with the epoch-0 "fresh grant" sentinel.
+pub fn fresh_epoch_token() -> u64 {
+    // `rand::random` is the version-stable top-level API (avoids a trait import
+    // whose path shifts between rand 0.9 and 0.10). Re-roll the (2^-64) zero so the
+    // token is never the epoch-0 sentinel — without special-casing it to a fixed
+    // value (which would bias the distribution toward that value).
+    loop {
+        let t = rand::random::<u64>();
+        if t != 0 {
+            return t;
+        }
+    }
+}
+
 /// True if `candidate_sv` carries operations not covered by `base_sv` — i.e.
 /// some client's clock in `candidate_sv` exceeds what `base_sv` has seen.
 ///
@@ -501,6 +521,7 @@ const COLL_OWNER_KEY: &str = "owner"; // owner principal (key fingerprint)
 const COLL_MEMBER_ROLES_KEY: &str = "member_roles"; // YMap<fingerprint -> {role,label}>
 const COLL_POLICY_KEY: &str = "join_policy"; // restrictive|invite|permissive
 const COLL_PENDING_KEY: &str = "pending"; // YMap<fingerprint -> {label,requested_at}>
+const COLL_RETIRED_KEY: &str = "retired"; // YMap<fingerprint -> last epoch> (#72 tombstone)
 const MEMBER_ROLE_KEY: &str = "role";
 const MEMBER_LABEL_KEY: &str = "label";
 /// ADR-023: per-member monotonic authorization epoch, bumped by the daemon on
@@ -957,6 +978,22 @@ impl KbCollectionDoc {
         }
     }
 
+    /// The `retired` tombstone map (#72): fingerprint → last epoch of members that
+    /// have been removed. A re-grant of a tombstoned principal issues a fresh
+    /// epoch instead of resetting to the epoch-0 sentinel (which would reuse the
+    /// pre-removal client_id and silently un-fence their old lineage).
+    fn retired_map(root: &MapRef, txn: &mut yrs::TransactionMut) -> MapRef {
+        match root.get(txn, COLL_RETIRED_KEY) {
+            Some(Out::YMap(m)) => m,
+            _ => root.insert(txn, COLL_RETIRED_KEY, MapPrelim::default()),
+        }
+    }
+
+    /// Whether `principal` has a removal tombstone (was a write-capable member).
+    fn is_retired(root: &MapRef, txn: &impl ReadTxn, principal: &str) -> bool {
+        matches!(root.get(txn, COLL_RETIRED_KEY), Some(Out::YMap(m)) if m.get(txn, principal).is_some())
+    }
+
     /// Bind the authoritative owner = `principal` (key fingerprint), display
     /// `label`. Idempotent; ensures schema=2 + default policy + the owner member
     /// entry. The daemon calls this on kb/share to bind the verified cert identity.
@@ -976,9 +1013,10 @@ impl KbCollectionDoc {
         }
         let m = Self::member_roles_map(&root, &mut txn);
         // Preserve the epoch on owner re-stamp (B-12 re-share — same owner, not a
-        // role change); a brand-new owner seeds at epoch 0.
+        // role change); a brand-new owner seeds at epoch 0. The owner is never
+        // removed via remove_principal (it is the authority), so never tombstoned.
         let prev = Self::entry_role_epoch(&m, &txn, principal);
-        let epoch = Self::next_epoch(prev, Role::Owner);
+        let epoch = Self::next_epoch(prev, Role::Owner, false);
         let entry = m.insert(&mut txn, principal, MapPrelim::default());
         entry.insert(&mut txn, MEMBER_ROLE_KEY, Role::Owner.as_str());
         entry.insert(&mut txn, MEMBER_LABEL_KEY, label);
@@ -1011,11 +1049,20 @@ impl KbCollectionDoc {
     /// role change rotates the client_id the member must author under, fencing their
     /// pre-change lineage at the daemon. (Monotonicity across remove/re-add is a
     /// documented hardening follow-up — a removed member's epoch is not persisted.)
-    fn next_epoch(prev: Option<(Role, u64)>, new_role: Role) -> u64 {
+    fn next_epoch(prev: Option<(Role, u64)>, new_role: Role, was_retired: bool) -> u64 {
         match prev {
-            None => 0,
+            // Existing member, same role: no-op re-set, epoch unchanged.
             Some((prev_role, prev_epoch)) if prev_role == new_role => prev_epoch,
-            Some((_, prev_epoch)) => prev_epoch + 1,
+            // Existing member, role changed: advance to an unpredictable token
+            // (#72 — was `prev_epoch + 1`, which a client could precompute).
+            Some(_) => fresh_epoch_token(),
+            // Re-grant of a previously-removed member: advance, never reset to 0
+            // (#72 Part B — monotonicity across remove/re-add).
+            None if was_retired => fresh_epoch_token(),
+            // Genuinely-fresh grant to a never-seen principal: the epoch-0 sentinel
+            // (no prior write-capable lineage to fence; owners/direct editors author
+            // under the base client_id with no editor-side epoch sync).
+            None => 0,
         }
     }
 
@@ -1036,14 +1083,20 @@ impl KbCollectionDoc {
     pub fn upsert_member(&mut self, principal: &str, label: &str, role: Role) -> Vec<u8> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let mut txn = self.doc.transact_mut();
+        let was_retired = Self::is_retired(&root, &txn, principal);
         let m = Self::member_roles_map(&root, &mut txn);
-        // Epoch advances only if this changes an existing member's role (ADR-023).
+        // Epoch advances on a role change of an existing member, or a re-grant of a
+        // previously-removed one (#72); else it's a fresh grant at epoch 0 (ADR-023).
         let prev = Self::entry_role_epoch(&m, &txn, principal);
-        let epoch = Self::next_epoch(prev, role);
+        let epoch = Self::next_epoch(prev, role, was_retired);
         let entry = m.insert(&mut txn, principal, MapPrelim::default());
         entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
         entry.insert(&mut txn, MEMBER_LABEL_KEY, label);
         entry.insert(&mut txn, MEMBER_EPOCH_KEY, epoch.to_string());
+        if was_retired {
+            let r = Self::retired_map(&root, &mut txn);
+            r.remove(&mut txn, principal); // member is active again — clear tombstone
+        }
         txn.encode_update_v1()
     }
 
@@ -1057,7 +1110,8 @@ impl KbCollectionDoc {
                 // Only an actual role change advances the epoch (ADR-023).
                 let prev =
                     Self::entry_role(&entry, &txn).map(|r| (r, Self::entry_epoch(&entry, &txn)));
-                let epoch = Self::next_epoch(prev, role);
+                // set_role only touches a present member, so there is no tombstone.
+                let epoch = Self::next_epoch(prev, role, false);
                 entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
                 entry.insert(&mut txn, MEMBER_EPOCH_KEY, epoch.to_string());
             }
@@ -1081,8 +1135,20 @@ impl KbCollectionDoc {
     pub fn remove_principal(&mut self, principal: &str) -> Vec<u8> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let mut txn = self.doc.transact_mut();
-        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
-            m.remove(&mut txn, principal);
+        // #72: tombstone the removed member's epoch so a later re-grant issues a
+        // fresh epoch (never reuses the pre-removal client_id and silently
+        // un-fences the removed member's old lineage).
+        let prev_epoch = match root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            Some(Out::YMap(m)) => {
+                let e = Self::entry_role_epoch(&m, &txn, principal).map(|(_, ep)| ep);
+                m.remove(&mut txn, principal);
+                e
+            }
+            _ => None,
+        };
+        if let Some(e) = prev_epoch {
+            let r = Self::retired_map(&root, &mut txn);
+            r.insert(&mut txn, principal, e.to_string());
         }
         txn.encode_update_v1()
     }
@@ -1134,16 +1200,22 @@ impl KbCollectionDoc {
             }
             p.remove(&mut txn, principal);
         }
+        let was_retired = Self::is_retired(&root, &txn, principal);
         let m = Self::member_roles_map(&root, &mut txn);
         // Approving a pending principal is a fresh grant into member_roles (a denied
         // pending peer has no write-capable lineage); epoch 0 unless this re-grants
-        // an existing member at a new role (ADR-023).
+        // an existing member at a new role, or re-admits a previously-removed one
+        // (#72 — the latter takes a fresh epoch, not the 0 sentinel).
         let prev = Self::entry_role_epoch(&m, &txn, principal);
-        let epoch = Self::next_epoch(prev, role);
+        let epoch = Self::next_epoch(prev, role, was_retired);
         let entry = m.insert(&mut txn, principal, MapPrelim::default());
         entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
         entry.insert(&mut txn, MEMBER_LABEL_KEY, label.as_str());
         entry.insert(&mut txn, MEMBER_EPOCH_KEY, epoch.to_string());
+        if was_retired {
+            let r = Self::retired_map(&root, &mut txn);
+            r.remove(&mut txn, principal);
+        }
         txn.encode_update_v1()
     }
 
@@ -1620,11 +1692,27 @@ mod tests {
         );
 
         // The B-19 cascade vector: a role CHANGE. The epoch MUST advance so bob's
-        // post-grant client_id differs from his viewer-era one.
+        // post-grant client_id differs from his viewer-era one — to an UNPREDICTABLE
+        // token (#72), never the guessable prev+1.
+        let viewer_epoch = coll.epoch_of("bob"); // 0
         coll.set_role("bob", Role::Editor);
-        assert_eq!(coll.epoch_of("bob"), 1, "viewer→editor bumps the epoch");
+        let editor_epoch = coll.epoch_of("bob");
+        assert_ne!(
+            editor_epoch, viewer_epoch,
+            "viewer→editor advances the epoch"
+        );
+        assert_ne!(
+            editor_epoch,
+            viewer_epoch + 1,
+            "advance is an unpredictable token, not prev+1 (#72)"
+        );
         coll.upsert_member("bob", "bob", Role::Viewer);
-        assert_eq!(coll.epoch_of("bob"), 2, "editor→viewer bumps again");
+        let reviewer_epoch = coll.epoch_of("bob");
+        assert_ne!(reviewer_epoch, editor_epoch, "editor→viewer advances again");
+        assert_ne!(
+            reviewer_epoch, 0,
+            "an advance never returns to the sentinel"
+        );
     }
 
     #[test]
@@ -1793,6 +1881,43 @@ mod tests {
         assert_eq!(coll.role_of("SHA256:bob"), Some(Role::Viewer));
         coll.remove_principal("SHA256:bob");
         assert_eq!(coll.role_of("SHA256:bob"), None);
+    }
+
+    // --- #72 epoch-fence hardening (security-negative oracles) ---
+
+    #[test]
+    fn epoch_advance_is_not_predictable_counter() {
+        // Pre-rotation defense (ADR-023): a role change must NOT advance the epoch
+        // to a guessable prev+1, or an attacker precomputes derive(fp, prev+1) and
+        // authors viewer-era ops under the future editor client_id.
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:owner", "alice");
+        coll.upsert_member("SHA256:bob", "bob", Role::Viewer); // fresh grant -> epoch 0
+        let prev = coll.epoch_of("SHA256:bob");
+        let predicted = derive_kb_client_id("SHA256:bob", prev + 1);
+        coll.set_role("SHA256:bob", Role::Editor); // role change -> epoch advance
+        let actual = derive_kb_client_id("SHA256:bob", coll.epoch_of("SHA256:bob"));
+        assert_ne!(
+            predicted, actual,
+            "epoch advance must be an unpredictable token, not prev+1"
+        );
+    }
+
+    #[test]
+    fn readd_after_remove_does_not_reuse_clientid() {
+        // Monotonicity across remove/re-add (ADR-023): a directly-added editor
+        // authors under derive(fp, 0). If remove+re-add resets to epoch 0, their
+        // pre-removal lineage is silently un-fenced. The re-added member's
+        // authoring client_id MUST differ from the pre-removal one.
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:owner", "alice");
+        coll.upsert_member("SHA256:bob", "bob", Role::Editor); // fresh grant -> epoch 0
+        let before = derive_kb_client_id("SHA256:bob", coll.epoch_of("SHA256:bob"));
+        coll.remove_principal("SHA256:bob");
+        coll.upsert_member("SHA256:bob", "bob", Role::Editor); // re-add
+        let after = derive_kb_client_id("SHA256:bob", coll.epoch_of("SHA256:bob"));
+        assert_ne!(
+            before, after,
+            "re-add must issue a fresh epoch, not reuse the pre-removal client_id"
+        );
     }
 
     #[test]

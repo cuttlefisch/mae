@@ -1300,6 +1300,7 @@ name = "mae-sync"
 version = "0.14.0"
 dependencies = [
  "base64 0.22.1",
+ "rand 0.9.4",
  "ropey",
  "serde",
  "serde_json",

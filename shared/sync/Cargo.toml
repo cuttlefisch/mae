@@ -13,9 +13,9 @@ base64 = "0.22"
 similar = "3"
 tracing = "0.1"
 sha2 = "0.10"
+rand = "0.9" # #72: unpredictable authorization-epoch tokens (fresh_epoch_token)
 
 [dev-dependencies]
-rand = "0.9"
 tempfile = "3"
 criterion = { version = "0.8", features = ["html_reports"] }
 
