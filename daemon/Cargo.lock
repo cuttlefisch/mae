@@ -1236,7 +1236,7 @@ dependencies = [
 
 [[package]]
 name = "mae-daemon"
-version = "0.13.12"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "cozo",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.13.12"
+version = "0.14.0"
 dependencies = [
  "cozo",
  "lru",
@@ -1275,7 +1275,7 @@ dependencies = [
 
 [[package]]
 name = "mae-mcp"
-version = "0.13.12"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1297,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "mae-sync"
-version = "0.13.12"
+version = "0.14.0"
 dependencies = [
  "base64 0.22.1",
  "ropey",
