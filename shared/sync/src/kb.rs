@@ -9,6 +9,7 @@ use yrs::{
     MapPrelim, MapRef, Out, ReadTxn, Text, TextPrelim, Transact,
 };
 
+use crate::membership::{MembershipAction, MembershipOp, SignedMembershipOp};
 use crate::text::{new_doc, new_doc_with_client_id};
 use crate::SyncError;
 
@@ -523,6 +524,25 @@ const COLL_POLICY_KEY: &str = "join_policy"; // restrictive|invite|permissive
 const COLL_PENDING_KEY: &str = "pending"; // YMap<fingerprint -> {label,requested_at}>
 const COLL_RETIRED_KEY: &str = "retired"; // YMap<fingerprint -> last epoch> (#72 tombstone)
 const COLL_TRANSPORT_POLICY_KEY: &str = "transport_policy"; // hub|p2p|both (absent ⇒ hub)
+/// ADR-026 signed membership op-log: `YMap<chain_hash -> op record>` — the
+/// append-only, CRDT *set* of signed membership ops (keyed by each op's
+/// `chain_hash` so concurrent appends converge). Validity is *derived* by every
+/// peer replaying this log (`derive_valid_members`), never read as a trusted
+/// verdict. This is the v3 source of truth; the v2 `member_roles` LWW map remains
+/// as a migration read-path until the daemon switches the gate over (Phase 2b-6).
+const COLL_OPLOG_KEY: &str = "membership_oplog";
+// Sub-keys of one op record (a YMap value under COLL_OPLOG_KEY, keyed by chain_hash).
+const OP_KBID_KEY: &str = "kb_id"; // signed kb_id (self-contained verification)
+const OP_ACTION_KEY: &str = "action"; // admit|remove|set_role|revoke
+const OP_SUBJECT_KEY: &str = "subject"; // principal acted on
+const OP_ROLE_KEY: &str = "role"; // granted role ("" if none)
+const OP_CAN_INVITE_KEY: &str = "can_invite"; // "1"|"0"
+const OP_AUTHOR_KEY: &str = "author"; // issuer principal (= signer fingerprint)
+const OP_ISSUED_KEY: &str = "issued_at"; // unix seconds (decimal)
+const OP_EXPIRES_KEY: &str = "expires_at"; // unix seconds (decimal); "" = no timebox
+const OP_PREV_KEY: &str = "prev_hash"; // chain_hash of the author's view-head ("" = genesis)
+const OP_SIG_KEY: &str = "sig"; // hex(64-byte Ed25519 signature)
+const OP_PUBKEY_KEY: &str = "author_pubkey"; // hex(32-byte Ed25519 public key)
 const MEMBER_ROLE_KEY: &str = "role";
 const MEMBER_LABEL_KEY: &str = "label";
 /// ADR-023: per-member monotonic authorization epoch, bumped by the daemon on
@@ -1316,6 +1336,174 @@ impl KbCollectionDoc {
             let r = Self::retired_map(&root, &mut txn);
             r.remove(&mut txn, principal);
         }
+        txn.encode_update_v1()
+    }
+
+    // --- ADR-026 signed membership op-log (the v3 source of truth) ---
+
+    /// Get-or-create the membership op-log YMap within an open txn.
+    fn oplog_map(root: &MapRef, txn: &mut yrs::TransactionMut) -> MapRef {
+        match root.get(txn, COLL_OPLOG_KEY) {
+            Some(Out::YMap(m)) => m,
+            _ => root.insert(txn, COLL_OPLOG_KEY, MapPrelim::default()),
+        }
+    }
+
+    /// Decode one op record (a YMap value) into a [`SignedMembershipOp`]. Returns
+    /// `None` if a required field is missing or malformed — a corrupt/partial
+    /// record simply doesn't contribute to derivation (fail-closed, never panics).
+    fn decode_op_record(rec: &MapRef, txn: &impl ReadTxn) -> Option<SignedMembershipOp> {
+        let get = |k: &str| rec.get(txn, k).map(|v| v.to_string(txn));
+        let role_s = get(OP_ROLE_KEY).unwrap_or_default();
+        let role = if role_s.is_empty() {
+            None
+        } else {
+            Some(Role::parse(&role_s)?)
+        };
+        let expires_s = get(OP_EXPIRES_KEY).unwrap_or_default();
+        let expires_at = if expires_s.is_empty() {
+            None
+        } else {
+            Some(expires_s.parse::<u64>().ok()?)
+        };
+        let sig = hex::decode(get(OP_SIG_KEY)?).ok()?;
+        let pubkey: [u8; 32] = hex::decode(get(OP_PUBKEY_KEY)?).ok()?.try_into().ok()?;
+        Some(SignedMembershipOp {
+            op: MembershipOp {
+                kb_id: get(OP_KBID_KEY)?,
+                action: MembershipAction::parse(&get(OP_ACTION_KEY)?)?,
+                subject: get(OP_SUBJECT_KEY)?,
+                role,
+                can_invite: get(OP_CAN_INVITE_KEY).as_deref() == Some("1"),
+                author: get(OP_AUTHOR_KEY)?,
+                issued_at: get(OP_ISSUED_KEY)?.parse::<u64>().ok()?,
+                expires_at,
+                prev_hash: get(OP_PREV_KEY).unwrap_or_default(),
+            },
+            sig,
+            author_pubkey: pubkey,
+        })
+    }
+
+    /// All signed membership ops in the log, in arbitrary order. Validity
+    /// derivation (`derive_valid_members`) orders them by the `prev_hash` causal
+    /// DAG and applies the resolver; this reader does no validation beyond decode.
+    pub fn oplog_ops(&self) -> Vec<SignedMembershipOp> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        let mut out = Vec::new();
+        if let Some(Out::YMap(log)) = root.get(&txn, COLL_OPLOG_KEY) {
+            for (_key, v) in log.iter(&txn) {
+                if let Out::YMap(rec) = v {
+                    if let Some(op) = Self::decode_op_record(&rec, &txn) {
+                        out.push(op);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Number of records in the op-log (decoded + malformed alike).
+    pub fn oplog_len(&self) -> usize {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        match root.get(&txn, COLL_OPLOG_KEY) {
+            Some(Out::YMap(log)) => log.len(&txn) as usize,
+            _ => 0,
+        }
+    }
+
+    /// The current frontier head of the op-log DAG — the `chain_hash` to use as the
+    /// next op's `prev_hash`. A tip is an op whose hash is no other op's `prev_hash`;
+    /// with multiple concurrent tips the highest hash is chosen (deterministic, so
+    /// every honest builder agrees). `None` ⇒ empty log (the next op is genesis).
+    pub fn oplog_head(&self) -> Option<String> {
+        let ops = self.oplog_ops();
+        let referenced: Vec<String> = ops
+            .iter()
+            .map(|o| o.op.prev_hash.clone())
+            .filter(|p| !p.is_empty())
+            .collect();
+        ops.iter()
+            .map(|o| o.chain_hash())
+            .filter(|h| !referenced.iter().any(|r| r == h))
+            .max()
+    }
+
+    /// Build an unsigned membership op linked to the current op-log head (pure — no
+    /// key, no mutation). The daemon signs the returned op with the authoring
+    /// identity, then calls [`append_signed_op`](Self::append_signed_op). `prev_hash`
+    /// is the author's view-head ([`oplog_head`](Self::oplog_head)) so the op extends
+    /// the causal DAG; the genesis op (empty log) gets `prev_hash = ""`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_membership_op(
+        &self,
+        kb_id: &str,
+        action: MembershipAction,
+        subject: &str,
+        role: Option<Role>,
+        can_invite: bool,
+        author: &str,
+        issued_at: u64,
+        expires_at: Option<u64>,
+    ) -> MembershipOp {
+        MembershipOp {
+            kb_id: kb_id.to_string(),
+            action,
+            subject: subject.to_string(),
+            role,
+            can_invite,
+            author: author.to_string(),
+            issued_at,
+            expires_at,
+            prev_hash: self.oplog_head().unwrap_or_default(),
+        }
+    }
+
+    /// Append a signed op to the log, keyed by its `chain_hash` (so concurrent
+    /// appends of distinct ops converge as a set, and a re-append is idempotent).
+    /// Stores the op fields + signature + author pubkey so the record is
+    /// independently verifiable by any peer. Returns the encoded yrs update.
+    ///
+    /// This does **not** validate the op — appending and *deriving validity* are
+    /// separate (a relay may carry an invalid op; `derive_valid_members` is what
+    /// refuses to count it). The daemon gates the author's capability *before*
+    /// appending (Phase 2b-6).
+    pub fn append_signed_op(
+        &mut self,
+        op: &MembershipOp,
+        sig: &[u8],
+        author_pubkey: &[u8; 32],
+    ) -> Vec<u8> {
+        let key = op.chain_hash(sig);
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        let log = Self::oplog_map(&root, &mut txn);
+        let rec = log.insert(&mut txn, key.as_str(), MapPrelim::default());
+        rec.insert(&mut txn, OP_KBID_KEY, op.kb_id.as_str());
+        rec.insert(&mut txn, OP_ACTION_KEY, op.action.as_str());
+        rec.insert(&mut txn, OP_SUBJECT_KEY, op.subject.as_str());
+        rec.insert(
+            &mut txn,
+            OP_ROLE_KEY,
+            op.role.map(|r| r.as_str()).unwrap_or(""),
+        );
+        rec.insert(
+            &mut txn,
+            OP_CAN_INVITE_KEY,
+            if op.can_invite { "1" } else { "0" },
+        );
+        rec.insert(&mut txn, OP_AUTHOR_KEY, op.author.as_str());
+        rec.insert(&mut txn, OP_ISSUED_KEY, op.issued_at.to_string());
+        rec.insert(
+            &mut txn,
+            OP_EXPIRES_KEY,
+            op.expires_at.map(|e| e.to_string()).unwrap_or_default(),
+        );
+        rec.insert(&mut txn, OP_PREV_KEY, op.prev_hash.as_str());
+        rec.insert(&mut txn, OP_SIG_KEY, hex::encode(sig));
+        rec.insert(&mut txn, OP_PUBKEY_KEY, hex::encode(author_pubkey));
         txn.encode_update_v1()
     }
 
@@ -2190,5 +2378,192 @@ mod tests {
         assert_eq!(coll.owner(), "legacy:alice");
         assert_eq!(coll.role_of("legacy:alice"), Some(Role::Owner));
         assert_eq!(coll.role_of("legacy:ghost"), Some(Role::Editor));
+    }
+
+    // --- ADR-026 signed membership op-log (slice 2b-2) ---
+
+    /// (secret seed, public key bytes, principal fingerprint) for a test identity.
+    fn oplog_keypair(seed: u8) -> ([u8; 32], [u8; 32], String) {
+        use crate::membership::fingerprint_of;
+        use ed25519_dalek::SigningKey;
+        let secret = [seed; 32];
+        let pubkey = SigningKey::from_bytes(&secret).verifying_key().to_bytes();
+        let fp = fingerprint_of(&pubkey);
+        (secret, pubkey, fp)
+    }
+
+    #[test]
+    fn oplog_append_read_roundtrips_and_verifies() {
+        let (secret, pubkey, owner_fp) = oplog_keypair(1);
+        let mut coll = KbCollectionDoc::new_owned("KB", &owner_fp, "alice");
+        assert!(coll.oplog_head().is_none(), "empty log has no head");
+
+        // Genesis: the owner admits themselves (self-signed).
+        let op = coll.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &owner_fp,
+            Some(Role::Owner),
+            true,
+            &owner_fp,
+            1000,
+            None,
+        );
+        assert_eq!(op.prev_hash, "", "genesis op has empty prev_hash");
+        let sig = op.sign(&secret);
+        coll.append_signed_op(&op, &sig, &pubkey);
+
+        let ops = coll.oplog_ops();
+        assert_eq!(ops.len(), 1);
+        let rec = &ops[0];
+        assert!(rec.verify_signed(), "round-tripped record verifies");
+        assert_eq!(rec.op.subject, owner_fp);
+        assert_eq!(rec.op.role, Some(Role::Owner));
+        assert!(rec.op.can_invite);
+        assert_eq!(rec.op.kb_id, "KB");
+        assert_eq!(
+            coll.oplog_head(),
+            Some(rec.chain_hash()),
+            "head is the lone op"
+        );
+        // Re-appending the identical signed op is idempotent (keyed by chain_hash).
+        coll.append_signed_op(&op, &sig, &pubkey);
+        assert_eq!(
+            coll.oplog_len(),
+            1,
+            "same op re-append is a no-op set insert"
+        );
+    }
+
+    #[test]
+    fn oplog_head_advances_along_the_chain() {
+        let (osec, opub, owner_fp) = oplog_keypair(1);
+        let (_bsec, _bpub, bob_fp) = oplog_keypair(2);
+        let mut coll = KbCollectionDoc::new_owned("KB", &owner_fp, "alice");
+
+        let g = coll.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &owner_fp,
+            Some(Role::Owner),
+            true,
+            &owner_fp,
+            1,
+            None,
+        );
+        let gsig = g.sign(&osec);
+        coll.append_signed_op(&g, &gsig, &opub);
+        let ghash = g.chain_hash(&gsig);
+        assert_eq!(coll.oplog_head(), Some(ghash.clone()));
+
+        // Owner admits bob; the new op chains off the genesis head.
+        let a = coll.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &bob_fp,
+            Some(Role::Editor),
+            false,
+            &owner_fp,
+            2,
+            None,
+        );
+        assert_eq!(a.prev_hash, ghash, "second op chains off genesis");
+        let asig = a.sign(&osec);
+        coll.append_signed_op(&a, &asig, &opub);
+        assert_eq!(coll.oplog_len(), 2);
+        assert_eq!(
+            coll.oplog_head(),
+            Some(a.chain_hash(&asig)),
+            "head advanced to the admit"
+        );
+    }
+
+    #[test]
+    fn oplog_concurrent_appends_converge_as_a_set() {
+        let (osec, opub, owner_fp) = oplog_keypair(1);
+        let (_sx, _px, x_fp) = oplog_keypair(2);
+        let (_sy, _py, y_fp) = oplog_keypair(3);
+
+        let mut base = KbCollectionDoc::new_owned("KB", &owner_fp, "alice");
+        let g = base.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &owner_fp,
+            Some(Role::Owner),
+            true,
+            &owner_fp,
+            1,
+            None,
+        );
+        let gsig = g.sign(&osec);
+        base.append_signed_op(&g, &gsig, &opub);
+        let state = base.encode_state();
+
+        // Two replicas concurrently admit DIFFERENT subjects, both off genesis.
+        let mut a = KbCollectionDoc::from_bytes(&state).unwrap();
+        let mut b = KbCollectionDoc::from_bytes(&state).unwrap();
+        let opx = a.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &x_fp,
+            Some(Role::Editor),
+            false,
+            &owner_fp,
+            2,
+            None,
+        );
+        let sx = opx.sign(&osec);
+        let ux = a.append_signed_op(&opx, &sx, &opub);
+        let opy = b.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &y_fp,
+            Some(Role::Editor),
+            false,
+            &owner_fp,
+            3,
+            None,
+        );
+        let sy = opy.sign(&osec);
+        let uy = b.append_signed_op(&opy, &sy, &opub);
+
+        // Cross-apply the concurrent updates.
+        a.apply_update(&uy).unwrap();
+        b.apply_update(&ux).unwrap();
+
+        // Both replicas hold all three ops (set union; no lost append).
+        assert_eq!(a.oplog_len(), 3);
+        assert_eq!(b.oplog_len(), 3);
+        // The deterministic head pick (highest-hash tip) agrees on both peers.
+        assert_eq!(a.oplog_head(), b.oplog_head());
+    }
+
+    #[test]
+    fn oplog_record_with_mismatched_pubkey_fails_verify() {
+        let (osec, _opub, owner_fp) = oplog_keypair(1);
+        let (_msec, mpub, _mfp) = oplog_keypair(9);
+        let mut coll = KbCollectionDoc::new_owned("KB", &owner_fp, "alice");
+
+        // The op names + is signed by the owner, but the record stores a DIFFERENT
+        // author_pubkey (a relay swapping the key). Decode succeeds; verify fails.
+        let op = coll.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &owner_fp,
+            Some(Role::Owner),
+            true,
+            &owner_fp,
+            1,
+            None,
+        );
+        let sig = op.sign(&osec);
+        coll.append_signed_op(&op, &sig, &mpub); // wrong pubkey stored
+
+        let ops = coll.oplog_ops();
+        assert_eq!(ops.len(), 1);
+        assert!(
+            !ops[0].verify_signed(),
+            "fingerprint(author_pubkey) != author ⇒ record rejected"
+        );
     }
 }
