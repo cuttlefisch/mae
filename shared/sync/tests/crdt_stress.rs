@@ -6,7 +6,7 @@
 //! Run: cargo test -p mae-sync --test crdt_stress -- --nocapture
 
 use mae_sync::text::TextSync;
-use rand::Rng;
+use rand::RngExt;
 
 /// FNV-1a 32-bit hash matching production `compute_client_id`.
 /// Produces client_ids safe for yrs v1 wire format.

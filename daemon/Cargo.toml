@@ -32,7 +32,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 toml = "1.1"
-sha2 = "0.10"
+sha2 = "0.11"
+hex = "0.4"
 
 [dev-dependencies]
+hex = "0.4"
 tempfile = "3"

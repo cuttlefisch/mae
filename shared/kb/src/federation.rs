@@ -509,7 +509,7 @@ pub fn import_org_dir_to_store(
         };
 
         // Compute content hash for change detection.
-        let content_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+        let content_hash = hex::encode(Sha256::digest(content.as_bytes()));
 
         // In incremental mode, skip files whose content hasn't changed.
         if matches!(mode, IngestMode::Incremental) {

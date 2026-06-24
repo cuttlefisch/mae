@@ -499,7 +499,7 @@ impl KbNodeDoc {
             hasher.update(tag.as_bytes());
             hasher.update(b"\0");
         }
-        format!("{:x}", hasher.finalize())
+        hex::encode(hasher.finalize())
     }
 
     /// Access the underlying Doc.

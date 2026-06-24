@@ -166,7 +166,7 @@ pub fn permission_warning(path: &Path) -> Option<String> {
 
 /// Generate a fresh random 256-bit secret, hex-encoded (64 chars).
 pub fn generate_secret() -> String {
-    use rand::RngCore;
+    use rand::Rng;
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()

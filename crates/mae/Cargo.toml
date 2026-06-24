@@ -41,7 +41,8 @@ semver = { version = "1", features = ["serde"] }
 libc = "0.2"
 mdns-sd = "0.20"
 hostname = "0.4"
-sha2 = "0.10"
+sha2 = "0.11"
+hex = "0.4"
 
 [features]
 gui = ["dep:mae-gui", "dep:winit"]

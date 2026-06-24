@@ -21,8 +21,9 @@ lru = "0.18"
 mae-sync = { path = "../sync", optional = true }
 mae-mcp = { path = "../mcp" }
 cozo = { version = "0.7", default-features = false, features = ["rayon"] }
-sha2 = "0.10"
+sha2 = "0.11"
 ndarray = "0.15"
+hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
