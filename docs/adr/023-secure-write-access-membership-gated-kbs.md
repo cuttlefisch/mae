@@ -1,7 +1,9 @@
 # ADR-023: Secure write-access for membership-gated KBs (epoch-fenced rebase)
 
-**Status:** Accepted (design). Core enforcement implemented; unpredictable-token hardening + the
-ADR-021 audit log are follow-ups.
+**Status:** Accepted; implemented. Core epoch-fenced enforcement + the **unpredictable-token
+hardening landed** (#72, PR #99) — so the fence is no longer pre-rotation-vulnerable and the
+peer-enforceable variant (ADR-026 §A5) is unblocked. The ADR-021 generalized audit log remains a
+follow-up (the ADR-026 signed membership op-log is the membership-side hash-chained record).
 **Extends:** ADR-017 (mTLS-as-identity), ADR-018 (identity-anchored RBAC access control), ADR-020
 (replicated KB CRDT artifact), ADR-022 (SV-reconcile on (re)join — the cascade vector).
 

@@ -1,6 +1,10 @@
 # ADR-027: Collaboration & P2P observability
 
-**Status:** Accepted (design). Implemented *incrementally alongside* each P2P phase (not a trailing pass).
+**Status:** Accepted (design); **partially implemented.** Foundational tracing exists (the `kb_sync`
+edit-flow target + symmetric daemon collab `info!`/`warn!`, and the dialer's `mesh peer …` lifecycle
+logs from PR #102). The **mesh-specific surfaces are NOT yet built**: the `*Mesh*` introspection buffer,
+`collab-doctor` mesh mode, and exported metrics (#93, Phase 6). #79 (migrate set_status emitters to the
+attention bus) is a predecessor for the notification surfaces.
 **Extends:** ADR-024 (notification attention bus), ADR-001 (`$/debug`), ADR-006 (collab engine).
 **Feeds:** ADR-025 (mesh transport), ADR-026 (peer-verifiable integrity).
 

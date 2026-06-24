@@ -1,8 +1,12 @@
 # ADR-026: Peer-verifiable KB integrity (signed membership op-log + derived validity)
 
-**Status:** Accepted (design). Phased implementation tracked separately (P2P epic, Phase 2b-4).
-Membership op-log + p2panda-auth strong-removal resolver + configurable quorum governance land in
-Phase 2b; the peer-side epoch fence in Phase 4 (gated on #72).
+**Status:** Accepted; **Phase 2b implemented** (PR #102). In `mae-sync`: the signed membership
+**op-log**, per-peer **derivation**, the p2panda-auth **strong-removal resolver**, inviter-removal
+**cascade**, **local blocklist**, and **quorum** governance — all unit-tested. Wired into the daemon:
+sign-on-mutate for owned KBs; `kb_access` peer-verifies derived membership for **anchored** (joined)
+KBs. **#72 landed** (PR #99), so the peer-enforceable epoch fence (§A5 / Phase 4) is unblocked.
+**Remaining:** signed **content** ops (Phase 4 second half); quorum sourced in the daemon gate
+(mae-sync ready); the fully-leaderless auth-DAG (§B, research).
 **Extends:** ADR-017 (mTLS-as-identity), ADR-018 (identity-anchored RBAC), ADR-021 (membership audit
 log), ADR-022 (SV-reconcile), ADR-023 (epoch-fenced rebase).
 **Depends on:** #72 (unpredictable daemon-issued epoch token) — a security prerequisite.

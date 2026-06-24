@@ -1,6 +1,11 @@
 # ADR-025: P2P daemon-mesh transport (iroh)
 
-**Status:** Accepted (design). Phased implementation tracked separately (P2P epic, Phase 1-2).
+**Status:** Accepted; **Phases 1 + 2a + 2c implemented** (PR #102, branch `feat/p2p-setup-and-mesh`):
+iroh transport + identity-gated accept (#88, merged #100), per-KB transport policy + live-reload
+connection gate (2a), join tickets + the outbound **dialer** (dial-by-node-id, anti-spoof `remote_id`
+verify, trust anchor, pull) + **bidirectional live sync** with reconnect/backoff (2c). Routing/mobility
+(direct + relay) relies on iroh's discovery defaults; a self-hosted relay + explicit Pkarr-republish
+tuning are operational follow-ups.
 **Extends:** ADR-001 (server-client protocol), ADR-006 (collaborative state engine / transport),
 ADR-014 (binary architecture — the daemon workspace), ADR-017 (mTLS-as-identity).
 **Feeds:** ADR-026 (peer-verifiable integrity), ADR-027 (collaboration observability).
