@@ -101,6 +101,20 @@ of the mesh machinery starts (zero overhead). `mae-daemon doctor` reports P2P st
 discovery, relay reachability, peer count) — the ADR-027 visibility surface, available at the CLI for
 headless deployments.
 
+**Hub + mesh coexistence (a supported, expected configuration — invariant).** Enabling the mesh ADDS a
+transport; it never replaces hub-mode sharing. When `collab.p2p.enabled`, the daemon runs the iroh
+endpoint **and** the v0.14 TCP hub listener concurrently, **over one shared `DocStore` + broadcaster + the
+same `authorized_keys`/membership (`KbCollectionDoc`, ADR-018)**. Consequences that MUST hold:
+- A KB can be shared **simultaneously** over the hub and the mesh; it is **one CRDT document** — a
+  hub-connected peer and a mesh peer edit the same `YDoc` and converge. No fork, no per-transport copy.
+- **Membership is transport-agnostic**: a member admitted via the hub is a member for mesh access and vice
+  versa (one trust set + one membership doc). A removal/epoch-fence applies to both transports at once.
+- `setup-collab --p2p` only flips `[collab.p2p].enabled`; `[collab].enabled` (the hub) is independent and
+  untouched, so the two compose by configuration.
+- *Current constraint (not a design limit):* the mesh is activated within the hub server path, so it
+  presently requires `collab.enabled = true`. "Both" is fully supported; mesh-only (hub off) is a small
+  follow-up refactor, out of scope here.
+
 ## Driving surfaces — CLI, editor & AI-peer parity
 
 Every P2P lifecycle action MUST be drivable from **all** of the surfaces below, so a
