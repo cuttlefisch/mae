@@ -311,8 +311,9 @@ async fn spawn_p2p_mesh(
     info!(
         fingerprint = %identity.fingerprint(),
         relay = %p2p.relay,
+        connection_gate = %p2p.connection_gate,
         authorized = mae_mcp::identity::AuthorizedKeys::load(&authorized_keys_path).len(),
-        "P2P mesh endpoint bound (ADR-025); accepting authorized peers"
+        "P2P mesh endpoint bound (ADR-025); accepting peers"
     );
     // Publish a clone to the control-socket state so `p2p/mint_ticket` can build
     // join tickets; the accept loop below owns the original.
@@ -320,6 +321,7 @@ async fn spawn_p2p_mesh(
     tokio::spawn(p2p::serve(
         endpoint,
         authorized_keys_path,
+        p2p.gate_open(),
         doc_store,
         broadcaster,
         start_time,

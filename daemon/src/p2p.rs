@@ -135,14 +135,32 @@ pub(crate) fn authorize_peer(
     })
 }
 
-/// [`authorize_peer`] against a **freshly loaded** `authorized_keys` file — the
-/// per-accept live-reload of the mesh gate (I-10). A missing/unreadable file
-/// loads as empty ⇒ deny (fail-secure).
-fn authorize_peer_reloading(
+/// Resolve a connecting mesh peer's identity per the connection-trust gate
+/// (ADR-025), re-reading `authorized_keys` **per accept** (I-10; fail-secure):
+/// - a peer in `authorized_keys` always resolves to its labelled identity;
+/// - else if `gate_open`, admit it with a **bare-fingerprint** identity — we
+///   know *who* via the verified `remote_id`, and per-KB access is still fully
+///   mediated by `kb_access` (membership + JoinPolicy), so an unknown peer gets
+///   a connection but no KB access it isn't entitled to;
+/// - else (closed gate) reject the connection at the transport.
+fn resolve_mesh_peer(
     pubkey: [u8; 32],
     authorized_keys_path: &std::path::Path,
+    gate_open: bool,
 ) -> Option<PeerIdentity> {
-    authorize_peer(pubkey, &AuthorizedKeys::load(authorized_keys_path))
+    if let Some(peer) = authorize_peer(pubkey, &AuthorizedKeys::load(authorized_keys_path)) {
+        return Some(peer);
+    }
+    if gate_open {
+        let pk = PublicKey::from_bytes(&pubkey, None)?;
+        let fingerprint = pk.fingerprint();
+        return Some(PeerIdentity {
+            label: fingerprint.clone(),
+            fingerprint,
+            pubkey,
+        });
+    }
+    None
 }
 
 /// Accept loop for the mesh endpoint. Each inbound connection is gated on its
@@ -157,6 +175,7 @@ fn authorize_peer_reloading(
 pub async fn serve(
     endpoint: Endpoint,
     authorized_keys_path: std::path::PathBuf,
+    gate_open: bool,
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: Instant,
@@ -186,11 +205,11 @@ pub async fn serve(
             // `revoke` and TOFU-approve take effect on the running mesh without a
             // restart — fail-secure: a missing/unreadable file ⇒ empty ⇒ deny.
             let pubkey = *conn.remote_id().as_bytes();
-            let Some(peer) = authorize_peer_reloading(pubkey, &authorized_keys_path) else {
+            let Some(peer) = resolve_mesh_peer(pubkey, &authorized_keys_path, gate_open) else {
                 let fp = PublicKey::from_bytes(&pubkey, None)
                     .map(|k| k.fingerprint())
                     .unwrap_or_default();
-                warn!(fingerprint = %fp, "rejecting mesh peer absent from authorized_keys");
+                warn!(fingerprint = %fp, "rejecting mesh peer (closed gate, not in authorized_keys)");
                 conn.close(1u32.into(), b"unauthorized");
                 return;
             };
@@ -334,18 +353,40 @@ mod tests {
         let peer_pub = peer.public().to_bytes();
 
         // Absent file ⇒ deny.
-        assert!(authorize_peer_reloading(peer_pub, &ak_path).is_none());
+        assert!(resolve_mesh_peer(peer_pub, &ak_path, false).is_none());
 
         // Authorize → the next call admits, live (no restart).
         let mut ak = AuthorizedKeys::load(&ak_path);
         ak.add(PublicKey::from_bytes(&peer_pub, Some("peer".to_string())).unwrap())
             .unwrap();
-        let admitted = authorize_peer_reloading(peer_pub, &ak_path).expect("authorized after add");
+        let admitted = resolve_mesh_peer(peer_pub, &ak_path, false).expect("authorized after add");
         assert_eq!(admitted.pubkey, peer_pub);
+
+        assert_eq!(admitted.label, "peer", "labelled identity for a known peer");
 
         // Revoke → the next call denies, live.
         ak.revoke_by_fingerprint(&admitted.fingerprint).unwrap();
-        assert!(authorize_peer_reloading(peer_pub, &ak_path).is_none());
+        assert!(resolve_mesh_peer(peer_pub, &ak_path, false).is_none());
+    }
+
+    /// The `open` connection gate admits an UNKNOWN authenticated peer with a
+    /// bare-fingerprint identity (per-KB access stays membership-gated), while the
+    /// closed gate rejects it.
+    #[test]
+    fn open_gate_admits_unknown_peers_as_bare_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let ak_path = dir.path().join("authorized_keys"); // empty
+        let stranger = Identity::generate("stranger").public().to_bytes();
+
+        // Closed gate: unknown peer rejected.
+        assert!(resolve_mesh_peer(stranger, &ak_path, false).is_none());
+
+        // Open gate: admitted with identity = its own fingerprint + a real
+        // principal, so kb_access sees an authenticated non-member.
+        let peer = resolve_mesh_peer(stranger, &ak_path, true).expect("open gate admits");
+        assert!(peer.is_authenticated());
+        assert_eq!(peer.label, peer.fingerprint);
+        assert_eq!(peer.principal(), Some(peer.fingerprint.as_str()));
     }
 
     /// End-to-end transport proof: two endpoints connect over iroh and round-trip a
