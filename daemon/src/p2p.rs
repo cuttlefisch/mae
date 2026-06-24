@@ -63,4 +63,111 @@ mod tests {
         );
         ep.close().await;
     }
+
+    /// End-to-end transport proof: two endpoints connect over iroh and round-trip a
+    /// **Content-Length-framed** mae_mcp message through `open_bi`/`accept_bi`
+    /// streams — confirming the QUIC streams drop into the existing framing, and the
+    /// acceptor sees the connector's `EndpointId` == its trusted-peer key (the
+    /// `authorized_keys` gate input).
+    #[tokio::test]
+    async fn two_endpoints_round_trip_a_framed_message() {
+        use iroh::{EndpointAddr, TransportAddr};
+        use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+        use std::time::Duration;
+        use tokio::io::BufReader;
+
+        let acc_id = Identity::generate("acceptor");
+        let con_id = Identity::generate("connector");
+        let con_pub = con_id.public().to_bytes();
+
+        let acceptor = bind_endpoint(&acc_id, RelayMode::Disabled).await.unwrap();
+
+        // Dial by EXPLICIT direct address — no relay, no discovery. With
+        // `RelayMode::Disabled` there is no relay home and DNS/Pkarr discovery
+        // never resolves on localhost, so `online()`/`addr()` would block forever
+        // (a 20-min hang in CI). Instead, hand the connector the acceptor's bound
+        // UDP socket(s) directly, rewriting the unspecified bind IP (0.0.0.0 / [::])
+        // to loopback so it is actually dialable. Compute this BEFORE moving the
+        // acceptor into the accept task.
+        let acc_addr = EndpointAddr::from_parts(
+            acceptor.id(),
+            acceptor
+                .bound_sockets()
+                .into_iter()
+                .map(|mut sa: SocketAddr| {
+                    if sa.ip().is_unspecified() {
+                        sa.set_ip(if sa.is_ipv4() {
+                            Ipv4Addr::LOCALHOST.into()
+                        } else {
+                            Ipv6Addr::LOCALHOST.into()
+                        });
+                    }
+                    TransportAddr::Ip(sa)
+                }),
+        );
+
+        // Acceptor: accept one connection, read a framed message, echo it back.
+        let server = tokio::spawn(async move {
+            let incoming = acceptor.accept().await.expect("incoming connection");
+            let conn = incoming
+                .accept()
+                .expect("accept")
+                .await
+                .expect("connection established");
+            let peer = conn.remote_id();
+            let (mut send, recv) = conn.accept_bi().await.expect("accept_bi");
+            let mut reader = BufReader::new(recv);
+            let msg = mae_mcp::read_message(&mut reader)
+                .await
+                .expect("read")
+                .expect("a framed message");
+            mae_mcp::write_framed(&mut send, msg.as_bytes(), Duration::from_secs(5))
+                .await
+                .expect("echo write");
+            send.finish().expect("finish");
+            conn.closed().await;
+            peer
+        });
+
+        // Connector: dial, open a bi stream, write a framed message, read the echo.
+        let connector = bind_endpoint(&con_id, RelayMode::Disabled).await.unwrap();
+        let conn = tokio::time::timeout(
+            Duration::from_secs(20),
+            connector.connect(acc_addr, MAE_ALPN),
+        )
+        .await
+        .expect("relay-less direct dial must not hang")
+        .expect("dial acceptor");
+        let (mut send, recv) = conn.open_bi().await.expect("open_bi");
+        let payload = r#"{"jsonrpc":"2.0","method":"$/ping"}"#;
+        mae_mcp::write_framed(&mut send, payload.as_bytes(), Duration::from_secs(5))
+            .await
+            .expect("write");
+        send.finish().expect("finish");
+        let mut reader = BufReader::new(recv);
+        let echo = mae_mcp::read_message(&mut reader)
+            .await
+            .expect("read echo")
+            .expect("a framed echo");
+
+        assert_eq!(
+            echo, payload,
+            "framed message round-trips over iroh streams"
+        );
+
+        // Signal a graceful close so the acceptor's `conn.closed().await` resolves
+        // (iroh's canonical client/server echo handshake — `close` only queues the
+        // CONNECTION_CLOSE; the acceptor was holding the connection open for it).
+        conn.close(0u32.into(), b"bye");
+
+        let peer = tokio::time::timeout(Duration::from_secs(20), server)
+            .await
+            .expect("acceptor task must not hang")
+            .unwrap();
+        assert_eq!(
+            peer.as_bytes(),
+            &con_pub,
+            "acceptor sees the connector's EndpointId = its trusted-peer key"
+        );
+    }
 }
