@@ -257,6 +257,22 @@ pub struct MembershipView {
     pub blocklist: BTreeSet<String>,
 }
 
+/// Per-KB governance for *who* can remove a member, and how many it takes
+/// (ADR-026 §A4). Global (agreed by all peers via owner-signed state), unlike the
+/// local [`MembershipView`]. The admin set is the members at [`Role::Owner`];
+/// members are uniform — no creator immunity — so under quorum even the founding
+/// owner is removable by enough co-signatures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Governance {
+    /// One irrevocable owner; only the owner manages. The default (matches v0.14).
+    #[default]
+    SingleOwner,
+    /// Removing any admin/owner needs `threshold` **distinct** admin co-signatures
+    /// (each a `Revoke`/`Remove` op for the same target); a lone compromised admin
+    /// cannot unilaterally remove another. `m`-of-`n` over the `Role::Owner` set.
+    Quorum { threshold: usize },
+}
+
 /// Derive the current valid membership by replaying the signed op-log against the
 /// **external trust anchor** (ADR-026 §A1–A3). Pure + deterministic: every honest
 /// peer that holds the same ops derives the identical map, with no coordinator and
@@ -298,13 +314,28 @@ pub fn derive_valid_members(
     derive_valid_members_with(ops, anchor_owner_pubkey, now, &MembershipView::default())
 }
 
-/// As [`derive_valid_members`], with a local [`MembershipView`] (ADR-026 §A3/§A4):
-/// the inviter-removal cascade policy + a per-peer blocklist. Both are local — they
-/// shape only what *this* peer accepts, never the shared op-log.
+/// As [`derive_valid_members`], with a local [`MembershipView`] (ADR-026 §A3/§A4)
+/// under single-owner governance.
 pub fn derive_valid_members_with(
     ops: &[SignedMembershipOp],
     anchor_owner_pubkey: &[u8; 32],
     now: u64,
+    view: &MembershipView,
+) -> BTreeMap<String, ValidMember> {
+    derive_valid_members_governed(ops, anchor_owner_pubkey, now, Governance::default(), view)
+}
+
+/// As [`derive_valid_members_with`], with explicit [`Governance`] (global) +
+/// [`MembershipView`] (local). Under [`Governance::Quorum`], removing an
+/// admin/owner requires the threshold of distinct admin co-signatures, so a single
+/// compromised admin cannot unilaterally remove others; the strong-removal resolver
+/// settles concurrency. The removal tally generalizes single-owner exactly
+/// (threshold 1 = the sole owner's removal).
+pub fn derive_valid_members_governed(
+    ops: &[SignedMembershipOp],
+    anchor_owner_pubkey: &[u8; 32],
+    now: u64,
+    governance: Governance,
     view: &MembershipView,
 ) -> BTreeMap<String, ValidMember> {
     // 1. Keep only cryptographically-valid records (sig + author↔key binding), and
@@ -344,7 +375,12 @@ pub fn derive_valid_members_with(
     //        by a *valid* removal — the strong-removal rule. Removals are exempt
     //        from (c), so mutual removals both stand.
     let mut valid: BTreeSet<String> = order.iter().cloned().collect();
-    loop {
+    // Safety bound: the fixpoint converges in a few passes for well-formed logs.
+    // Quorum tallies create a theoretical re-validation path, so cap iterations to
+    // keep termination + determinism (same inputs ⇒ same passes ⇒ same result on
+    // every peer regardless of convergence).
+    let max_iter = order.len() + 2;
+    for _ in 0..max_iter {
         let mut next: BTreeSet<String> = BTreeSet::new();
         for h in &order {
             let op = &by_hash[h].op;
@@ -356,40 +392,54 @@ pub fn derive_valid_members_with(
                 continue;
             }
             // (b) capability judged on the op's valid causal past (M_P).
-            let mp = membership_at(&by_hash, &order, &valid, &anc, &anc[h], &genesis_hash, now);
-            if !authorized(&mp, op, &owner_principal) {
+            let mp = membership_at(
+                &by_hash,
+                &order,
+                &valid,
+                &anc,
+                &anc[h],
+                &genesis_hash,
+                governance,
+                now,
+            );
+            if !authorized(&mp, op, &owner_principal, governance) {
                 continue;
             }
-            // (c) strong concurrent removal: a non-removal op by S dies if some
-            //     valid removal of S is concurrent with it (neither is the other's
-            //     ancestor). Ops in the removal's past survive; a removal itself is
-            //     exempt (mutual removal ⇒ both apply).
+            // (c) strong concurrent removal: a non-removal op by S dies if S is
+            //     *effectively* removed (≥threshold distinct admin co-signatures
+            //     under quorum; one owner removal under single-owner) and that
+            //     effective removal is concurrent with the op. Ops in the removal's
+            //     causal past survive; removals themselves are exempt (mutual
+            //     removal ⇒ both apply).
             if !is_removal(op.action) {
-                let killed = order.iter().any(|rh| {
-                    if rh == h || !valid.contains(rh) {
-                        return false;
+                if let Some(rh) =
+                    effective_removal(&op.author, governance, &by_hash, &order, &valid)
+                {
+                    if !anc[&rh].contains(h) && !anc[h].contains(&rh) {
+                        continue; // concurrent with the effective removal ⇒ killed
                     }
-                    let r = &by_hash[rh].op;
-                    is_removal(r.action)
-                        && r.subject == op.author
-                        && !anc[rh].contains(h) // op not in the removal's past …
-                        && !anc[h].contains(rh) // … and removal not in op's past ⇒ concurrent
-                });
-                if killed {
-                    continue;
                 }
             }
             next.insert(h.clone());
         }
-        if next == valid {
+        let stable = next == valid;
+        valid = next;
+        if stable {
             break;
         }
-        valid = next;
     }
 
     // 5. Build the final member map from the surviving ops (removal-dominant; a
     //    causally-later re-admit wins; higher-hash SetRole wins concurrent ties).
-    let mut members = build_members(&by_hash, &order, &valid, &anc, &genesis_hash, now);
+    let mut members = build_members(
+        &by_hash,
+        &order,
+        &valid,
+        &anc,
+        &genesis_hash,
+        governance,
+        now,
+    );
 
     // 6. Inviter-removal cascade (ADR-026 §A3). `CascadeAll` transitively drops any
     //    member whose inviter is no longer present — delegated-trust revocation
@@ -447,12 +497,53 @@ fn is_removal(action: MembershipAction) -> bool {
     matches!(action, MembershipAction::Remove | MembershipAction::Revoke)
 }
 
+/// The `chain_hash` of the removal op that makes `target` *effectively* removed
+/// under `governance` — the op at which the count of **distinct** admin authors who
+/// validly removed `target` reaches the threshold, in causal order — or `None` if
+/// not (yet) removed. `SingleOwner` ⇒ threshold 1 (the sole owner's removal; this
+/// reduces to the per-op rule). `Quorum{m}` ⇒ the m-th distinct admin's
+/// co-signature. Valid removal ops are admin-authored (gated by [`authorized`]), so
+/// counting distinct authors counts distinct admins, and a lone admin's removal of
+/// another never reaches threshold.
+fn effective_removal(
+    target: &str,
+    governance: Governance,
+    by_hash: &BTreeMap<String, &SignedMembershipOp>,
+    order: &[String],
+    valid: &BTreeSet<String>,
+) -> Option<String> {
+    let needed = match governance {
+        Governance::SingleOwner => 1,
+        Governance::Quorum { threshold } => threshold.max(1),
+    };
+    let mut authors: BTreeSet<String> = BTreeSet::new();
+    for h in order {
+        if !valid.contains(h) {
+            continue;
+        }
+        let op = &by_hash[h].op;
+        if is_removal(op.action) && op.subject == target {
+            authors.insert(op.author.clone());
+            if authors.len() >= needed {
+                return Some(h.clone());
+            }
+        }
+    }
+    None
+}
+
 /// Whether `op`'s author held the capability to perform it, given the membership
 /// `mp` derived from the op's valid causal past. Owner or a delegated inviter may
-/// `Admit` (attenuated: cannot grant above the author's own role); only the owner
-/// may `SetRole`/`Remove`/`Revoke` in single-owner governance, and the owner is
-/// never removable via the chain (quorum + blocklist relax this in 2b-5b).
-fn authorized(mp: &BTreeMap<String, ValidMember>, op: &MembershipOp, owner: &str) -> bool {
+/// `Admit` (attenuated: cannot grant above the author's own role); an admin
+/// (`Role::Owner`) may `SetRole`/`Remove`/`Revoke`. Under `SingleOwner` the owner
+/// is irrevocable via the chain; under `Quorum` every member is uniform (the owner
+/// is removable, gated by the co-signature threshold in [`effective_removal`]).
+fn authorized(
+    mp: &BTreeMap<String, ValidMember>,
+    op: &MembershipOp,
+    owner: &str,
+    governance: Governance,
+) -> bool {
     let author = match mp.get(&op.author) {
         Some(a) => a,
         None => return false,
@@ -466,7 +557,8 @@ fn authorized(mp: &BTreeMap<String, ValidMember>, op: &MembershipOp, owner: &str
         }
         MembershipAction::SetRole => author.role == Role::Owner && mp.contains_key(&op.subject),
         MembershipAction::Remove | MembershipAction::Revoke => {
-            author.role == Role::Owner && op.subject != owner && mp.contains_key(&op.subject)
+            let owner_protected = governance == Governance::SingleOwner && op.subject == owner;
+            author.role == Role::Owner && !owner_protected && mp.contains_key(&op.subject)
         }
     }
 }
@@ -483,24 +575,27 @@ fn membership_at(
     anc: &BTreeMap<String, BTreeSet<String>>,
     target_anc: &BTreeSet<String>,
     genesis_hash: &str,
+    governance: Governance,
     now: u64,
 ) -> BTreeMap<String, ValidMember> {
     let sub: BTreeSet<String> = valid.intersection(target_anc).cloned().collect();
-    build_members(by_hash, order, &sub, anc, genesis_hash, now)
+    build_members(by_hash, order, &sub, anc, genesis_hash, governance, now)
 }
 
 /// Construct the member map from a set of already-validated ops, in causal order.
 /// Removal-dominant per p2panda-auth: a principal is present iff some valid `Admit`
-/// of them is **not** overridden by a valid removal outside that admit's causal
-/// past (so a concurrent/later removal wins, but a causally-later *re-admit*
-/// supersedes the removal). Roles overlay causally-later valid `SetRole`s (higher
-/// `chain_hash` wins concurrent ties via `order`).
+/// of them is **not** overridden by an *effective* removal (under `governance`)
+/// outside that admit's causal past (so a concurrent/later removal wins, but a
+/// causally-later *re-admit* supersedes it). Roles overlay causally-later valid
+/// `SetRole`s (higher `chain_hash` wins concurrent ties via `order`).
+#[allow(clippy::too_many_arguments)]
 fn build_members(
     by_hash: &BTreeMap<String, &SignedMembershipOp>,
     order: &[String],
     valid: &BTreeSet<String>,
     anc: &BTreeMap<String, BTreeSet<String>>,
     genesis_hash: &str,
+    governance: Governance,
     now: u64,
 ) -> BTreeMap<String, ValidMember> {
     let in_admit_past =
@@ -516,15 +611,12 @@ fn build_members(
             continue;
         }
         let principal = op.subject.clone();
-        // Is this admit overridden by a valid removal of the same principal that is
-        // not in the admit's causal past? (Removal dominates concurrent/later.)
-        let dominated = order.iter().any(|rh| {
-            if !valid.contains(rh) {
-                return false;
-            }
-            let r = &by_hash[rh].op;
-            is_removal(r.action) && r.subject == principal && !in_admit_past(h, rh)
-        });
+        // Is this admit overridden by an *effective* removal of the principal that
+        // is not in the admit's causal past? (Removal dominates concurrent/later;
+        // under quorum the removal is effective only at the co-signature threshold.)
+        let dominated = effective_removal(&principal, governance, by_hash, order, valid)
+            .map(|rh| !in_admit_past(h, &rh))
+            .unwrap_or(false);
         if dominated {
             continue;
         }
@@ -1494,5 +1586,177 @@ mod tests {
         assert!(m.is_empty(), "blocking the owner collapses the local view");
         // Purely local: without the block, both are members.
         assert_eq!(derive_valid_members(&ops, &owner.pubkey, 100).len(), 2);
+    }
+
+    // --- quorum governance (slice 2b-5b) ---
+
+    /// Derive under the given governance with no local view overrides.
+    fn governed(
+        ops: &[SignedMembershipOp],
+        owner: &Id,
+        gov: Governance,
+    ) -> BTreeMap<String, ValidMember> {
+        derive_valid_members_governed(ops, &owner.pubkey, 100, gov, &MembershipView::default())
+    }
+
+    /// Owner admits `who` at Role::Owner (an admin), with the invite capability.
+    fn admit_admin(owner: &Id, who: &Id, prev: &str) -> SignedMembershipOp {
+        make(
+            owner,
+            MembershipAction::Admit,
+            &who.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            prev,
+        )
+    }
+
+    #[test]
+    fn quorum_any_admin_can_manage() {
+        let owner = id(1);
+        let alice = id(2);
+        let carol = id(3);
+        let g = genesis(&owner);
+        let admit_alice = admit_admin(&owner, &alice, &g.chain_hash());
+        // alice (an admin) admits carol — proves management is not owner-exclusive.
+        let admit_carol = make(
+            &alice,
+            MembershipAction::Admit,
+            &carol.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &admit_alice.chain_hash(),
+        );
+        let m = governed(
+            &[g, admit_alice, admit_carol],
+            &owner,
+            Governance::Quorum { threshold: 2 },
+        );
+        assert_eq!(m[&alice.fp].role, Role::Owner, "alice is an admin");
+        assert_eq!(
+            m[&carol.fp].role,
+            Role::Editor,
+            "admin alice admitted carol"
+        );
+    }
+
+    #[test]
+    fn quorum_single_admin_cannot_remove_another() {
+        let owner = id(1);
+        let alice = id(2);
+        let bob = id(3);
+        let g = genesis(&owner);
+        let admit_alice = admit_admin(&owner, &alice, &g.chain_hash());
+        let admit_bob = admit_admin(&owner, &bob, &admit_alice.chain_hash());
+        // alice alone revokes bob — one of two required co-signatures.
+        let revoke_bob = make(
+            &alice,
+            MembershipAction::Revoke,
+            &bob.fp,
+            None,
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        let m = governed(
+            &[g, admit_alice, admit_bob, revoke_bob],
+            &owner,
+            Governance::Quorum { threshold: 2 },
+        );
+        assert!(
+            m.contains_key(&bob.fp),
+            "a lone admin's revoke does not reach the m-of-n threshold"
+        );
+    }
+
+    #[test]
+    fn quorum_threshold_co_signatures_remove_even_the_owner() {
+        let owner = id(1);
+        let alice = id(2);
+        let bob = id(3);
+        let g = genesis(&owner);
+        let admit_alice = admit_admin(&owner, &alice, &g.chain_hash());
+        let admit_bob = admit_admin(&owner, &bob, &admit_alice.chain_hash());
+        // alice + bob (two distinct admins) both revoke the OWNER — members are
+        // uniform under quorum, so the founder is removable at threshold.
+        let revoke_owner_a = make(
+            &alice,
+            MembershipAction::Revoke,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        let revoke_owner_b = make(
+            &bob,
+            MembershipAction::Revoke,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &revoke_owner_a.chain_hash(),
+        );
+        let ops = [g, admit_alice, admit_bob, revoke_owner_a, revoke_owner_b];
+        let m = governed(&ops, &owner, Governance::Quorum { threshold: 2 });
+        assert!(
+            !m.contains_key(&owner.fp),
+            "two admin co-signatures remove the owner under quorum"
+        );
+        assert!(m.contains_key(&alice.fp) && m.contains_key(&bob.fp));
+        // Under single-owner governance the same ops never remove the owner.
+        let single = governed(&ops, &owner, Governance::SingleOwner);
+        assert!(
+            single.contains_key(&owner.fp),
+            "single-owner: the owner is irrevocable via the chain"
+        );
+    }
+
+    #[test]
+    fn quorum_mutual_removal_both_apply() {
+        let owner = id(1);
+        let alice = id(2);
+        let bob = id(3);
+        let g = genesis(&owner);
+        let admit_alice = admit_admin(&owner, &alice, &g.chain_hash());
+        let admit_bob = admit_admin(&owner, &bob, &admit_alice.chain_hash());
+        // CONCURRENT off admit_bob: alice removes bob ∥ bob removes alice. With
+        // threshold 1 each removal is immediately effective; removals are exempt
+        // from concurrent invalidation, so BOTH apply (the remove-the-remover
+        // paradox resolves without forking or emptying the group).
+        let alice_removes_bob = make(
+            &alice,
+            MembershipAction::Remove,
+            &bob.fp,
+            None,
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        let bob_removes_alice = make(
+            &bob,
+            MembershipAction::Remove,
+            &alice.fp,
+            None,
+            false,
+            None,
+            &admit_bob.chain_hash(),
+        );
+        let m = governed(
+            &[
+                g,
+                admit_alice,
+                admit_bob,
+                alice_removes_bob,
+                bob_removes_alice,
+            ],
+            &owner,
+            Governance::Quorum { threshold: 1 },
+        );
+        assert!(!m.contains_key(&alice.fp), "alice removed by bob");
+        assert!(!m.contains_key(&bob.fp), "bob removed by alice");
+        assert!(m.contains_key(&owner.fp), "owner unaffected");
     }
 }
