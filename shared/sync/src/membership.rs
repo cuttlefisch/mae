@@ -240,6 +240,23 @@ impl InviterRemovalPolicy {
     }
 }
 
+/// Local, per-peer options for deriving membership (ADR-026 §A4). The signed
+/// op-log is shared and global; *this* is the self-protection a peer applies on
+/// top, which never changes the log and needs no consensus:
+/// - `cascade` — the inviter-removal policy (slice 2b-5);
+/// - `blocklist` — principals this peer refuses to accept. A blocked principal's
+///   authored ops are ignored (so they can't grant or manage — even the *owner*,
+///   which severs this peer from the KB) and they are dropped from the derived
+///   set. Unilateral + immediate; it only restricts what this daemon accepts.
+///
+/// (Quorum governance — an admin set + m-of-n co-signed removal — extends this in
+/// a later slice.)
+#[derive(Clone, Debug, Default)]
+pub struct MembershipView {
+    pub cascade: InviterRemovalPolicy,
+    pub blocklist: BTreeSet<String>,
+}
+
 /// Derive the current valid membership by replaying the signed op-log against the
 /// **external trust anchor** (ADR-026 §A1–A3). Pure + deterministic: every honest
 /// peer that holds the same ops derives the identical map, with no coordinator and
@@ -271,34 +288,32 @@ impl InviterRemovalPolicy {
 ///
 /// Quorum governance + the local blocklist layer on in slice 2b-5b.
 ///
-/// Uses the default [`InviterRemovalPolicy`] (`PendingOnly`); call
-/// [`derive_valid_members_with`] to choose the inviter-removal cascade policy.
+/// Uses the default [`MembershipView`] (no blocklist, `PendingOnly` cascade); call
+/// [`derive_valid_members_with`] to apply a local blocklist or cascade policy.
 pub fn derive_valid_members(
     ops: &[SignedMembershipOp],
     anchor_owner_pubkey: &[u8; 32],
     now: u64,
 ) -> BTreeMap<String, ValidMember> {
-    derive_valid_members_with(
-        ops,
-        anchor_owner_pubkey,
-        now,
-        InviterRemovalPolicy::default(),
-    )
+    derive_valid_members_with(ops, anchor_owner_pubkey, now, &MembershipView::default())
 }
 
-/// As [`derive_valid_members`], with an explicit inviter-removal cascade `policy`
-/// (ADR-026 §A3). `CascadeAll` transitively drops any member whose `invited_by`
-/// chain passes through a non-member once the resolver has settled; `PendingOnly`
-/// (default) and `Retain` keep validly-admitted members.
+/// As [`derive_valid_members`], with a local [`MembershipView`] (ADR-026 §A3/§A4):
+/// the inviter-removal cascade policy + a per-peer blocklist. Both are local — they
+/// shape only what *this* peer accepts, never the shared op-log.
 pub fn derive_valid_members_with(
     ops: &[SignedMembershipOp],
     anchor_owner_pubkey: &[u8; 32],
     now: u64,
-    policy: InviterRemovalPolicy,
+    view: &MembershipView,
 ) -> BTreeMap<String, ValidMember> {
-    // 1. Keep only cryptographically-valid records (sig + author↔key binding),
-    //    indexed by chain_hash for tree traversal.
-    let crypto: Vec<&SignedMembershipOp> = ops.iter().filter(|o| o.verify_signed()).collect();
+    // 1. Keep only cryptographically-valid records (sig + author↔key binding), and
+    //    drop ops authored by a locally-blocked principal (this peer ignores their
+    //    authority entirely — even the owner's). Indexed by chain_hash.
+    let crypto: Vec<&SignedMembershipOp> = ops
+        .iter()
+        .filter(|o| o.verify_signed() && !view.blocklist.contains(&o.op.author))
+        .collect();
     let by_hash: BTreeMap<String, &SignedMembershipOp> =
         crypto.iter().map(|o| (o.chain_hash(), *o)).collect();
 
@@ -382,7 +397,7 @@ pub fn derive_valid_members_with(
     //    already handled those admitted *concurrently* with it). The owner is
     //    self-invited, so it roots the tree and is never cascaded. `PendingOnly`
     //    (default) and `Retain` keep validly-admitted members as-is.
-    if policy == InviterRemovalPolicy::CascadeAll {
+    if view.cascade == InviterRemovalPolicy::CascadeAll {
         loop {
             let present: BTreeSet<String> = members.keys().cloned().collect();
             let orphans: Vec<String> = members
@@ -397,6 +412,13 @@ pub fn derive_valid_members_with(
                 members.remove(&o);
             }
         }
+    }
+
+    // 7. Local blocklist: drop blocked principals from the derived set. Their
+    //    authored ops were already ignored in step 1; this also drops a blocked
+    //    principal that some *other* member admitted. Local + immediate.
+    if !view.blocklist.is_empty() {
+        members.retain(|p, _| !view.blocklist.contains(p));
     }
     members
 }
@@ -1344,7 +1366,11 @@ mod tests {
             InviterRemovalPolicy::PendingOnly,
             InviterRemovalPolicy::Retain,
         ] {
-            let m = derive_valid_members_with(&ops, &owner.pubkey, 100, policy);
+            let view = MembershipView {
+                cascade: policy,
+                ..Default::default()
+            };
+            let m = derive_valid_members_with(&ops, &owner.pubkey, 100, &view);
             assert!(!m.contains_key(&alice.fp), "{policy:?}: alice removed");
             assert!(m.contains_key(&bob.fp), "{policy:?}: bob retained");
             assert!(m.contains_key(&carol.fp), "{policy:?}: carol retained");
@@ -1353,8 +1379,15 @@ mod tests {
         assert!(derive_valid_members(&ops, &owner.pubkey, 100).contains_key(&bob.fp));
 
         // CascadeAll: removing alice transitively drops her whole invite subtree.
-        let cascade =
-            derive_valid_members_with(&ops, &owner.pubkey, 100, InviterRemovalPolicy::CascadeAll);
+        let cascade = derive_valid_members_with(
+            &ops,
+            &owner.pubkey,
+            100,
+            &MembershipView {
+                cascade: InviterRemovalPolicy::CascadeAll,
+                ..Default::default()
+            },
+        );
         assert!(!cascade.contains_key(&alice.fp));
         assert!(
             !cascade.contains_key(&bob.fp),
@@ -1365,5 +1398,101 @@ mod tests {
             "cascade is transitive through the subtree"
         );
         assert!(cascade.contains_key(&owner.fp), "owner is never cascaded");
+    }
+
+    // --- local blocklist (slice 2b-5b) ---
+
+    #[test]
+    fn local_blocklist_drops_a_directly_admitted_member() {
+        let owner = id(1);
+        let bob = id(2);
+        let g = genesis(&owner);
+        let admit_bob = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let ops = [g, admit_bob];
+        let view = MembershipView {
+            blocklist: BTreeSet::from([bob.fp.clone()]),
+            ..Default::default()
+        };
+        let m = derive_valid_members_with(&ops, &owner.pubkey, 100, &view);
+        assert!(m.contains_key(&owner.fp), "owner unaffected");
+        assert!(
+            !m.contains_key(&bob.fp),
+            "a blocked member is dropped even when admitted by the owner"
+        );
+        // The block is purely local — unblocked, bob is a member.
+        assert_eq!(derive_valid_members(&ops, &owner.pubkey, 100).len(), 2);
+    }
+
+    #[test]
+    fn local_blocklist_ignores_a_blocked_inviters_downstream() {
+        let owner = id(1);
+        let alice = id(2);
+        let bob = id(3);
+        let g = genesis(&owner);
+        let admit_alice = make(
+            &owner,
+            MembershipAction::Admit,
+            &alice.fp,
+            Some(Role::Editor),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        let admit_bob = make(
+            &alice,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &admit_alice.chain_hash(),
+        );
+        let ops = [g, admit_alice, admit_bob];
+        let view = MembershipView {
+            blocklist: BTreeSet::from([alice.fp.clone()]),
+            ..Default::default()
+        };
+        let m = derive_valid_members_with(&ops, &owner.pubkey, 100, &view);
+        assert!(m.contains_key(&owner.fp));
+        assert!(!m.contains_key(&alice.fp), "blocked principal dropped");
+        assert!(
+            !m.contains_key(&bob.fp),
+            "a blocked inviter's authored admits are ignored ⇒ their invitees vanish"
+        );
+    }
+
+    #[test]
+    fn local_blocklist_can_block_even_the_owner() {
+        let owner = id(1);
+        let bob = id(2);
+        let g = genesis(&owner);
+        let admit_bob = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let ops = [g, admit_bob];
+        // Blocking the owner severs this peer from the KB: the owner-authored
+        // genesis is ignored, so there is no trust root ⇒ empty local view.
+        let view = MembershipView {
+            blocklist: BTreeSet::from([owner.fp.clone()]),
+            ..Default::default()
+        };
+        let m = derive_valid_members_with(&ops, &owner.pubkey, 100, &view);
+        assert!(m.is_empty(), "blocking the owner collapses the local view");
+        // Purely local: without the block, both are members.
+        assert_eq!(derive_valid_members(&ops, &owner.pubkey, 100).len(), 2);
     }
 }
