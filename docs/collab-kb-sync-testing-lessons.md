@@ -164,3 +164,29 @@ SV-reconcile path is covered by a real-process-handler e2e. Together they make a
 run a **confirmation rather than a discovery**. Remaining live validation: **T3c-stress**
 (edit-then-instant-`kill -9` within the sled flush window) + a 3rd peer, which exercises the
 one residual window (content never flushed) that no in-process test can model.
+
+## 5. Next cycle (the P2P mesh) — what we changed from these lessons
+
+The v0.14 cycle that produced this document (and the raw logs in
+`collab-test-notes-alice.md` / `-bob.md`, **preserved as case-study material — do not
+overwrite**) cost the most time on four reproducibility gaps, now closed for the P2P
+mesh cycle:
+
+1. **Stale-binary fix verification** (§4.4) → `scripts/verify-binary.sh` + `make
+   verify-binary`: fails loudly if a running `mae`/`mae-daemon` differs from the fresh
+   build. Run `make build && make verify-binary && make install` before every retest.
+2. **Poisoned local state stalling the next run** (B-5) → `scripts/reset-collab-state.sh`:
+   moves `collab/` + `kb/` aside (timestamped backup, never deletes), XDG-first + cross-OS.
+3. **Auto-reconnect masking pre-connect windows** → the protocol mandates
+   `collab_auto_connect=false` (env wins) for any scenario observing an offline/crash
+   window.
+4. **Verbal/ad-hoc handoffs + commit drift** → a single working protocol: per-machine
+   note files with a shared row format + issue ids (`P-NN`) + probe slugs, the branch as
+   the channel, explicit `→ PEER: pickup at S<N>` handoff blocks, and a pinned commit per
+   scenario.
+
+The full P2P plan (setup, fixtures, scenarios S1–S12, acceptance criteria, and the
+alice/bob working protocol) is **`docs/p2p-mesh-two-machine-testing.md`**; current
+feature status is **`docs/P2P_MESH_STATUS.md`**. The methodology razor from §2 carries
+over unchanged: **assert convergence (the peer's content changed / a deny logged), drive
+the production path, source values from the real generator — never a parallel universe.**
