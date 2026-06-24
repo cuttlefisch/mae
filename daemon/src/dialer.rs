@@ -8,10 +8,9 @@
 //! than trusting the relay, ADR-026), then pull the collection + nodes over the same
 //! `kb/join` protocol the editor speaks.
 //!
-//! This slice (2c) does the dial + verify + anchor + one-shot full-state pull. The
-//! background drain of `pending_p2p_joins`, ongoing bidirectional sync, and
-//! reconnect/backoff layer on top — at which point `dial_and_join` gets a caller.
-#![allow(dead_code)]
+//! This slice (2c) does the dial + verify + anchor + one-shot full-state pull, plus
+//! the background drain of `pending_p2p_joins` with retry. Ongoing bidirectional
+//! sync + persistent per-peer connections (live updates) layer on next.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +19,9 @@ use iroh::Endpoint;
 use tokio::io::BufReader;
 use tracing::{info, warn};
 
+use tokio::sync::Mutex;
+
+use crate::handler::DaemonState;
 use crate::p2p::MAE_ALPN;
 use crate::ticket::JoinTicket;
 use mae_daemon::doc_store::DocStore;
@@ -27,6 +29,64 @@ use mae_sync::encoding::base64_to_update;
 
 const DIAL_TIMEOUT: Duration = Duration::from_secs(20);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const POLL_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Background task (spawned with the mesh): drain queued join tickets (from
+/// `p2p/join_ticket`) and pull each KB. A ticket still PENDING owner approval, or
+/// whose dial failed (owner offline / unreachable), is re-queued for the next poll,
+/// so a join eventually completes once the owner approves + comes online. Ongoing
+/// bidirectional sync + persistent per-peer connections layer on in a later slice.
+pub async fn run_dialer(
+    state: Arc<Mutex<DaemonState>>,
+    doc_store: Arc<DocStore>,
+    endpoint: Endpoint,
+) {
+    loop {
+        tokio::time::sleep(POLL_INTERVAL).await;
+        drain_pending_once(&state, &doc_store, &endpoint).await;
+    }
+}
+
+/// One drain pass: dial every queued ticket once; re-queue the ones not yet pulled
+/// (still pending approval, or a transient dial failure). Returns `(pulled,
+/// requeued)` for observability + tests. New tickets enqueued concurrently are
+/// preserved (we re-`lock` to append, never overwrite).
+async fn drain_pending_once(
+    state: &Arc<Mutex<DaemonState>>,
+    doc_store: &Arc<DocStore>,
+    endpoint: &Endpoint,
+) -> (usize, usize) {
+    let pending = {
+        let mut st = state.lock().await;
+        std::mem::take(&mut st.pending_p2p_joins)
+    };
+    if pending.is_empty() {
+        return (0, 0);
+    }
+    let mut pulled = 0usize;
+    let mut requeue = Vec::new();
+    for ticket in pending {
+        match dial_and_join(endpoint, &ticket, doc_store).await {
+            Ok(JoinOutcome::Pulled { nodes }) => {
+                info!(kb_id = %ticket.kb_id, nodes, "mesh join complete");
+                pulled += 1;
+            }
+            Ok(JoinOutcome::Pending) => {
+                info!(kb_id = %ticket.kb_id, "mesh join pending owner approval — will retry");
+                requeue.push(ticket);
+            }
+            Err(e) => {
+                warn!(kb_id = %ticket.kb_id, error = %e, "mesh join failed — will retry");
+                requeue.push(ticket);
+            }
+        }
+    }
+    let requeued = requeue.len();
+    if requeued > 0 {
+        state.lock().await.pending_p2p_joins.extend(requeue);
+    }
+    (pulled, requeued)
+}
 
 /// What a dial+join attempt produced.
 #[derive(Debug, PartialEq, Eq)]
@@ -168,7 +228,7 @@ mod tests {
     use crate::p2p::{bind_endpoint, loopback_if_unspecified, serve};
     use iroh::{EndpointAddr, RelayMode, TransportAddr};
     use mae_daemon::doc_store::DocStore;
-    use mae_mcp::broadcast::EventBroadcaster;
+    use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
     use mae_mcp::identity::Identity;
     use mae_sync::kb::{KbCollectionDoc, KbNodeDoc, Role as SyncRole, TransportPolicy};
     use mae_sync::membership::MembershipAction;
@@ -341,6 +401,106 @@ mod tests {
         assert!(
             b_store.kb_anchor("kbx").await.is_none(),
             "no anchor on failure"
+        );
+    }
+
+    /// Spin up owner A serving `kb_id` over the mesh; returns A's dialable address.
+    /// `member` Some ⇒ that principal is an editor (a join PULLS); None ⇒ the
+    /// default Invite policy (a join goes PENDING).
+    async fn serve_owner_kb(
+        a_id: &Arc<Identity>,
+        kb_id: &str,
+        member: Option<&str>,
+    ) -> EndpointAddr {
+        let a_store = mem_store();
+        let a_bc: SharedBroadcaster = Arc::new(std::sync::Mutex::new(EventBroadcaster::new()));
+        let mut coll = KbCollectionDoc::new_owned(kb_id, &a_id.fingerprint(), "A");
+        coll.set_transport_policy(TransportPolicy::P2p);
+        if let Some(m) = member {
+            coll.upsert_member(m, "member", SyncRole::Editor);
+        }
+        a_store
+            .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+            .await
+            .unwrap();
+        let ep = bind_endpoint(a_id, RelayMode::Disabled).await.unwrap();
+        let addr = EndpointAddr::from_parts(
+            ep.id(),
+            ep.bound_sockets()
+                .into_iter()
+                .map(|sa| TransportAddr::Ip(loopback_if_unspecified(sa))),
+        );
+        tokio::spawn(serve(
+            ep,
+            std::path::PathBuf::from("/nonexistent/authorized_keys"),
+            true,
+            a_store,
+            a_bc,
+            Instant::now(),
+        ));
+        addr
+    }
+
+    #[tokio::test]
+    async fn drain_pulls_a_member_kb_and_clears_the_queue() {
+        let a_id = Arc::new(Identity::generate("owner-D"));
+        let b_id = Identity::generate("joiner-D");
+        let addr = serve_owner_kb(&a_id, "kbm", Some(&b_id.fingerprint())).await;
+
+        let b_endpoint = bind_endpoint(&b_id, RelayMode::Disabled).await.unwrap();
+        let b_store = mem_store();
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        state
+            .lock()
+            .await
+            .pending_p2p_joins
+            .push(JoinTicket::new(addr, "kbm"));
+
+        let (pulled, requeued) = drain_pending_once(&state, &b_store, &b_endpoint).await;
+        assert_eq!((pulled, requeued), (1, 0));
+        assert!(b_store.has_doc("kbc:kbm").await, "KB pulled");
+        assert!(
+            state.lock().await.pending_p2p_joins.is_empty(),
+            "a pulled ticket is not re-queued"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_requeues_a_pending_join_for_retry() {
+        let a_id = Arc::new(Identity::generate("owner-P"));
+        let b_id = Identity::generate("joiner-P");
+        // B is NOT a member ⇒ invite policy ⇒ kb/join returns pending.
+        let addr = serve_owner_kb(&a_id, "kbp", None).await;
+
+        let b_endpoint = bind_endpoint(&b_id, RelayMode::Disabled).await.unwrap();
+        let b_store = mem_store();
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        state
+            .lock()
+            .await
+            .pending_p2p_joins
+            .push(JoinTicket::new(addr, "kbp"));
+
+        let (pulled, requeued) = drain_pending_once(&state, &b_store, &b_endpoint).await;
+        assert_eq!(
+            (pulled, requeued),
+            (0, 1),
+            "a pending join is retried, not dropped"
+        );
+        assert_eq!(
+            state.lock().await.pending_p2p_joins.len(),
+            1,
+            "the ticket is re-queued for the next poll"
+        );
+        assert!(
+            !b_store.has_doc("kbc:kbp").await,
+            "no KB pulled while pending"
+        );
+        // The anchor is still registered — identity was verified on connect (ADR-026).
+        assert_eq!(
+            b_store.kb_anchor("kbp").await,
+            Some(a_id.public().to_bytes()),
+            "anchor registered even while the join is pending"
         );
     }
 }

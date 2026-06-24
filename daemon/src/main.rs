@@ -319,6 +319,14 @@ async fn spawn_p2p_mesh(
     // Publish a clone to the control-socket state so `p2p/mint_ticket` can build
     // join tickets; the accept loop below owns the original.
     state.lock().await.p2p_endpoint = Some(endpoint.clone());
+    // Background dialer (ADR-025/026): drain `p2p/join_ticket` requests and pull the
+    // joined KBs (dial by node-id, verify, anchor, fetch). Shares the doc_store with
+    // the accept loop so a pulled KB is immediately served onward.
+    tokio::spawn(dialer::run_dialer(
+        Arc::clone(&state),
+        Arc::clone(&doc_store),
+        endpoint.clone(),
+    ));
     tokio::spawn(p2p::serve(
         endpoint,
         authorized_keys_path,
