@@ -1568,6 +1568,34 @@ impl SchemeRuntime {
             },
         );
 
+        // (kb-join-ticket TICKET) — queue a P2P join from a "magnet link" and
+        // RETURN the daemon's confirmation. Synchronous daemon control-socket call;
+        // the background dialer then connects + pulls the KB (after the owner
+        // approves). Same single backend as the kb-join-p2p command + kb_join_p2p
+        // MCP tool + `mae kb-join` CLI (ADR-025 §"Driving surfaces").
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-join-ticket",
+            "Queue a P2P join from a mae://join/… ticket; the dialer pulls the KB after the owner approves.",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let ticket = arg_string(args, 0, "kb-join-ticket")?;
+                let control = s.lock().unwrap().daemon_control.clone();
+                match control {
+                    Some(c) => c
+                        .join_p2p_ticket(&ticket)
+                        .map(Value::string)
+                        .map_err(|e| LispError::user(e, vec![])),
+                    None => Err(LispError::user(
+                        "not connected to a daemon — start one and enable P2P with \
+                         `mae setup-collab --p2p`"
+                            .to_string(),
+                        vec![],
+                    )),
+                }
+            },
+        );
+
         // (kb-join KB-ID) — join a shared KB.
         let s = shared.clone();
         vm.register_fn(

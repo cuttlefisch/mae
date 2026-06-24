@@ -172,6 +172,13 @@ impl mae_core::DaemonControl for DaemonControlClient {
             .mint_p2p_ticket(kb_id)
             .map_err(|e| e.to_string())
     }
+    fn join_p2p_ticket(&self, ticket: &str) -> Result<String, String> {
+        self.0
+            .lock()
+            .map_err(|_| "daemon control channel is poisoned".to_string())?
+            .join_p2p_ticket(ticket)
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Enable the P2P daemon mesh (ADR-025) by writing `[collab.p2p]` to the local
@@ -301,6 +308,8 @@ fn main() -> io::Result<()> {
         println!("                          One-command key-mode setup: identity + init.scm (--p2p also enables the daemon mesh)");
         println!("  kb-share-p2p [KB-ID] [--socket PATH]");
         println!("                          Mint a P2P join ticket (mae://join/…) via the daemon and print it");
+        println!("  kb-join <ticket> [--socket PATH]");
+        println!("                          Queue a P2P join from a mae://join/… ticket (the dialer pulls the KB)");
         println!("  --gui                   Force GUI backend (default on a desktop session; auto-off over SSH/tty)");
         println!("  --no-gui, --tui, -nw    Force terminal mode (like emacs -nw)");
         println!("  --connect [ADDR]        Connect to daemon (like emacsclient -c)");
@@ -438,6 +447,45 @@ fn main() -> io::Result<()> {
         }
     }
 
+    // `mae kb-join <ticket> [--socket PATH]`: queue a P2P join from a "magnet link"
+    // via the running daemon. The CLI surface of the `kb-join-p2p` command /
+    // `(kb-join-ticket)` Scheme primitive / `kb_join_p2p` MCP tool — same
+    // `DaemonClient::join_p2p_ticket` backend (ADR-025 §"Driving surfaces"). The
+    // background dialer then connects + pulls the KB once the owner approves.
+    if args.get(1).is_some_and(|a| a == "kb-join") {
+        let ticket = match args.get(2).filter(|a| !a.starts_with("--")) {
+            Some(t) => t.clone(),
+            None => {
+                eprintln!("usage: mae kb-join <mae://join/…ticket> [--socket PATH]");
+                std::process::exit(2);
+            }
+        };
+        let socket = args
+            .iter()
+            .position(|a| a == "--socket")
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .unwrap_or_else(|| "/tmp/mae-daemon.sock".to_string());
+        let mut client = mae_mcp::daemon_client::DaemonClient::new(&socket);
+        if let Err(e) = client.connect() {
+            eprintln!(
+                "error: cannot reach mae-daemon at {socket}: {e}\n\
+                 start it with `mae-daemon` and enable P2P with `mae setup-collab --p2p`."
+            );
+            std::process::exit(1);
+        }
+        match client.join_p2p_ticket(&ticket) {
+            Ok(msg) => {
+                println!("{msg}");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("error: kb-join: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // `mae setup-collab [--server <addr>]`: idempotent one-command key-mode setup.
     // Generates the peer identity (if absent), persists collab key-mode options to
     // init.scm, and prints the `mae-daemon authorize` line for the admin.
@@ -537,6 +585,9 @@ fn main() -> io::Result<()> {
                             );
                             println!();
                             println!("  Share a KB over the mesh:  mae kb-share-p2p <kb-id>");
+                            println!(
+                                "  Join a shared KB:          mae kb-join <mae://join/…ticket>"
+                            );
                             println!();
                         }
                         Err(e) => {

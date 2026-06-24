@@ -116,6 +116,34 @@ impl Editor {
                 self.mark_full_redraw();
                 Some(true)
             }
+            "kb-join-p2p" => {
+                // P2P join from a "magnet link" ticket: `:kb-join-p2p <mae://join/…>`
+                // (the ticket arrives in command_line). SYNCHRONOUS daemon
+                // control-socket call — same backend as the CLI / Scheme / MCP
+                // (ADR-025 §"Driving surfaces"). The background dialer then connects
+                // + pulls the KB once the owner approves.
+                let ticket = self.vi.command_line.trim().to_string();
+                if ticket.is_empty() {
+                    self.set_status("usage: :kb-join-p2p <mae://join/…ticket>".to_string());
+                } else {
+                    match self.kb.join_p2p(&ticket) {
+                        Ok(msg) => {
+                            self.notify(
+                                crate::notifications::Notification::success(
+                                    "collab",
+                                    "P2P join queued",
+                                )
+                                .body(msg)
+                                .key("p2p-join"),
+                            );
+                            self.set_status("P2P join queued → *Messages*".to_string());
+                        }
+                        Err(e) => self.set_status(format!("kb-join-p2p: {e}")),
+                    }
+                }
+                self.mark_full_redraw();
+                Some(true)
+            }
             "kb-join" => {
                 // Join a KB — SPC-key dispatch uses active name or "default".
                 // :kb-join <id> is handled in command.rs before reaching here.

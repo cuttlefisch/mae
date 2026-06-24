@@ -1304,6 +1304,10 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "kb-join-ticket",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "kb-join",
       "source": "crates/scheme/src/runtime.rs"
     },

@@ -141,6 +141,24 @@ impl DaemonClient {
             })
     }
 
+    /// Queue a P2P join from a `ticket` ("magnet link") via the daemon's
+    /// `p2p/join_ticket` control method. The background dialer then connects + pulls
+    /// the KB (after the owner approves). Returns the daemon's human-readable
+    /// confirmation message. Shared by the editor's `DaemonControl` impl and the
+    /// `mae` CLI (ADR-025 §"Driving surfaces").
+    pub fn join_p2p_ticket(&mut self, ticket: &str) -> Result<String, DaemonClientError> {
+        let result = self.call("p2p/join_ticket", json!({ "ticket": ticket }))?;
+        // Prefer the daemon's friendly message; fall back to a kb_id confirmation.
+        if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+            return Ok(msg.to_string());
+        }
+        let kb_id = result
+            .get("kb_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("the KB");
+        Ok(format!("Join recorded for {kb_id}."))
+    }
+
     fn call_inner(&mut self, method: &str, params: &Value) -> Result<Value, DaemonClientError> {
         self.ensure_connected()?;
 

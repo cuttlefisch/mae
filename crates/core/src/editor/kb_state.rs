@@ -26,6 +26,12 @@ pub trait DaemonControl: Send + Sync {
     /// daemon's `p2p/mint_ticket` control method. Returns the `mae://join/…`
     /// string, or a human-readable error (daemon down, P2P disabled, …).
     fn mint_p2p_ticket(&self, kb_id: &str) -> Result<String, String>;
+
+    /// Queue a P2P join from a `ticket` ("magnet link") via the daemon's
+    /// `p2p/join_ticket` control method. The background dialer then connects +
+    /// pulls the KB (after the owner approves). Returns a human-readable
+    /// confirmation, or an error (daemon down, P2P disabled, malformed ticket).
+    fn join_p2p_ticket(&self, ticket: &str) -> Result<String, String>;
 }
 
 /// Knowledge base context: backing store, federation, watchers, and config.
@@ -177,6 +183,19 @@ impl KbContext {
         control.mint_p2p_ticket(kb_id)
     }
 
+    /// Queue a P2P join from a `ticket` over the daemon control channel. The
+    /// **single backend** behind the `kb-join-p2p` command, the `(kb-join-ticket)`
+    /// Scheme primitive, and the `kb_join_p2p` MCP tool — human + AI peer drive the
+    /// identical action (ADR-025 parity). The background dialer does the dial+pull.
+    pub fn join_p2p(&self, ticket: &str) -> Result<String, String> {
+        let control = self.daemon_control.as_deref().ok_or_else(|| {
+            "not connected to a daemon — start one with `mae setup-daemon` and enable \
+             P2P with `mae setup-collab --p2p`"
+                .to_string()
+        })?;
+        control.join_p2p_ticket(ticket)
+    }
+
     /// Whether a daemon query layer is active.
     pub fn has_daemon(&self) -> bool {
         self.daemon_query.is_some()
@@ -281,6 +300,9 @@ mod tests {
         fn mint_p2p_ticket(&self, _kb_id: &str) -> Result<String, String> {
             self.0.clone()
         }
+        fn join_p2p_ticket(&self, _ticket: &str) -> Result<String, String> {
+            self.0.clone()
+        }
     }
 
     fn ctx() -> KbContext {
@@ -312,5 +334,27 @@ mod tests {
             "P2P mesh not enabled".into()
         )))));
         assert_eq!(kb.share_p2p("k").unwrap_err(), "P2P mesh not enabled");
+    }
+
+    #[test]
+    fn join_p2p_without_daemon_control_is_an_actionable_error() {
+        let kb = ctx();
+        let err = kb.join_p2p("mae://join/x").unwrap_err();
+        assert!(
+            err.contains("daemon"),
+            "error should point the user at the daemon: {err}"
+        );
+    }
+
+    #[test]
+    fn join_p2p_delegates_to_the_injected_control() {
+        let mut kb = ctx();
+        kb.set_daemon_control(Some(Arc::new(StubControl(Ok("Join recorded".into())))));
+        assert_eq!(kb.join_p2p("mae://join/x").unwrap(), "Join recorded");
+
+        kb.set_daemon_control(Some(Arc::new(StubControl(Err(
+            "malformed join ticket".into()
+        )))));
+        assert_eq!(kb.join_p2p("garbage").unwrap_err(), "malformed join ticket");
     }
 }

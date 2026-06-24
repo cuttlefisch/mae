@@ -15,6 +15,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "collab_discover" => execute_collab_discover(editor),
         "kb_share" => execute_kb_share(editor, &call.arguments),
         "kb_share_p2p" => execute_kb_share_p2p(editor, &call.arguments),
+        "kb_join_p2p" => execute_kb_join_p2p(editor, &call.arguments),
         "kb_join" => execute_kb_join(editor, &call.arguments),
         "kb_leave" => execute_kb_leave(editor, &call.arguments),
         "kb_add_member" => execute_kb_add_member(editor, &call.arguments),
@@ -254,6 +255,24 @@ fn execute_kb_share_p2p(editor: &mut Editor, args: &Value) -> Result<String, Str
         "message": format!(
             "P2P join link for '{kb_id}'. Share it with a peer; they run kb_join / `kb-join <ticket>`."
         ),
+    })
+    .to_string())
+}
+
+fn execute_kb_join_p2p(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    // Same single backend as the `kb-join-p2p` command + `(kb-join-ticket)` Scheme
+    // primitive + `mae kb-join` CLI (ADR-025 §"Driving surfaces"): a synchronous
+    // daemon control call that queues a P2P join from a "magnet link". The
+    // background dialer then connects + pulls the KB once the owner approves.
+    let ticket = args
+        .get("ticket")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'ticket' parameter (a mae://join/… link)")?;
+    let message = editor.kb.join_p2p(ticket)?;
+    editor.set_status("Queued P2P join".to_string());
+    Ok(serde_json::json!({
+        "action": "join_kb_p2p",
+        "message": message,
     })
     .to_string())
 }

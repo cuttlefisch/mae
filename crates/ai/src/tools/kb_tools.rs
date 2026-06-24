@@ -619,6 +619,23 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             permission: Some(PermissionTier::Write),
         },
         ToolDefinition {
+            name: "kb_join_p2p".into(),
+            description: "Queue a P2P join from a 'magnet link' ticket (mae://join/…) you received from a KB owner. The daemon's background dialer then connects to the owner by node-id and pulls the KB once the owner approves your join. Requires the daemon to have P2P enabled (`mae setup-collab --p2p`).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "ticket".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "The mae://join/… ticket shared by the KB owner.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["ticket".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
             name: "kb_join".into(),
             description: "Join a shared KB from the connected daemon. Downloads all nodes and enables continuous sync.".into(),
             parameters: ToolParameters {
