@@ -241,6 +241,8 @@ fn main() -> io::Result<()> {
         println!("  --collab-identity       Print this editor's collab peer identity (for `mae-daemon authorize`)");
         println!("  setup-collab [--server ADDR] [--ssh-key PATH]");
         println!("                          One-command key-mode setup: identity + init.scm (optionally reuse an SSH key)");
+        println!("  kb-share-p2p [KB-ID] [--socket PATH]");
+        println!("                          Mint a P2P join ticket (mae://join/…) via the daemon and print it");
         println!("  --gui                   Force GUI backend (default on a desktop session; auto-off over SSH/tty)");
         println!("  --no-gui, --tui, -nw    Force terminal mode (like emacs -nw)");
         println!("  --connect [ADDR]        Connect to daemon (like emacsclient -c)");
@@ -340,6 +342,44 @@ fn main() -> io::Result<()> {
             }
         }
     }
+    // `mae kb-share-p2p [KB-ID] [--socket PATH]`: mint a P2P join ticket via the
+    // running daemon and print it to stdout (pipe-friendly). The CLI surface of
+    // the `kb-share-p2p` command / `(kb-share-p2p)` Scheme primitive / `kb_share_p2p`
+    // MCP tool — same `DaemonClient::mint_p2p_ticket` backend (ADR-025 §"Driving
+    // surfaces").
+    if args.get(1).is_some_and(|a| a == "kb-share-p2p") {
+        let kb_id = args
+            .get(2)
+            .filter(|a| !a.starts_with("--"))
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+        let socket = args
+            .iter()
+            .position(|a| a == "--socket")
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .unwrap_or_else(|| "/tmp/mae-daemon.sock".to_string());
+        let mut client = mae_mcp::daemon_client::DaemonClient::new(&socket);
+        if let Err(e) = client.connect() {
+            eprintln!(
+                "error: cannot reach mae-daemon at {socket}: {e}\n\
+                 start it with `mae-daemon` and enable P2P with `mae setup-collab --p2p`."
+            );
+            std::process::exit(1);
+        }
+        match client.mint_p2p_ticket(&kb_id) {
+            Ok(ticket) => {
+                // Just the ticket on stdout, so it pipes cleanly (e.g. | qrencode).
+                println!("{ticket}");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("error: kb-share-p2p '{kb_id}': {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // `mae setup-collab [--server <addr>]`: idempotent one-command key-mode setup.
     // Generates the peer identity (if absent), persists collab key-mode options to
     // init.scm, and prints the `mae-daemon authorize` line for the admin.
