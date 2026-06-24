@@ -159,6 +159,7 @@ Source: `crates/core/src/lib.rs`
 | `image_meta` | mod |
 | `input` | mod |
 | `kb_seed` | mod |
+| `kb_sharing` | mod |
 | `kb_view` | mod |
 | `keymap` | mod |
 | `keymap_registry` | mod |
@@ -166,6 +167,8 @@ Source: `crates/core/src/lib.rs`
 | `lock_stats` | mod |
 | `lsp_intent` | mod |
 | `messages` | mod |
+| `notifications` | mod |
+| `notifications_view` | mod |
 | `options` | mod |
 | `project` | mod |
 | `render_common` | mod |
@@ -272,6 +275,8 @@ Source: `shared/kb/src/lib.rs`
 | `StaleNode` | struct |
 | `KbHealthReport` | struct |
 | `KnowledgeBase` | struct |
+| `ReconcileAction` | enum |
+| `ReconcileOutcome` | struct |
 | `slugify` | fn |
 | `timestamp_id` | fn |
 
@@ -316,8 +321,11 @@ Source: `shared/mcp/src/lib.rs`
 | `client` | mod |
 | `client_mgr` | mod |
 | `daemon_client` | mod |
+| `identity` | mod |
+| `keystore` | mod |
 | `protocol` | mod |
 | `session` | mod |
+| `tls` | mod |
 | `McpToolRequest` | struct |
 | `McpToolResult` | struct |
 | `McpServer` | struct |
@@ -392,6 +400,7 @@ Source: `shared/sync/src/lib.rs`
 | `encoding` | mod |
 | `kb` | mod |
 | `text` | mod |
+| `wire` | mod |
 | `SyncError` | enum |
 | `DocAddress` | enum |
 | `SavePolicy` | enum |
@@ -473,6 +482,13 @@ Source: `shared/sync/src/lib.rs`
 | `kb-restore` | `crates/scheme/src/runtime.rs` |
 | `kb-raw-query` | `crates/scheme/src/runtime.rs` |
 | `kb-add-link!` | `crates/scheme/src/runtime.rs` |
+| `kb-share` | `crates/scheme/src/runtime.rs` |
+| `kb-join` | `crates/scheme/src/runtime.rs` |
+| `kb-leave` | `crates/scheme/src/runtime.rs` |
+| `kb-add-member` | `crates/scheme/src/runtime.rs` |
+| `kb-remove-member` | `crates/scheme/src/runtime.rs` |
+| `kb-approve` | `crates/scheme/src/runtime.rs` |
+| `kb-set-policy` | `crates/scheme/src/runtime.rs` |
 | `kb-remove-link!` | `crates/scheme/src/runtime.rs` |
 | `kb-add-meta-member!` | `crates/scheme/src/runtime.rs` |
 | `kb-remove-meta-member!` | `crates/scheme/src/runtime.rs` |
@@ -561,6 +577,7 @@ Source: `shared/sync/src/lib.rs`
 | `buffer-string` | `crates/scheme/src/runtime.rs` |
 | `buffer-text` | `crates/scheme/src/runtime.rs` |
 | `collab-status` | `crates/scheme/src/runtime.rs` |
+| `kb-sharing-status` | `crates/scheme/src/runtime.rs` |
 | `collab-synced-buffers` | `crates/scheme/src/runtime.rs` |
 | `collab-confirmed-shares` | `crates/scheme/src/runtime.rs` |
 | `buffer-sync-enabled?` | `crates/scheme/src/runtime.rs` |
@@ -571,7 +588,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (522 built-in)
+## Commands (526 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -700,6 +717,10 @@ Source: `shared/sync/src/lib.rs`
 | `window-move-down` | Move window down (SPC w J) |
 | `focus-next-window` | Cycle focus to next window (SPC w w) |
 | `view-messages` | Show *Messages* log buffer |
+| `notifications-open` | Open the *Notifications* attention buffer |
+| `notify-run-action` | Run the action under the cursor in *Notifications* (Enter) |
+| `notify-dismiss` | Dismiss the notification under the cursor (d) |
+| `notify-toggle-fold` | Fold/unfold the notification category under the cursor (Tab) |
 | `dashboard` | Show the startup dashboard |
 | `toggle-scratch-buffer` | Toggle the scratch buffer (SPC x) |
 | `command-palette` | Search and run any command |
@@ -976,7 +997,7 @@ Source: `shared/sync/src/lib.rs`
 | `keymap-set-flavor` | Switch keymap flavor live (:keymap-set-flavor <name>; no arg toggles doom/nonmodal) |
 | `choose-keymap-flavor` | Open the guided keybindings picker (modal vs non-modal, with descriptions) |
 | `kb-set-search-scope` | Choose the default KB search scope (all / local / remote / instance) |
-| `set-save` | Set an option and persist to config.toml (:set-save <key> [value]) |
+| `set-save` | Set an option and persist to init.scm (:set-save <key> [value]) |
 | `kill-other-buffers` | Close all buffers except current (SPC b o) |
 | `save-all-buffers` | Save all modified buffers (SPC b S) |
 | `revert-buffer` | Reload buffer from disk (SPC b r) |

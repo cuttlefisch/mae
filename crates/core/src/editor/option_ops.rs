@@ -1,5 +1,12 @@
 use crate::options::{parse_option_bool, parse_option_int};
 
+/// Parse a `notify_route_*` option value into a notification [`Surface`].
+fn parse_notify_surface(value: &str) -> Result<crate::notifications::Surface, String> {
+    crate::notifications::Surface::parse(value).ok_or_else(|| {
+        format!("Invalid notify surface '{value}' (expected status|badge|modal|buffer|silent)")
+    })
+}
+
 impl super::Editor {
     pub fn set_local_option(&mut self, name: &str, value: &str) -> Result<String, String> {
         let def_name = self
@@ -164,6 +171,7 @@ impl super::Editor {
             "collab_save_on_remote_update" => self.collab.save_on_remote_update.to_string(),
             "collab_heartbeat_interval" => self.collab.heartbeat_interval.to_string(),
             "collab_kb_sync_mode" => self.collab.kb_sync_mode.clone(),
+            "collab_fence_resolution" => self.collab.fence_resolution.clone(),
             "collab_psk" => {
                 if self.collab.psk.is_empty() {
                     String::new()
@@ -172,10 +180,25 @@ impl super::Editor {
                 }
             }
             "collab_psk_command" => self.collab.psk_command.clone(),
+            "collab_auth_mode" => self.collab.auth_mode.clone(),
+            "collab_host_key_policy" => self.collab.host_key_policy.clone(),
+            "collab_tls" => self.collab.tls.to_string(),
             "daemon_enabled" => self.kb.daemon_enabled.to_string(),
             "daemon_socket" => self.kb.daemon_socket.display().to_string(),
             "daemon_cache_size" => self.kb.daemon_cache_size.to_string(),
             "fill_column" => self.fill_column.to_string(),
+            "notify_route_info" => self.notifications.route_info.as_str().to_string(),
+            "notify_route_success" => self.notifications.route_success.as_str().to_string(),
+            "notify_route_warning" => self.notifications.route_warning.as_str().to_string(),
+            "notify_route_error" => self.notifications.route_error.as_str().to_string(),
+            "notify_route_action_required" => self
+                .notifications
+                .route_action_required
+                .as_str()
+                .to_string(),
+            "notify_badge_min_severity" => {
+                self.notifications.badge_min_severity.as_str().to_string()
+            }
             _ => return None,
         };
         Some((value, def))
@@ -686,11 +709,48 @@ impl super::Editor {
                     ))
                 }
             },
+            "collab_fence_resolution" => match value {
+                "prompt" | "auto" => self.collab.fence_resolution = value.to_string(),
+                _ => {
+                    return Err(format!(
+                        "Invalid collab_fence_resolution: '{}' (expected 'prompt' or 'auto')",
+                        value
+                    ))
+                }
+            },
             "collab_psk" => {
                 self.collab.psk = value.to_string();
             }
             "collab_psk_command" => {
                 self.collab.psk_command = value.to_string();
+            }
+            "collab_auth_mode" => match value {
+                "none" | "psk" | "key" => self.collab.auth_mode = value.to_string(),
+                _ => {
+                    return Err(format!(
+                        "Invalid collab_auth_mode: '{value}' (expected 'none', 'psk', or 'key')"
+                    ))
+                }
+            },
+            "collab_host_key_policy" => match value {
+                "prompt" | "accept-new" | "strict" => {
+                    self.collab.host_key_policy = value.to_string();
+                    // B-21: propagate to the live cell the background collab task's
+                    // host-key verifier reads, so the change is honored on the next
+                    // connect without a relaunch.
+                    if let Ok(mut p) = self.collab.host_key_policy_live.lock() {
+                        *p = value.to_string();
+                    }
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid collab_host_key_policy: '{value}' (expected 'prompt', \
+                         'accept-new', or 'strict')"
+                    ))
+                }
+            },
+            "collab_tls" => {
+                self.collab.tls = parse_option_bool(value)?;
             }
             "daemon_enabled" => {
                 self.kb.daemon_enabled = parse_option_bool(value)?;
@@ -710,6 +770,26 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.fill_column = v.clamp(20, 200);
+            }
+            "notify_route_info" => self.notifications.route_info = parse_notify_surface(value)?,
+            "notify_route_success" => {
+                self.notifications.route_success = parse_notify_surface(value)?
+            }
+            "notify_route_warning" => {
+                self.notifications.route_warning = parse_notify_surface(value)?
+            }
+            "notify_route_error" => self.notifications.route_error = parse_notify_surface(value)?,
+            "notify_route_action_required" => {
+                self.notifications.route_action_required = parse_notify_surface(value)?
+            }
+            "notify_badge_min_severity" => {
+                self.notifications.badge_min_severity =
+                    crate::notifications::Severity::parse(value).ok_or_else(|| {
+                        format!(
+                            "Invalid severity '{}' (expected info|success|warning|error|action-required)",
+                            value
+                        )
+                    })?
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -829,7 +909,7 @@ impl super::Editor {
         lines.push(
             "Use :set <option> <value> to change, :set <option> to toggle booleans.".to_string(),
         );
-        lines.push("Use :set-save <option> [value] to persist to config.toml.".to_string());
+        lines.push("Use :set-save <option> [value] to persist to init.scm.".to_string());
         lines.push("Use :describe-option <name> or SPC h o for documentation.".to_string());
 
         let content = lines.join("\n");

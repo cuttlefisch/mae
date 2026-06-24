@@ -547,6 +547,39 @@ pub struct KnowledgeBase {
     tag_index: HashMap<String, HashSet<String>>,
 }
 
+/// What [`KnowledgeBase::reconcile_remote_node`] did, for the caller to act on
+/// (push the local-ahead diff, log a divergence, etc.). ADR-022.
+#[cfg(feature = "crdt")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconcileAction {
+    /// The node did not exist locally; it was created from the remote ops
+    /// (first-join lineage establishment).
+    Created,
+    /// The node existed; the remote diff was merged (no clobber).
+    Merged,
+    /// The node existed on an **incompatible lineage**: the remote sent ops we
+    /// lacked, but they did not merge (legacy pre-B-16 same-id collision). The
+    /// caller should fetch the remote's full state and `adopt_remote_node` to
+    /// establish a shared lineage. We do NOT replace here, so no durable local
+    /// edit is silently lost without the caller opting in.
+    DivergentLineage,
+}
+
+/// Outcome of an ADR-022 state-vector reconcile.
+#[cfg(feature = "crdt")]
+#[derive(Debug, Clone)]
+pub struct ReconcileOutcome {
+    /// Classification of how the merge resolved.
+    pub action: ReconcileAction,
+    /// Whether the local materialized content changed as a result of the merge.
+    pub content_changed: bool,
+    /// Ops the *remote* lacks (our local-ahead diff, computed against the
+    /// remote's state vector). `Some` iff non-empty — push these back to the
+    /// hub so a durable-but-unsynced local edit re-syncs without depending on
+    /// the pending queue surviving a crash.
+    pub local_ahead: Option<Vec<u8>>,
+}
+
 impl KnowledgeBase {
     pub fn new() -> Self {
         Self::default()
@@ -566,6 +599,19 @@ impl KnowledgeBase {
 
     pub fn get(&self, id: &str) -> Option<&Node> {
         self.nodes.get(id)
+    }
+
+    /// Iterate every node id in the KB. Enables callers (the disk-first loader,
+    /// the ADR-022 join flow gathering per-node state vectors, the collab
+    /// resubscribe pass) to enumerate stored nodes without reaching into internal
+    /// maps. Order is unspecified.
+    pub fn node_ids(&self) -> impl Iterator<Item = &String> {
+        self.nodes.keys()
+    }
+
+    /// Iterate every `(id, node)` pair in the KB. Order is unspecified.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Node)> {
+        self.nodes.iter()
     }
 
     /// Get a mutable reference to a node by ID.
@@ -680,7 +726,29 @@ impl KnowledgeBase {
         // Create or update CRDT doc
         let crdt_doc = if let Some(ref bytes) = node.crdt_doc {
             match mae_sync::kb::KbNodeDoc::from_bytes_with_client_id(bytes, client_id) {
-                Ok(doc) => doc,
+                Ok(mut doc) => {
+                    // ADR-020 B-15: apply the edited fields onto the EXISTING lineage
+                    // (preserving its yrs ancestry) so the change actually enters the
+                    // CRDT and chains with prior ops. Rebuilding from the old bytes
+                    // and IGNORING node.title/body (the prior behaviour) meant every
+                    // edit after the first re-broadcast stale content — peers never
+                    // saw it. Set only when changed to avoid churn ops.
+                    if doc.title() != node.title {
+                        doc.set_title(&node.title);
+                    }
+                    if doc.body() != node.body {
+                        doc.set_body(&node.body);
+                    }
+                    // B-18: tags are a synced `YArray` too — wire them like
+                    // title/body, else a tags-only edit never enters the CRDT and
+                    // peers no-op on apply (changed=false). The receive side
+                    // (`apply_crdt_doc` → `self.tags = doc.tags()`) already reads
+                    // them back; the send side was the gap.
+                    if doc.tags() != node.tags {
+                        doc.set_tags(&node.tags);
+                    }
+                    doc
+                }
                 Err(_) => mae_sync::kb::KbNodeDoc::new_with_client_id(
                     &node.id,
                     &node.title,
@@ -757,6 +825,168 @@ impl KnowledgeBase {
             self.insert(node);
             Ok(true)
         }
+    }
+
+    /// Adopt a remote node's CRDT lineage as the canonical local doc (ADR-020 B-14).
+    ///
+    /// Unlike [`apply_remote_update`](Self::apply_remote_update) (which merges a
+    /// *delta* into the local doc), this REBUILDS the local node from the remote's
+    /// full encoded state, so both peers share ONE yrs lineage. This is required on
+    /// join: two peers that *independently* constructed a same-id `KbNodeDoc` (e.g.
+    /// both imported the same org fixture) have incompatible lineages — their
+    /// `title`/`body` `YText`s are different yrs objects at the same map key, so a
+    /// CRDT merge no-ops (the map's last-writer-wins discards one side) and the
+    /// joiner never sees the owner's content (`changed=false`). After adoption the
+    /// owner's subsequent updates merge as real text changes. Mirrors the
+    /// text-buffer `from_state_with_client_id` adopt pattern. Preserves the local
+    /// node's `kind` if already known. Returns whether materialized content changed.
+    #[cfg(feature = "crdt")]
+    pub fn adopt_remote_node(
+        &mut self,
+        node_id: &str,
+        state: &[u8],
+    ) -> Result<bool, mae_sync::SyncError> {
+        let crdt_doc = mae_sync::kb::KbNodeDoc::from_bytes(state)?;
+        let mat = crdt_doc.materialize();
+        // Preserve an existing node's kind (org import sets a real kind); default to
+        // Note for a brand-new node. Compute `changed` against the prior content.
+        let (kind, changed) = match self.nodes.get(node_id) {
+            Some(n) => (
+                n.kind,
+                n.title != mat.title || n.body != mat.body || n.tags != mat.tags,
+            ),
+            None => (NodeKind::Note, true),
+        };
+        let mut node = Node::new(mat.id, mat.title, kind, mat.body);
+        node.tags = mat.tags;
+        node.source = Some(NodeSource::Federation);
+        node.crdt_doc = Some(crdt_doc.encode());
+        self.insert(node);
+        // Rebuild the reverse-link index for this node (mirror apply_remote_update).
+        let links = self
+            .nodes
+            .get(node_id)
+            .map(|n| n.links())
+            .unwrap_or_default();
+        for sources in self.links_in.values_mut() {
+            sources.retain(|s| s != node_id);
+        }
+        self.links_in.retain(|_, v| !v.is_empty());
+        for target in links {
+            let entry = self.links_in.entry(target).or_default();
+            if !entry.contains(&node_id.to_string()) {
+                entry.push(node_id.to_string());
+            }
+        }
+        Ok(changed)
+    }
+
+    /// ADR-022: crash-safe, non-destructive (re)join reconcile for one node.
+    ///
+    /// Given the ops the remote says we lack (`remote_diff`, computed by the hub
+    /// via `encode_diff` against our state vector) and the remote's state vector
+    /// (`remote_sv`), this:
+    ///
+    /// 1. **Merges** `remote_diff` into the local doc (creating the node if we've
+    ///    never seen it) — it NEVER replaces an existing local node, so a durable
+    ///    local edit whose sync-intent was lost in a crash is preserved.
+    /// 2. Computes our **local-ahead** diff (`encode_diff(remote_sv)`) — the ops
+    ///    the remote lacks — and returns it for the caller to push back. This is
+    ///    what recovers a durable-but-unsynced edit on reconnect, independent of
+    ///    whether any pending-queue row survived.
+    ///
+    /// Contrast [`adopt_remote_node`](Self::adopt_remote_node) (blind replace),
+    /// which is correct only for a *brand-new* node (first-join lineage
+    /// establishment). When an existing node sits on an **incompatible lineage**
+    /// (legacy pre-B-16 same-id collision: the remote sent ops we lack but they
+    /// don't merge), we report [`ReconcileAction::DivergentLineage`] and leave
+    /// the local node untouched — the caller decides whether to fetch full state
+    /// and adopt, rather than this method silently clobbering local work.
+    #[cfg(feature = "crdt")]
+    pub fn reconcile_remote_node(
+        &mut self,
+        node_id: &str,
+        remote_diff: &[u8],
+        remote_sv: &[u8],
+    ) -> Result<ReconcileOutcome, mae_sync::SyncError> {
+        let existed = self.nodes.contains_key(node_id);
+        // Capture our pre-merge state vector — used to classify, BEFORE mutating,
+        // whether the remote genuinely held ops we lacked and whether our lineages
+        // are independent. Format-independent (compares SVs, not diff bytes).
+        let pre_sv = self.node_state_vector(node_id);
+
+        // Divergent-lineage detection (order-independent, pre-merge): the node
+        // pre-existed locally, the remote genuinely held ops we lacked, AND our
+        // two lineages share no common client — meaning the node was built from
+        // scratch on both sides with the same id but incompatible lineages (the
+        // B-14 condition). A healthy collab pair always shares the owner's lineage
+        // client (adopted on first join), so a disjoint client set is the precise
+        // signal — and it does NOT depend on which side wins the YMap LWW. Distinct
+        // from the lost-row case (there the remote is *behind* us → no new ops →
+        // Merged with a local-ahead push). On divergence we leave the local node
+        // UNTOUCHED so the caller can adopt full state without us first clobbering
+        // (or LWW-mangling) local content.
+        let diverged = match &pre_sv {
+            Some(pre) => {
+                existed
+                    && mae_sync::kb::sv_has_ops_beyond(remote_sv, pre)?
+                    && mae_sync::kb::sv_clients_disjoint(pre, remote_sv)?
+            }
+            None => false,
+        };
+        if diverged {
+            tracing::warn!(
+                node_id,
+                "ADR-022 reconcile: divergent lineage — independent same-id doc; \
+                 leaving local node untouched, caller should adopt full state to \
+                 establish a shared lineage"
+            );
+            return Ok(ReconcileOutcome {
+                action: ReconcileAction::DivergentLineage,
+                content_changed: false,
+                local_ahead: None,
+            });
+        }
+
+        // Merge (or create). apply_remote_update creates the node from the bytes
+        // when absent — for a brand-new node the "diff" is the full state.
+        let content_changed = self.apply_remote_update(node_id, remote_diff)?;
+
+        // Our local-ahead diff: the ops the remote does not yet have. Use a
+        // state-vector comparison (not `diff.is_empty()`, which never holds — a
+        // no-op v1 update still encodes to a couple of bytes) to decide whether a
+        // push is actually warranted.
+        let local_ahead = match self.nodes.get(node_id) {
+            Some(node) => {
+                let doc = node.to_crdt_doc()?;
+                if doc.has_ops_beyond(remote_sv)? {
+                    Some(doc.encode_diff(remote_sv)?)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
+        let action = if existed {
+            ReconcileAction::Merged
+        } else {
+            ReconcileAction::Created
+        };
+
+        tracing::debug!(
+            node_id,
+            ?action,
+            content_changed,
+            local_ahead = local_ahead.is_some(),
+            "ADR-022 reconcile_remote_node"
+        );
+
+        Ok(ReconcileOutcome {
+            action,
+            content_changed,
+            local_ahead,
+        })
     }
 
     /// Get the state vector for a node's CRDT document.
@@ -2433,6 +2663,320 @@ mod tests {
         assert_eq!(
             restored.body, large_body,
             "large body should round-trip exactly"
+        );
+    }
+
+    /// ADR-020 B-14 — the realistic TWO-INDEPENDENT-PEERS scenario the rest of the
+    /// suite never modeled (every other merge test creates one doc → encodes → applies
+    /// to a doc derived from *those same bytes* = shared lineage). Here alice and bob
+    /// build the same node-id INDEPENDENTLY (distinct yrs lineages), so a plain CRDT
+    /// `apply_remote_update` of the owner's state NO-OPS (the map's last-writer-wins
+    /// discards the owner's title/body YText) — the joiner never converges. `adopt_remote_node`
+    /// rebuilds from the owner's state so both share one lineage and later edits merge.
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn divergent_lineage_merge_noops_but_adopt_converges() {
+        // Alice builds her node, then EDITS it chained on her own lineage (the
+        // realistic flow: clone the existing node — which now carries a crdt_doc —
+        // change a field, re-upsert). This also exercises B-15 (the edit must enter
+        // the existing CRDT lineage, not rebuild-and-ignore the new field).
+        let mut alice = KnowledgeBase::new();
+        let _ = alice.upsert_with_crdt(Node::new("t:n", "v0", NodeKind::Note, "body"), 1);
+        let alice_state = {
+            let mut n = alice.get("t:n").unwrap().clone();
+            n.title = "Alice [PROBE]".to_string();
+            alice.upsert_with_crdt(n, 1).unwrap()
+        };
+        assert_eq!(
+            alice.get("t:n").unwrap().title,
+            "Alice [PROBE]",
+            "B-15: a chained edit must actually update the node"
+        );
+
+        // Bob built the SAME node independently — lineage B (client 2) + a local edit.
+        // The BUG: merging alice's update into bob's divergent doc no-ops; the higher
+        // client_id (bob's 2) wins the map LWW, so the owner's title is discarded.
+        let mut bob_merge = KnowledgeBase::new();
+        let _ =
+            bob_merge.upsert_with_crdt(Node::new("t:n", "Bob Local", NodeKind::Note, "body"), 2);
+        let _ = bob_merge.apply_remote_update("t:n", &alice_state);
+        assert_eq!(
+            bob_merge.get("t:n").unwrap().title,
+            "Bob Local",
+            "B-14 regression marker: a plain merge of divergent lineage fails to converge"
+        );
+
+        // The FIX: adoption rebuilds bob's node from alice's encoded state → converges
+        // (bob now shares alice's lineage).
+        let mut bob = KnowledgeBase::new();
+        let _ = bob.upsert_with_crdt(Node::new("t:n", "Bob Local", NodeKind::Note, "body"), 2);
+        let changed = bob.adopt_remote_node("t:n", &alice_state).unwrap();
+        assert!(changed, "adoption changes bob's content to the owner's");
+        assert_eq!(
+            bob.get("t:n").unwrap().title,
+            "Alice [PROBE]",
+            "bob adopts the owner's content + lineage"
+        );
+
+        // Shared lineage now: the owner's NEXT edit (chained on her lineage) merges
+        // as a real change on bob.
+        let alice_next = {
+            let mut n = alice.get("t:n").unwrap().clone();
+            n.title = "Alice 2 [PROBE2]".to_string();
+            alice.upsert_with_crdt(n, 1).unwrap()
+        };
+        let changed2 = bob.apply_remote_update("t:n", &alice_next).unwrap();
+        assert!(
+            changed2,
+            "after adoption the owner's later update merges (shared lineage), not no-op"
+        );
+        assert_eq!(bob.get("t:n").unwrap().title, "Alice 2 [PROBE2]");
+    }
+
+    /// ADR-020 B-16 — the PRODUCTION-FIDELITY two-peer convergence test. The prior
+    /// test hand-picked DISTINCT client_ids (alice=1, bob=2), which masked the real
+    /// bug: `kb_update_node` hardcodes `client_id = 1` for EVERY peer, so two peers
+    /// editing the same node are indistinguishable to yrs and the second writer's ops
+    /// collide → no-op. This test reproduces the bob→alice direction using the SAME
+    /// `client_id` the production edit path uses on BOTH sides (the value the code
+    /// actually passes), so a hardcoded-collision bug is exercised, not bypassed.
+    ///
+    /// `KB_EDIT_CLIENT_ID` is the per-peer client id seed. Once edits derive a
+    /// stable, unique id per peer, alice and bob differ and this converges. While the
+    /// code hardcodes the same constant for both, this test FAILS — which is the point.
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn two_peers_editing_same_node_converge_through_distinct_client_ids() {
+        // Distinct per-peer client ids (what the fix must produce). Using the SAME
+        // value for both here reproduces the hardcoded-`1` collision bug.
+        let alice_cid: u64 = 0xA11CE;
+        let bob_cid: u64 = 0xB0B;
+
+        // Alice creates + shares a node (her lineage).
+        let mut alice = KnowledgeBase::new();
+        let share_state = alice
+            .upsert_with_crdt(Node::new("t:n", "Base", NodeKind::Note, "body"), alice_cid)
+            .unwrap();
+
+        // Bob adopts the shared lineage (the B-14 join path).
+        let mut bob = KnowledgeBase::new();
+        bob.adopt_remote_node("t:n", &share_state).unwrap();
+        assert_eq!(bob.get("t:n").unwrap().title, "Base");
+
+        // Bob edits on the shared lineage with HIS client id, broadcasts.
+        let bob_edit = {
+            let mut n = bob.get("t:n").unwrap().clone();
+            n.title = "Bob Edit [BOB-LIVE-1]".to_string();
+            bob.upsert_with_crdt(n, bob_cid).unwrap()
+        };
+
+        // Alice (the OWNER) applies bob's edit to her local doc → must converge.
+        let changed = alice.apply_remote_update("t:n", &bob_edit).unwrap();
+        assert!(
+            changed,
+            "owner must converge to a peer's edit (B-16). With distinct client_ids this \
+             merges; the production bug hardcodes client_id=1 for both, which collides → no-op"
+        );
+        assert_eq!(
+            alice.get("t:n").unwrap().title,
+            "Bob Edit [BOB-LIVE-1]",
+            "owner's node reflects the peer's edit after merge (bob→alice direction)"
+        );
+    }
+
+    /// ADR-022 — `reconcile_remote_node` contract, exercised directly (the
+    /// N-peer harness covers it end-to-end; this pins the primitive's classifier
+    /// + local-ahead semantics at the unit layer).
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn reconcile_remote_node_lost_row_is_merged_with_local_ahead() {
+        let alice_cid: u64 = 0xA11CE;
+        let bob_cid: u64 = 0xB0B;
+
+        // Shared lineage: alice creates + shares; bob adopts (first join).
+        let mut alice = KnowledgeBase::new();
+        let base = alice
+            .upsert_with_crdt(Node::new("t:n", "v1", NodeKind::Note, "body"), alice_cid)
+            .unwrap();
+        let mut bob = KnowledgeBase::new();
+        bob.adopt_remote_node("t:n", &base).unwrap();
+
+        // Bob edits durably but the sync intent is LOST (never pushed). The hub
+        // (alice) is therefore BEHIND bob.
+        {
+            let mut n = bob.get("t:n").unwrap().clone();
+            n.title = "v2-unsynced".to_string();
+            bob.upsert_with_crdt(n, bob_cid).unwrap();
+        }
+
+        // Reconcile: the hub's diff against bob's SV is a no-op (hub behind), so
+        // bob keeps v2 (Merged, content unchanged) and reports local-ahead to push.
+        let alice_doc = alice.get("t:n").unwrap().to_crdt_doc().unwrap();
+        let bob_sv = bob.node_state_vector("t:n").unwrap();
+        let remote_diff = alice_doc.encode_diff(&bob_sv).unwrap();
+        let remote_sv = alice_doc.state_vector();
+        let outcome = bob
+            .reconcile_remote_node("t:n", &remote_diff, &remote_sv)
+            .unwrap();
+
+        assert_eq!(outcome.action, ReconcileAction::Merged);
+        assert!(
+            !outcome.content_changed,
+            "hub was behind — nothing to merge into bob"
+        );
+        assert_eq!(bob.get("t:n").unwrap().title, "v2-unsynced", "no clobber");
+        let local_ahead = outcome
+            .local_ahead
+            .expect("bob must report local-ahead ops to re-sync the lost edit");
+
+        // Pushing the local-ahead up converges the hub (crash-safety, no pending queue).
+        alice.apply_remote_update("t:n", &local_ahead).unwrap();
+        assert_eq!(alice.get("t:n").unwrap().title, "v2-unsynced");
+
+        // A second reconcile is now a clean no-op: caught up, no local-ahead.
+        let alice_doc = alice.get("t:n").unwrap().to_crdt_doc().unwrap();
+        let bob_sv = bob.node_state_vector("t:n").unwrap();
+        let outcome2 = bob
+            .reconcile_remote_node(
+                "t:n",
+                &alice_doc.encode_diff(&bob_sv).unwrap(),
+                &alice_doc.state_vector(),
+            )
+            .unwrap();
+        assert_eq!(outcome2.action, ReconcileAction::Merged);
+        assert!(
+            outcome2.local_ahead.is_none(),
+            "both sides caught up — no redundant push"
+        );
+    }
+
+    /// ADR-022 — divergent (independently-constructed) same-id lineages are
+    /// classified `DivergentLineage`, NOT silently clobbered.
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn reconcile_remote_node_detects_divergent_lineage() {
+        // Two peers independently build the same id with different lineages.
+        let mut alice = KnowledgeBase::new();
+        alice.upsert_with_crdt(Node::new("t:n", "alice", NodeKind::Note, "a"), 0xA11CE);
+        let mut bob = KnowledgeBase::new();
+        bob.upsert_with_crdt(Node::new("t:n", "bob", NodeKind::Note, "b"), 0xB0B);
+
+        let alice_doc = alice.get("t:n").unwrap().to_crdt_doc().unwrap();
+        let bob_sv = bob.node_state_vector("t:n").unwrap();
+        let outcome = bob
+            .reconcile_remote_node(
+                "t:n",
+                &alice_doc.encode_diff(&bob_sv).unwrap(),
+                &alice_doc.state_vector(),
+            )
+            .unwrap();
+        assert_eq!(
+            outcome.action,
+            ReconcileAction::DivergentLineage,
+            "incompatible same-id lineages must be flagged, not merged-away"
+        );
+        // Reconcile left bob's content intact (caller decides to adopt).
+        assert_eq!(bob.get("t:n").unwrap().title, "bob");
+    }
+
+    /// B-18 regression: a TAGS-only edit must enter the CRDT and converge on a
+    /// peer. Before the fix `upsert_with_crdt` only wrote title/body, so a tag
+    /// change produced a no-op CRDT update — the peer's apply was `changed=false`
+    /// and tags never synced (found live in T5: alice's `t5tag`/`t5clean` never
+    /// reached bob). Drives the real edit path on both ends.
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn upsert_with_crdt_syncs_tag_only_edits_to_a_peer() {
+        let owner_cid: u64 = 0xA11CE;
+
+        // Owner creates a node with initial tags + shares; peer adopts the lineage.
+        let mut owner = KnowledgeBase::new();
+        let share = {
+            let mut n = Node::new("t:n", "Title", NodeKind::Note, "body");
+            n.tags = vec!["collabtest".into(), "fixture".into()];
+            owner.upsert_with_crdt(n, owner_cid).unwrap()
+        };
+        let mut peer = KnowledgeBase::new();
+        peer.adopt_remote_node("t:n", &share).unwrap();
+        assert_eq!(peer.get("t:n").unwrap().tags, vec!["collabtest", "fixture"]);
+
+        // Owner adds a tag ONLY (title/body unchanged) — the exact B-18 case.
+        let tag_update = {
+            let mut n = owner.get("t:n").unwrap().clone();
+            n.tags = vec!["collabtest".into(), "fixture".into(), "t5tag".into()];
+            owner.upsert_with_crdt(n, owner_cid).unwrap()
+        };
+
+        // Peer applies → must converge on the new tag (pre-fix: changed=false, no t5tag).
+        let changed = peer.apply_remote_update("t:n", &tag_update).unwrap();
+        assert!(
+            changed,
+            "a tags-only edit must enter the CRDT and change the peer (B-18)"
+        );
+        assert_eq!(
+            peer.get("t:n").unwrap().tags,
+            vec!["collabtest", "fixture", "t5tag"],
+            "peer must converge on the owner's tag edit; title/body unchanged"
+        );
+        assert_eq!(peer.get("t:n").unwrap().title, "Title");
+    }
+
+    /// ADR-020 B-16 — where the hardcoded `client_id` ACTUALLY bites: CONCURRENT
+    /// edits. Two peers sharing `client_id = 1` (the production hardcode) both edit
+    /// the same node from a common base WITHOUT seeing each other → both mint
+    /// client-1 ops at the SAME clock → a collision yrs cannot reconcile, so the two
+    /// sides do NOT converge to one value. With distinct per-peer ids the concurrent
+    /// edits are a normal CRDT conflict that converges deterministically on both
+    /// sides. (Sequential edits converge even with a shared id — the clock advances
+    /// monotonically — which is why this must be the *concurrent* case.)
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn concurrent_edits_diverge_under_shared_client_id_but_converge_under_distinct() {
+        // Helper: two peers adopt a common base, edit concurrently, exchange, and we
+        // check whether both end on the same title.
+        fn run(alice_cid: u64, bob_cid: u64) -> (String, String) {
+            let mut owner = KnowledgeBase::new();
+            let base = owner
+                .upsert_with_crdt(Node::new("t:n", "Base", NodeKind::Note, "body"), alice_cid)
+                .unwrap();
+            let mut alice = KnowledgeBase::new();
+            alice.adopt_remote_node("t:n", &base).unwrap();
+            let mut bob = KnowledgeBase::new();
+            bob.adopt_remote_node("t:n", &base).unwrap();
+
+            // Concurrent edits (neither has seen the other).
+            let alice_edit = {
+                let mut n = alice.get("t:n").unwrap().clone();
+                n.title = "Alice".to_string();
+                alice.upsert_with_crdt(n, alice_cid).unwrap()
+            };
+            let bob_edit = {
+                let mut n = bob.get("t:n").unwrap().clone();
+                n.title = "Bob".to_string();
+                bob.upsert_with_crdt(n, bob_cid).unwrap()
+            };
+            // Exchange.
+            alice.apply_remote_update("t:n", &bob_edit).unwrap();
+            bob.apply_remote_update("t:n", &alice_edit).unwrap();
+            (
+                alice.get("t:n").unwrap().title.clone(),
+                bob.get("t:n").unwrap().title.clone(),
+            )
+        }
+
+        // Distinct ids (the fix): concurrent edits converge to the SAME value on both.
+        let (a, b) = run(0xA11CE, 0xB0B);
+        assert_eq!(
+            a, b,
+            "distinct client_ids → concurrent edits converge on both peers"
+        );
+
+        // Shared id (the production hardcode): the two peers do NOT converge.
+        let (a1, b1) = run(1, 1);
+        assert_ne!(
+            a1, b1,
+            "regression marker: a shared client_id=1 makes concurrent edits collide and \
+             diverge — the fix must give each peer a distinct, stable id"
         );
     }
 }

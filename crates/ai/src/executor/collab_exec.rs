@@ -16,6 +16,11 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "kb_share" => execute_kb_share(editor, &call.arguments),
         "kb_join" => execute_kb_join(editor, &call.arguments),
         "kb_leave" => execute_kb_leave(editor, &call.arguments),
+        "kb_add_member" => execute_kb_add_member(editor, &call.arguments),
+        "kb_remove_member" => execute_kb_remove_member(editor, &call.arguments),
+        "kb_approve" => execute_kb_approve(editor, &call.arguments),
+        "kb_set_policy" => execute_kb_set_policy(editor, &call.arguments),
+        "kb_sharing_status" => execute_kb_sharing_status(editor, &call.arguments),
         _ => return None,
     };
     Some(result)
@@ -35,6 +40,20 @@ fn execute_collab_status(editor: &Editor) -> Result<String, String> {
         "server_address": address,
     })
     .to_string())
+}
+
+/// AI-peer introspection: this peer's full KB-sharing state (KBs, members +
+/// roles, policy, pending requests, my role/epoch, sync status). Read-only,
+/// built from local replicas — the same snapshot the `*KB Sharing*` buffer and
+/// the `(kb-sharing-status)` Scheme primitive show (CLAUDE.md #3 the AI is a
+/// peer, #8 shared computation). Optional `kb_id` scopes to one KB.
+fn execute_kb_sharing_status(editor: &Editor, args: &Value) -> Result<String, String> {
+    let snapshot = editor.kb_sharing_snapshot();
+    if let Some(kb_id) = args.get("kb_id").and_then(|v| v.as_str()) {
+        let entry = snapshot.kbs.iter().find(|k| k.id == kb_id);
+        return serde_json::to_string(&entry).map_err(|e| e.to_string());
+    }
+    serde_json::to_string(&snapshot).map_err(|e| e.to_string())
 }
 
 fn execute_collab_connect(editor: &mut Editor, args: &Value) -> Result<String, String> {
@@ -169,23 +188,32 @@ fn execute_collab_discover(editor: &mut Editor) -> Result<String, String> {
 }
 
 fn execute_kb_share(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    // Accept both `kb_id` and `kb_name` (the tool previously read only `kb_name`
+    // and silently shared the default KB when callers passed `kb_id`).
     let kb_name = args
-        .get("kb_name")
+        .get("kb_id")
+        .or_else(|| args.get("kb_name"))
         .and_then(|v| v.as_str())
         .unwrap_or(mae_core::KB_DEFAULT_NAME)
         .to_string();
 
-    // Collect node IDs from the named KB.
+    // Collect node IDs from the named KB. `instances` is keyed by UUID, so
+    // resolve name→uuid via the registry first (a bare name lookup missed).
     let node_ids: Vec<String> = if kb_name == mae_core::KB_DEFAULT_NAME || kb_name == "primary" {
         if let Some(q) = editor.kb.query_layer() {
             q.list_ids(None)
         } else {
             editor.kb.primary.list_ids(None)
         }
-    } else if let Some(kb) = editor.kb.instances.get(&kb_name) {
-        kb.list_ids(None)
     } else {
-        return Err(format!("No KB instance named '{}'", kb_name));
+        let uuid = editor.kb.registry.find(&kb_name).map(|i| i.uuid.clone());
+        match uuid
+            .and_then(|u| editor.kb.instances.get(&u))
+            .or_else(|| editor.kb.instances.get(&kb_name))
+        {
+            Some(kb) => kb.list_ids(None),
+            None => return Err(format!("No KB instance named '{}'", kb_name)),
+        }
     };
 
     let count = node_ids.len();
@@ -209,8 +237,10 @@ fn execute_kb_join(editor: &mut Editor, args: &Value) -> Result<String, String> 
         .and_then(|v| v.as_str())
         .ok_or("Missing required 'kb_id' parameter")?
         .to_string();
+    let node_svs = editor.kb_join_node_svs(&kb_id);
     editor.collab.pending_intent = Some(CollabIntent::JoinKb {
         kb_id: kb_id.clone(),
+        node_svs,
     });
     editor.set_status(format!("Joining shared KB '{}'...", kb_id));
     Ok(serde_json::json!({
@@ -235,6 +265,132 @@ fn execute_kb_leave(editor: &mut Editor, args: &Value) -> Result<String, String>
         "action": "leave_kb",
         "kb_id": kb_id,
         "message": format!("KB leave intent queued for '{}' (local copy preserved)", kb_id),
+    })
+    .to_string())
+}
+
+fn execute_kb_add_member(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let kb_id = args
+        .get("kb_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'kb_id' parameter")?
+        .to_string();
+    let member = args
+        .get("member")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'member' parameter (peer fingerprint)")?
+        .to_string();
+    // Default matches the `:kb-member-add` command (role optional → editor).
+    let role = args
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("editor")
+        .to_string();
+    editor.collab.pending_intent = Some(CollabIntent::KbAddMember {
+        kb_id: kb_id.clone(),
+        member: member.clone(),
+        role: role.clone(),
+    });
+    editor.set_status(format!("Adding '{member}' to KB '{kb_id}' as {role}..."));
+    Ok(serde_json::json!({
+        "action": "kb_add_member",
+        "kb_id": kb_id,
+        "member": member,
+        "role": role,
+        "message": format!("Membership change queued: '{member}' → {role} on KB '{kb_id}' (owner-only; applied by the daemon)"),
+    })
+    .to_string())
+}
+
+fn execute_kb_remove_member(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let kb_id = args
+        .get("kb_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'kb_id' parameter")?
+        .to_string();
+    let member = args
+        .get("member")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'member' parameter (peer fingerprint)")?
+        .to_string();
+    editor.collab.pending_intent = Some(CollabIntent::KbRemoveMember {
+        kb_id: kb_id.clone(),
+        member: member.clone(),
+    });
+    editor.set_status(format!("Removing '{member}' from KB '{kb_id}'..."));
+    Ok(serde_json::json!({
+        "action": "kb_remove_member",
+        "kb_id": kb_id,
+        "member": member,
+        "message": format!("Membership removal queued: '{member}' from KB '{kb_id}' (owner-only; applied by the daemon)"),
+    })
+    .to_string())
+}
+
+/// Approve a pending join request as `role` (owner-only, ADR-018). Use
+/// `kb_sharing_status` first to read the pending requests' fingerprints.
+fn execute_kb_approve(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let kb_id = args
+        .get("kb_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'kb_id' parameter")?
+        .to_string();
+    let principal = args
+        .get("member")
+        .or_else(|| args.get("principal"))
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'member' parameter (pending peer fingerprint)")?
+        .to_string();
+    let role = args
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("editor")
+        .to_string();
+    editor.collab.pending_intent = Some(CollabIntent::KbApprove {
+        kb_id: kb_id.clone(),
+        principal: principal.clone(),
+        role: role.clone(),
+    });
+    editor.set_status(format!(
+        "Approving '{principal}' for KB '{kb_id}' as {role}..."
+    ));
+    Ok(serde_json::json!({
+        "action": "kb_approve",
+        "kb_id": kb_id,
+        "member": principal,
+        "role": role,
+        "message": format!("Approval queued: '{principal}' → {role} on KB '{kb_id}' (owner-only; applied by the daemon)"),
+    })
+    .to_string())
+}
+
+/// Set a KB's join policy: restrictive | invite | permissive (owner-only, ADR-018).
+fn execute_kb_set_policy(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let kb_id = args
+        .get("kb_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'kb_id' parameter")?
+        .to_string();
+    let policy = args
+        .get("policy")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'policy' parameter (restrictive|invite|permissive)")?
+        .to_string();
+    if !matches!(policy.as_str(), "restrictive" | "invite" | "permissive") {
+        return Err(format!(
+            "Invalid policy '{policy}' (expected restrictive, invite, or permissive)"
+        ));
+    }
+    editor.collab.pending_intent = Some(CollabIntent::KbSetPolicy {
+        kb_id: kb_id.clone(),
+        policy: policy.clone(),
+    });
+    editor.set_status(format!("Setting KB '{kb_id}' join policy to {policy}..."));
+    Ok(serde_json::json!({
+        "action": "kb_set_policy",
+        "kb_id": kb_id,
+        "policy": policy,
+        "message": format!("Policy change queued: KB '{kb_id}' → {policy} (owner-only; applied by the daemon)"),
     })
     .to_string())
 }
@@ -288,6 +444,82 @@ mod tests {
         let mut editor = Editor::new();
         let call = make_call("unknown_tool", json!({}));
         assert!(dispatch(&mut editor, &call).is_none());
+    }
+
+    #[test]
+    fn kb_approve_and_set_policy_queue_intents() {
+        let mut editor = Editor::new();
+        let r = dispatch(
+            &mut editor,
+            &make_call(
+                "kb_approve",
+                json!({"kb_id": "team", "member": "SHA256:carol"}),
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(parsed["action"], "kb_approve");
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::KbApprove { kb_id, principal, role })
+                if kb_id == "team" && principal == "SHA256:carol" && role == "editor"
+        ));
+
+        dispatch(
+            &mut editor,
+            &make_call(
+                "kb_set_policy",
+                json!({"kb_id": "team", "policy": "permissive"}),
+            ),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::KbSetPolicy { kb_id, policy })
+                if kb_id == "team" && policy == "permissive"
+        ));
+
+        // An invalid policy is rejected.
+        let bad = dispatch(
+            &mut editor,
+            &make_call("kb_set_policy", json!({"kb_id": "team", "policy": "bogus"})),
+        )
+        .unwrap();
+        assert!(bad.is_err());
+    }
+
+    #[test]
+    fn kb_sharing_status_returns_snapshot_json() {
+        // P0: the AI peer introspects KB-sharing state via the same snapshot the
+        // human sees. With no shared KBs the snapshot is well-formed and empty.
+        let mut editor = Editor::new();
+        let result = dispatch(&mut editor, &make_call("kb_sharing_status", json!({})))
+            .unwrap()
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.get("connection").is_some());
+        assert!(parsed["kbs"].as_array().unwrap().is_empty());
+
+        // Seed an owner replica → the tool reports the KB with the owner member.
+        let coll = mae_sync::kb::KbCollectionDoc::new_owned("Team", "mefp", "me");
+        editor.collab.local_fingerprint = "mefp".to_string();
+        editor
+            .collab
+            .kb_collection_state
+            .insert("team".to_string(), coll.encode_state());
+
+        let scoped = dispatch(
+            &mut editor,
+            &make_call("kb_sharing_status", json!({"kb_id": "team"})),
+        )
+        .unwrap()
+        .unwrap();
+        let kb: Value = serde_json::from_str(&scoped).unwrap();
+        assert_eq!(kb["id"], "team");
+        assert_eq!(kb["role_of_me"], "owner");
+        assert!(kb["is_owner"].as_bool().unwrap());
     }
 
     #[test]
@@ -365,7 +597,7 @@ mod tests {
         assert_eq!(parsed["kb_id"], "work-notes");
         assert!(matches!(
             &editor.collab.pending_intent,
-            Some(CollabIntent::JoinKb { kb_id }) if kb_id == "work-notes"
+            Some(CollabIntent::JoinKb { kb_id, .. }) if kb_id == "work-notes"
         ));
     }
 
@@ -387,6 +619,59 @@ mod tests {
         assert!(matches!(
             &editor.collab.pending_intent,
             Some(CollabIntent::LeaveKb { kb_id }) if kb_id == "work-notes"
+        ));
+    }
+
+    #[test]
+    fn kb_add_member_sets_intent_with_role() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "kb_add_member",
+            json!({"kb_id": "collabtest", "member": "SHA256:bob", "role": "viewer"}),
+        );
+        let parsed: Value =
+            serde_json::from_str(&dispatch(&mut editor, &call).unwrap().unwrap()).unwrap();
+        assert_eq!(parsed["role"], "viewer");
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::KbAddMember { kb_id, member, role })
+                if kb_id == "collabtest" && member == "SHA256:bob" && role == "viewer"
+        ));
+    }
+
+    #[test]
+    fn kb_add_member_defaults_role_to_editor() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "kb_add_member",
+            json!({"kb_id": "collabtest", "member": "SHA256:bob"}),
+        );
+        dispatch(&mut editor, &call).unwrap().unwrap();
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::KbAddMember { role, .. }) if role == "editor"
+        ));
+    }
+
+    #[test]
+    fn kb_add_member_requires_member() {
+        let mut editor = Editor::new();
+        let call = make_call("kb_add_member", json!({"kb_id": "collabtest"}));
+        assert!(dispatch(&mut editor, &call).unwrap().is_err());
+    }
+
+    #[test]
+    fn kb_remove_member_sets_intent() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "kb_remove_member",
+            json!({"kb_id": "collabtest", "member": "SHA256:bob"}),
+        );
+        dispatch(&mut editor, &call).unwrap().unwrap();
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::KbRemoveMember { kb_id, member })
+                if kb_id == "collabtest" && member == "SHA256:bob"
         ));
     }
 

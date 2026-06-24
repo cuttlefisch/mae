@@ -217,7 +217,26 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
 
     let editor: &Editor = editor;
 
-    if editor.file_picker.is_some() {
+    // Overlay PRIORITY is shared with the GUI via `render_common::overlay::active_overlay`
+    // (single source of truth) so the two backends can't diverge — the bug where the TUI
+    // drew the blocking mini-dialog only under the command palette while the GUI drew it
+    // on top (B-22a). A blocking modal is highest priority, matching the input side (B-22b).
+    use mae_core::render_common::overlay::{active_overlay, ActiveOverlay};
+    let overlay = active_overlay(editor);
+    if overlay == ActiveOverlay::MiniDialog {
+        let chunks = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+        render_window_area(frame, chunks[0], editor, &syntax_spans, shells);
+        status_render::render_status_bar(frame, chunks[1], editor);
+        status_render::render_command_line(frame, chunks[2], editor);
+        // render_command_palette draws the mini-dialog (it checks mini_dialog first).
+        popup_render::render_command_palette(frame, area, editor);
+    } else if overlay == ActiveOverlay::FilePicker {
         let chunks = Layout::vertical([
             Constraint::Min(1),
             Constraint::Length(1),
@@ -229,7 +248,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
         popup_render::render_file_picker(frame, area, editor);
-    } else if editor.file_browser.is_some() {
+    } else if overlay == ActiveOverlay::FileBrowser {
         let chunks = Layout::vertical([
             Constraint::Min(1),
             Constraint::Length(1),
@@ -241,7 +260,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
         popup_render::render_file_browser(frame, area, editor);
-    } else if editor.command_palette.is_some() {
+    } else if overlay == ActiveOverlay::CommandPalette {
         let chunks = Layout::vertical([
             Constraint::Min(1),
             Constraint::Length(1),
@@ -253,10 +272,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
         popup_render::render_command_palette(frame, area, editor);
-    } else if !editor.which_key_prefix.is_empty()
-        || editor.buffer_keys_popup
-        || editor.leader_active
-    {
+    } else if overlay == ActiveOverlay::WhichKey {
         let (entries, title_override) = if editor.buffer_keys_popup {
             let kind = editor.active_buffer().kind;
             use mae_core::buffer_mode::BufferMode;
@@ -306,7 +322,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
             &entries,
             title_override.as_deref(),
         );
-    } else if mae_core::render_common::splash::should_show_splash(editor) {
+    } else if overlay == ActiveOverlay::Splash {
         let chunks = Layout::vertical([
             Constraint::Min(1),
             Constraint::Length(1),

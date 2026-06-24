@@ -27,7 +27,7 @@ mae-sync = { path = "../../shared/sync" }
 mae-gui = { path = "../gui", optional = true }
 winit = { version = "0.30", optional = true }
 crossterm = { version = "0.29", features = ["event-stream"] }
-tokio = { version = "1", features = ["rt", "macros", "sync"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync"] }
 futures = "0.3"
 base64 = "0.22"
 tracing = { workspace = true }

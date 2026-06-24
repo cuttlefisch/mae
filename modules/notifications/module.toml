@@ -1,0 +1,13 @@
+[module]
+name = "notifications"
+version = "0.1.0"
+description = "Attention bus: *Notifications* buffer keybindings + SPC n leader (ADR-024)"
+mae_version = ">=0.13.0"
+category = "tools"
+# Core feature: the attention bus surfaces UNPROMPTED (a background event can raise
+# the *Notifications* buffer / a modal), so its keybindings must always be present.
+# Auto-enabled regardless of the (mae!) block; opt out with (package! "notifications" :disable #t).
+required = true
+
+[entry]
+autoloads = "autoloads.scm"

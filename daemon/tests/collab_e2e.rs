@@ -239,6 +239,72 @@ impl Client {
         self.recv().await
     }
 
+    // --- KB sync (ADR-020) ---
+    //
+    // These build their wire messages via the SHARED `mae_sync::wire` constructors
+    // — the SAME functions the editor's emit path uses — so the test and production
+    // can never diverge on the protocol shape (the bug class that hid B-8: the
+    // editor sent `kb/node_update` as a no-`id` notification while a hand-rolled test
+    // client sent the correct request, so no test ever exercised the shipping path).
+
+    /// Owner shares a KB: collection doc + node docs. `nodes` is `(node_id, state_b64)`.
+    async fn kb_share(
+        &mut self,
+        kb_id: &str,
+        collection_state_b64: &str,
+        nodes: &[(String, String)],
+    ) -> serde_json::Value {
+        let msg = mae_sync::wire::kb_share_request(
+            self.next_id,
+            kb_id,
+            kb_id,
+            "tester",
+            collection_state_b64,
+            nodes,
+        );
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
+    /// Member joins a shared KB (subscribes to its node docs, pulls their state).
+    /// No `node_svs` → the daemon replies with full per-node state (the
+    /// pre-ADR-022 / first-join path; backward-compat).
+    async fn kb_join(&mut self, kb_id: &str) -> serde_json::Value {
+        self.kb_join_with_svs(kb_id, &[]).await
+    }
+
+    /// ADR-022 reconcile join: send per-node state vectors so the daemon replies
+    /// with an incremental `diff` (+ its `sv`) per known node.
+    async fn kb_join_with_svs(
+        &mut self,
+        kb_id: &str,
+        node_svs: &[(String, String)],
+    ) -> serde_json::Value {
+        let msg = mae_sync::wire::kb_join_request(self.next_id, kb_id, node_svs);
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
+    /// Send a KB node update — the exact request the editor's bg-task emits.
+    async fn kb_node_update(
+        &mut self,
+        kb_id: &str,
+        node_id: &str,
+        update: &[u8],
+    ) -> serde_json::Value {
+        let msg = mae_sync::wire::kb_node_update_request(
+            self.next_id,
+            kb_id,
+            node_id,
+            &update_to_base64(update),
+        );
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
     /// Drain any pending notifications (non-blocking). Includes buffered ones.
     async fn drain_notifications(&mut self) -> Vec<serde_json::Value> {
         let mut notifications: Vec<serde_json::Value> =
@@ -2159,4 +2225,288 @@ async fn multi_doc_content_isolation() {
     // Cross-check: each can read the other's doc without contamination.
     assert_eq!(alice.content("bob-doc.txt").await, "bob-content-edited");
     assert_eq!(bob.content("alice-doc.txt").await, "alice-content-modified");
+}
+
+/// ADR-020 B-8 regression gate — the test that the old suite was missing.
+///
+/// Drives a REAL `kb/node_update` over a REAL connection to the REAL daemon handler
+/// (via the shared `mae_sync::wire` builder the editor uses), and asserts BOTH that
+/// the daemon applied it AND that a second joined client received the broadcast.
+/// This is precisely the round-trip that was never tested: the editor was sending
+/// `kb/node_update` as a no-`id` notification (silently dropped), while the only KB
+/// test asserted editor-side enqueue or used a hand-rolled correct client. With the
+/// shared builder, a regression to a notification (no `id`) makes the daemon's
+/// request handler never run → `applied:true` absent / no broadcast → this fails.
+#[tokio::test]
+async fn kb_node_update_applies_and_broadcasts_to_peer() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut bob = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Alice builds a 1-node KB: the node doc + a collection that LISTS the node
+    // (kb/join uses the collection's node list to subscribe the joiner).
+    let mut node = mae_sync::kb::KbNodeDoc::new("testkb:n1", "Original", "body", &[]);
+    let node_state = node.encode_state();
+    let mut coll = mae_sync::kb::KbCollectionDoc::new("testkb", "alice");
+    coll.add_node("testkb:n1", "Original");
+    let coll_state = coll.encode_state();
+
+    // Alice shares the KB.
+    let share_resp = alice
+        .kb_share(
+            "testkb",
+            &update_to_base64(&coll_state),
+            &[("testkb:n1".to_string(), update_to_base64(&node_state))],
+        )
+        .await;
+    assert!(
+        share_resp.get("error").is_none(),
+        "kb/share failed: {share_resp}"
+    );
+
+    // Bob joins → subscribed to the node doc, eligible for its broadcasts.
+    let join_resp = bob.kb_join("testkb").await;
+    assert!(
+        join_resp.get("error").is_none(),
+        "kb/join failed: {join_resp}"
+    );
+
+    // Alice edits the node title, producing a CRDT delta.
+    let update = node.set_title("Edited [PROBE-RECV]");
+
+    // Alice sends the kb/node_update. THE assertion the old suite lacked: the daemon
+    // must APPLY it (respond `{applied:true}`) — a no-`id` notification is dropped and
+    // this response never comes.
+    let resp = alice.kb_node_update("testkb", "testkb:n1", &update).await;
+    assert!(
+        resp.get("error").is_none(),
+        "kb/node_update rejected by daemon: {resp}"
+    );
+    assert_eq!(
+        resp["result"]["applied"],
+        serde_json::json!(true),
+        "daemon must APPLY the kb/node_update (a no-id notification would be silently dropped): {resp}"
+    );
+
+    // Bob must RECEIVE the broadcast for the node doc.
+    let notif = bob
+        .wait_for_notification("notifications/sync_update", 1000)
+        .await
+        .expect("bob must receive the kb/node_update broadcast (event-driven fan-out)");
+    let event_data = &notif["params"]["event"]["data"];
+    assert_eq!(
+        event_data["buffer_name"],
+        serde_json::json!("kb:testkb:n1"),
+        "broadcast must target the node doc: {notif}"
+    );
+
+    // Bob applies the broadcast to its copy of the node → sees Alice's edit.
+    let remote = base64_to_update(event_data["update_base64"].as_str().unwrap()).unwrap();
+    let mut bob_node = mae_sync::kb::KbNodeDoc::from_bytes(&node_state).unwrap();
+    bob_node.apply_update(&remote).unwrap();
+    assert_eq!(
+        bob_node.title(),
+        "Edited [PROBE-RECV]",
+        "bob's node must reflect alice's edit after applying the broadcast"
+    );
+}
+
+/// T5 / B-18 regression at the production-protocol layer: a node's TAGS (a yrs
+/// `YArray` — the field that silently did NOT sync before the B-18 fix) must
+/// round-trip through a REAL `kb/node_update` + broadcast exactly like title/body.
+#[tokio::test]
+async fn kb_node_tags_round_trip_through_daemon() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut bob = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    let mut node = mae_sync::kb::KbNodeDoc::new("tagkb:n1", "Title", "body", &[]);
+    let node_state = node.encode_state();
+    let mut coll = mae_sync::kb::KbCollectionDoc::new("tagkb", "alice");
+    coll.add_node("tagkb:n1", "Title");
+    alice
+        .kb_share(
+            "tagkb",
+            &update_to_base64(&coll.encode_state()),
+            &[("tagkb:n1".to_string(), update_to_base64(&node_state))],
+        )
+        .await;
+    bob.kb_join("tagkb").await;
+
+    // Alice sets the node's tags (the B-18 field) and syncs the delta.
+    let tags = vec!["rust".to_string(), "crdt".to_string()];
+    let update = node.set_tags(&tags);
+    let resp = alice.kb_node_update("tagkb", "tagkb:n1", &update).await;
+    assert_eq!(
+        resp["result"]["applied"],
+        serde_json::json!(true),
+        "tags update must be applied: {resp}"
+    );
+
+    // Bob receives the broadcast and applies it → his node carries the tags.
+    let notif = bob
+        .wait_for_notification("notifications/sync_update", 1000)
+        .await
+        .expect("bob must receive the tags broadcast");
+    let remote = base64_to_update(
+        notif["params"]["event"]["data"]["update_base64"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut bob_node = mae_sync::kb::KbNodeDoc::from_bytes(&node_state).unwrap();
+    bob_node.apply_update(&remote).unwrap();
+    assert_eq!(
+        bob_node.tags(),
+        tags,
+        "node tags (YArray) must CRDT-sync through the daemon — B-18 regression"
+    );
+}
+
+/// T6 at the KB layer: a `kb/node_update` applied before a daemon restart must be
+/// recovered from the WAL (snapshot + replay), so a peer connecting to the
+/// restarted daemon sees the edit — the durability contract validated live in T6.
+#[tokio::test]
+async fn kb_node_update_survives_daemon_restart() {
+    init_tracing();
+    let backend: Arc<dyn mae_daemon::storage::StorageBackend> =
+        Arc::new(SqliteBackend::open_memory().unwrap());
+    let store = Arc::new(DocStore::new(Arc::clone(&backend), 500));
+    let bc = test_broadcaster();
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    let mut node = mae_sync::kb::KbNodeDoc::new("durkb:n1", "Before", "body", &[]);
+    let node_state = node.encode_state();
+    let mut coll = mae_sync::kb::KbCollectionDoc::new("durkb", "alice");
+    coll.add_node("durkb:n1", "Before");
+    alice
+        .kb_share(
+            "durkb",
+            &update_to_base64(&coll.encode_state()),
+            &[("durkb:n1".to_string(), update_to_base64(&node_state))],
+        )
+        .await;
+
+    let update = node.set_title("After [B-T6]");
+    let resp = alice.kb_node_update("durkb", "durkb:n1", &update).await;
+    assert_eq!(
+        resp["result"]["applied"],
+        serde_json::json!(true),
+        "edit must be applied (and WAL-persisted) before restart: {resp}"
+    );
+
+    // "Restart" the daemon: drop the store + client, recreate from the same backend.
+    drop(alice);
+    drop(store);
+    let store2 = Arc::new(DocStore::new(backend, 500));
+    let bc2 = test_broadcaster();
+    let mut bob = Client::connect(Arc::clone(&store2), Arc::clone(&bc2)).await;
+
+    let recovered = bob.full_state("kb:durkb:n1").await;
+    let node2 = mae_sync::kb::KbNodeDoc::from_bytes(&recovered).unwrap();
+    assert_eq!(
+        node2.title(),
+        "After [B-T6]",
+        "kb/node_update must survive a daemon restart via WAL recovery"
+    );
+}
+
+/// ADR-022: a `kb/join` carrying the member's per-node state vectors must get an
+/// incremental **diff** (+ the daemon's `sv`) per known node — the crash-safe
+/// reconcile path — while a plain join (no svs) still gets full **state**
+/// (backward-compat). Exercises the REAL daemon handler, not the editor model.
+#[tokio::test]
+async fn kb_join_with_svs_returns_reconcile_diff_else_full_state() {
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut alice = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut bob = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+    let mut carol = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
+
+    // Alice shares a 1-node KB (v1).
+    let mut node = mae_sync::kb::KbNodeDoc::new("rk:n1", "V1", "body", &[]);
+    let node_state_v1 = node.encode_state();
+    let mut coll = mae_sync::kb::KbCollectionDoc::new("rk", "alice");
+    coll.add_node("rk:n1", "V1");
+    let share_resp = alice
+        .kb_share(
+            "rk",
+            &update_to_base64(&coll.encode_state()),
+            &[("rk:n1".to_string(), update_to_base64(&node_state_v1))],
+        )
+        .await;
+    assert!(
+        share_resp.get("error").is_none(),
+        "share failed: {share_resp}"
+    );
+
+    // Bob's local copy is v1; its state vector describes v1.
+    let bob_doc_v1 = mae_sync::kb::KbNodeDoc::from_bytes(&node_state_v1).unwrap();
+    let bob_sv_v1 = bob_doc_v1.state_vector();
+
+    // Alice advances the daemon to v2.
+    let update = node.set_title("V2 [reconcile]");
+    let upd_resp = alice.kb_node_update("rk", "rk:n1", &update).await;
+    assert_eq!(upd_resp["result"]["applied"], serde_json::json!(true));
+
+    // Bob joins WITH its v1 SV → daemon must return an incremental diff + sv.
+    let join = bob
+        .kb_join_with_svs("rk", &[("rk:n1".to_string(), update_to_base64(&bob_sv_v1))])
+        .await;
+    assert!(join.get("error").is_none(), "reconcile join failed: {join}");
+    let bnode = &join["result"]["nodes"][0];
+    assert_eq!(bnode["id"], serde_json::json!("rk:n1"));
+    assert!(
+        bnode.get("diff").and_then(|v| v.as_str()).is_some(),
+        "reconcile join must return an incremental `diff`: {join}"
+    );
+    assert!(
+        bnode.get("sv").and_then(|v| v.as_str()).is_some(),
+        "reconcile join must return the daemon's `sv`: {join}"
+    );
+    assert!(
+        bnode.get("state").is_none(),
+        "reconcile join sends `diff`, not full `state`: {join}"
+    );
+    // Bob applies the diff to its v1 copy → converges to v2.
+    let mut bob_doc = mae_sync::kb::KbNodeDoc::from_bytes(&node_state_v1).unwrap();
+    let diff = base64_to_update(bnode["diff"].as_str().unwrap()).unwrap();
+    bob_doc.apply_update(&diff).unwrap();
+    assert_eq!(
+        bob_doc.title(),
+        "V2 [reconcile]",
+        "bob converges via the diff"
+    );
+
+    // Carol joins WITHOUT svs (first-ever join) → full state, no diff (backward-compat).
+    let cjoin = carol.kb_join("rk").await;
+    assert!(cjoin.get("error").is_none(), "plain join failed: {cjoin}");
+    let cnode = &cjoin["result"]["nodes"][0];
+    assert!(
+        cnode.get("state").and_then(|v| v.as_str()).is_some(),
+        "plain join must return full `state`: {cjoin}"
+    );
+    assert!(
+        cnode.get("diff").is_none(),
+        "plain join must NOT return a `diff`: {cjoin}"
+    );
+    // The daemon now also carries `sv` on the full-state path (member can reconcile next time).
+    assert!(cnode.get("sv").and_then(|v| v.as_str()).is_some());
+    let carol_doc = mae_sync::kb::KbNodeDoc::from_bytes(
+        &base64_to_update(cnode["state"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        carol_doc.title(),
+        "V2 [reconcile]",
+        "carol gets the current v2 state"
+    );
 }

@@ -7,6 +7,7 @@ pub mod awareness;
 pub mod encoding;
 pub mod kb;
 pub mod text;
+pub mod wire;
 
 pub use yrs;
 

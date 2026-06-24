@@ -92,8 +92,10 @@ impl Editor {
                     .kb
                     .active_instance_name()
                     .unwrap_or_else(|| "default".to_string());
+                let node_svs = self.kb_join_node_svs(&kb_id);
                 self.collab.pending_intent = Some(CollabIntent::JoinKb {
                     kb_id: kb_id.clone(),
+                    node_svs,
                 });
                 self.set_status(format!("Joining KB '{}'...", kb_id));
                 self.mark_full_redraw();
@@ -109,6 +111,96 @@ impl Editor {
                 });
                 self.set_status(format!("Leaving KB '{}'...", kb_id));
                 self.mark_full_redraw();
+                Some(true)
+            }
+            "kb-member-add" | "kb-member-remove" => {
+                // :kb-member-add <kb-id> <fingerprint> [role]  (args via command_line).
+                let line = self.vi.command_line.trim().to_string();
+                let mut parts = line.split_whitespace();
+                let kb_id = parts.next().unwrap_or("").to_string();
+                let member = parts.next().unwrap_or("").to_string();
+                let role = parts.next().unwrap_or("editor").to_string();
+                if member.is_empty() {
+                    // No fingerprint to type by hand → open the *KB Sharing* buffer,
+                    // where members are picked at-point (the canonical pick surface).
+                    self.open_kb_sharing();
+                    self.set_status(
+                        "Pick a member in *KB Sharing* (e/v/o = role, x = remove)".to_string(),
+                    );
+                    return Some(true);
+                }
+                let add = name == "kb-member-add";
+                self.collab.pending_intent = Some(if add {
+                    CollabIntent::KbAddMember {
+                        kb_id: kb_id.clone(),
+                        member: member.clone(),
+                        role,
+                    }
+                } else {
+                    CollabIntent::KbRemoveMember {
+                        kb_id: kb_id.clone(),
+                        member: member.clone(),
+                    }
+                });
+                self.set_status(format!(
+                    "{} '{member}' {} KB '{kb_id}'...",
+                    if add { "Adding" } else { "Removing" },
+                    if add { "to" } else { "from" }
+                ));
+                Some(true)
+            }
+            "kb-approve" => {
+                // :kb-approve <kb-id> <fingerprint> [role]
+                let line = self.vi.command_line.trim().to_string();
+                let mut parts = line.split_whitespace();
+                let kb_id = parts.next().unwrap_or("").to_string();
+                let principal = parts.next().unwrap_or("").to_string();
+                let role = parts.next().unwrap_or("editor").to_string();
+                if principal.is_empty() {
+                    // No fingerprint to type by hand → open the *KB Sharing* buffer,
+                    // where pending requests are approved at-point (a = approve).
+                    self.open_kb_sharing();
+                    self.set_status(
+                        "Pick a pending request in *KB Sharing* (a = approve, d = deny)"
+                            .to_string(),
+                    );
+                    return Some(true);
+                }
+                self.set_status(format!("Approving '{principal}' for KB '{kb_id}'..."));
+                self.collab.pending_intent = Some(CollabIntent::KbApprove {
+                    kb_id,
+                    principal,
+                    role,
+                });
+                Some(true)
+            }
+            "kb-pending" => {
+                // :kb-pending <kb-id>
+                let kb_id = self.vi.command_line.trim().to_string();
+                if kb_id.is_empty() {
+                    self.set_status("usage: :kb-pending <kb-id>".to_string());
+                    return Some(true);
+                }
+                self.set_status(format!("Listing pending requests for KB '{kb_id}'..."));
+                self.collab.pending_intent = Some(CollabIntent::KbListPending { kb_id });
+                Some(true)
+            }
+            "kb-policy" => {
+                // :kb-policy <kb-id> <restrictive|invite|permissive>
+                let line = self.vi.command_line.trim().to_string();
+                let mut parts = line.split_whitespace();
+                let kb_id = parts.next().unwrap_or("").to_string();
+                let policy = parts.next().unwrap_or("").to_string();
+                if kb_id.is_empty()
+                    || !matches!(policy.as_str(), "restrictive" | "invite" | "permissive")
+                {
+                    self.set_status(
+                        "usage: :kb-policy <kb-id> <restrictive|invite|permissive>".to_string(),
+                    );
+                    return Some(true);
+                }
+                self.set_status(format!("Setting KB '{kb_id}' policy to {policy}..."));
+                self.collab.pending_intent = Some(CollabIntent::KbSetPolicy { kb_id, policy });
                 Some(true)
             }
             "kb-list-remote" => {
@@ -184,6 +276,94 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_kb_member_add_parses_args() {
+        let mut editor = Editor::new();
+        // Args arrive via command_line (as the ex-command parser sets them).
+        editor.vi.command_line = "my-kb SHA256:alice viewer".to_string();
+        assert_eq!(editor.dispatch_collab("kb-member-add"), Some(true));
+        match editor.collab.pending_intent {
+            Some(CollabIntent::KbAddMember {
+                ref kb_id,
+                ref member,
+                ref role,
+            }) => {
+                assert_eq!(kb_id, "my-kb");
+                assert_eq!(member, "SHA256:alice");
+                assert_eq!(role, "viewer");
+            }
+            other => panic!("expected KbAddMember, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_kb_member_remove_parses_args() {
+        let mut editor = Editor::new();
+        editor.vi.command_line = "my-kb bob".to_string();
+        assert_eq!(editor.dispatch_collab("kb-member-remove"), Some(true));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::KbRemoveMember { .. })
+        ));
+    }
+
+    #[test]
+    fn dispatch_kb_member_add_missing_args_no_intent() {
+        let mut editor = Editor::new();
+        editor.vi.command_line = "only-kb-id".to_string();
+        assert_eq!(editor.dispatch_collab("kb-member-add"), Some(true));
+        assert!(
+            editor.collab.pending_intent.is_none(),
+            "incomplete args must not queue an intent"
+        );
+    }
+
+    #[test]
+    fn dispatch_kb_approve_parses_args() {
+        let mut editor = Editor::new();
+        editor.vi.command_line = "my-kb SHA256:bob editor".to_string();
+        assert_eq!(editor.dispatch_collab("kb-approve"), Some(true));
+        match editor.collab.pending_intent {
+            Some(CollabIntent::KbApprove {
+                ref kb_id,
+                ref principal,
+                ref role,
+            }) => {
+                assert_eq!(kb_id, "my-kb");
+                assert_eq!(principal, "SHA256:bob");
+                assert_eq!(role, "editor");
+            }
+            other => panic!("expected KbApprove, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_kb_pending_sets_intent() {
+        let mut editor = Editor::new();
+        editor.vi.command_line = "my-kb".to_string();
+        assert_eq!(editor.dispatch_collab("kb-pending"), Some(true));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::KbListPending { .. })
+        ));
+    }
+
+    #[test]
+    fn dispatch_kb_policy_parses_and_rejects_bad_value() {
+        let mut editor = Editor::new();
+        editor.vi.command_line = "my-kb permissive".to_string();
+        assert_eq!(editor.dispatch_collab("kb-policy"), Some(true));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::KbSetPolicy { ref policy, .. }) if policy == "permissive"
+        ));
+        // bad policy value → no intent queued.
+        let mut e2 = Editor::new();
+        e2.vi.command_line = "my-kb bogus".to_string();
+        assert_eq!(e2.dispatch_collab("kb-policy"), Some(true));
+        assert!(e2.collab.pending_intent.is_none());
+    }
+
+    #[test]
     fn dispatch_collab_share_uses_active_buffer() {
         let mut editor = Editor::new();
         let expected_name = editor.active_buffer().name.clone();
@@ -195,5 +375,40 @@ mod tests {
             }
             other => panic!("expected ShareBuffer intent, got: {other:?}"),
         }
+    }
+
+    /// C2 (collab test-gap plan): `:collab-connect` must use the server address
+    /// set by `(set-option!)` in the SAME breath — no tick / apply-drain wait, no
+    /// manual `(get-option)` poll. `set_option` writes `collab.server_address`
+    /// synchronously and the connect dispatch reads it live, so the address the
+    /// connect intent carries is always the latest value. Guards against a future
+    /// change that snapshots/caches the address at task-setup time instead.
+    #[test]
+    fn collab_connect_reads_server_address_live_no_drain() {
+        let mut editor = Editor::new();
+        editor
+            .set_option("collab_server_address", "10.0.0.9:9999")
+            .unwrap();
+        // Dispatch immediately — no event-loop tick / option drain in between.
+        assert_eq!(editor.dispatch_collab("collab-connect"), Some(true));
+        match editor.collab.pending_intent {
+            Some(CollabIntent::Connect { ref address }) => {
+                assert_eq!(
+                    address, "10.0.0.9:9999",
+                    "connect must use the just-set address, not a stale snapshot"
+                );
+            }
+            ref other => panic!("expected Connect intent, got: {other:?}"),
+        }
+
+        // A second change is likewise reflected with no wait.
+        editor
+            .set_option("collab-server-address", "host.example:1234")
+            .unwrap();
+        editor.dispatch_collab("collab-connect");
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::Connect { ref address }) if address == "host.example:1234"
+        ));
     }
 }

@@ -504,8 +504,35 @@ impl Renderer for GuiRenderer {
         // Track all window layouts across render branches for mouse click caching.
         let mut all_layouts: HashMap<mae_core::WindowId, layout::FrameLayout> = HashMap::new();
 
-        // Check for fullscreen overlays first.
-        if editor.file_picker.is_some() {
+        // Check for fullscreen overlays first. The PRIORITY ORDER lives once in
+        // `render_common::overlay::active_overlay` (shared with the TUI), so the two
+        // backends can't diverge again — the bug where the TUI drew the blocking
+        // mini-dialog only under the command palette but the GUI drew it on top
+        // (B-22a). A blocking modal is highest priority, matching the input side
+        // (B-22b) which routes all keys to `mini_dialog` whenever present.
+        use mae_core::render_common::overlay::{active_overlay, ActiveOverlay};
+        let overlay = active_overlay(editor);
+        if overlay == ActiveOverlay::MiniDialog {
+            debug!("render: mini_dialog modal overlay");
+            render_window_area(
+                canvas,
+                editor,
+                &syntax_spans,
+                shells,
+                0,
+                0,
+                cols,
+                window_height,
+                &mut all_layouts,
+                &mut layout_time_us,
+                &mut draw_time_us,
+                wrc,
+            );
+            status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
+            status_render::render_command_line(canvas, editor, cmd_row, cols);
+            // render_command_palette draws the mini-dialog (it checks mini_dialog first).
+            popup_render::render_command_palette(canvas, editor, cols, rows);
+        } else if overlay == ActiveOverlay::FilePicker {
             debug!("render: file_picker overlay");
             render_window_area(
                 canvas,
@@ -524,7 +551,7 @@ impl Renderer for GuiRenderer {
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
             popup_render::render_file_picker(canvas, editor, cols, rows);
-        } else if editor.file_browser.is_some() {
+        } else if overlay == ActiveOverlay::FileBrowser {
             debug!("render: file_browser overlay");
             render_window_area(
                 canvas,
@@ -543,7 +570,7 @@ impl Renderer for GuiRenderer {
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
             popup_render::render_file_browser(canvas, editor, cols, rows);
-        } else if editor.command_palette.is_some() {
+        } else if overlay == ActiveOverlay::CommandPalette {
             debug!("render: command_palette overlay");
             render_window_area(
                 canvas,
@@ -562,10 +589,7 @@ impl Renderer for GuiRenderer {
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
             popup_render::render_command_palette(canvas, editor, cols, rows);
-        } else if !editor.which_key_prefix.is_empty()
-            || editor.buffer_keys_popup
-            || editor.leader_active
-        {
+        } else if overlay == ActiveOverlay::WhichKey {
             debug!("render: which_key popup");
             let (entries, title_override) = if editor.buffer_keys_popup {
                 let kind = editor.active_buffer().kind;
@@ -630,7 +654,7 @@ impl Renderer for GuiRenderer {
                 &entries,
                 title_override.as_deref(),
             );
-        } else if splash_render::should_show_splash(editor) {
+        } else if overlay == ActiveOverlay::Splash {
             debug!("render: splash screen");
             splash_render::render_splash(canvas, editor, 0, 0, cols, window_height);
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);

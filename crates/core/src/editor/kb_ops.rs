@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use mae_kb::federation::{ImportHealth, ImportReport};
+use mae_kb::KbStore;
 
 use super::Editor;
 
@@ -404,6 +405,464 @@ impl Editor {
         }
     }
 
+    /// Locate the in-memory KB that owns `id`: `None` = primary, `Some(uuid)` =
+    /// a federated instance. Used so writes (update/delete) resolve nodes the
+    /// same way reads do — i.e. across `primary` ∪ `instances` — instead of
+    /// primary-only (I-9).
+    pub(crate) fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {
+        if self.kb.primary.contains(id) {
+            return Some(None);
+        }
+        self.kb
+            .instances
+            .iter()
+            .find(|(_, kb)| kb.contains(id))
+            .map(|(uuid, _)| Some(uuid.clone()))
+    }
+
+    /// Register a joined collaborative KB as a first-class federated instance
+    /// (ADR-019). Joined nodes become addressable in their own instance instead
+    /// of being dumped into `primary` (fixes B-3: they appear in `kb_instances`
+    /// and route correctly), and the instance carries the durable
+    /// `shared`/`collab_id` markers that gate broadcasts + survive restart.
+    ///
+    /// ADR-020: nodes are MERGED via `apply_remote_update` (CRDT) rather than
+    /// inserted/overwritten, so a member's offline/local edits survive a re-join
+    /// (the join is no longer a lossy full-snapshot replace). `node_states` are
+    /// the raw per-node CRDT state bytes. Idempotent: a re-join reuses the
+    /// existing instance. Returns the uuid.
+    pub fn kb_register_joined_instance(
+        &mut self,
+        kb_id: &str,
+        nodes: Vec<crate::editor::JoinedNode>,
+    ) -> String {
+        // Reuse the existing instance for this collab id (idempotent re-join).
+        let uuid = self
+            .kb
+            .registry
+            .find_by_collab_id(kb_id)
+            .map(|i| i.uuid.clone())
+            .unwrap_or_else(mae_kb::federation::generate_uuid);
+
+        // Best-effort durable store under the shared-KB data dir, so the joined
+        // KB survives restart (the reconstruction phase reads it back).
+        let mut db_path = std::path::PathBuf::new();
+        if !self.kb.instance_stores.contains_key(&uuid) {
+            if let Some(ref data_dir) = self.kb.data_dir {
+                let slug = mae_kb::data_dir::slugify(kb_id);
+                let meta = mae_kb::data_dir::SharedKbMeta {
+                    name: kb_id.to_string(),
+                    collab_id: kb_id.to_string(),
+                    creator: String::new(),
+                    created_at: mae_kb::data_dir::chrono_now_iso(),
+                    peers: vec![],
+                    last_sync: Some(mae_kb::data_dir::chrono_now_iso()),
+                    sync_mode: crate::editor::KB_SYNC_MODE_DEFAULT.to_string(),
+                };
+                if let Ok(path) = data_dir.init_shared_kb(&slug, &meta) {
+                    if let Ok(store) = mae_kb::CozoKbStore::open(&path) {
+                        db_path = path;
+                        self.kb
+                            .instance_stores
+                            .insert(uuid.clone(), std::sync::Arc::new(store));
+                    }
+                }
+            }
+        }
+
+        // In-memory instance: get-or-create, then RECONCILE each node (ADR-022).
+        // The daemon sends an incremental diff (against the SV we supplied) plus
+        // its own SV: we MERGE the diff (never replace), so a durable-but-unsynced
+        // local edit survives the (re)join, and we collect our local-ahead diff to
+        // re-sync back up — the crash-safety path that does NOT depend on the
+        // pending-queue row surviving. Two cases fall back to a full-state adopt:
+        // a brand-new node (first join — `reconcile` Created via apply), and a
+        // divergent independent same-id lineage (B-14): there the daemon's "diff"
+        // against our disjoint SV is its full lineage, so adopting it establishes
+        // the shared lineage without clobbering (the node was never in sync). A
+        // pre-ADR-022 daemon sends no SV → legacy full-state adopt.
+        let mut local_ahead: Vec<(String, Vec<u8>)> = Vec::new();
+        // ADR-024 R5: nodes where adopting the remote lineage would overwrite
+        // DIFFERENT local content (unsynced work) — surfaced for resolution instead
+        // of silently clobbered.
+        let mut divergent_conflicts: Vec<String> = Vec::new();
+        let merged: Vec<mae_kb::Node> = {
+            let kb = self.kb.instances.entry(uuid.clone()).or_default();
+            let mut out = Vec::with_capacity(nodes.len());
+            for jn in &nodes {
+                let applied = match &jn.daemon_sv {
+                    Some(daemon_sv) => match kb.reconcile_remote_node(&jn.id, &jn.bytes, daemon_sv)
+                    {
+                        Ok(outcome) => {
+                            if outcome.action == mae_kb::ReconcileAction::DivergentLineage {
+                                // The diff against our disjoint SV IS the daemon's
+                                // full lineage — adopting establishes a shared lineage.
+                                // ADR-024 R5 (hybrid no-silent-overwrite): if the local
+                                // content DIFFERS from the authoritative version, adopting
+                                // would lose the user's unsynced edits — defer + surface a
+                                // resolution. If identical, it's a harmless lineage repair.
+                                let local_differs = kb.get(&jn.id).is_some_and(|local| {
+                                    mae_sync::kb::KbNodeDoc::from_bytes(&jn.bytes)
+                                        .map(|remote| {
+                                            local.title != remote.title()
+                                                || local.body != remote.body()
+                                                || local.tags != remote.tags()
+                                        })
+                                        .unwrap_or(false)
+                                });
+                                if local_differs {
+                                    // Preserve local until the user resolves (no clobber).
+                                    divergent_conflicts.push(jn.id.clone());
+                                } else if let Err(e) = kb.adopt_remote_node(&jn.id, &jn.bytes) {
+                                    tracing::warn!(target: "kb_sync", node_id = %jn.id, error = %e, "join: divergent-lineage adopt failed — skipping");
+                                }
+                            } else if let Some(la) = outcome.local_ahead {
+                                local_ahead.push((jn.id.clone(), la));
+                            }
+                            true
+                        }
+                        Err(e) => {
+                            tracing::warn!(target: "kb_sync", node_id = %jn.id, error = %e, "join: reconcile failed — skipping");
+                            false
+                        }
+                    },
+                    None => match kb.adopt_remote_node(&jn.id, &jn.bytes) {
+                        Ok(_changed) => true,
+                        Err(e) => {
+                            tracing::warn!(target: "kb_sync", node_id = %jn.id, error = %e, "join: legacy full-state adopt failed — skipping");
+                            false
+                        }
+                    },
+                };
+                if applied {
+                    if let Some(n) = kb.get(&jn.id) {
+                        out.push(n.clone());
+                    }
+                }
+            }
+            out
+        };
+        // Write-through the merged nodes to the durable instance store.
+        if let Some(store) = self.kb.instance_stores.get(&uuid) {
+            for node in &merged {
+                if let Err(e) = store.update_node(node) {
+                    tracing::warn!(node_id = %node.id, error = %e, "joined-KB instance write-through failed");
+                }
+            }
+        }
+
+        // ADR-022 crash-safety: re-sync any local-ahead edits the daemon lacked.
+        // These were re-derived from the durable crdt_doc during reconcile, so they
+        // are recovered even if the original pending-queue row was lost in a crash.
+        // Route them through the same durable pending queue the live edit path uses
+        // (single emit source); the post-(re)connect drain ships them to the daemon.
+        if !local_ahead.is_empty() {
+            tracing::info!(
+                target: "kb_sync", kb_id = %kb_id, count = local_ahead.len(),
+                "ADR-022 join: re-syncing recovered local-ahead edit(s) (crash-safe, independent of pending queue)"
+            );
+            for (node_id, bytes) in &local_ahead {
+                if let Some(ref store) = self.kb.store {
+                    if let Err(e) = store.push_pending_update(kb_id, node_id, bytes) {
+                        tracing::warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, error = %e, "join: failed to re-queue local-ahead update");
+                    }
+                } else {
+                    self.collab.pending_kb_updates.push((
+                        kb_id.to_string(),
+                        node_id.clone(),
+                        bytes.clone(),
+                    ));
+                }
+            }
+        }
+
+        // ADR-024 R5: for each node where the (re)join would have overwritten
+        // DIFFERENT local content, raise an actionable notification (badge +
+        // *Notifications* row) instead of silently clobbering. The local copy was
+        // preserved above; the actions run the same adopt-and-re-author flow (R1).
+        for node_id in &divergent_conflicts {
+            tracing::warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, "join: divergent local content preserved — surfacing resolution (ADR-024 R5)");
+            self.notify(
+                crate::notifications::Notification::action_required(
+                    "collab",
+                    format!(
+                        "KB '{kb_id}': {node_id} diverged — your local version differs from remote"
+                    ),
+                )
+                .key(format!("collab:diverge:{kb_id}:{node_id}"))
+                .body(
+                    "Reconnecting found a different remote version. Adopt remote \
+                     (discard local), keep yours (re-author), or stash it.",
+                )
+                .action(
+                    "Accept-remote (clobber local)",
+                    crate::notifications::NotifCommand::AdoptRemote {
+                        kb_id: kb_id.to_string(),
+                        node_id: node_id.clone(),
+                    },
+                )
+                .action(
+                    "Keep-mine (re-author)",
+                    crate::notifications::NotifCommand::KeepMine {
+                        kb_id: kb_id.to_string(),
+                        node_id: node_id.clone(),
+                    },
+                )
+                .action(
+                    "Stash externally",
+                    crate::notifications::NotifCommand::StashExternally {
+                        kb_id: kb_id.to_string(),
+                        node_id: node_id.clone(),
+                    },
+                ),
+            );
+        }
+
+        // Durable registry marker (idempotent).
+        let now = mae_kb::data_dir::chrono_now_iso();
+        match self.kb.registry.find_mut(&uuid) {
+            Some(inst) => {
+                inst.shared = true;
+                inst.collab_id = Some(kb_id.to_string());
+                inst.last_sync = Some(now);
+            }
+            None => {
+                self.kb
+                    .registry
+                    .instances
+                    .push(mae_kb::federation::KbInstance {
+                        uuid: uuid.clone(),
+                        name: kb_id.to_string(),
+                        org_dir: std::path::PathBuf::new(),
+                        db_path,
+                        primary: false,
+                        enabled: true,
+                        last_import: None,
+                        collab_id: Some(kb_id.to_string()),
+                        shared: true,
+                        remote_peers: Vec::new(),
+                        last_sync: Some(now),
+                    });
+            }
+        }
+        if let Some(dir) = self.mae_data_dir() {
+            if let Err(e) = self.kb.registry.save(&dir) {
+                tracing::warn!(kb = %kb_id, error = %e, "failed to persist joined-KB registry marker");
+            }
+        }
+        self.kb.rebuild_query_layer();
+        tracing::debug!(target: "kb_sync", kb_id = %kb_id, uuid = %uuid, node_count = nodes.len(), merged = merged.len(), "join: registered first-class instance (reconciled)");
+        uuid
+    }
+
+    /// The collab ids of every KB this editor durably syncs (ADR-019): the
+    /// primary-share marker + each shared registered instance. Used on
+    /// (re)connect to re-subscribe so remote edits resume flowing after a
+    /// restart, and at startup to warm the cache.
+    pub fn durable_shared_kb_ids(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        if self.kb.registry.primary_shared {
+            ids.push(
+                self.kb
+                    .registry
+                    .primary_collab_id
+                    .clone()
+                    .unwrap_or_else(|| crate::editor::KB_DEFAULT_NAME.to_string()),
+            );
+        }
+        for inst in &self.kb.registry.instances {
+            if inst.shared {
+                if let Some(c) = &inst.collab_id {
+                    ids.push(c.clone());
+                }
+            }
+        }
+        ids
+    }
+
+    /// Re-subscribe intents for every durably-shared *instance* on reconnect
+    /// (ADR-019). A **guest** (joined KB — empty `org_dir`) re-JOINS to
+    /// re-subscribe (as a member the daemon returns it immediately, no pending
+    /// pop); an **owner** (shared a registered instance — real `org_dir`)
+    /// re-SHARES to re-establish + re-subscribe (silent). The **primary KB is
+    /// skipped**: re-joining one's own primary produces a spurious pending
+    /// request (and re-uploading thousands of nodes is wrong) — that was the
+    /// "Collab Status pops up on launch" regression.
+    /// Gather this editor's per-node state vectors for a shared KB (ADR-022),
+    /// sent on (re)join so the daemon replies with incremental diffs and we
+    /// reconcile (merge, no clobber) rather than adopt a full snapshot. Empty if
+    /// we hold no local instance for `kb_id` (first-ever join → full state). This
+    /// is the durable-content side of crash-safety: the SVs are derived from the
+    /// persisted `crdt_doc`s, independent of any pending-queue row.
+    pub fn kb_join_node_svs(&self, kb_id: &str) -> Vec<(String, Vec<u8>)> {
+        let Some(inst) = self.kb.registry.find_by_collab_id(kb_id) else {
+            return Vec::new();
+        };
+        let Some(kb) = self.kb.instances.get(&inst.uuid) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (id, node) in kb.iter() {
+            match node.to_crdt_doc() {
+                Ok(doc) => out.push((id.clone(), doc.state_vector())),
+                Err(e) => {
+                    tracing::warn!(node_id = %id, error = %e, "kb_join_node_svs: skipping node with no CRDT doc")
+                }
+            }
+        }
+        out
+    }
+
+    pub fn kb_resubscribe_intents(&self) -> Vec<crate::editor::CollabIntent> {
+        use crate::editor::CollabIntent;
+        let mut out = Vec::new();
+        for inst in &self.kb.registry.instances {
+            if !inst.shared {
+                continue;
+            }
+            let Some(kb_id) = inst.collab_id.clone() else {
+                continue;
+            };
+            if inst.org_dir.as_os_str().is_empty() {
+                let node_svs = self.kb_join_node_svs(&kb_id);
+                out.push(CollabIntent::JoinKb { kb_id, node_svs });
+            } else {
+                out.push(CollabIntent::ShareKb {
+                    kb_name: inst.name.clone(),
+                    node_ids: vec![],
+                });
+            }
+        }
+        out
+    }
+
+    /// Rebuild the transient `shared_kbs` node-id index from DURABLE markers
+    /// (ADR-019). Local-only — no daemon round-trip. The emit gate already
+    /// works from the markers; this warms the cache (status/mDNS counts, fast
+    /// reverse lookups) so a restart leaves the editor in a consistent state.
+    pub fn reconstruct_kb_sync_gate(&mut self) {
+        if self.kb.registry.primary_shared {
+            let kb_id = self
+                .kb
+                .registry
+                .primary_collab_id
+                .clone()
+                .unwrap_or_else(|| crate::editor::KB_DEFAULT_NAME.to_string());
+            let ids: std::collections::HashSet<String> =
+                self.kb.primary.list_ids(None).into_iter().collect();
+            self.collab.shared_kbs.insert(kb_id, ids);
+        }
+        let shared: Vec<(String, String)> = self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .filter(|i| i.shared)
+            .filter_map(|i| i.collab_id.clone().map(|c| (i.uuid.clone(), c)))
+            .collect();
+        for (uuid, collab_id) in shared {
+            let ids: std::collections::HashSet<String> = self
+                .kb
+                .instances
+                .get(&uuid)
+                .map(|kb| kb.list_ids(None).into_iter().collect())
+                .unwrap_or_default();
+            self.collab.shared_kbs.insert(collab_id, ids);
+        }
+    }
+
+    /// The collaborative id a node's owning KB is shared under, derived from
+    /// **durable** registry markers (ADR-019) — not the transient `shared_kbs`
+    /// cache. This is the broadcast-gate authority, so a shared KB keeps
+    /// propagating edits across editor restart/reconnect (the cache may be
+    /// empty until reconstruction runs). `owner == None` ⇒ primary KB;
+    /// `Some(uuid)` ⇒ a federated instance.
+    fn kb_collab_id_of(&self, owner: &Option<String>) -> Option<String> {
+        match owner {
+            None => self.kb.registry.primary_shared.then(|| {
+                self.kb
+                    .registry
+                    .primary_collab_id
+                    .clone()
+                    .unwrap_or_else(|| crate::editor::KB_DEFAULT_NAME.to_string())
+            }),
+            Some(uuid) => self
+                .kb
+                .registry
+                .find_by_uuid(uuid)
+                .filter(|i| i.shared)
+                .and_then(|i| i.collab_id.clone()),
+        }
+    }
+
+    /// Apply a remote CRDT update to a KB node, routing it to its **owning**
+    /// store — primary or the owning federated instance — not always primary
+    /// (ADR-019 receive-side federation; mirror of the write-side fix). For a
+    /// brand-new node not yet present locally, `collab_id_hint` (e.g. the
+    /// node-id namespace prefix) routes it to the matching shared instance.
+    /// Returns whether content changed. Write-through persists to the owner.
+    pub fn kb_apply_remote_update(
+        &mut self,
+        node_id: &str,
+        update: &[u8],
+        collab_id_hint: Option<&str>,
+    ) -> Result<bool, String> {
+        let target: Option<String> = match self.kb_owner_of(node_id) {
+            Some(owner) => owner, // Some(uuid) = instance, None = primary
+            None => collab_id_hint
+                .and_then(|c| self.kb.registry.find_by_collab_id(c))
+                .map(|i| i.uuid.clone()),
+        };
+        let changed = match &target {
+            Some(uuid) => match self.kb.instances.get_mut(uuid) {
+                Some(kb) => kb
+                    .apply_remote_update(node_id, update)
+                    .map_err(|e| e.to_string())?,
+                None => self
+                    .kb
+                    .primary
+                    .apply_remote_update(node_id, update)
+                    .map_err(|e| e.to_string())?,
+            },
+            None => self
+                .kb
+                .primary
+                .apply_remote_update(node_id, update)
+                .map_err(|e| e.to_string())?,
+        };
+        if changed {
+            let node = match &target {
+                Some(uuid) => self
+                    .kb
+                    .instances
+                    .get(uuid)
+                    .and_then(|kb| kb.get(node_id))
+                    .cloned(),
+                None => self.kb.primary.get(node_id).cloned(),
+            };
+            if let Some(node) = node {
+                self.kb_persist_node_in(&target, &node);
+            }
+        }
+        tracing::debug!(target: "kb_sync", node_id = %node_id, owner = ?target, changed, "recv: applied remote kb update");
+        Ok(changed)
+    }
+
+    /// Persist a node to its owning store: the primary store, or the matching
+    /// federated instance store (keyed by uuid). Best-effort write-through.
+    fn kb_persist_node_in(&self, owner: &Option<String>, node: &mae_kb::Node) {
+        match owner {
+            None => self.kb_persist_node(node),
+            Some(uuid) => {
+                if let Some(store) = self.kb.instance_stores.get(uuid) {
+                    if let Err(e) = store.update_node(node) {
+                        tracing::warn!(node_id = %node.id, error = %e, "KB instance store write-through failed");
+                    }
+                }
+            }
+        }
+    }
+
     /// Persist a deletion to the backing store (if present). Best-effort.
     fn kb_persist_delete(&self, id: &str) {
         if let Some(ref store) = self.kb.store {
@@ -442,17 +901,153 @@ impl Editor {
     /// Delete a KB node from the local knowledge base.
     /// Rejects deleting seed nodes (built-in help).
     pub fn kb_delete_node(&mut self, id: &str) -> Result<(), String> {
-        match self.kb.primary.get(id) {
-            None => Err(format!("No KB node: {}", id)),
-            Some(node) if node.source == Some(mae_kb::NodeSource::Seed) => Err(format!(
+        // Resolve across primary ∪ federated instances (I-9), like update/read.
+        let owner = self
+            .kb_owner_of(id)
+            .ok_or_else(|| format!("No KB node: {}", id))?;
+        let node = match &owner {
+            None => self.kb.primary.get(id),
+            Some(uuid) => self.kb.instances.get(uuid).and_then(|kb| kb.get(id)),
+        }
+        .ok_or_else(|| format!("No KB node: {}", id))?;
+        if node.source == Some(mae_kb::NodeSource::Seed) {
+            return Err(format!(
                 "Cannot delete seed node '{}' — built-in help is protected",
                 id
-            )),
-            Some(_) => {
+            ));
+        }
+        match &owner {
+            None => {
                 self.kb_persist_delete(id);
                 self.kb.primary.remove(id);
-                self.set_status(format!("KB node deleted: {}", id));
-                Ok(())
+            }
+            Some(uuid) => {
+                if let Some(store) = self.kb.instance_stores.get(uuid) {
+                    if let Err(e) = store.delete_node(id) {
+                        tracing::warn!(node_id = %id, error = %e, "KB instance store delete failed");
+                    }
+                }
+                if let Some(kb) = self.kb.instances.get_mut(uuid) {
+                    kb.remove(id);
+                }
+            }
+        }
+        self.set_status(format!("KB node deleted: {}", id));
+        Ok(())
+    }
+
+    /// This peer's stable, unique yrs `client_id` for local KB CRDT edits
+    /// (ADR-020 B-16), set once at startup from the durable collab identity
+    /// fingerprint. Falls back to `1` only when no collab identity is configured
+    /// (single, unshared peer — no collision possible).
+    pub fn kb_local_client_id(&self) -> u64 {
+        if self.collab.local_kb_client_id != 0 {
+            self.collab.local_kb_client_id
+        } else {
+            1
+        }
+    }
+
+    /// ADR-023: the yrs `client_id` this peer must author edits to a *specific
+    /// shared KB* under — its base identity client_id rotated by the KB's current
+    /// **authorization epoch** (learned from that KB's `kbc:` collection doc). A
+    /// role change bumps the epoch ⇒ a fresh, unrelated client_id, so the daemon
+    /// fences the peer's pre-change lineage (`"rebase required"`) and only fresh,
+    /// current-epoch ops are accepted. At epoch 0 (fresh grant / owner / directly-
+    /// added editor) this equals `kb_local_client_id()` — no behavioural change.
+    pub fn kb_client_id_for(&self, kb_id: &str) -> u64 {
+        let epoch = self.collab.kb_epochs.get(kb_id).copied().unwrap_or(0);
+        if epoch == 0 || self.collab.local_fingerprint.is_empty() {
+            return self.kb_local_client_id();
+        }
+        crate::editor::derive_kb_client_id(&self.collab.local_fingerprint, epoch)
+    }
+
+    /// ADR-024 R1: replace a node's local CRDT doc with the daemon's authoritative
+    /// `state`, DROPPING any divergent (fenced stale-epoch) local ops, then persist.
+    /// This is the member-side "adopt authoritative state" the daemon's `rebase
+    /// required` error asks for — the editor can't self-adopt because its local doc
+    /// still carries the rejected op. Routes to the node's owning KB (instance or
+    /// primary); falls back to primary if the node isn't found locally.
+    pub fn kb_adopt_node(&mut self, node_id: &str, state: &[u8]) -> Result<bool, String> {
+        let owner = self.kb_owner_of(node_id).unwrap_or(None);
+        let changed = match &owner {
+            None => self.kb.primary.adopt_remote_node(node_id, state),
+            Some(uuid) => self
+                .kb
+                .instances
+                .get_mut(uuid)
+                .ok_or_else(|| format!("no KB instance {uuid}"))?
+                .adopt_remote_node(node_id, state),
+        }
+        .map_err(|e| e.to_string())?;
+        let node = match &owner {
+            None => self.kb.primary.get(node_id).cloned(),
+            Some(uuid) => self
+                .kb
+                .instances
+                .get(uuid)
+                .and_then(|k| k.get(node_id))
+                .cloned(),
+        };
+        if let Some(n) = node {
+            self.kb_persist_node_in(&owner, &n);
+        }
+        Ok(changed)
+    }
+
+    /// ADR-020 B-16: establish + persist a canonical CRDT lineage for every node
+    /// about to be shared. A node that was never CRDT-edited has `crdt_doc == None`;
+    /// `to_collection` would then mint an EPHEMERAL, non-persisted lineage (fresh
+    /// random doc each call) — so the owner's local doc never matches the lineage
+    /// peers adopt on join, and a peer's later edit no-ops against the owner's
+    /// divergent doc. Here we `upsert_with_crdt` each such node with THIS peer's
+    /// stable client_id (persisting the lineage onto the node) and write it through
+    /// to the durable store, so the owner's local doc IS the shared lineage.
+    pub fn kb_prepare_share_lineage(&mut self, kb_name: &str, node_ids: &[String]) {
+        let cid = self.kb_local_client_id();
+        let is_primary = kb_name == crate::editor::KB_DEFAULT_NAME || kb_name == "primary";
+        let owner: Option<String> = if is_primary {
+            None
+        } else {
+            match self.kb.registry.find(kb_name).map(|i| i.uuid.clone()) {
+                Some(u) => Some(u),
+                None => return,
+            }
+        };
+        // Establish + persist lineage in-memory; collect the nodes to write through.
+        let updated: Vec<mae_kb::Node> = {
+            let kb = match &owner {
+                None => &mut self.kb.primary,
+                Some(u) => match self.kb.instances.get_mut(u) {
+                    Some(k) => k,
+                    None => return,
+                },
+            };
+            let ids: Vec<String> = if node_ids.is_empty() {
+                kb.list_ids(None)
+            } else {
+                node_ids.to_vec()
+            };
+            let mut out = Vec::new();
+            for id in ids {
+                let needs = kb.get(&id).map(|n| n.crdt_doc.is_none()).unwrap_or(false);
+                if needs {
+                    if let Some(node) = kb.get(&id).cloned() {
+                        // upsert_with_crdt stores the new crdt_doc onto the node.
+                        let _ = kb.upsert_with_crdt(node, cid);
+                        if let Some(n) = kb.get(&id) {
+                            out.push(n.clone());
+                        }
+                    }
+                }
+            }
+            out
+        };
+        if !updated.is_empty() {
+            tracing::debug!(target: "kb_sync", kb = %kb_name, count = updated.len(), client_id = cid, "share: established + persisted canonical lineage for unedited nodes");
+            for node in &updated {
+                self.kb_persist_node_in(&owner, node);
             }
         }
     }
@@ -466,12 +1061,19 @@ impl Editor {
         body: Option<&str>,
         tags: Option<Vec<String>>,
     ) -> Result<(), String> {
-        let existing = self
-            .kb
-            .primary
-            .get(id)
-            .ok_or_else(|| format!("No KB node: {}", id))?
-            .clone();
+        // Resolve the node across primary ∪ federated instances (I-9): a shared
+        // KB lives in `instances` on the host that registered it, and in
+        // `primary` on a peer that joined it. The write path must find it in
+        // either, mirroring the read path — not primary-only.
+        let owner = self
+            .kb_owner_of(id)
+            .ok_or_else(|| format!("No KB node: {}", id))?;
+        let existing = match &owner {
+            None => self.kb.primary.get(id),
+            Some(uuid) => self.kb.instances.get(uuid).and_then(|kb| kb.get(id)),
+        }
+        .ok_or_else(|| format!("No KB node: {}", id))?
+        .clone();
         if existing.source == Some(mae_kb::NodeSource::Seed) {
             return Err(format!(
                 "Cannot modify seed node '{}' — built-in help is protected",
@@ -489,40 +1091,154 @@ impl Editor {
             updated.tags = t;
         }
 
-        // Check if this node belongs to a shared KB and sync mode is "on_save".
+        // Does this node's OWNING KB sync, per durable registry markers
+        // (ADR-019)? Derived from the owning instance's `shared`/`collab_id`,
+        // not the transient `shared_kbs` cache — so edits broadcast even right
+        // after a restart, before the cache is reconstructed.
         let shared_kb_id = if self.collab.kb_sync_mode == "on_save" {
-            self.collab
-                .shared_kbs
-                .iter()
-                .find(|(_, nodes)| nodes.contains(id))
-                .map(|(kb_id, _)| kb_id.clone())
+            self.kb_collab_id_of(&owner)
         } else {
             None
         };
+        tracing::debug!(
+            target: "kb_sync",
+            node_id = %id,
+            owner = ?owner,
+            sync_mode = %self.collab.kb_sync_mode,
+            gate_hit = shared_kb_id.is_some(),
+            "kb edit: broadcast-gate decision"
+        );
 
         if let Some(kb_id) = shared_kb_id {
-            // Use CRDT-aware upsert to generate update bytes for broadcasting.
-            // client_id 1 is used for local edits (distinct from remote).
-            if let Some(update_bytes) = self.kb.primary.upsert_with_crdt(updated, 1) {
-                // Persist CRDT update to pending queue (durable offline queue).
+            // CRDT-aware upsert on the OWNING in-memory KB to generate update bytes
+            // for broadcasting. ADR-020 B-16: use this peer's STABLE, UNIQUE
+            // client_id (not a hardcoded 1 — two peers sharing a client_id collide
+            // and their concurrent edits diverge). ADR-023: rotated by THIS KB's
+            // authorization epoch so a role-changed member authors under their
+            // current-epoch client_id (the daemon fences any stale-epoch lineage).
+            let cid = self.kb_client_id_for(&kb_id);
+            let update_bytes = match &owner {
+                None => self.kb.primary.upsert_with_crdt(updated, cid),
+                Some(uuid) => self
+                    .kb
+                    .instances
+                    .get_mut(uuid)
+                    .and_then(|kb| kb.upsert_with_crdt(updated, cid)),
+            };
+            if let Some(update_bytes) = update_bytes {
+                // ADR-020 single-source emit: enqueue to EXACTLY ONE queue. With a
+                // durable store, the CRDT update goes to the crash-durable SQLite
+                // pending queue (acked only on daemon-confirm); without a store it
+                // falls back to the transient in-memory queue. Enqueuing to both
+                // (the old behaviour) caused every shared edit to be sent twice.
                 if let Some(ref store) = self.kb.store {
-                    let _ = store.push_pending_update(&kb_id, id, &update_bytes);
+                    // ADR-020: persist to the durable queue at EDIT time — including
+                    // while OFFLINE (no connection check here). This is the crash-
+                    // durability point (the row exists before any reconnect/drain);
+                    // logged so the offline enqueue is greppable, not invisible.
+                    match store.push_pending_update(&kb_id, id, &update_bytes) {
+                        Ok(()) => {
+                            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %id, bytes = update_bytes.len(), "edit: persisted to durable pending queue (survives offline + restart)")
+                        }
+                        Err(e) => {
+                            tracing::warn!(target: "kb_sync", kb_id = %kb_id, node_id = %id, error = %e, "edit: failed to persist durable pending update")
+                        }
+                    }
+                } else {
+                    self.collab
+                        .pending_kb_updates
+                        .push((kb_id, id.to_string(), update_bytes));
                 }
-                self.collab
-                    .pending_kb_updates
-                    .push((kb_id, id.to_string(), update_bytes));
             }
-            // Persist the updated node to store.
-            if let Some(node) = self.kb.primary.get(id) {
-                self.kb_persist_node(node);
+            // Persist the updated node to its owning store.
+            let persisted = match &owner {
+                None => self.kb.primary.get(id).cloned(),
+                Some(uuid) => self
+                    .kb
+                    .instances
+                    .get(uuid)
+                    .and_then(|kb| kb.get(id))
+                    .cloned(),
+            };
+            if let Some(node) = persisted {
+                self.kb_persist_node_in(&owner, &node);
             }
         } else {
-            self.kb_persist_node(&updated);
-            self.kb.primary.insert(updated);
+            self.kb_persist_node_in(&owner, &updated);
+            match &owner {
+                None => {
+                    self.kb.primary.insert(updated);
+                }
+                Some(uuid) => {
+                    if let Some(kb) = self.kb.instances.get_mut(uuid) {
+                        kb.insert(updated);
+                    }
+                }
+            }
         }
 
         self.set_status(format!("KB node updated: {}", id));
         Ok(())
+    }
+
+    /// Queue a KB collaboration lifecycle action as a `CollabIntent` for the
+    /// binary's collab bridge to drain — the single typed path the Scheme
+    /// primitives (`(kb-share)` …) route through, so they reuse the SAME intent
+    /// the commands + MCP tools use (no `(execute-ex …)` string building; #3, #7).
+    /// `Join` computes its node state-vectors editor-side (ADR-022).
+    pub fn queue_kb_collab_action(&mut self, action: crate::editor::KbCollabAction) {
+        use crate::editor::{CollabIntent, KbCollabAction};
+        let intent = match action {
+            KbCollabAction::Share { kb_name } => CollabIntent::ShareKb {
+                kb_name,
+                node_ids: vec![],
+            },
+            KbCollabAction::Join { kb_id } => {
+                let node_svs = self.kb_join_node_svs(&kb_id);
+                CollabIntent::JoinKb { kb_id, node_svs }
+            }
+            KbCollabAction::Leave { kb_id } => CollabIntent::LeaveKb { kb_id },
+            KbCollabAction::AddMember {
+                kb_id,
+                member,
+                role,
+            } => CollabIntent::KbAddMember {
+                kb_id,
+                member,
+                role,
+            },
+            KbCollabAction::RemoveMember { kb_id, member } => {
+                CollabIntent::KbRemoveMember { kb_id, member }
+            }
+            KbCollabAction::Approve {
+                kb_id,
+                principal,
+                role,
+            } => CollabIntent::KbApprove {
+                kb_id,
+                principal,
+                role,
+            },
+            KbCollabAction::SetPolicy { kb_id, policy } => {
+                CollabIntent::KbSetPolicy { kb_id, policy }
+            }
+        };
+        self.collab.pending_intent = Some(intent);
+    }
+
+    /// Build this peer's KB-sharing introspection snapshot — the single source of
+    /// truth shared by the `*KB Sharing*` buffer, the `kb_sharing_status` MCP tool,
+    /// and the `(kb-sharing-status)` Scheme primitive (CLAUDE.md #3, #8). Pure read
+    /// from local collection replicas; the daemon stays authoritative.
+    pub fn kb_sharing_snapshot(&self) -> crate::kb_sharing::KbSharingSnapshot {
+        crate::kb_sharing::build_snapshot(&self.collab)
+    }
+
+    /// The KB-sharing snapshot serialized to JSON — for the `(kb-sharing-status)`
+    /// Scheme primitive and the `kb_sharing_status` MCP tool (serde lives here in
+    /// mae-core, not in mae-scheme). `{}` if serialization fails.
+    pub fn kb_sharing_snapshot_json(&self) -> String {
+        serde_json::to_string(&self.kb_sharing_snapshot()).unwrap_or_else(|_| "{}".to_string())
     }
 
     /// Show KB instances in a dedicated read-only buffer.
@@ -2136,6 +2852,57 @@ mod tests {
         tmp
     }
 
+    /// B5 / B-6 (CLAUDE.md #13): the primary KB data dir — the parent of the
+    /// `primary.cozo` store the editor opens at startup — MUST be XDG-first on
+    /// EVERY platform: `XDG_DATA_HOME/mae`, else `$HOME/.local/share/mae` — never
+    /// `dirs::data_dir()` (which is `~/Library/Application Support` on macOS and
+    /// would (a) break `XDG_DATA_HOME` test isolation and (b) split data from the
+    /// ADR-019 registry markers, breaking restart survival). This locks the
+    /// cf673b7c fix so a future change can't silently reintroduce `dirs::data_dir`.
+    #[test]
+    fn mae_data_dir_is_xdg_first_not_platform_native() {
+        let mut editor = Editor::new();
+        editor.data_dir_override = None; // exercise the real env-based resolution
+
+        let orig_xdg = std::env::var_os("XDG_DATA_HOME");
+        let orig_home = std::env::var_os("HOME");
+        let tmp = TempDir::new().unwrap();
+
+        // 1) XDG_DATA_HOME set → honored verbatim (joined with "mae").
+        std::env::set_var("XDG_DATA_HOME", tmp.path());
+        assert_eq!(
+            editor.mae_data_dir(),
+            Some(tmp.path().join("mae")),
+            "XDG_DATA_HOME must be honored on all platforms"
+        );
+
+        // 2) No XDG_DATA_HOME → ~/.local/share/mae (NOT a platform-native dir).
+        std::env::remove_var("XDG_DATA_HOME");
+        std::env::set_var("HOME", tmp.path());
+        let resolved = editor.mae_data_dir().expect("HOME-based path");
+        assert_eq!(
+            resolved,
+            tmp.path().join(".local").join("share").join("mae"),
+            "fallback must be ~/.local/share/mae, never ~/Library/Application Support"
+        );
+        assert!(
+            !resolved
+                .to_string_lossy()
+                .contains("Library/Application Support"),
+            "must never resolve to the macOS platform-native data dir"
+        );
+
+        // Restore env so sibling tests are unaffected.
+        match orig_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
     #[test]
     fn open_file_at_path_detects_language() {
         let dir = TempDir::new().unwrap();
@@ -2562,6 +3329,641 @@ mod tests {
         assert_eq!(node.title, "Updated Title");
         assert_eq!(node.body, "original body"); // unchanged
         assert_eq!(node.tags, vec!["tag1".to_string()]);
+    }
+
+    /// I-9: a node that lives in a federated *instance* (not `primary`) — the
+    /// shape on the host that registered a shared KB — must be editable via
+    /// `kb_update_node`, not rejected with "No KB node" (the original
+    /// primary-only resolution bug).
+    #[test]
+    fn kb_update_node_resolves_federated_instance() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        let mut n = mae_kb::Node::new(
+            "collabtest:overview",
+            "Overview",
+            mae_kb::NodeKind::Note,
+            "body",
+        );
+        n.source = Some(mae_kb::NodeSource::Federation);
+        inst.insert(n);
+        editor.kb.instances.insert("uuid-collabtest".into(), inst);
+
+        // Not in primary — only in the instance.
+        assert!(editor.kb.primary.get("collabtest:overview").is_none());
+        let res = editor.kb_update_node(
+            "collabtest:overview",
+            Some("Overview v2"),
+            Some("new body"),
+            None,
+        );
+        assert!(
+            res.is_ok(),
+            "instance node must resolve for update: {res:?}"
+        );
+        let updated = editor
+            .kb
+            .instances
+            .get("uuid-collabtest")
+            .and_then(|kb| kb.get("collabtest:overview"))
+            .expect("node still in instance");
+        assert_eq!(updated.title, "Overview v2");
+        assert_eq!(updated.body, "new body");
+    }
+
+    /// ADR-019: editing an instance node whose KB carries a DURABLE share marker
+    /// must queue a CRDT update for broadcast — **even with `shared_kbs` empty**
+    /// (the exact editor-restart scenario: the transient cache is gone but the
+    /// registry marker survives, so the emit gate still fires).
+    #[test]
+    fn kb_update_node_shared_instance_queues_crdt_update() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        let mut n = mae_kb::Node::new(
+            "collabtest:alpha",
+            "Alpha",
+            mae_kb::NodeKind::Note,
+            "alpha body",
+        );
+        n.source = Some(mae_kb::NodeSource::Federation);
+        inst.insert(n);
+        editor.kb.instances.insert("uuid-collabtest".into(), inst);
+
+        // Durable marker only (registry), NOT the transient shared_kbs cache.
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-collabtest".into(),
+                name: "collabtest".into(),
+                org_dir: std::path::PathBuf::from("/tmp/collabtest"),
+                db_path: std::path::PathBuf::from("/tmp/collabtest.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: Some("collabtest".into()),
+                shared: true,
+                remote_peers: Vec::new(),
+                last_sync: None,
+            });
+        editor.collab.kb_sync_mode = "on_save".into();
+        assert!(
+            editor.collab.shared_kbs.is_empty(),
+            "gate must fire from the durable marker, not the cache"
+        );
+
+        assert!(editor.collab.pending_kb_updates.is_empty());
+        editor
+            .kb_update_node("collabtest:alpha", None, Some("edited"), None)
+            .unwrap();
+        assert_eq!(
+            editor.collab.pending_kb_updates.len(),
+            1,
+            "edit to a durably-shared instance node must queue a kb/node_update"
+        );
+        let (kb_id, node_id, _bytes) = &editor.collab.pending_kb_updates[0];
+        assert_eq!(kb_id, "collabtest");
+        assert_eq!(node_id, "collabtest:alpha");
+    }
+
+    /// ADR-019: with the durable marker ABSENT (instance not shared), an edit
+    /// must NOT broadcast — even if a stale `shared_kbs` cache entry exists.
+    #[test]
+    fn kb_update_node_unshared_instance_does_not_queue() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        let mut n = mae_kb::Node::new("local:x", "X", mae_kb::NodeKind::Note, "b");
+        n.source = Some(mae_kb::NodeSource::Federation);
+        inst.insert(n);
+        editor.kb.instances.insert("uuid-local".into(), inst);
+        // Registry instance exists but is NOT shared.
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-local".into(),
+                name: "local".into(),
+                org_dir: std::path::PathBuf::from("/tmp/local"),
+                db_path: std::path::PathBuf::from("/tmp/local.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+            });
+        editor.collab.kb_sync_mode = "on_save".into();
+        // A stale cache entry must NOT be trusted as authority.
+        let mut nodes = std::collections::HashSet::new();
+        nodes.insert("local:x".to_string());
+        editor.collab.shared_kbs.insert("local".into(), nodes);
+
+        editor
+            .kb_update_node("local:x", None, Some("edited"), None)
+            .unwrap();
+        assert!(
+            editor.collab.pending_kb_updates.is_empty(),
+            "unshared KB must not broadcast even with a stale cache entry"
+        );
+    }
+
+    /// I-9: deleting an instance node must resolve it (not "No KB node").
+    #[test]
+    fn kb_delete_node_resolves_federated_instance() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        let mut n = mae_kb::Node::new("collabtest:beta", "Beta", mae_kb::NodeKind::Note, "b");
+        n.source = Some(mae_kb::NodeSource::Federation);
+        inst.insert(n);
+        editor.kb.instances.insert("uuid-collabtest".into(), inst);
+
+        let res = editor.kb_delete_node("collabtest:beta");
+        assert!(
+            res.is_ok(),
+            "instance node must resolve for delete: {res:?}"
+        );
+        assert!(editor
+            .kb
+            .instances
+            .get("uuid-collabtest")
+            .and_then(|kb| kb.get("collabtest:beta"))
+            .is_none());
+    }
+
+    /// Helper: a registry instance marked shared (uuid = "uuid-ct", collab_id =
+    /// "collabtest").
+    fn shared_ct_instance() -> mae_kb::federation::KbInstance {
+        mae_kb::federation::KbInstance {
+            uuid: "uuid-ct".into(),
+            name: "collabtest".into(),
+            org_dir: std::path::PathBuf::new(),
+            db_path: std::path::PathBuf::new(),
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: Some("collabtest".into()),
+            shared: true,
+            remote_peers: Vec::new(),
+            last_sync: None,
+        }
+    }
+
+    /// ADR-019 receive-side: a remote update for a *new* node routes to the
+    /// owning instance (via the collab_id hint), NOT primary.
+    #[test]
+    fn kb_apply_remote_update_routes_new_node_to_instance() {
+        let mut editor = Editor::new();
+        editor
+            .kb
+            .instances
+            .insert("uuid-ct".into(), mae_kb::KnowledgeBase::new());
+        editor.kb.registry.instances.push(shared_ct_instance());
+
+        // Build a remote CRDT update from a separate KB (client_id 2 = "remote").
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let update = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new("collabtest:newnode", "T", mae_kb::NodeKind::Note, "b"),
+                2,
+            )
+            .unwrap();
+
+        let changed = editor
+            .kb_apply_remote_update("collabtest:newnode", &update, Some("collabtest"))
+            .unwrap();
+        assert!(changed, "a new remote node must be created");
+        assert!(
+            editor.kb.instances["uuid-ct"]
+                .get("collabtest:newnode")
+                .is_some(),
+            "remote node must route to the owning instance"
+        );
+        assert!(
+            editor.kb.primary.get("collabtest:newnode").is_none(),
+            "remote node must NOT land in primary"
+        );
+    }
+
+    /// ADR-019 receive-side: a remote update for an *existing* instance node is
+    /// applied in that instance and never copied into primary.
+    #[test]
+    fn kb_apply_remote_update_existing_node_stays_in_instance() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        let mut n = mae_kb::Node::new("collabtest:overview", "Old", mae_kb::NodeKind::Note, "old");
+        n.source = Some(mae_kb::NodeSource::Federation);
+        inst.insert(n);
+        editor.kb.instances.insert("uuid-ct".into(), inst);
+        editor.kb.registry.instances.push(shared_ct_instance());
+
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let update = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new(
+                    "collabtest:overview",
+                    "Updated",
+                    mae_kb::NodeKind::Note,
+                    "updated",
+                ),
+                2,
+            )
+            .unwrap();
+
+        editor
+            .kb_apply_remote_update("collabtest:overview", &update, None)
+            .unwrap();
+        assert!(
+            editor.kb.instances["uuid-ct"]
+                .get("collabtest:overview")
+                .is_some(),
+            "node stays in the owning instance"
+        );
+        assert!(
+            editor.kb.primary.get("collabtest:overview").is_none(),
+            "remote update must not copy the node into primary"
+        );
+    }
+
+    /// ADR-020 Phase 2: a joined KB is registered + nodes MERGED via
+    /// apply_remote_update (not insert-overwritten). A re-join is idempotent:
+    /// the same instance is reused, the node is kept (merged), and the registry
+    /// has exactly one entry for the collab id.
+    #[test]
+    fn kb_register_joined_instance_merges_and_is_idempotent() {
+        let mut editor = Editor::new();
+        let _dirs = with_test_dirs(&mut editor);
+
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let state = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new("ct:overview", "V0", mae_kb::NodeKind::Note, "b0"),
+                2,
+            )
+            .unwrap();
+
+        let sv = remote.node_state_vector("ct:overview").unwrap();
+        let join_node = |bytes: Vec<u8>| {
+            vec![crate::editor::JoinedNode {
+                id: "ct:overview".to_string(),
+                bytes,
+                daemon_sv: Some(sv.clone()),
+            }]
+        };
+
+        let uuid = editor.kb_register_joined_instance("ct", join_node(state.clone()));
+        assert!(
+            editor.kb.instances[&uuid].get("ct:overview").is_some(),
+            "first join creates the node in its instance"
+        );
+        // Joined node lives in the instance, never primary.
+        assert!(editor.kb.primary.get("ct:overview").is_none());
+
+        // Re-join with the same state — reconcile MERGES (idempotent),
+        // does not crash, reuses the instance, keeps the node, no duplicate.
+        let uuid2 = editor.kb_register_joined_instance("ct", join_node(state));
+        assert_eq!(uuid2, uuid, "re-join reuses the same instance");
+        assert!(editor.kb.instances[&uuid].get("ct:overview").is_some());
+        assert_eq!(
+            editor
+                .kb
+                .registry
+                .instances
+                .iter()
+                .filter(|i| i.collab_id.as_deref() == Some("ct"))
+                .count(),
+            1,
+            "exactly one registry instance for the collab id"
+        );
+    }
+
+    /// B3 (collab test-gap plan): a joined KB instance must SURFACE to the user.
+    /// After `kb_register_joined_instance`, the node resolves via federated get
+    /// WITH its instance name attached (non-null), federated search attributes the
+    /// hit to the joined instance (not the primary KB), and the instance appears
+    /// in the user-facing `*KB Instances*` list. Guards the "joined KB is invisible
+    /// after join" regression class — the surfacing the live two-machine test did
+    /// by hand each iteration.
+    #[test]
+    fn joined_instance_surfaces_in_list_get_and_search() {
+        let mut editor = Editor::new();
+        let _dirs = with_test_dirs(&mut editor);
+
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let state = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new(
+                    "shared:alpha",
+                    "Findme Title",
+                    mae_kb::NodeKind::Note,
+                    "searchable body",
+                ),
+                2,
+            )
+            .unwrap();
+        let sv = remote.node_state_vector("shared:alpha").unwrap();
+
+        let uuid = editor.kb_register_joined_instance(
+            "team-kb",
+            vec![crate::editor::JoinedNode {
+                id: "shared:alpha".to_string(),
+                bytes: state,
+                daemon_sv: Some(sv),
+            }],
+        );
+
+        // 1) Federated get resolves the node WITH a non-null instance attribution,
+        //    and the node never leaks into the primary KB.
+        let (inst_name, node) = editor
+            .kb_federated_get("shared:alpha")
+            .expect("joined node must resolve via federated get");
+        assert_eq!(node.id, "shared:alpha");
+        assert_eq!(
+            inst_name.as_deref(),
+            Some("team-kb"),
+            "federated get must attribute the joined node to its instance"
+        );
+        assert!(
+            editor.kb.primary.get("shared:alpha").is_none(),
+            "joined nodes never pollute the primary KB"
+        );
+
+        // 2) Federated search attributes the hit to the joined instance.
+        let hits = editor.kb_federated_search("Findme");
+        let hit = hits
+            .iter()
+            .find(|(_, n)| n.id == "shared:alpha")
+            .expect("joined node must be findable via federated search");
+        assert_eq!(
+            hit.0.as_deref(),
+            Some("team-kb"),
+            "search hit must carry the joined instance name, not None (local)"
+        );
+
+        // 3) The instance surfaces in the user-facing *KB Instances* list.
+        editor.show_kb_instances();
+        let listing = editor
+            .buffers
+            .iter()
+            .find(|b| b.name == "*KB Instances*")
+            .map(|b| b.rope().to_string())
+            .expect("show_kb_instances must create the *KB Instances* buffer");
+        assert!(
+            listing.contains("team-kb"),
+            "joined KB name must appear in *KB Instances*:\n{listing}"
+        );
+        assert!(
+            listing.contains(&uuid),
+            "the instance uuid must appear in *KB Instances*:\n{listing}"
+        );
+    }
+
+    /// ADR-020 Phase 3 (B-10): a joined instance persists its nodes to a durable
+    /// CozoDB store with a real `db_path` that a fresh open + load_all reloads —
+    /// the foundation of restart survival (the startup loader reads this back).
+    #[test]
+    fn joined_instance_persists_to_reloadable_store() {
+        let mut editor = Editor::new();
+        let tmp = with_test_dirs(&mut editor);
+        let dd = mae_kb::data_dir::KbDataDir::new(&tmp.path().join("data")).unwrap();
+        editor.kb.data_dir = Some(dd);
+
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let state = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new("ct:overview", "Persisted", mae_kb::NodeKind::Note, "body"),
+                2,
+            )
+            .unwrap();
+        let sv = remote.node_state_vector("ct:overview").unwrap();
+        let uuid = editor.kb_register_joined_instance(
+            "ct",
+            vec![crate::editor::JoinedNode {
+                id: "ct:overview".to_string(),
+                bytes: state,
+                daemon_sv: Some(sv),
+            }],
+        );
+
+        let db_path = {
+            let inst = editor.kb.registry.find_by_uuid(&uuid).unwrap();
+            assert!(
+                !inst.db_path.as_os_str().is_empty() && inst.db_path.exists(),
+                "joined instance must have a real, existing db_path (durable across restart)"
+            );
+            inst.db_path.clone()
+        };
+
+        // Drop the editor (and its live store) to release the sled lock, then
+        // open fresh from db_path exactly as the startup loader does on restart.
+        drop(editor);
+        let store = mae_kb::CozoKbStore::open(&db_path).unwrap();
+        let nodes = store.load_all().unwrap();
+        assert!(
+            nodes.iter().any(|n| n.id == "ct:overview"),
+            "node reloads from the durable store (B-10 restart survival)"
+        );
+    }
+
+    /// ADR-020 B-16: `kb_prepare_share_lineage` establishes + persists a canonical
+    /// CRDT lineage for a never-edited node, so the owner's local doc IS the lineage
+    /// peers adopt — and a peer's later edit converges on the owner (the bob→alice
+    /// direction that previously no-opped). Drives the OWNER (editor) path.
+    #[test]
+    fn prepare_share_lineage_persists_canonical_doc_so_owner_converges() {
+        let mut editor = Editor::new();
+        editor.collab.local_kb_client_id = 0xA11CE; // alice's stable, unique id
+
+        // A node from org import: present locally with NO CRDT lineage.
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "p:beta",
+            "Plain",
+            mae_kb::NodeKind::Note,
+            "body",
+        ));
+        assert!(
+            editor.kb.primary.get("p:beta").unwrap().crdt_doc.is_none(),
+            "starts with no lineage (the divergence trap)"
+        );
+
+        // Owner prepares to share → establishes + persists the canonical lineage.
+        editor.kb_prepare_share_lineage(crate::editor::KB_DEFAULT_NAME, &[]);
+        let shared_state = editor
+            .kb
+            .primary
+            .get("p:beta")
+            .unwrap()
+            .crdt_doc
+            .clone()
+            .expect("lineage established + persisted onto the local node");
+
+        // Bob adopts the shared lineage and edits with HIS distinct client_id.
+        let mut bob = mae_kb::KnowledgeBase::new();
+        bob.adopt_remote_node("p:beta", &shared_state).unwrap();
+        let bob_edit = {
+            let mut n = bob.get("p:beta").unwrap().clone();
+            n.title = "Bob Edit [REVERSE]".to_string();
+            bob.upsert_with_crdt(n, 0xB0B).unwrap()
+        };
+
+        // The OWNER applies bob's edit to her local doc → converges (was a no-op).
+        let changed = editor
+            .kb
+            .primary
+            .apply_remote_update("p:beta", &bob_edit)
+            .unwrap();
+        assert!(
+            changed,
+            "owner converges to a peer's edit — local doc is now on the shared lineage (B-16)"
+        );
+        assert_eq!(
+            editor.kb.primary.get("p:beta").unwrap().title,
+            "Bob Edit [REVERSE]"
+        );
+    }
+
+    /// ADR-019 Phase 3: after a restart the transient cache is empty, but
+    /// reconstruction rebuilds it from the durable registry markers (primary +
+    /// shared instances), and durable_shared_kb_ids lists what to re-subscribe.
+    #[test]
+    fn reconstruct_kb_sync_gate_rebuilds_from_durable_markers() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "collabtest:overview",
+            "O",
+            mae_kb::NodeKind::Note,
+            "b",
+        ));
+        editor.kb.instances.insert("uuid-ct".into(), inst);
+        editor.kb.registry.instances.push(shared_ct_instance());
+        editor.kb.registry.primary_shared = true;
+        editor.kb.registry.primary_collab_id = Some("default".into());
+        editor
+            .kb
+            .primary
+            .insert(mae_kb::Node::new("p:1", "P", mae_kb::NodeKind::Note, "b"));
+
+        assert!(
+            editor.collab.shared_kbs.is_empty(),
+            "cache empty post-restart"
+        );
+        editor.reconstruct_kb_sync_gate();
+        assert!(editor.collab.shared_kbs["collabtest"].contains("collabtest:overview"));
+        assert!(editor.collab.shared_kbs["default"].contains("p:1"));
+
+        let mut ids = editor.durable_shared_kb_ids();
+        ids.sort();
+        assert_eq!(ids, vec!["collabtest".to_string(), "default".to_string()]);
+    }
+
+    /// ADR-019: reconnect re-subscribe SKIPS the primary KB (re-joining one's own
+    /// primary popped a spurious pending request → the *Collab Status* buffer on
+    /// launch), re-JOINS guests (empty org_dir), and re-SHARES owner instances.
+    #[test]
+    fn kb_resubscribe_intents_skips_primary_and_distinguishes_owner_guest() {
+        use crate::editor::CollabIntent;
+        let mut editor = Editor::new();
+        // Stale primary share marker (must NOT produce a re-subscribe intent).
+        editor.kb.registry.primary_shared = true;
+        editor.kb.registry.primary_collab_id = Some("default".into());
+        // Guest-joined instance: empty org_dir.
+        let mut guest = shared_ct_instance();
+        guest.name = "joined-kb".into();
+        guest.collab_id = Some("joined-kb".into());
+        guest.org_dir = std::path::PathBuf::new();
+        editor.kb.registry.instances.push(guest);
+        // Owner-shared instance: real org_dir.
+        let mut owner = shared_ct_instance();
+        owner.uuid = "uuid-owned".into();
+        owner.name = "owned-kb".into();
+        owner.collab_id = Some("owned-kb".into());
+        owner.org_dir = std::path::PathBuf::from("/home/u/org");
+        editor.kb.registry.instances.push(owner);
+
+        let intents = editor.kb_resubscribe_intents();
+        assert_eq!(
+            intents.len(),
+            2,
+            "primary must be skipped; 2 instances remain"
+        );
+        assert!(
+            intents
+                .iter()
+                .any(|i| matches!(i, CollabIntent::JoinKb { kb_id, .. } if kb_id == "joined-kb")),
+            "guest (empty org_dir) must re-JOIN"
+        );
+        assert!(
+            intents.iter().any(
+                |i| matches!(i, CollabIntent::ShareKb { kb_name, .. } if kb_name == "owned-kb")
+            ),
+            "owner (real org_dir) must re-SHARE"
+        );
+        assert!(
+            !intents
+                .iter()
+                .any(|i| matches!(i, CollabIntent::JoinKb { kb_id, .. } if kb_id == "default")),
+            "primary KB must NOT be re-subscribed (the launch-popup bug)"
+        );
+    }
+
+    /// B-8 repro: register a KB via the REAL kb_register path (CozoKbStore
+    /// import — not a hand-inserted instance), stamp the durable share marker as
+    /// the share would, then edit a node. The edit MUST enqueue a CRDT update.
+    /// Live, this produced pending_kb_updates=0 (no emit) — reproduce it here.
+    #[test]
+    fn b8_repro_registered_kb_edit_enqueues() {
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/kb/collabtest"
+        );
+        if !std::path::Path::new(fixture).is_dir() {
+            eprintln!("fixture missing, skipping: {fixture}");
+            return;
+        }
+        let mut editor = Editor::new();
+        let _dirs = with_test_dirs(&mut editor);
+        let result = editor
+            .kb_register("collabtest", std::path::Path::new(fixture))
+            .expect("register collabtest");
+        let uuid = result.uuid.clone();
+        eprintln!("registered uuid={uuid}");
+        eprintln!(
+            "instances keys = {:?}",
+            editor.kb.instances.keys().collect::<Vec<_>>()
+        );
+        eprintln!(
+            "node in instance? {}",
+            editor
+                .kb
+                .instances
+                .get(&uuid)
+                .map(|kb| kb.contains("collabtest:overview"))
+                .unwrap_or(false)
+        );
+        eprintln!(
+            "node in primary? {}",
+            editor.kb.primary.contains("collabtest:overview")
+        );
+
+        // Stamp the durable share marker (as the KbShared handler does).
+        {
+            let inst = editor.kb.registry.find_mut(&uuid).expect("find inst");
+            inst.shared = true;
+            inst.collab_id = Some("collabtest".into());
+        }
+        editor.collab.kb_sync_mode = "on_save".into();
+
+        editor
+            .kb_update_node("collabtest:overview", Some("EDITED"), None, None)
+            .expect("update");
+        assert_eq!(
+            editor.collab.pending_kb_updates.len(),
+            1,
+            "registered-KB edit must enqueue a kb/node_update (B-8)"
+        );
     }
 
     #[test]

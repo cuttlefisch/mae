@@ -1,0 +1,14 @@
+:PROPERTIES:
+:ID: collabtest:alpha
+:KIND: note
+:END:
+#+title: Collab Test Alpha
+#+filetags: :collabtest:fixture:
+
+Alpha is the first leaf node of the collab test fixture. It links back to the
+[[references:collabtest:overview][Overview]] and across to its sibling
+[[references:collabtest:beta][Beta]], giving the fixture a small but real link
+graph (overview ↔ alpha ↔ beta).
+
+The sentinel token QUOKKA appears only on this node, so per-node replication can
+be asserted distinctly from the overview's ZEPHYRINE.

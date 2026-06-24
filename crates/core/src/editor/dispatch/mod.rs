@@ -8,8 +8,10 @@ mod fold_org;
 mod git;
 mod help;
 mod kb;
+mod kb_sharing;
 mod lsp;
 mod nav;
+mod notify;
 mod project;
 mod terminal;
 mod ui;
@@ -190,6 +192,16 @@ impl Editor {
             return v;
         }
         if let Some(v) = self.dispatch_collab(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_notifications(name) {
+            return v;
+        }
+        if name == "kb-sharing" {
+            self.open_kb_sharing();
+            return true;
+        }
+        if let Some(v) = self.dispatch_kb_sharing(name) {
             return v;
         }
 

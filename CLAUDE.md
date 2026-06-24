@@ -124,6 +124,12 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 12. **Local-first by design.** MAE satisfies 5 of 7 Ink & Switch local-first ideals today (no spinners, multi-device, network optional, collaboration without conflict, user ownership). P2P collaboration and E2E encryption will complete the remaining two. The daemon is an optimization for persistence and discovery, not a requirement for collaboration.
 
+13. **Cross-platform parity (macOS + Linux) is a development constraint, not an afterthought.** MAE is developed and run across macOS and Linux *simultaneously* (often on the same branch, same day). Every script, path-resolution, and tool invocation MUST behave identically on both — or fail loudly with a portable fallback, never silently no-op on one platform. A "fix" that only works on one developer's machine is not a fix; it manufactures the stop-and-go cross-machine debugging this principle exists to prevent. Concretely:
+    - **Directory resolution is XDG-first on ALL platforms.** Honor `XDG_CONFIG_HOME` / `XDG_DATA_HOME` when set, then fall back to the platform default. The bare `dirs` / `directories` crate follows Apple conventions on macOS (`~/Library/Application Support`) and *ignores* XDG — so calling `dirs::config_dir()` / `dirs::data_dir()` directly breaks env-var test isolation and contradicts the documented `~/.config/mae` + `~/.local/share/mae` contract. Use the XDG-first helpers (`mae-mcp::identity::default_collab_dir`, `mae-mcp::keystore`, editor `pkg/paths.rs::{dirs_candidate,data_dir_candidate}`), never raw `dirs::*` for primary config/data paths.
+    - **Shell scripts use portable tooling.** No Linux-only commands without a fallback: `ss` → `lsof` → `netstat`; `timeout` → `gtimeout` → optional/omitted; avoid GNU-only behavior (`sed -i` arg differences, `readlink -f`, `mktemp` templates, `date` flags). Prefer POSIX; gate platform branches on capability (`command -v`), not `uname`. Keep the Linux path first so CI/driver behavior is unchanged.
+    - **CI must exercise both OSes** for anything touching paths, sockets, or scripts — the collab e2e (`scripts/collab-*-e2e.sh`) especially, since that's where this bites.
+    This is the cross-machine corollary to principles #8 (shared computation) and #9 (downstream impact): verify the change on *both* platforms, not just the one in front of you.
+
 ### Rendering Pipeline
 The GUI renderer uses a three-phase pipeline: `compute_layout()` produces
 a `FrameLayout`, `render_buffer_content()` draws text, and `render_cursor()`
@@ -149,7 +155,12 @@ All phases below are COMPLETE. See ROADMAP.md for granular milestone details.
 | 7. Documentation | Help system (862 KB nodes), tutorials, `:describe-configuration` | — |
 | 8. GUI Backend | winit + Skia, inline images, multi-cursor, magit-style git | 2,629 |
 
-**Current:** 5,863+ tests. **Next:** Org export & babel, PDF preview, module system.
+**Current:** v0.14.0 pending (PR #69) — collaborative **KB sharing** is now user-ready: trusted-peer mTLS
+auth, per-KB membership/roles/policy (Owner/Editor/Viewer, ADR-018), epoch-fenced write access (ADR-023),
+the ADR-024 attention bus, a magit-style `*KB Sharing*` management buffer (`SPC C K m`), and full
+introspection + lifecycle parity across the human (buffer + Scheme `(kb-…)` primitives) and the AI peer
+(`kb_sharing_status` + lifecycle MCP tools). See `docs/COLLABORATION.md`.
+**Next:** crypto-deps bump (hmac/sha2/rand alignment), hosted-edit (ADR-020 D1), ADR-021 audit log.
 
 ## Key Design Decisions Already Made
 
@@ -258,7 +269,7 @@ make test-scheme-all                # All local tests
 
 ## Developing MAE Inside MAE (MCP Tools)
 
-All 130+ MAE editor tools are exposed via MCP with full parity — the same tools the built-in AI agent uses. When developing MAE with Claude Code connected via the MCP shim (`mae-mcp-shim`), prefer these tools over raw file reads for structured editor operations.
+All 135+ MAE editor tools are exposed via MCP with full parity — the same tools the built-in AI agent uses. When developing MAE with Claude Code connected via the MCP shim (`mae-mcp-shim`), prefer these tools over raw file reads for structured editor operations.
 
 ### Connection
 
@@ -314,9 +325,18 @@ Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (
 | `collab_doctor` | Run connectivity diagnostics |
 | `collab_list` | List shared documents on the server |
 | `collab_discover` | Discover MAE peers via mDNS |
+| `kb_sharing_status` | Introspect KBs + members/roles/policy/pending/my-role (call before managing) |
 | `kb_share` | Share a KB for collaborative editing |
 | `kb_join` | Join a shared KB from the server |
 | `kb_leave` | Leave a shared KB (local copy preserved) |
+| `kb_add_member` / `kb_remove_member` | Add/remove a member by fingerprint (owner-only) |
+| `kb_approve` | Approve a pending join request as a role (owner-only) |
+| `kb_set_policy` | Set join policy: restrictive\|invite\|permissive (owner-only) |
+
+KB-sharing lifecycle is also first-class in Scheme: `(kb-share)`, `(kb-join)`,
+`(kb-leave)`, `(kb-add-member)`, `(kb-remove-member)`, `(kb-approve)`,
+`(kb-set-policy)`, `(kb-sharing-status)`. The `*KB Sharing*` buffer (`SPC C K m`),
+the Scheme primitive, and the MCP tool all read the same introspection snapshot.
 
 ### Buffer / Editor
 

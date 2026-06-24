@@ -19,7 +19,7 @@ MAE has several security-relevant subsystems. This section documents the current
 
 ### Strong Protections
 
-**Permission tiers** — The AI agent operates under a configurable permission tier (`config.toml` or `MAE_AI_PERMISSIONS` env var). Tiers are enforced before every tool execution with no bypass vectors:
+**Permission tiers** — The AI agent operates under a configurable permission tier. The primary surface is `init.scm` via `(set-option! "permission_tier" …)` (also settable at runtime with `:set permission_tier …` and persisted with `:set-save`); `config.toml` is a narrow legacy bootstrap, and `MAE_AI_PERMISSIONS` env var still works. Tiers are enforced before every tool execution with no bypass vectors:
 - **readonly** — AI can read buffers and navigate, but cannot modify files
 - **write** — AI can edit buffers and create files
 - **shell** — AI can execute shell commands (default)
@@ -65,8 +65,10 @@ MAE has several security-relevant subsystems. This section documents the current
 
 ### Recommendations
 
-- **API keys:** Use `api_key_command` with a password manager (e.g., `api_key_command = "pass show anthropic/api-key"`), not plaintext `api_key` in config.toml.
-- **Permission tier:** Set `permission_tier = "write"` unless your workflow requires shell access. Use `"readonly"` for review-only sessions.
+- **Secrets are never plaintext in config.toml.** `config.toml` is a legacy bootstrap; do not store API keys or the collab PSK in it directly.
+- **API keys:** Use `api_key_command` with a password manager (e.g., `api_key_command = "pass show anthropic/api-key"`), not plaintext `api_key`.
+- **Collab secrets:** Never put `collab_psk` plaintext in config.toml — use `collab_psk_command` (shell to pass/keychain), or preferably `collab_auth_mode = "key"` (Ed25519 trusted-peer mTLS) with the keystore at `$XDG_DATA_HOME/mae/collab/trusted_keys`.
+- **Permission tier:** Set it via `(set-option! "permission_tier" "write")` (or `:set permission_tier write`) unless your workflow requires shell access. Use `"readonly"` for review-only sessions.
 - **Untrusted files:** Run MAE in a container when opening untrusted org files or working with untrusted AI prompts (see below).
 - **Transcripts:** Review files in `~/.local/share/mae/transcripts/` before sharing or committing them.
 - **MCP access:** The MCP socket is ephemeral (per-process PID). Only grant `mae-mcp-shim` access to tools appropriate for your trust level.

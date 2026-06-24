@@ -14,7 +14,9 @@ mae pkg doctor my-module
 
 ## Module Structure
 
-Every module has three files:
+Every module has two required files (`module.toml` + `autoloads.scm`), with an
+optional `init.scm` for lazy initialization — many modules ship without it. Core or
+auto-enabled modules set `required = true` in the manifest's `[module]` table.
 
 ### `module.toml` — Identity
 
@@ -53,8 +55,10 @@ Runs at startup, before user `config.scm`. Register commands, keybindings, optio
 ;; Commands
 (define-command "my-greet" (lambda () (buffer-insert "Hello!")) "Greet the user")
 
-;; Keybindings
-(define-key "normal" "SPC x g" "my-greet")
+;; Keybindings — SPC leader bindings go in the shared `leader` keymap WITHOUT
+;; the SPC prefix; this appears as `SPC x g`.
+(define-key "leader" "x g" "my-greet")
+(set-group-name "leader" "x" "+mystuff")  ;; which-key group label
 
 ;; Options
 (define-option! "my_greeting" "string" "Hello!" "The greeting text")
@@ -64,8 +68,14 @@ Runs at startup, before user `config.scm`. Register commands, keybindings, optio
 
 ;; Conditional on flags
 (when-flag "+extra"
-  (define-key "normal" "SPC x e" "my-extra-cmd"))
+  (define-key "leader" "x e" "my-extra-cmd"))
 ```
+
+**Leader vs. mode keymaps:** The shared `leader` keymap is the single source of
+truth for the which-key tree and is the *only* place SPC leader bindings belong —
+flavor modules (`keymap-doom`, `keymap-nonmodal`) wire the keypad entry that
+dispatches into it. Non-leader, buffer- or mode-local bindings can still target a
+mode keymap directly (e.g. `(define-key "normal" "g d" "lsp-goto-definition")`).
 
 ### `init.scm` — Lazy Initialization
 
@@ -152,6 +162,7 @@ any module keybinding or option in their config.
 | Function | Description |
 |----------|-------------|
 | `(define-key keymap key command)` | Bind key to command |
+| `(set-group-name map prefix label)` | Set which-key group label (e.g. `(set-group-name "leader" "x" "+mystuff")`) |
 | `(define-keymap name parent)` | Create new keymap with parent |
 | `(undefine-key! keymap key)` | Remove binding |
 | `*keymap-list*` | All keymap names |
@@ -238,7 +249,7 @@ Use `when-flag` in autoloads to conditionally load:
 ```scheme
 (when-flag "+agenda"
   (autoload "open-agenda" "org-agenda" "Open agenda view")
-  (define-key "normal" "SPC o a" "open-agenda"))
+  (define-key "leader" "o a" "open-agenda"))
 ```
 
 ## Testing Your Module
@@ -407,7 +418,7 @@ C functions for buffer operations.
 | `:describe-key` | `SPC h k` | What command a key is bound to |
 | `:describe-command` | `SPC h c` | Command documentation |
 | `:describe-option` | `SPC h o` | All option values |
-| `:describe-configuration` | — | Health report: config.toml + init.scm validation |
+| `:describe-configuration` | — | Health report: validates init.scm (primary config) plus the legacy config.toml bootstrap |
 
 ## Related KB Nodes
 

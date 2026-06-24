@@ -1,0 +1,981 @@
+//! Asymmetric Ed25519 identities and SSH-style trust stores for the collab
+//! `key` auth mode (ADR-017).
+//!
+//! Layout under `$XDG_DATA_HOME/mae/collab/` (mirrors `~/.ssh/`):
+//!
+//! - `id_ed25519`      — this peer's private key (0600), hex-encoded 32 bytes.
+//! - `id_ed25519.pub`  — this peer's public key line: `mae-ed25519 <b64> <label>`.
+//! - `known_hosts`     — pinned daemon public keys: `<addr> mae-ed25519 <b64>`.
+//! - `authorized_keys` — trusted client public keys: `mae-ed25519 <b64> <label>`.
+//!
+//! Public keys and signatures travel as base64 in the handshake JSON.
+//! Fingerprints are `SHA256:<base64(sha256(pubkey))>`, like OpenSSH.
+
+use std::path::{Path, PathBuf};
+
+use base64::prelude::{Engine as _, BASE64_STANDARD};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+
+/// Algorithm tag written in key lines and the handshake.
+pub const ALGO: &str = "mae-ed25519";
+
+/// Domain-separation prefix bound into every signed transcript.
+const TRANSCRIPT_DOMAIN: &[u8] = b"mae-collab-key-auth-v1";
+
+/// The default collab directory: `$XDG_DATA_HOME/mae/collab`
+/// (fallback `~/.local/share/mae/collab`).
+pub fn default_collab_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
+    Some(base.join("mae/collab"))
+}
+
+// --- PublicKey ---
+
+/// A peer's public key plus an optional human label.
+#[derive(Clone, Debug)]
+pub struct PublicKey {
+    key: VerifyingKey,
+    pub label: Option<String>,
+}
+
+/// An authenticated peer's identity, recovered from a verified key/cert.
+/// Authoritative for attribution + membership (ADR-017 strict binding).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PeerIdentity {
+    /// Human label (from authorized_keys / the cert CN), else the fingerprint.
+    pub label: String,
+    /// SHA256 fingerprint of the public key.
+    pub fingerprint: String,
+    /// Raw 32-byte Ed25519 public key.
+    pub pubkey: [u8; 32],
+}
+
+impl PeerIdentity {
+    /// A synthetic identity for the `none` auth mode, so handlers have a uniform
+    /// type. No real key and no principal — `none` sessions are loopback-trusted.
+    pub fn synthetic(label: &str) -> Self {
+        Self {
+            label: label.to_string(),
+            fingerprint: String::new(),
+            pubkey: [0u8; 32],
+        }
+    }
+
+    /// A synthetic identity for `psk` auth: a single stable principal `psk:<keyid>`
+    /// shared by every peer presenting that pre-shared key. Coarse by design — real
+    /// per-identity access control requires `key` mode (ADR-018).
+    pub fn synthetic_psk(keyid: &str) -> Self {
+        Self {
+            label: keyid.to_string(),
+            fingerprint: format!("psk:{keyid}"),
+            pubkey: [0u8; 32],
+        }
+    }
+
+    /// True for a real (key-authenticated) identity, false for synthetic.
+    pub fn is_authenticated(&self) -> bool {
+        self.pubkey != [0u8; 32]
+    }
+
+    /// The access-control **principal** (ADR-018): the key fingerprint for a real
+    /// key/TLS-authenticated peer, the `psk:<keyid>` string for psk, or `None` for
+    /// an unauthenticated (`none`/loopback) session. This — never the mutable,
+    /// non-unique label — is the sole subject identity for KB ownership/membership.
+    pub fn principal(&self) -> Option<&str> {
+        if self.is_authenticated() || self.fingerprint.starts_with("psk:") {
+            Some(&self.fingerprint)
+        } else {
+            None
+        }
+    }
+}
+
+impl PublicKey {
+    /// The raw 32 public-key bytes.
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.key.to_bytes()
+    }
+
+    /// Build from raw 32 bytes (rejects non-canonical / invalid points).
+    pub fn from_bytes(bytes: &[u8; 32], label: Option<String>) -> Option<Self> {
+        VerifyingKey::from_bytes(bytes)
+            .ok()
+            .map(|key| Self { key, label })
+    }
+
+    /// Base64 of the 32 public-key bytes (handshake wire form).
+    pub fn encoded(&self) -> String {
+        BASE64_STANDARD.encode(self.key.to_bytes())
+    }
+
+    /// Parse from the base64 wire form.
+    pub fn from_encoded(b64: &str, label: Option<String>) -> Option<Self> {
+        let bytes = BASE64_STANDARD.decode(b64).ok()?;
+        let arr: [u8; 32] = bytes.try_into().ok()?;
+        Self::from_bytes(&arr, label)
+    }
+
+    /// A storage line: `mae-ed25519 <b64> [label]`.
+    pub fn to_line(&self) -> String {
+        match &self.label {
+            Some(l) => format!("{ALGO} {} {l}", self.encoded()),
+            None => format!("{ALGO} {}", self.encoded()),
+        }
+    }
+
+    /// Parse a storage line `mae-ed25519 <b64> [label]`. Returns `None` on a
+    /// bad algo tag or malformed key.
+    pub fn from_line(line: &str) -> Option<Self> {
+        let mut toks = line.split_whitespace();
+        if toks.next()? != ALGO {
+            return None;
+        }
+        let b64 = toks.next()?;
+        let label = toks.next().map(|s| s.to_string());
+        Self::from_encoded(b64, label)
+    }
+
+    /// Parse an **OpenSSH** Ed25519 public-key line — `ssh-ed25519 <b64> [comment]`
+    /// (e.g. from `~/.ssh/id_ed25519.pub`). The label defaults to the comment.
+    /// Only the public key is imported (never a private key — key separation).
+    pub fn from_ssh_line(line: &str, label: Option<String>) -> Option<Self> {
+        let mut toks = line.split_whitespace();
+        if toks.next()? != "ssh-ed25519" {
+            return None;
+        }
+        let blob = BASE64_STANDARD.decode(toks.next()?).ok()?;
+        let comment = toks.next().map(|s| s.to_string());
+        // SSH wire format: string("ssh-ed25519") || string(32-byte key).
+        let read_str = |buf: &[u8], off: usize| -> Option<(usize, usize)> {
+            let len = u32::from_be_bytes(buf.get(off..off + 4)?.try_into().ok()?) as usize;
+            let start = off + 4;
+            buf.get(start..start + len)?; // bounds check
+            Some((start, len))
+        };
+        let (a_start, a_len) = read_str(&blob, 0)?;
+        if &blob[a_start..a_start + a_len] != b"ssh-ed25519" {
+            return None;
+        }
+        let (k_start, k_len) = read_str(&blob, a_start + a_len)?;
+        if k_len != 32 {
+            return None;
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&blob[k_start..k_start + 32]);
+        Self::from_bytes(&key, label.or(comment))
+    }
+
+    /// OpenSSH-style fingerprint: `SHA256:<base64(sha256(pubkey))>` (no padding).
+    pub fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(self.key.to_bytes());
+        let b64 = base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest);
+        format!("SHA256:{b64}")
+    }
+
+    /// Verify a 64-byte signature over `msg`.
+    pub fn verify(&self, msg: &[u8], sig_bytes: &[u8]) -> bool {
+        let arr: [u8; 64] = match sig_bytes.try_into() {
+            Ok(a) => a,
+            Err(_) => return false,
+        };
+        let sig = Signature::from_bytes(&arr);
+        self.key.verify(msg, &sig).is_ok()
+    }
+}
+
+// --- Identity (private key) ---
+
+/// This peer's long-lived signing identity.
+pub struct Identity {
+    signing: SigningKey,
+    label: String,
+}
+
+impl Identity {
+    /// Generate a fresh random identity.
+    pub fn generate(label: &str) -> Self {
+        use rand::RngCore;
+        let mut secret = [0u8; 32];
+        rand::rng().fill_bytes(&mut secret);
+        let signing = SigningKey::from_bytes(&secret);
+        Self {
+            signing,
+            label: label.to_string(),
+        }
+    }
+
+    /// This identity's public key (with the same label).
+    pub fn public(&self) -> PublicKey {
+        PublicKey {
+            key: self.signing.verifying_key(),
+            label: Some(self.label.clone()),
+        }
+    }
+
+    /// The label.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Fingerprint of the public key.
+    pub fn fingerprint(&self) -> String {
+        self.public().fingerprint()
+    }
+
+    /// Sign `msg`, returning the 64 signature bytes.
+    pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
+        self.signing.sign(msg).to_bytes().to_vec()
+    }
+
+    /// PKCS#8 DER encoding of the private key (for building a TLS keypair).
+    pub fn pkcs8_der(&self) -> Result<Vec<u8>, String> {
+        use ed25519_dalek::pkcs8::EncodePrivateKey;
+        self.signing
+            .to_pkcs8_der()
+            .map(|d| d.as_bytes().to_vec())
+            .map_err(|e| format!("pkcs8 encode failed: {e}"))
+    }
+
+    /// Load the identity from `dir/id_ed25519`, generating + persisting one
+    /// (0600 private key, public-key line) if absent.
+    pub fn load_or_generate(dir: &Path, label: &str) -> std::io::Result<Self> {
+        let priv_path = dir.join("id_ed25519");
+        if let Ok(content) = std::fs::read_to_string(&priv_path) {
+            if let Some(id) = Self::parse_private(content.trim(), label) {
+                return Ok(id);
+            }
+        }
+        // Generate + persist.
+        let id = Self::generate(label);
+        id.save(dir)?;
+        Ok(id)
+    }
+
+    /// Persist this identity to `dir`: private key `id_ed25519` (0600, hex) +
+    /// public-key line `id_ed25519.pub`. Overwrites any existing identity.
+    pub fn save(&self, dir: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        secure_dir(dir);
+        let hex: String = self
+            .signing
+            .to_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        crate::keystore::write_secure(&dir.join("id_ed25519"), &format!("{hex}\n"))?;
+        std::fs::write(
+            dir.join("id_ed25519.pub"),
+            format!("{}\n", self.public().to_line()),
+        )
+    }
+
+    /// Build an identity from a raw 32-byte Ed25519 seed.
+    pub fn from_seed(seed: &[u8; 32], label: &str) -> Self {
+        Self {
+            signing: SigningKey::from_bytes(seed),
+            label: label.to_string(),
+        }
+    }
+
+    /// Import an existing **OpenSSH Ed25519 private key** as a collab identity
+    /// (opt-in key reuse). Errors on encrypted or non-ed25519 keys. The caller
+    /// persists it via [`save`](Self::save). The matching SSH *public* key can be
+    /// authorized on the daemon with `mae-daemon authorize --from-ssh-pub`.
+    pub fn import_ssh_private_key(path: &Path, label: &str) -> Result<Self, String> {
+        let key = ssh_key::PrivateKey::read_openssh_file(path)
+            .map_err(|e| format!("read OpenSSH key {}: {e}", path.display()))?;
+        if key.is_encrypted() {
+            return Err(
+                "the SSH key is passphrase-encrypted — decrypt a copy first \
+                 (`ssh-keygen -p -f <copy>` with an empty passphrase) or use a \
+                 MAE-native identity"
+                    .into(),
+            );
+        }
+        match key.key_data() {
+            ssh_key::private::KeypairData::Ed25519(kp) => {
+                Ok(Self::from_seed(&kp.private.to_bytes(), label))
+            }
+            _ => Err("not an Ed25519 SSH key (only ssh-ed25519 is supported)".into()),
+        }
+    }
+
+    fn parse_private(hex: &str, label: &str) -> Option<Self> {
+        let hex = hex.split_whitespace().next()?;
+        if hex.len() != 64 {
+            return None;
+        }
+        let mut secret = [0u8; 32];
+        for (i, b) in secret.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+        }
+        Some(Self {
+            signing: SigningKey::from_bytes(&secret),
+            label: label.to_string(),
+        })
+    }
+}
+
+// --- known_hosts (client pins daemon keys) ---
+
+/// A pinned host entry: `<addr> mae-ed25519 <b64>`.
+pub struct KnownHosts {
+    path: PathBuf,
+    entries: Vec<(String, PublicKey)>,
+}
+
+impl KnownHosts {
+    /// Load (or start empty if the file is absent).
+    pub fn load(path: &Path) -> Self {
+        let mut entries = Vec::new();
+        if let Ok(content) = std::fs::read_to_string(path) {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((addr, rest)) = line.split_once(char::is_whitespace) {
+                    if let Some(pk) = PublicKey::from_line(rest.trim()) {
+                        entries.push((addr.to_string(), pk));
+                    }
+                }
+            }
+        }
+        Self {
+            path: path.to_path_buf(),
+            entries,
+        }
+    }
+
+    /// The pinned key for `addr`, if any.
+    pub fn get(&self, addr: &str) -> Option<&PublicKey> {
+        self.entries.iter().find(|(a, _)| a == addr).map(|(_, k)| k)
+    }
+
+    /// Pin `pubkey` for `addr` (in memory + appended to the file, 0600).
+    pub fn pin(&mut self, addr: &str, pubkey: &PublicKey) -> std::io::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+            secure_dir(parent);
+        }
+        // Rewrite the whole file so first-creation gets 0600.
+        self.entries.push((addr.to_string(), pubkey.clone()));
+        crate::keystore::write_secure(&self.path, &self.render())?;
+        Ok(())
+    }
+
+    fn render(&self) -> String {
+        let mut out = String::from("# MAE collab known_hosts — <addr> mae-ed25519 <b64>\n");
+        for (addr, pk) in &self.entries {
+            out.push_str(&format!("{addr} {ALGO} {}\n", pk.encoded()));
+        }
+        out
+    }
+}
+
+// --- authorized_keys (daemon trusts client keys) ---
+
+/// Trusted client public keys (daemon side).
+#[derive(Debug)]
+pub struct AuthorizedKeys {
+    path: PathBuf,
+    entries: Vec<PublicKey>,
+}
+
+impl AuthorizedKeys {
+    /// Load (or start empty if absent).
+    pub fn load(path: &Path) -> Self {
+        let mut entries = Vec::new();
+        if let Ok(content) = std::fs::read_to_string(path) {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some(pk) = PublicKey::from_line(line) {
+                    entries.push(pk);
+                }
+            }
+        }
+        Self {
+            path: path.to_path_buf(),
+            entries,
+        }
+    }
+
+    /// The on-disk path this set was loaded from (for live re-reads, I-10).
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Number of trusted keys.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// True when no keys are trusted.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// If `pubkey_bytes` is trusted, return its label (or `""`).
+    pub fn authorize(&self, pubkey_bytes: &[u8; 32]) -> Option<String> {
+        self.entries
+            .iter()
+            .find(|k| &k.to_bytes() == pubkey_bytes)
+            .map(|k| k.label.clone().unwrap_or_default())
+    }
+
+    /// The trusted entry for `pubkey_bytes`, if any (label + fingerprint accessor).
+    pub fn authorize_full(&self, pubkey_bytes: &[u8; 32]) -> Option<&PublicKey> {
+        self.entries.iter().find(|k| &k.to_bytes() == pubkey_bytes)
+    }
+
+    /// Find a trusted key by its `SHA256:<b64>` fingerprint (the principal).
+    pub fn lookup_by_fingerprint(&self, fp: &str) -> Option<&PublicKey> {
+        self.entries.iter().find(|k| k.fingerprint() == fp)
+    }
+
+    /// Find a trusted key by its (unique) label. Well-defined because `add`
+    /// enforces label uniqueness.
+    pub fn lookup_by_label(&self, label: &str) -> Option<&PublicKey> {
+        self.entries
+            .iter()
+            .find(|k| k.label.as_deref() == Some(label))
+    }
+
+    /// All entries (for listing).
+    pub fn entries(&self) -> &[PublicKey] {
+        &self.entries
+    }
+
+    /// Add a trusted key (rejecting an exact-bytes duplicate). Persists 0600.
+    ///
+    /// Enforces **label uniqueness** (ADR-018): a non-empty label may name at most
+    /// one key. Without this, two distinct keys could share a label and become
+    /// indistinguishable for access control (and `revoke(label)` would be
+    /// ambiguous). Unlabeled keys are allowed and not constrained.
+    pub fn add(&mut self, pubkey: PublicKey) -> std::io::Result<()> {
+        if self
+            .entries
+            .iter()
+            .any(|k| k.to_bytes() == pubkey.to_bytes())
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "public key already authorized",
+            ));
+        }
+        if let Some(new_label) = pubkey.label.as_deref().filter(|l| !l.is_empty()) {
+            if self
+                .entries
+                .iter()
+                .any(|k| k.label.as_deref() == Some(new_label))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "label '{new_label}' is already authorized for a different key \
+                         (labels must be unique)"
+                    ),
+                ));
+            }
+        }
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+            secure_dir(parent);
+        }
+        self.entries.push(pubkey);
+        crate::keystore::write_secure(&self.path, &self.render())?;
+        Ok(())
+    }
+
+    /// Remove the key(s) with `label`. Returns how many were removed. Persists.
+    /// With label uniqueness enforced by `add`, this removes at most one key.
+    pub fn revoke(&mut self, label: &str) -> std::io::Result<usize> {
+        let before = self.entries.len();
+        self.entries.retain(|k| k.label.as_deref() != Some(label));
+        let removed = before - self.entries.len();
+        if removed > 0 {
+            crate::keystore::write_secure(&self.path, &self.render())?;
+        }
+        Ok(removed)
+    }
+
+    /// Remove the key with the given `SHA256:<b64>` fingerprint (the precise,
+    /// unambiguous revocation — ADR-018). Returns how many were removed. Persists.
+    pub fn revoke_by_fingerprint(&mut self, fp: &str) -> std::io::Result<usize> {
+        let before = self.entries.len();
+        self.entries.retain(|k| k.fingerprint() != fp);
+        let removed = before - self.entries.len();
+        if removed > 0 {
+            crate::keystore::write_secure(&self.path, &self.render())?;
+        }
+        Ok(removed)
+    }
+
+    fn render(&self) -> String {
+        let mut out = String::from("# MAE collab authorized_keys — mae-ed25519 <b64> <label>\n");
+        for pk in &self.entries {
+            out.push_str(&pk.to_line());
+            out.push('\n');
+        }
+        out
+    }
+}
+
+// --- Host-key verification policy (client side) ---
+
+/// Trust-on-first-use policy for an unknown daemon host key (ADR-017).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostKeyPolicy {
+    /// Auto-pin unknown hosts; still abort on a *changed* key. Headless default.
+    AcceptNew,
+    /// Never auto-pin; unknown or changed host key aborts.
+    Strict,
+    /// Defer to an interactive prompt (the file verifier rejects; the editor
+    /// supplies a prompting verifier).
+    Prompt,
+}
+
+impl HostKeyPolicy {
+    /// Parse from the `collab_host_key_policy` option string.
+    pub fn from_str_opt(s: &str) -> HostKeyPolicy {
+        match s {
+            "strict" => HostKeyPolicy::Strict,
+            "accept-new" => HostKeyPolicy::AcceptNew,
+            _ => HostKeyPolicy::Prompt,
+        }
+    }
+}
+
+/// Decides whether to trust a daemon's presented public key. Implementations
+/// handle `known_hosts` pinning, policy, and (in the editor) prompting.
+/// `Debug` is required because this is held inside a rustls cert verifier.
+pub trait HostKeyVerifier: Send + Sync + std::fmt::Debug {
+    /// Return `true` to proceed with `server_pub` from `addr`, `false` to abort.
+    fn verify(&self, addr: &str, server_pub: &PublicKey) -> bool;
+}
+
+/// Default `known_hosts`-backed verifier: pins on first use per `policy`, and
+/// always aborts when a previously pinned key changes (MITM defense). Cannot
+/// prompt — under `Prompt` it rejects unknown hosts (the editor overrides).
+#[derive(Debug)]
+pub struct FileHostKeyVerifier {
+    pub path: PathBuf,
+    pub policy: HostKeyPolicy,
+}
+
+impl FileHostKeyVerifier {
+    pub fn new(path: PathBuf, policy: HostKeyPolicy) -> Self {
+        Self { path, policy }
+    }
+}
+
+impl HostKeyVerifier for FileHostKeyVerifier {
+    fn verify(&self, addr: &str, server_pub: &PublicKey) -> bool {
+        let mut kh = KnownHosts::load(&self.path);
+        match kh.get(addr) {
+            Some(pinned) => {
+                if pinned.to_bytes() == server_pub.to_bytes() {
+                    true
+                } else {
+                    tracing::error!(
+                        addr,
+                        expected = %pinned.fingerprint(),
+                        got = %server_pub.fingerprint(),
+                        "daemon host key CHANGED — aborting (possible MITM)"
+                    );
+                    false
+                }
+            }
+            None => match self.policy {
+                HostKeyPolicy::AcceptNew => {
+                    if let Err(e) = kh.pin(addr, server_pub) {
+                        tracing::warn!(addr, error = %e, "failed to pin host key");
+                        return false;
+                    }
+                    tracing::info!(addr, fp = %server_pub.fingerprint(), "pinned new daemon host key (accept-new)");
+                    true
+                }
+                HostKeyPolicy::Strict | HostKeyPolicy::Prompt => {
+                    tracing::warn!(addr, fp = %server_pub.fingerprint(), policy = ?self.policy, "unknown host key rejected");
+                    false
+                }
+            },
+        }
+    }
+}
+
+/// Build the signed transcript binding both identities + nonces to the session.
+/// Both sides MUST compute this identically.
+pub fn transcript(
+    client_pub: &[u8; 32],
+    server_pub: &[u8; 32],
+    client_nonce: &[u8],
+    server_nonce: &[u8],
+) -> Vec<u8> {
+    let mut t =
+        Vec::with_capacity(TRANSCRIPT_DOMAIN.len() + 64 + client_nonce.len() + server_nonce.len());
+    t.extend_from_slice(TRANSCRIPT_DOMAIN);
+    t.extend_from_slice(client_pub);
+    t.extend_from_slice(server_pub);
+    t.extend_from_slice(client_nonce);
+    t.extend_from_slice(server_nonce);
+    t
+}
+
+#[cfg(unix)]
+fn secure_dir(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+}
+#[cfg(not(unix))]
+fn secure_dir(_dir: &Path) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sign_verify_roundtrip() {
+        let id = Identity::generate("alice");
+        let pk = id.public();
+        let msg = b"hello world";
+        let sig = id.sign(msg);
+        assert!(pk.verify(msg, &sig));
+        assert!(!pk.verify(b"tampered", &sig));
+        // A different identity's key must not verify.
+        assert!(!Identity::generate("bob").public().verify(msg, &sig));
+    }
+
+    #[test]
+    fn pubkey_line_roundtrip() {
+        let pk = Identity::generate("framework").public();
+        let line = pk.to_line();
+        assert!(line.starts_with("mae-ed25519 "));
+        let parsed = PublicKey::from_line(&line).unwrap();
+        assert_eq!(parsed.to_bytes(), pk.to_bytes());
+        assert_eq!(parsed.label.as_deref(), Some("framework"));
+        assert!(
+            PublicKey::from_line("ssh-rsa AAAA foo").is_none(),
+            "wrong algo"
+        );
+    }
+
+    #[test]
+    fn ssh_ed25519_pubkey_roundtrips() {
+        // Build a real OpenSSH ed25519 pubkey line from a known key, then parse it.
+        let id = Identity::generate("laptop");
+        let key = id.public().to_bytes();
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&(11u32).to_be_bytes());
+        blob.extend_from_slice(b"ssh-ed25519");
+        blob.extend_from_slice(&(32u32).to_be_bytes());
+        blob.extend_from_slice(&key);
+        let line = format!(
+            "ssh-ed25519 {} alice@host",
+            base64::prelude::BASE64_STANDARD.encode(&blob)
+        );
+        let pk = PublicKey::from_ssh_line(&line, None).expect("parse ssh pubkey");
+        assert_eq!(pk.to_bytes(), key, "ssh pubkey bytes must match");
+        assert_eq!(pk.label.as_deref(), Some("alice@host"), "comment → label");
+        // An explicit label overrides the comment.
+        let pk2 = PublicKey::from_ssh_line(&line, Some("bob".into())).unwrap();
+        assert_eq!(pk2.label.as_deref(), Some("bob"));
+        // Non-ed25519 / garbage rejected.
+        assert!(PublicKey::from_ssh_line("ssh-rsa AAAA x", None).is_none());
+        assert!(PublicKey::from_ssh_line("not a key", None).is_none());
+    }
+
+    #[test]
+    fn import_ssh_private_key_matches_pubkey() {
+        use ssh_key::private::{Ed25519Keypair, Ed25519PrivateKey, KeypairData, PrivateKey};
+        let dir = std::env::temp_dir().join(format!("mae-sshimp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("id_ed25519");
+
+        // Build an OpenSSH ed25519 private key from a known seed and write it.
+        let seed = [7u8; 32];
+        let private = Ed25519PrivateKey::from_bytes(&seed);
+        let public = (&private).into();
+        let kp = Ed25519Keypair { public, private };
+        let ssh = PrivateKey::new(KeypairData::Ed25519(kp), "me@host").unwrap();
+        ssh.write_openssh_file(&path, ssh_key::LineEnding::LF)
+            .unwrap();
+
+        // Import it — the MAE identity must equal the same seed's identity.
+        let imported = Identity::import_ssh_private_key(&path, "laptop").unwrap();
+        assert_eq!(
+            imported.public().to_bytes(),
+            Identity::from_seed(&seed, "x").public().to_bytes()
+        );
+
+        // The SSH .pub the daemon would authorize must match the imported identity.
+        let pubfile = std::fs::read_to_string(dir.join("id_ed25519.pub")).ok();
+        if let Some(line) = pubfile {
+            let from_pub = PublicKey::from_ssh_line(line.trim(), None).unwrap();
+            assert_eq!(
+                from_pub.to_bytes(),
+                imported.public().to_bytes(),
+                "daemon --from-ssh-pub must trust the key the editor presents"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fingerprint_is_stable_and_sshlike() {
+        let pk = Identity::generate("x").public();
+        let fp = pk.fingerprint();
+        assert!(fp.starts_with("SHA256:"));
+        assert_eq!(fp, pk.fingerprint(), "deterministic");
+        assert_ne!(fp, Identity::generate("y").public().fingerprint());
+    }
+
+    #[test]
+    fn identity_persists_and_reloads() {
+        let dir = std::env::temp_dir().join(format!("mae-id-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let a = Identity::load_or_generate(&dir, "framework").unwrap();
+        let b = Identity::load_or_generate(&dir, "framework").unwrap();
+        assert_eq!(
+            a.public().to_bytes(),
+            b.public().to_bytes(),
+            "stable across loads"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.join("id_ed25519"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "private key must be 0600");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn known_hosts_pin_and_lookup() {
+        let dir = std::env::temp_dir().join(format!("mae-kh-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("known_hosts");
+        let mut kh = KnownHosts::load(&path);
+        assert!(kh.get("10.0.0.5:9473").is_none());
+        let server = Identity::generate("daemon").public();
+        kh.pin("10.0.0.5:9473", &server).unwrap();
+        // Reload from disk.
+        let kh2 = KnownHosts::load(&path);
+        assert_eq!(
+            kh2.get("10.0.0.5:9473").unwrap().to_bytes(),
+            server.to_bytes()
+        );
+        assert!(kh2.get("other:9473").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_verifier_aborts_on_changed_key_without_overwriting_pin() {
+        // A4 / TOFU integrity: once a daemon host key is pinned, a DIFFERENT key
+        // for the same address (a MITM / key-substitution) must be rejected AND
+        // must NOT overwrite the trusted pin — otherwise an attacker could
+        // silently re-pin and impersonate the daemon thereafter.
+        let dir = std::env::temp_dir().join(format!("mae-mitm-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("known_hosts");
+
+        let genuine = Identity::generate("daemon").public();
+        let attacker = Identity::generate("mitm").public();
+        let addr = "10.0.0.9:9473";
+
+        // First contact under accept-new pins the genuine key.
+        let v = FileHostKeyVerifier::new(path.clone(), HostKeyPolicy::AcceptNew);
+        assert!(
+            v.verify(addr, &genuine),
+            "first-use accept-new pins + trusts"
+        );
+
+        // The attacker presents a different key for the same address → rejected.
+        assert!(
+            !v.verify(addr, &attacker),
+            "a changed host key must be rejected (MITM defense)"
+        );
+
+        // The pin on disk is STILL the genuine key — not silently overwritten.
+        let kh = KnownHosts::load(&path);
+        assert_eq!(
+            kh.get(addr).unwrap().to_bytes(),
+            genuine.to_bytes(),
+            "the trusted pin must survive a rejected key-change attempt"
+        );
+        // And the genuine key still verifies afterwards.
+        assert!(
+            v.verify(addr, &genuine),
+            "genuine key still trusted after the attack"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_verifier_strict_rejects_unknown_host() {
+        // Strict policy never auto-pins: an unknown (unpinned) host is rejected,
+        // and nothing is written to known_hosts.
+        let dir = std::env::temp_dir().join(format!("mae-strict-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("known_hosts");
+        let server = Identity::generate("daemon").public();
+        let v = FileHostKeyVerifier::new(path.clone(), HostKeyPolicy::Strict);
+        assert!(
+            !v.verify("h:9473", &server),
+            "strict policy rejects an unpinned host (no TOFU)"
+        );
+        assert!(
+            KnownHosts::load(&path).get("h:9473").is_none(),
+            "strict policy must not pin anything"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn authorized_keys_add_authorize_revoke() {
+        let dir = std::env::temp_dir().join(format!("mae-ak-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("authorized_keys");
+        let mut ak = AuthorizedKeys::load(&path);
+        let client = Identity::generate("laptop").public();
+        ak.add(client.clone()).unwrap();
+        assert_eq!(ak.len(), 1);
+        assert_eq!(ak.authorize(&client.to_bytes()).as_deref(), Some("laptop"));
+        // Unknown key not authorized.
+        assert!(ak
+            .authorize(&Identity::generate("z").public().to_bytes())
+            .is_none());
+        // Duplicate rejected.
+        assert!(ak.add(client.clone()).is_err());
+        // Reload + revoke.
+        let mut ak2 = AuthorizedKeys::load(&path);
+        assert_eq!(ak2.revoke("laptop").unwrap(), 1);
+        assert!(ak2.authorize(&client.to_bytes()).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn authorized_keys_label_uniqueness_and_distinct_principals() {
+        // ADR-018: a non-empty label may name at most one key, and two distinct
+        // keys are distinct principals even if an admin tries to reuse a label.
+        let dir = std::env::temp_dir().join(format!("mae-ak-uniq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("authorized_keys");
+        let mut ak = AuthorizedKeys::load(&path);
+        let alice = Identity::generate("alice").public();
+        let other = Identity::generate("alice").public(); // different key, SAME label
+        ak.add(alice.clone()).unwrap();
+        let err = ak.add(other.clone()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(ak.len(), 1, "collision must not add a second key");
+        assert_ne!(
+            alice.fingerprint(),
+            other.fingerprint(),
+            "distinct keys have distinct principals despite a label collision attempt"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn authorized_keys_fingerprint_lookup_and_revoke() {
+        let dir = std::env::temp_dir().join(format!("mae-ak-fp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("authorized_keys");
+        let mut ak = AuthorizedKeys::load(&path);
+        let k = Identity::generate("bob").public();
+        ak.add(k.clone()).unwrap();
+        let fp = k.fingerprint();
+        assert!(ak.lookup_by_fingerprint(&fp).is_some());
+        assert!(ak.lookup_by_label("bob").is_some());
+        assert!(ak.authorize_full(&k.to_bytes()).is_some());
+        assert_eq!(ak.revoke_by_fingerprint(&fp).unwrap(), 1);
+        assert!(ak.lookup_by_fingerprint(&fp).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn peer_identity_principal_per_auth_mode() {
+        let k = Identity::generate("alice").public();
+        let real = PeerIdentity {
+            label: "alice".into(),
+            fingerprint: k.fingerprint(),
+            pubkey: k.to_bytes(),
+        };
+        assert_eq!(real.principal(), Some(k.fingerprint().as_str()));
+        assert_eq!(
+            PeerIdentity::synthetic_psk("team").principal(),
+            Some("psk:team")
+        );
+        assert_eq!(PeerIdentity::synthetic("anon").principal(), None);
+    }
+
+    #[test]
+    fn file_verifier_accept_new_pins_then_detects_change() {
+        let dir = std::env::temp_dir().join(format!("mae-fv-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("known_hosts");
+        let v = FileHostKeyVerifier::new(path.clone(), HostKeyPolicy::AcceptNew);
+        let server = Identity::generate("daemon").public();
+        // First sight → accepted + pinned.
+        assert!(v.verify("10.0.0.5:9473", &server));
+        // Same key again → accepted (pinned match).
+        assert!(v.verify("10.0.0.5:9473", &server));
+        // Different key for same addr → rejected (possible MITM).
+        let imposter = Identity::generate("evil").public();
+        assert!(!v.verify("10.0.0.5:9473", &imposter));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_verifier_strict_rejects_unknown() {
+        let dir = std::env::temp_dir().join(format!("mae-fvs-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let v = FileHostKeyVerifier::new(dir.join("known_hosts"), HostKeyPolicy::Strict);
+        assert!(!v.verify("h:9473", &Identity::generate("d").public()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn host_key_policy_parsing() {
+        assert_eq!(HostKeyPolicy::from_str_opt("strict"), HostKeyPolicy::Strict);
+        assert_eq!(
+            HostKeyPolicy::from_str_opt("accept-new"),
+            HostKeyPolicy::AcceptNew
+        );
+        assert_eq!(HostKeyPolicy::from_str_opt("prompt"), HostKeyPolicy::Prompt);
+        assert_eq!(
+            HostKeyPolicy::from_str_opt("garbage"),
+            HostKeyPolicy::Prompt
+        );
+    }
+
+    #[test]
+    fn transcript_binds_inputs() {
+        let cp = [1u8; 32];
+        let sp = [2u8; 32];
+        let t1 = transcript(&cp, &sp, b"na", b"nb");
+        assert_eq!(t1, transcript(&cp, &sp, b"na", b"nb"));
+        assert_ne!(
+            t1,
+            transcript(&sp, &cp, b"na", b"nb"),
+            "pubkey order matters"
+        );
+        assert_ne!(
+            t1,
+            transcript(&cp, &sp, b"nb", b"na"),
+            "nonce order matters"
+        );
+    }
+}

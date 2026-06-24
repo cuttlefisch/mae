@@ -71,7 +71,7 @@ Controlled by the `collab_kb_sync_mode` option:
 | Mode | Behavior |
 |------|----------|
 | `on_save` (default) | Auto-sync when you edit a KB node via `:kb-update` or AI tools |
-| `manual` | Only sync when you explicitly run `:kb-sync` |
+| `manual` | Only sync when you explicitly run `:collab-sync` (`SPC C y`) |
 
 Set via:
 ```
@@ -133,24 +133,58 @@ When `on_save` mode is active:
 
 ## Data Directory Layout
 
-Shared KBs are stored under `$XDG_DATA_HOME/mae/kb/shared/`:
+Shared KBs are stored under `$XDG_DATA_HOME/mae/kb/shared/<slug>/` (default
+`~/.local/share/mae/kb/shared/`). The on-disk internal layout is an
+implementation detail and subject to change — treat the directory as opaque and
+manage shared KBs through MAE (the `*KB Sharing*` buffer, `:kb-*` commands, or
+the Scheme/MCP primitives) rather than by editing files directly.
 
+## Authentication
+
+The daemon's `auth.mode` defaults to `none` (no auth — suitable only for trusted
+loopback). For any multi-user / non-loopback deployment, authenticate.
+
+### Recommended: `key` mode (trusted-peer mTLS)
+
+The recommended collab auth is **`key` mode** — Ed25519 trusted-peer identities
+with mutual TLS (ADR-017/018). Each peer gets a stable Ed25519 identity, the
+channel is encrypted, the daemon is pinned on first connect (TOFU), edits are
+attributed to the verified identity, and per-KB membership is enforced. There is
+**no shared secret** to distribute.
+
+The one-command client setup is idempotent:
+
+```bash
+mae setup-collab --server 192.168.1.10:9473
 ```
-kb/
-  shared/
-    my-notes/
-      kb.sqlite     # Local CRDT-enabled storage
-      meta.toml     # Name, collab_id, creator, peers, last_sync
+
+This generates the peer's Ed25519 identity, persists `collab-auth-mode=key` +
+the server address + `collab-auto-connect` to `init.scm`, and prints the
+`mae-daemon authorize …` line to hand to the admin.
+
+Configure the daemon (`~/.config/mae/daemon.toml`):
+
+```toml
+[collab]
+bind = "0.0.0.0:9473"
+
+[collab.auth]
+mode = "key"            # Ed25519 + mTLS (tls = true by default)
 ```
 
-## Authentication (PSK)
+The full role/policy lifecycle — Owner/Editor/Viewer roles, the
+`restrictive | invite | permissive` join policy, the `*KB Sharing*` management
+buffer (`SPC C K m`), epoch fencing, peer authorization, and the Scheme/MCP
+primitives — is documented in
+[COLLABORATION.md §10 (Trusted-Peer Mode)](COLLABORATION.md#10-trusted-peer-mode-key-auth--mtls).
 
-MAE supports mutual authentication using a pre-shared key (HMAC-SHA256).
-Both the server and all clients must share the same key.
+### Alternative: `psk` mode (pre-shared key)
 
-### Setup
+PSK mutual authentication (HMAC-SHA256) is an alternative for quick shared-secret
+setups. The secret must be supplied via a command — **never** a plaintext key in
+`config.toml`.
 
-1. **Generate a key** (any method):
+1. **Generate a key:**
    ```bash
    # Option A: random key
    openssl rand -hex 32 > ~/.config/mae/collab-psk.txt
@@ -161,23 +195,19 @@ Both the server and all clients must share the same key.
 
 2. **Configure the server** (`~/.config/mae/daemon.toml`):
    ```toml
-   [auth]
+   [collab.auth]
    mode = "psk"
    psk_command = "cat ~/.config/mae/collab-psk.txt"
-   # Or plaintext fallback (not recommended):
-   # psk = "your-secret-key"
    ```
 
-3. **Configure each client** (`~/.config/mae/config.toml`):
-   ```toml
-   [collaboration]
-   server_address = "192.168.1.10:9473"
-   psk_command = "cat ~/.config/mae/collab-psk.txt"
-   # Or plaintext fallback:
-   # psk = "your-secret-key"
+3. **Configure each client** (`init.scm`):
+   ```scheme
+   (set-option! "collab-server-address" "192.168.1.10:9473")
+   (set-option! "collab-auth-mode" "psk")
+   (set-option! "collab-psk-command" "cat ~/.config/mae/collab-psk.txt")
    ```
 
-### How It Works
+#### How It Works
 
 ```
 Client → Server: hello + nonce
@@ -190,10 +220,10 @@ Both sides prove knowledge of the PSK without transmitting it.
 Nonces prevent replay attacks. If keys don't match, the connection is rejected
 before any data exchange.
 
-### No PSK (Default)
+### No auth (default)
 
-If no PSK is configured, connections proceed without authentication.
-This is suitable for trusted local networks only.
+If `auth.mode = "none"` (the default), connections proceed without
+authentication. This is suitable for trusted local networks only.
 
 ## Network Configuration
 
@@ -271,27 +301,24 @@ dns-sd -B _mae-sync._tcp local.
 cargo install --path crates/mae
 cargo install --path daemon
 
-# 2. Create PSK
-mkdir -p ~/.config/mae
-openssl rand -hex 32 > ~/.config/mae/collab-psk.txt
-
-# 3. Configure server
+# 2. Configure server for trusted-peer (key) mode
 cat > ~/.config/mae/daemon.toml << 'EOF'
+[collab]
 bind = "0.0.0.0:9473"
-[auth]
-mode = "psk"
-psk_command = "cat ~/.config/mae/collab-psk.txt"
+
+[collab.auth]
+mode = "key"
 EOF
 
-# 4. Start server
+# 3. Start server
 mae-daemon
+
+# 4. Print the daemon's identity (share the fingerprint out-of-band)
+mae-daemon identity
 
 # 5. Get your IP
 ip addr show | grep "inet " | grep -v 127.0.0.1
 # → e.g., 192.168.1.10
-
-# 6. Share the PSK with Machine B (secure channel!)
-# Copy ~/.config/mae/collab-psk.txt to Machine B
 ```
 
 **On Machine B (macOS, joining):**
@@ -299,25 +326,23 @@ ip addr show | grep "inet " | grep -v 127.0.0.1
 # 1. Install/build MAE
 cargo install --path crates/mae
 
-# 2. Place the same PSK file
-mkdir -p ~/.config/mae
-# (paste the PSK from Machine A)
-echo "the-same-key" > ~/.config/mae/collab-psk.txt
+# 2. One-command setup: generates an Ed25519 identity, writes init.scm,
+#    and prints the `mae-daemon authorize …` line to send to Machine A's admin.
+mae setup-collab --server 192.168.1.10:9473
 
-# 3. Configure client
-cat >> ~/.config/mae/config.toml << 'EOF'
-[collaboration]
-server_address = "192.168.1.10:9473"
-psk_command = "cat ~/.config/mae/collab-psk.txt"
-user_name = "machine-b"
-EOF
+# 3. On Machine A, authorize Machine B's printed key, e.g.:
+#    mae-daemon authorize mae-ed25519 <base64> machine-b
 
-# 4. Launch MAE and connect
+# 4. Launch MAE and connect (accept the TOFU prompt — verify it matches step 4 above)
 mae ~/my-notes/
 # In editor:
 :collab-connect 192.168.1.10:9473
 :kb-share default
 ```
+
+For the PSK alternative, set `[collab.auth] mode = "psk"` + `psk_command` on the
+daemon and `collab-auth-mode=psk` + `collab-psk-command` in each client's
+`init.scm` (see [Authentication](#authentication) above).
 
 **On Machine A (in MAE):**
 ```
@@ -374,7 +399,7 @@ KB sharing uses yrs (Yjs Rust port) CRDTs for conflict-free merging:
 - `KbCollectionDoc`: manifest listing all nodes in a shared KB
 - Transport: JSON-RPC 2.0 over TCP with Content-Length framing
 - Protocol methods: `kb/share`, `kb/join`, `kb/node_update`, `kb/leave`
-- Authentication: mutual HMAC-SHA256 PSK handshake (optional, before JSON-RPC)
+- Authentication: `key` mode (Ed25519 trusted-peer mTLS, recommended) or `psk` mode (mutual HMAC-SHA256 handshake); both optional, before JSON-RPC
 - Discovery: mDNS `_mae-sync._tcp.local` service type
 
 See [ADR-005](adr/adr-005-kb-crdt.md) and [ADR-006](adr/adr-006-collaborative-state-engine.md) for design rationale.
@@ -391,6 +416,7 @@ For persistent availability across devices or over the internet, run
 mae-daemon --bind 0.0.0.0:9473
 
 # Or set in daemon.toml:
+[collab]
 bind = "0.0.0.0:9473"
 ```
 
@@ -417,9 +443,10 @@ sudo firewall-cmd --reload
 sudo nft add rule inet filter input tcp dport 9473 accept
 ```
 
-For internet-facing deployments, always configure a PSK (`[auth] mode = "psk"`
-in `daemon.toml`). Without PSK, anyone who can reach port 9473 can read
-and write your shared KB.
+For internet-facing deployments, always authenticate — prefer `key` mode
+(`[collab.auth] mode = "key"` in `daemon.toml`), or `psk` as an alternative.
+Without auth (`mode = "none"`), anyone who can reach port 9473 can read and write
+your shared KB.
 
 ---
 
@@ -444,7 +471,8 @@ PrivateTmp=true
 ProtectSystem=strict
 
 # Allow writes only to the data and config dirs
-ReadWritePaths=/var/lib/mae /etc/mae
+# (adjust to your service user's XDG dirs, e.g. ~/.local/share/mae and ~/.config/mae)
+ReadWritePaths=%h/.local/share/mae %h/.config/mae
 
 # Prevent privilege escalation
 NoNewPrivileges=true
@@ -471,11 +499,12 @@ Verify it is running and the data directory is writable before connecting client
 ## VPN / WireGuard Tunnel
 
 For internet deployments, binding `mae-daemon` to a WireGuard tunnel
-interface provides network-level encryption as defense-in-depth alongside PSK
-authentication.
+interface provides network-level encryption as defense-in-depth alongside
+`key`-mode mTLS (or PSK) authentication.
 
 ```toml
 # daemon.toml — bind to WireGuard interface only
+[collab]
 bind = "10.0.0.1:9473"   # wg0 address
 ```
 
@@ -485,18 +514,16 @@ sudo wg-quick up wg0
 mae-daemon
 ```
 
-Clients connect to the WireGuard peer address:
-```toml
-# config.toml on client
-[collaboration]
-server_address = "10.0.0.1:9473"
-psk_command = "pass mae/collab-psk"
+Clients connect to the WireGuard peer address (`init.scm`):
+```scheme
+(set-option! "collab-server-address" "10.0.0.1:9473")
+(set-option! "collab-auth-mode" "key")   ; or "psk" + collab-psk-command
 ```
 
-Even without PSK, the WireGuard tunnel encrypts all traffic with
-Curve25519 + ChaCha20-Poly1305. Using both (WireGuard + PSK) provides
-defense-in-depth: a compromised WireGuard key does not leak KB data unless
-the PSK is also compromised.
+Even without app-level auth, the WireGuard tunnel encrypts all traffic with
+Curve25519 + ChaCha20-Poly1305. Using both (WireGuard + `key`/`psk` auth)
+provides defense-in-depth: a compromised WireGuard key does not leak KB data
+unless the peer identity or PSK is also compromised.
 
 ---
 
@@ -505,6 +532,7 @@ the PSK is also compromised.
 `mae-daemon` supports IPv6. To listen on all interfaces (dual-stack):
 
 ```toml
+[collab]
 bind = "[::]:9473"
 ```
 
@@ -562,7 +590,7 @@ collab-doctor: OK                          ← overall health (OK / WARN / ERROR
 Connection
   server:    192.168.1.10:9473             ← configured server address
   status:    connected                     ← TCP connection state
-  auth:      PSK (HMAC-SHA256) [verified]  ← auth method + last handshake result
+  auth:      key (Ed25519 mTLS) [verified] ← auth mode + last handshake result
   latency:   4 ms                          ← round-trip to server ($/ping)
   uptime:    2h 14m                        ← time since last successful connect
 
@@ -604,20 +632,21 @@ The server binary has its own diagnostics subcommand:
 mae-daemon doctor
 ```
 
-Example output:
+Example output (illustrative — exact fields and formatting vary by version):
 ```
 mae-daemon doctor
-  bind:          0.0.0.0:9473        [listening]
-  auth:          PSK (HMAC-SHA256)   [configured]
-  database:      /var/lib/mae/daemon.db  [ok, 3 shards]
-  wal_size:      142 KB
-  documents:     12 active, 0 evicted
+  bind:          0.0.0.0:9473                 [listening]
+  auth.mode:     key                          [Ed25519 + mTLS]
+  data dir:      ~/.local/share/mae           [writable]
+  collab db:     ~/.local/share/mae/collab/state.db  [ok]
   peers:         2 connected
-  compaction:    last ran 4m ago, next in 56s
   uptime:        3h 07m
 
   Self-test:     PASS (ping round-trip: 1ms)
 ```
+
+The collab database lives at `<data_dir>/collab/state.db`, where `<data_dir>`
+defaults to the XDG data dir (`~/.local/share/mae`).
 
 Flags:
 - `--check-config` — validate `daemon.toml` without binding a port

@@ -33,6 +33,12 @@ pub fn highlight_spans_for_buffer(buf: &Buffer) -> Option<Vec<HighlightSpan>> {
         ),
         crate::buffer::BufferKind::Diff => Some(crate::diff::diff_highlight_spans(buf.rope())),
         crate::buffer::BufferKind::Agenda => Some(super::agenda::compute_agenda_spans(buf)),
+        crate::buffer::BufferKind::Notifications => {
+            Some(super::notifications::compute_notif_spans(buf))
+        }
+        crate::buffer::BufferKind::KbSharing => {
+            Some(super::kb_sharing::compute_kb_sharing_spans(buf))
+        }
         crate::buffer::BufferKind::Text => None,
         _ => None,
     }

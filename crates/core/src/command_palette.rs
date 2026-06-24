@@ -152,6 +152,13 @@ pub enum MiniDialogContext {
         address: String,
     },
     SetupKbNotesDir,
+    /// ADR-024: a `BlockingReply` notification routed to a modal — the y/N answer
+    /// is sent on the notification's reply channel (`pending_notif_reply`). The
+    /// generalized successor to the bespoke TOFU `PeerKeyAccept` prompt (ADR-017):
+    /// the host-key trust prompt is now just one consumer of this mechanism.
+    Notification {
+        notif_id: u64,
+    },
 }
 
 /// State for a multi-field mini-dialog (edit-link, rename, etc.)
@@ -172,7 +179,10 @@ impl MiniDialogState {
     pub fn title(&self) -> &'static str {
         match self.kind {
             MiniDialogKind::EditLink => "Edit Link",
-            MiniDialogKind::Confirm => "Confirm",
+            MiniDialogKind::Confirm => match &self.context {
+                MiniDialogContext::Notification { .. } => "Action Required",
+                _ => "Confirm",
+            },
             MiniDialogKind::SingleInput => match &self.context {
                 MiniDialogContext::FileRename { .. } | MiniDialogContext::FileTreeRename { .. } => {
                     "Rename"

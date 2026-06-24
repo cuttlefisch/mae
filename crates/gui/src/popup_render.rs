@@ -924,77 +924,62 @@ fn render_mini_dialog(
     cols: usize,
     rows: usize,
 ) {
-    // Smaller dialog box than the full palette.
-    let dialog_width = 50.min(cols.saturating_sub(4));
-    let dialog_height = (4 + dialog.fields.len()).min(rows.saturating_sub(2));
-    let col = cols.saturating_sub(dialog_width) / 2;
-    let row = rows.saturating_sub(dialog_height) / 2;
+    // Content-adaptive geometry (B-23): the box grows to fit its title/body/fields
+    // and wraps long content (e.g. the host-key fingerprint) instead of clipping.
+    // Shared with the TUI via `render_common::dialog` so the two can't diverge.
+    use mae_core::render_common::dialog::{mini_dialog_layout, DialogLine};
+    use mae_core::text_utils::display_width;
+    let layout = mini_dialog_layout(dialog, cols, rows);
+    let (col, row, width, height) = (layout.col, layout.row, layout.width, layout.height);
 
     let text_fg = theme::ts_fg(editor, "ui.text");
     let prompt_fg = theme::ts_fg(editor, "ui.popup.key");
+    let dim_fg = theme::ts_fg(editor, "ui.popup.text");
     let selection_bg = theme::ts_bg(editor, "ui.selection");
     let border_fg = theme::ts_fg(editor, "ui.window.border.active");
     let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
 
-    canvas.draw_rect_fill(row, col, dialog_width, dialog_height, bg);
+    canvas.draw_rect_fill(row, col, width, height, bg);
     let title = format!(" {} ", dialog.title());
-    draw_border_titled(
-        canvas,
-        row,
-        col,
-        dialog_width,
-        dialog_height,
-        border_fg,
-        &title,
-    );
+    draw_border_titled(canvas, row, col, width, height, border_fg, &title);
 
     let inner_col = col + 2;
-    let inner_width = dialog_width.saturating_sub(4);
+    let inner_width = layout.inner_width();
 
-    for (i, field) in dialog.fields.iter().enumerate() {
-        let field_row = row + 1 + i;
-        let is_active = i == dialog.active_field;
-
-        if is_active {
-            if let Some(bg) = selection_bg {
-                canvas.draw_rect_fill(field_row, col + 1, dialog_width - 2, 1, bg);
+    for (i, line) in layout.lines.iter().enumerate() {
+        let line_row = row + 1 + i;
+        match line {
+            DialogLine::Text(t) => canvas.draw_text_at(line_row, inner_col, t, text_fg),
+            DialogLine::Hint(h) => canvas.draw_text_at(line_row, inner_col, h, prompt_fg),
+            DialogLine::Field {
+                label,
+                value,
+                placeholder,
+                active,
+                ..
+            } => {
+                if *active {
+                    if let Some(sel) = selection_bg {
+                        canvas.draw_rect_fill(line_row, col + 1, width.saturating_sub(2), 1, sel);
+                    }
+                }
+                let label_s = format!("{label}: ");
+                canvas.draw_text_at(line_row, inner_col, &label_s, prompt_fg);
+                let value_col = inner_col + display_width(&label_s);
+                let max_value_len = inner_width.saturating_sub(display_width(&label_s));
+                let (display_value, fg) = if value.is_empty() {
+                    (placeholder.as_str(), dim_fg)
+                } else {
+                    (value.as_str(), text_fg)
+                };
+                let truncated: String = display_value.chars().take(max_value_len).collect();
+                canvas.draw_text_at(line_row, value_col, &truncated, fg);
+                if *active {
+                    let cursor_col = value_col + value.chars().count().min(max_value_len);
+                    canvas.draw_text_at(line_row, cursor_col, "│", text_fg);
+                }
             }
         }
-
-        let label = format!("{}: ", field.label);
-        canvas.draw_text_at(field_row, inner_col, &label, prompt_fg);
-
-        let value_col = inner_col + label.len();
-        let max_value_len = inner_width.saturating_sub(label.len());
-        let display_value = if field.value.is_empty() {
-            &field.placeholder
-        } else {
-            &field.value
-        };
-        let fg = if field.value.is_empty() {
-            // Dim placeholder
-            theme::ts_fg(editor, "ui.popup.text")
-        } else {
-            text_fg
-        };
-        let truncated: String = display_value.chars().take(max_value_len).collect();
-        canvas.draw_text_at(field_row, value_col, &truncated, fg);
-
-        // Draw cursor for active field
-        if is_active && !field.value.is_empty() {
-            let cursor_col = value_col + field.value.len().min(max_value_len);
-            canvas.draw_text_at(field_row, cursor_col, "│", text_fg);
-        } else if is_active {
-            canvas.draw_text_at(field_row, value_col, "│", text_fg);
-        }
-    }
-
-    // Footer hint
-    let footer_row = row + 1 + dialog.fields.len();
-    if footer_row < row + dialog_height - 1 {
-        let hint = "Tab: next  Enter: apply  Esc: cancel";
-        let hint_col = inner_col;
-        canvas.draw_text_at(footer_row, hint_col, hint, prompt_fg);
     }
 }
 

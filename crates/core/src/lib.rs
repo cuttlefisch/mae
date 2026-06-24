@@ -33,6 +33,7 @@ pub mod hooks;
 pub mod image_meta;
 pub mod input;
 pub mod kb_seed;
+pub mod kb_sharing;
 pub mod kb_view;
 pub mod keymap;
 pub mod keymap_registry;
@@ -40,6 +41,8 @@ pub mod link_detect;
 pub mod lock_stats;
 pub mod lsp_intent;
 pub mod messages;
+pub mod notifications;
+pub mod notifications_view;
 pub mod options;
 pub mod project;
 pub mod render_common;
@@ -84,10 +87,11 @@ pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
     is_builtin_node, BlameEntry, BlameOverlay, CaptureState, CodeActionItem, CodeActionMenu,
     CollabIntent, CollabStatus, CompletionItem, Diagnostic, DiagnosticSeverity, DiagnosticStore,
-    DocumentHighlightRange, EditRecord, Editor, HighlightKind, HoverPopup, InputLock, LspLocation,
-    LspRange, LspServerInfo, LspServerStatus, PeekReferenceLocation, PeekReferencesState,
-    PeekState, SignatureHelpInfo, SignatureHelpState, SymbolOutlineEntry, SymbolOutlineState,
-    DEFAULT_COLLAB_ADDRESS, DEFAULT_COLLAB_PORT, KB_DEFAULT_NAME, KB_SYNC_MODE_DEFAULT,
+    DocumentHighlightRange, EditRecord, Editor, HighlightKind, HoverPopup, InputLock, JoinedNode,
+    KbCollabAction, LspLocation, LspRange, LspServerInfo, LspServerStatus, PeekReferenceLocation,
+    PeekReferencesState, PeekState, SignatureHelpInfo, SignatureHelpState, SymbolOutlineEntry,
+    SymbolOutlineState, DEFAULT_COLLAB_ADDRESS, DEFAULT_COLLAB_PORT, KB_DEFAULT_NAME,
+    KB_SYNC_MODE_DEFAULT,
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;

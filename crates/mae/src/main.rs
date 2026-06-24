@@ -39,6 +39,16 @@ use mae_renderer::Renderer;
 use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, warn};
 
+/// Short git SHA of this build (`-dirty` if the working tree had uncommitted
+/// changes, "unknown" if built outside a git checkout). Set by `build.rs`. Used
+/// in the startup log, `--version`, and `collab-doctor` so a running editor can
+/// be pinned to an exact commit across machines (the cross-machine deploy
+/// discipline the live two-machine test depends on).
+pub(crate) const BUILD_SHA: &str = match option_env!("MAE_BUILD_SHA") {
+    Some(s) => s,
+    None => "unknown",
+};
+
 use bootstrap::{init_logging, load_history, load_init_file, setup_ai, setup_dap, setup_lsp};
 use terminal_loop::{cleanup_stale_mcp_sockets, run_headless_self_test, run_terminal_loop};
 
@@ -94,6 +104,54 @@ fn should_use_gui(
     gui_compiled && !force_tui && (force_gui || display_available)
 }
 
+/// Parse a boolean from an environment variable's **value** (not its mere
+/// presence). Returns `None` when unset so callers can leave a config-derived
+/// default untouched. Recognised falsy: `0/false/no/off` and empty; anything
+/// else non-empty is truthy. This is the fix for the footgun where
+/// `MAE_COLLAB_AUTO_CONNECT=false` still enabled auto-connect because the old
+/// check keyed on `is_ok()` (presence).
+fn env_bool(key: &str) -> Option<bool> {
+    std::env::var(key).ok().map(|v| parse_truthy(&v))
+}
+
+/// Interpret a string as a boolean flag value. Falsy: `0/false/no/off` and
+/// empty/whitespace (case-insensitive); everything else is truthy.
+fn parse_truthy(v: &str) -> bool {
+    !matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "no" | "off" | ""
+    )
+}
+
+/// Apply **per-launch** collaboration overrides (env vars, then CLI `--connect`)
+/// AFTER the config files (config.toml + init.scm) have been applied, so they
+/// take precedence per the standard chain: defaults < config files < env < CLI.
+///
+/// Before this, `init.scm` (loaded last) could override `--connect` and the env
+/// vars were either ignored entirely (GUI/TUI path never read
+/// `MAE_COLLAB_AUTO_CONNECT`) or beaten by a later `(set-option! …)` in
+/// `init.scm`. Env: `MAE_COLLAB_SERVER` (address), `MAE_COLLAB_AUTO_CONNECT`
+/// (parsed truthy/falsy). CLI `--connect` wins last.
+fn apply_collab_launch_overrides(editor: &mut Editor, connect_addr: Option<&str>) {
+    if let Ok(addr) = std::env::var("MAE_COLLAB_SERVER") {
+        if !addr.trim().is_empty() {
+            let _ = editor.set_option("collab_server_address", addr.trim());
+        }
+    }
+    if let Some(v) = env_bool("MAE_COLLAB_AUTO_CONNECT") {
+        let _ = editor.set_option("collab_auto_connect", &v.to_string());
+        info!(
+            auto_connect = v,
+            "env MAE_COLLAB_AUTO_CONNECT override applied"
+        );
+    }
+    if let Some(addr) = connect_addr {
+        let _ = editor.set_option("collab_server_address", addr);
+        let _ = editor.set_option("collab_auto_connect", "true");
+        info!(address = %addr, "CLI --connect: auto-connect enabled");
+    }
+}
+
 /// Entry point for the MAE editor.
 ///
 /// Plain `fn main()` — the tokio runtime is constructed manually so that
@@ -120,7 +178,11 @@ fn main() -> io::Result<()> {
     let log_handle = message_log.handle();
     init_logging(log_handle);
 
-    info!(version = env!("CARGO_PKG_VERSION"), "mae starting");
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        build = BUILD_SHA,
+        "mae starting"
+    );
 
     // Sync PATH from user's shell (login/interactive) so we can find binaries
     // even when launched from a desktop environment with a minimal PATH.
@@ -139,7 +201,7 @@ fn main() -> io::Result<()> {
 
     let args: Vec<String> = std::env::args().collect(); // Handle --version / --help / --init-config before the terminal UI starts.
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("mae {}", env!("CARGO_PKG_VERSION"));
+        println!("mae {} ({})", env!("CARGO_PKG_VERSION"), BUILD_SHA);
         return Ok(());
     }
     // `mae upgrade` owns its own flags (incl. `--help`), so route it before the
@@ -160,6 +222,9 @@ fn main() -> io::Result<()> {
         println!("  --init-config [--force] Write a commented template and run wizard");
         println!("  --print-config-path     Print the config file path and exit");
         println!("  --print-config-template Print the default commented template to stdout");
+        println!("  --collab-identity       Print this editor's collab peer identity (for `mae-daemon authorize`)");
+        println!("  setup-collab [--server ADDR] [--ssh-key PATH]");
+        println!("                          One-command key-mode setup: identity + init.scm (optionally reuse an SSH key)");
         println!("  --gui                   Force GUI backend (default on a desktop session; auto-off over SSH/tty)");
         println!("  --no-gui, --tui, -nw    Force terminal mode (like emacs -nw)");
         println!("  --connect [ADDR]        Connect to daemon (like emacsclient -c)");
@@ -226,6 +291,133 @@ fn main() -> io::Result<()> {
     if args.iter().any(|a| a == "--print-config-template") {
         print!("{}", config::default_config_template());
         return Ok(());
+    }
+    // --collab-identity: print this editor's Ed25519 peer identity (generating
+    // it on first use) so an admin can authorize it on the daemon.
+    if args.iter().any(|a| a == "--collab-identity") {
+        let label = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "mae-editor".to_string());
+        match mae_mcp::identity::default_collab_dir() {
+            Some(dir) => match mae_mcp::identity::Identity::load_or_generate(&dir, &label) {
+                Ok(id) => {
+                    println!(
+                        "MAE collab peer identity ({}):",
+                        dir.join("id_ed25519").display()
+                    );
+                    println!("  fingerprint: {}", id.fingerprint());
+                    println!("  public key:  {}", id.public().to_line());
+                    println!();
+                    println!("Authorize on the daemon host with:");
+                    println!("  mae-daemon authorize {}", id.public().to_line());
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("error: failed to load/generate identity: {e}");
+                    std::process::exit(1);
+                }
+            },
+            None => {
+                eprintln!("error: cannot resolve collab dir (set XDG_DATA_HOME or HOME)");
+                std::process::exit(1);
+            }
+        }
+    }
+    // `mae setup-collab [--server <addr>]`: idempotent one-command key-mode setup.
+    // Generates the peer identity (if absent), persists collab key-mode options to
+    // init.scm, and prints the `mae-daemon authorize` line for the admin.
+    if args.get(1).is_some_and(|a| a == "setup-collab") {
+        let server = args
+            .iter()
+            .position(|a| a == "--server")
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .unwrap_or_else(|| "127.0.0.1:9473".to_string());
+        // `--server` is the address this editor CONNECTS to (the daemon's
+        // reachable IP). `0.0.0.0` is a *bind* address (the daemon's), never a
+        // connect target — catch the common mix-up early.
+        if server.starts_with("0.0.0.0") {
+            eprintln!(
+                "error: --server is the daemon's reachable address to connect TO, not a bind address.\n\
+                 '0.0.0.0' is what the DAEMON binds (in daemon.toml) to listen on all interfaces.\n\
+                 Use the daemon host's LAN IP (e.g. 192.168.1.10:9473), or 127.0.0.1:9473 on the same machine."
+            );
+            std::process::exit(2);
+        }
+        let mut editor = Editor::new();
+        for (opt, val) in [
+            ("collab_auth_mode", "key"),
+            ("collab_server_address", server.as_str()),
+            ("collab_auto_connect", "true"),
+        ] {
+            if let Err(e) = editor.set_option(opt, val) {
+                eprintln!("error: set {opt}: {e}");
+                std::process::exit(1);
+            }
+            if let Err(e) = editor.save_option_to_init(opt) {
+                eprintln!("error: persist {opt}: {e}");
+                std::process::exit(1);
+            }
+        }
+        let label = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "mae-editor".to_string());
+        // --ssh-key <path>: reuse an existing OpenSSH Ed25519 key as the identity
+        // (opt-in). The matching .pub is authorized on the daemon via
+        // `mae-daemon authorize --from-ssh-pub`.
+        let ssh_key = args
+            .iter()
+            .position(|a| a == "--ssh-key")
+            .and_then(|i| args.get(i + 1));
+        let id = if let Some(ssh_path) = ssh_key {
+            match mae_mcp::identity::Identity::import_ssh_private_key(
+                std::path::Path::new(ssh_path),
+                &label,
+            ) {
+                Ok(id) => {
+                    if let Some(dir) = mae_mcp::identity::default_collab_dir() {
+                        if let Err(e) = id.save(&dir) {
+                            eprintln!("error: persist identity: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                    println!("✓ imported SSH identity from {ssh_path}");
+                    Some(id)
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            mae_mcp::identity::default_collab_dir()
+                .and_then(|dir| mae_mcp::identity::Identity::load_or_generate(&dir, &label).ok())
+        };
+        match id {
+            Some(id) => {
+                println!("✓ collab key mode configured (init.scm updated):");
+                println!("    collab-auth-mode = key");
+                println!("    collab-server-address = {server}");
+                println!("    collab-auto-connect = true");
+                println!();
+                println!("Your peer identity:");
+                println!("  fingerprint: {}", id.fingerprint());
+                println!("  public key:  {}", id.public().to_line());
+                println!();
+                println!("On the daemon host, authorize this peer:");
+                println!("  mae-daemon authorize {}", id.public().to_line());
+                println!();
+                println!("Then launch `mae` — it auto-connects; accept the daemon's");
+                println!("key on first connect (verify the fingerprint, then press y).");
+                return Ok(());
+            }
+            None => {
+                eprintln!("error: cannot resolve collab dir (set XDG_DATA_HOME or HOME)");
+                std::process::exit(1);
+            }
+        }
     }
     if args.iter().any(|a| a == "--setup-agents") {
         let dir = args
@@ -344,15 +536,12 @@ fn main() -> io::Result<()> {
             }
         };
 
-        // Apply env-var overrides for collab.
-        if let Ok(addr) = std::env::var("MAE_COLLAB_SERVER") {
-            editor.collab.server_address = addr;
-        }
-        if std::env::var("MAE_COLLAB_AUTO_CONNECT").is_ok() {
-            editor.collab.auto_connect = true;
-        }
-
         let _module_registry = load_init_file(&mut scheme, &mut editor);
+
+        // Per-launch collab overrides (env vars) win over init.scm — applied AFTER
+        // it, with value parsing (so MAE_COLLAB_AUTO_CONNECT=false disables).
+        // `--test` has no `--connect`. See apply_collab_launch_overrides.
+        apply_collab_launch_overrides(&mut editor, None);
 
         // Build a minimal tokio runtime for the collab bridge.
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -579,12 +768,34 @@ fn main() -> io::Result<()> {
         let _ = editor.set_option("collab_user_name", &resolved);
     }
 
-    // --connect overrides collab options: auto-connect to the given address.
-    if let Some(ref addr) = connect_addr {
-        let _ = editor.set_option("collab_server_address", addr);
-        let _ = editor.set_option("collab_auto_connect", "true");
-        info!(address = %addr, "CLI --connect: auto-connect enabled");
+    // ADR-020 B-16: derive this peer's STABLE, UNIQUE yrs client_id for KB CRDT
+    // edits from the durable collab identity fingerprint. Two peers sharing a
+    // client_id collide in yrs' clock space and their concurrent edits diverge;
+    // seeding from the per-install Ed25519 fingerprint makes every peer distinct
+    // and stable across restarts (so a peer's edits chain on one lineage).
+    if editor.collab.local_kb_client_id == 0 {
+        if let Some(dir) = mae_mcp::identity::default_collab_dir() {
+            let label = editor.collab.user_name.clone();
+            if let Ok(id) = mae_mcp::identity::Identity::load_or_generate(&dir, &label) {
+                let fp = id.fingerprint();
+                let cid = mae_core::editor::derive_kb_client_id(&fp, 0);
+                editor.collab.local_kb_client_id = cid;
+                // ADR-023: remember our own principal so node edits can be re-derived
+                // under a rotated per-KB authorization epoch (see kb_client_id_for).
+                editor.collab.local_fingerprint = fp;
+                info!(
+                    client_id = cid,
+                    "KB CRDT client_id derived from collab identity"
+                );
+            }
+        }
     }
+
+    // NB: per-launch collab overrides (env + CLI `--connect`) are applied AFTER
+    // init.scm loads (below), so they win over config files — see
+    // `apply_collab_launch_overrides`. (They used to be set here, before init.scm,
+    // which let a `(set-option! "collab_auto_connect" …)` in init.scm clobber the
+    // CLI flag and ignore the env var.)
 
     // Apply daemon settings from config → OptionRegistry.
     if let Some(enabled) = app_config.daemon.enabled {
@@ -635,11 +846,21 @@ fn main() -> io::Result<()> {
         debug!("init.scm and history loaded");
     }
 
+    // Per-launch overrides win over config files (config.toml + init.scm):
+    // defaults < config files < env < CLI. Must run AFTER init.scm.
+    apply_collab_launch_overrides(&mut editor, connect_addr.as_deref());
+
     // Load KB federation registry and import enabled instances.
     if !clean_mode {
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
-            .join("mae");
+        // XDG-first (CLAUDE.md principle #13 / B-6): honor XDG_DATA_HOME, then
+        // ~/.local/share — NOT dirs::data_dir() (macOS ~/Library). This MUST
+        // match editor.mae_data_dir() (where ADR-019 persists the shared-KB
+        // registry markers) or those markers would save + load to different
+        // paths and silently fail to survive restart.
+        let data_dir = editor.mae_data_dir().unwrap_or_else(|| {
+            crate::pkg::paths::data_dir_candidate("mae")
+                .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share/mae"))
+        });
 
         // Build an in-memory manual KB so the help system's cozo-backed
         // `KbQueryLayer` can resolve built-in nodes (`index`, command/option
@@ -798,63 +1019,140 @@ fn main() -> io::Result<()> {
             if !inst.enabled {
                 continue;
             }
-            if inst.org_dir.exists() {
-                info!(name = %inst.name, dir = %inst.org_dir.display(), "loading KB instance");
-                // Try CozoDB-direct load first (retains store handle for query layer).
-                let loaded_via_cozo = if inst.db_path.exists() {
-                    match mae_kb::CozoKbStore::open(&inst.db_path) {
-                        Ok(store) => match store.load_all() {
-                            Ok(nodes) => {
-                                let count = nodes.len();
-                                let mut kb = mae_kb::KnowledgeBase::new();
-                                for node in nodes {
-                                    kb.insert(node);
-                                }
-                                info!(
-                                    name = %inst.name,
-                                    nodes = count,
-                                    "KB instance loaded from CozoDB"
-                                );
-                                editor.kb.instances.insert(inst.uuid.clone(), kb);
-                                editor
-                                    .kb
-                                    .instance_stores
-                                    .insert(inst.uuid.clone(), std::sync::Arc::new(store));
-                                true
+            // ADR-020: load from the durable CozoDB store FIRST when present — this
+            // works for collab-JOINED instances whose `org_dir` is empty (they carry
+            // a real `db_path`). Previously gated on `org_dir.exists()`, so joined
+            // instances were skipped ("dir missing") and lost their nodes (B-10).
+            let loaded_via_cozo = if inst.db_path.exists() {
+                match mae_kb::CozoKbStore::open(&inst.db_path) {
+                    Ok(store) => match store.load_all() {
+                        Ok(nodes) => {
+                            let count = nodes.len();
+                            let mut kb = mae_kb::KnowledgeBase::new();
+                            for node in nodes {
+                                kb.insert(node);
                             }
-                            Err(e) => {
-                                warn!(error = %e, name = %inst.name, "CozoDB load_all failed, falling back to org import");
-                                false
-                            }
-                        },
+                            info!(name = %inst.name, nodes = count, shared = inst.shared, "KB instance loaded from CozoDB");
+                            editor.kb.instances.insert(inst.uuid.clone(), kb);
+                            editor
+                                .kb
+                                .instance_stores
+                                .insert(inst.uuid.clone(), std::sync::Arc::new(store));
+                            true
+                        }
                         Err(e) => {
-                            warn!(error = %e, name = %inst.name, "CozoDB open failed, falling back to org import");
+                            warn!(error = %e, name = %inst.name, "CozoDB load_all failed, falling back to org import");
                             false
                         }
+                    },
+                    Err(e) => {
+                        warn!(error = %e, name = %inst.name, "CozoDB open failed, falling back to org import");
+                        false
                     }
-                } else {
-                    false
-                };
-                if !loaded_via_cozo {
-                    let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
-                    info!(
-                        name = %inst.name,
-                        nodes = report.nodes_imported,
-                        skipped = report.nodes_skipped,
-                        errors = report.errors.len(),
-                        "KB instance loaded from org files"
-                    );
-                    editor.kb.instances.insert(inst.uuid.clone(), kb);
                 }
             } else {
-                info!(name = %inst.name, dir = %inst.org_dir.display(), "KB instance dir missing, skipping");
+                false
+            };
+            if loaded_via_cozo {
+                // done
+            } else if inst.org_dir.exists() {
+                let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
+                info!(
+                    name = %inst.name,
+                    nodes = report.nodes_imported,
+                    skipped = report.nodes_skipped,
+                    errors = report.errors.len(),
+                    "KB instance loaded from org files"
+                );
+                editor.kb.instances.insert(inst.uuid.clone(), kb);
+            } else {
+                warn!(name = %inst.name, db = %inst.db_path.display(), "KB instance has no loadable store or org dir, skipping");
             }
         }
         editor.kb.registry = registry;
 
+        // ADR-020 recovery: reconstruct shared-KB instances present on disk but
+        // MISSING from the registry (e.g. a clobbered registry — the exact failure
+        // that lost a joined KB mid-session). Collect candidates first (immutable
+        // borrow of data_dir), then reconstruct (mutable). Idempotent.
+        let recoveries: Vec<(String, String, std::path::PathBuf, Option<String>)> =
+            if let Some(dd) = editor.kb.data_dir.as_ref() {
+                dd.list_shared_kbs()
+                    .into_iter()
+                    .filter_map(|slug| {
+                        let meta = dd.read_shared_meta(&slug)?;
+                        Some((
+                            meta.collab_id,
+                            meta.name,
+                            dd.shared_kb_db(&slug),
+                            meta.last_sync,
+                        ))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        let mut recovered_any = false;
+        for (collab_id, name, db_path, last_sync) in recoveries {
+            if collab_id.is_empty()
+                || editor.kb.registry.find_by_collab_id(&collab_id).is_some()
+                || !db_path.exists()
+            {
+                continue;
+            }
+            if let Ok(store) = mae_kb::CozoKbStore::open(&db_path) {
+                if let Ok(nodes) = store.load_all() {
+                    let uuid = mae_kb::federation::generate_uuid();
+                    let mut kb = mae_kb::KnowledgeBase::new();
+                    for node in nodes {
+                        kb.insert(node);
+                    }
+                    let count = kb.list_ids(None).len();
+                    editor.kb.instances.insert(uuid.clone(), kb);
+                    editor
+                        .kb
+                        .instance_stores
+                        .insert(uuid.clone(), std::sync::Arc::new(store));
+                    editor
+                        .kb
+                        .registry
+                        .instances
+                        .push(mae_kb::federation::KbInstance {
+                            uuid,
+                            name: if name.is_empty() {
+                                collab_id.clone()
+                            } else {
+                                name.clone()
+                            },
+                            org_dir: std::path::PathBuf::new(),
+                            db_path,
+                            primary: false,
+                            enabled: true,
+                            last_import: None,
+                            collab_id: Some(collab_id.clone()),
+                            shared: true,
+                            remote_peers: Vec::new(),
+                            last_sync,
+                        });
+                    recovered_any = true;
+                    info!(kb = %collab_id, nodes = count, "recovered shared KB instance from disk (registry rescan)");
+                }
+            }
+        }
+        if recovered_any {
+            if let Err(e) = editor.kb.registry.save(&data_dir) {
+                warn!(error = %e, "failed to persist recovered shared-KB registry");
+            }
+        }
+
         // Build the CozoDB-first query layer AFTER all stores are loaded
         // (primary + manual + federated instances).
         editor.kb.rebuild_query_layer();
+
+        // ADR-019: warm the shared-KB sync cache from durable markers at startup
+        // so a restarted editor's broadcast gate + status reflect what syncs (the
+        // re-subscribe to RECEIVE happens on the Connected event).
+        editor.reconstruct_kb_sync_gate();
     }
 
     // Optionally connect to mae-daemon for LRU-cached KB access.
@@ -923,7 +1221,17 @@ fn main() -> io::Result<()> {
     // Build the tokio runtime manually. The GUI path needs the event loop
     // on the main thread (winit requirement) with tokio on a background
     // thread. The terminal path runs tokio on the main thread as before.
-    let rt = tokio::runtime::Builder::new_current_thread()
+    //
+    // B-22: use a MULTI-threaded pool. The host-key TOFU verifier is called
+    // synchronously by rustls mid-handshake and blocks (up to 120s) waiting for
+    // the user's prompt answer. On a single-threaded runtime that one worker is
+    // also the `bridge_task` forwarder (and MCP/AI/LSP/DAP), so the blocking wait
+    // starved it — the `HostKeyPrompt` event never reached the GUI/MCP and the
+    // modal never rendered (the GUI twin of the #66 TUI deadlock). A small worker
+    // pool lets the forwarder keep running on another worker while a connect
+    // blocks on the prompt, so the modal surfaces and the answer flows back.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
         .enable_all()
         .build()
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -1868,7 +2176,19 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.alt_held,
                     self.shift_held,
                 ) {
-                    if self.editor.ai.input_lock != mae_core::InputLock::None {
+                    if self.editor.mini_dialog.is_some() {
+                        // A blocking modal (e.g. host-key TOFU prompt) captures input
+                        // before AI-input-lock / shell routing — otherwise Esc/Ctrl-C
+                        // leak to AI-cancel and the modal is unanswerable (B-22).
+                        key_handling::handle_key_from_keypress(
+                            &mut self.editor,
+                            &mut self.scheme,
+                            kp,
+                            &mut self.pending_keys,
+                            &self.ai_command_tx,
+                            &mut self.pending_interactive_event,
+                        );
+                    } else if self.editor.ai.input_lock != mae_core::InputLock::None {
                         if kp.key == mae_core::Key::Escape
                             || (kp.key == mae_core::Key::Char('c') && kp.ctrl)
                         {
@@ -2419,7 +2739,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_available_from_env, should_use_gui};
+    use super::{display_available_from_env, parse_truthy, should_use_gui};
 
     // --- gui_display_available policy -------------------------------------
 
@@ -2472,5 +2792,17 @@ mod tests {
         // No flags: GUI iff a display is available.
         assert!(should_use_gui(true, false, false, true));
         assert!(!should_use_gui(true, false, false, false));
+    }
+
+    /// The auto-connect footgun fix: a boolean env var must be read by VALUE, not
+    /// presence — `MAE_COLLAB_AUTO_CONNECT=false` (or `0`/empty) must disable.
+    #[test]
+    fn parse_truthy_reads_value_not_presence() {
+        for t in ["1", "true", "TRUE", "yes", "on", "anything", " true "] {
+            assert!(parse_truthy(t), "{t:?} should be truthy");
+        }
+        for f in ["0", "false", "FALSE", "no", "off", "", "  ", " off "] {
+            assert!(!parse_truthy(f), "{f:?} should be falsy");
+        }
     }
 }

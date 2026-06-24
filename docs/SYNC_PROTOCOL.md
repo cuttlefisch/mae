@@ -348,7 +348,7 @@ is echo-filtered — they never receive their own awareness updates.
 - **Subscription:** Clients must subscribe to `"awareness_update"` event type to receive notifications.
 
 **User identity resolution order:**
-1. `config.toml` → `[collaboration] user_name = "Alice"`
+1. Configured `user_name` — `init.scm` via `(set-option! "user_name" "Alice")` is the primary surface; `config.toml` `[collaboration] user_name = "Alice"` is the legacy bootstrap.
 2. `git config user.name`
 3. `$USER` environment variable
 4. `hostname`
@@ -367,8 +367,8 @@ Completed in v0.11.0:
 5. ~~No awareness protocol~~ — `sync/awareness` JSON-RPC relay with 50ms throttle, 30s timeout, echo filtering, 8-color theme palette, GUI+TUI rendering *(v0.11.0)*
 
 Still deferred:
-6. **No P2P transport.** All sync goes through the daemon. mDNS LAN discovery planned (v0.12.0+).
-7. **No E2E encryption.** Transport is plaintext TCP. TLS planned.
+6. **No direct P2P transport.** All sync goes through the daemon. mDNS LAN peer *discovery* is implemented (`crates/mae/src/mdns_discovery.rs`, `collab_discover`); direct P2P *transport* (daemon-less sync) is still deferred.
+7. **No end-to-end content encryption.** Transport is encrypted in `key` mode (mutual-TLS, ADR-017); `psk`/`none` modes remain plaintext TCP. End-to-end content encryption (encrypted-at-rest CRDT payloads) is the still-deferred piece.
 
 ---
 
@@ -379,4 +379,5 @@ Still deferred:
 - ADR-003: File safety (content-hash, advisory locks)
 - ADR-006: Collaborative state engine
 - ADR-007: Save coordination
+- ADR-017: Asymmetric peer authentication (Ed25519 trusted-peer mutual-TLS)
 - y-websocket: We align on update/sv exchange; we diverge on transport (TCP vs WebSocket) and framing (Content-Length vs WebSocket frames).

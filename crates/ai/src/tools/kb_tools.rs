@@ -568,15 +568,32 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         // --- KB sharing tools ---
         ToolDefinition {
-            name: "kb_share".into(),
-            description: "Share a knowledge base for collaborative editing via the connected daemon. Shares all nodes in the KB instance.".into(),
+            name: "kb_sharing_status".into(),
+            description: "Introspect this peer's KB-sharing state: every shared/joined KB with its members + roles, join policy, pending requests, your own role and authorization epoch, and live sync status. Read-only; reflects this peer's local replica (the daemon is authoritative). Call this BEFORE managing membership so you know who is a member and what the fingerprints are.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
-                    "kb_name".into(),
+                    "kb_id".into(),
                     ToolProperty {
                         prop_type: "string".into(),
-                        description: "Name of the KB instance to share (default: 'default' = primary KB)".into(),
+                        description: "Optional: scope to a single KB by id/name (e.g. 'collabtest'). Omit for all shared/joined KBs.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_share".into(),
+            description: "Share a knowledge base for collaborative editing via the connected daemon. Shares all nodes in the named KB instance (NOT the active/default KB unless you name it).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "kb_id".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Name of the KB instance to share, e.g. 'collabtest' (default: 'default' = primary KB). Alias: kb_name.".into(),
                         enum_values: None,
                     },
                 )]),
@@ -615,6 +632,138 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
                     },
                 )]),
                 required: vec!["kb_id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_add_member".into(),
+            description: "Add a peer to a shared KB's membership, or change their role (owner-only, ADR-018). The peer is identified by its collab identity fingerprint. Controls who may join and write.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB identifier (e.g. 'collabtest')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "member".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Peer's collab identity fingerprint, e.g. 'SHA256:9xLh0...'".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "role".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Role for the peer (default 'editor'): 'viewer' = read-only, 'editor' = read+write, 'owner' = full control.".into(),
+                            enum_values: Some(vec![
+                                "viewer".into(),
+                                "editor".into(),
+                                "owner".into(),
+                            ]),
+                        },
+                    ),
+                ]),
+                required: vec!["kb_id".into(), "member".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_remove_member".into(),
+            description: "Remove a peer from a shared KB's membership (owner-only, ADR-018). The peer can no longer join or write; their local copy is unaffected.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB identifier (e.g. 'collabtest')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "member".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Peer's collab identity fingerprint to remove".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["kb_id".into(), "member".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_approve".into(),
+            description: "Approve a pending join request on a shared KB, granting the peer membership at a role (owner-only, ADR-018). Under the 'invite' policy, non-members' joins become pending until approved. Use kb_sharing_status first to read the pending fingerprints.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB identifier (e.g. 'collabtest')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "member".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Pending peer's collab identity fingerprint to approve".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "role".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Role to grant (default 'editor')".into(),
+                            enum_values: Some(vec!["owner".into(), "editor".into(), "viewer".into()]),
+                        },
+                    ),
+                ]),
+                required: vec!["kb_id".into(), "member".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_set_policy".into(),
+            description: "Set a shared KB's join policy (owner-only, ADR-018): 'restrictive' (only explicitly-added members), 'invite' (joins become pending → approve), or 'permissive' (any authenticated peer auto-joins as viewer).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB identifier (e.g. 'collabtest')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "policy".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Join policy".into(),
+                            enum_values: Some(vec![
+                                "restrictive".into(),
+                                "invite".into(),
+                                "permissive".into(),
+                            ]),
+                        },
+                    ),
+                ]),
+                required: vec!["kb_id".into(), "policy".into()],
             },
             permission: Some(PermissionTier::Write),
         },

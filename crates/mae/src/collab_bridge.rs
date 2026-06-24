@@ -9,13 +9,51 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-use mae_core::{CollabIntent, CollabStatus, Editor};
+use mae_core::{CollabIntent, CollabStatus, Editor, JoinedNode};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
 /// Module-level storage for the mDNS manager, preventing the memory leak
 /// from `std::mem::forget`. The manager auto-unregisters its service on Drop.
 static MDNS_MANAGER: Mutex<Option<crate::mdns_discovery::MdnsManager>> = Mutex::new(None);
+
+/// Ensure the module-level mDNS manager is browsing for peers in the background,
+/// so `collab-discover` reads results instantly instead of blocking the main
+/// thread on a discovery sleep (CLAUDE.md #1). Idempotent: creates a browse-only
+/// manager on first call; starts the browse on an existing (register-only)
+/// manager. Best-effort — mDNS may be unavailable (no multicast).
+fn ensure_mdns_browsing() {
+    let Ok(mut guard) = MDNS_MANAGER.lock() else {
+        return;
+    };
+    match guard.as_mut() {
+        Some(mgr) => {
+            if !mgr.is_browsing() {
+                if let Err(e) = mgr.start_browse() {
+                    debug!(error = %e, "mDNS browse start failed");
+                }
+            }
+        }
+        None => match crate::mdns_discovery::MdnsManager::new() {
+            Ok(mut mgr) => {
+                if let Err(e) = mgr.start_browse() {
+                    debug!(error = %e, "mDNS browse start failed");
+                }
+                *guard = Some(mgr);
+            }
+            Err(e) => debug!(error = %e, "mDNS unavailable — discovery disabled"),
+        },
+    }
+}
+
+/// Snapshot of peers the background browse has discovered so far.
+fn mdns_discovered_peers() -> Vec<crate::mdns_discovery::DiscoveredPeer> {
+    MDNS_MANAGER
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|m| m.discovered_peers()))
+        .unwrap_or_default()
+}
 
 /// Compute a deterministic client_id for a buffer's yrs Doc.
 ///
@@ -46,6 +84,25 @@ fn compute_client_id(buffer_idx: usize) -> u64 {
     }
 }
 
+/// Marker the daemon embeds in an epoch-fence rejection's error message
+/// (daemon/src/collab_handler.rs:1780). This is the editor↔daemon contract: a
+/// `kb/node_update` rejected with this text was authored under a stale,
+/// pre-grant authorization epoch (ADR-023) and can never be accepted as-is.
+/// Matched as a substring because the daemon appends node-specific detail.
+const EPOCH_FENCE_MARKER: &str = "rebase required";
+
+/// True if a daemon `kb/node_update` rejection is the epoch fence firing.
+///
+/// Centralizing the contract string here (instead of an inline `contains` at the
+/// call site) means a daemon-side reword can't silently downgrade fence
+/// rejections into a generic "sync failed" status line — which would drop the
+/// actionable ADR-024 notification and reopen the B-19 silent-cascade UX gap.
+/// The producer side is guarded by the daemon's `viewer_era_*` /
+/// `stale_epoch_continuation_*` tests; this is the consumer-side guard.
+fn is_epoch_fence_rejection(message: &str) -> bool {
+    message.contains(EPOCH_FENCE_MARKER)
+}
+
 /// Capacity for the command channel (main thread -> collab background task).
 const COLLAB_CMD_CHANNEL_CAP: usize = 256;
 /// Capacity for the event channel (collab background task -> main thread).
@@ -62,6 +119,23 @@ fn try_send_evt(tx: &mpsc::Sender<CollabEvent>, event: CollabEvent) {
     if let Err(e) = tx.try_send(event) {
         warn!("collab evt channel full/closed — event dropped: {}", e);
     }
+}
+
+/// Re-render the `*Collab Status*` buffer if it is currently open, by queuing a
+/// fresh status query (ADR-019, bob's report): state-changing collab events
+/// previously left it stale — e.g. it kept showing "pending owner approval"
+/// even after the join succeeded. Queued (one-per-tick) so it never blocks.
+fn refresh_collab_status_if_open(editor: &mut Editor) {
+    if editor.find_buffer_by_name("*Collab Status*").is_some() {
+        editor
+            .collab
+            .reconnect_intents
+            .push_back(CollabIntent::ShowStatus);
+    }
+    // P1: the *KB Sharing* management buffer reflects the same membership state,
+    // so repaint it on every collab event (share/join/leave + live kbc:
+    // membership broadcasts) — a remote promote/demote/approve shows up live.
+    editor.refresh_kb_sharing_buffer();
 }
 
 // --- Command / Event types ---
@@ -125,19 +199,55 @@ pub enum CollabCommand {
         collection_state: Vec<u8>,
         node_states: Vec<(String, Vec<u8>)>,
     },
-    /// Join a shared KB from the server.
+    /// Join a shared KB from the server. `node_svs` carries the member's per-node
+    /// state vectors (ADR-022) so the daemon replies with incremental diffs and
+    /// the member reconciles instead of adopting full snapshots.
     JoinKb {
         kb_id: String,
+        node_svs: Vec<(String, Vec<u8>)>,
     },
     /// Leave a shared KB.
     LeaveKb {
         kb_id: String,
     },
+    /// ADR-024 R1: fetch a single node's authoritative state from the daemon so the
+    /// editor can adopt it (drop a fenced stale-epoch op) + re-author.
+    KbAdoptNode {
+        kb_id: String,
+        node_id: String,
+    },
     /// Send a KB node update to the server (continuous sync).
+    /// `pending_rowid` is the durable SQLite queue row this update came from
+    /// (`Some` when store-backed); the row is acked only after the daemon confirms
+    /// it applied (queue → send → confirm → ack). `None` = transient in-memory
+    /// update (no durable store) — best-effort, requeued in-memory on failure.
     KbNodeUpdate {
         kb_id: String,
         node_id: String,
         update: Vec<u8>,
+        pending_rowid: Option<i64>,
+    },
+    /// Add or remove a peer (by principal) from a KB's members (owner-only).
+    KbMember {
+        kb_id: String,
+        member: String,
+        role: String,
+        add: bool,
+    },
+    /// Approve a pending join request as `role` (owner-only, ADR-018).
+    KbApprove {
+        kb_id: String,
+        principal: String,
+        role: String,
+    },
+    /// List pending join requests for a KB (owner-only, ADR-018).
+    KbListPending {
+        kb_id: String,
+    },
+    /// Set a KB's join policy (owner-only, ADR-018).
+    KbSetPolicy {
+        kb_id: String,
+        policy: String,
     },
 }
 
@@ -147,6 +257,14 @@ pub enum CollabEvent {
     Connected {
         address: String,
         peer_count: usize,
+    },
+    /// TOFU: an unknown daemon identity needs interactive approval. The main
+    /// thread shows a confirm dialog and sends the decision back via `reply`
+    /// (the connection task blocks on it). ADR-017.
+    HostKeyPrompt {
+        addr: String,
+        fingerprint: String,
+        reply: std::sync::mpsc::Sender<bool>,
     },
     Disconnected {
         reason: String,
@@ -234,12 +352,17 @@ pub enum CollabEvent {
     KbShared {
         kb_id: String,
         node_count: usize,
+        /// Authoritative collection state from the daemon (post-set_owner /
+        /// preserved on re-share) — seeds the owner's local collection replica so
+        /// it can introspect its own KB's membership (C1 then keeps it fresh).
+        collection_state: Vec<u8>,
     },
     /// Joined a shared KB — carries collection + node states.
     KbJoined {
         kb_id: String,
         collection_state: Vec<u8>,
-        node_states: Vec<(String, Vec<u8>)>,
+        /// ADR-022: per-node reconcile payloads (diff-or-state + the daemon's SV).
+        nodes: Vec<JoinedNode>,
     },
     /// Left a shared KB.
     KbLeft {
@@ -250,6 +373,40 @@ pub enum CollabEvent {
         kb_id: String,
         node_id: String,
         update_bytes: Vec<u8>,
+    },
+    /// ADR-020 emit durability: the background task could not put a `kb/node_update`
+    /// on the wire (write failed, or no writer / disconnected). For a store-backed
+    /// update the durable row still exists — just release the in-flight mark so the
+    /// next drain retries it. For a transient in-memory update (`pending_rowid:None`)
+    /// re-push it to the in-memory queue. Never silently dropped (B-8).
+    KbUpdateRequeue {
+        kb_id: String,
+        node_id: String,
+        update: Vec<u8>,
+        pending_rowid: Option<i64>,
+    },
+    /// ADR-020 queue→send→confirm→**ack**: the daemon confirmed it applied a
+    /// `kb/node_update` (responded `{applied:true}`). Now — and only now — the
+    /// durable SQLite row is removed and the in-flight mark cleared.
+    KbUpdateAcked {
+        rowid: i64,
+    },
+    /// The daemon rejected a `kb/node_update` with an error response (e.g. access
+    /// denied / malformed). Surfaced loudly; the durable row is dropped (a retry of
+    /// the identical update would not succeed) and the in-flight mark cleared.
+    KbUpdateFailed {
+        kb_id: String,
+        node_id: String,
+        rowid: Option<i64>,
+        message: String,
+    },
+    /// ADR-024 R1: the daemon returned a node's authoritative state in response to
+    /// `kb/node_fetch`. The editor adopts it (dropping a fenced stale-epoch op) and,
+    /// if a `pending_reauthor` entry exists, re-applies the kept edit (keep-mine).
+    KbNodeAdopted {
+        kb_id: String,
+        node_id: String,
+        state_bytes: Vec<u8>,
     },
 }
 
@@ -282,36 +439,69 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
     }
 
     // Drain pending KB node updates (generated by kb_update_node for shared nodes).
-    // Only send when connected — updates accumulate in pending_kb_updates while offline.
-    // Sources: (1) in-memory Vec, (2) SQLite pending_updates table (crash-durable).
+    // Only send when connected — updates accumulate while offline.
+    //
+    // ADR-020 queue→send→confirm→ack: a store-backed update lives in the durable
+    // SQLite queue and is **acked only after the daemon confirms it applied**
+    // (CollabEvent::KbUpdateAcked → ack_pending_update). To avoid re-sending the
+    // same row every tick while its response is in flight, sent rowids are held in
+    // `inflight_kb_updates`; the mark is cleared on ack, on requeue, or on
+    // disconnect (so an unconfirmed update retries on reconnect). When no durable
+    // store exists, updates fall back to the transient in-memory queue (best-effort).
     if matches!(editor.collab.status, CollabStatus::Connected { .. }) {
-        // First drain in-memory pending updates.
+        // Durable path: SQLite-persisted updates (survives crashes). Non-destructive
+        // read — the row is removed only on daemon-confirmed ack.
+        let pending = editor
+            .kb
+            .store
+            .as_ref()
+            .and_then(|s| s.drain_pending_updates().ok())
+            .unwrap_or_default();
+        for pu in pending {
+            // Skip rows already on the wire awaiting the daemon's apply-confirmation.
+            if !editor.collab.inflight_kb_updates.insert(pu.rowid) {
+                continue;
+            }
+            tracing::debug!(target: "kb_sync", kb_id = %pu.kb_id, node_id = %pu.node_id, rowid = pu.rowid, bytes = pu.update_bytes.len(), "drain: send kb/node_update (durable)");
+            let cmd = CollabCommand::KbNodeUpdate {
+                kb_id: pu.kb_id,
+                node_id: pu.node_id,
+                update: pu.update_bytes,
+                pending_rowid: Some(pu.rowid),
+            };
+            if collab_tx.try_send(cmd).is_err() {
+                // Couldn't hand off — release the mark so the next tick retries.
+                editor.collab.inflight_kb_updates.remove(&pu.rowid);
+                warn!("collab command channel full — persisted KB update retried next tick");
+            }
+        }
+
+        // Fallback path: transient in-memory updates (only populated when there is
+        // no durable store). Destructive take — requeued in-memory on send failure.
+        let in_mem = editor.collab.pending_kb_updates.len();
         for (kb_id, node_id, update) in std::mem::take(&mut editor.collab.pending_kb_updates) {
+            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, bytes = update.len(), "drain: send kb/node_update (in-mem)");
             let cmd = CollabCommand::KbNodeUpdate {
                 kb_id,
                 node_id,
                 update,
+                pending_rowid: None,
             };
             if collab_tx.try_send(cmd).is_err() {
                 warn!("collab command channel full — KB node update dropped");
             }
         }
-        // Then drain SQLite-persisted pending updates (survives crashes).
-        if let Some(ref store) = editor.kb.store {
-            if let Ok(pending) = store.drain_pending_updates() {
-                for pu in pending {
-                    let cmd = CollabCommand::KbNodeUpdate {
-                        kb_id: pu.kb_id,
-                        node_id: pu.node_id,
-                        update: pu.update_bytes,
-                    };
-                    if collab_tx.try_send(cmd).is_err() {
-                        warn!("collab command channel full — persisted KB update dropped");
-                    }
-                    // Ack: remove from SQLite after successful send.
-                    let _ = store.ack_pending_update(pu.rowid);
-                }
-            }
+        if in_mem > 0 {
+            tracing::debug!(target: "kb_sync", count = in_mem, "drain: flushed in-memory kb updates");
+        }
+    }
+
+    // ADR-019: feed the reconstruction queue through the single intent slot,
+    // one per tick, so re-join/re-share fans out across all durably-shared KBs
+    // on reconnect (reusing the existing per-intent handling below).
+    if editor.collab.pending_intent.is_none() {
+        if let Some(next) = editor.collab.reconnect_intents.pop_front() {
+            editor.collab.pending_intent = Some(next);
         }
     }
 
@@ -322,7 +512,12 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
 
     let cmd = match intent {
         CollabIntent::StartServer => CollabCommand::StartServer,
-        CollabIntent::Connect { address } => CollabCommand::Connect { address },
+        CollabIntent::Connect { address } => {
+            // Start discovering LAN peers in the background so `collab-discover`
+            // has results ready (non-blocking — just spawns a browse thread).
+            ensure_mdns_browsing();
+            CollabCommand::Connect { address }
+        }
         CollabIntent::Disconnect => CollabCommand::Disconnect,
         CollabIntent::ShowStatus => CollabCommand::ShowStatus,
         CollabIntent::ShareBuffer { buffer_name } => {
@@ -399,12 +594,27 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         CollabIntent::ListDocsForJoin => CollabCommand::ListDocs { for_join: true },
         CollabIntent::JoinDoc { doc_id } => CollabCommand::JoinDoc { doc_id },
         CollabIntent::ShareKb { kb_name, node_ids } => {
+            // ADR-020 B-16: establish + persist a canonical CRDT lineage for every
+            // shared node (incl. never-edited ones) BEFORE encoding the payload, so
+            // the owner's local docs ARE the lineage peers adopt on join — otherwise
+            // `to_collection` mints an ephemeral, non-persisted lineage and a peer's
+            // later edit no-ops against the owner's divergent local doc (bob→alice).
+            editor.kb_prepare_share_lineage(&kb_name, &node_ids);
             // Look up the KB instance: KB_DEFAULT_NAME/"primary" → editor.kb.primary,
-            // otherwise check editor.kb.instances.
+            // otherwise resolve a registered instance. `editor.kb.instances` is keyed
+            // by UUID, but callers pass a human name (e.g. ":kb-share collabtest"), so
+            // map name→uuid via the registry first (find() accepts a name or a uuid).
+            // Without this, every named-instance share failed with "KB not found".
             let kb = if kb_name == mae_core::KB_DEFAULT_NAME || kb_name == "primary" {
                 Some(&editor.kb.primary)
             } else {
-                editor.kb.instances.get(&kb_name)
+                let uuid = editor
+                    .kb
+                    .registry
+                    .find(&kb_name)
+                    .map(|inst| inst.uuid.clone());
+                uuid.and_then(|u| editor.kb.instances.get(&u))
+                    .or_else(|| editor.kb.instances.get(&kb_name))
             };
             let kb = match kb {
                 Some(k) => k,
@@ -441,8 +651,35 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
                 }
             }
         }
-        CollabIntent::JoinKb { kb_id } => CollabCommand::JoinKb { kb_id },
+        CollabIntent::JoinKb { kb_id, node_svs } => CollabCommand::JoinKb { kb_id, node_svs },
         CollabIntent::LeaveKb { kb_id } => CollabCommand::LeaveKb { kb_id },
+        CollabIntent::KbAddMember {
+            kb_id,
+            member,
+            role,
+        } => CollabCommand::KbMember {
+            kb_id,
+            member,
+            role,
+            add: true,
+        },
+        CollabIntent::KbRemoveMember { kb_id, member } => CollabCommand::KbMember {
+            kb_id,
+            member,
+            role: String::new(),
+            add: false,
+        },
+        CollabIntent::KbApprove {
+            kb_id,
+            principal,
+            role,
+        } => CollabCommand::KbApprove {
+            kb_id,
+            principal,
+            role,
+        },
+        CollabIntent::KbListPending { kb_id } => CollabCommand::KbListPending { kb_id },
+        CollabIntent::KbSetPolicy { kb_id, policy } => CollabCommand::KbSetPolicy { kb_id, policy },
         CollabIntent::KbNodeUpdate {
             kb_id,
             node_id,
@@ -451,50 +688,44 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             kb_id,
             node_id,
             update,
+            pending_rowid: None,
         },
+        CollabIntent::KbAdoptNode { kb_id, node_id } => {
+            CollabCommand::KbAdoptNode { kb_id, node_id }
+        }
         CollabIntent::DiscoverPeers => {
-            // mDNS discovery: browse for _mae-sync._tcp.local services.
-            match crate::mdns_discovery::MdnsManager::new() {
-                Ok(mut mgr) => {
-                    if let Err(e) = mgr.start_browse() {
-                        editor.set_status(format!("mDNS browse failed: {}", e));
-                    } else {
-                        // Give mDNS a moment to discover peers.
-                        std::thread::sleep(std::time::Duration::from_millis(1500));
-                        let peers = mgr.discovered_peers();
-                        if peers.is_empty() {
-                            editor.set_status("No MAE peers found on local network.");
-                        } else {
-                            let mut lines = vec![
-                                "Discovered MAE Peers".to_string(),
-                                "====================".to_string(),
-                                String::new(),
-                            ];
-                            for p in &peers {
-                                lines.push(format!(
-                                    "  {} — {} (v{}, {} KBs)",
-                                    p.user_name, p.address, p.version, p.kb_count
-                                ));
-                            }
-                            lines.push(String::new());
-                            lines.push(
-                                "Use :collab-connect <address> to connect to a peer.".to_string(),
-                            );
-                            let content = lines.join("\n");
-                            let idx = editor.find_or_create_buffer("*Collab Discover*", || {
-                                let mut buf = mae_core::buffer::Buffer::new();
-                                buf.name = "*Collab Discover*".to_string();
-                                buf
-                            });
-                            editor.buffers[idx].replace_contents(&content);
-                            editor.switch_to_buffer(idx);
-                            editor.set_status(format!("Found {} peer(s)", peers.len()));
-                        }
-                    }
+            // Read the BACKGROUND browse's current snapshot — never sleep on the
+            // main thread (#1). The browse runs persistently (started on connect /
+            // server-start / first discover), so results accumulate over time.
+            ensure_mdns_browsing();
+            let peers = mdns_discovered_peers();
+            if peers.is_empty() {
+                editor.set_status(
+                    "Discovering MAE peers… run :collab-discover again in a moment.".to_string(),
+                );
+            } else {
+                let mut lines = vec![
+                    "Discovered MAE Peers".to_string(),
+                    "====================".to_string(),
+                    String::new(),
+                ];
+                for p in &peers {
+                    lines.push(format!(
+                        "  {} — {} (v{}, {} KBs)",
+                        p.user_name, p.address, p.version, p.kb_count
+                    ));
                 }
-                Err(e) => {
-                    editor.set_status(format!("mDNS init failed: {}", e));
-                }
+                lines.push(String::new());
+                lines.push("Use :collab-connect <address> to connect to a peer.".to_string());
+                let content = lines.join("\n");
+                let idx = editor.find_or_create_buffer("*Collab Discover*", || {
+                    let mut buf = mae_core::buffer::Buffer::new();
+                    buf.name = "*Collab Discover*".to_string();
+                    buf
+                });
+                editor.buffers[idx].replace_contents(&content);
+                editor.switch_to_buffer(idx);
+                editor.set_status(format!("Found {} peer(s)", peers.len()));
             }
             return;
         }
@@ -630,20 +861,154 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::SendSaveIntent { .. } => "send-save-intent",
         CollabCommand::SendAwareness { .. } => "send-awareness",
         CollabCommand::SendSaveCommitted { .. } => "send-save-committed",
+        CollabCommand::KbApprove { .. } => "kb-approve",
+        CollabCommand::KbListPending { .. } => "kb-pending",
+        CollabCommand::KbSetPolicy { .. } => "kb-policy",
         CollabCommand::ListDocs { .. } => "list-docs",
         CollabCommand::JoinDoc { .. } => "join-doc",
         CollabCommand::ShareKb { .. } => "share-kb",
         CollabCommand::JoinKb { .. } => "join-kb",
         CollabCommand::LeaveKb { .. } => "leave-kb",
+        CollabCommand::KbAdoptNode { .. } => "kb-adopt-node",
         CollabCommand::KbNodeUpdate { .. } => "kb-node-update",
+        CollabCommand::KbMember { .. } => "kb-member",
     }
 }
 
 // --- Event handling (main thread) ---
 
+/// C1 (ADR-023): apply a live `kbc:` collection-doc broadcast to this peer's local
+/// collection replica and relearn its authorization epoch WITHOUT a reconnect.
+///
+/// The daemon broadcasts the KB's collection doc on every membership/role change.
+/// We hold a local CRDT replica (`kb_collection_state`) seeded from the join
+/// snapshot; applying the broadcast delta and re-deriving `epoch_of(fingerprint)`
+/// lets the very next node edit be authored under the rotated, current-epoch
+/// client_id — eliminating the manual reconnect the live two-machine test needed.
+///
+/// Security (CLAUDE.md #10): the daemon stays the sole authority — it re-derives
+/// each member's epoch from its OWN authoritative collection when fencing
+/// (B-19/B-20, untouched). This relearn is a pure client convenience: a tampered
+/// or stale local replica can only mislead THIS client about its own epoch, never
+/// self-elevate at the daemon. A client that ignores the relearn and keeps
+/// authoring under a stale epoch is still fenced.
+fn handle_kbc_membership_broadcast(editor: &mut Editor, kb_id: &str, update_bytes: &[u8]) {
+    // No baseline replica ⇒ we never joined this KB (or already left); a bare
+    // delta can't be applied to nothing.
+    let Some(base) = editor.collab.kb_collection_state.get(kb_id).cloned() else {
+        debug!(kb = %kb_id, "kbc broadcast for a KB with no local replica — ignoring");
+        return;
+    };
+    let mut coll = match mae_sync::kb::KbCollectionDoc::from_bytes(&base) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(kb = %kb_id, error = %e, "kbc broadcast: local replica decode failed");
+            return;
+        }
+    };
+    // Pending requests present BEFORE this broadcast (to detect new arrivals).
+    let prev_pending: std::collections::HashSet<String> =
+        mae_sync::kb::KbCollectionDoc::from_bytes(&base)
+            .map(|c| c.pending().into_iter().map(|p| p.fingerprint).collect())
+            .unwrap_or_default();
+
+    if let Err(e) = coll.apply_update(update_bytes) {
+        warn!(kb = %kb_id, error = %e, "kbc broadcast: apply_update failed");
+        return;
+    }
+    // Persist the advanced replica so the next broadcast composes on top of it.
+    editor
+        .collab
+        .kb_collection_state
+        .insert(kb_id.to_string(), coll.encode_state());
+
+    // Any membership change repaints the *KB Sharing* buffer (remote
+    // promote/demote/approve/join shows live), even when our own epoch is
+    // unchanged.
+    editor.refresh_kb_sharing_buffer();
+
+    // P4: surface NEW join requests to the owner as an actionable notification,
+    // so the owner isn't blind to pending requests with the buffer closed.
+    let me = editor.collab.local_fingerprint.clone();
+    if !me.is_empty() && coll.role_of(&me) == Some(mae_sync::kb::Role::Owner) {
+        for req in coll.pending() {
+            if !prev_pending.contains(&req.fingerprint) {
+                let who = mae_core::kb_sharing::format_peer(&req.label, &req.fingerprint);
+                editor.notify(
+                    mae_core::notifications::Notification::action_required(
+                        "collab",
+                        format!("KB '{kb_id}': join request from {who}"),
+                    )
+                    .key(format!("collab:pending:{kb_id}:{}", req.fingerprint))
+                    .body(
+                        "A peer asked to join this KB. Open *KB Sharing* (SPC C K m) to \
+                         approve (a) or deny (d), or use :kb-approve.",
+                    ),
+                );
+            }
+        }
+    }
+
+    if editor.collab.local_fingerprint.is_empty() {
+        return; // no collab identity loaded ⇒ no epoch to relearn
+    }
+    let new_epoch = coll.epoch_of(&editor.collab.local_fingerprint);
+    let prev = editor.collab.kb_epochs.get(kb_id).copied().unwrap_or(0);
+    if new_epoch == prev {
+        return; // no authorization change for us
+    }
+    if new_epoch == 0 {
+        editor.collab.kb_epochs.remove(kb_id);
+    } else {
+        editor.collab.kb_epochs.insert(kb_id.to_string(), new_epoch);
+    }
+    info!(
+        kb = %kb_id, prev_epoch = prev, new_epoch,
+        "relearned KB authorization epoch from live membership broadcast (C1)"
+    );
+    editor.notify(mae_core::notifications::Notification::info(
+        "collab",
+        format!("KB '{kb_id}': your access changed — edits now use updated authorization"),
+    ));
+    editor.fire_hook("kb-epoch-changed");
+    refresh_collab_status_if_open(editor);
+}
+
 /// Handle an event from the collab background task — update editor state.
 pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
     match event {
+        CollabEvent::HostKeyPrompt {
+            addr,
+            fingerprint,
+            reply,
+        } => {
+            tracing::debug!(target: "collab", addr = %addr, "host-key TOFU prompt raised (awaiting trust decision)");
+            // ADR-017 TOFU, now via the ADR-024 bus: a BlockingReply notification
+            // routes to a modal; the y/n answer in apply_mini_dialog sends back on
+            // `reply` (unblocking the connection task). One consumer of the generic
+            // mechanism — no bespoke `pending_host_key_reply` field anymore.
+            editor.notify(
+                mae_core::notifications::Notification::action_required(
+                    "collab",
+                    format!("Trust daemon at {addr}?"),
+                )
+                .body(format!("{fingerprint}  (first connect — accept & pin?)"))
+                // B-22c: explicit bus actions so the prompt is answerable via
+                // `notify_resolve` / the `*Notifications*` row (headless/agent parity,
+                // and a working answer path while the GUI modal paint is fixed), in
+                // addition to the modal y/n keypress — both send on the reply channel.
+                .action(
+                    "Accept & pin",
+                    mae_core::notifications::NotifCommand::Reply(true),
+                )
+                .action(
+                    "Reject",
+                    mae_core::notifications::NotifCommand::Reply(false),
+                )
+                .blocking(mae_core::notifications::NotifReply::Bool(reply)),
+            );
+            editor.mark_full_redraw();
+        }
         CollabEvent::Connected {
             address,
             peer_count,
@@ -682,11 +1047,40 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     offline_docs.len()
                 ));
             }
+
+            // ADR-019: KBs get the same reconnect care as buffers. Rebuild the
+            // gate cache from durable markers, then re-subscribe every durably-
+            // shared INSTANCE so remote edits resume flowing — guests re-join,
+            // owners re-share, primary is skipped (see kb_resubscribe_intents).
+            // Idempotent via subscribed_kbs; queued one-per-tick.
+            editor.reconstruct_kb_sync_gate();
+            let mut resubscribed = 0;
+            for intent in editor.kb_resubscribe_intents() {
+                let key = match &intent {
+                    CollabIntent::JoinKb { kb_id, .. } => kb_id.clone(),
+                    CollabIntent::ShareKb { kb_name, .. } => kb_name.clone(),
+                    _ => continue,
+                };
+                if editor.collab.subscribed_kbs.insert(key) {
+                    editor.collab.reconnect_intents.push_back(intent);
+                    resubscribed += 1;
+                }
+            }
+            if resubscribed > 0 {
+                info!(count = resubscribed, "reconnect: re-subscribing shared KBs");
+            }
+
             editor.mark_full_redraw();
         }
         CollabEvent::Disconnected { reason } => {
             info!(reason = %reason, "collab disconnected");
             editor.collab.status = CollabStatus::Disconnected;
+            // Re-subscribe on the next connect (ADR-019).
+            editor.collab.subscribed_kbs.clear();
+            // ADR-020: any kb/node_update whose apply-confirmation was still in flight
+            // will never be answered now — release the marks so the durable rows
+            // re-drain on reconnect (the rows themselves are untouched in SQLite).
+            editor.collab.inflight_kb_updates.clear();
             editor.set_status(format!("Collab disconnected: {}", reason));
             // Preserve sync_doc and collab_doc_id for offline recovery (WU3).
             // Only clear UI tracking state — CRDT state survives disconnect
@@ -726,7 +1120,13 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             update_bytes,
             wal_seq,
         } => {
-            if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
+            // C1: a `kbc:` broadcast is a KB collection-doc (membership/epoch)
+            // delta, NOT buffer text. Apply it to our local collection replica and
+            // relearn our authorization epoch live — no manual reconnect. It never
+            // maps to a buffer, so intercept it before the buffer lookup.
+            if let Some(kb_id) = doc_id.strip_prefix("kbc:") {
+                handle_kbc_membership_broadcast(editor, kb_id, &update_bytes);
+            } else if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
                 // Capture cursor char offsets for all windows viewing this buffer
                 // so we can restore them after the rope rebuild.
                 let window_cursors: Vec<(mae_core::WindowId, usize)> = editor
@@ -876,6 +1276,11 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                         warn!(error = %e, "mDNS registration failed");
                     } else {
                         info!(port, user, "mDNS service registered");
+                    }
+                    // Also browse so this host discovers peers (and `collab-discover`
+                    // reads results without blocking the main thread, #1).
+                    if let Err(e) = mgr.start_browse() {
+                        debug!(error = %e, "mDNS browse start failed");
                     }
                     // Store in module-level static so it lives for the editor's lifetime
                     // and auto-unregisters on drop (no memory leak).
@@ -1199,8 +1604,33 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 .update(client_id, doc_id, state, color_index);
             editor.mark_full_redraw();
         }
-        CollabEvent::KbShared { kb_id, node_count } => {
+        CollabEvent::KbShared {
+            kb_id,
+            node_count,
+            collection_state,
+        } => {
             info!(kb = %kb_id, node_count, "KB shared successfully");
+            // OQ1 / introspection: seed the owner's local collection replica from
+            // the daemon's authoritative collection state so the owner can see its
+            // own KB's members/roles/policy in `kb_sharing_snapshot`. C1's
+            // `handle_kbc_membership_broadcast` then advances this replica on every
+            // membership change. Re-derive the owner's epoch from the same doc.
+            if !collection_state.is_empty() {
+                if let Ok(coll) = mae_sync::kb::KbCollectionDoc::from_bytes(&collection_state) {
+                    if !editor.collab.local_fingerprint.is_empty() {
+                        let epoch = coll.epoch_of(&editor.collab.local_fingerprint);
+                        if epoch == 0 {
+                            editor.collab.kb_epochs.remove(&kb_id);
+                        } else {
+                            editor.collab.kb_epochs.insert(kb_id.clone(), epoch);
+                        }
+                    }
+                }
+                editor
+                    .collab
+                    .kb_collection_state
+                    .insert(kb_id.clone(), collection_state);
+            }
             // Track which nodes are shared for continuous sync.
             // Get node IDs from the primary KB (or the named instance).
             let node_ids: HashSet<String> =
@@ -1210,78 +1640,99 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                     } else {
                         editor.kb.primary.list_ids(None).into_iter().collect()
                     }
-                } else if let Some(kb) = editor.kb.instances.get(&kb_id) {
-                    kb.list_ids(None).into_iter().collect()
                 } else {
-                    HashSet::new()
+                    // `instances` is keyed by UUID, but `kb_id` is the human name
+                    // (e.g. "collabtest"). Resolve name→uuid via the registry first,
+                    // else `shared_kbs` gets an EMPTY set and later edits to the
+                    // shared KB never match → no kb/node_update is broadcast (I-9).
+                    let uuid = editor
+                        .kb
+                        .registry
+                        .find(&kb_id)
+                        .map(|inst| inst.uuid.clone());
+                    let kb = uuid
+                        .and_then(|u| editor.kb.instances.get(&u))
+                        .or_else(|| editor.kb.instances.get(&kb_id));
+                    match kb {
+                        Some(kb) => kb.list_ids(None).into_iter().collect(),
+                        None => HashSet::new(),
+                    }
                 };
             editor.collab.shared_kbs.insert(kb_id.clone(), node_ids);
+
+            // ADR-019: stamp the DURABLE share marker so "this KB syncs" survives
+            // editor restart / reconnect (the transient `shared_kbs` set above is
+            // only a cache; the emit gate now reads these markers). Persisted to
+            // the XDG-first registry. Only on a confirmed share.
+            let now = mae_kb::data_dir::chrono_now_iso();
+            if kb_id == mae_core::KB_DEFAULT_NAME || kb_id == "primary" {
+                editor.kb.registry.primary_shared = true;
+                editor.kb.registry.primary_collab_id = Some(kb_id.clone());
+            } else if let Some(inst) = editor.kb.registry.find_mut(&kb_id) {
+                inst.shared = true;
+                inst.collab_id = Some(kb_id.clone());
+                inst.last_sync = Some(now);
+            }
+            if let Some(dir) = editor.mae_data_dir() {
+                if let Err(e) = editor.kb.registry.save(&dir) {
+                    warn!(kb = %kb_id, error = %e, "failed to persist shared-KB registry marker");
+                }
+            }
+            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_count, "share: durable marker stamped");
             editor.set_status(format!("KB '{}' shared ({} nodes)", kb_id, node_count));
+            refresh_collab_status_if_open(editor);
         }
         CollabEvent::KbJoined {
             kb_id,
             collection_state,
-            node_states,
+            nodes,
         } => {
-            let node_count = node_states.len();
-            info!(kb = %kb_id, node_count, collection_bytes = collection_state.len(), "KB joined — applying to local store");
+            let node_count = nodes.len();
+            info!(kb = %kb_id, node_count, collection_bytes = collection_state.len(), "KB joined — reconciling into local store");
 
-            // Initialize shared KB directory if data_dir is available.
-            if let Some(ref data_dir) = editor.kb.data_dir {
-                let slug = mae_kb::data_dir::slugify(&kb_id);
-                let meta = mae_kb::data_dir::SharedKbMeta {
-                    name: kb_id.clone(),
-                    collab_id: kb_id.clone(),
-                    creator: String::new(), // extracted from collection if available
-                    created_at: mae_kb::data_dir::chrono_now_iso(),
-                    peers: vec![],
-                    last_sync: Some(mae_kb::data_dir::chrono_now_iso()),
-                    sync_mode: mae_core::KB_SYNC_MODE_DEFAULT.to_string(),
-                };
-                if let Err(e) = data_dir.init_shared_kb(&slug, &meta) {
-                    warn!(kb = %kb_id, error = %e, "failed to init shared KB directory");
-                }
-            }
-
-            // Apply each node to the primary KB (or create a federated instance).
-            let mut inserted = 0;
-            let mut errors = 0;
-            for (node_id, state_bytes) in &node_states {
-                match mae_sync::kb::KbNodeDoc::from_bytes(state_bytes) {
-                    Ok(crdt_doc) => {
-                        let node = mae_kb::Node::from_crdt_doc(
-                            &crdt_doc,
-                            mae_kb::NodeKind::Note,
-                            mae_kb::NodeSource::Federation,
-                        );
-                        debug!(kb = %kb_id, node_id = %node_id, title = %node.title, "inserting joined KB node");
-                        editor.kb.primary.insert(node);
-                        inserted += 1;
-                    }
-                    Err(e) => {
-                        warn!(kb = %kb_id, node_id = %node_id, error = %e, "failed to decode KB node — skipping");
-                        errors += 1;
-                    }
-                }
-            }
-
-            // Track joined nodes for continuous sync.
-            let joined_node_ids: HashSet<String> =
-                node_states.iter().map(|(id, _)| id.clone()).collect();
+            // ADR-019 + ADR-020 + ADR-022: register the joined KB as a FIRST-CLASS
+            // federated instance (durable markers, addressable, in kb_instances) and
+            // RECONCILE each node's CRDT state (state-vector diff + local-ahead push)
+            // rather than overwrite — so a member's offline/local edits survive a
+            // (re)join even if their pending-queue row was lost in a crash. Per-node
+            // decode/reconcile errors are tolerated (skipped + warned) inside the helper.
+            let joined_node_ids: HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
+            editor.kb_register_joined_instance(&kb_id, nodes);
+            // Keep the transient index in sync as a cache.
             editor
                 .collab
                 .shared_kbs
                 .insert(kb_id.clone(), joined_node_ids);
 
-            info!(kb = %kb_id, inserted, errors, "KB join complete");
-            if errors > 0 {
-                editor.set_status(format!(
-                    "Joined KB '{}' ({} nodes, {} errors)",
-                    kb_id, inserted, errors
-                ));
-            } else {
-                editor.set_status(format!("Joined KB '{}' ({} nodes)", kb_id, inserted));
+            // ADR-023: learn THIS peer's current authorization epoch for the KB from
+            // the (full) collection snapshot, so subsequent node edits are authored
+            // under the current-epoch client_id the daemon's fence expects. This is
+            // also the post-rebase relearn point: a "rebase required" rejection
+            // triggers a re-join, which re-delivers collection_state with the bumped
+            // epoch. Absent/0 ⇒ fresh grant ⇒ the legacy base client_id (no change).
+            if !editor.collab.local_fingerprint.is_empty() {
+                if let Ok(coll) = mae_sync::kb::KbCollectionDoc::from_bytes(&collection_state) {
+                    let epoch = coll.epoch_of(&editor.collab.local_fingerprint);
+                    if epoch == 0 {
+                        editor.collab.kb_epochs.remove(&kb_id);
+                    } else {
+                        editor.collab.kb_epochs.insert(kb_id.clone(), epoch);
+                    }
+                    debug!(kb = %kb_id, epoch, "learned KB authorization epoch (ADR-023)");
+                }
             }
+
+            // C1: seed the local collection replica from the full join snapshot so
+            // subsequent live `kbc:` membership broadcasts can be applied as deltas
+            // and the epoch relearned without a reconnect.
+            editor
+                .collab
+                .kb_collection_state
+                .insert(kb_id.clone(), collection_state);
+
+            info!(kb = %kb_id, node_count, "KB join complete (merged)");
+            editor.set_status(format!("Joined KB '{}' ({} nodes)", kb_id, node_count));
+            refresh_collab_status_if_open(editor);
             editor.mark_full_redraw();
         }
         CollabEvent::KbLeft { kb_id } => {
@@ -1289,7 +1740,12 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             // Local KB nodes persist after leaving (local-first principle).
             // Only stop receiving further updates.
             editor.collab.shared_kbs.remove(&kb_id);
+            // C1: drop the collection replica + learned epoch — we no longer track
+            // this KB's membership (a later rejoin re-seeds from a fresh snapshot).
+            editor.collab.kb_collection_state.remove(&kb_id);
+            editor.collab.kb_epochs.remove(&kb_id);
             editor.set_status(format!("Left KB '{}' (local copy preserved)", kb_id));
+            refresh_collab_status_if_open(editor);
             editor.mark_full_redraw();
         }
         CollabEvent::KbNodeUpdate {
@@ -1303,11 +1759,11 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 update_len = update_bytes.len(),
                 "remote KB node update — applying"
             );
-            match editor
-                .kb
-                .primary
-                .apply_remote_update(&node_id, &update_bytes)
-            {
+            // ADR-019: route to the OWNING KB (instance or primary), not always
+            // primary. The node-id namespace prefix hints the target instance
+            // for a node not yet present locally.
+            let hint = node_id.split(':').next().filter(|p| !p.is_empty());
+            match editor.kb_apply_remote_update(&node_id, &update_bytes, hint) {
                 Ok(changed) => {
                     if changed {
                         debug!(kb = %kb_id, node = %node_id, "KB node content changed by remote update");
@@ -1316,6 +1772,188 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 }
                 Err(e) => {
                     warn!(kb = %kb_id, node = %node_id, error = %e, "failed to apply remote KB node update");
+                }
+            }
+        }
+        CollabEvent::KbUpdateRequeue {
+            kb_id,
+            node_id,
+            update,
+            pending_rowid,
+        } => {
+            // ADR-020 durability: the bg task couldn't put this kb/node_update on the
+            // wire — never silently lost (B-8). A store-backed row still EXISTS (the
+            // drain is non-destructive and acks only on daemon-confirm), so we must
+            // NOT re-persist it (that would duplicate the row) — just release the
+            // in-flight mark so the next drain retries the same row. A transient
+            // in-memory update has no durable row, so re-push it to the in-mem queue.
+            match pending_rowid {
+                Some(rowid) => {
+                    editor.collab.inflight_kb_updates.remove(&rowid);
+                    tracing::debug!(target: "kb_sync", kb = %kb_id, node = %node_id, rowid, "requeue: released in-flight durable row for retry");
+                }
+                None => {
+                    editor
+                        .collab
+                        .pending_kb_updates
+                        .push((kb_id, node_id, update));
+                }
+            }
+        }
+        CollabEvent::KbUpdateAcked { rowid } => {
+            // ADR-020 queue→send→confirm→**ack**: the daemon confirmed apply, so now
+            // remove the durable row and clear the in-flight mark.
+            editor.collab.inflight_kb_updates.remove(&rowid);
+            if let Some(ref store) = editor.kb.store {
+                if let Err(e) = store.ack_pending_update(rowid) {
+                    warn!(target: "kb_sync", rowid, error = %e, "ack: failed to remove confirmed pending kb update");
+                } else {
+                    tracing::debug!(target: "kb_sync", rowid, "ack: durable pending kb update confirmed + removed");
+                }
+            }
+        }
+        CollabEvent::KbUpdateFailed {
+            kb_id,
+            node_id,
+            rowid,
+            message,
+        } => {
+            // The daemon rejected the update (e.g. access denied / malformed). Surface
+            // loudly and drop the durable row — retrying the identical update would not
+            // succeed. (A future ReplicationFailed status surfaces this in the UI.)
+            //
+            // ADR-023: a "rebase required" rejection is the epoch fence firing — this
+            // op was authored under a stale (pre-grant) authorization epoch and can
+            // NEVER be accepted as-is (that is the whole point: a pre-grant divergent
+            // lineage must not cascade). The security guarantee holds regardless of
+            // what we do here (the daemon enforced it); we drop the row so it isn't
+            // retried forever, relearn our epoch on the next (re)join, and tell the
+            // user their pre-grant edit was not synced and must be re-applied. (The
+            // graceful auto-adopt + re-author under the current epoch is tracked as a
+            // follow-up; it needs a targeted node-adopt primitive.)
+            let is_rebase = is_epoch_fence_rejection(&message);
+            if is_rebase {
+                warn!(target: "kb_sync", kb = %kb_id, node = %node_id, error = %message, "kb/node_update fenced (stale-epoch) — pre-grant edit not synced (B-19)");
+                use mae_core::notifications::{NotifCommand, Notification};
+                // P4: `collab_fence_resolution = auto` resolves the fence in the
+                // background — adopt the authoritative state + re-author the local
+                // edit under the current epoch (the keep-mine path), no prompt.
+                // Default `prompt` keeps the user in the loop (#10).
+                if editor.collab.fence_resolution == "auto" {
+                    if editor.notify_collab_keep_mine(&kb_id, &node_id) {
+                        editor.notify(Notification::info(
+                            "collab",
+                            format!(
+                                "KB '{kb_id}': access changed — re-applying your edit to {node_id} under updated authorization"
+                            ),
+                        ));
+                    }
+                    if let Some(rowid) = rowid {
+                        editor.collab.inflight_kb_updates.remove(&rowid);
+                        if let Some(ref store) = editor.kb.store {
+                            let _ = store.ack_pending_update(rowid);
+                        }
+                    }
+                    editor.mark_full_redraw();
+                    return;
+                }
+                // ADR-024 R2: raise an actionable, non-clobberable notification (badge
+                // + *Notifications* row) instead of a status line that gets drowned out.
+                // The actions invoke the R1 adopt-and-re-author round-trip.
+                editor.notify(
+                    Notification::action_required(
+                        "collab",
+                        format!("KB '{kb_id}': your edit to {node_id} wasn't synced"),
+                    )
+                    .key(format!("collab:fence:{kb_id}:{node_id}"))
+                    .body(
+                        "You edited this node before your access to the KB changed, so the \
+                         server rejected the edit. Choose what to do: Accept-remote replaces \
+                         your copy with the current shared version (your edit is lost); \
+                         Keep-mine re-applies your edit on top of the current version; Stash \
+                         externally saves your version to a separate file first.",
+                    )
+                    .action(
+                        "Accept-remote (clobber local)",
+                        NotifCommand::AdoptRemote {
+                            kb_id: kb_id.clone(),
+                            node_id: node_id.clone(),
+                        },
+                    )
+                    .action(
+                        "Keep-mine (re-author)",
+                        NotifCommand::KeepMine {
+                            kb_id: kb_id.clone(),
+                            node_id: node_id.clone(),
+                        },
+                    )
+                    .action(
+                        "Stash externally",
+                        NotifCommand::StashExternally {
+                            kb_id: kb_id.clone(),
+                            node_id: node_id.clone(),
+                        },
+                    ),
+                );
+            } else {
+                warn!(target: "kb_sync", kb = %kb_id, node = %node_id, error = %message, "kb/node_update failed — dropping");
+                editor.set_status(format!("KB sync rejected for {node_id}: {message}"));
+            }
+            if let Some(rowid) = rowid {
+                editor.collab.inflight_kb_updates.remove(&rowid);
+                if let Some(ref store) = editor.kb.store {
+                    let _ = store.ack_pending_update(rowid);
+                }
+            }
+        }
+        CollabEvent::KbNodeAdopted {
+            kb_id,
+            node_id,
+            state_bytes,
+        } => {
+            // ADR-024 R1: replace the local node with the daemon's authoritative
+            // state (dropping the fenced stale-epoch op), then — if keep-mine
+            // captured the user's edit — re-apply it under the current epoch so it
+            // converges as a fresh, authorized op.
+            match editor.kb_adopt_node(&node_id, &state_bytes) {
+                Ok(_) => {
+                    let kept = editor
+                        .collab
+                        .pending_reauthor
+                        .remove(&(kb_id.clone(), node_id.clone()));
+                    if let Some(f) = kept {
+                        match editor.kb_update_node(
+                            &node_id,
+                            Some(&f.title),
+                            Some(&f.body),
+                            Some(f.tags),
+                        ) {
+                            Ok(()) => {
+                                editor.notify(mae_core::notifications::Notification::success(
+                                    "collab",
+                                    format!(
+                                        "Re-applied your edit to {node_id} under current access"
+                                    ),
+                                ));
+                            }
+                            Err(e) => {
+                                editor.set_status(format!("Re-author failed for {node_id}: {e}"))
+                            }
+                        }
+                    } else {
+                        editor.notify(mae_core::notifications::Notification::success(
+                            "collab",
+                            format!("Adopted authoritative {node_id} (local changes discarded)"),
+                        ));
+                    }
+                    editor.mark_full_redraw();
+                }
+                Err(e) => {
+                    editor
+                        .collab
+                        .pending_reauthor
+                        .remove(&(kb_id, node_id.clone()));
+                    editor.set_status(format!("Adopt failed for {node_id}: {e}"));
                 }
             }
         }
@@ -1336,8 +1974,40 @@ pub(crate) struct CollabSpawn {
     backoff_factor: u64,
     max_reconnect_attempts: u64,
     heartbeat_secs: u64,
-    /// PSK for mutual authentication (empty = no auth).
-    psk: String,
+    /// How this editor authenticates to the daemon (psk / key+mTLS / key+JSON).
+    transport: ClientTransport,
+}
+
+/// Resolve the client collab credential: `(psk_or_cmd_sentinel, key_id)`.
+///
+/// Precedence:
+///   1. `psk_command` (legacy) — returned as a `cmd:` sentinel, resolved async
+///      in `run_collab_task`. No `key_id`.
+///   2. `psk` (legacy plaintext). No `key_id`.
+///   3. the trusted-keys keystore at `keystore_path` — present its primary key,
+///      advertising the key's name as the wire `key_id` so a multi-key daemon
+///      can select it.
+///   4. nothing configured → empty secret (no-auth).
+///
+/// Pure (the only I/O is reading `keystore_path`) so it is unit-testable with a
+/// temp path or `None`.
+fn resolve_client_credential(
+    psk_command: &str,
+    psk: &str,
+    keystore_path: Option<&std::path::Path>,
+) -> (String, Option<String>) {
+    if !psk_command.is_empty() {
+        (format!("cmd:{psk_command}"), None)
+    } else if !psk.is_empty() {
+        (psk.to_string(), None)
+    } else if let Some(entry) = keystore_path
+        .and_then(|p| mae_mcp::keystore::load_optional(p).ok().flatten())
+        .and_then(|ks| ks.primary().cloned())
+    {
+        (entry.secret, entry.name)
+    } else {
+        (String::new(), None)
+    }
 }
 
 /// Create collab channels and read config. Does NOT require a tokio runtime.
@@ -1367,18 +2037,7 @@ pub(crate) fn setup_collab_channels(
     let max_reconnect_attempts = editor.collab.max_reconnect_attempts;
     let heartbeat_secs = editor.collab.heartbeat_interval;
 
-    // PSK: prefer psk_command output, fall back to psk string.
-    // Actual async resolution happens in run_collab_task; here we just pass config.
-    let psk_raw = editor.collab.psk.clone();
-    let psk_cmd = editor.collab.psk_command.clone();
-    // If psk_command is set, we pass it as a sentinel; run_collab_task resolves it async.
-    // If only psk is set, use it directly.
-    let psk = if !psk_cmd.is_empty() {
-        // Sentinel: resolve async in the task. Store the command prefixed.
-        format!("cmd:{}", psk_cmd)
-    } else {
-        psk_raw
-    };
+    let transport = resolve_client_transport(editor, &evt_tx);
 
     let spawn = CollabSpawn {
         cmd_rx,
@@ -1390,10 +2049,69 @@ pub(crate) fn setup_collab_channels(
         backoff_factor,
         max_reconnect_attempts,
         heartbeat_secs,
-        psk,
+        transport,
     };
 
     (evt_rx, cmd_tx, spawn)
+}
+
+/// Resolve how the editor authenticates to the daemon from `collab_*` options.
+///
+/// - `auth_mode = "key"` → load this editor's Ed25519 identity + a
+///   `known_hosts` verifier (TOFU policy from `collab_host_key_policy`); use
+///   mTLS unless `collab_tls = false` (then the JSON KeyAuth fallback).
+/// - otherwise → PSK / none (see `resolve_client_credential`).
+fn resolve_client_transport(
+    editor: &Editor,
+    evt_tx: &mpsc::Sender<CollabEvent>,
+) -> ClientTransport {
+    if editor.collab.auth_mode == "key" {
+        if let Some(dir) = mae_mcp::identity::default_collab_dir() {
+            let label = hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "mae-editor".to_string());
+            match mae_mcp::identity::Identity::load_or_generate(&dir, &label) {
+                Ok(id) => {
+                    let known_hosts = dir.join("known_hosts");
+                    // B-21: the verifier reads the LIVE policy at verify-time (via the
+                    // shared cell), so a runtime `:set collab-host-key-policy` is honored
+                    // on the next connect without a relaunch — the transport is otherwise
+                    // built once at collab-task setup and cached. Seed the cell from the
+                    // current option value (covers config-load paths that set the field
+                    // directly), then hand the verifier a clone of the Arc. We always use
+                    // the prompting verifier because it is the only one that CAN prompt;
+                    // it dispatches on the live policy (accept-new → pin, strict → reject,
+                    // prompt → ask the user).
+                    if let Ok(mut p) = editor.collab.host_key_policy_live.lock() {
+                        *p = editor.collab.host_key_policy.clone();
+                    }
+                    let verifier: std::sync::Arc<dyn mae_mcp::identity::HostKeyVerifier> =
+                        std::sync::Arc::new(PromptingHostKeyVerifier {
+                            known_hosts,
+                            evt_tx: evt_tx.clone(),
+                            timeout: std::time::Duration::from_secs(120),
+                            policy: editor.collab.host_key_policy_live.clone(),
+                        });
+                    let identity = std::sync::Arc::new(id);
+                    return if editor.collab.tls {
+                        ClientTransport::KeyTls { identity, verifier }
+                    } else {
+                        ClientTransport::KeyJson { identity, verifier }
+                    };
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to load collab identity; falling back to no-auth");
+                }
+            }
+        }
+    }
+    let (psk, key_id) = resolve_client_credential(
+        &editor.collab.psk_command,
+        &editor.collab.psk,
+        mae_mcp::keystore::default_keystore_path().as_deref(),
+    );
+    ClientTransport::Plain { psk, key_id }
 }
 
 /// Spawn the collab background task. MUST be called from within a tokio runtime.
@@ -1407,7 +2125,7 @@ pub(crate) fn spawn_collab_task(spawn: CollabSpawn) {
         spawn.backoff_factor,
         spawn.max_reconnect_attempts,
         spawn.heartbeat_secs,
-        spawn.psk,
+        spawn.transport,
     ));
 
     // Auto-connect if configured
@@ -1459,8 +2177,26 @@ pub(crate) enum PendingResponseKind {
     KbJoin {
         kb_id: String,
     },
+    /// ADR-024 R1: response to `kb/node_fetch` — carries `{state, sv}` to adopt.
+    KbAdoptNode {
+        kb_id: String,
+        node_id: String,
+    },
     KbLeave {
         kb_id: String,
+    },
+    KbMember {
+        kb_id: String,
+        member: String,
+        add: bool,
+    },
+    /// Awaiting the daemon's apply-confirmation for a `kb/node_update`. On success
+    /// (`{applied:true}`) the durable SQLite row `pending_rowid` is acked; on an
+    /// error response it is surfaced loudly and dropped (queue→send→confirm→ack).
+    KbNodeUpdate {
+        kb_id: String,
+        node_id: String,
+        pending_rowid: Option<i64>,
     },
 }
 
@@ -1471,8 +2207,193 @@ pub(crate) enum PendingResponseKind {
 /// partially-consumed data, corrupting all subsequent reads. By running `read_message` in
 /// a dedicated task that is never cancelled, we ensure it always runs to completion.
 /// The `select!` loop receives from the channel, which is always cancel-safe.
-fn spawn_reader_task(
-    reader: tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>,
+/// A type-erased read half — TCP or TLS — so the connection loop is uniform.
+type BoxReader = Box<dyn tokio::io::AsyncBufRead + Unpin + Send>;
+/// A type-erased write half — TCP or TLS.
+type BoxWriter = Box<dyn tokio::io::AsyncWrite + Unpin + Send>;
+
+/// How the editor authenticates to the daemon. Resolved once from options.
+enum ClientTransport {
+    /// Plaintext TCP. `psk` empty = no auth; otherwise PSK handshake (may be a
+    /// `cmd:` sentinel resolved at task start). `key_id` names a keystore key.
+    Plain { psk: String, key_id: Option<String> },
+    /// Plaintext TCP + the JSON KeyAuth signed-challenge handshake (key mode,
+    /// `collab_tls = false` fallback).
+    KeyJson {
+        identity: std::sync::Arc<mae_mcp::identity::Identity>,
+        verifier: std::sync::Arc<dyn mae_mcp::identity::HostKeyVerifier>,
+    },
+    /// Native mTLS (key mode, default) — identity + pinning are the TLS layer.
+    KeyTls {
+        identity: std::sync::Arc<mae_mcp::identity::Identity>,
+        verifier: std::sync::Arc<dyn mae_mcp::identity::HostKeyVerifier>,
+    },
+}
+
+impl ClientTransport {
+    /// The PSK (or `cmd:` sentinel) for a Plain transport — test inspection.
+    #[cfg(test)]
+    fn plain_psk(&self) -> Option<&str> {
+        match self {
+            ClientTransport::Plain { psk, .. } => Some(psk.as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// A `HostKeyVerifier` that prompts the user interactively (TOFU) for an unknown
+/// daemon identity, via a round-trip to the main thread. A previously pinned key
+/// that matches is accepted silently; a CHANGED key is rejected (MITM defense).
+/// The editor's host-key verifier. Unlike the non-interactive
+/// `FileHostKeyVerifier`, this one can prompt — and it reads the trust policy
+/// from a **live** shared cell at verify-time (B-21), so a runtime
+/// `:set collab-host-key-policy` is honored on the next connect (the transport
+/// is built once at collab-task setup and cached). Dispatches on the live policy:
+/// `accept-new` → pin on first use, `strict` → reject unknown, `prompt` → ask.
+struct PromptingHostKeyVerifier {
+    known_hosts: std::path::PathBuf,
+    evt_tx: mpsc::Sender<CollabEvent>,
+    timeout: std::time::Duration,
+    /// Live mirror of `collab_host_key_policy` (shared with the editor).
+    policy: std::sync::Arc<std::sync::Mutex<String>>,
+}
+
+impl std::fmt::Debug for PromptingHostKeyVerifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromptingHostKeyVerifier")
+            .field("known_hosts", &self.known_hosts)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PromptingHostKeyVerifier {
+    /// The current trust policy (read live each verify so runtime changes apply).
+    fn current_policy(&self) -> mae_mcp::identity::HostKeyPolicy {
+        let s = self
+            .policy
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_else(|_| "prompt".to_string());
+        mae_mcp::identity::HostKeyPolicy::from_str_opt(&s)
+    }
+}
+
+impl mae_mcp::identity::HostKeyVerifier for PromptingHostKeyVerifier {
+    fn verify(&self, addr: &str, server_pub: &mae_mcp::identity::PublicKey) -> bool {
+        let mut kh = mae_mcp::identity::KnownHosts::load(&self.known_hosts);
+        if let Some(pinned) = kh.get(addr) {
+            // Known host: pin-match (MITM defense) regardless of policy.
+            if pinned.to_bytes() == server_pub.to_bytes() {
+                return true;
+            }
+            tracing::error!(
+                addr,
+                expected = %pinned.fingerprint(),
+                got = %server_pub.fingerprint(),
+                "daemon host key CHANGED — aborting (possible MITM)"
+            );
+            return false;
+        }
+        // Unknown host — dispatch on the LIVE policy.
+        match self.current_policy() {
+            mae_mcp::identity::HostKeyPolicy::AcceptNew => match kh.pin(addr, server_pub) {
+                Ok(_) => {
+                    info!(addr, fp = %server_pub.fingerprint(), "pinned new daemon host key (accept-new)");
+                    true
+                }
+                Err(e) => {
+                    warn!(addr, error = %e, "failed to pin host key");
+                    false
+                }
+            },
+            mae_mcp::identity::HostKeyPolicy::Strict => {
+                warn!(addr, fp = %server_pub.fingerprint(), "unknown host key rejected (strict)");
+                false
+            }
+            mae_mcp::identity::HostKeyPolicy::Prompt => {
+                // Ask the user (the connection task blocks here; the main UI thread
+                // is separate, so no deadlock).
+                let (reply_tx, reply_rx) = std::sync::mpsc::channel::<bool>();
+                if self
+                    .evt_tx
+                    .try_send(CollabEvent::HostKeyPrompt {
+                        addr: addr.to_string(),
+                        fingerprint: server_pub.fingerprint(),
+                        reply: reply_tx,
+                    })
+                    .is_err()
+                {
+                    warn!("host-key prompt could not be delivered; rejecting");
+                    return false;
+                }
+                match reply_rx.recv_timeout(self.timeout) {
+                    Ok(true) => {
+                        tracing::debug!(target: "collab", addr, fp = %server_pub.fingerprint(), "host-key trusted by user — pinning");
+                        kh.pin(addr, server_pub).is_ok()
+                    }
+                    Ok(false) => {
+                        tracing::debug!(target: "collab", addr, "host-key rejected by user — aborting");
+                        false
+                    }
+                    Err(_) => {
+                        tracing::debug!(target: "collab", addr, "host-key prompt timed out — aborting");
+                        false
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Connect to `addr` and run the auth handshake, returning boxed read/write
+/// halves ready for `send_initialize`. The trust decision (TOFU / authorized
+/// peer) happens inside the handshake.
+async fn establish_connection(
+    addr: &str,
+    transport: &ClientTransport,
+) -> Result<(BoxReader, BoxWriter), String> {
+    use tokio::io::BufReader;
+    use tokio::net::TcpStream;
+    match transport {
+        ClientTransport::KeyTls { identity, verifier } => {
+            let cfg = mae_mcp::tls::client_config(identity, addr.to_string(), verifier.clone())?;
+            let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
+            let connector = mae_mcp::tls::TlsConnector::from(cfg);
+            let server_name =
+                mae_mcp::tls::ServerName::try_from(mae_mcp::tls::SNI).map_err(|e| e.to_string())?;
+            let tls = connector
+                .connect(server_name, stream)
+                .await
+                .map_err(|e| format!("TLS handshake failed: {e}"))?;
+            let (r, w) = tokio::io::split(tls);
+            Ok((
+                Box::new(BufReader::new(r)) as BoxReader,
+                Box::new(w) as BoxWriter,
+            ))
+        }
+        ClientTransport::KeyJson { identity, verifier } => {
+            use mae_mcp::auth::{AuthProvider, KeyAuth};
+            let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
+            let (r, mut w) = stream.into_split();
+            let mut br = BufReader::new(r);
+            let auth = KeyAuth::client(identity.clone(), addr.to_string(), verifier.clone());
+            auth.client_handshake(&mut br, &mut w)
+                .await
+                .map_err(|e| format!("key auth failed: {e}"))?;
+            Ok((Box::new(br) as BoxReader, Box::new(w) as BoxWriter))
+        }
+        ClientTransport::Plain { psk, key_id } => {
+            let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
+            let (r, mut w) = stream.into_split();
+            let mut br = BufReader::new(r);
+            perform_psk_auth(&mut br, &mut w, psk, key_id.as_deref()).await?;
+            Ok((Box::new(br) as BoxReader, Box::new(w) as BoxWriter))
+        }
+    }
+}
+
+fn spawn_reader_task<R: tokio::io::AsyncBufRead + Unpin + Send + 'static>(
+    reader: R,
 ) -> mpsc::Receiver<Result<String, String>> {
     let (msg_tx, msg_rx) = mpsc::channel::<Result<String, String>>(32);
     tokio::spawn(async move {
@@ -1511,31 +2432,48 @@ async fn run_collab_task(
     backoff_factor: u64,
     max_reconnect_attempts: u64,
     heartbeat_secs: u64,
-    psk_config: String,
+    transport: ClientTransport,
 ) {
     use mae_mcp::write_framed;
     use std::collections::HashMap;
-    use tokio::io::BufReader;
-    use tokio::net::tcp::OwnedWriteHalf;
-    use tokio::net::TcpStream;
 
-    // Resolve PSK: if prefixed with "cmd:", run the command to get the key.
-    let resolved_psk = if let Some(cmd) = psk_config.strip_prefix("cmd:") {
-        mae_mcp::auth::load_psk(Some(cmd), None)
-            .await
-            .unwrap_or_default()
-    } else {
-        psk_config
+    // Resolve a `cmd:` PSK sentinel once (run the command to get the key).
+    let transport = match transport {
+        ClientTransport::Plain { psk, key_id } => {
+            let psk = if let Some(cmd) = psk.strip_prefix("cmd:") {
+                mae_mcp::auth::load_psk(Some(cmd), None)
+                    .await
+                    .unwrap_or_default()
+            } else {
+                psk
+            };
+            ClientTransport::Plain { psk, key_id }
+        }
+        other => other,
     };
-    if !resolved_psk.is_empty() {
-        info!(
-            auth = "psk",
-            "PSK authentication enabled for collab connections"
-        );
+    match &transport {
+        ClientTransport::KeyTls { .. } => {
+            info!(
+                auth = "key",
+                tls = true,
+                "mTLS authentication enabled for collab"
+            )
+        }
+        ClientTransport::KeyJson { .. } => {
+            info!(
+                auth = "key",
+                tls = false,
+                "KeyAuth authentication enabled for collab"
+            )
+        }
+        ClientTransport::Plain { psk, .. } if !psk.is_empty() => {
+            info!(auth = "psk", "PSK authentication enabled for collab")
+        }
+        _ => {}
     }
 
     let mut msg_rx: Option<mpsc::Receiver<Result<String, String>>> = None;
-    let mut writer: Option<OwnedWriteHalf> = None;
+    let mut writer: Option<BoxWriter> = None;
     let mut target_address: Option<String> = None;
     let mut shared_docs: Vec<String> = Vec::new();
     let mut reconnect_enabled = false;
@@ -1565,7 +2503,7 @@ async fn run_collab_task(
     /// Dropping msg_rx causes the reader task to terminate on its next send.
     fn tear_down(
         rx: &mut Option<mpsc::Receiver<Result<String, String>>>,
-        wr: &mut Option<OwnedWriteHalf>,
+        wr: &mut Option<BoxWriter>,
     ) {
         *rx = None;
         *wr = None;
@@ -1893,47 +2831,81 @@ async fn run_collab_task(
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
                                 next_request_id += 1;
-                                let nodes_json: Vec<serde_json::Value> = node_states.iter().map(|(id, state)| {
-                                    serde_json::json!({ "id": id, "state": mae_sync::encoding::update_to_base64(state) })
+                                let nodes: Vec<(String, String)> = node_states.iter().map(|(id, state)| {
+                                    (id.clone(), mae_sync::encoding::update_to_base64(state))
                                 }).collect();
-                                let req = serde_json::json!({
-                                    "jsonrpc": "2.0",
-                                    "id": req_id,
-                                    "method": "kb/share",
-                                    "params": {
-                                        "kb_id": kb_id,
-                                        "name": name,
-                                        "creator": creator,
-                                        "collection_state": mae_sync::encoding::update_to_base64(&collection_state),
-                                        "nodes": nodes_json,
-                                    }
-                                });
+                                let req = mae_sync::wire::kb_share_request(
+                                    req_id,
+                                    &kb_id,
+                                    &name,
+                                    &creator,
+                                    &mae_sync::encoding::update_to_base64(&collection_state),
+                                    &nodes,
+                                );
                                 let body = match serde_json::to_vec(&req) {
                                     Ok(b) => b,
                                     Err(e) => { error!("kb share serialize error: {e}"); continue; }
                                 };
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    // ADR-020 B-13: subscribe the OWNER to its own
+                                    // collection + node docs so peer edits broadcast
+                                    // back are applied, not dropped at the
+                                    // shared_docs filter. (Mirror of the text-buffer
+                                    // share path which adds the doc to shared_docs.)
+                                    let coll_doc = format!("kbc:{kb_id}");
+                                    if !shared_docs.contains(&coll_doc) {
+                                        shared_docs.push(coll_doc);
+                                    }
+                                    for (id, _) in &node_states {
+                                        let node_doc = format!("kb:{id}");
+                                        if !shared_docs.contains(&node_doc) {
+                                            shared_docs.push(node_doc);
+                                        }
+                                    }
                                     pending_responses.insert(req_id, PendingResponseKind::KbShare { kb_id });
                                 }
                             }
                         }
-                        CollabCommand::JoinKb { kb_id } => {
-                            info!(kb = %kb_id, "joining KB");
+                        CollabCommand::JoinKb { kb_id, node_svs } => {
+                            info!(kb = %kb_id, node_sv_count = node_svs.len(), "joining KB (ADR-022 reconcile)");
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
                                 next_request_id += 1;
-                                let req = serde_json::json!({
-                                    "jsonrpc": "2.0",
-                                    "id": req_id,
-                                    "method": "kb/join",
-                                    "params": { "kb_id": kb_id }
-                                });
+                                let svs_b64: Vec<(String, String)> = node_svs
+                                    .iter()
+                                    .map(|(id, sv)| {
+                                        (id.clone(), mae_sync::encoding::update_to_base64(sv))
+                                    })
+                                    .collect();
+                                let req = mae_sync::wire::kb_join_request(req_id, &kb_id, &svs_b64);
                                 let body = match serde_json::to_vec(&req) {
                                     Ok(b) => b,
                                     Err(e) => { error!("kb join serialize error: {e}"); continue; }
                                 };
                                 if write_framed(w, &body, write_timeout).await.is_ok() {
                                     pending_responses.insert(req_id, PendingResponseKind::KbJoin { kb_id });
+                                }
+                            }
+                        }
+                        CollabCommand::KbAdoptNode { kb_id, node_id } => {
+                            info!(kb = %kb_id, node = %node_id, "kb/node_fetch (adopt authoritative — ADR-024 R1)");
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req =
+                                    mae_sync::wire::kb_node_fetch_request(req_id, &kb_id, &node_id);
+                                let body = match serde_json::to_vec(&req) {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        error!("kb node_fetch serialize error: {e}");
+                                        continue;
+                                    }
+                                };
+                                if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    pending_responses.insert(
+                                        req_id,
+                                        PendingResponseKind::KbAdoptNode { kb_id, node_id },
+                                    );
                                 }
                             }
                         }
@@ -1957,22 +2929,109 @@ async fn run_collab_task(
                                 }
                             }
                         }
-                        CollabCommand::KbNodeUpdate { kb_id, node_id, update } => {
+                        CollabCommand::KbNodeUpdate { kb_id, node_id, update, pending_rowid } => {
+                            // ADR-020: a kb/node_update is a REQUEST (carries an `id`),
+                            // built via the shared `mae_sync::wire` constructor so the
+                            // editor and the daemon (+ tests) serialise identically. The
+                            // daemon dispatches it to the apply+broadcast handler and
+                            // replies `{applied:true}`; the durable row is acked only on
+                            // that response (PendingResponseKind::KbNodeUpdate → ack).
+                            // On write failure / no writer it is NEVER silently lost:
+                            // re-queue (durable row released, or in-mem re-pushed).
+                            let mut delivered = false;
                             if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = mae_sync::wire::kb_node_update_request(
+                                    req_id,
+                                    &kb_id,
+                                    &node_id,
+                                    &mae_sync::encoding::update_to_base64(&update),
+                                );
+                                match serde_json::to_vec(&req) {
+                                    Ok(body) => match write_framed(w, &body, write_timeout).await {
+                                        Ok(()) => {
+                                            delivered = true;
+                                            pending_responses.insert(req_id, PendingResponseKind::KbNodeUpdate {
+                                                kb_id: kb_id.clone(),
+                                                node_id: node_id.clone(),
+                                                pending_rowid,
+                                            });
+                                            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, req_id, "bg: kb/node_update written to wire (awaiting apply-ack)");
+                                        }
+                                        Err(e) => warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, error = %e, "bg: kb/node_update wire write FAILED — requeueing"),
+                                    },
+                                    Err(e) => {
+                                        // Serialize errors are not transient; drop with a loud log.
+                                        error!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, error = %e, "bg: kb/node_update serialize error — dropping");
+                                        delivered = true;
+                                    }
+                                }
+                            } else {
+                                warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, "bg: kb/node_update — writer absent while connected, requeueing");
+                            }
+                            if !delivered {
+                                try_send_evt(&evt_tx, CollabEvent::KbUpdateRequeue { kb_id, node_id, update, pending_rowid });
+                            }
+                        }
+                        CollabCommand::KbMember { kb_id, member, role, add } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let method = if add { "kb/add_member" } else { "kb/remove_member" };
                                 let req = serde_json::json!({
                                     "jsonrpc": "2.0",
-                                    "method": "kb/node_update",
-                                    "params": {
-                                        "kb_id": kb_id,
-                                        "node_id": node_id,
-                                        "update": mae_sync::encoding::update_to_base64(&update),
-                                    }
+                                    "id": req_id,
+                                    "method": method,
+                                    "params": { "kb_id": kb_id, "member": member, "role": role, "label": member }
                                 });
-                                let body = match serde_json::to_vec(&req) {
-                                    Ok(b) => b,
-                                    Err(e) => { error!("kb node update serialize error: {e}"); continue; }
-                                };
-                                let _ = write_framed(w, &body, write_timeout).await;
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    if write_framed(w, &body, write_timeout).await.is_ok() {
+                                        pending_responses.insert(
+                                            req_id,
+                                            PendingResponseKind::KbMember { kb_id, member, add },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        CollabCommand::KbApprove { kb_id, principal, role } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0", "id": req_id, "method": "kb/approve_member",
+                                    "params": { "kb_id": kb_id, "principal": principal, "role": role }
+                                });
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    let _ = write_framed(w, &body, write_timeout).await;
+                                }
+                            }
+                        }
+                        CollabCommand::KbListPending { kb_id } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0", "id": req_id, "method": "kb/list_pending",
+                                    "params": { "kb_id": kb_id }
+                                });
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    let _ = write_framed(w, &body, write_timeout).await;
+                                }
+                            }
+                        }
+                        CollabCommand::KbSetPolicy { kb_id, policy } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0", "id": req_id, "method": "kb/set_policy",
+                                    "params": { "kb_id": kb_id, "policy": policy }
+                                });
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    let _ = write_framed(w, &body, write_timeout).await;
+                                }
                             }
                         }
                         CollabCommand::Connect { address } => {
@@ -2101,7 +3160,7 @@ async fn run_collab_task(
                                 &mut target_address, &mut reconnect_enabled,
                                 &mut shared_docs, &mut next_request_id,
                                 &mut pending_responses, write_timeout,
-                                &resolved_psk,
+                                &transport,
                             ).await;
                         }
                         _ = tokio::time::sleep(std::time::Duration::from_secs(
@@ -2120,31 +3179,30 @@ async fn run_collab_task(
                                 continue;
                             }
                             reconnect_attempt += 1;
-                            if let Ok(stream) = TcpStream::connect(&addr_clone).await {
-                                let (r, mut w) = stream.into_split();
-                                let mut buf_reader = BufReader::new(r);
-                                // PSK auth before JSON-RPC initialize.
-                                if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, &resolved_psk).await {
-                                    debug!(error = %e, "PSK auth failed on reconnect, will retry");
-                                    continue;
-                                }
-                                if let Some(peer_count) = send_initialize(&mut w, &mut buf_reader, write_timeout).await {
-                                    // Spawn dedicated reader task (cancel-safety fix).
-                                    msg_rx = Some(spawn_reader_task(buf_reader));
-                                    writer = Some(w);
-                                    reconnect_attempt = 0; // Reset on success.
-                                    // Subscribe to sync_update events (B4 fix).
-                                    if let Some(ref mut w) = writer {
-                                        send_subscribe(w, &mut next_request_id, &mut pending_responses, write_timeout).await;
+                            match establish_connection(&addr_clone, &transport).await {
+                                Ok((mut reader, mut w)) => {
+                                    if let Some(peer_count) = send_initialize(&mut w, &mut reader, write_timeout).await {
+                                        // Spawn dedicated reader task (cancel-safety fix).
+                                        // ADR-020: set writer before msg_rx so a
+                                        // command never observes connected(msg_rx)=Some
+                                        // while writer is None (avoids a spurious requeue).
+                                        writer = Some(w);
+                                        msg_rx = Some(spawn_reader_task(reader));
+                                        reconnect_attempt = 0; // Reset on success.
+                                        // Subscribe to sync_update events (B4 fix).
+                                        if let Some(ref mut w) = writer {
+                                            send_subscribe(w, &mut next_request_id, &mut pending_responses, write_timeout).await;
+                                        }
+                                        try_send_evt(&evt_tx, CollabEvent::Connected {
+                                            address: addr_clone,
+                                            peer_count,
+                                        });
                                     }
-                                    try_send_evt(&evt_tx, CollabEvent::Connected {
-                                        address: addr_clone,
-                                        peer_count,
-                                    });
                                 }
-                            } else {
-                                debug!(addr = %addr_clone, attempt = reconnect_attempt,
-                                    "reconnect failed, will retry");
+                                Err(e) => {
+                                    debug!(addr = %addr_clone, attempt = reconnect_attempt, error = %e,
+                                        "reconnect failed, will retry");
+                                }
                             }
                         }
                     }
@@ -2166,7 +3224,7 @@ async fn run_collab_task(
                     &mut next_request_id,
                     &mut pending_responses,
                     write_timeout,
-                    &resolved_psk,
+                    &transport,
                 )
                 .await;
             }
@@ -2612,6 +3670,35 @@ fn handle_response(
                 warn!(doc = %doc_id, error = ?err, "server rejected sync update");
             }
         }
+        PendingResponseKind::KbNodeUpdate {
+            kb_id,
+            node_id,
+            pending_rowid,
+        } => {
+            // ADR-020 queue→send→confirm→ack: the daemon has now answered.
+            if let Some(err) = val.get("error") {
+                let message = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("kb/node_update rejected")
+                    .to_string();
+                warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, error = %message, "kb/node_update REJECTED by daemon");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::KbUpdateFailed {
+                        kb_id,
+                        node_id,
+                        rowid: pending_rowid,
+                        message,
+                    },
+                );
+            } else {
+                tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, rowid = ?pending_rowid, "kb/node_update: daemon confirmed applied");
+                if let Some(rowid) = pending_rowid {
+                    try_send_evt(evt_tx, CollabEvent::KbUpdateAcked { rowid });
+                }
+            }
+        }
         PendingResponseKind::SaveIntent {
             doc_id,
             expected_hash,
@@ -2686,7 +3773,19 @@ fn handle_response(
                     .and_then(|r| r.get("node_count"))
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as usize;
-                try_send_evt(evt_tx, CollabEvent::KbShared { kb_id, node_count });
+                let collection_state = result
+                    .and_then(|r| r.get("collection_state"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())
+                    .unwrap_or_default();
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::KbShared {
+                        kb_id,
+                        node_count,
+                        collection_state,
+                    },
+                );
             } else {
                 try_send_evt(
                     evt_tx,
@@ -2696,38 +3795,161 @@ fn handle_response(
                 );
             }
         }
-        PendingResponseKind::KbJoin { kb_id } => {
-            let collection_state = result
-                .and_then(|r| r.get("collection_state"))
+        PendingResponseKind::KbAdoptNode { kb_id, node_id } => {
+            // ADR-024 R1: response to kb/node_fetch → adopt the authoritative state.
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("fetch failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("KB '{kb_id}': could not fetch {node_id} to adopt: {msg}"),
+                    },
+                );
+            } else if let Some(state) = result
+                .and_then(|r| r.get("state"))
                 .and_then(|v| v.as_str())
                 .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())
-                .unwrap_or_default();
-            let node_states: Vec<(String, Vec<u8>)> = result
-                .and_then(|r| r.get("nodes"))
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|n| {
-                            let id = n.get("id")?.as_str()?.to_string();
-                            let state =
-                                mae_sync::encoding::base64_to_update(n.get("state")?.as_str()?)
-                                    .ok()?;
-                            Some((id, state))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            try_send_evt(
-                evt_tx,
-                CollabEvent::KbJoined {
-                    kb_id,
-                    collection_state,
-                    node_states,
-                },
-            );
+            {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::KbNodeAdopted {
+                        kb_id,
+                        node_id,
+                        state_bytes: state,
+                    },
+                );
+            } else {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("KB '{kb_id}': empty state for {node_id} (cannot adopt)"),
+                    },
+                );
+            }
+        }
+        PendingResponseKind::KbJoin { kb_id } => {
+            // Distinguish denied / pending / joined so the editor stops showing
+            // "Joined (0 nodes)" for all three outcomes (B-1). Daemon shapes:
+            //   denied  → JSON-RPC error
+            //   pending → success { status: "pending" }   (invite policy)
+            //   joined  → success { collection_state, nodes: [...] }
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("access denied");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("KB '{kb_id}' join denied: {msg}"),
+                    },
+                );
+            } else if result
+                .and_then(|r| r.get("status"))
+                .and_then(|s| s.as_str())
+                == Some("pending")
+            {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::StatusReport {
+                        lines: vec![format!(
+                            "KB '{kb_id}': join request sent — pending owner approval"
+                        )],
+                    },
+                );
+            } else {
+                let collection_state = result
+                    .and_then(|r| r.get("collection_state"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())
+                    .unwrap_or_default();
+                // ADR-022: each node carries the daemon's SV plus either an
+                // incremental `diff` (we sent an SV → reconcile) or a full `state`
+                // (first join / pre-ADR-022 daemon). `daemon_sv` is None only for an
+                // old daemon that omits `sv` → the member falls back to adopt.
+                let nodes: Vec<JoinedNode> = result
+                    .and_then(|r| r.get("nodes"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|n| {
+                                let id = n.get("id")?.as_str()?.to_string();
+                                // Prefer the incremental diff; fall back to full state.
+                                let bytes = n
+                                    .get("diff")
+                                    .and_then(|v| v.as_str())
+                                    .or_else(|| n.get("state").and_then(|v| v.as_str()))
+                                    .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())?;
+                                let daemon_sv = n
+                                    .get("sv")
+                                    .and_then(|v| v.as_str())
+                                    .and_then(|s| mae_sync::encoding::base64_to_update(s).ok());
+                                Some(JoinedNode {
+                                    id,
+                                    bytes,
+                                    daemon_sv,
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // ADR-020 B-13: establish the member's LIVE subscription to the
+                // collection + each joined node doc, so subsequent inbound
+                // sync_update broadcasts are applied instead of being dropped at the
+                // shared_docs filter. The one-time join snapshot (KbJoined) catches
+                // up; these subscriptions keep it live. (Mirror of the text-buffer
+                // join path.)
+                let coll_doc = format!("kbc:{kb_id}");
+                if !shared_docs.contains(&coll_doc) {
+                    shared_docs.push(coll_doc);
+                }
+                for n in &nodes {
+                    let node_doc = format!("kb:{}", n.id);
+                    if !shared_docs.contains(&node_doc) {
+                        shared_docs.push(node_doc);
+                    }
+                }
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::KbJoined {
+                        kb_id,
+                        collection_state,
+                        nodes,
+                    },
+                );
+            }
         }
         PendingResponseKind::KbLeave { kb_id } => {
             try_send_evt(evt_tx, CollabEvent::KbLeft { kb_id });
+        }
+        PendingResponseKind::KbMember { kb_id, member, add } => {
+            // The membership change response carries error (e.g. not owner) or ok.
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("membership change failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: msg.to_string(),
+                    },
+                );
+            } else {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::StatusReport {
+                        lines: vec![format!(
+                            "{} '{member}' {} KB '{kb_id}'",
+                            if add { "Added" } else { "Removed" },
+                            if add { "to" } else { "from" }
+                        )],
+                    },
+                );
+            }
         }
     }
 }
@@ -2762,41 +3984,27 @@ async fn handle_disconnected_cmd(
     cmd: CollabCommand,
     evt_tx: &mpsc::Sender<CollabEvent>,
     msg_rx: &mut Option<mpsc::Receiver<Result<String, String>>>,
-    writer: &mut Option<tokio::net::tcp::OwnedWriteHalf>,
+    writer: &mut Option<BoxWriter>,
     target_address: &mut Option<String>,
     reconnect_enabled: &mut bool,
     shared_docs: &mut Vec<String>,
     next_request_id: &mut u64,
     pending_responses: &mut std::collections::HashMap<u64, PendingResponseKind>,
     write_timeout: std::time::Duration,
-    psk: &str,
+    transport: &ClientTransport,
 ) {
-    use tokio::io::BufReader;
-
     match cmd {
         CollabCommand::Connect { address } => {
             *target_address = Some(address.clone());
-            match tokio::net::TcpStream::connect(&address).await {
-                Ok(stream) => {
-                    let (r, mut w) = stream.into_split();
-                    let mut buf_reader = BufReader::new(r);
-                    // PSK auth before JSON-RPC initialize.
-                    if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, psk).await {
-                        *reconnect_enabled = true;
-                        try_send_evt(
-                            evt_tx,
-                            CollabEvent::Error {
-                                message: format!("{} ({})", e, address),
-                            },
-                        );
-                        return;
-                    }
+            match establish_connection(&address, transport).await {
+                Ok((mut reader, mut w)) => {
                     if let Some(peer_count) =
-                        send_initialize(&mut w, &mut buf_reader, write_timeout).await
+                        send_initialize(&mut w, &mut reader, write_timeout).await
                     {
                         // Spawn dedicated reader task (cancel-safety fix).
-                        *msg_rx = Some(spawn_reader_task(buf_reader));
+                        // ADR-020: writer before msg_rx (see reconnect note).
                         *writer = Some(w);
+                        *msg_rx = Some(spawn_reader_task(reader));
                         *reconnect_enabled = true;
                         // Subscribe to sync_update events (B4 fix).
                         if let Some(ref mut w) = writer {
@@ -2849,25 +4057,13 @@ async fn handle_disconnected_cmd(
                         .clone()
                         .unwrap_or_else(|| default_addr.clone());
                     *target_address = Some(addr.clone());
-                    match tokio::net::TcpStream::connect(&addr).await {
-                        Ok(stream) => {
-                            let (r, mut w) = stream.into_split();
-                            let mut buf_reader = BufReader::new(r);
-                            // PSK auth before JSON-RPC initialize.
-                            if let Err(e) = perform_psk_auth(&mut buf_reader, &mut w, psk).await {
-                                try_send_evt(
-                                    evt_tx,
-                                    CollabEvent::Error {
-                                        message: format!("{} ({})", e, addr),
-                                    },
-                                );
-                                return;
-                            }
+                    match establish_connection(&addr, transport).await {
+                        Ok((mut reader, mut w)) => {
                             if let Some(peer_count) =
-                                send_initialize(&mut w, &mut buf_reader, write_timeout).await
+                                send_initialize(&mut w, &mut reader, write_timeout).await
                             {
                                 // Spawn dedicated reader task (cancel-safety fix).
-                                *msg_rx = Some(spawn_reader_task(buf_reader));
+                                *msg_rx = Some(spawn_reader_task(reader));
                                 *writer = Some(w);
                                 *reconnect_enabled = true;
                                 // Subscribe after server start too.
@@ -2994,11 +4190,21 @@ async fn handle_disconnected_cmd(
                 },
             );
         }
-        CollabCommand::JoinKb { kb_id } => {
+        CollabCommand::JoinKb { kb_id, .. } => {
             try_send_evt(
                 evt_tx,
                 CollabEvent::Error {
                     message: format!("Not connected \u{2014} cannot join KB '{}'", kb_id),
+                },
+            );
+        }
+        CollabCommand::KbAdoptNode { kb_id, node_id } => {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
+                    message: format!(
+                        "Not connected \u{2014} cannot adopt {node_id} in KB '{kb_id}'"
+                    ),
                 },
             );
         }
@@ -3010,8 +4216,34 @@ async fn handle_disconnected_cmd(
                 },
             );
         }
-        CollabCommand::KbNodeUpdate { .. } => {
-            // Silently drop — not connected.
+        CollabCommand::KbNodeUpdate {
+            kb_id,
+            node_id,
+            update,
+            pending_rowid,
+        } => {
+            // ADR-020 durability: not connected — re-queue (don't drop) so the
+            // edit is retried on reconnect.
+            try_send_evt(
+                evt_tx,
+                CollabEvent::KbUpdateRequeue {
+                    kb_id,
+                    node_id,
+                    update,
+                    pending_rowid,
+                },
+            );
+        }
+        CollabCommand::KbMember { kb_id, .. }
+        | CollabCommand::KbApprove { kb_id, .. }
+        | CollabCommand::KbListPending { kb_id }
+        | CollabCommand::KbSetPolicy { kb_id, .. } => {
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
+                    message: format!("Not connected — cannot manage KB '{kb_id}'"),
+                },
+            );
         }
     }
 }
@@ -3019,7 +4251,12 @@ async fn handle_disconnected_cmd(
 /// Perform PSK mutual authentication handshake before JSON-RPC initialize.
 /// Returns `Ok(())` on success or if no PSK is configured (no-auth mode).
 /// Returns `Err(message)` if auth fails.
-async fn perform_psk_auth<R, W>(reader: &mut R, writer: &mut W, psk: &str) -> Result<(), String>
+async fn perform_psk_auth<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    psk: &str,
+    key_id: Option<&str>,
+) -> Result<(), String>
 where
     R: tokio::io::AsyncBufRead + Unpin + Send,
     W: tokio::io::AsyncWrite + Unpin + Send,
@@ -3030,7 +4267,7 @@ where
         return Ok(());
     }
 
-    let auth = PskAuth::new(psk);
+    let auth = PskAuth::new(psk).offering(key_id.map(String::from));
     auth.client_handshake(reader, writer)
         .await
         .map_err(|e| format!("PSK auth failed: {e}"))
@@ -3132,9 +4369,33 @@ pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
         lines.push(format!("\u{2713} State server reachable ({})", ctx.address));
         lines.push("\u{2713} Protocol: JSON-RPC 2.0 (Content-Length framing)".to_string());
         lines.push(format!(
-            "\u{2713} Client version: {}",
-            env!("CARGO_PKG_VERSION")
+            "\u{2713} Client version: {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            crate::BUILD_SHA
         ));
+
+        // Cross-machine build check: the daemon reports its own version + build
+        // in `$/debug`. Surface both and warn on a mismatch — the "are we on the
+        // same commit?" question the live two-machine test kept asking by hand.
+        if let Some(ref debug_val) = ctx.server_debug {
+            let server_ver = debug_val.get("version").and_then(|v| v.as_str());
+            let server_build = debug_val.get("build").and_then(|v| v.as_str());
+            if let Some(ver) = server_ver {
+                match server_build {
+                    Some(build) => lines.push(format!("\u{2713} Server version: {ver} ({build})")),
+                    None => lines.push(format!("\u{2713} Server version: {ver}")),
+                }
+            }
+            if let Some(build) = server_build {
+                if build != "unknown" && crate::BUILD_SHA != "unknown" && build != crate::BUILD_SHA
+                {
+                    lines.push(format!(
+                        "\u{26a0} Build mismatch: editor {} vs daemon {} — rebuild/redeploy both to the same commit",
+                        crate::BUILD_SHA, build
+                    ));
+                }
+            }
+        }
 
         // Latency
         match ctx.ping_latency_ms {
@@ -3221,6 +4482,629 @@ pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fence_auto_resolution_reauthors_in_background_without_prompt() {
+        // P4: collab_fence_resolution = "auto" resolves a fenced edit silently —
+        // captures the local edit for re-author (keep-mine) and queues the adopt,
+        // with NO action-required prompt (an Info notice instead).
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "mefp".to_string();
+        editor.collab.fence_resolution = "auto".to_string();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:beta",
+            "My Title",
+            mae_kb::NodeKind::Note,
+            "my body",
+        ));
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbUpdateFailed {
+                kb_id: "team".to_string(),
+                node_id: "concept:beta".to_string(),
+                rowid: None,
+                message: "rebase required: node 'concept:beta' carries a stale-epoch op"
+                    .to_string(),
+            },
+        );
+
+        // Keep-mine captured the edit for re-author + queued the adopt round-trip.
+        assert!(editor
+            .collab
+            .pending_reauthor
+            .contains_key(&("team".to_string(), "concept:beta".to_string())));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(mae_core::CollabIntent::KbAdoptNode { .. })
+        ));
+        // No action-required prompt was raised (auto = no user interruption).
+        assert_eq!(editor.notifications.outstanding_count(), 0);
+    }
+
+    #[test]
+    fn fence_prompt_raises_action_required_by_default() {
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "mefp".to_string();
+        // default fence_resolution == "prompt"
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbUpdateFailed {
+                kb_id: "team".to_string(),
+                node_id: "concept:beta".to_string(),
+                rowid: None,
+                message: "rebase required: stale".to_string(),
+            },
+        );
+        assert_eq!(editor.notifications.outstanding_count(), 1);
+        assert!(editor.collab.pending_reauthor.is_empty());
+    }
+
+    #[test]
+    fn owner_notified_of_new_pending_join_request() {
+        // P4: when the owner's replica advances with a NEW pending request, raise
+        // an action-required notification so the owner isn't blind.
+        use mae_sync::kb::KbCollectionDoc;
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "alicefp".to_string();
+        let mut coll = KbCollectionDoc::new_owned("Team", "alicefp", "alice");
+        editor
+            .collab
+            .kb_collection_state
+            .insert("team".to_string(), coll.encode_state());
+
+        // A peer's join request arrives as a kbc: broadcast.
+        let update = coll.add_pending("carolfp", "carol", "2026-06-23");
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::RemoteUpdate {
+                doc_id: "kbc:team".to_string(),
+                update_bytes: update,
+                wal_seq: 1,
+            },
+        );
+
+        assert!(
+            editor
+                .notifications
+                .active_sorted()
+                .iter()
+                .any(|n| n.source == "collab" && n.title.contains("join request")),
+            "owner is notified of the pending request"
+        );
+    }
+
+    #[test]
+    fn kb_shared_seeds_owner_replica_for_introspection() {
+        // OQ1: on KbShared the owner seeds a local collection replica from the
+        // daemon's authoritative collection, so `kb_sharing_snapshot` can list its
+        // OWN KB's members (the owner is otherwise blind to its own KB).
+        use mae_sync::kb::KbCollectionDoc;
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "alicefp".to_string();
+
+        let coll = KbCollectionDoc::new_owned("Team", "alicefp", "alice");
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbShared {
+                kb_id: "team".to_string(),
+                node_count: 0,
+                collection_state: coll.encode_state(),
+            },
+        );
+
+        assert!(
+            editor.collab.kb_collection_state.contains_key("team"),
+            "owner replica seeded on share"
+        );
+        let snap = editor.kb_sharing_snapshot();
+        let kb = snap
+            .kbs
+            .iter()
+            .find(|k| k.id == "team")
+            .expect("kb present");
+        assert_eq!(kb.role_of_me.as_deref(), Some("owner"));
+        assert!(kb.is_owner);
+        assert!(
+            kb.members.iter().any(|m| m.is_me && m.role == "owner"),
+            "owner sees itself as a member of its own KB"
+        );
+    }
+
+    #[test]
+    fn kbc_broadcast_relearns_epoch_without_reconnect() {
+        // C1: a live `kbc:` collection-doc broadcast that changes THIS peer's role
+        // must update its learned authorization epoch in-place — no reconnect/
+        // re-join — so the next node edit authors under the rotated client_id.
+        use mae_sync::kb::{KbCollectionDoc, Role};
+
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "alicefp".to_string();
+
+        // Owner shares; Alice is granted (epoch 0 — a fresh grant doesn't bump).
+        let mut coll = KbCollectionDoc::new_owned("teamkb", "ownerfp", "Owner");
+        let _ = coll.upsert_member("alicefp", "Alice", Role::Editor);
+        // Seed Alice's local replica from the join snapshot.
+        editor
+            .collab
+            .kb_collection_state
+            .insert("teamkb".to_string(), coll.encode_state());
+        assert_eq!(coll.epoch_of("alicefp"), 0, "fresh grant is epoch 0");
+
+        // Owner demotes Alice (Editor → Viewer): a real role change → epoch bumps.
+        let demote_update = coll.set_role("alicefp", Role::Viewer);
+        assert_eq!(coll.epoch_of("alicefp"), 1, "role change bumps the epoch");
+
+        // The daemon broadcasts the delta as a `kbc:` RemoteUpdate.
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::RemoteUpdate {
+                doc_id: "kbc:teamkb".to_string(),
+                update_bytes: demote_update,
+                wal_seq: 1,
+            },
+        );
+
+        assert_eq!(
+            editor.collab.kb_epochs.get("teamkb").copied(),
+            Some(1),
+            "epoch relearned live from the broadcast — no reconnect needed"
+        );
+        assert!(
+            editor
+                .notifications
+                .feed()
+                .any(|n| n.source == "collab" && n.title.contains("access changed")),
+            "the user is informed their access changed"
+        );
+    }
+
+    #[test]
+    fn kbc_broadcast_cannot_self_elevate_other_members_change_is_ignored() {
+        // C1 security non-regression: the relearn derives epoch ONLY from the
+        // daemon-authored collection doc. A broadcast that changes a DIFFERENT
+        // member must not touch THIS peer's epoch — a client cannot synthesize an
+        // epoch bump for itself. (The daemon remains authoritative and fences a
+        // client that authors under a stale epoch regardless — see the daemon's
+        // viewer_era_* / stale_epoch_continuation_* tests, untouched by C1.)
+        use mae_sync::kb::{KbCollectionDoc, Role};
+
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "alicefp".to_string();
+
+        let mut coll = KbCollectionDoc::new_owned("teamkb", "ownerfp", "Owner");
+        let _ = coll.upsert_member("alicefp", "Alice", Role::Editor);
+        let _ = coll.upsert_member("bobfp", "Bob", Role::Editor);
+        editor
+            .collab
+            .kb_collection_state
+            .insert("teamkb".to_string(), coll.encode_state());
+
+        // Owner changes BOB's role (not Alice's).
+        let bob_update = coll.set_role("bobfp", Role::Viewer);
+        assert_eq!(coll.epoch_of("bobfp"), 1);
+        assert_eq!(coll.epoch_of("alicefp"), 0, "Alice's epoch is unchanged");
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::RemoteUpdate {
+                doc_id: "kbc:teamkb".to_string(),
+                update_bytes: bob_update,
+                wal_seq: 1,
+            },
+        );
+
+        // Alice's epoch stays at 0 — she gained nothing from Bob's change.
+        assert!(
+            editor.collab.kb_epochs.get("teamkb").copied().unwrap_or(0) == 0,
+            "a change to another member must not alter this peer's epoch"
+        );
+    }
+
+    #[test]
+    fn kbc_broadcast_for_unjoined_kb_is_ignored() {
+        // C1: a `kbc:` broadcast for a KB we hold no replica of (never joined, or
+        // already left) is safely ignored — a bare delta can't apply to nothing.
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "alicefp".to_string();
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::RemoteUpdate {
+                doc_id: "kbc:ghost-kb".to_string(),
+                update_bytes: vec![1, 2, 3],
+                wal_seq: 1,
+            },
+        );
+        assert!(editor.collab.kb_epochs.is_empty());
+        assert!(editor.collab.kb_collection_state.is_empty());
+    }
+
+    #[test]
+    fn kb_node_adopted_keep_mine_reauthors_over_authoritative() {
+        // A2b: the bridge half of the R1 adopt-and-re-author round-trip. After a
+        // fence, keep-mine captured the user's fields into `pending_reauthor`; when
+        // the daemon's authoritative node state arrives (KbNodeAdopted, the reply
+        // to kb/node_fetch), `handle_collab_event` must (1) replace the local node
+        // with the authoritative state, then (2) re-apply the kept edit on top so
+        // it converges as a fresh, authorized op — and consume the pending entry.
+        let mut editor = Editor::new();
+        // Local node carries the pre-fence (stale) content.
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:beta",
+            "STALE LOCAL",
+            mae_kb::NodeKind::Note,
+            "stale local body",
+        ));
+        // Keep-mine already captured the user's edit for re-author.
+        editor.collab.pending_reauthor.insert(
+            ("teamkb".to_string(), "concept:beta".to_string()),
+            mae_core::editor::ReauthorFields {
+                title: "MY KEPT TITLE".to_string(),
+                body: "my kept body".to_string(),
+                tags: vec!["mine".to_string()],
+            },
+        );
+
+        // The daemon's authoritative state for the node (a different lineage/value).
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let state_bytes = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new(
+                    "concept:beta",
+                    "AUTHORITATIVE",
+                    mae_kb::NodeKind::Note,
+                    "authoritative body",
+                ),
+                7,
+            )
+            .unwrap();
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbNodeAdopted {
+                kb_id: "teamkb".to_string(),
+                node_id: "concept:beta".to_string(),
+                state_bytes,
+            },
+        );
+
+        // The pending re-author entry is consumed.
+        assert!(
+            editor.collab.pending_reauthor.is_empty(),
+            "pending_reauthor must be consumed after adopt"
+        );
+        // The node materializes to the kept edit, re-authored over the
+        // authoritative base (not the stale local, not the bare authoritative).
+        let node = editor
+            .kb
+            .primary
+            .get("concept:beta")
+            .expect("node present after adopt");
+        assert_eq!(node.title, "MY KEPT TITLE");
+        assert_eq!(node.body, "my kept body");
+        assert_eq!(node.tags, vec!["mine".to_string()]);
+    }
+
+    #[test]
+    fn kb_node_adopted_accept_remote_takes_authoritative_value() {
+        // A2b (accept-remote): with NO pending_reauthor entry, KbNodeAdopted
+        // replaces the local node with the authoritative state and discards the
+        // local edit — no re-author.
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:beta",
+            "STALE LOCAL",
+            mae_kb::NodeKind::Note,
+            "stale local body",
+        ));
+
+        let mut remote = mae_kb::KnowledgeBase::new();
+        let state_bytes = remote
+            .upsert_with_crdt(
+                mae_kb::Node::new(
+                    "concept:beta",
+                    "AUTHORITATIVE",
+                    mae_kb::NodeKind::Note,
+                    "authoritative body",
+                ),
+                7,
+            )
+            .unwrap();
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbNodeAdopted {
+                kb_id: "teamkb".to_string(),
+                node_id: "concept:beta".to_string(),
+                state_bytes,
+            },
+        );
+
+        let node = editor
+            .kb
+            .primary
+            .get("concept:beta")
+            .expect("node present after adopt");
+        assert_eq!(
+            node.title, "AUTHORITATIVE",
+            "accept-remote takes the daemon value"
+        );
+        assert_eq!(node.body, "authoritative body");
+    }
+
+    #[test]
+    fn build_sha_is_populated() {
+        // C3 smoke test: build.rs must embed a non-empty build identifier.
+        assert!(!crate::BUILD_SHA.is_empty());
+    }
+
+    #[test]
+    fn doctor_reports_build_and_warns_on_mismatch() {
+        // C3: collab-doctor surfaces the daemon's build and flags an
+        // editor↔daemon build mismatch — the "same commit?" check the live
+        // two-machine test ran by hand.
+        let ctx_match = DoctorContext {
+            address: "127.0.0.1:9473".to_string(),
+            connected: true,
+            server_debug: Some(serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "build": crate::BUILD_SHA,
+            })),
+            ping_latency_ms: Some(1),
+            synced_info: vec![],
+        };
+        let lines = build_doctor_lines(&ctx_match).join("\n");
+        assert!(
+            lines.contains("Server version:"),
+            "doctor must report the server version/build:\n{lines}"
+        );
+        assert!(
+            !lines.contains("Build mismatch"),
+            "matching builds must not warn:\n{lines}"
+        );
+
+        let ctx_mismatch = DoctorContext {
+            server_debug: Some(serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "build": "deadbeefcafe",
+            })),
+            ..ctx_match
+        };
+        let lines = build_doctor_lines(&ctx_mismatch).join("\n");
+        assert!(
+            lines.contains("Build mismatch"),
+            "a differing daemon build must warn:\n{lines}"
+        );
+    }
+
+    #[test]
+    fn resolve_transport_reads_credentials_live_no_cache() {
+        // C2 (collab test-gap plan): the connect transport is resolved from the
+        // LIVE editor options (the OptionRegistry-backed `collab.*` fields), with
+        // no read-site cache — so `(set-option!)` then a (re)resolve picks up the
+        // new value with no tick in between. (The transport is built once at
+        // collab-task setup and cached for the task's lifetime; the security-
+        // critical runtime-changeable field — host-key policy — is kept live via
+        // `host_key_policy_live`. A full per-connect transport rebuild on a
+        // runtime auth_mode/tls change is a separate, deferred follow-up.)
+        let (tx, _rx) = mpsc::channel::<CollabEvent>(8);
+        let mut editor = Editor::new();
+        // PSK mode keeps this filesystem-free (no identity load).
+        editor.set_option("collab_auth_mode", "psk").unwrap();
+
+        editor.set_option("collab_psk", "first").unwrap();
+        let t1 = resolve_client_transport(&editor, &tx);
+        assert_eq!(
+            t1.plain_psk(),
+            Some("first"),
+            "transport must reflect the freshly-set PSK"
+        );
+
+        editor.set_option("collab_psk", "second").unwrap();
+        let t2 = resolve_client_transport(&editor, &tx);
+        assert_eq!(
+            t2.plain_psk(),
+            Some("second"),
+            "a re-resolve reads the live PSK — no read-site cache (no apply-drain wait)"
+        );
+
+        // Switching auth_mode away from key/psk is likewise read live: "none"
+        // still resolves to a Plain transport built from current options.
+        editor.set_option("collab_auth_mode", "none").unwrap();
+        let t3 = resolve_client_transport(&editor, &tx);
+        assert!(
+            t3.plain_psk().is_some(),
+            "auth_mode is read live at resolve time"
+        );
+    }
+
+    #[test]
+    fn epoch_fence_rejection_classified_from_daemon_message() {
+        // Editor↔daemon contract (B-19 regression guard): the daemon embeds
+        // "rebase required" in an epoch-fence rejection (collab_handler.rs:1780,
+        // node-specific detail appended). The editor MUST still classify such a
+        // message as a fence so it raises the actionable ADR-024 notification
+        // rather than a generic status line. If the daemon reword breaks this,
+        // BOTH the daemon's producer-side tests and this consumer-side test fail,
+        // forcing the marker to be updated in lockstep.
+        let daemon_msg = "rebase required: node 'concept:beta' carries an op from a stale epoch";
+        assert!(
+            is_epoch_fence_rejection(daemon_msg),
+            "daemon fence message must classify as an epoch fence"
+        );
+        // The bare marker (and embedded anywhere) classifies.
+        assert!(is_epoch_fence_rejection(EPOCH_FENCE_MARKER));
+        assert!(is_epoch_fence_rejection(&format!(
+            "error: {EPOCH_FENCE_MARKER} (node x)"
+        )));
+        // Unrelated rejections must NOT be mistaken for a fence (else a real sync
+        // error would be silently swallowed into the adopt/keep-mine UX).
+        assert!(!is_epoch_fence_rejection(
+            "kb sync rejected: node not found"
+        ));
+        assert!(!is_epoch_fence_rejection("connection reset"));
+        assert!(!is_epoch_fence_rejection(""));
+    }
+
+    fn tofu_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("mae-tofu-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn prompting_verifier_pinned_match_no_prompt() {
+        use mae_mcp::identity::{HostKeyVerifier, Identity, KnownHosts};
+        let dir = tofu_dir("pin");
+        let kh = dir.join("known_hosts");
+        let server = Identity::generate("daemon").public();
+        KnownHosts::load(&kh).pin("d:9473", &server).unwrap();
+        // No receiver needed — a pinned match must NOT prompt.
+        let (tx, _rx) = mpsc::channel::<CollabEvent>(8);
+        let v = PromptingHostKeyVerifier {
+            known_hosts: kh,
+            evt_tx: tx,
+            policy: std::sync::Arc::new(std::sync::Mutex::new("prompt".to_string())),
+            timeout: std::time::Duration::from_millis(50),
+        };
+        assert!(
+            v.verify("d:9473", &server),
+            "pinned key must be accepted silently"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prompting_verifier_changed_key_rejected() {
+        use mae_mcp::identity::{HostKeyVerifier, Identity, KnownHosts};
+        let dir = tofu_dir("changed");
+        let kh = dir.join("known_hosts");
+        KnownHosts::load(&kh)
+            .pin("d:9473", &Identity::generate("real").public())
+            .unwrap();
+        let (tx, _rx) = mpsc::channel::<CollabEvent>(8);
+        let v = PromptingHostKeyVerifier {
+            known_hosts: kh,
+            evt_tx: tx,
+            policy: std::sync::Arc::new(std::sync::Mutex::new("prompt".to_string())),
+            timeout: std::time::Duration::from_millis(50),
+        };
+        // A DIFFERENT key for the same addr → abort (no prompt).
+        assert!(!v.verify("d:9473", &Identity::generate("imposter").public()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prompting_verifier_unknown_accept_pins() {
+        use mae_mcp::identity::{HostKeyVerifier, Identity, KnownHosts};
+        let dir = tofu_dir("accept");
+        let kh = dir.join("known_hosts");
+        let server = Identity::generate("daemon").public();
+        let server_bytes = server.to_bytes();
+        let (tx, mut rx) = mpsc::channel::<CollabEvent>(8);
+        let v = PromptingHostKeyVerifier {
+            known_hosts: kh.clone(),
+            evt_tx: tx,
+            policy: std::sync::Arc::new(std::sync::Mutex::new("prompt".to_string())),
+            timeout: std::time::Duration::from_secs(5),
+        };
+        // verify() blocks until the (simulated) user answers via the event reply.
+        let handle = std::thread::spawn(move || v.verify("d:9473", &server));
+        match rx.blocking_recv().expect("prompt event") {
+            CollabEvent::HostKeyPrompt {
+                reply, fingerprint, ..
+            } => {
+                assert!(fingerprint.starts_with("SHA256:"));
+                reply.send(true).unwrap();
+            }
+            other => panic!("expected HostKeyPrompt, got {other:?}"),
+        }
+        assert!(handle.join().unwrap(), "accepted host must verify");
+        // ...and is now pinned.
+        assert_eq!(
+            KnownHosts::load(&kh).get("d:9473").unwrap().to_bytes(),
+            server_bytes
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prompting_verifier_unknown_reject_not_pinned() {
+        use mae_mcp::identity::{HostKeyVerifier, Identity, KnownHosts};
+        let dir = tofu_dir("reject");
+        let kh = dir.join("known_hosts");
+        let server = Identity::generate("daemon").public();
+        let (tx, mut rx) = mpsc::channel::<CollabEvent>(8);
+        let v = PromptingHostKeyVerifier {
+            known_hosts: kh.clone(),
+            evt_tx: tx,
+            policy: std::sync::Arc::new(std::sync::Mutex::new("prompt".to_string())),
+            timeout: std::time::Duration::from_secs(5),
+        };
+        let handle = std::thread::spawn(move || v.verify("d:9473", &server));
+        if let CollabEvent::HostKeyPrompt { reply, .. } = rx.blocking_recv().unwrap() {
+            reply.send(false).unwrap();
+        }
+        assert!(!handle.join().unwrap(), "rejected host must not verify");
+        assert!(
+            KnownHosts::load(&kh).get("d:9473").is_none(),
+            "rejected host must not be pinned"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// B-21 regression: a runtime `collab_host_key_policy` change is honored by the
+    /// SAME verifier instance at verify-time (the verifier/transport is built once
+    /// at collab-task setup and cached, so it must read the live policy cell).
+    #[test]
+    fn host_key_policy_change_honored_at_verify_time_b21() {
+        use mae_mcp::identity::{HostKeyVerifier, Identity, KnownHosts};
+        let dir = tofu_dir("b21");
+        let kh = dir.join("known_hosts");
+        let policy = std::sync::Arc::new(std::sync::Mutex::new("accept-new".to_string()));
+        let (tx, mut rx) = mpsc::channel::<CollabEvent>(8);
+        let v = PromptingHostKeyVerifier {
+            known_hosts: kh.clone(),
+            evt_tx: tx,
+            policy: policy.clone(),
+            timeout: std::time::Duration::from_secs(5),
+        };
+        // accept-new: an unknown host is pinned WITHOUT prompting.
+        let a = Identity::generate("daemon-a").public();
+        assert!(v.verify("a:9473", &a), "accept-new pins unknown host");
+        assert!(rx.try_recv().is_err(), "accept-new must NOT prompt");
+        assert_eq!(
+            KnownHosts::load(&kh).get("a:9473").unwrap().to_bytes(),
+            a.to_bytes()
+        );
+
+        // Flip the LIVE policy to `prompt` — the SAME verifier must now ASK on a new
+        // host instead of auto-pinning (the B-21 fix: no rebuild/relaunch needed).
+        *policy.lock().unwrap() = "prompt".to_string();
+        let b = Identity::generate("daemon-b").public();
+        let b_bytes = b.to_bytes();
+        let handle = std::thread::spawn(move || v.verify("b:9473", &b));
+        match rx
+            .blocking_recv()
+            .expect("prompt event after runtime policy change")
+        {
+            CollabEvent::HostKeyPrompt {
+                reply, fingerprint, ..
+            } => {
+                assert!(fingerprint.starts_with("SHA256:"));
+                reply.send(false).unwrap(); // decline
+            }
+            other => panic!("expected HostKeyPrompt after policy→prompt, got {other:?}"),
+        }
+        assert!(!handle.join().unwrap(), "declined prompt → not verified");
+        assert!(
+            KnownHosts::load(&kh).get("b:9473").is_none(),
+            "declined host must not be pinned"
+        );
+        let _ = b_bytes; // (only needed to move `b` into the thread)
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn drain_collab_intent_connect() {
@@ -3640,6 +5524,48 @@ mod tests {
         assert_eq!(seq.get("test.rs"), Some(&1));
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, CollabEvent::BufferShared { doc_id } if doc_id == "test.rs"));
+    }
+
+    /// ADR-020 B-13 regression: a successful `kb/join` must add the collection AND
+    /// each node doc to `shared_docs`, or later inbound `sync_update` broadcasts for
+    /// `kb:<node>` are dropped at the `shared_docs.contains()` filter and the member
+    /// never receives live edits (emit works, receive is dead).
+    #[tokio::test]
+    async fn handle_response_kb_join_subscribes_to_collection_and_node_docs() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut shared: Vec<String> = Vec::new();
+        let mut seq = std::collections::HashMap::new();
+
+        let coll = mae_sync::kb::KbCollectionDoc::new("testkb", "owner");
+        let coll_b64 = mae_sync::encoding::update_to_base64(&coll.encode_state());
+        let node = mae_sync::kb::KbNodeDoc::new("testkb:n1", "T", "b", &[]);
+        let node_b64 = mae_sync::encoding::update_to_base64(&node.encode_state());
+
+        let val = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "collection_state": coll_b64,
+                "nodes": [ { "id": "testkb:n1", "state": node_b64 } ]
+            }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::KbJoin {
+                kb_id: "testkb".to_string(),
+            },
+            &tx,
+            &mut shared,
+            &mut seq,
+        );
+        assert!(
+            shared.contains(&"kbc:testkb".to_string()),
+            "join must subscribe to the collection doc"
+        );
+        assert!(
+            shared.contains(&"kb:testkb:n1".to_string()),
+            "join must subscribe to each node doc — else inbound live updates are dropped (B-13)"
+        );
     }
 
     #[tokio::test]
@@ -4343,6 +6269,87 @@ mod tests {
         );
     }
 
+    /// B-1: a kb/join response must surface joined / pending / denied as three
+    /// DISTINCT outcomes — not "Joined (0 nodes)" for all of them.
+    #[tokio::test]
+    async fn kb_join_pending_response_is_distinct() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut shared = Vec::new();
+        let val = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": { "kb_id": "collabtest", "status": "pending" }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::KbJoin {
+                kb_id: "collabtest".into(),
+            },
+            &tx,
+            &mut shared,
+            &mut std::collections::HashMap::new(),
+        );
+        match rx.try_recv().unwrap() {
+            CollabEvent::StatusReport { lines } => {
+                assert!(
+                    lines.iter().any(|l| l.contains("pending")),
+                    "pending join should report pending approval, got {lines:?}"
+                );
+            }
+            other => panic!("expected StatusReport for pending, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn kb_join_denied_response_is_distinct() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut shared = Vec::new();
+        let val = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "error": { "code": -32603, "message": "not a member of KB 'collabtest'" }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::KbJoin {
+                kb_id: "collabtest".into(),
+            },
+            &tx,
+            &mut shared,
+            &mut std::collections::HashMap::new(),
+        );
+        match rx.try_recv().unwrap() {
+            CollabEvent::Error { message } => {
+                assert!(
+                    message.contains("denied"),
+                    "denied join should report denial, got {message:?}"
+                );
+            }
+            other => panic!("expected Error for denied join, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn kb_join_success_response_emits_joined() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut shared = Vec::new();
+        let val = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": { "kb_id": "collabtest", "collection_state": "", "nodes": [] }
+        });
+        handle_response(
+            &val,
+            PendingResponseKind::KbJoin {
+                kb_id: "collabtest".into(),
+            },
+            &tx,
+            &mut shared,
+            &mut std::collections::HashMap::new(),
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), CollabEvent::KbJoined { .. }),
+            "a real join must emit KbJoined"
+        );
+    }
+
     #[test]
     fn peer_count_zero_shows_all_disconnected() {
         let mut editor = Editor::new();
@@ -4707,6 +6714,10 @@ mod tests {
     #[test]
     fn collab_kb_shared_populates_tracking() {
         let mut editor = Editor::new();
+        // Isolate the registry save (handler stamps the primary-shared marker).
+        let tmp = std::env::temp_dir().join(format!("mae-adr019-prim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        editor.data_dir_override = Some(tmp.clone());
         // Insert some nodes into the primary KB.
         editor.kb.primary.insert(mae_kb::Node::new(
             "node-1".to_string(),
@@ -4727,6 +6738,7 @@ mod tests {
             CollabEvent::KbShared {
                 kb_id: "default".to_string(),
                 node_count: 2,
+                collection_state: Vec::new(),
             },
         );
 
@@ -4740,22 +6752,194 @@ mod tests {
             "shared_kbs should contain all node IDs: {:?}",
             tracked
         );
+        // ADR-019: primary-share durable marker stamped.
+        assert!(editor.kb.registry.primary_shared);
+        assert_eq!(
+            editor.kb.registry.primary_collab_id.as_deref(),
+            Some("default")
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// I-9 + ADR-019: sharing a *named federated instance* tracks its node IDs by
+    /// resolving name→uuid (cache) AND stamps the DURABLE registry marker
+    /// (`shared`/`collab_id`) so the share survives editor restart.
+    #[test]
+    fn collab_kb_shared_named_instance_tracks_nodes_by_uuid() {
+        let mut editor = Editor::new();
+        // Isolate the registry save to a temp dir (the handler persists markers).
+        let tmp = std::env::temp_dir().join(format!("mae-adr019-share-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        editor.data_dir_override = Some(tmp.clone());
+
+        let uuid = "uuid-collabtest".to_string();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "collabtest:overview",
+            "Overview",
+            mae_kb::NodeKind::Note,
+            "b",
+        ));
+        inst.insert(mae_kb::Node::new(
+            "collabtest:alpha",
+            "Alpha",
+            mae_kb::NodeKind::Note,
+            "b",
+        ));
+        editor.kb.instances.insert(uuid.clone(), inst);
+        // Registry maps the human name → uuid, NOT yet shared (handler stamps it).
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: uuid.clone(),
+                name: "collabtest".into(),
+                org_dir: std::path::PathBuf::from("/tmp/collabtest"),
+                db_path: std::path::PathBuf::from("/tmp/collabtest.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+            });
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbShared {
+                kb_id: "collabtest".to_string(),
+                node_count: 2,
+                collection_state: Vec::new(),
+            },
+        );
+
+        let tracked = &editor.collab.shared_kbs["collabtest"];
+        assert!(
+            tracked.contains("collabtest:overview") && tracked.contains("collabtest:alpha"),
+            "named-instance share must track nodes via uuid resolution, got: {:?}",
+            tracked
+        );
+        // Durable marker stamped (survives restart).
+        let inst = editor.kb.registry.find("collabtest").unwrap();
+        assert!(inst.shared, "share must stamp durable shared=true");
+        assert_eq!(inst.collab_id.as_deref(), Some("collabtest"));
+        // And persisted to the isolated registry file.
+        assert!(
+            tmp.join("kb-registry.toml").exists(),
+            "registry marker must be persisted"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// ADR-019 restart-survival (the bug): the durable share marker must survive
+    /// a registry SAVE→LOAD round-trip, so a freshly-started editor's emit gate
+    /// fires without any live event. This is the persistence crux of "edits keep
+    /// propagating across editor restart".
+    #[test]
+    fn adr019_share_marker_survives_registry_reload() {
+        let tmp = std::env::temp_dir().join(format!("mae-adr019-reload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let mut editor = Editor::new();
+        editor.data_dir_override = Some(tmp.clone());
+
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "collabtest:overview",
+            "O",
+            mae_kb::NodeKind::Note,
+            "b",
+        ));
+        editor.kb.instances.insert("uuid-ct".into(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-ct".into(),
+                name: "collabtest".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+            });
+
+        handle_collab_event(
+            &mut editor,
+            CollabEvent::KbShared {
+                kb_id: "collabtest".to_string(),
+                node_count: 1,
+                collection_state: Vec::new(),
+            },
+        );
+
+        // Simulate restart: load the registry fresh from disk.
+        let reloaded = mae_kb::federation::KbRegistry::load(&tmp);
+        let inst = reloaded
+            .find("collabtest")
+            .expect("instance survives reload");
+        assert!(
+            inst.shared && inst.collab_id.as_deref() == Some("collabtest"),
+            "durable share marker must survive a registry save→load round-trip"
+        );
+
+        // A restarted editor (empty cache) with the reloaded registry: the emit
+        // gate fires from the durable marker → edits still queue for broadcast.
+        let mut restarted = Editor::new();
+        restarted.kb.registry = reloaded;
+        let mut inst2 = mae_kb::KnowledgeBase::new();
+        let mut n = mae_kb::Node::new("collabtest:overview", "O", mae_kb::NodeKind::Note, "b");
+        n.source = Some(mae_kb::NodeSource::Federation);
+        inst2.insert(n);
+        restarted.kb.instances.insert("uuid-ct".into(), inst2);
+        restarted.collab.kb_sync_mode = "on_save".into();
+        assert!(restarted.collab.shared_kbs.is_empty());
+
+        restarted
+            .kb_update_node(
+                "collabtest:overview",
+                Some("edited after restart"),
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            restarted.collab.pending_kb_updates.len(),
+            1,
+            "post-restart edit must still queue a kb/node_update (durable gate)"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn collab_kb_joined_populates_tracking() {
         let mut editor = Editor::new();
+        let tmp = std::env::temp_dir().join(format!("mae-adr019-join-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        editor.data_dir_override = Some(tmp.clone());
 
-        // Create a CRDT node state for the join event.
+        // Create a CRDT node state + SV for the join event (ADR-022 reconcile).
         let doc = mae_sync::kb::KbNodeDoc::new("join-node-1", "Joined Title", "joined body", &[]);
         let state = doc.encode_state();
+        let sv = doc.state_vector();
 
         handle_collab_event(
             &mut editor,
             CollabEvent::KbJoined {
                 kb_id: "remote-kb".to_string(),
                 collection_state: vec![],
-                node_states: vec![("join-node-1".to_string(), state)],
+                nodes: vec![JoinedNode {
+                    id: "join-node-1".to_string(),
+                    bytes: state,
+                    daemon_sv: Some(sv),
+                }],
             },
         );
 
@@ -4767,6 +6951,24 @@ mod tests {
             editor.collab.shared_kbs["remote-kb"].contains("join-node-1"),
             "shared_kbs should contain the joined node ID"
         );
+        // ADR-019: joined KB is a FIRST-CLASS instance with durable markers, NOT
+        // dumped into primary (fixes B-3).
+        let inst = editor
+            .kb
+            .registry
+            .find_by_collab_id("remote-kb")
+            .expect("joined KB must be a registered instance");
+        assert!(inst.shared && inst.collab_id.as_deref() == Some("remote-kb"));
+        let uuid = inst.uuid.clone();
+        assert!(
+            editor.kb.instances[&uuid].get("join-node-1").is_some(),
+            "joined node must live in the instance"
+        );
+        assert!(
+            editor.kb.primary.get("join-node-1").is_none(),
+            "joined node must NOT be dumped into primary"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -4800,10 +7002,9 @@ mod tests {
             mae_kb::NodeKind::Note,
             "original body".to_string(),
         ));
-        editor.collab.shared_kbs.insert(
-            "my-kb".to_string(),
-            HashSet::from(["shared-node".to_string()]),
-        );
+        // ADR-019: the durable primary-share marker is the gate authority.
+        editor.kb.registry.primary_shared = true;
+        editor.kb.registry.primary_collab_id = Some("my-kb".to_string());
         editor.collab.kb_sync_mode = mae_core::KB_SYNC_MODE_DEFAULT.to_string();
 
         // Update the node.
@@ -4899,10 +7100,15 @@ mod tests {
                 kb_id,
                 node_id,
                 update,
+                pending_rowid,
             } => {
                 assert_eq!(kb_id, "kb-1");
                 assert_eq!(node_id, "node-a");
                 assert_eq!(update, vec![1, 2, 3]);
+                assert_eq!(
+                    pending_rowid, None,
+                    "in-memory updates carry no durable rowid"
+                );
             }
             other => panic!(
                 "expected KbNodeUpdate, got: {:?}",
@@ -4914,10 +7120,15 @@ mod tests {
                 kb_id,
                 node_id,
                 update,
+                pending_rowid,
             } => {
                 assert_eq!(kb_id, "kb-1");
                 assert_eq!(node_id, "node-b");
                 assert_eq!(update, vec![4, 5, 6]);
+                assert_eq!(
+                    pending_rowid, None,
+                    "in-memory updates carry no durable rowid"
+                );
             }
             other => panic!(
                 "expected KbNodeUpdate, got: {:?}",
@@ -4940,10 +7151,9 @@ mod tests {
             mae_kb::NodeKind::Note,
             "original body with café and 日本語".to_string(),
         ));
-        editor.collab.shared_kbs.insert(
-            "test-kb".to_string(),
-            HashSet::from(["crdt-test".to_string()]),
-        );
+        // ADR-019: durable primary-share marker gates the broadcast.
+        editor.kb.registry.primary_shared = true;
+        editor.kb.registry.primary_collab_id = Some("test-kb".to_string());
         editor.collab.kb_sync_mode = mae_core::KB_SYNC_MODE_DEFAULT.to_string();
 
         editor
@@ -5095,7 +7305,7 @@ mod tests {
         let client_handle = tokio::spawn(async move {
             let mut cr = BufReader::new(cr);
             let mut cw = BufWriter::new(cw);
-            perform_psk_auth(&mut cr, &mut cw, psk).await
+            perform_psk_auth(&mut cr, &mut cw, psk, None).await
         });
 
         let (server_result, client_result) = tokio::join!(server_handle, client_handle);
@@ -5128,7 +7338,7 @@ mod tests {
         let client_handle = tokio::spawn(async move {
             let mut cr = BufReader::new(cr);
             let mut cw = BufWriter::new(cw);
-            perform_psk_auth(&mut cr, &mut cw, "wrong-key").await
+            perform_psk_auth(&mut cr, &mut cw, "wrong-key", None).await
         });
 
         let (server_result, client_result) = tokio::join!(server_handle, client_handle);
@@ -5150,7 +7360,7 @@ mod tests {
         let mut cr = BufReader::new(cr);
         let mut cw = BufWriter::new(cw);
 
-        let result = perform_psk_auth(&mut cr, &mut cw, "").await;
+        let result = perform_psk_auth(&mut cr, &mut cw, "", None).await;
         assert!(result.is_ok(), "empty PSK should skip auth and return Ok");
     }
 
@@ -5162,8 +7372,9 @@ mod tests {
 
         let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
         assert_eq!(
-            spawn.psk, "my-secret-key",
-            "CollabSpawn.psk should contain the direct PSK value"
+            spawn.transport.plain_psk(),
+            Some("my-secret-key"),
+            "transport should carry the direct PSK value"
         );
     }
 
@@ -5175,8 +7386,9 @@ mod tests {
 
         let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
         assert_eq!(
-            spawn.psk, "cmd:cat /tmp/test-psk.txt",
-            "CollabSpawn.psk should contain cmd: prefix for deferred resolution"
+            spawn.transport.plain_psk(),
+            Some("cmd:cat /tmp/test-psk.txt"),
+            "transport should carry the cmd: prefix for deferred resolution"
         );
     }
 
@@ -5188,24 +7400,48 @@ mod tests {
         let _ = editor.set_option("collab_psk_command", "pass show mae/psk");
 
         let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
+        let psk = spawn.transport.plain_psk().unwrap_or("");
         assert!(
-            spawn.psk.starts_with("cmd:"),
-            "psk_command should take precedence over psk: got '{}'",
-            spawn.psk
+            psk.starts_with("cmd:"),
+            "psk_command should take precedence over psk: got '{psk}'"
         );
-        assert_eq!(spawn.psk, "cmd:pass show mae/psk");
+        assert_eq!(psk, "cmd:pass show mae/psk");
     }
 
     #[test]
     fn setup_collab_channels_empty_psk_is_empty() {
-        // When neither psk nor psk_command is set, psk should be empty.
-        let editor = Editor::new();
-        let (_evt_rx, _cmd_tx, spawn) = setup_collab_channels(&editor);
-        assert!(
-            spawn.psk.is_empty(),
-            "default PSK should be empty string, got '{}'",
-            spawn.psk
-        );
+        // With no psk/psk_command AND no keystore, the credential is empty.
+        let (psk, key_id) = resolve_client_credential("", "", None);
+        assert!(psk.is_empty(), "no creds → empty psk, got '{psk}'");
+        assert_eq!(key_id, None);
+    }
+
+    #[test]
+    fn resolve_credential_precedence() {
+        // psk_command wins, returned as a cmd: sentinel, no key_id.
+        let (psk, id) = resolve_client_credential("pass show k", "plain", None);
+        assert_eq!(psk, "cmd:pass show k");
+        assert_eq!(id, None);
+        // psk wins over keystore when no command.
+        let (psk, id) = resolve_client_credential("", "plain", None);
+        assert_eq!(psk, "plain");
+        assert_eq!(id, None);
+    }
+
+    #[test]
+    fn resolve_credential_from_keystore_primary() {
+        // A keystore with a named primary key → present its secret + name.
+        let dir = std::env::temp_dir().join(format!("mae-cred-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("trusted_keys");
+        mae_mcp::keystore::add_key(&path, Some("framework"), "deadbeef").unwrap();
+        mae_mcp::keystore::add_key(&path, Some("thinkpad"), "cafef00d").unwrap();
+
+        let (psk, id) = resolve_client_credential("", "", Some(&path));
+        assert_eq!(psk, "deadbeef", "presents the primary (first) key");
+        assert_eq!(id.as_deref(), Some("framework"), "advertises the key name");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

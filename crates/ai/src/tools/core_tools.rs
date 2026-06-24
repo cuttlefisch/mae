@@ -184,6 +184,43 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             permission: Some(PermissionTier::ReadOnly),
         },
         ToolDefinition {
+            name: "notifications_list".into(),
+            description: "List outstanding + recently-resolved notifications from the attention bus (ADR-024) as JSON: id, severity, source, title, body, actions, resolved. The agent/headless path for seeing what demands attention (e.g. a collab edit fenced and needing resolution).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "notify_resolve".into(),
+            description: "Resolve an outstanding notification by id: run one of its actions (by index) or dismiss it. For a collab fenced-edit, action 0 = Accept-remote (discard local), 1 = Keep-mine (re-author), 2 = Stash externally.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "id".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Notification id (from notifications_list).".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "action".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Action index to run. Omit to dismiss the notification.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
             name: "window_layout".into(),
             description: "JSON of all windows with their buffer assignments and dimensions.".into(),
             parameters: ToolParameters {

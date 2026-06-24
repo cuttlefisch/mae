@@ -393,11 +393,62 @@ fn build_scheme_section(editor: &Editor) -> serde_json::Value {
 fn build_collaboration_section(editor: &Editor) -> serde_json::Value {
     let collab_status = editor.collab.status.as_str();
     let collab_server = editor.collab.server_address.clone();
+
+    // Shared-KB sync visibility (ADR-019): the transient broadcast-gate set, the
+    // durable owning-instance markers, and the pending-update queue depth. The
+    // key diagnostic is divergence — a KB with a durable `shared`/`collab_id`
+    // marker but an empty `shared_kbs` entry means edits won't broadcast.
+    let mut shared_kbs: Vec<serde_json::Value> = editor
+        .collab
+        .shared_kbs
+        .iter()
+        .map(|(kb_id, nodes)| json!({ "kb_id": kb_id, "node_count": nodes.len() }))
+        .collect();
+    shared_kbs.sort_by(|a, b| a["kb_id"].as_str().cmp(&b["kb_id"].as_str()));
+
+    let owning_instances: Vec<serde_json::Value> = editor
+        .kb
+        .registry
+        .instances
+        .iter()
+        .filter(|i| i.shared || i.collab_id.is_some())
+        .map(|i| {
+            json!({
+                "name": i.name,
+                "uuid": i.uuid,
+                "shared": i.shared,
+                "collab_id": i.collab_id,
+                "gate_present": editor.collab.shared_kbs.contains_key(&i.name)
+                    || i
+                        .collab_id
+                        .as_ref()
+                        .is_some_and(|c| editor.collab.shared_kbs.contains_key(c)),
+            })
+        })
+        .collect();
+
+    // ADR-020 observability: an edit to a shared node is persisted to the DURABLE
+    // SQLite pending queue at edit time (even offline) — the in-memory queue is empty
+    // when store-backed (B-16 single-source emit). Report both so a user/agent can
+    // answer "do I have unsynced offline edits?" (the in-mem count alone reads 0
+    // offline, which is misleading).
+    let durable_pending = editor
+        .kb
+        .store
+        .as_ref()
+        .and_then(|s| s.count_pending_updates().ok())
+        .unwrap_or(0);
     json!({
         "collab_status": collab_status,
         "collab_server": collab_server,
         "synced_buffers": editor.collab.synced_docs,
         "pending_collab_intent": editor.collab.pending_intent.is_some(),
+        "kb_sync_mode": editor.collab.kb_sync_mode,
+        "shared_kbs": shared_kbs,
+        // Total unsynced edits = transient in-memory (no-store fallback) + durable queue.
+        "pending_kb_updates": editor.collab.pending_kb_updates.len() + durable_pending,
+        "durable_pending_kb_updates": durable_pending,
+        "owning_instances": owning_instances,
     })
 }
 
@@ -458,6 +509,47 @@ mod tests {
         assert!(collab["collab_server"].as_str().is_some());
         assert_eq!(collab["synced_buffers"], 0);
         assert_eq!(collab["pending_collab_intent"], false);
+        // ADR-019 observability fields present.
+        assert!(collab["kb_sync_mode"].as_str().is_some());
+        assert!(collab["shared_kbs"].as_array().unwrap().is_empty());
+        assert_eq!(collab["pending_kb_updates"], 0);
+        assert!(collab["owning_instances"].as_array().unwrap().is_empty());
+    }
+
+    /// ADR-019: the introspect surface must make the broadcast-gate divergence
+    /// visible — a KB with a durable `shared`/`collab_id` marker but no
+    /// `shared_kbs` entry reports `gate_present: false` (edits won't broadcast).
+    #[test]
+    fn introspect_surfaces_shared_kb_gate_divergence() {
+        let mut editor = Editor::new();
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-collabtest".into(),
+                name: "collabtest".into(),
+                org_dir: std::path::PathBuf::from("/tmp/collabtest"),
+                db_path: std::path::PathBuf::from("/tmp/collabtest.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: Some("collabtest".into()),
+                shared: true,
+                remote_peers: Vec::new(),
+                last_sync: None,
+            });
+        // shared_kbs intentionally left empty → divergence.
+        let result = execute_introspect(&editor, &json!({"section": "collaboration"})).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let owning = &val["collaboration"]["owning_instances"];
+        assert_eq!(owning.as_array().unwrap().len(), 1);
+        assert_eq!(owning[0]["name"], "collabtest");
+        assert_eq!(owning[0]["shared"], true);
+        assert_eq!(
+            owning[0]["gate_present"], false,
+            "durable marker present but gate empty must surface as gate_present=false"
+        );
     }
 
     #[test]

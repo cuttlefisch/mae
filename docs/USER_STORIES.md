@@ -1,6 +1,6 @@
 # MAE User Stories — End-to-End Workflows
 
-> Modern AI Editor (MAE) v0.11.x — Rust + Scheme, vi-modal, GPU/TUI dual backend
+> Modern AI Editor (MAE) v0.13.12 (v0.14.0 pending) — Rust + Scheme, vi-modal, GPU/TUI dual backend
 
 This document collects eight representative user stories covering the full breadth of MAE's capabilities. Each story is written from the perspective of a real persona, with concrete commands, verification steps, and an honest assessment of gaps relative to competing tools.
 
@@ -218,7 +218,7 @@ Build and navigate a personal knowledge base of linked org-mode nodes, find info
    ```
    :kb-create "My Concept"
    ```
-   MAE creates an org-mode file in `~/.local/share/mae/kb/local/my-concept/`, opens it, and registers it in the SQLite graph store.
+   MAE creates an org-mode file in `~/.local/share/mae/kb/local/my-concept/`, opens it, and registers it in the CozoDB graph store.
 
 3. Write content in org-mode syntax: headings (`*`, `**`), prose, code blocks, lists.
 
@@ -282,7 +282,7 @@ Build and navigate a personal knowledge base of linked org-mode nodes, find info
 - `org-open-link` (C-c C-o / RET)
 - Daily notes (`:daily`, `daily-prev`, `daily-next`)
 - Org export: HTML (`org-export-html`), Markdown (`org-export-markdown`), subtree export
-- SQLite-backed graph store with FTS5 full-text search
+- CozoDB graph store (Datalog) with full-text search
 - Help buffer KB navigation (Tab / Enter / C-o)
 
 ### Gaps vs Competitors
@@ -298,7 +298,7 @@ Build and navigate a personal knowledge base of linked org-mode nodes, find info
 
 ## 4. Team — Shared KB + AI
 
-**Status:** Complete (v0.11.0)
+**Status:** Complete — matured in v0.14.0 (trusted-peer mTLS, per-KB roles/policy, membership management)
 
 ### Persona
 
@@ -397,7 +397,7 @@ Stand up a shared KB session, have team members join, co-edit nodes in real time
 
 | Competitor | Gap |
 |---|---|
-| Notion | No per-node access control or permission levels yet (planned) |
+| Notion | Access control is per-KB, not per-node: roles (Owner/Editor/Viewer) + join policy (restrictive/invite/permissive) + membership management are shipped; per-node permission levels are not |
 | Confluence | No rich-text WYSIWYG; MAE is org-mode plain text |
 | Zed collab | Zed collab is buffer-level; MAE adds KB-level sharing as a distinct layer |
 | Roam Multiplayer | MAE requires self-hosted server; no managed cloud offering |
@@ -860,7 +860,7 @@ Customize MAE's behavior at runtime via Scheme: bind new keys, add hooks that tr
     Or via the ex command:
     ```
     :set scrolloff=4
-    :set-save scrolloff=4   ; persists to config.toml
+    :set-save scrolloff=4   ; persists to ~/.config/mae/init.scm
     ```
 
 ### What to Verify
@@ -869,7 +869,7 @@ Customize MAE's behavior at runtime via Scheme: bind new keys, add hooks that tr
 - `(add-hook! 'after-save-hook ...)` fires after every `:w` save and receives no arguments (the buffer context is implicit).
 - `(add-hook! 'mode-change-hook ...)` fires with the new mode symbol on every mode transition.
 - `:reload-config` re-evaluates init.scm and applies new bindings; previously defined hooks are not duplicated (hook registry is idempotent for named hooks).
-- `:set-save scrolloff=4` writes to `config.toml` and survives a restart.
+- `:set-save scrolloff=4` writes to `~/.config/mae/init.scm` and survives a restart.
 - `:describe-configuration` reports any option with an invalid value as a warning, not a silent failure.
 
 ### Key Features Used
@@ -904,7 +904,7 @@ Customize MAE's behavior at runtime via Scheme: bind new keys, add hooks that tr
 | 1 | Multi-Project Git | Solo Rust dev | Complete | Magit-style hunk staging + project switching |
 | 2 | AI-Assisted Feature Dev | Developer + AI | Complete | Tool-calling AI with diff-overlay review |
 | 3 | Personal KB | Researcher / writer | Complete | AI-queryable org-mode graph with FTS5 |
-| 4 | Shared KB + AI | Engineering team | Complete (v0.11.0) | CRDT KB sync + mDNS discovery + AI over shared KB |
+| 4 | Shared KB + AI | Engineering team | Complete — matured v0.14.0 | CRDT KB sync + mDNS discovery + AI over shared KB; trusted-peer mTLS, roles/policy, membership |
 | 5 | LSP Code Navigation | Large codebase dev | Complete | AI-aware LSP (AI can call LSP tools as a peer) |
 | 6 | DAP Debug Session | Rust / Python dev | Complete | AI reads live debug state for hypothesis testing |
 | 7 | Org + Babel Notebooks | Literate programmer | Complete | AI as notebook participant (execute / rewrite blocks) |

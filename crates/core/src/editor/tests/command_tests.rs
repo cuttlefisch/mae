@@ -1091,4 +1091,69 @@ fn file_tree_reveal_on_toggle() {
     }
 }
 
+// ===== kb-share <name> (share a specific KB instance) =====
+
+#[test]
+fn kb_share_with_name_targets_named_instance() {
+    // `:kb-share <name>` must queue a ShareKb intent for THAT instance, not the
+    // first-registered one — so a user with personal notes + a project KB can
+    // choose which to replicate (and not leak the wrong one).
+    let mut editor = Editor::new();
+    assert!(editor.execute_command("kb-share collabtest"));
+    assert!(
+        matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::ShareKb { kb_name, .. }) if kb_name == "collabtest"
+        ),
+        "expected ShareKb for 'collabtest', got {:?}",
+        editor.collab.pending_intent
+    );
+}
+
+#[test]
+fn kb_share_no_arg_shares_active_default_instance() {
+    // No-arg `:kb-share` (and SPC C S) keeps the old behavior: dispatch shares the
+    // active instance, which defaults to "default" when none are registered.
+    let mut editor = Editor::new();
+    assert!(editor.execute_command("kb-share"));
+    assert!(
+        matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::ShareKb { kb_name, .. }) if kb_name == "default"
+        ),
+        "no-arg kb-share should target the active/default instance, got {:?}",
+        editor.collab.pending_intent
+    );
+}
+
+#[test]
+fn kb_join_with_id_targets_that_kb() {
+    // `:kb-join <id>` must join THAT KB, not the active instance — otherwise a
+    // member of one KB silently joins the wrong collection.
+    let mut editor = Editor::new();
+    assert!(editor.execute_command("kb-join collabtest"));
+    assert!(
+        matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::JoinKb { kb_id, .. }) if kb_id == "collabtest"
+        ),
+        "expected JoinKb for 'collabtest', got {:?}",
+        editor.collab.pending_intent
+    );
+}
+
+#[test]
+fn kb_leave_with_id_targets_that_kb() {
+    let mut editor = Editor::new();
+    assert!(editor.execute_command("kb-leave collabtest"));
+    assert!(
+        matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::LeaveKb { kb_id }) if kb_id == "collabtest"
+        ),
+        "expected LeaveKb for 'collabtest', got {:?}",
+        editor.collab.pending_intent
+    );
+}
+
 // ===== Operator-pending mode tests (WU0) =====

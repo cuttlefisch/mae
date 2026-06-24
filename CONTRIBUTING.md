@@ -84,7 +84,7 @@ The Dockerfile mirrors GitHub CI exactly. If `make docker-ci` passes, the PR wil
 
 ## Architecture Overview
 
-MAE is organized as a Rust workspace with 20 crates and 19 Scheme modules.
+MAE is organized as a Rust workspace with 20 crates and 25 Scheme modules.
 
 ### Crate Map
 
@@ -98,7 +98,7 @@ MAE is organized as a Rust workspace with 20 crates and 19 Scheme modules.
 | `mae-lsp` | LSP client — connection, navigation, diagnostics, completion |
 | `mae-dap` | DAP client — breakpoints, stepping, watches |
 | `mae-shell` | Terminal emulator (alacritty_terminal), PTY management |
-| `mae-kb` | Knowledge base — graph store, org parser, FTS5 |
+| `mae-kb` | Knowledge base — CozoDB graph store, typed relationships, org parser, federation |
 | `mae-mcp` | MCP bridge — Unix socket, JSON-RPC, stdio shim |
 | `mae-babel` | Literate programming — code block execution, tangling |
 | `mae-export` | Org export (HTML, Markdown) |
@@ -107,11 +107,12 @@ MAE is organized as a Rust workspace with 20 crates and 19 Scheme modules.
 | `mae-make` | Build system integration |
 | `mae-lookup` | Documentation lookup |
 | `mae-spell` | Spell checking |
+| `mae-canvas` | Visual buffer (diagrams, drawings) |
 | `mae-sync` | CRDT sync (yrs/YATA), ropey bridge, collaborative state |
 | `mae-daemon` | Background daemon — KB persistence, collab sync, WAL persistence |
 | `mae` | Binary crate — CLI entry point, config loading, event loops |
 
-The 19 Scheme modules in `modules/` provide keybinding overlays and optional features (agenda, dashboard, git-status, org, tables, surround, multicursor, etc.). See [docs/CODE_MAP.md](docs/CODE_MAP.md) for the dependency graph and module sizes.
+The 25 Scheme modules in `modules/` provide keybinding overlays and optional features (agenda, dashboard, git-status, org, tables, surround, multicursor, etc.). See [docs/CODE_MAP.md](docs/CODE_MAP.md) for the dependency graph and module sizes.
 
 Key files to know:
 - `crates/core/src/editor/mod.rs` — editor state struct

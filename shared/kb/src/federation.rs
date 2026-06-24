@@ -92,6 +92,15 @@ impl KbScope {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KbRegistry {
     pub instances: Vec<KbInstance>,
+    /// Whether the **primary** KB is shared for collaboration (ADR-019). The
+    /// primary KB has no `KbInstance` row, so its durable share marker lives
+    /// here — making "is the primary KB syncing?" reconstructable across
+    /// restarts instead of depending on a transient in-memory event.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub primary_shared: bool,
+    /// Collaborative id the primary KB is shared under (when `primary_shared`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_collab_id: Option<String>,
 }
 
 impl KbRegistry {
@@ -195,6 +204,22 @@ impl KbRegistry {
     /// Find an instance by UUID.
     pub fn find_by_uuid(&self, uuid: &str) -> Option<&KbInstance> {
         self.instances.iter().find(|i| i.uuid == uuid)
+    }
+
+    /// Find a mutable instance by name or UUID (ADR-019: the share path stamps
+    /// `shared`/`collab_id` durable markers).
+    pub fn find_mut(&mut self, name_or_uuid: &str) -> Option<&mut KbInstance> {
+        self.instances
+            .iter_mut()
+            .find(|i| i.name == name_or_uuid || i.uuid == name_or_uuid)
+    }
+
+    /// Find a shared instance by its collaborative id (ADR-019: receive-side
+    /// routing + reconstruction resolve a `collab_id` back to its instance).
+    pub fn find_by_collab_id(&self, collab_id: &str) -> Option<&KbInstance> {
+        self.instances
+            .iter()
+            .find(|i| i.collab_id.as_deref() == Some(collab_id))
     }
 }
 
@@ -615,7 +640,7 @@ fn write_sentinel(org_dir: &Path, uuid: &str, name: &str) -> io::Result<()> {
 }
 
 /// Generate a simple UUID-like string.
-fn generate_uuid() -> String {
+pub fn generate_uuid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)

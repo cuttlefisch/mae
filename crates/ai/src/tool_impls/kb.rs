@@ -16,20 +16,25 @@ use mae_core::Editor;
 /// `#[serde(rename_all = "lowercase")]` so the wire shape matches
 /// what `kb_search` / `kb_list` would produce on the same node.
 fn node_json(editor: &Editor, id: &str) -> Option<serde_json::Value> {
-    // Use query layer (CozoDB-first) when available
+    // Use query layer (CozoDB-first) when available. A *miss* here must fall
+    // through to the in-memory KB — a node joined over collab lives in
+    // `primary` but may not be in the CozoDB query layer yet, so short-
+    // circuiting on a query-layer miss made `kb_get` fail for joined nodes
+    // even though `kb_update` could resolve them (I-9 read/write asymmetry).
     if let Some(q) = editor.kb.query_layer() {
-        let node = q.get(id)?;
-        let links_from: Vec<String> = q.links_from(id).into_iter().map(|l| l.dst).collect();
-        let links_to: Vec<String> = q.links_to(id).into_iter().map(|l| l.src).collect();
-        return Some(serde_json::json!({
-            "id": node.id,
-            "title": node.title,
-            "kind": node.kind,
-            "body": node.body,
-            "tags": node.tags,
-            "links_from": links_from,
-            "links_to": links_to,
-        }));
+        if let Some(node) = q.get(id) {
+            let links_from: Vec<String> = q.links_from(id).into_iter().map(|l| l.dst).collect();
+            let links_to: Vec<String> = q.links_to(id).into_iter().map(|l| l.src).collect();
+            return Some(serde_json::json!({
+                "id": node.id,
+                "title": node.title,
+                "kind": node.kind,
+                "body": node.body,
+                "tags": node.tags,
+                "links_from": links_from,
+                "links_to": links_to,
+            }));
+        }
     }
     // Fallback: in-memory KB
     if let Some(node) = editor.kb.primary.get(id) {

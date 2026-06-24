@@ -59,24 +59,27 @@ mae-daemon
 mae
 ```
 
-In each MAE instance, configure via `config.toml` (recommended):
-
-```toml
-# In ~/.config/mae/config.toml:
-[collaboration]
-server_address = "127.0.0.1:9473"
-auto_connect = true
-user_name = "alice"
-```
-
-Or via Scheme (runtime):
+In each MAE instance, configure via `init.scm` (the primary config surface):
 
 ```scheme
+;; In ~/.config/mae/init.scm:
 (set-option! "collab-server-address" "127.0.0.1:9473")
 (set-option! "collab-auto-connect" "true")
+(set-option! "collab-user-name" "alice")
 ```
 
-Or use the interactive commands: `SPC C s` (start server), `SPC C c` (connect).
+Or persist at runtime (`:set` + `:set-save` writes `init.scm`):
+
+```
+:set collab-server-address 127.0.0.1:9473
+:set collab-auto-connect true
+:set-save
+```
+
+The legacy `config.toml` `[collaboration]` block is still read as bootstrap, but
+it is being retired — prefer `init.scm`.
+
+Or use the interactive commands: `SPC C s` (start daemon), `SPC C c` (connect).
 
 ### Workflow C — Collaborative (multi-user, LAN/VPN)
 
@@ -85,18 +88,25 @@ Or use the interactive commands: `SPC C s` (start server), `SPC C c` (connect).
 mae-daemon --bind 0.0.0.0:9473
 ```
 
-Each client (`config.toml` or `init.scm`):
+Each client (`init.scm`) — use **`key` mode** (trusted-peer mTLS) for any non-loopback setup:
 
-```toml
-[collaboration]
-server_address = "192.168.1.10:9473"
-auto_connect = true
-user_name = "bob"
+```scheme
+(set-option! "collab-server-address" "192.168.1.10:9473")
+(set-option! "collab-auto-connect" "true")
+(set-option! "collab-user-name" "bob")
+(set-option! "collab-auth-mode" "key")   ; trusted-peer mTLS — recommended (§10)
 ```
 
-> **Security:** PSK mutual authentication (HMAC-SHA256) is required since v0.11.0.
-> Set `collab_psk` on both server and all clients. For untrusted networks, use a VPN.
-> See [Security](#8-security) below.
+The one-command path is `mae setup-collab --server 192.168.1.10:9473` (generates
+your Ed25519 identity, writes these options, and prints the `mae-daemon authorize`
+line for the admin — see §10).
+
+> **Security:** auth is not required for loopback, but for multi-user/LAN/VPN use
+> **`key` mode** (Ed25519 trusted-peer mTLS), which encrypts and authenticates each
+> peer. The daemon's `auth.mode` defaults to `none`; set it to `key` (recommended)
+> or `psk`. If you use `psk`, supply the secret via `collab-psk-command` — never a
+> plaintext `collab-psk` in `config.toml`. For untrusted networks, add a VPN.
+> See [Security](#8-security) and §10 below.
 
 ---
 
@@ -104,42 +114,60 @@ user_name = "bob"
 
 ### Editor Options
 
+Configured via `init.scm` (the primary config surface) — **not** `config.toml`,
+which is being retired. Secrets (PSKs) never go in `config.toml`; see §8/§10.
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `collab-server-address` | string | `""` | Server `host:port`. Empty string = solo mode. |
-| `collab-auto-connect` | bool-string | `"false"` | Connect automatically on startup when address is set. |
-| `collab-username` | string | `""` | Display name shown to peers (empty = system hostname). |
-| `collab-wal-threshold` | integer | `500` | WAL entries before compaction (server-side). |
-| `collab-write-timeout-ms` | integer | `5000` | Peer write timeout in milliseconds. |
+| `collab-server-address` | string | `127.0.0.1:9473` | Daemon `host:port`. |
+| `collab-auto-connect` | bool | `false` | Connect automatically on startup. |
+| `collab-user-name` | string | `""` | Display name (empty = hostname). Overridden by the authenticated identity in key mode (§10). |
+| `collab-write-timeout-ms` | int | `5000` | Peer write timeout (ms). |
+| `collab-reconnect-interval` | int | `5` | Base reconnect interval (s). |
+| `collab-reconnect-backoff-factor` | int | `2` | Exponential backoff multiplier. |
+| `collab-auth-mode` | string | `psk` | `none` \| `psk` \| `key` (trusted-peer mTLS — §10). |
+| `collab-host-key-policy` | string | `prompt` | Key mode TOFU: `prompt` \| `accept-new` \| `strict`. |
+| `collab-tls` | bool | `true` | Use mTLS in key mode (false = plaintext KeyAuth fallback). |
+| `collab-psk` | string | `""` | PSK (plaintext fallback — prefer a keystore/command). |
+| `collab-psk-command` | string | `""` | Command that prints the PSK (e.g. `pass show mae/key`). |
+| `collab-auto-share` | bool | `false` | Auto-share new buffers when connected. |
+| `collab-kb-sync-mode` | string | `on_save` | KB sync trigger: `manual` (sync explicitly with `:collab-sync`, `SPC C y`) or `on_save`. |
+| `collab-fence-resolution` | string | `prompt` | On a fenced edit ("rebase required"): `prompt` (ask) or `auto` (adopt + re-author in background). |
 
-Set options at runtime:
-
-```scheme
-(set-option! "collab-server-address" "127.0.0.1:9473")
-```
-
-Persist across restarts with `:set-save`:
+Set + persist at runtime (writes `init.scm`):
 
 ```
 :set collab-server-address 127.0.0.1:9473
+:set collab-auto-connect true
 :set-save
 ```
+
+Or directly in `init.scm`:
+
+```scheme
+;; --- Collaboration: connect on startup, trusted-peer mode ---
+(set-option! "collab-server-address" "192.168.1.10:9473")
+(set-option! "collab-auto-connect" "true")
+(set-option! "collab-auth-mode" "key")            ; trusted-peer mode (§10)
+(set-option! "collab-fence-resolution" "auto")    ; resolve access-change fences silently
+```
+
+Then, once connected, share a KB from the `*KB Sharing*` buffer (`SPC C K m`),
+the `:kb-share <name>` command, or the `(kb-share "team-notes")` Scheme primitive
+(re-sharing is idempotent — the daemon preserves existing membership).
 
 ### Environment Variables
 
 | Variable | Overrides |
 |----------|-----------|
-| `MAE_COLLAB_ADDR` | `collab-server-address` |
-| `MAE_COLLAB_AUTO_CONNECT` | `collab-auto-connect` (`1` = true) |
+| `MAE_COLLAB_SERVER` | `collab-server-address` |
+| `MAE_COLLAB_AUTO_CONNECT` | `collab-auto-connect` — read by **value**: `1/true/yes/on` enable, `0/false/no/off`/empty disable |
 
-### config.toml
-
-```toml
-[collab]
-server_address = "127.0.0.1:9473"
-auto_connect = true
-username = "alice"
-```
+**Precedence:** defaults < config files (`config.toml`, then `init.scm`) < environment
+variables < CLI flags (`--connect`). Per-launch overrides (env + CLI) are applied *after*
+`init.scm`, so e.g. `MAE_COLLAB_AUTO_CONNECT=false ./mae` starts offline even if your
+`init.scm` calls `(set-option! "collab-auto-connect" "true")`. (Note: the env var is read by
+value — `=false` disables — not by mere presence.)
 
 ---
 
@@ -151,27 +179,36 @@ username = "alice"
 mae-daemon [OPTIONS] [SUBCOMMAND]
 
 Options:
-  --bind <ADDR>          Listen address (default: 127.0.0.1:9473)
-  --unix-socket <PATH>   Also listen on a Unix domain socket
-  --db <PATH>            SQLite WAL path (default: ~/.local/share/mae/collab.db)
-  --wal-threshold <N>    Compact after N WAL entries (default: 500)
-  --check-config         Validate configuration and exit
+  --bind <ADDR>          Override the collab listen address (e.g. 0.0.0.0:9473)
+  --config <PATH>        Use a specific daemon.toml
+  --data-dir <PATH>      Override the data directory
+  --check-config         Validate configuration (+ print effective settings) and exit
+  --version, -V          Print version
 
 Subcommands:
-  doctor                 Run diagnostics (port, WAL, disk space)
+  doctor                 Run diagnostics (config, collab storage, port)
+  # Symmetric PSK mode (collab.auth.mode = "psk"):
+  keygen [NAME]          Generate a random trusted key + write it to the keystore
+  keys                   List trusted keys (names + fingerprints)
+  # Asymmetric key mode (collab.auth.mode = "key", recommended — see §10):
+  identity               Print this daemon's Ed25519 public key + fingerprint
+  authorized             List authorized client keys
+  authorize <pubkey>     Authorize a client public-key line (mae-ed25519 <b64> <label>)
+  revoke <label>         Revoke an authorized client by label
 ```
+
+All other settings (bind, storage, auth) live in `~/.config/mae/daemon.toml`
+(see §4 config below). The daemon's KB Unix socket and persistence paths come
+from config/XDG, not CLI flags.
 
 Examples:
 
 ```bash
-# Local loopback only
+# Local loopback only (uses daemon.toml, default 127.0.0.1:9473)
 mae-daemon
 
-# LAN / VPN (all interfaces)
+# LAN / VPN: override the bind for all interfaces
 mae-daemon --bind 0.0.0.0:9473
-
-# Custom database path
-mae-daemon --db /var/lib/mae/collab.db
 
 # Validate config without starting
 mae-daemon --check-config
@@ -300,8 +337,12 @@ sudo iptables -A INPUT -p tcp --dport 9473 -j ACCEPT
 
 ### Security Warnings
 
-> **PSK authentication is required.** Both server and clients must share the
-> same `collab_psk` (HMAC-SHA256). Connections without a valid PSK are rejected.
+> **Authenticate any non-loopback deployment.** The daemon's `auth.mode` defaults
+> to `none` (suitable only for trusted loopback). For LAN/VPN/multi-user use, set
+> **`key` mode** (Ed25519 trusted-peer mTLS — §10): it encrypts and mutually
+> authenticates each peer. PSK (`psk` mode, HMAC-SHA256) is an alternative; supply
+> the secret via `collab-psk-command` — **never** a plaintext `collab-psk` in
+> `config.toml`.
 
 Recommendations:
 - **Local only**: Use the default `127.0.0.1` binding (no firewall needed).
@@ -329,10 +370,10 @@ From inside MAE: `SPC C D` (`:collab-doctor`) or `mae doctor` from the CLI.
 
 | Key | Command | Description |
 |-----|---------|-------------|
-| `SPC C s` | `:collab-start-server` | Start a local daemon process |
+| `SPC C s` | `:collab-start` | Start a local daemon process |
 | `SPC C c` | `:collab-connect` | Connect to configured server |
 | `SPC C d` | `:collab-disconnect` | Disconnect from current server |
-| `SPC C S` | `:collab-share-buffer` | Share active buffer with connected peers |
+| `SPC C S` | `:collab-share` | Share active buffer with connected peers |
 | `SPC C i` | `:collab-status` | Show connection info, peers, shared docs |
 | `:collab-doctor` | — | Comprehensive diagnostic report |
 | `:collab-status` | — | Live connection state (also available as `SPC C i`) |
@@ -433,7 +474,7 @@ MAE preserves sync state during disconnection and reconciles on reconnect.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `collab_reconnect_interval` | `5` | Base reconnect interval (seconds) |
-| `collab_reconnect_backoff_factor` | `1.5` | Exponential backoff multiplier |
+| `collab_reconnect_backoff_factor` | `2` | Exponential backoff multiplier (integer) |
 
 ---
 
@@ -476,7 +517,7 @@ AI: [calls collab_doctor or issues $/debug via sync transport]
 | No peers visible | Wrong `collab-server-address` | Check all clients use same address |
 | Stale state after restart | WAL replay needed | Automatic; check logs for errors |
 | Slow sync | Peer write timeout | Increase `collab-write-timeout-ms` |
-| WAL grows unbounded | Compaction threshold too high | Lower `collab-wal-threshold` |
+| WAL grows unbounded | Compaction threshold too high | Lower `compact_threshold` (or `max_wal_entries`) in `daemon.toml` |
 
 ### WAL Integrity
 
@@ -487,7 +528,7 @@ applying it to memory. On restart:
 2. Replay WAL entries newer than the snapshot.
 3. Serve from the recovered in-memory state.
 
-If the WAL is corrupted, delete `~/.local/share/mae/collab.db` and restart. All
+If the WAL is corrupted, delete `~/.local/share/mae/collab/state.db` and restart. All
 connected clients will push their local state on reconnect, restoring the merged
 document.
 
@@ -495,26 +536,35 @@ document.
 
 ## 8. Security
 
-**Current posture: PSK authentication (HMAC-SHA256).** Both server and clients
-must share the same pre-shared key (`collab_psk` / `collab_psk_command`).
-Connections without a valid PSK are rejected at the TCP handshake.
+Three auth modes (`collab.auth.mode` on the daemon, `collab-auth-mode` on the
+editor):
+
+| Mode | Mechanism | Use |
+|------|-----------|-----|
+| `none` | No auth | Trusted loopback only |
+| `psk` | Pre-shared key, HMAC-SHA256 mutual handshake | Quick shared-secret setups |
+| `key` | **Ed25519 mTLS** — encryption + mutual auth + TOFU pinning + per-KB membership | **Recommended; multi-user / enterprise (§10)** |
 
 | Phase | Mechanism | Status |
 |-------|-----------|--------|
 | v1 | No auth — trusted LAN / VPN only | Superseded |
-| v2 (current) | Pre-shared key (PSK) HMAC-SHA256 | ✅ Shipped (v0.11.0) |
-| v3 | SSH key exchange | Planned |
-| v4 | OAuth 2.0 / OIDC for enterprise deployments | Planned |
+| v2 | Pre-shared key (PSK) HMAC-SHA256 | ✅ Shipped (v0.11.0) |
+| v3 | **Ed25519 mTLS trusted peers + per-KB membership** (ADR-017) | ✅ Shipped |
+| v4 | OAuth 2.0 / OIDC for enterprise SSO | Planned |
+
+**Secrets** never belong in `config.toml`. Use `key` mode (no shared secret), or
+a PSK keystore / `collab-psk-command` for `psk` mode.
 
 **Recommendations:**
 
 - Bind to `127.0.0.1` for solo/loopback use (default).
-- Use a VPN (WireGuard, Tailscale) when collaborating across machines.
-- Firewall the port (`9473`) from untrusted networks.
-- Never bind to `0.0.0.0` on a machine with a public IP without a VPN or firewall rule.
-
-Unix domain socket (`--unix-socket`) access is controlled by filesystem
-permissions. Use it for intra-machine IPC where tighter isolation is needed.
+- For multi-machine, use **`key` mode** — it encrypts (mTLS) and authenticates
+  each peer. On a trusted LAN it's sufficient; on untrusted networks add a VPN
+  (WireGuard, Tailscale).
+- `psk`/`none` modes are **plaintext** on the wire — keep them on trusted
+  networks or behind a TLS-terminating proxy / VPN.
+- Firewall the port (`9473`) from untrusted networks; never bind `0.0.0.0` on a
+  public IP without a VPN or firewall rule.
 
 ---
 
@@ -594,6 +644,214 @@ When the last client disconnects (`peer_count` reaches 0):
 - If a save is in flight when disconnection occurs, the `SendSaveIntent` / `SendSaveCommitted`
   commands are dropped silently. The local file save (`:w`) has already succeeded at that point.
 - Peers will not receive a `save_committed` notification, but the CRDT state is consistent.
+
+---
+
+## 10. Trusted-Peer Mode (key auth + mTLS)
+
+For multi-user / multi-machine collaboration and **long-term shared knowledge
+management**, use `key` mode (ADR-017). It gives every peer a stable **Ed25519
+identity**, encrypts the channel with **mutual TLS**, pins the daemon on first
+connect (**TOFU**), authoritatively attributes edits to the verified identity,
+and enforces **per-KB membership** (least privilege). It supersedes `psk` mode's
+shared secret. Layout lives under `$XDG_DATA_HOME/mae/collab/` (like `~/.ssh/`):
+`id_ed25519`(.pub), `known_hosts`, `authorized_keys`.
+
+### Daemon (the hub)
+
+`~/.config/mae/daemon.toml`:
+
+```toml
+[collab]
+bind = "0.0.0.0:9473"     # LAN; for untrusted networks tunnel via VPN
+
+[collab.auth]
+mode = "key"              # Ed25519 + mTLS (tls = true by default)
+```
+
+```bash
+mae-daemon identity        # prints the daemon's fingerprint + public key line
+mae-daemon --check-config  # shows auth.mode=key, tls, identity, authorized count
+```
+
+Share the daemon's **fingerprint** out-of-band so clients can verify the TOFU
+prompt.
+
+### Editor setup (each peer) — one command
+
+```bash
+mae setup-collab --server 192.168.1.10:9473
+```
+
+This is **idempotent**: it generates the peer's Ed25519 identity (if absent),
+persists `collab-auth-mode=key` + the server address + `collab-auto-connect` to
+`init.scm`, and prints the exact `mae-daemon authorize …` line to hand to the
+admin. (`mae --collab-identity` just prints the identity without touching config.)
+
+**Reuse an existing SSH key** (opt-in — convenient if you already manage an
+Ed25519 SSH key; it becomes your collab identity):
+
+```bash
+mae setup-collab --server 192.168.1.10:9473 --ssh-key ~/.ssh/id_ed25519
+```
+
+> Trade-off: reusing one key across SSH and MAE means a compromise of either
+> affects both. A dedicated MAE identity (the default) keeps them separate.
+> Only unencrypted Ed25519 SSH keys are supported.
+
+### Authorize each peer (daemon host)
+
+The label you assign is the peer's identity for attribution + membership.
+
+```bash
+# MAE-native key (from `mae setup-collab` / `mae --collab-identity`):
+mae-daemon authorize mae-ed25519 <base64> alice
+# ...or import the peer's SSH public key (pairs with editor `--ssh-key`):
+mae-daemon authorize --from-ssh-pub /path/to/alice_id_ed25519.pub alice
+
+mae-daemon authorized      # list trusted peers
+mae-daemon revoke alice    # per-peer revocation (no secret rotation)
+```
+
+### First connect (TOFU)
+
+Launch `mae`; an unknown daemon key triggers a **"Trust Daemon Key? SHA256:…
+[y/N]"** dialog — verify it matches `mae-daemon identity`, accept to pin. A
+*changed* key later aborts the connection (MITM defense). Headless
+(`mae --test`/CI) should set `collab-host-key-policy` to `accept-new`.
+
+### Shared KBs — identity, roles, and join policy (ADR-018)
+
+**Identity is your key, not your name.** KB ownership and membership are keyed on
+your **Ed25519 key fingerprint** (`SHA256:…`), never the label or `collab-user-name`
+(which are display-only). The daemon binds the owner to the *verified cert* on
+`:kb-share`, so a self-claimed name is ignored — there is no "creator mismatch".
+
+**Roles** (hierarchical — `owner ⊇ editor ⊇ viewer`): owner manages members + policy;
+editor reads + edits nodes; **viewer is read-only**.
+
+**Join policy** per KB (owner sets it; default **`invite`**):
+- `restrictive` — only the owner + explicitly-added members.
+- `invite` — a non-member's join becomes a **pending request** the owner approves.
+- `permissive` — any authorized peer auto-joins as a **viewer**.
+
+```
+:kb-share <name>                       # owner shares a specific KB (owner = your key)
+:kb-policy <kb> restrictive|invite|permissive
+:kb-pending <kb>                       # list pending requests: (label, fingerprint)
+:kb-approve <kb> <fingerprint> [role]  # approve a pending peer (default editor)
+:kb-member-add <kb> <fingerprint> [role]   # add directly, by fingerprint
+:kb-member-remove <kb> <fingerprint>
+:kb-join <kb>                          # member → join; non-member → per policy
+```
+
+> **Members are managed by fingerprint.** Find a peer's fingerprint from
+> `:kb-pending` (for a pending request) or `mae-daemon authorized` (admin). Labels
+> are display only and must be unique in `authorized_keys`.
+
+**Admin (daemon):** `mae-daemon authorize <pubkey-line> <unique-label>` (labels must
+be unique), `mae-daemon revoke <label|SHA256:fingerprint>` (revoke by fingerprint is
+unambiguous).
+
+A non-owner cannot escalate via a raw collection write — the daemon owner-gates raw
+`kbc:` updates (membership-smuggling defense). The model follows NIST RBAC + Google
+Zanzibar/ReBAC + OWASP authorization (see [ADR-018](adr/018-identity-anchored-kb-access-control.md)).
+
+### The `*KB Sharing*` management buffer (recommended)
+
+Press **`SPC C K m`** (or `:kb-sharing`) to open a magit-style management buffer
+that shows every shared/joined KB with its members, roles, join policy, pending
+requests, and your own role/epoch — and lets you act **at point** so you never
+type a fingerprint by hand:
+
+```
+KB Sharing
+  Connected to 127.0.0.1:9473 — 2 peer(s)
+
+▾ KB: Team Notes  [owner · invite · synced]
+    Your role: owner (epoch 0)
+    Policy: invite
+  ▾ Members (2):
+      alice (SHA256:ab12…cd) — owner  (you)
+      bob   (SHA256:9xLh…0p) — editor
+  ▾ Pending (1):
+      carol (SHA256:c1f2…9a) — requested 2026-06-23
+```
+
+| Key | On a… | Action |
+|-----|-------|--------|
+| `a` / `d` | pending row | approve (as editor) / deny |
+| `e` / `v` / `o` | member row | set role to editor / viewer / owner |
+| `x` | member row | remove member |
+| `y` | member row | copy full fingerprint to clipboard |
+| `p` | KB header | cycle join policy (restrictive → invite → permissive) |
+| `L` | KB header | leave the KB (local copy preserved) |
+| `Tab` | header | fold / unfold |
+| `g r` | anywhere | refresh |
+
+The buffer **repaints live**: when the owner promotes/demotes/approves a peer, the
+change appears on every connected member without a reconnect. New join requests
+also raise a **notification** (badge + `*Notifications*`), so the owner isn't blind
+with the buffer closed. Running `:kb-approve <kb>` / `:kb-member-add <kb>` **without**
+a fingerprint just opens this buffer to pick at point.
+
+The buffer, the `(kb-sharing-status)` Scheme primitive, and the `kb_sharing_status`
+MCP tool all read the **same** snapshot — the human and the AI peer see identical
+state (it is your peer's local replica; the daemon stays authoritative).
+
+### Scripting and AI peers
+
+Every lifecycle action is a first-class Scheme primitive **and** an MCP tool — the
+user and the AI agent are peers calling the same intents:
+
+```scheme
+(kb-share "team-notes")                  ; share a KB
+(kb-join "team-notes")                   ; join one
+(kb-add-member "team-notes" "SHA256:…" "editor")
+(kb-approve "team-notes" "SHA256:…" "editor")   ; approve a pending request
+(kb-set-policy "team-notes" "permissive")
+(kb-remove-member "team-notes" "SHA256:…")
+(kb-leave "team-notes")
+(kb-sharing-status)                      ; → JSON snapshot of all shared/joined KBs
+```
+
+The AI agent drives the same lifecycle via MCP (`kb_share`, `kb_join`, `kb_leave`,
+`kb_add_member`, `kb_remove_member`, `kb_approve`, `kb_set_policy`) and introspects
+via **`kb_sharing_status`** — call it before managing membership to read the roster
+and the pending fingerprints. The agent's local replica can only mislead itself; the
+daemon re-derives authorization from its own collection, so an agent cannot
+self-elevate.
+
+### When your access changes ("rebase required")
+
+Membership roles carry a per-member **authorization epoch** (ADR-023). When an owner
+changes your role, the daemon **rotates** the identity your edits are authored under
+and **fences** any edit you made under the old role ("rebase required") — this is the
+security guarantee that a viewer's pre-grant edits can't silently cascade once you're
+promoted. Your editor **relearns** the new epoch automatically from the membership
+broadcast (no reconnect needed), so your *next* edit is accepted.
+
+If an edit you made just before the change was fenced, MAE surfaces a
+`*Notifications*` item with three choices:
+
+- **Accept-remote** — replace your copy with the current shared version (your edit is dropped).
+- **Keep-mine** — re-apply your edit on top of the current version (it converges).
+- **Stash externally** — save your version to a separate file first.
+
+Set **`collab_fence_resolution = auto`** (default `prompt`) to have MAE resolve this
+in the background (keep-mine: adopt + re-author) without asking.
+
+### Discovering peers
+
+`:collab-discover` (`SPC C P`) finds MAE daemons on your LAN via mDNS and lists their
+shared KBs; `:collab-list` shows the shared documents on the daemon you're connected
+to. To join manually: connect (`:collab-connect`), then `:kb-join <name>`.
+
+### Validate it
+
+`make test-collab-mtls-e2e` (single-host mTLS) and
+`make test-collab-membership-e2e` (two-editor membership) exercise the full
+stack with real daemon + editors.
 
 ---
 

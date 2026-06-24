@@ -1,0 +1,23 @@
+:PROPERTIES:
+:ID: collabtest:overview
+:KIND: concept
+:ALIASES: collab-test-kb,fixture-overview
+:END:
+#+title: Collab Test Fixture Overview
+#+filetags: :collabtest:fixture:
+
+A tiny, throwaway knowledge base used as a **test fixture** for the trusted-peer
+KB replication & per-KB membership end-to-end tests (ADR-017). It deliberately
+carries no real user data so it can be committed and shared between machines.
+
+The sentinel token ZEPHYRINE appears only in this fixture, so a test can assert
+that the KB actually replicated to a peer (search for ZEPHYRINE → this node)
+rather than matching incidental content.
+
+This KB is a 3-node star: this overview links out to two leaf nodes.
+
+** Structure
+- [[references:collabtest:alpha][Alpha]] — first leaf (sentinel QUOKKA)
+- [[references:collabtest:beta][Beta]] — second leaf (sentinel NARWHAL)
+
+See also: [[references:collabtest:alpha][Alpha Node]], [[references:collabtest:beta][Beta Node]].

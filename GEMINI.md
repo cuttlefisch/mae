@@ -34,6 +34,12 @@ The project README (`README.md`) contains the architecture spec and stack ration
 
 ## Crate Layout
 
+Two workspaces (ADR-014): the **editor workspace** (root `Cargo.toml`, CozoDB+sled) with
+17 editor crates in `crates/` plus the 3 shared crates in `shared/` (`mae-kb`, `mae-sync`,
+`mae-mcp` — path deps from both workspaces), and a **separate daemon workspace** (`daemon/`,
+own `Cargo.lock`, excluded from the root workspace, CozoDB+sqlite) holding the `mae-daemon`
+binary. The table below lists the editor + shared crates.
+
 | Crate | Purpose |
 |---|---|
 | `mae-core` | Buffer management (rope), editor state, commands, keymap, syntax |
@@ -47,7 +53,6 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) |
 | `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O |
 | `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers |
-| `mae-daemon` | Background daemon — KB persistence, collab sync, WAL persistence, per-doc locking |
 | `mae-babel` | Org-babel executor — 12 languages, persistent sessions, language backends |
 | `mae-export` | Org/Markdown export — HTML, Markdown, TOC, syntax highlighting |
 | `mae-snippets` | YASnippet-style templates — tab-stops, mirrors, transforms |
@@ -113,7 +118,7 @@ Collaborative state uses **yrs** (Yjs Rust port, YATA algorithm). `mae-sync` wra
 
 Background daemon for KB persistence and multi-machine collaborative editing.
 
-**Usage:** `mae-daemon [--bind 0.0.0.0:9473] [--unix-socket /path] [--check-config] [doctor]`
+**Usage:** `mae-daemon [--config <path>] [--bind 0.0.0.0:9473] [--data-dir <path>] [--check-config] [doctor]`
 
 **Architecture:**
 - Per-document locking (`RwLock<HashMap<String, Arc<Mutex<DocEntry>>>>`)
@@ -123,11 +128,11 @@ Background daemon for KB persistence and multi-machine collaborative editing.
 
 **Join-save model:** Joined buffers have no local file path by default. Users use `:saveas` to persist locally. `collab_auto_resolve_paths` enables prompted project-root mapping. Server-side suffix matching resolves bare filenames.
 
-**Persistent doc_id:** MAE's doc_ids persist across sessions (unique in the industry). Enables asynchronous collaboration — documents survive host disconnection. P2P collaboration via mDNS is planned.
+**Persistent doc_id:** MAE's doc_ids persist across sessions (unique in the industry). Enables asynchronous collaboration — documents survive host disconnection. mDNS LAN peer discovery is implemented (`collab_discover`); direct daemon-less P2P transport is still planned.
 
 **Editor commands:** `collab-start` (SPC C s), `collab-connect` (SPC C c), `collab-share` (SPC C S), `collab-join` (SPC C j), `collab-status` (SPC C i), `collab-doctor` (SPC C D)
 
-**Collab options (11):** `collab_server_address`, `collab_auto_connect`, `collab_auto_share`, `collab_reconnect_interval`, `collab_user_name`, `collab_write_timeout_ms`, `collab_max_pending_updates`, `collab_reconnect_backoff_factor`, `collab_max_reconnect_attempts`, `collab_batch_update_ms`, `collab_auto_resolve_paths`, `collab_default_save_dir`, `collab_save_on_remote_update`
+**Collab options (13):** `collab_server_address`, `collab_auto_connect`, `collab_auto_share`, `collab_reconnect_interval`, `collab_user_name`, `collab_write_timeout_ms`, `collab_max_pending_updates`, `collab_reconnect_backoff_factor`, `collab_max_reconnect_attempts`, `collab_batch_update_ms`, `collab_auto_resolve_paths`, `collab_default_save_dir`, `collab_save_on_remote_update`
 
 ## Scheme Testing Framework
 
@@ -143,7 +148,7 @@ Architecture: `scheme/lib/mae-test.scm` (BDD library) + `crates/mae/src/test_run
 
 ## Development Status
 
-**v0.11.0-dailies** — 3,638+ tests, 20 crates, 19 modules. All phases through 8 complete.
+**v0.13.12 (v0.14.0 pending)** — 20 crates, 19 modules. Phases 1-13 complete.
 
 See `ROADMAP.md` for granular milestone tracking.
 
@@ -157,7 +162,7 @@ See `ROADMAP.md` for granular milestone tracking.
 ## File Conventions
 
 - **`.mae/`** — Project-local runtime state (conversations, sessions, plans, memories). Gitignored.
-- **`~/.config/mae/`** — User config (config.toml, init.scm, themes).
+- **`~/.config/mae/`** — User config. `init.scm` is the primary config surface (`:set-save` persists here); `config.toml` is a narrow legacy bootstrap (AI provider + theme only). Plus themes.
 - **`~/.local/share/mae/`** — User data (transcripts, logs).
 - **`CLAUDE.md`** — Authoritative AI dev guide (this file is a mirror).
 - **`ROADMAP.md`** — Milestone tracking with completion status.

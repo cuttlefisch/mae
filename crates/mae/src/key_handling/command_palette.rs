@@ -278,10 +278,25 @@ fn handle_mini_dialog(editor: &mut Editor, key: KeyEvent) {
     if is_confirm {
         match key.code {
             KeyCode::Esc | KeyCode::Char('n') => {
+                // A pending BlockingReply notification (e.g. the TOFU host-key
+                // prompt, ADR-024): answer "no" on its reply channel + resolve.
+                if let Some((id, notif_reply)) = editor.pending_notif_reply.take() {
+                    match notif_reply {
+                        mae_core::notifications::NotifReply::Bool(tx) => {
+                            let _ = tx.send(false);
+                        }
+                        mae_core::notifications::NotifReply::Text(tx) => {
+                            let _ = tx.send(String::new());
+                        }
+                    }
+                    editor.resolve_notification(id, mae_core::notifications::Resolution::Replied);
+                    editor.set_status("Declined");
+                } else {
+                    editor.set_status("Cancelled");
+                }
                 editor.mini_dialog = None;
                 editor.command_palette = None;
                 editor.set_mode(Mode::Normal);
-                editor.set_status("Cancelled");
             }
             KeyCode::Enter | KeyCode::Char('y') => {
                 let dialog = editor.mini_dialog.take().unwrap();
@@ -560,6 +575,22 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             } else {
                 editor.set_status("Buffer no longer exists".to_string());
             }
+        }
+        MiniDialogContext::Notification { notif_id } => {
+            // ADR-024 BlockingReply accept (e.g. TOFU host-key): answer "yes" on the
+            // notification's reply channel (unblocks the waiting task) + resolve.
+            let id = *notif_id;
+            if let Some((_id, notif_reply)) = editor.pending_notif_reply.take() {
+                match notif_reply {
+                    mae_core::notifications::NotifReply::Bool(tx) => {
+                        let _ = tx.send(true);
+                    }
+                    mae_core::notifications::NotifReply::Text(tx) => {
+                        let _ = tx.send("y".to_string());
+                    }
+                }
+            }
+            editor.resolve_notification(id, mae_core::notifications::Resolution::Replied);
         }
         MiniDialogContext::RevertBuffer { buf_idx } => {
             let buf_idx = *buf_idx;

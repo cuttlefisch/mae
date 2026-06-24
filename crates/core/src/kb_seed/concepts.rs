@@ -200,9 +200,9 @@ See also: [[concept:gui]], [[concept:options]]\n";
 pub(super) const CONCEPT_AUTOSAVE: &str = "\
 **Autosave** periodically saves all modified file-backed buffers in the background.\n\n\
 ** Configuration\n\
+Configure in `init.scm` — MAE's primary config surface:\n\
 - `:set autosave_interval 300` — save every 5 minutes (0 = disabled)\n\
-- `config.toml`: `autosave_interval = 300` under `[editor]`\n\
-- Scheme: `(set-option! \"autosave-interval\" \"300\")`\n\n\
+- Scheme: `(set-option! \"autosave-interval\" \"300\")` (persists via `:set-save`)\n\n\
 ** Idle Debounce\n\
 Autosave waits at least **5 seconds** after the last edit before saving. \
 This prevents saving mid-typing. The timer resets with each keystroke.\n\n\
@@ -311,8 +311,10 @@ Explicit guardrails (~70 lines) for smaller/cheaper models:\n\
 Unknown models default to **compact** (safe: over-prompting wastes a few tokens; \
 under-prompting wastes millions in looping).\n\n\
 *** Override\n\
-Set `[ai] prompt_tier = \"full\"` or `\"compact\"` in `config.toml` to force a tier \
-regardless of model.\n\n\
+Force a tier regardless of model with `[ai] prompt_tier = \"full\"` (or \
+`\"compact\"`) in `config.toml`. Prompt-tier selection is part of the narrow AI-provider \
+bootstrap read at startup (alongside provider/model), so it lives in `config.toml` rather \
+than the Scheme option surface.\n\n\
 *** Custom Prompts\n\
 Place `pair-programmer.xml` or `pair-programmer-compact.xml` in:\n\
 - `~/.config/mae/prompts/` (user override)\n\
@@ -523,7 +525,8 @@ See also: [[concept:knowledge-base]], [[concept:command]], [[concept:agent-boots
 pub(super) const CONCEPT_KB: &str = "\
 MAE's **knowledge base** is a typed graph database backed by CozoDB (Datalog). \
 It serves as both the built-in manual and a personal knowledge graph \
-(org-roam-equivalent). CozoDB with SQLite storage engine is the sole backend.\n\n\
+(org-roam-equivalent). CozoDB is the sole graph store (sled storage engine in the \
+editor; the daemon uses CozoDB-over-SQLite for persistence).\n\n\
 ** Graph model\n\
 - **CozoDB** (Datalog) primary backend with typed nodes and relationships.\n\
 - 14 `NodeKind` variants: Index, Command, Concept, Key, Note, Project, Category, \
@@ -585,7 +588,7 @@ knowledge base instances alongside MAE's built-in help.\n\n\
     └─────────────────────┘\n\
 ```\n\n\
 ** Design principle\n\
-**The org directory is READ-ONLY for the KB layer. SQLite is derived.**\n\
+**The org directory is READ-ONLY for the KB layer. The CozoDB graph is derived.**\n\
 Your org files remain the canonical source of truth. MAE reads them, \
 builds an in-memory graph, and never writes to your org directory \
 (except one sentinel file: `eor-instance.org`).\n\n\
@@ -636,8 +639,8 @@ Quick version: `:kb-register MyNotes ~/org-roam`\n\n\
 ** Backup and restore\n\
 **Your org files ARE the backup.** They're plain text on disk — version \
 them with git, sync them with any tool you like.\n\
-- The SQLite cache is disposable: delete it and reimport, zero data loss.\n\
-- `:kb-save <path>` exports a SQLite snapshot (useful for sharing the index).\n\
+- The CozoDB cache is disposable: delete it and reimport, zero data loss.\n\
+- `:kb-save <path>` exports a CozoDB snapshot (useful for sharing the index).\n\
 - `:kb-load <path>` imports a snapshot.\n\
 - `:kb-reimport <name>` rebuilds from org source.\n\
 - **There is no new data format to manage.** Your existing org files + \
@@ -657,9 +660,9 @@ How MAE's knowledge base compares to Obsidian and Roam Research.\n\n\
 | Feature | MAE KB | Obsidian | Roam Research |\n\
 |---------|--------|----------|---------------|\n\
 | Data format | Org-mode (plain text) | Markdown | Proprietary JSON |\n\
-| Storage | Local files + SQLite index | Local vault | Cloud (proprietary) |\n\
+| Storage | Local files + CozoDB graph index | Local vault | Cloud (proprietary) |\n\
 | Link model | Typed graph, reverse index | Wiki-links, backlinks | Block references |\n\
-| Search | FTS5 + fuzzy + substring | Basic full-text | Full-text + filter |\n\
+| Search | CozoDB FTS + fuzzy + substring | Basic full-text | Full-text + filter |\n\
 | AI integration | Peer actor (same API) | Plugin (Copilot) | None native |\n\
 | Federation | Multi-directory, cross-KB | Single vault | Single graph |\n\
 | Open source | GPL-3.0 | Freemium, closed core | Proprietary |\n\
@@ -677,7 +680,7 @@ How MAE's knowledge base compares to Obsidian and Roam Research.\n\n\
 - `((block-ref))` maps lossy to heading-level `:ID:` nodes.\n\
 - Register: `:kb-register RoamExport ~/roam-export`\n\n\
 ** Philosophy: why local-first + AI-peer + plain-text-canonical\n\n\
-1. **Plain text is the only immortal format.** SQLite is derived. Cloud sync \
+1. **Plain text is the only immortal format.** The CozoDB graph is derived. Cloud sync \
 is a dependency. Org files survive every tool transition.\n\
 2. **AI as peer, not plugin.** MAE's AI calls `kb_search`, `kb_get`, `kb_graph` — \
 the same query surface the human uses. No impedance mismatch.\n\
@@ -687,7 +690,7 @@ is a registered instance, searchable together.\n\
 4. **Ownership means exit.** Your org files are yours. No account, no sync \
 service, no API key required to read your own notes.\n\
 5. **Performance at the editor layer.** In-memory graph with pre-lowercased \
-search cache. FTS5 with porter stemmer. Sub-millisecond search across \
+search cache. CozoDB Tantivy FTS. Sub-millisecond search across \
 thousands of nodes. No Electron, no browser runtime.\n\n\
 See also: [[concept:knowledge-base]], [[concept:kb-federation]], [[concept:kb-workflows]]\n";
 
@@ -918,7 +921,8 @@ can discover the editor's MCP tools with zero manual setup.\n\n\
 - `:agent-list` — show all agents MAE can bootstrap\n\
 - `mae --setup-agents [DIR]` — CLI: write configs without starting the editor\n\n\
 ** Configuration\n\
-In `~/.config/mae/config.toml`:\n\
+Agent bootstrap is a startup-time concern (it runs at terminal-spawn), so it lives \
+in the narrow legacy `config.toml` bootstrap, with env-var overrides:\n\
 ```toml\n\
 [agents]\n\
 auto_mcp_json = true       # write .mcp.json on terminal spawn\n\
@@ -1018,7 +1022,7 @@ pub(super) const CONCEPT_GUI: &str =
 - Desktop launcher: installed via `make install` to `~/.local/share/applications/mae.desktop`.\n\n\
 ** GUI features\n\
 - **Mouse support:** click to place cursor, wheel scroll.\n\
-- **Font configuration:** `config.toml` `[editor] font_size = 14.0` or `:set font_size 16`.\n\
+- **Font configuration:** `:set font_size 16` (or `(set-option! \"font-size\" \"14.0\")` in init.scm).\n\
 - **Dirty-flag rendering:** GPU idle when nothing changes (~0% CPU).\n\
 - **Shell colors:** terminal emulator respects editor theme.\n\
 - **Shell scrollback:** Shift-PageUp/PageDown.\n\
@@ -1142,8 +1146,8 @@ showing styled labels instead of raw syntax.\n\n\
 - `:set link_descriptive false` — show raw `[label](url)` text\n\
 - `:set render_markup false` — disable inline styling in conversation buffers\n\
 - `:setlocal nolink_descriptive` — per-buffer override\n\
-- `config.toml`: `link_descriptive = true` under `[editor]`\n\
-- Scheme: `(set-option! \"link-descriptive\" \"true\")`\n\n\
+- Scheme (in init.scm, the primary config surface): `(set-option! \"link-descriptive\" \"true\")` \
+(persists via `:set-save`)\n\n\
 ** Scope\n\
 - **Conversation buffers:** markdown links are stripped to labels; org and markdown \
 inline markup (bold, italic, code) get styling spans\n\
@@ -1459,17 +1463,17 @@ Each KB node becomes a yrs document with schema:\n\
 ```\n\
 YMap { id, title: YText, body: YText, tags: YArray, links: YArray, meta: YMap }\n\
 ```\n\n\
-SQLite remains the persistence backend — yrs document bytes stored as BLOBs. \
-FTS5 indexes materialized text from `YText::to_string()`.\n\n\
+CozoDB remains the persistence backend — yrs document bytes stored as a column. \
+The FTS index covers materialized text from `YText::to_string()`.\n\n\
 ** Benefits\n\
 - **Offline editing**: Edit KB nodes without connectivity, merge on reconnect\n\
 - **P2P federation**: Exchange yrs state vectors between MAE instances\n\
 - **AI attribution**: Each transaction carries a client ID\n\
 - **Per-user undo**: yrs UndoManager provides this automatically\n\n\
 ** Migration Path\n\
-1. Phase A: SQLite only (current)\n\
-2. Phase B: Optional `crdt_doc BLOB` column, new nodes get yrs docs\n\
-3. Phase C: All nodes have yrs docs, SQLite is read cache + FTS index\n\n\
+1. Phase A: plain CozoDB nodes only (current)\n\
+2. Phase B: Optional `crdt_doc` column, new nodes get yrs docs\n\
+3. Phase C: All nodes have yrs docs, CozoDB is read cache + FTS index\n\n\
 Full ADR: `docs/adr/005-kb-crdt.md`\n\n\
 See also: [[concept:sync-engine]], [[concept:knowledge-base]], [[concept:collaborative-state]]\n";
 
@@ -1544,7 +1548,7 @@ their SHA-256, and compares it with the last-known hash. If they differ an \
 external modification warning is raised. After writing, the new hash is \
 stored as the baseline. Advisory lock files (`.{name}.mae.lock`) prevent \
 simultaneous writes from two editor instances.\n\n\
-** State Server Role\n\
+** Daemon Role\n\
 The `mae-daemon` binary is a **document hub**, not a source of truth. \
 Documents are authoritative at the client; the server:\n\
 - Holds the latest merged CRDT state (yrs doc bytes)\n\
@@ -1595,15 +1599,19 @@ The server can be started with:\n\
 ```bash\n\
 mae-daemon --bind 0.0.0.0:9473\n\
 ```\n\n\
-> **Security:** PSK mutual authentication (HMAC-SHA256) is required since v0.11.0.\n\
-> Set `collab_psk` on both server and clients. For untrusted networks, use a VPN.\n\n\
+> **Security:** the auth mode is one of `none`, `psk`, or `key`. The recommended \
+> mode is `key` — Ed25519 trusted-peer mutual TLS, where access keys on each peer's \
+> verified key fingerprint (no shared secret to leak). `psk` (HMAC-SHA256 shared key) \
+> remains available for simple setups. Never store secrets in plaintext `config.toml`: \
+> use the trusted-peer keystore (`key` mode) or `collab_psk_command`. For untrusted \
+> networks, use a VPN regardless.\n\n\
 ** Commands\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
-| `SPC C s` | `:collab-start-server` | Start a local mae-daemon |\n\
+| `SPC C s` | `:collab-start` | Start a local mae-daemon |\n\
 | `SPC C c` | `:collab-connect` | Connect to configured server |\n\
 | `SPC C d` | `:collab-disconnect` | Disconnect from server |\n\
-| `SPC C S` | `:collab-share-buffer` | Share current buffer with peers |\n\
+| `SPC C S` | `:collab-share` | Share current buffer with peers |\n\
 | `SPC C i` | `:collab-status` | Show connection + peer status |\n\n\
 ** Configuration Options\n\
 | Option | Default | Description |\n\
@@ -1716,8 +1724,28 @@ N is the number of shared KBs and status is `synced`, `offline`, or \
 On a LAN, `:collab-discover` uses mDNS (`_mae-sync._tcp.local`) to find \
 peers running `mae-daemon`. Connect to a discovered peer to browse \
 their shared KBs.\n\n\
-** PSK Authentication\n\
-Set `collab_psk` or `collab_psk_command` to enable HMAC-SHA256 mutual \
-authentication. Both client and server must share the same key.\n\n\
+** Authentication\n\
+Auth mode is `none`, `psk`, or `key`. The recommended mode is `key` — Ed25519 \
+trusted-peer mutual TLS keyed on each peer's verified key fingerprint (see the \
+access-control section below). `psk` mode (`collab_psk` / `collab_psk_command`, \
+HMAC-SHA256, shared secret) remains available for simple setups. Never put secrets \
+in plaintext `config.toml`.\n\n\
+** Access Control: identity, roles, policy (ADR-018)\n\
+Ownership and membership key on your **Ed25519 key fingerprint** (`SHA256:…`), \
+NOT your label or `collab-user-name` (display only). On `:kb-share` the daemon \
+binds the owner to your verified key; a self-claimed creator is ignored.\n\
+- Roles (hierarchical, owner ⊇ editor ⊇ viewer): owner manages members + \
+policy; editor reads + edits; **viewer is read-only**.\n\
+- Per-KB join policy (default `invite`): `restrictive` (owner + added members \
+only), `invite` (join → pending → owner approves), `permissive` (any \
+authorized peer auto-joins as viewer).\n\
+- `:kb-policy <kb> <restrictive|invite|permissive>`, `:kb-pending <kb>` (lists \
+label + fingerprint), `:kb-approve <kb> <fingerprint> [role]`, \
+`:kb-member-add <kb> <fingerprint> [role]`, `:kb-member-remove <kb> <fingerprint>`.\n\
+- Members are managed by **fingerprint** (from `:kb-pending` or, for admins, \
+`mae-daemon authorized`). Admin: `mae-daemon authorize <line> <unique-label>`, \
+`mae-daemon revoke <label|SHA256:fp>`.\n\
+**As an AI peer you act under the human's KB role and cannot exceed it** — the \
+daemon enforces identically for keybindings and tool calls.\n\n\
 See also: [[concept:knowledge-base]], [[concept:collab-architecture]], \
 [[concept:sync-engine]], [[concept:adr-kb-crdt]], [[index]]\n";

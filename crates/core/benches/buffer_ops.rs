@@ -1,5 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use mae_core::Buffer;
+use std::hint::black_box;
 
 fn bench_buffer_creation(c: &mut Criterion) {
     c.bench_function("buffer_create_empty", |b| {

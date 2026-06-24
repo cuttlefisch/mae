@@ -189,13 +189,18 @@ Gutter markers show severity: `E` error, `W` warning, `I` info, `H` hint.\n\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
 | `SPC c s` | [[cmd:lsp-status]] | Show LSP server status |\n\n\
-Configure servers in `~/.config/mae/config.toml`:\n\
+LSP server paths are one of the few settings that live in the legacy \
+`config.toml` bootstrap (`SPC f P`):\n\
 ```toml\n\
 [lsp.rust]\n\
 command = \"rust-analyzer\"\n\n\
 [lsp.python]\n\
 command = \"pylsp\"\n\
-```\n\n\
+```\n\
+You can also override a server path per-launch with an env var \
+(`MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_TYPESCRIPT`, `MAE_LSP_GO`). \
+General editor behavior, by contrast, is configured in `init.scm` via \
+`(set-option!)` / `:set` / `:set-save` — not config.toml.\n\n\
 **Prev:** [[lesson:scheme|Lesson 6]]  |  \
 **Next:** [[lesson:terminal|Lesson 8: Terminal]]  |  \
 **Index:** [[tutor:index|Tutorial]]\n";
@@ -476,7 +481,7 @@ When you edit org files externally, refresh the graph:\n\
 ### Data safety\n\
 - MAE **never writes** to your org directory (except `eor-instance.org` sentinel).\n\
 - Your org files are the source of truth. The index is always re-derivable.\n\
-- Back up your org files with git. The SQLite cache is disposable.\n\n\
+- Back up your org files with git. The CozoDB index is disposable.\n\n\
 ### Unregister\n\
 ```\n\
 :kb-unregister MyNotes\n\
@@ -512,21 +517,27 @@ For multi-machine use, bind to all interfaces:\n\
 mae-daemon --bind 0.0.0.0:9473\n\
 ```\n\n\
 Or press `SPC C s` inside MAE to start a local server automatically.\n\n\
-### Step 3 — Set a shared secret (PSK authentication)\n\n\
-MAE uses HMAC-SHA256 mutual authentication. Both the server and all \
-clients must share the same pre-shared key.\n\n\
-In `~/.config/mae/config.toml`:\n\
-```toml\n\
-[collaboration]\n\
-psk = \"your-shared-secret-here\"\n\
+### Step 3 — Authenticate (trusted-peer `key` mode)\n\n\
+MAE has three auth modes — `none`, `psk`, and `key`. The recommended mode is \
+**`key`**: each editor holds an Ed25519 identity and the daemon trusts only \
+explicitly authorized peers over mTLS — nothing secret is shared, so nothing \
+can leak from a config file. One command on each **client** sets it up:\n\
+```bash\n\
+mae setup-collab --server 127.0.0.1:9473\n\
+```\n\
+This mints the editor's identity and writes `collab-auth-mode` + \
+`collab-server-address` into `init.scm`. Add `--ssh-key ~/.ssh/id_ed25519` to \
+reuse an existing key. Then print the client's public identity and authorize \
+it on the **host**:\n\
+```bash\n\
+mae --collab-identity                 # on the client: prints the pubkey line\n\
+mae-daemon authorize <pubkey-line>    # on the host: trust that client\n\
 ```\n\n\
-For the server, add the same key to `~/.config/mae/daemon.toml`:\n\
-```toml\n\
-psk = \"your-shared-secret-here\"\n\
-```\n\n\
-For production, use a secrets manager instead of plaintext:\n\
-```toml\n\
-psk_command = \"pass show mae/collab-psk\"\n\
+The legacy symmetric `psk` mode (HMAC-SHA256, one shared secret for server + \
+all clients) still works — set `collab-auth-mode` to `psk` — but supply the \
+key out of band, never as plaintext in config:\n\
+```scheme\n\
+(set-option! \"collab-psk-command\" \"pass show mae/collab-psk\")\n\
 ```\n\n\
 ### Step 4 — Configure MAE to use the server\n\n\
 In your Scheme REPL (`:eval`) or `init.scm`:\n\
@@ -594,11 +605,14 @@ mae-daemon --bind 0.0.0.0:9473\n\
 Open the firewall port:\n\
 - Fedora: `sudo firewall-cmd --add-port=9473/tcp --permanent && sudo firewall-cmd --reload`\n\
 - Ubuntu: `sudo ufw allow 9473/tcp`\n\n\
-**Security:** MAE uses PSK (HMAC-SHA256) mutual authentication. Set `collab_psk` \
-on both server and clients. For untrusted networks, use a VPN (Tailscale/WireGuard).\n\n\
+**Security:** prefer trusted-peer `key` mode (Ed25519 identities over mTLS) — \
+authorize each client with `mae-daemon authorize`. The legacy `psk` mode \
+(HMAC-SHA256, shared secret) is also supported; keep the secret out of \
+plaintext config (`collab-psk-command`). For untrusted networks, use a VPN \
+(Tailscale/WireGuard).\n\n\
 ### Troubleshooting\n\n\
 - **Connection refused** — check `mae-daemon` is running: `ss -tlnp | grep 9473`\n\
-- **Auth failed** — PSK mismatch: ensure server and all clients use the same `collab_psk`\n\
+- **Auth failed** — in `key` mode the client isn't authorized: run `mae-daemon authorize <pubkey-line>` on the host; in `psk` mode the keys differ\n\
 - **No peers visible** — ensure all clients use the same `collab-server-address`\n\
 - **Stale state after restart** — run `:collab-doctor` to inspect WAL health; \
   the server recovers from WAL automatically on restart\n\

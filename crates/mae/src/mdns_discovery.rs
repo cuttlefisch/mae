@@ -101,9 +101,19 @@ impl MdnsManager {
         }
     }
 
+    /// True if a background browse is already running.
+    pub fn is_browsing(&self) -> bool {
+        self.browse_handle.is_some()
+    }
+
     /// Start browsing for `_mae-sync._tcp.local` services.
     /// Returns a handle that populates `discovered` peers in the background.
+    /// Idempotent: a second call while a browse is already running is a no-op
+    /// (so callers can `ensure` browsing without spawning duplicate threads).
     pub fn start_browse(&mut self) -> Result<(), String> {
+        if self.browse_handle.is_some() {
+            return Ok(());
+        }
         let receiver = self
             .daemon
             .browse(SERVICE_TYPE)

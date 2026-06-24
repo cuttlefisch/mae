@@ -1,21 +1,81 @@
-//! Network E2E tests for mae-daemon.
+//! Network E2E tests for mae-daemon over real TCP.
 //!
-//! These tests spawn a real TCP server and connect multiple clients.
-//! Gated on `MAE_STATE_SERVER` env var for CI (requires port binding).
+//! Each test spawns its own `mae-daemon` on a free port and connects real TCP
+//! clients — self-contained, no external server. Gated on `MAE_TCP_E2E` (the same
+//! run-gate as `crates/mae/tests/collab_tcp_e2e.rs`).
+//!
+//! Run: `MAE_TCP_E2E=1 cargo test -p mae-daemon --test network_e2e`
+//!
+//! (Was gated on `MAE_STATE_SERVER=host:port`, which pointed at the retired
+//! state-server and required an externally-running daemon — so it never ran in
+//! CI. These tests are the only e2e coverage of `sync/resync`.)
+
+use std::net::SocketAddr;
+use std::time::Duration;
 
 use mae_mcp::protocol::JsonRpcResponse;
 use mae_sync::encoding::update_to_base64;
 use mae_sync::text::TextSync;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// Skip test if MAE_STATE_SERVER env is not set (for CI gating).
-macro_rules! require_env {
-    () => {
-        if std::env::var("MAE_STATE_SERVER").is_err() {
-            eprintln!("skipping: MAE_STATE_SERVER not set");
-            return;
+/// Holds a spawned `mae-daemon` (+ its temp data dir) for a test's lifetime.
+/// Dropping it kills the daemon (`kill_on_drop`) and removes the temp dir.
+struct ServerGuard {
+    _child: tokio::process::Child,
+    _tmp: tempfile::TempDir,
+    addr: SocketAddr,
+}
+
+/// Spawn a `mae-daemon` on a free TCP port for this test. Returns `None` (the
+/// caller returns early, skipping) unless `MAE_TCP_E2E` is set.
+async fn spawn_server() -> Option<ServerGuard> {
+    if std::env::var("MAE_TCP_E2E").is_err() {
+        eprintln!("skipping: MAE_TCP_E2E not set");
+        return None;
+    }
+    // Reserve a free port, then hand it to the daemon.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    drop(listener);
+    let tmp = tempfile::tempdir().unwrap();
+    // Isolate this daemon fully so tests run in parallel and alongside any other
+    // daemon (incl. a developer's live one): a per-test XDG_RUNTIME_DIR gives it a
+    // unique Unix socket (the daemon also binds `$XDG_RUNTIME_DIR/mae-daemon.sock`,
+    // not just TCP), and a per-test XDG_CONFIG_HOME means it finds no daemon.toml →
+    // runs with default (no-auth) config.
+    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
+        .args([
+            "--bind",
+            &addr.to_string(),
+            "--data-dir",
+            tmp.path().to_str().unwrap(),
+        ])
+        .env("XDG_RUNTIME_DIR", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("failed to spawn mae-daemon");
+    for _ in 0..50 {
+        if tokio::net::TcpStream::connect(addr).await.is_ok() {
+            return Some(ServerGuard {
+                _child: child,
+                _tmp: tmp,
+                addr,
+            });
         }
-    };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("mae-daemon did not start within 5s on {addr}");
+}
+
+/// Compute SHA-256 of content (matching the server's content hash).
+fn sha256(content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// Read a Content-Length framed message from a TCP stream.
@@ -55,16 +115,14 @@ async fn send_recv(stream: &mut tokio::net::TcpStream, msg: &serde_json::Value) 
     serde_json::from_value(value).unwrap()
 }
 
-// Tests connect to a running mae-daemon binary (set MAE_STATE_SERVER=host:port).
+// Each test spawns its own mae-daemon via spawn_server() (gated on MAE_TCP_E2E).
 
 #[tokio::test]
 async fn tcp_initialize_and_ping() {
-    require_env!();
-
-    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER")
-        .unwrap()
-        .parse()
-        .expect("MAE_STATE_SERVER should be host:port");
+    let Some(server) = spawn_server().await else {
+        return;
+    };
+    let addr = server.addr;
 
     let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
 
@@ -90,9 +148,10 @@ async fn tcp_initialize_and_ping() {
 
 #[tokio::test]
 async fn tcp_sync_update_roundtrip() {
-    require_env!();
-
-    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+    let Some(server) = spawn_server().await else {
+        return;
+    };
+    let addr = server.addr;
 
     let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
 
@@ -137,9 +196,10 @@ async fn tcp_sync_update_roundtrip() {
 
 #[tokio::test]
 async fn tcp_two_clients_converge() {
-    require_env!();
-
-    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+    let Some(server) = spawn_server().await else {
+        return;
+    };
+    let addr = server.addr;
 
     let doc_name = format!("converge-{}", std::process::id());
 
@@ -199,9 +259,10 @@ async fn tcp_two_clients_converge() {
 
 #[tokio::test]
 async fn tcp_state_vector_diff_protocol() {
-    require_env!();
-
-    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+    let Some(server) = spawn_server().await else {
+        return;
+    };
+    let addr = server.addr;
 
     let doc_name = format!("diff-{}", std::process::id());
 
@@ -247,9 +308,10 @@ async fn tcp_state_vector_diff_protocol() {
 
 #[tokio::test]
 async fn tcp_docs_list() {
-    require_env!();
-
-    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+    let Some(server) = spawn_server().await else {
+        return;
+    };
+    let addr = server.addr;
 
     let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
     send_recv(
@@ -272,9 +334,10 @@ async fn tcp_docs_list() {
 
 #[tokio::test]
 async fn tcp_docs_stats() {
-    require_env!();
-
-    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+    let Some(server) = spawn_server().await else {
+        return;
+    };
+    let addr = server.addr;
     let doc_name = format!("stats-{}", std::process::id());
 
     let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -315,22 +378,24 @@ async fn tcp_docs_stats() {
         "docs/stats returned error: {:?}",
         resp.error
     );
-    let result = resp.result.unwrap();
+    // docs/stats nests the metrics under a `stats` object.
+    let stats = &resp.result.unwrap()["stats"];
     assert!(
-        result["wal_seq"].as_u64().is_some(),
-        "expected wal_seq field, got: {result}"
+        stats["wal_seq"].as_u64().is_some(),
+        "expected stats.wal_seq field, got: {stats}"
     );
     assert!(
-        result["content_length"].as_u64().is_some(),
-        "expected content_length field, got: {result}"
+        stats["content_length"].as_u64().is_some(),
+        "expected stats.content_length field, got: {stats}"
     );
 }
 
 #[tokio::test]
 async fn tcp_save_intent_ok() {
-    require_env!();
-
-    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+    let Some(server) = spawn_server().await else {
+        return;
+    };
+    let addr = server.addr;
 
     let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
     send_recv(
@@ -370,15 +435,14 @@ async fn tcp_save_intent_ok() {
         .unwrap()
         .to_string();
 
-    // Use content string as a simple hash (protocol allows any opaque string).
-    let hash = format!("{:x}", content.len());
-
-    // Send save_intent.
+    // docs/save_intent requires `expected_hash` = the server's SHA-256 of the
+    // current content (ADR-003 content-hash verification). Sending the matching
+    // hash must report it's safe to save.
     let resp = send_recv(
         &mut client,
         &serde_json::json!({
             "jsonrpc": "2.0", "id": 4, "method": "docs/save_intent",
-            "params": { "doc": "save-test-doc", "content_hash": hash }
+            "params": { "doc": "save-test-doc", "expected_hash": sha256(&content) }
         }),
     )
     .await;
@@ -387,13 +451,19 @@ async fn tcp_save_intent_ok() {
         "docs/save_intent returned error: {:?}",
         resp.error
     );
+    let result = resp.result.unwrap();
+    assert_eq!(
+        result["result"]["status"], "ok",
+        "matching expected_hash should be safe to save (status=ok), got: {result}"
+    );
 }
 
 #[tokio::test]
 async fn tcp_resync_protocol() {
-    require_env!();
-
-    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+    let Some(server) = spawn_server().await else {
+        return;
+    };
+    let addr = server.addr;
     let doc_name = format!("resync-{}", std::process::id());
 
     let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -445,9 +515,10 @@ async fn tcp_resync_protocol() {
 
 #[tokio::test]
 async fn tcp_debug_endpoint() {
-    require_env!();
-
-    let addr: std::net::SocketAddr = std::env::var("MAE_STATE_SERVER").unwrap().parse().unwrap();
+    let Some(server) = spawn_server().await else {
+        return;
+    };
+    let addr = server.addr;
 
     let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
     send_recv(
@@ -470,8 +541,11 @@ async fn tcp_debug_endpoint() {
         resp.error
     );
     let result = resp.result.unwrap();
+    // `documents` is now a count; older builds returned an array/object.
     assert!(
-        result["documents"].is_array() || result["documents"].is_object(),
+        result["documents"].is_u64()
+            || result["documents"].is_array()
+            || result["documents"].is_object(),
         "expected documents field, got: {result}"
     );
     assert!(

@@ -17,6 +17,7 @@ pub(crate) mod help_ops;
 mod hook_ops;
 mod jumps;
 pub(crate) mod kb_ops;
+mod kb_sharing_ops;
 pub mod kb_state;
 mod keymaps;
 mod lsp_actions;
@@ -29,6 +30,7 @@ mod markdown_ops;
 mod marks;
 mod mouse_ops;
 mod multicursor;
+mod notify_ops;
 mod option_ops;
 mod org_ops;
 pub mod perf;
@@ -98,6 +100,41 @@ impl CollabStatus {
 ///
 /// The binary drains `editor.pending_collab_intent` each tick, similar to
 /// `pending_lsp_requests` and `pending_dap_intents`.
+/// A KB-sharing lifecycle action requested from a high-level surface (the Scheme
+/// primitives). [`Editor::queue_kb_collab_action`] lowers it to the matching
+/// [`CollabIntent`] (computing editor-side data like `Join` state-vectors), so all
+/// three actors — command, MCP tool, Scheme — share one intent path (#3, #7).
+#[derive(Debug, Clone)]
+pub enum KbCollabAction {
+    Share {
+        kb_name: String,
+    },
+    Join {
+        kb_id: String,
+    },
+    Leave {
+        kb_id: String,
+    },
+    AddMember {
+        kb_id: String,
+        member: String,
+        role: String,
+    },
+    RemoveMember {
+        kb_id: String,
+        member: String,
+    },
+    Approve {
+        kb_id: String,
+        principal: String,
+        role: String,
+    },
+    SetPolicy {
+        kb_id: String,
+        policy: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum CollabIntent {
     /// Start a local daemon process.
@@ -130,16 +167,47 @@ pub enum CollabIntent {
         kb_name: String,
         node_ids: Vec<String>,
     },
-    /// Join a shared KB from the server.
-    JoinKb { kb_id: String },
+    /// Join a shared KB from the server. `node_svs` carries this editor's
+    /// per-node state vectors (ADR-022) so the daemon can reply with an
+    /// incremental diff per node and the member reconciles instead of adopting a
+    /// full snapshot (crash-safe re-join). Empty on a first-ever join with no
+    /// local nodes — the daemon then sends full state.
+    JoinKb {
+        kb_id: String,
+        node_svs: Vec<(String, Vec<u8>)>,
+    },
     /// Leave (unsubscribe from) a shared KB.
     LeaveKb { kb_id: String },
+    /// Add a peer (by principal/fingerprint) to a KB with a role (owner-only, ADR-018).
+    KbAddMember {
+        kb_id: String,
+        member: String,
+        role: String,
+    },
+    /// Remove a peer (by principal) from a KB's members (owner-only, ADR-018).
+    KbRemoveMember { kb_id: String, member: String },
+    /// Approve a pending join request as `role` (owner-only, ADR-018).
+    KbApprove {
+        kb_id: String,
+        principal: String,
+        role: String,
+    },
+    /// List pending join requests for a KB (owner-only, ADR-018).
+    KbListPending { kb_id: String },
+    /// Set a KB's join policy (restrictive|invite|permissive; owner-only, ADR-018).
+    KbSetPolicy { kb_id: String, policy: String },
     /// Send a CRDT update for a KB node to the server.
     KbNodeUpdate {
         kb_id: String,
         node_id: String,
         update: Vec<u8>,
     },
+    /// ADR-024 R1: fetch a node's authoritative state from the daemon and ADOPT it
+    /// locally (drop the stale-epoch divergence that the daemon fenced), so a
+    /// legitimately-granted member can resume editing. If a `pending_reauthor`
+    /// entry exists for `(kb_id, node_id)`, the adopted node is then re-authored
+    /// under the current epoch (the graceful keep-mine path).
+    KbAdoptNode { kb_id: String, node_id: String },
     /// Discover peers on the local network via mDNS.
     DiscoverPeers,
 }
@@ -175,6 +243,15 @@ pub struct ShellIntents {
     pub viewport_cwds: HashMap<usize, String>,
 }
 
+/// Node field values captured for an ADR-024 keep-mine resolution (re-applied
+/// after adopting authoritative state, under the current epoch).
+#[derive(Debug, Clone)]
+pub struct ReauthorFields {
+    pub title: String,
+    pub body: String,
+    pub tags: Vec<String>,
+}
+
 /// Collaborative editing state extracted from Editor.
 /// All fields were previously `collab_*` on Editor; now accessed via `editor.collab.*`.
 #[derive(Debug)]
@@ -187,6 +264,14 @@ pub struct CollabState {
     pub synced_buffers: HashSet<String>,
     /// Pending collaborative editing intent for the binary event loop to drain.
     pub pending_intent: Option<CollabIntent>,
+    /// Queue of reconstruction intents (ADR-019) drained one-per-tick through
+    /// `pending_intent` — e.g. re-join/re-share every durably-shared KB on
+    /// reconnect so the editor resumes RECEIVING remote edits without a manual
+    /// re-share. Fans out beyond the single-slot `pending_intent`.
+    pub reconnect_intents: std::collections::VecDeque<CollabIntent>,
+    /// KBs already re-subscribed this connection (idempotency guard so a
+    /// reconnect storm doesn't double-join).
+    pub subscribed_kbs: HashSet<String>,
     /// TCP address of the collaborative state server.
     pub server_address: String,
     /// Automatically connect to the state server on startup.
@@ -233,12 +318,71 @@ pub struct CollabState {
     pub shared_kbs: HashMap<String, HashSet<String>>,
     /// KB sync mode: "manual" (explicit :kb-sync), "on_save" (auto on node edit).
     pub kb_sync_mode: String,
-    /// Pending KB node updates to send (accumulated between ticks).
+    /// Epoch-fence resolution: "prompt" (raise the ADR-024 Accept/Keep/Stash
+    /// notification — default, keeps the user in the loop) or "auto" (adopt the
+    /// authoritative version + re-author the local edit in the background).
+    pub fence_resolution: String,
+    /// Pending KB node updates to send (accumulated between ticks). Transient
+    /// fallback used only when there is no durable store; store-backed updates
+    /// live in the SQLite pending queue (ADR-020 single-source emit).
     pub pending_kb_updates: Vec<(String, String, Vec<u8>)>, // (kb_id, node_id, update_bytes)
+    /// Durable-queue rowids of `kb/node_update`s currently on the wire awaiting the
+    /// daemon's apply-confirmation (ADR-020 queue→send→confirm→ack). Prevents the
+    /// drain from re-sending an in-flight row every tick; cleared on ack, requeue,
+    /// or disconnect (so unconfirmed updates retry on reconnect).
+    pub inflight_kb_updates: std::collections::HashSet<i64>,
+    /// Stable, per-peer yrs `client_id` for local KB CRDT edits (ADR-020 B-16),
+    /// derived once at startup from the durable collab identity fingerprint. Two
+    /// peers MUST have distinct client_ids or their concurrent edits to the same
+    /// node collide in yrs' clock space and diverge. `0` = unset (no collab identity
+    /// loaded) → `kb_local_client_id()` falls back to a legacy default.
+    pub local_kb_client_id: u64,
+    /// ADR-024 R1: node field values captured for the **keep-mine** resolution,
+    /// keyed by `(kb_id, node_id)`. Captured BEFORE a `KbAdoptNode` (since adopt
+    /// overwrites the local doc); the `KbNodeAdopted` handler re-applies them under
+    /// the current epoch after adopt, then removes the entry. Absent = accept-remote
+    /// (discard local).
+    pub pending_reauthor: HashMap<(String, String), ReauthorFields>,
+    /// This peer's own collab principal (key fingerprint) — the identity the daemon
+    /// authorizes against. Stored so KB node ops can be re-derived under a rotated
+    /// authorization epoch (ADR-023). Empty when no collab identity is loaded.
+    pub local_fingerprint: String,
+    /// ADR-023 per-KB authorization epoch for THIS peer, learned from each shared
+    /// KB's `kbc:` collection doc (on join + every membership broadcast). A node
+    /// edit is authored under `derive_kb_client_id(local_fingerprint, epoch)`; a
+    /// role change bumps the epoch (daemon-authored, unforgeable), rotating the
+    /// client_id so the daemon fences the peer's pre-change lineage. Absent ⇒ 0
+    /// (fresh grant / unshared), which equals the legacy base client_id.
+    pub kb_epochs: HashMap<String, u64>,
+    /// ADR-023 / C1: a local CRDT replica (encoded `KbCollectionDoc` state bytes)
+    /// of each joined KB's `kbc:` collection doc, keyed by `kb_id`. Seeded from the
+    /// full `collection_state` on join, then advanced by every live `kbc:`
+    /// membership broadcast — so this peer relearns its authorization epoch the
+    /// moment the owner promotes/demotes it, WITHOUT a manual reconnect. The daemon
+    /// remains the sole authority (it re-derives the epoch from its own collection
+    /// when fencing), so a tampered local replica can only mislead this client about
+    /// its own epoch — it can never self-elevate at the daemon.
+    pub kb_collection_state: HashMap<String, Vec<u8>>,
     /// Pre-shared key for mutual authentication (plaintext fallback).
     pub psk: String,
     /// Shell command to retrieve the PSK (preferred over psk for security).
     pub psk_command: String,
+    /// Auth mode for connecting to the daemon: "none" | "psk" | "key".
+    /// "key" uses the Ed25519 trusted-peer identity (mTLS).
+    pub auth_mode: String,
+    /// Host-key (daemon identity) trust policy in key mode:
+    /// "prompt" (interactive TOFU) | "accept-new" | "strict".
+    pub host_key_policy: String,
+    /// Cross-thread live mirror of `host_key_policy` for the background collab
+    /// task's host-key verifier (B-21). The verifier is built once at collab-task
+    /// setup but holds a clone of this `Arc` and reads it at verify-time, so a
+    /// runtime `:set collab-host-key-policy` / `(set-option! …)` takes effect on
+    /// the NEXT connect with no relaunch. Kept in sync with `host_key_policy`
+    /// (the canonical option value used by get/set_option).
+    pub host_key_policy_live: std::sync::Arc<std::sync::Mutex<String>>,
+    /// Use native mTLS in key mode (recommended). When false, the plaintext
+    /// JSON KeyAuth handshake is used.
+    pub tls: bool,
 }
 
 impl CollabState {
@@ -249,6 +393,8 @@ impl CollabState {
             synced_buffers: HashSet::new(),
             confirmed_shares: HashSet::new(),
             pending_intent: None,
+            reconnect_intents: std::collections::VecDeque::new(),
+            subscribed_kbs: HashSet::new(),
             server_address: DEFAULT_COLLAB_ADDRESS.to_string(),
             auto_connect: false,
             auto_share: false,
@@ -269,9 +415,20 @@ impl CollabState {
             last_awareness_sent: std::time::Instant::now(),
             shared_kbs: HashMap::new(),
             kb_sync_mode: KB_SYNC_MODE_DEFAULT.to_string(),
+            fence_resolution: "prompt".to_string(),
             pending_kb_updates: Vec::new(),
+            inflight_kb_updates: std::collections::HashSet::new(),
+            local_kb_client_id: 0,
+            local_fingerprint: String::new(),
+            kb_epochs: HashMap::new(),
+            kb_collection_state: HashMap::new(),
+            pending_reauthor: HashMap::new(),
             psk: String::new(),
             psk_command: String::new(),
+            auth_mode: "psk".to_string(),
+            host_key_policy: "prompt".to_string(),
+            host_key_policy_live: std::sync::Arc::new(std::sync::Mutex::new("prompt".to_string())),
+            tls: true,
         }
     }
 }
@@ -281,6 +438,39 @@ impl Default for CollabState {
         Self::new()
     }
 }
+
+/// A node delivered by the daemon on `kb/join` (ADR-022 reconcile).
+#[derive(Debug, Clone)]
+pub struct JoinedNode {
+    /// Bare KB node id.
+    pub id: String,
+    /// Bytes to merge into the local node: an incremental **diff** (reconcile
+    /// mode — the daemon sent only the ops we lacked) or the full **state**
+    /// (first time we've seen the node, or a pre-ADR-022 daemon).
+    pub bytes: Vec<u8>,
+    /// The daemon's state vector for this node. `Some` → reconcile (compute our
+    /// local-ahead diff against it and push back); `None` → a pre-ADR-022 daemon
+    /// that sent no SV, so fall back to a legacy full-state adopt.
+    pub daemon_sv: Option<Vec<u8>>,
+}
+
+/// Derive a stable, unique yrs `client_id` for KB CRDT edits from this peer's
+/// durable collab identity fingerprint (ADR-020 B-16). FNV-1a, folded into the
+/// **53-bit** range yrs permits for a `ClientID` (B-17); never returns `0` (yrs
+/// sentinel) or `1` (the legacy single-peer default), so distinct identities map
+/// to distinct ids and "unset" stays distinguishable. Set once at startup into
+/// `CollabState::local_kb_client_id`.
+///
+/// yrs only uses the low 53 bits of a client id (the top 11 are an internal
+/// tag): a full-u64 id panics in debug and *silently truncates* in release,
+/// which would let two fingerprints differing only above bit 53 collide on one
+/// yrs lineage — the very B-16 collision this derivation prevents.
+///
+/// ADR-023: `epoch` is the member's per-KB authorization epoch (0 = primary /
+/// unscoped); a role change bumps it, rotating the client_id so the daemon can
+/// fence a member's pre-grant ops. The implementation lives in `mae-sync` so the
+/// daemon derives identically; re-exported here for the editor's call sites.
+pub use mae_sync::kb::derive_kb_client_id;
 
 /// State for an active note capture session (org-roam parity).
 /// Set when `kb_create_note_from_title` creates a note; cleared by
@@ -702,6 +892,12 @@ pub struct Editor {
     pub command_palette: Option<CommandPalette>,
     /// Mini-dialog state for interactive commands (edit-link, rename, etc.).
     pub mini_dialog: Option<crate::command_palette::MiniDialogState>,
+    /// ADR-024 attention bus — background subsystems raise notifications here;
+    /// routed by severity to status / badge / modal / `*Notifications*` buffer.
+    pub notifications: crate::notifications::NotificationCenter,
+    /// Reply channel for a pending `BlockingReply` notification routed to a modal
+    /// (generalizes `pending_host_key_reply`). `(notif_id, reply)`; consumed on answer.
+    pub pending_notif_reply: Option<(u64, crate::notifications::NotifReply)>,
     /// LSP state: intent queues, completion, hover, peek, symbols, diagnostics.
     pub lsp: LspContext,
     /// Shell/terminal intent queue and cached state.
@@ -1077,6 +1273,8 @@ impl Editor {
             file_browser: None,
             command_palette: None,
             mini_dialog: None,
+            notifications: crate::notifications::NotificationCenter::new(),
+            pending_notif_reply: None,
             lsp: LspContext::new(),
             shell: ShellIntents::default(),
             pending_buffer_removals: Vec::new(),

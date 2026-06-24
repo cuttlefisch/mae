@@ -1115,6 +1115,47 @@ impl Editor {
                     }
                     // No arg: open palette picker (falls through to dispatch_builtin)
                 }
+                // kb-share with an explicit KB name: share THAT instance, not just
+                // the first-registered one. Without this a user with several KBs
+                // (e.g. personal notes + a project KB) cannot choose which to share
+                // and could replicate the wrong one to peers. No-arg `:kb-share`
+                // (and `SPC C S`) falls through to dispatch and shares the active
+                // instance as before. The intent processor validates the name.
+                if command == "kb-share" {
+                    if let Some(name) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                        self.collab.pending_intent = Some(super::CollabIntent::ShareKb {
+                            kb_name: name.to_string(),
+                            node_ids: vec![],
+                        });
+                        self.set_status(format!("Sharing KB '{}'...", name));
+                        return true;
+                    }
+                    // No arg: fall through to dispatch (shares the active instance).
+                }
+                // kb-join / kb-leave with an explicit KB id: act on THAT KB. Without
+                // this the dispatch fallback ignores the arg and uses the active
+                // instance, so `:kb-join <other-kb>` silently joined the wrong KB.
+                // No-arg falls through to dispatch (active instance / picker).
+                if command == "kb-join" {
+                    if let Some(kb_id) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                        let node_svs = self.kb_join_node_svs(kb_id);
+                        self.collab.pending_intent = Some(super::CollabIntent::JoinKb {
+                            kb_id: kb_id.to_string(),
+                            node_svs,
+                        });
+                        self.set_status(format!("Joining KB '{}'...", kb_id));
+                        return true;
+                    }
+                }
+                if command == "kb-leave" {
+                    if let Some(kb_id) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                        self.collab.pending_intent = Some(super::CollabIntent::LeaveKb {
+                            kb_id: kb_id.to_string(),
+                        });
+                        self.set_status(format!("Leaving KB '{}'...", kb_id));
+                        return true;
+                    }
+                }
                 // Final fallback: dispatch any registered builtin command by
                 // name. This lets `:debug-stop`, `:debug-continue`, etc. work
                 // without explicit `:`-arms, and is the foundation for making

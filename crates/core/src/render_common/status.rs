@@ -181,6 +181,14 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         segments.push(Segment::new(format!(" E:{} W:{}", e, w), 3));
     }
 
+    // Priority 3: ADR-024 attention badge — outstanding action-required/warning/
+    // error notifications. Reads the NotificationCenter (NOT status_msg), so it is
+    // non-clobberable; high priority so it survives truncation. SPC n n opens the
+    // *Notifications* buffer.
+    if let Some(badge) = format_attention_badge(editor) {
+        segments.push(Segment::with_style(badge.0, 3, badge.1));
+    }
+
     // Priority 4: AI info.
     let ai_info = format_ai_info(editor);
     if !ai_info.is_empty() {
@@ -521,6 +529,29 @@ pub fn format_lsp_status(editor: &Editor) -> String {
     } else {
         String::new()
     }
+}
+
+/// ADR-024 attention badge: `(text, theme_key)` for the worst outstanding
+/// notification, or `None` when nothing is outstanding. Reads the
+/// NotificationCenter — never `status_msg` — so the badge can't be clobbered by a
+/// transient status message.
+pub fn format_attention_badge(editor: &Editor) -> Option<(String, &'static str)> {
+    use crate::notifications::Severity;
+    let count = editor.notifications.outstanding_count();
+    if count == 0 {
+        return None;
+    }
+    // Reuse the widely-defined `diagnostic.*` theme keys so the badge is colored
+    // across every theme without per-theme additions.
+    let (glyph, key) = match editor.notifications.badge_severity()? {
+        Severity::ActionRequired => ("\u{2691}", "diagnostic.error"), // ⚑ (red — demands action)
+        Severity::Error => ("\u{2716}", "diagnostic.error"),          // ✖
+        _ => ("\u{26A0}", "diagnostic.warn"),                         // ⚠
+    };
+    Some((
+        format!(" {glyph} {count} ", glyph = glyph, count = count),
+        key,
+    ))
 }
 
 pub fn format_collab_status(editor: &Editor) -> String {
@@ -994,5 +1025,33 @@ mod tests {
             .push(("kb".to_string(), "n".to_string(), vec![1]));
         let s = format_collab_status(&editor);
         assert_eq!(s, " [C:\u{2717}|KB:1 pending]");
+    }
+
+    #[test]
+    fn attention_badge_absent_when_no_outstanding() {
+        let editor = Editor::new();
+        assert!(format_attention_badge(&editor).is_none());
+        let segments = build_status_segments(&editor, None);
+        assert!(!segments.iter().any(|s| s.text.contains('\u{2691}')));
+    }
+
+    #[test]
+    fn attention_badge_shows_count_and_severity_glyph() {
+        use crate::notifications::Notification;
+        let mut editor = Editor::new();
+        // A warning + an action-required → badge picks the worst (action-required ⚑).
+        editor.notify(Notification::warning("save", "conflict").key("w"));
+        editor.notify(Notification::action_required("collab", "fenced").key("a"));
+        let (text, key) = format_attention_badge(&editor).expect("badge present");
+        assert!(text.contains('\u{2691}'), "worst severity glyph: {text:?}");
+        assert!(text.contains('2'), "count of outstanding: {text:?}");
+        assert_eq!(key, "diagnostic.error");
+        // It is a real, high-priority segment (survives truncation).
+        let segments = build_status_segments(&editor, None);
+        let badge = segments
+            .iter()
+            .find(|s| s.text.contains('\u{2691}'))
+            .expect("badge segment present");
+        assert_eq!(badge.priority, 3);
     }
 }

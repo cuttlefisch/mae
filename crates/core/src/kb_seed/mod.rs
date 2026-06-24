@@ -466,7 +466,7 @@ fn install_option_nodes(kb: &mut KnowledgeBase) {
              ```\n\
              :set {name} <value>       \" set from command line\n\
              :set {name}               \" toggle (booleans) or show current value\n\
-             :set-save {name} <value>  \" set and persist to config.toml\n\
+             :set-save {name} <value>  \" set and persist to init.scm\n\
              ```\n\
              ```scheme\n\
              (set-option! \"{scheme_name}\" \"<value>\")  ; set from Scheme\n\

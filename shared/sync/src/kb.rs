@@ -6,7 +6,7 @@
 use sha2::{Digest, Sha256};
 use yrs::{
     updates::decoder::Decode, updates::encoder::Encode, Array, ArrayPrelim, Doc, GetString, Map,
-    MapPrelim, Out, ReadTxn, Text, TextPrelim, Transact,
+    MapPrelim, MapRef, Out, ReadTxn, Text, TextPrelim, Transact,
 };
 
 use crate::text::{new_doc, new_doc_with_client_id};
@@ -18,6 +18,121 @@ const BODY_KEY: &str = "body";
 const TAGS_KEY: &str = "tags";
 const LINKS_KEY: &str = "links";
 const META_KEY: &str = "meta";
+
+/// Derive a stable yrs `client_id` for KB CRDT edits from a peer's durable collab
+/// identity `fingerprint` + its per-KB authorization `epoch` (ADR-020 B-16,
+/// ADR-023). FNV-1a over the fingerprint then the epoch, folded into the **53-bit**
+/// range yrs permits (B-17 — a full u64 panics in debug / silently truncates in
+/// release), never `0`/`1`. A role change bumps the epoch → a *different,
+/// unrelated* client_id, so the daemon can fence a member's pre-grant (stale-epoch)
+/// ops. Lives here (mae-sync) so both the editor and the daemon derive identically.
+pub fn derive_kb_client_id(fingerprint: &str, epoch: u64) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in fingerprint.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    for b in epoch.to_le_bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let folded = (h ^ (h >> 53)) & ((1u64 << 53) - 1);
+    if folded == 0 || folded == 1 {
+        2
+    } else {
+        folded
+    }
+}
+
+/// True if `candidate_sv` carries operations not covered by `base_sv` — i.e.
+/// some client's clock in `candidate_sv` exceeds what `base_sv` has seen.
+///
+/// Both args are v1-encoded yrs state vectors. This is the format-independent
+/// primitive behind ADR-022 reconcile decisions: "is the remote ahead of me?"
+/// (`sv_has_ops_beyond(remote_sv, my_sv)`) and "am I ahead of the remote?"
+/// (`sv_has_ops_beyond(my_sv, remote_sv)`). Avoids the trap that an `encode_diff`
+/// against a fully-covering SV is still a non-empty (`[0,0]`) byte sequence.
+pub fn sv_has_ops_beyond(candidate_sv: &[u8], base_sv: &[u8]) -> Result<bool, SyncError> {
+    let candidate = yrs::StateVector::decode_v1(candidate_sv)
+        .map_err(|e| SyncError::Encoding(e.to_string()))?;
+    let base =
+        yrs::StateVector::decode_v1(base_sv).map_err(|e| SyncError::Encoding(e.to_string()))?;
+    for (client, &clock) in candidate.iter() {
+        if base.get(client) < clock {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// True if two v1-encoded state vectors share **no** client id — i.e. the two
+/// documents were constructed on entirely independent lineages.
+///
+/// This is the order-independent ADR-022 divergence signal: any healthy collab
+/// pair shares at least the owner's lineage client (the joiner adopted it on
+/// first join), so a *disjoint* client set means the nodes were built from
+/// scratch with the same id but incompatible lineages (the B-14 condition) —
+/// regardless of which side happens to win the YMap last-writer-wins.
+pub fn sv_clients_disjoint(a_sv: &[u8], b_sv: &[u8]) -> Result<bool, SyncError> {
+    let a = yrs::StateVector::decode_v1(a_sv).map_err(|e| SyncError::Encoding(e.to_string()))?;
+    let b = yrs::StateVector::decode_v1(b_sv).map_err(|e| SyncError::Encoding(e.to_string()))?;
+    for (client, _) in a.iter() {
+        if b.contains_client(client) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// ADR-023: the set of client_ids that authored operations in `update` that are
+/// **not yet covered by `base_state`** — i.e. the "new" ops a peer is contributing
+/// on top of the daemon's authoritative node STATE. The daemon fences with this:
+/// every new-op author must equal the member's current-epoch client_id
+/// (`derive_kb_client_id(fp, epoch_now)`); a stale-epoch author means a pre-grant
+/// (or otherwise unauthorized) lineage and the write is rejected (`rebase required`).
+///
+/// Takes the full authoritative **state** (not merely its state vector) because a
+/// naive `Update::state_vector()` comparison has a blind spot (B-20): an op that is
+/// a *contiguous-clock continuation* of a client already present in the base does
+/// **not** appear in the incoming update's own state vector, so a member who keeps
+/// authoring under a still-canonical client_id (e.g. they never rotated off it after
+/// a demotion) could append post-demotion edits and slip the fence. Detecting that
+/// requires integrating the update against the real state and observing which
+/// clients' clocks actually advanced. We do exactly that, then UNION the legacy
+/// `Update::state_vector()` signal so we never fence *fewer* ops than before
+/// (independent/divergent lineages whose ops can't integrate into the base stay
+/// caught).
+pub fn update_new_op_authors(update: &[u8], base_state: &[u8]) -> Result<Vec<u64>, SyncError> {
+    let mut authors = std::collections::BTreeSet::new();
+
+    // Primary signal — apply-and-diff against the authoritative state. Integrating
+    // the update reveals contiguous continuations of an already-known client (the
+    // B-20 vector) that the update's own SV omits, as well as fresh clients whose
+    // ops depend only on the base.
+    let mut doc = KbNodeDoc::from_bytes(base_state)?;
+    let before = yrs::StateVector::decode_v1(&doc.state_vector())
+        .map_err(|e| SyncError::Encoding(e.to_string()))?;
+    doc.apply_update(update)?;
+    let after = yrs::StateVector::decode_v1(&doc.state_vector())
+        .map_err(|e| SyncError::Encoding(e.to_string()))?;
+    for (client, &clock) in after.iter() {
+        if before.get(client) < clock {
+            authors.insert(client.get());
+        }
+    }
+
+    // Defense in depth — the legacy signal. Catches ops from an independent lineage
+    // that do NOT integrate into the base (they remain pending, so apply-and-diff
+    // wouldn't advance the SV), preserving the pre-B-20 fencing for that case.
+    let upd = yrs::Update::decode_v1(update).map_err(|e| SyncError::Encoding(e.to_string()))?;
+    for (client, &clock) in upd.state_vector().iter() {
+        if before.get(client) < clock {
+            authors.insert(client.get());
+        }
+    }
+
+    Ok(authors.into_iter().collect())
+}
 
 /// Materialized content from a KbNodeDoc — all fields extracted for FTS rebuild.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +344,27 @@ impl KbNodeDoc {
         txn.encode_update_v1()
     }
 
+    /// Replace ALL tags with `tags` (clear + re-insert the `YArray`). Returns the
+    /// encoded update. This is the setter `upsert_with_crdt` needs for a wholesale
+    /// tag edit (e.g. `kb_update` with a new tags list) to enter the CRDT and
+    /// broadcast a delta — B-18: previously only `set_title`/`set_body` were wired,
+    /// so tag changes after node creation never synced (peer apply was a no-op).
+    /// Mirrors `set_title`'s clear-then-insert so the change chains on the lineage.
+    pub fn set_tags(&mut self, tags: &[String]) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map("node");
+        let mut txn = self.doc.transact_mut();
+        if let Some(Out::YArray(arr)) = root.get(&txn, TAGS_KEY) {
+            let len = arr.len(&txn);
+            if len > 0 {
+                arr.remove_range(&mut txn, 0, len);
+            }
+            for tag in tags {
+                arr.push_back(&mut txn, tag.as_str());
+            }
+        }
+        txn.encode_update_v1()
+    }
+
     /// Get links.
     pub fn links(&self) -> Vec<String> {
         let root = self.doc.get_or_insert_map("node");
@@ -303,6 +439,19 @@ impl KbNodeDoc {
         txn.state_vector().encode_v1()
     }
 
+    /// True if this document holds operations not yet covered by `remote_sv`
+    /// — i.e. `encode_diff(remote_sv)` would carry real (non-no-op) content.
+    ///
+    /// Format-independent: a yrs v1 update against a fully-covering state vector
+    /// still encodes to a small non-empty byte sequence (`[0, 0]`), so checking
+    /// `encode_diff(..).is_empty()` is wrong. We instead compare state vectors
+    /// per client: we are "ahead" iff some client's local clock exceeds what the
+    /// remote has seen. Used by ADR-022 reconcile to decide whether a local-ahead
+    /// push is actually needed.
+    pub fn has_ops_beyond(&self, remote_sv: &[u8]) -> Result<bool, SyncError> {
+        sv_has_ops_beyond(&self.state_vector(), remote_sv)
+    }
+
     /// Extract all fields into a `MaterializedNode` for FTS5 rebuild.
     pub fn materialize(&self) -> MaterializedNode {
         MaterializedNode {
@@ -343,9 +492,110 @@ impl KbNodeDoc {
 
 const COLLECTION_MAP: &str = "collection";
 const COLL_NAME_KEY: &str = "name";
-const COLL_CREATOR_KEY: &str = "creator";
+const COLL_CREATOR_KEY: &str = "creator"; // legacy display label (never authoritative)
 const COLL_NODES_KEY: &str = "nodes";
-const COLL_MEMBERS_KEY: &str = "members";
+const COLL_MEMBERS_KEY: &str = "members"; // legacy YArray<label>, read-only after ADR-018
+                                          // ADR-018 identity-anchored schema (v2):
+const COLL_SCHEMA_KEY: &str = "schema";
+const COLL_OWNER_KEY: &str = "owner"; // owner principal (key fingerprint)
+const COLL_MEMBER_ROLES_KEY: &str = "member_roles"; // YMap<fingerprint -> {role,label}>
+const COLL_POLICY_KEY: &str = "join_policy"; // restrictive|invite|permissive
+const COLL_PENDING_KEY: &str = "pending"; // YMap<fingerprint -> {label,requested_at}>
+const MEMBER_ROLE_KEY: &str = "role";
+const MEMBER_LABEL_KEY: &str = "label";
+/// ADR-023: per-member monotonic authorization epoch, bumped by the daemon on
+/// every role change for that member. Drives the epoch-fenced rebase: the KB
+/// client_id a member authors under is `derive_kb_client_id(fp, epoch)`, so a
+/// role change rotates it and the daemon can fence pre-grant (stale-epoch) ops.
+/// Stored as a decimal string (mirrors the role/label string fields).
+const MEMBER_EPOCH_KEY: &str = "epoch";
+const PENDING_AT_KEY: &str = "requested_at";
+
+/// Collection schema version. v2 = ADR-018 (principal-anchored owner/roles/policy).
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// A KB role. Hierarchical RBAC (NIST INCITS 359): `owner ⊇ editor ⊇ viewer`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Owner,
+    Editor,
+    Viewer,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Owner => "owner",
+            Role::Editor => "editor",
+            Role::Viewer => "viewer",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Role> {
+        match s {
+            "owner" => Some(Role::Owner),
+            "editor" => Some(Role::Editor),
+            "viewer" => Some(Role::Viewer),
+            _ => None,
+        }
+    }
+    fn rank(self) -> u8 {
+        match self {
+            Role::Viewer => 0,
+            Role::Editor => 1,
+            Role::Owner => 2,
+        }
+    }
+    /// Role inheritance: a senior role holds all junior permissions.
+    pub fn includes(self, other: Role) -> bool {
+        self.rank() >= other.rank()
+    }
+}
+
+/// Per-KB join policy (maps to Drive sharing modes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum JoinPolicy {
+    /// Default-deny: only owner + explicitly added members.
+    Restrictive,
+    /// Non-members' joins become pending → owner approves (default).
+    #[default]
+    Invite,
+    /// Any authenticated peer auto-joins as viewer.
+    Permissive,
+}
+
+impl JoinPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JoinPolicy::Restrictive => "restrictive",
+            JoinPolicy::Invite => "invite",
+            JoinPolicy::Permissive => "permissive",
+        }
+    }
+    pub fn parse(s: &str) -> Option<JoinPolicy> {
+        match s {
+            "restrictive" => Some(JoinPolicy::Restrictive),
+            "invite" => Some(JoinPolicy::Invite),
+            "permissive" => Some(JoinPolicy::Permissive),
+            _ => None,
+        }
+    }
+}
+
+/// A KB member: the principal (key fingerprint), its role, and a display label.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Member {
+    pub fingerprint: String,
+    pub role: Role,
+    pub label: String,
+}
+
+/// A pending join request (invite policy).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingRequest {
+    pub fingerprint: String,
+    pub label: String,
+    pub requested_at: String,
+}
 
 /// A KB collection manifest represented as a yrs document.
 ///
@@ -488,6 +738,23 @@ impl KbCollectionDoc {
         }
     }
 
+    /// Re-stamp the authoritative creator and ensure they are a member.
+    /// Used by the daemon to bind a shared collection to the AUTHENTICATED peer
+    /// identity (ADR-017 strict binding), overriding the client-supplied creator.
+    /// Returns the encoded update.
+    pub fn set_creator(&mut self, creator: &str) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        root.insert(&mut txn, COLL_CREATOR_KEY, creator);
+        if let Some(Out::YArray(members)) = root.get(&txn, COLL_MEMBERS_KEY) {
+            let already = members.iter(&txn).any(|v| v.to_string(&txn) == creator);
+            if !already {
+                members.push_back(&mut txn, creator);
+            }
+        }
+        txn.encode_update_v1()
+    }
+
     /// Add a member to the collection. Returns encoded update.
     pub fn add_member(&mut self, user_name: &str) -> Vec<u8> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
@@ -527,6 +794,421 @@ impl KbCollectionDoc {
         }
     }
 
+    // --- ADR-018: identity-anchored owner / roles / join-policy / pending ---
+
+    /// Create a v2 collection owned by `owner_principal` (a key fingerprint), with
+    /// `owner_label` for display. Seeds schema=2, owner, the owner member entry
+    /// (role=owner), join_policy=invite, an empty pending map, and legacy
+    /// `creator`/`members` for back-compat reads. An empty owner principal is
+    /// tolerated (the daemon stamps the real owner from the verified cert).
+    pub fn new_owned(name: &str, owner_principal: &str, owner_label: &str) -> Self {
+        Self::new_owned_with(
+            name,
+            owner_principal,
+            owner_label,
+            None,
+            JoinPolicy::default(),
+        )
+    }
+
+    /// Like `new_owned` but with an explicit client id and join policy.
+    pub fn new_owned_with(
+        name: &str,
+        owner_principal: &str,
+        owner_label: &str,
+        client_id: Option<u64>,
+        policy: JoinPolicy,
+    ) -> Self {
+        let doc = match client_id {
+            Some(id) => new_doc_with_client_id(id),
+            None => new_doc(),
+        };
+        {
+            let root = doc.get_or_insert_map(COLLECTION_MAP);
+            let mut txn = doc.transact_mut();
+            root.insert(&mut txn, COLL_NAME_KEY, name);
+            root.insert(&mut txn, COLL_SCHEMA_KEY, SCHEMA_VERSION as i64);
+            root.insert(&mut txn, COLL_OWNER_KEY, owner_principal);
+            root.insert(&mut txn, COLL_CREATOR_KEY, owner_label); // legacy display
+            root.insert(&mut txn, COLL_NODES_KEY, MapPrelim::default());
+            root.insert(&mut txn, COLL_POLICY_KEY, policy.as_str());
+            root.insert(&mut txn, COLL_PENDING_KEY, MapPrelim::default());
+            let m = root.insert(&mut txn, COLL_MEMBER_ROLES_KEY, MapPrelim::default());
+            if !owner_principal.is_empty() {
+                let entry = m.insert(&mut txn, owner_principal, MapPrelim::default());
+                entry.insert(&mut txn, MEMBER_ROLE_KEY, Role::Owner.as_str());
+                entry.insert(&mut txn, MEMBER_LABEL_KEY, owner_label);
+            }
+            // legacy members array (read-only after migration)
+            let legacy = root.insert(&mut txn, COLL_MEMBERS_KEY, ArrayPrelim::default());
+            legacy.push_back(&mut txn, owner_label);
+        }
+        Self { doc }
+    }
+
+    /// Schema version (0 = legacy v1, absent the schema key).
+    pub fn schema_version(&self) -> u32 {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        root.get(&txn, COLL_SCHEMA_KEY)
+            .map(|v| v.to_string(&txn).parse::<u32>().unwrap_or(0))
+            .unwrap_or(0)
+    }
+
+    /// Owner principal (key fingerprint). Empty if unset.
+    pub fn owner(&self) -> String {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        root.get(&txn, COLL_OWNER_KEY)
+            .map(|v| v.to_string(&txn))
+            .unwrap_or_default()
+    }
+
+    /// Owner display label (legacy `creator` field).
+    pub fn owner_label(&self) -> String {
+        self.creator()
+    }
+
+    /// The role of `principal` (key fingerprint), if it is a member.
+    pub fn role_of(&self, principal: &str) -> Option<Role> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
+                return entry
+                    .get(&txn, MEMBER_ROLE_KEY)
+                    .map(|r| r.to_string(&txn))
+                    .and_then(|s| Role::parse(&s));
+            }
+        }
+        None
+    }
+
+    /// All members with their roles (the ReBAC tuple set for this KB).
+    pub fn member_roles(&self) -> Vec<Member> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        let mut out = Vec::new();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            for (fp, v) in m.iter(&txn) {
+                if let Out::YMap(entry) = v {
+                    let role = entry
+                        .get(&txn, MEMBER_ROLE_KEY)
+                        .map(|r| r.to_string(&txn))
+                        .and_then(|s| Role::parse(&s))
+                        .unwrap_or(Role::Viewer);
+                    let label = entry
+                        .get(&txn, MEMBER_LABEL_KEY)
+                        .map(|l| l.to_string(&txn))
+                        .unwrap_or_default();
+                    out.push(Member {
+                        fingerprint: fp.to_string(),
+                        role,
+                        label,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// The KB join policy (default invite).
+    pub fn join_policy(&self) -> JoinPolicy {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        root.get(&txn, COLL_POLICY_KEY)
+            .map(|v| v.to_string(&txn))
+            .and_then(|s| JoinPolicy::parse(&s))
+            .unwrap_or_default()
+    }
+
+    /// Pending join requests (invite policy).
+    pub fn pending(&self) -> Vec<PendingRequest> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        let mut out = Vec::new();
+        if let Some(Out::YMap(p)) = root.get(&txn, COLL_PENDING_KEY) {
+            for (fp, v) in p.iter(&txn) {
+                if let Out::YMap(req) = v {
+                    let label = req
+                        .get(&txn, MEMBER_LABEL_KEY)
+                        .map(|l| l.to_string(&txn))
+                        .unwrap_or_default();
+                    let requested_at = req
+                        .get(&txn, PENDING_AT_KEY)
+                        .map(|t| t.to_string(&txn))
+                        .unwrap_or_default();
+                    out.push(PendingRequest {
+                        fingerprint: fp.to_string(),
+                        label,
+                        requested_at,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Helper: get-or-create the `member_roles` YMap within an open txn.
+    fn member_roles_map(root: &MapRef, txn: &mut yrs::TransactionMut) -> MapRef {
+        match root.get(txn, COLL_MEMBER_ROLES_KEY) {
+            Some(Out::YMap(m)) => m,
+            _ => root.insert(txn, COLL_MEMBER_ROLES_KEY, MapPrelim::default()),
+        }
+    }
+
+    /// Bind the authoritative owner = `principal` (key fingerprint), display
+    /// `label`. Idempotent; ensures schema=2 + default policy + the owner member
+    /// entry. The daemon calls this on kb/share to bind the verified cert identity.
+    pub fn set_owner(&mut self, principal: &str, label: &str) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        root.insert(&mut txn, COLL_OWNER_KEY, principal);
+        root.insert(&mut txn, COLL_CREATOR_KEY, label);
+        if root.get(&txn, COLL_SCHEMA_KEY).is_none() {
+            root.insert(&mut txn, COLL_SCHEMA_KEY, SCHEMA_VERSION as i64);
+        }
+        if root.get(&txn, COLL_POLICY_KEY).is_none() {
+            root.insert(&mut txn, COLL_POLICY_KEY, JoinPolicy::default().as_str());
+        }
+        if root.get(&txn, COLL_PENDING_KEY).is_none() {
+            root.insert(&mut txn, COLL_PENDING_KEY, MapPrelim::default());
+        }
+        let m = Self::member_roles_map(&root, &mut txn);
+        // Preserve the epoch on owner re-stamp (B-12 re-share — same owner, not a
+        // role change); a brand-new owner seeds at epoch 0.
+        let prev = Self::entry_role_epoch(&m, &txn, principal);
+        let epoch = Self::next_epoch(prev, Role::Owner);
+        let entry = m.insert(&mut txn, principal, MapPrelim::default());
+        entry.insert(&mut txn, MEMBER_ROLE_KEY, Role::Owner.as_str());
+        entry.insert(&mut txn, MEMBER_LABEL_KEY, label);
+        entry.insert(&mut txn, MEMBER_EPOCH_KEY, epoch.to_string());
+        txn.encode_update_v1()
+    }
+
+    /// Read the current epoch of a member entry (within an open txn). 0 if absent.
+    fn entry_epoch(entry: &MapRef, txn: &impl ReadTxn) -> u64 {
+        entry
+            .get(txn, MEMBER_EPOCH_KEY)
+            .map(|v| v.to_string(txn))
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0)
+    }
+
+    /// Read a member entry's current role (within an open txn).
+    fn entry_role(entry: &MapRef, txn: &impl ReadTxn) -> Option<Role> {
+        entry
+            .get(txn, MEMBER_ROLE_KEY)
+            .map(|v| v.to_string(txn))
+            .and_then(|s| Role::parse(&s))
+    }
+
+    /// ADR-023 epoch transition. The authorization epoch advances **only when an
+    /// existing member's role actually changes** — the B-19 cascade vector (e.g.
+    /// viewer→editor). A *fresh* grant has no prior write-capable lineage to fence,
+    /// so it stays at epoch 0; this is what lets owners and directly-added editors
+    /// author under the base (epoch-0) client_id with no editor-side epoch sync. A
+    /// role change rotates the client_id the member must author under, fencing their
+    /// pre-change lineage at the daemon. (Monotonicity across remove/re-add is a
+    /// documented hardening follow-up — a removed member's epoch is not persisted.)
+    fn next_epoch(prev: Option<(Role, u64)>, new_role: Role) -> u64 {
+        match prev {
+            None => 0,
+            Some((prev_role, prev_epoch)) if prev_role == new_role => prev_epoch,
+            Some((_, prev_epoch)) => prev_epoch + 1,
+        }
+    }
+
+    /// Read a member entry's `(role, epoch)` for an epoch transition decision.
+    fn entry_role_epoch(m: &MapRef, txn: &impl ReadTxn, principal: &str) -> Option<(Role, u64)> {
+        match m.get(txn, principal) {
+            Some(Out::YMap(e)) => {
+                Self::entry_role(&e, txn).map(|r| (r, Self::entry_epoch(&e, txn)))
+            }
+            _ => None,
+        }
+    }
+
+    /// Insert or update a member's role (keyed by principal; CRDT-safe LWW).
+    /// ADR-023: any call here is a role (re)assignment, so it **bumps the member's
+    /// authorization epoch** — rotating the KB client_id they must author under and
+    /// fencing their pre-grant lineage at the daemon.
+    pub fn upsert_member(&mut self, principal: &str, label: &str, role: Role) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        let m = Self::member_roles_map(&root, &mut txn);
+        // Epoch advances only if this changes an existing member's role (ADR-023).
+        let prev = Self::entry_role_epoch(&m, &txn, principal);
+        let epoch = Self::next_epoch(prev, role);
+        let entry = m.insert(&mut txn, principal, MapPrelim::default());
+        entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
+        entry.insert(&mut txn, MEMBER_LABEL_KEY, label);
+        entry.insert(&mut txn, MEMBER_EPOCH_KEY, epoch.to_string());
+        txn.encode_update_v1()
+    }
+
+    /// Update only the role of an existing member (no-op if absent). Bumps the
+    /// member's authorization epoch (ADR-023).
+    pub fn set_role(&mut self, principal: &str, role: Role) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
+                // Only an actual role change advances the epoch (ADR-023).
+                let prev =
+                    Self::entry_role(&entry, &txn).map(|r| (r, Self::entry_epoch(&entry, &txn)));
+                let epoch = Self::next_epoch(prev, role);
+                entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
+                entry.insert(&mut txn, MEMBER_EPOCH_KEY, epoch.to_string());
+            }
+        }
+        txn.encode_update_v1()
+    }
+
+    /// The current authorization epoch of `principal` (ADR-023). 0 if not a member.
+    pub fn epoch_of(&self, principal: &str) -> u64 {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
+                return Self::entry_epoch(&entry, &txn);
+            }
+        }
+        0
+    }
+
+    /// Remove a member by principal.
+    pub fn remove_principal(&mut self, principal: &str) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            m.remove(&mut txn, principal);
+        }
+        txn.encode_update_v1()
+    }
+
+    /// Set the KB join policy.
+    pub fn set_join_policy(&mut self, policy: JoinPolicy) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        root.insert(&mut txn, COLL_POLICY_KEY, policy.as_str());
+        txn.encode_update_v1()
+    }
+
+    /// Record a pending join request (idempotent re-request).
+    pub fn add_pending(&mut self, principal: &str, label: &str, requested_at: &str) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        let p = match root.get(&txn, COLL_PENDING_KEY) {
+            Some(Out::YMap(p)) => p,
+            _ => root.insert(&mut txn, COLL_PENDING_KEY, MapPrelim::default()),
+        };
+        let req = p.insert(&mut txn, principal, MapPrelim::default());
+        req.insert(&mut txn, MEMBER_LABEL_KEY, label);
+        req.insert(&mut txn, PENDING_AT_KEY, requested_at);
+        txn.encode_update_v1()
+    }
+
+    /// Remove a pending request.
+    pub fn remove_pending(&mut self, principal: &str) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        if let Some(Out::YMap(p)) = root.get(&txn, COLL_PENDING_KEY) {
+            p.remove(&mut txn, principal);
+        }
+        txn.encode_update_v1()
+    }
+
+    /// Approve a pending principal as `role` — removes pending + adds the member
+    /// in a SINGLE transaction (atomic, no transient half-state on peers).
+    pub fn approve(&mut self, principal: &str, role: Role) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        let mut label = String::new();
+        if let Some(Out::YMap(p)) = root.get(&txn, COLL_PENDING_KEY) {
+            if let Some(Out::YMap(req)) = p.get(&txn, principal) {
+                label = req
+                    .get(&txn, MEMBER_LABEL_KEY)
+                    .map(|l| l.to_string(&txn))
+                    .unwrap_or_default();
+            }
+            p.remove(&mut txn, principal);
+        }
+        let m = Self::member_roles_map(&root, &mut txn);
+        // Approving a pending principal is a fresh grant into member_roles (a denied
+        // pending peer has no write-capable lineage); epoch 0 unless this re-grants
+        // an existing member at a new role (ADR-023).
+        let prev = Self::entry_role_epoch(&m, &txn, principal);
+        let epoch = Self::next_epoch(prev, role);
+        let entry = m.insert(&mut txn, principal, MapPrelim::default());
+        entry.insert(&mut txn, MEMBER_ROLE_KEY, role.as_str());
+        entry.insert(&mut txn, MEMBER_LABEL_KEY, label.as_str());
+        entry.insert(&mut txn, MEMBER_EPOCH_KEY, epoch.to_string());
+        txn.encode_update_v1()
+    }
+
+    /// Legacy v1 members (the read-only `members` YArray of labels), for migration.
+    pub fn legacy_members(&self) -> Vec<String> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        match root.get(&txn, COLL_MEMBERS_KEY) {
+            Some(Out::YArray(arr)) => arr.iter(&txn).map(|v| v.to_string(&txn)).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Migrate a legacy v1 collection (label `creator` + `members` YArray) to the
+    /// v2 identity-anchored schema. Idempotent: returns `None` if already v2.
+    ///
+    /// `resolver(label) -> Some((fingerprint, label))` maps a legacy label to its
+    /// key principal (e.g. via the daemon's authorized_keys). A label that doesn't
+    /// resolve becomes a transitional `legacy:<label>` principal — preserved for
+    /// audit, but a real key peer won't match it, so the owner should re-add it by
+    /// fingerprint (or simply re-share, which `set_owner` re-binds). The legacy
+    /// `members` YArray is left intact (read-only); v2 data lives under new keys.
+    pub fn migrate_if_legacy<F>(&mut self, resolver: F) -> Option<Vec<u8>>
+    where
+        F: Fn(&str) -> Option<(String, String)>,
+    {
+        if self.schema_version() >= 2 {
+            return None;
+        }
+        let creator_label = self.creator();
+        let legacy = self.legacy_members();
+        // Resolve a label → (principal, label); fall back to legacy:<label>.
+        let resolve = |label: &str| -> (String, String) {
+            resolver(label).unwrap_or_else(|| (format!("legacy:{label}"), label.to_string()))
+        };
+        let (owner_principal, owner_label) = resolve(&creator_label);
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        root.insert(&mut txn, COLL_SCHEMA_KEY, SCHEMA_VERSION as i64);
+        root.insert(&mut txn, COLL_OWNER_KEY, owner_principal.as_str());
+        if root.get(&txn, COLL_POLICY_KEY).is_none() {
+            root.insert(&mut txn, COLL_POLICY_KEY, JoinPolicy::default().as_str());
+        }
+        if root.get(&txn, COLL_PENDING_KEY).is_none() {
+            root.insert(&mut txn, COLL_PENDING_KEY, MapPrelim::default());
+        }
+        let m = Self::member_roles_map(&root, &mut txn);
+        // Owner entry first.
+        {
+            let e = m.insert(&mut txn, owner_principal.as_str(), MapPrelim::default());
+            e.insert(&mut txn, MEMBER_ROLE_KEY, Role::Owner.as_str());
+            e.insert(&mut txn, MEMBER_LABEL_KEY, owner_label.as_str());
+        }
+        for label in legacy {
+            let (principal, disp) = resolve(&label);
+            if principal == owner_principal {
+                continue; // already the owner
+            }
+            let e = m.insert(&mut txn, principal.as_str(), MapPrelim::default());
+            e.insert(&mut txn, MEMBER_ROLE_KEY, Role::Editor.as_str());
+            e.insert(&mut txn, MEMBER_LABEL_KEY, disp.as_str());
+        }
+        Some(txn.encode_update_v1())
+    }
+
     /// Access the underlying Doc.
     pub fn doc(&self) -> &Doc {
         &self.doc
@@ -552,6 +1234,27 @@ mod tests {
         assert_eq!(node.body(), "Some body text");
         assert_eq!(node.tags(), vec!["tag1", "tag2"]);
         assert!(node.links().is_empty());
+    }
+
+    #[test]
+    fn set_tags_replaces_and_syncs() {
+        // B-18: set_tags produces a real CRDT delta that converges a peer's tags.
+        let mut owner = KbNodeDoc::new("n1", "T", "b", &["a".to_string(), "b".to_string()]);
+        // Peer shares the lineage (loaded from the owner's encoded state).
+        let mut peer = KbNodeDoc::from_bytes(&owner.encode()).unwrap();
+        let sv = peer.state_vector();
+        assert_eq!(peer.tags(), vec!["a", "b"]);
+
+        // Owner replaces the tag set → diff → peer applies → converges.
+        owner.set_tags(&["a".to_string(), "c".to_string()]);
+        assert_eq!(owner.tags(), vec!["a", "c"]);
+        let diff = owner.encode_diff(&sv).unwrap();
+        peer.apply_update(&diff).unwrap();
+        assert_eq!(
+            peer.tags(),
+            vec!["a", "c"],
+            "peer must converge on the owner's set_tags delta"
+        );
     }
 
     #[test]
@@ -871,6 +1574,160 @@ mod tests {
     }
 
     #[test]
+    fn collection_set_creator_restamps_and_seeds_member() {
+        // A collection built with a client-claimed creator...
+        let mut coll = KbCollectionDoc::new("Test", "client-name");
+        assert_eq!(coll.creator(), "client-name");
+        // ...is re-stamped to the authenticated identity, which becomes a member.
+        coll.set_creator("alice");
+        assert_eq!(coll.creator(), "alice", "creator overridden");
+        assert!(
+            coll.members().contains(&"alice".to_string()),
+            "creator seeded as member"
+        );
+        // Idempotent: no duplicate member on re-stamp.
+        coll.set_creator("alice");
+        assert_eq!(
+            coll.members().iter().filter(|m| *m == "alice").count(),
+            1,
+            "no duplicate member"
+        );
+    }
+
+    // ---- ADR-023 (B-19) epoch-fenced-rebase primitives ----
+
+    #[test]
+    fn member_epoch_advances_only_on_role_change() {
+        // The daemon authors these ops, so the epoch is unforgeable by the client.
+        let mut coll = KbCollectionDoc::new("Test", "alice");
+        assert_eq!(coll.epoch_of("bob"), 0, "non-member starts at epoch 0");
+
+        // Fresh grants stay at epoch 0 — no prior write-capable lineage to fence,
+        // so owners + directly-added editors need no editor-side epoch sync.
+        coll.set_owner("alice", "alice");
+        assert_eq!(coll.epoch_of("alice"), 0, "fresh owner seeds at epoch 0");
+        coll.upsert_member("bob", "bob", Role::Viewer);
+        assert_eq!(coll.epoch_of("bob"), 0, "first grant ⇒ epoch 0");
+
+        // Re-stamping the SAME role must not advance (B-12 owner re-share idempotency).
+        coll.set_owner("alice", "alice");
+        assert_eq!(coll.epoch_of("alice"), 0, "owner re-stamp preserves epoch");
+        coll.upsert_member("bob", "bob", Role::Viewer);
+        assert_eq!(
+            coll.epoch_of("bob"),
+            0,
+            "same-role re-assignment is a no-op"
+        );
+
+        // The B-19 cascade vector: a role CHANGE. The epoch MUST advance so bob's
+        // post-grant client_id differs from his viewer-era one.
+        coll.set_role("bob", Role::Editor);
+        assert_eq!(coll.epoch_of("bob"), 1, "viewer→editor bumps the epoch");
+        coll.upsert_member("bob", "bob", Role::Viewer);
+        assert_eq!(coll.epoch_of("bob"), 2, "editor→viewer bumps again");
+    }
+
+    #[test]
+    fn derive_kb_client_id_rotates_with_epoch_and_stays_53bit() {
+        let fp = "ed25519:AAAA";
+        let ids: Vec<u64> = (0..4).map(|e| derive_kb_client_id(fp, e)).collect();
+        // Distinct per epoch — a viewer-era op can never masquerade as current-epoch.
+        for (i, a) in ids.iter().enumerate() {
+            for b in &ids[i + 1..] {
+                assert_ne!(a, b, "epochs must yield distinct client_ids");
+            }
+        }
+        // B-17: yrs ClientID is 53-bit; never 0/1.
+        for id in &ids {
+            assert!(*id < (1u64 << 53), "client_id must fit yrs' 53 bits");
+            assert!(*id > 1, "client_id must avoid the reserved 0/1");
+        }
+        // Deterministic across the editor/daemon boundary.
+        assert_eq!(derive_kb_client_id(fp, 2), derive_kb_client_id(fp, 2));
+    }
+
+    #[test]
+    fn update_new_op_authors_flags_stale_epoch_lineage() {
+        // The daemon's fence in miniature: an owner-authored node is the canonical
+        // base; a viewer (old epoch) and a granted editor (new epoch) each author an
+        // edit. update_new_op_authors must attribute each update to its real author,
+        // so the daemon can reject the viewer-era lineage and accept only C_now.
+        let fp = "ed25519:bob";
+        let c_viewer = derive_kb_client_id(fp, 0); // pre-grant (added at epoch 0)
+        let c_editor = derive_kb_client_id(fp, 1); // post-grant, viewer→editor (C_now)
+
+        let base = KbNodeDoc::new_with_client_id("n1", "Original", "body", &[], 99);
+        let base_state = base.encode_state();
+
+        // Viewer-era edit (would be denied live, but lands in the local lineage).
+        let mut viewer = KbNodeDoc::from_bytes_with_client_id(&base_state, c_viewer).unwrap();
+        let viewer_update = viewer.set_title("hijacked");
+        let viewer_authors = update_new_op_authors(&viewer_update, &base_state).unwrap();
+        assert_eq!(
+            viewer_authors,
+            vec![c_viewer],
+            "stale lineage is attributable"
+        );
+        assert!(
+            !viewer_authors.iter().all(|a| *a == c_editor),
+            "fence rejects: not every new op is from C_now"
+        );
+
+        // A fresh, current-epoch edit is accepted (every new op is C_now).
+        let mut editor = KbNodeDoc::from_bytes_with_client_id(&base_state, c_editor).unwrap();
+        let editor_update = editor.set_title("legit edit");
+        let editor_authors = update_new_op_authors(&editor_update, &base_state).unwrap();
+        assert_eq!(editor_authors, vec![c_editor]);
+        assert!(
+            editor_authors.iter().all(|a| *a == c_editor),
+            "fence accepts: all new ops authored under C_now"
+        );
+
+        // Grandfathering: re-presenting only already-canonical ops flags no author.
+        let empty = update_new_op_authors(&base_state, &base_state).unwrap();
+        assert!(empty.is_empty(), "ops the daemon already has are not 'new'");
+    }
+
+    /// B-20 regression: a stale-epoch op that is a *contiguous-clock continuation*
+    /// of a client already present in the canonical base must still be fenced.
+    ///
+    /// Live 9c: bob (editor, epoch 2) makes an accepted edit, so his epoch-2 client
+    /// becomes canonical. He is demoted to viewer then re-promoted to editor (epoch
+    /// jumps to 4), but his editor never rotated off the epoch-2 client (no rejoin),
+    /// so a viewer-interval edit rides that *still-canonical* client. Because the
+    /// op merely extends an existing lineage, the incoming update's own state vector
+    /// omits it — the pre-fix fence saw "no new authors" and let it cascade. The
+    /// fix integrates the update against the authoritative state and catches the
+    /// clock advance.
+    #[test]
+    fn update_new_op_authors_flags_contiguous_stale_continuation() {
+        let fp = "ed25519:bob";
+        let c_e2 = derive_kb_client_id(fp, 2); // canonical via an accepted edit (9b)
+        let c_now = derive_kb_client_id(fp, 4); // current epoch after demote->promote
+
+        // Owner seeds the node; bob (epoch 2) makes the accepted edit -> the daemon's
+        // authoritative state now contains bob's epoch-2 client.
+        let owner = KbNodeDoc::new_with_client_id("n", "Original", "body", &[], 999_111);
+        let mut bob = KbNodeDoc::from_bytes_with_client_id(&owner.encode_state(), c_e2).unwrap();
+        let accepted = bob.set_title("POST-GRANT-EDIT");
+        let mut daemon = KbNodeDoc::from_bytes(&owner.encode_state()).unwrap();
+        daemon.apply_update(&accepted).unwrap();
+        let base_state = daemon.encode_state(); // authoritative state the fence sees
+
+        // bob (still epoch 2) appends a viewer-interval edit -> contiguous extension.
+        let stale_update = bob.set_title("VIEWER-ERA");
+        let authors = update_new_op_authors(&stale_update, &base_state).unwrap();
+        assert!(
+            authors.contains(&c_e2),
+            "the contiguous stale-epoch continuation must be attributable (B-20)"
+        );
+        assert!(
+            authors.iter().any(|a| *a != c_now),
+            "fence MUST reject: a stale-epoch (c_e2) author is present though c_now is epoch 4"
+        );
+    }
+
+    #[test]
     fn collection_encode_decode_roundtrip() {
         let mut coll = KbCollectionDoc::new("KB1", "alice");
         coll.add_node("n1", "Node One");
@@ -902,5 +1759,131 @@ mod tests {
         let nodes_a = coll_a.list_nodes();
         let nodes_b = coll_b.list_nodes();
         assert_eq!(nodes_a.len(), nodes_b.len());
+    }
+
+    // --- ADR-018 v2 schema: owner / roles / policy / pending ---
+
+    #[test]
+    fn role_hierarchy_includes() {
+        assert!(Role::Owner.includes(Role::Editor));
+        assert!(Role::Owner.includes(Role::Viewer));
+        assert!(Role::Editor.includes(Role::Viewer));
+        assert!(!Role::Viewer.includes(Role::Editor));
+        assert!(!Role::Editor.includes(Role::Owner));
+    }
+
+    #[test]
+    fn collection_v2_new_owned_seeds_owner_role_policy() {
+        let coll = KbCollectionDoc::new_owned("KB", "SHA256:owner", "alice");
+        assert_eq!(coll.schema_version(), 2);
+        assert_eq!(coll.owner(), "SHA256:owner");
+        assert_eq!(coll.owner_label(), "alice");
+        assert_eq!(coll.role_of("SHA256:owner"), Some(Role::Owner));
+        assert_eq!(coll.join_policy(), JoinPolicy::Invite);
+        assert!(coll.pending().is_empty());
+        assert_eq!(coll.member_roles().len(), 1);
+    }
+
+    #[test]
+    fn collection_v2_roles_and_upsert() {
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:owner", "alice");
+        coll.upsert_member("SHA256:bob", "bob", Role::Editor);
+        assert_eq!(coll.role_of("SHA256:bob"), Some(Role::Editor));
+        coll.set_role("SHA256:bob", Role::Viewer);
+        assert_eq!(coll.role_of("SHA256:bob"), Some(Role::Viewer));
+        coll.remove_principal("SHA256:bob");
+        assert_eq!(coll.role_of("SHA256:bob"), None);
+    }
+
+    #[test]
+    fn collection_v2_join_policy() {
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
+        assert_eq!(coll.join_policy(), JoinPolicy::Invite);
+        coll.set_join_policy(JoinPolicy::Restrictive);
+        assert_eq!(coll.join_policy(), JoinPolicy::Restrictive);
+    }
+
+    #[test]
+    fn collection_v2_pending_then_approve_atomic() {
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
+        coll.add_pending("SHA256:bob", "bob", "2026-06-16T00:00:00Z");
+        assert_eq!(coll.pending().len(), 1);
+        assert_eq!(coll.role_of("SHA256:bob"), None);
+        coll.approve("SHA256:bob", Role::Editor);
+        assert!(coll.pending().is_empty(), "approve clears pending");
+        assert_eq!(coll.role_of("SHA256:bob"), Some(Role::Editor));
+        let m = coll
+            .member_roles()
+            .into_iter()
+            .find(|m| m.fingerprint == "SHA256:bob")
+            .unwrap();
+        assert_eq!(m.label, "bob", "approve carries the pending label");
+    }
+
+    #[test]
+    fn collection_v2_two_client_member_merge_converges() {
+        let mut a =
+            KbCollectionDoc::new_owned_with("KB", "SHA256:o", "alice", Some(1), JoinPolicy::Invite);
+        let state = a.encode_state();
+        let mut b = KbCollectionDoc::from_bytes(&state).unwrap();
+        let ua = a.upsert_member("SHA256:bob", "bob", Role::Editor);
+        let ub = b.upsert_member("SHA256:carol", "carol", Role::Viewer);
+        a.apply_update(&ub).unwrap();
+        b.apply_update(&ua).unwrap();
+        for c in [&a, &b] {
+            assert_eq!(c.role_of("SHA256:bob"), Some(Role::Editor));
+            assert_eq!(c.role_of("SHA256:carol"), Some(Role::Viewer));
+        }
+        assert_eq!(a.member_roles().len(), b.member_roles().len());
+    }
+
+    #[test]
+    fn collection_v2_roundtrip_preserves_schema() {
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
+        coll.upsert_member("SHA256:bob", "bob", Role::Viewer);
+        coll.set_join_policy(JoinPolicy::Permissive);
+        coll.add_pending("SHA256:eve", "eve", "t");
+        let bytes = coll.encode_state();
+        let r = KbCollectionDoc::from_bytes(&bytes).unwrap();
+        assert_eq!(r.schema_version(), 2);
+        assert_eq!(r.owner(), "SHA256:o");
+        assert_eq!(r.role_of("SHA256:bob"), Some(Role::Viewer));
+        assert_eq!(r.join_policy(), JoinPolicy::Permissive);
+        assert_eq!(r.pending().len(), 1);
+    }
+
+    #[test]
+    fn migrate_v1_resolves_labels_to_principals() {
+        // Build a legacy v1 collection (label creator + members YArray).
+        let mut coll = KbCollectionDoc::new("KB", "alice");
+        coll.add_member("bob");
+        assert_eq!(coll.schema_version(), 0, "legacy = no schema key");
+        // resolver maps known labels to fingerprints.
+        let resolver = |label: &str| match label {
+            "alice" => Some(("SHA256:alice".to_string(), "alice".to_string())),
+            "bob" => Some(("SHA256:bob".to_string(), "bob".to_string())),
+            _ => None,
+        };
+        let update = coll.migrate_if_legacy(resolver).expect("migrated");
+        assert!(!update.is_empty());
+        assert_eq!(coll.schema_version(), 2);
+        assert_eq!(coll.owner(), "SHA256:alice");
+        assert_eq!(coll.role_of("SHA256:alice"), Some(Role::Owner));
+        assert_eq!(coll.role_of("SHA256:bob"), Some(Role::Editor));
+        assert_eq!(coll.join_policy(), JoinPolicy::Invite);
+        // idempotent
+        assert!(coll.migrate_if_legacy(resolver).is_none());
+    }
+
+    #[test]
+    fn migrate_v1_unresolved_label_falls_back_to_legacy_principal() {
+        let mut coll = KbCollectionDoc::new("KB", "alice");
+        coll.add_member("ghost");
+        // resolver knows nobody → legacy:<label> principals.
+        coll.migrate_if_legacy(|_| None).expect("migrated");
+        assert_eq!(coll.schema_version(), 2);
+        assert_eq!(coll.owner(), "legacy:alice");
+        assert_eq!(coll.role_of("legacy:alice"), Some(Role::Owner));
+        assert_eq!(coll.role_of("legacy:ghost"), Some(Role::Editor));
     }
 }

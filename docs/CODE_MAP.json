@@ -335,6 +335,10 @@
           "kind": "mod"
         },
         {
+          "name": "kb_sharing",
+          "kind": "mod"
+        },
+        {
           "name": "kb_view",
           "kind": "mod"
         },
@@ -360,6 +364,14 @@
         },
         {
           "name": "messages",
+          "kind": "mod"
+        },
+        {
+          "name": "notifications",
+          "kind": "mod"
+        },
+        {
+          "name": "notifications_view",
           "kind": "mod"
         },
         {
@@ -689,6 +701,14 @@
           "kind": "struct"
         },
         {
+          "name": "ReconcileAction",
+          "kind": "enum"
+        },
+        {
+          "name": "ReconcileOutcome",
+          "kind": "struct"
+        },
+        {
           "name": "slugify",
           "kind": "fn"
         },
@@ -777,11 +797,23 @@
           "kind": "mod"
         },
         {
+          "name": "identity",
+          "kind": "mod"
+        },
+        {
+          "name": "keystore",
+          "kind": "mod"
+        },
+        {
           "name": "protocol",
           "kind": "mod"
         },
         {
           "name": "session",
+          "kind": "mod"
+        },
+        {
+          "name": "tls",
           "kind": "mod"
         },
         {
@@ -953,6 +985,10 @@
         },
         {
           "name": "text",
+          "kind": "mod"
+        },
+        {
+          "name": "wire",
           "kind": "mod"
         },
         {
@@ -1253,6 +1289,34 @@
     },
     {
       "name": "kb-add-link!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-share",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-join",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-leave",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-add-member",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-remove-member",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-approve",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-set-policy",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -1605,6 +1669,10 @@
     },
     {
       "name": "collab-status",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-sharing-status",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -2145,6 +2213,22 @@
     {
       "name": "view-messages",
       "doc": "Show *Messages* log buffer"
+    },
+    {
+      "name": "notifications-open",
+      "doc": "Open the *Notifications* attention buffer"
+    },
+    {
+      "name": "notify-run-action",
+      "doc": "Run the action under the cursor in *Notifications* (Enter)"
+    },
+    {
+      "name": "notify-dismiss",
+      "doc": "Dismiss the notification under the cursor (d)"
+    },
+    {
+      "name": "notify-toggle-fold",
+      "doc": "Fold/unfold the notification category under the cursor (Tab)"
     },
     {
       "name": "dashboard",
@@ -3252,7 +3336,7 @@
     },
     {
       "name": "set-save",
-      "doc": "Set an option and persist to config.toml (:set-save <key> [value])"
+      "doc": "Set an option and persist to init.scm (:set-save <key> [value])"
     },
     {
       "name": "kill-other-buffers",
