@@ -29,6 +29,10 @@ pub struct DaemonState {
     /// `Endpoint` is cheaply cloneable (Arc-backed); the accept loop owns its
     /// own clone.
     pub p2p_endpoint: Option<iroh::Endpoint>,
+    /// Join targets accepted from `p2p/join_ticket` (parsed "magnet links"): the
+    /// owner `EndpointAddr` + KB-id the Phase-2 mesh dialer will dial. Recorded
+    /// here now; the dial + TOFU trust happen when the dialer lands (#89).
+    pub pending_p2p_joins: Vec<crate::ticket::JoinTicket>,
 }
 
 impl DaemonState {
@@ -40,6 +44,7 @@ impl DaemonState {
             instance_stores: std::collections::HashMap::new(),
             started_at: Instant::now(),
             p2p_endpoint: None,
+            pending_p2p_joins: Vec::new(),
         }
     }
 
@@ -289,6 +294,48 @@ pub async fn dispatch(
             Ok(json!({ "ticket": ticket.to_string(), "kb_id": kb_id }))
         }
 
+        // Accept a join "magnet link": parse + validate it and record the dial
+        // target. The actual connect + TOFU trust happen via the Phase-2 dialer
+        // (#89) — recorded here so the workflow surface exists now and the dialer
+        // consumes `pending_p2p_joins` when it lands.
+        "p2p/join_ticket" => {
+            let ticket_str =
+                params
+                    .get("ticket")
+                    .and_then(|v| v.as_str())
+                    .ok_or(DaemonError::InvalidParams(
+                        "p2p/join_ticket requires a string 'ticket'",
+                    ))?;
+            let ticket: crate::ticket::JoinTicket = ticket_str.trim().parse().map_err(|_| {
+                DaemonError::InvalidParams("malformed join ticket (expected mae://join/…)")
+            })?;
+            let kb_id = ticket.kb_id.clone();
+            let node_id = ticket.node_id();
+            // The owner's authorized_keys principal (what the dialer will verify).
+            let peer = mae_mcp::identity::PublicKey::from_bytes(node_id.as_bytes(), None)
+                .map(|k| k.fingerprint())
+                .unwrap_or_else(|| "unknown".to_string());
+            {
+                let mut st = state.lock().await;
+                // Idempotent: don't queue the same (peer, KB) twice.
+                if !st
+                    .pending_p2p_joins
+                    .iter()
+                    .any(|t| t.node_id() == node_id && t.kb_id == kb_id)
+                {
+                    st.pending_p2p_joins.push(ticket);
+                }
+            }
+            Ok(json!({
+                "kb_id": kb_id,
+                "peer": peer,
+                "status": "recorded",
+                "message": format!(
+                    "Join recorded for KB '{kb_id}' from peer {peer}. The mesh dialer connects it (Phase 2); the owner must approve your join."
+                ),
+            }))
+        }
+
         _ => Err(DaemonError::MethodNotFound(method.to_string())),
     }
 }
@@ -389,5 +436,44 @@ mod tests {
         assert_eq!(parsed.kb_id, "concept:x");
 
         endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn join_ticket_records_a_pending_target_idempotently() {
+        // A real minted ticket round-trips through the join method.
+        let id = mae_mcp::identity::Identity::generate("owner");
+        let endpoint = crate::p2p::bind_endpoint(&id, iroh::RelayMode::Disabled)
+            .await
+            .unwrap();
+        let ticket = crate::p2p::mint_ticket(&endpoint, "concept:x").to_string();
+        endpoint.close().await;
+
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let result = dispatch("p2p/join_ticket", json!({ "ticket": ticket }), &state)
+            .await
+            .unwrap();
+        assert_eq!(result["kb_id"].as_str(), Some("concept:x"));
+        assert_eq!(result["status"].as_str(), Some("recorded"));
+        assert!(result["peer"].as_str().unwrap().starts_with("SHA256:"));
+        assert_eq!(state.lock().await.pending_p2p_joins.len(), 1);
+
+        // Re-accepting the same ticket does not double-queue.
+        dispatch("p2p/join_ticket", json!({ "ticket": ticket }), &state)
+            .await
+            .unwrap();
+        assert_eq!(state.lock().await.pending_p2p_joins.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn join_ticket_rejects_a_malformed_ticket() {
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let result = dispatch(
+            "p2p/join_ticket",
+            json!({ "ticket": "not-a-ticket" }),
+            &state,
+        )
+        .await;
+        assert!(matches!(result, Err(DaemonError::InvalidParams(_))));
+        assert!(state.lock().await.pending_p2p_joins.is_empty());
     }
 }
