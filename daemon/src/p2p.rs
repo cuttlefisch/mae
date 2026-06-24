@@ -80,7 +80,6 @@ pub(crate) fn relay_mode_from_config(relay: &str) -> Result<RelayMode, String> {
 /// Rewrite an unspecified bind IP (`0.0.0.0` / `[::]`) to loopback so the socket
 /// is actually dialable when it lands in a ticket's direct-address hints or a
 /// relay-less local dial.
-#[allow(dead_code)] // used by mint_ticket (below) + the connectivity test
 fn loopback_if_unspecified(mut sa: SocketAddr) -> SocketAddr {
     if sa.ip().is_unspecified() {
         sa.set_ip(if sa.is_ipv4() {
@@ -97,7 +96,6 @@ fn loopback_if_unspecified(mut sa: SocketAddr) -> SocketAddr {
 /// knows (`endpoint.addr()`), augmented with the bound UDP sockets so a LAN /
 /// relay-disabled endpoint still carries a dialable direct address. Synchronous
 /// and non-blocking (never calls `online()`), so it is safe on a request path.
-#[allow(dead_code)] // wired into the `p2p/mint_ticket` collab method next (#101)
 pub fn mint_ticket(endpoint: &Endpoint, kb_id: impl Into<String>) -> JoinTicket {
     let mut addr = endpoint.addr();
     for sa in endpoint.bound_sockets() {

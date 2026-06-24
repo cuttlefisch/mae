@@ -23,6 +23,12 @@ pub struct DaemonState {
     pub instance_stores: std::collections::HashMap<String, Arc<CozoKbStore>>,
     /// Daemon startup time.
     pub started_at: Instant,
+    /// The P2P mesh endpoint (ADR-025), present only when `collab.p2p.enabled`.
+    /// Stored here so the local control socket can mint join tickets
+    /// (`p2p/mint_ticket`) without reaching into the collab session machinery.
+    /// `Endpoint` is cheaply cloneable (Arc-backed); the accept loop owns its
+    /// own clone.
+    pub p2p_endpoint: Option<iroh::Endpoint>,
 }
 
 impl DaemonState {
@@ -33,6 +39,7 @@ impl DaemonState {
             registry: mae_kb::federation::KbRegistry::default(),
             instance_stores: std::collections::HashMap::new(),
             started_at: Instant::now(),
+            p2p_endpoint: None,
         }
     }
 
@@ -263,6 +270,25 @@ pub async fn dispatch(
         // this arm exists for completeness if dispatch is called directly.
         "daemon/shutdown" => Ok(json!({"shutting_down": true})),
 
+        // --- P2P mesh (ADR-025) ---
+        // Mint a shareable "magnet link" join ticket for a KB the local owner is
+        // sharing. This is a LOCAL control op (the daemon owner sharing their own
+        // KB over the Unix socket); remote trust is enforced at the mesh accept
+        // gate + pending-approve, not here.
+        "p2p/mint_ticket" => {
+            let kb_id =
+                params
+                    .get("kb_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or(DaemonError::InvalidParams(
+                        "p2p/mint_ticket requires a string 'kb_id'",
+                    ))?;
+            let state = state.lock().await;
+            let endpoint = state.p2p_endpoint.as_ref().ok_or(DaemonError::NotReady)?;
+            let ticket = crate::p2p::mint_ticket(endpoint, kb_id);
+            Ok(json!({ "ticket": ticket.to_string(), "kb_id": kb_id }))
+        }
+
         _ => Err(DaemonError::MethodNotFound(method.to_string())),
     }
 }
@@ -323,5 +349,45 @@ mod tests {
         let state = Arc::new(Mutex::new(DaemonState::new()));
         let result = dispatch("kb/get", json!({"id": "test:node"}), &state).await;
         assert!(matches!(result, Err(DaemonError::NotReady)));
+    }
+
+    #[tokio::test]
+    async fn mint_ticket_without_mesh_is_not_ready() {
+        // P2P disabled (no endpoint) → the control method reports NotReady rather
+        // than minting a useless ticket.
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let result = dispatch("p2p/mint_ticket", json!({"kb_id": "kb:x"}), &state).await;
+        assert!(matches!(result, Err(DaemonError::NotReady)));
+    }
+
+    #[tokio::test]
+    async fn mint_ticket_requires_kb_id() {
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let result = dispatch("p2p/mint_ticket", json!({}), &state).await;
+        assert!(matches!(result, Err(DaemonError::InvalidParams(_))));
+    }
+
+    #[tokio::test]
+    async fn mint_ticket_with_mesh_returns_a_join_link() {
+        // With a bound mesh endpoint, the control method returns a parseable
+        // `mae://join/` ticket carrying the requested KB-id.
+        let id = mae_mcp::identity::Identity::generate("owner");
+        let endpoint = crate::p2p::bind_endpoint(&id, iroh::RelayMode::Disabled)
+            .await
+            .unwrap();
+        let mut st = DaemonState::new();
+        st.p2p_endpoint = Some(endpoint.clone());
+        let state = Arc::new(Mutex::new(st));
+
+        let result = dispatch("p2p/mint_ticket", json!({"kb_id": "concept:x"}), &state)
+            .await
+            .unwrap();
+        let ticket = result["ticket"].as_str().expect("ticket string");
+        assert!(ticket.starts_with("mae://join/"), "got: {ticket}");
+        assert_eq!(result["kb_id"].as_str(), Some("concept:x"));
+        let parsed: crate::ticket::JoinTicket = ticket.parse().expect("ticket re-parses");
+        assert_eq!(parsed.kb_id, "concept:x");
+
+        endpoint.close().await;
     }
 }

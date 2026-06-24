@@ -225,7 +225,7 @@ async fn main() {
             // Non-fatal: KB service continues, collab disabled
             warn!("collab service disabled due to config errors");
         } else {
-            spawn_collab_server(&config).await;
+            spawn_collab_server(&config, Arc::clone(&state)).await;
         }
     } else {
         info!("collab service disabled in config");
@@ -292,6 +292,7 @@ async fn spawn_p2p_mesh(
     doc_store: Arc<doc_store::DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
+    state: Arc<Mutex<DaemonState>>,
 ) {
     let relay_mode = match p2p::relay_mode_from_config(&p2p.relay) {
         Ok(mode) => mode,
@@ -313,6 +314,9 @@ async fn spawn_p2p_mesh(
         authorized = authorized.len(),
         "P2P mesh endpoint bound (ADR-025); accepting authorized peers"
     );
+    // Publish a clone to the control-socket state so `p2p/mint_ticket` can build
+    // join tickets; the accept loop below owns the original.
+    state.lock().await.p2p_endpoint = Some(endpoint.clone());
     tokio::spawn(p2p::serve(
         endpoint,
         authorized,
@@ -322,7 +326,7 @@ async fn spawn_p2p_mesh(
     ));
 }
 
-async fn spawn_collab_server(config: &DaemonConfig) {
+async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState>>) {
     let collab = &config.collab;
 
     // Open collab storage
@@ -460,6 +464,7 @@ async fn spawn_collab_server(config: &DaemonConfig) {
                     Arc::clone(&doc_store),
                     broadcaster.clone(),
                     server_start_time,
+                    Arc::clone(&state),
                 )
                 .await;
             }
