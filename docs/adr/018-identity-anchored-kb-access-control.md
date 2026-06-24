@@ -96,6 +96,8 @@ guarantees:
   preservation without a re-share; a `collab_kb_default_policy` editor option threaded
   into the shared collection.
 
+  **Tracked:** #73 (wire authorized_keys resolver into daemon collection load) · #74 (collab_kb_default_policy editor option).
+
 ## Verification
 
 Unit: `mae-mcp` (label uniqueness, revoke-by-fp, distinct-principals), `mae-sync`

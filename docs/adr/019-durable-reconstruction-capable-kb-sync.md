@@ -81,6 +81,7 @@ correctness fix: the marker save + load paths must match).
   to stamp its durable marker. Nodes already joined into `primary` by the old
   path are superseded on the next join (idempotent instance registration);
   a startup migration of stranded `primary` federation nodes is future work.
+  **Tracked:** #76 — startup migration for stranded primary-federated nodes.
 - **Open operational concern:** daemon idle-eviction (`doc_store::evict_idle`) can
   delete an idle node doc with no connected clients; a subsequent partial update
   could diverge. Mitigation: reconstruction re-shares full state; exempting

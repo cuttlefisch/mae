@@ -116,6 +116,7 @@ analogy).
   (LSP diagnostics, AI proposals, save conflicts, file-watcher external-change,
   build/test results) and migrate the *appropriate* ones into consumers — pure
   transient info stays on `set_status`.
+  **Tracked:** #79 — migrate attention-worthy set_status emitters to the notification bus.
 
 ## Verification
 

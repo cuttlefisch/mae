@@ -91,6 +91,8 @@ of a pre-grant lineage, is gone.
   client cannot precompute), so the future-epoch client_id is unknowable until granted. The **core uses a
   predictable counter** (kills the honest + naive-malicious cascade); the unpredictable token is the
   documented hardening pass.
+
+  **Tracked:** #72 — unpredictable daemon-issued epoch token + persist member epoch across remove/re-add. The research-grade causal-hash-DAG alternative remains design-stage.
 - **Concurrent grant/revoke, multi-node, migration of pre-feature ops** → hardening. The new-ops check
   grandfathers existing canonical ops (only ops *beyond the daemon SV* are fenced), so pre-feature KBs
   keep working; a member's epoch initializes on first post-feature interaction.

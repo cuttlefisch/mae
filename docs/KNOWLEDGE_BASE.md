@@ -253,7 +253,7 @@ See `crates/kb/src/export.rs`.
 ### Authentication
 
 - **PSK mutual auth** — HMAC-SHA256 challenge-response before `initialize`. Both peers must share a pre-configured key.
-- **SSH key auth** — planned for v0.12.0, replacing PSK for multi-user deployments.
+- **Ed25519 trusted-peer auth** — shipped as collab `key` mode (mutual TLS, ADR-017), replacing PSK for multi-user deployments. Collab auth modes: `none | psk | key`.
 
 Until authentication is enabled, collaborative KB access is trusted-LAN only (same security model as the daemon).
 

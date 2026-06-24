@@ -128,6 +128,8 @@ flagship e2e) follows once Stage 1 is green.
 (D4 — `kb-edit-source` on joined nodes, and D5 — a `registry.save` clobber guard — are tracked as
 follow-up tasks outside this ADR.)
 
+**Tracking:** D4 (replication_mode field + Replicated/Hosted/ReplicationFailed status) is GitHub issue #75. D2 (kb/join state-vector diff) shipped via ADR-022. D1 (hosted live-edit), D3 (richer management UX), D6 (configurable eviction) remain design-stage / partially shipped — not yet issue-tracked.
+
 ## Verification
 
 Unit: emit-pipeline ack-only-on-confirm + no-drop-on-disconnect; daemon `connected_clients` tracking

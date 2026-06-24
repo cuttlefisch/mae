@@ -4,6 +4,41 @@
 
 ---
 
+## Tracked Work (GitHub Issues)
+
+> **Convention:** items marked **`→ #N`** below are tracked as GitHub issues. Unchecked
+> roadmap items *without* an issue reference are intentionally roadmap-only — design-stage
+> or not-yet-scheduled — and live here until promoted to an issue. The far-horizon / research
+> sections near the bottom (Enterprise KB tiers, Inter-Agent A1–A5, AI Harness, Doom-parity
+> crates, P2P transport, E2E encryption, hosted live-edit, op-based version control) are
+> intentionally **not** issue-tracked yet — they are design-stage by choice.
+
+Near-term, code-grounded work extracted from this roadmap + the ADR backlog (filed 2026-06-24):
+
+**Collaboration / security**
+- #71 — append-only hash-chained membership/policy audit log (ADR-021)
+- #72 — epoch-fence hardening: unpredictable token + persist epoch across remove/re-add (ADR-023)
+- #73 — wire `authorized_keys` resolver into daemon collection load (ADR-018)
+- #74 — `collab_kb_default_policy` editor option (ADR-018)
+- #75 — complete the `replicated|hosted` mode axis + loud status (ADR-020 D4)
+- #76 — startup migration for stranded `primary`-federated nodes (ADR-019)
+
+**Daemon / reliability**
+- #77 — collab-WAL power-loss durability (synchronous/checkpoint discipline + kill-9 test)
+- #78 — doc-store eviction TOCTOU race
+
+**Editor / UI / KB**
+- #79 — migrate attention-worthy `set_status` emitters to the notification bus (ADR-024)
+- #80 — `[ReadOnly]` badge confusing during collab
+- #81 — full-text/fuzzy search over KB node bodies
+- #82 — KB search scoping + node visibility + per-workspace isolation
+- #83 — wire which-key idle-delay + floating popup mode
+- #84 — load custom themes from `~/.config/mae/themes/`
+
+**Earlier-filed (still open):** #51 (blocked dep upgrades) · #66 (TOFU `prompt` deadlock — re-verify) · #67 (window-placement discoverability) · #70 (magit `FoldableView` extraction + split oversized collab files).
+
+---
+
 ## Phase Summary
 
 | Phase | Status | Summary |
@@ -30,7 +65,7 @@
 
 - [ ] **AI output buffer cursor invisible in GUI**: After AI responds, the cursor in the `*ai*` conversation output buffer is not visible. Root cause: buffer type / layout metadata mismatch — the conversation buffer doesn't provide the same state that the cursor renderer expects. Low priority (output buffer is read-only, navigation still works).
 - [ ] **Theme load failure is silent in headless mode**: If config.toml requests a nonexistent theme, `set_theme_by_name()` shows a status bar message but keeps the current theme. In CI/headless mode the user gets zero feedback. Should log to stderr or return non-zero exit from `--check-config`.
-- [ ] **Status bar `[ReadOnly]` confusing during collab**: The `[ReadOnly]` badge is the AI permission tier (`status.rs:271`), not a buffer property. During collab sessions users mistake it for a collab-imposed restriction. Consider: rename to `[AI:RO]` or `[Tier:RO]`, or hide when no AI session is active.
+- [ ] **Status bar `[ReadOnly]` confusing during collab** **→ #80**: The `[ReadOnly]` badge is the AI permission tier (`status.rs:271`), not a buffer property. During collab sessions users mistake it for a collab-imposed restriction. Consider: rename to `[AI:RO]` or `[Tier:RO]`, or hide when no AI session is active.
 
 ### Collaborative Editing (v0.11.0)
 
@@ -120,14 +155,7 @@
   - `WalEntry::client_id` stored but never read for audit/attribution (deferred — needs Phase F auth)
   - `StorageError::Io` variant reserved but unused (pluggable backends — by design)
 - [ ] **State server v2** (Phase F): Auth tiers (PSK → SSH → OAuth/OIDC), update compression (msgpack), multi-machine sync. Completed: awareness protocol ✅, per-user undo ✅ (yrs `UndoManager`), git-based identity ✅, heartbeat/keepalive ✅, buffer status indicators ✅, Bugs 2-4 ✅ *(8de53b8)*, PSK mutual auth ✅ *(fffa39f)*, KB protocol handlers ✅ *(fffa39f)*, **KB sharing E2E** ✅ (bridge + continuous sync + offline + mDNS), **SSH/Ed25519 trusted-peer mTLS** ✅ (ADR-017). Next: msgpack wire format, OAuth/OIDC.
-  - **SSH Key Exchange Authentication** (deferred from v0.11.0):
-    - Ed25519 keypair generation + TOFU trust store (`~/.config/mae/trusted_keys.toml`)
-    - `SshAuth` provider implementing existing `AuthProvider` trait (`crates/sync/src/auth.rs`)
-    - Client-side auth in `collab_bridge.rs` (currently sends `initialize` with PSK when configured)
-    - Crates: `ed25519-dalek` v2, `ssh-key` v0.6
-    - Prior art: SSH RFC 4252 challenge-response, Syncthing device IDs, WireGuard Noise_IKpsk2
-    - See `research:ssh-key-exchange-patterns` KB node for full analysis
-    - Open questions: reuse `~/.ssh/id_ed25519` vs generate separate key, UI for TOFU accept/reject, key revocation model
+  - [x] **SSH/Ed25519 trusted-peer authentication** — ✅ *Shipped as `key` mode (ADR-017)*, superseding the earlier PSK-only deferral. Ed25519 identity + TOFU trust store (`shared/mcp/src/keystore.rs`), native mutual-TLS transport (TLS 1.3, pubkey pinning — `shared/mcp/src/tls.rs`), `KeyAuth` on the `AuthProvider` trait (`shared/mcp/src/auth.rs`). Onboarding via `mae setup-collab` + `mae-daemon authorize`. `collab_auth_mode = none|psk|key`.
 - [ ] **Enterprise KB server**: Shared KB instance serving development teams + AI agents. Scaling tiers:
   - *Tier 1* (5-20 users, <20K nodes): Shared SQLite in WAL mode + connection pool + TCP proxy. ~1 week effort.
   - *Tier 2* (20-100 users, <100K nodes): Dedicated `mae-kb-server` microservice with HTTP/gRPC API, write-ahead buffer, read replicas, vector embeddings for semantic search. ~1 month.
@@ -157,7 +185,7 @@
 - [x] **Incremental sync**: `sync_to_sqlite()` — only writes changed nodes, records all mutations in changelog.
 - [x] **Structured timestamps**: `created_at` / `updated_at` INTEGER columns on `nodes`. Enables `ORDER BY updated_at` without JSON parsing.
 - [x] **Changelog query API**: `node_history()`, `changes_since()` for auditing and time-travel.
-- [ ] **Point-in-time restore**: `kb_restore` command + MCP tool to revert a node to any prior state from changelog.
+- [x] **Point-in-time restore**: `kb_restore` command + MCP tool revert a node to any prior state. *(Shipped — CozoDB Phase H: `node_history`/`restore_version` in `shared/kb/src/cozo_store.rs`, MCP `kb_restore` tool.)*
 - [ ] **Node blame**: Per-change author tracking. Requires session identity propagation from MCP client → KB write path.
 - [ ] **Changelog pruning**: Configurable retention policy (default: 90 days). `kb-changelog-prune` command.
 - [ ] **KB backup/export**: `kb-export` dumps full KB + changelog to portable format (SQLite file or JSON). `kb-import` restores.
@@ -319,15 +347,19 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [ ] Semantic code search (vector embeddings)
 - [x] Org ↔ Markdown bidirectional conversion (`:markdown-to-org`, `:org-to-markdown`)
 
-### Phase 12: RAG Pipeline (planned)
+### GraphRAG Live Pipeline (planned — design-stage, not yet issue-tracked)
 
-- [ ] **Embedding storage**: `sqlite-vec` extension for f32 vectors in KB SQLite. Schema: `node_embeddings(node_id, model, vector BLOB, updated_at)`.
-- [ ] **Embedding generation**: Support local models (GGUF/llama.cpp) and API-based (OpenAI, Voyage). `mae-embed` crate or integration in `mae-kb`.
-- [ ] **Vector search**: `kb_semantic_search(query, top_k)` MCP tool + `(kb-semantic-search QUERY K)` Scheme fn. Cosine similarity, FTS5 fallback.
-- [ ] **Retrieval pipeline**: Before each AI turn, auto-retrieve relevant KB nodes by: buffer context, semantic similarity, explicit references. Budget: `rag_max_context_tokens` option (default 2048).
-- [ ] **Context injection**: Retrieved nodes as structured `<context>` blocks in system prompt. Dedup, TTL cache (5 min).
+> Storage + search shipped on CozoDB; the *live* generation + retrieval + injection
+> pipeline is the remaining work. (Updated from the original SQLite/`sqlite-vec` design —
+> the KB is CozoDB with an HNSW index now.)
+
+- [x] **Embedding storage**: CozoDB `embeddings` relation + **HNSW index** (384-dim F32 Cosine). *(Phase G — supersedes the original `sqlite-vec`/`node_embeddings` BLOB design.)*
+- [x] **Vector search**: `kb_vector_search` MCP tool over the HNSW index. *(Phase G.)*
+- [ ] **Embedding generation**: provider trait (local GGUF/llama.cpp + API: OpenAI/Voyage/Ollama) to actually populate the relation. *(The index exists but generation is not wired.)*
+- [ ] **Retrieval pipeline**: before each AI turn, auto-retrieve relevant KB nodes by buffer context, semantic similarity, explicit references. Budget: `rag_max_context_tokens` option (default 2048).
+- [ ] **Context injection**: retrieved nodes as structured `<context>` blocks in the system prompt. Dedup, TTL cache (5 min).
 - [ ] **Incremental re-embedding**: `kb-reindex` command, background task, status bar progress.
-- [ ] **Multi-source indexing**: Code files (tree-sitter chunked), docs (section chunked), git history (recent commits).
+- [ ] **Multi-source indexing**: code files (tree-sitter chunked), docs (section chunked), git history (recent commits).
 
 ### AI Harness & Per-Model Tuning (planned)
 
@@ -422,22 +454,22 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 
 - [x] **Editor struct field extraction**: ~69 fields after 6 extractions — `CollabState` (18), `ShellIntents` (12), `ViState` (41), `AiState` (34), `KbContext` (21), `DapContext` (2). Remaining candidate: `LspContext` (7 fields).
 - [x] **dispatch/ui.rs split**: Split into dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs, dispatch/help.rs, dispatch/kb.rs. *(0829dd5)*
-- [ ] **Custom theme filesystem loading**: Only bundled themes work. No user theme search path (~/.config/mae/themes/). Emacs, Vim, Helix all support this.
+- [ ] **Custom theme filesystem loading** **→ #84**: Only bundled themes work. No user theme search path (~/.config/mae/themes/). Emacs, Vim, Helix all support this.
 - [ ] **Binding ownership audit**: Every kernel-dispatched command should have a kernel default binding. Module bindings are for module-specific commands or user-facing overrides only.
 - [ ] **Ad-hoc solution review**: Thorough code review for hardcoded values, duplicated logic between TUI/GUI, and workarounds that should be proper abstractions — in prep for server-client architecture.
-- [ ] **Which-key idle delay**: Wire `which-key-idle-delay` option to event loop timer (default 0ms = immediate).
-- [ ] **Which-key floating popup mode**: Option to render which-key as a centered floating popup (like find-file/command-palette) instead of docked to bottom. Controlled by a `which-key-display` option (`docked` | `floating`).
+- [ ] **Which-key idle delay** **→ #83**: Wire `which-key-idle-delay` option to event loop timer (default 0ms = immediate).
+- [ ] **Which-key floating popup mode** **→ #83**: Option to render which-key as a centered floating popup (like find-file/command-palette) instead of docked to bottom. Controlled by a `which-key-display` option (`docked` | `floating`).
 - [ ] **Scheme configurability audit**: Audit ALL OptionRegistry entries for missing `config_key` (prevents `:set-save` persistence). Verify every option round-trips through `:set-save` persistence to `init.scm` (the primary config surface). Document full option surface in `:help concept:options` KB node.
 - [x] **Performance regression testing**: Criterion benchmark suite for buffer_ops + crdt_ops. `make bench/bench-save/bench-compare`. *(0829dd5)*
-- [ ] **KB search scoping**: Allow per-project KB search that excludes MAE internal nodes (scheme:*, cmd:*, option:*). Add `kb_search_scope` option: `"all"` (default), `"user"` (exclude internal), `"project"` (only project-registered KBs). AI tools respect scope; `:help` always searches all.
-- [ ] **KB node visibility**: Add `visibility` property to nodes: `public` (default), `internal` (MAE system nodes), `private` (user personal notes). Internal nodes hidden from user-facing search unless explicitly queried with `:help` or `kb_get` by ID.
-- [ ] **Per-workspace KB isolation**: When multiple projects are open, `kb_search` defaults to the active project's registered KB instances. Cross-project search available via `kb_search --all` or `(kb-search-all query)` Scheme API.
+- [ ] **KB search scoping** **→ #82**: Allow per-project KB search that excludes MAE internal nodes (scheme:*, cmd:*, option:*). Add `kb_search_scope` option: `"all"` (default), `"user"` (exclude internal), `"project"` (only project-registered KBs). AI tools respect scope; `:help` always searches all.
+- [ ] **KB node visibility** **→ #82**: Add `visibility` property to nodes: `public` (default), `internal` (MAE system nodes), `private` (user personal notes). Internal nodes hidden from user-facing search unless explicitly queried with `:help` or `kb_get` by ID.
+- [ ] **Per-workspace KB isolation** **→ #82**: When multiple projects are open, `kb_search` defaults to the active project's registered KB instances. Cross-project search available via `kb_search --all` or `(kb-search-all query)` Scheme API.
 - [ ] **KB tangle pipeline**: `make docs-tangle` extracts ADR markdown from KB concept nodes. CI job validates freshness (same as code-map pattern). Enables KB as single source of truth for architecture docs.
 - [ ] **Checkbox toggle in KB view mode**: Allow toggling checkboxes in read-only help/KB buffers without entering edit mode. Requires refactoring view-mode to allow targeted mutations.
 - [ ] **Replace mode (R)**: Standard vim replace mode where keystrokes overwrite characters.
-- [ ] **Doc store eviction TOCTOU**: Between identifying eviction candidates (read lock) and evicting (write lock), a client could reconnect. Low probability; fix requires holding write lock during entire eviction.
+- [ ] **Doc store eviction TOCTOU** **→ #78**: Between identifying eviction candidates (read lock) and evicting (write lock), a client could reconnect. Low probability; fix requires holding write lock during entire eviction.
 - [ ] **Unified buffer-switching strategy**: Three patterns exist (`switch_to_buffer`, `display_buffer_and_focus`, palette). Should converge on one with consistent view state management.
-- [ ] **KB fuzzy body search**: `kb_search` currently matches node titles and tags via FTS5 but not node body content in a fuzzy/substring way. Searching for a term like "DeltaDB" that only appears in the body of some nodes returns no results. Add full-text indexing of node bodies (FTS5 `content` column) so `kb_search` and `:help` fuzzy completion can find concepts mentioned anywhere in the knowledge graph, not just in titles.
+- [ ] **KB fuzzy body search** **→ #81**: `kb_search` currently matches node titles and tags but not node body content in a fuzzy/substring way. Searching for a term like "DeltaDB" that only appears in the body of some nodes returns no results. Add full-text indexing of node bodies (CozoDB FTS) so `kb_search` and `:help` fuzzy completion can find concepts mentioned anywhere in the knowledge graph, not just in titles.
 - [x] **Binary architecture split** (v0.13.0, ADR-014): Split MAE into editor workspace + daemon workspace with separate `Cargo.lock` files. `mae-daemon` binary with CozoDB+SQLite backend for persistent KB, background maintenance (scheduler with watcher/maintenance/health ticks), and JSON-RPC API over Unix socket. Shared crates (`mae-kb`, `mae-sync`, `mae-mcp`) moved to `shared/` with feature flags (`storage-sled`, `crdt`). `CozoKbStore::open_with_engine()` + `open_mem()` for backend-agnostic storage. Resolves rusqlite linker conflict (separate dependency trees). LRU cache query layer (`LruQueryLayer`) + `DaemonClient` for editor-daemon integration. Config: `[daemon]` section with 3 options. CI/CD: daemon job, release artifacts include `mae-daemon`. ADR-014 written.
 
 ---

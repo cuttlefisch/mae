@@ -71,6 +71,8 @@ A follow-up effort delivers the **lifetime compliance record** and the **policy 
   management UX (ADR-020 `*KB Sharing*` buffer) and the same mediated methods.
 - Export/verification tooling (replay the chain, verify the head hash) for audits.
 
+**Tracked:** the append-only hash-chained audit log is GitHub issue #71. The policy engine (RBAC → ABAC/ReBAC) remains design-stage in this ADR (not yet issue-tracked).
+
 ## Consequences
 
 - Membership is durable and traceable enough today to be safe (no silent revoke; mediated,
