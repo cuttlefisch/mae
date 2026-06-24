@@ -325,6 +325,7 @@ async fn spawn_p2p_mesh(
     tokio::spawn(dialer::run_dialer(
         Arc::clone(&state),
         Arc::clone(&doc_store),
+        broadcaster.clone(),
         endpoint.clone(),
     ));
     tokio::spawn(p2p::serve(
