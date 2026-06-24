@@ -288,7 +288,7 @@ async fn main() {
 async fn spawn_p2p_mesh(
     p2p: &config::P2pConfig,
     identity: &mae_mcp::identity::Identity,
-    authorized: Arc<mae_mcp::identity::AuthorizedKeys>,
+    authorized_keys_path: std::path::PathBuf,
     doc_store: Arc<doc_store::DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
@@ -311,7 +311,7 @@ async fn spawn_p2p_mesh(
     info!(
         fingerprint = %identity.fingerprint(),
         relay = %p2p.relay,
-        authorized = authorized.len(),
+        authorized = mae_mcp::identity::AuthorizedKeys::load(&authorized_keys_path).len(),
         "P2P mesh endpoint bound (ADR-025); accepting authorized peers"
     );
     // Publish a clone to the control-socket state so `p2p/mint_ticket` can build
@@ -319,7 +319,7 @@ async fn spawn_p2p_mesh(
     state.lock().await.p2p_endpoint = Some(endpoint.clone());
     tokio::spawn(p2p::serve(
         endpoint,
-        authorized,
+        authorized_keys_path,
         doc_store,
         broadcaster,
         start_time,
@@ -457,10 +457,13 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
             // node identity and gate inbound peers on the same authorized_keys
             // set, sharing the doc_store + broadcaster with the TCP listener.
             if collab.p2p.enabled {
+                // Pass the authorized_keys PATH (not a snapshot): the mesh gate
+                // re-reads it per accept so authorize/revoke/approve take effect
+                // live (I-10).
                 spawn_p2p_mesh(
                     &collab.p2p,
                     &identity,
-                    Arc::clone(&authorized),
+                    ak_path.clone(),
                     Arc::clone(&doc_store),
                     broadcaster.clone(),
                     server_start_time,

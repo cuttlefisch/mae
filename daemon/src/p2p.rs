@@ -135,6 +135,16 @@ pub(crate) fn authorize_peer(
     })
 }
 
+/// [`authorize_peer`] against a **freshly loaded** `authorized_keys` file — the
+/// per-accept live-reload of the mesh gate (I-10). A missing/unreadable file
+/// loads as empty ⇒ deny (fail-secure).
+fn authorize_peer_reloading(
+    pubkey: [u8; 32],
+    authorized_keys_path: &std::path::Path,
+) -> Option<PeerIdentity> {
+    authorize_peer(pubkey, &AuthorizedKeys::load(authorized_keys_path))
+}
+
 /// Accept loop for the mesh endpoint. Each inbound connection is gated on its
 /// `remote_id()` being in `authorized_keys` (see [`authorize_peer`]); authorized
 /// peers are handed to the **same** `handle_client_authenticated` the editor's
@@ -146,13 +156,13 @@ pub(crate) fn authorize_peer(
 /// response like the TCP path. Mesh multiplexing/gossip is Phase 2 (#89).
 pub async fn serve(
     endpoint: Endpoint,
-    authorized: Arc<AuthorizedKeys>,
+    authorized_keys_path: std::path::PathBuf,
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: Instant,
 ) {
     while let Some(incoming) = endpoint.accept().await {
-        let authorized = Arc::clone(&authorized);
+        let authorized_keys_path = authorized_keys_path.clone();
         let doc_store = Arc::clone(&doc_store);
         let broadcaster = broadcaster.clone();
         tokio::spawn(async move {
@@ -171,9 +181,12 @@ pub async fn serve(
                 }
             };
 
-            // Gate on the peer's verified key being authorized.
+            // Gate on the peer's verified key being authorized. Re-read
+            // authorized_keys **per accept** (I-10) so `mae-daemon authorize` /
+            // `revoke` and TOFU-approve take effect on the running mesh without a
+            // restart — fail-secure: a missing/unreadable file ⇒ empty ⇒ deny.
             let pubkey = *conn.remote_id().as_bytes();
-            let Some(peer) = authorize_peer(pubkey, &authorized) else {
+            let Some(peer) = authorize_peer_reloading(pubkey, &authorized_keys_path) else {
                 let fp = PublicKey::from_bytes(&pubkey, None)
                     .map(|k| k.fingerprint())
                     .unwrap_or_default();
@@ -308,6 +321,31 @@ mod tests {
             authorize_peer(stranger, &ak).is_none(),
             "a key absent from authorized_keys must be rejected by the mesh gate"
         );
+    }
+
+    /// The mesh gate re-reads authorized_keys **per accept** (I-10): authorize /
+    /// revoke take effect with no restart and no in-memory snapshot. A missing
+    /// file denies (fail-secure).
+    #[test]
+    fn mesh_gate_reloads_authorized_keys_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let ak_path = dir.path().join("authorized_keys");
+        let peer = Identity::generate("peer");
+        let peer_pub = peer.public().to_bytes();
+
+        // Absent file ⇒ deny.
+        assert!(authorize_peer_reloading(peer_pub, &ak_path).is_none());
+
+        // Authorize → the next call admits, live (no restart).
+        let mut ak = AuthorizedKeys::load(&ak_path);
+        ak.add(PublicKey::from_bytes(&peer_pub, Some("peer".to_string())).unwrap())
+            .unwrap();
+        let admitted = authorize_peer_reloading(peer_pub, &ak_path).expect("authorized after add");
+        assert_eq!(admitted.pubkey, peer_pub);
+
+        // Revoke → the next call denies, live.
+        ak.revoke_by_fingerprint(&admitted.fingerprint).unwrap();
+        assert!(authorize_peer_reloading(peer_pub, &ak_path).is_none());
     }
 
     /// End-to-end transport proof: two endpoints connect over iroh and round-trip a
