@@ -514,9 +514,10 @@ Items E1–E8 track open design questions and planned improvements for the colla
   - P2P-LAN: mDNS discovery ✅ stays the LAN fast-path; global discovery via iroh DNS/Pkarr.
   - P2P-KB: KB node replication ✅; link-graph merge (future).
   - **Prerequisite:** #72 (unpredictable epoch token) — required for peer-side fencing.
-  - **Phased epics:** P1 iroh transport adapter · P2 daemon-as-peer mesh + gossip/anti-entropy ·
-    P3 signed hash-chained membership · P4 signed ops + peer-enforced fence · P5 key/auth rotation
-    + revocation · P6 mesh visibility hardening.
+  - **Phased epics:** P1 iroh transport adapter (#88) + P2P config/install/activation (#94) ·
+    P2 daemon-as-peer mesh + gossip/anti-entropy (#89) · P3 signed hash-chained membership (#90) ·
+    P4 signed ops + peer-enforced fence (#91) · P5 key/auth rotation + revocation (#92) ·
+    P6 mesh visibility hardening (#93).
   - **Deferred:** P2P-E2E end-to-end content encryption (Noise) — own ADR/phase; leaderless
     auth-DAG (research). NAT traversal handled by iroh (no bespoke WebRTC/QUIC stack).
 

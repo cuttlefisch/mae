@@ -71,6 +71,36 @@ Adopt **iroh** (n0) as the daemon-to-daemon transport substrate.
 The whole substrate sits behind a `collab.p2p` config gate; v0.14 hub mode remains the default until the
 mesh is proven.
 
+## Configuration, install & activation
+
+P2P must be a **configurable, opt-in capability the user enables once**, after which the daemon
+**activates the required features itself** — no manual wiring. Three surfaces, all reusing existing
+infrastructure:
+
+1. **Daemon config** — a new `[collab.p2p]` table in `daemon.toml` (alongside the existing
+   `[collab]`/`[collab.auth]`/`[collab.storage]`/`[collab.sync]`, `daemon/src/config.rs`):
+   `enabled` (bool, default false), `relay` (`default` | `self:<url>` | `none`), `discovery`
+   (`dns-pkarr` | `mdns` | `both` | `manual`), and optional explicit peer node-IDs for the `manual`
+   case. **Identity is *not* duplicated** — the mesh reuses the daemon's `[collab.auth]` `key`-mode
+   Ed25519 identity + `authorized_keys`/`trusted_keys` keystore (ADR-017). `--check-config` validates
+   the table; legacy configs without it default to disabled.
+2. **Editor enablement + wizard** — a `collab_p2p` editor option (OptionRegistry → init.scm, principle
+   #8) and an extended **`mae setup-collab --p2p`** (the existing idempotent key-mode wizard,
+   `crates/mae/src/main.rs:330`): it generates/loads the Ed25519 identity, writes `[collab.p2p]` +ON,
+   and ensures the daemon is installed/running (composing with `setup-daemon`). One command takes a user
+   from zero to a P2P-ready daemon.
+3. **Install / service** — `make install-daemon-service` + `assets/mae-daemon.service` (the systemd user
+   unit) gain P2P-aware defaults (outbound network is required; document the relay/self-host choice);
+   `assets/install.sh` notes the P2P opt-in. No extra binary — iroh is linked into `mae-daemon`.
+
+**Activation (daemon-side):** on startup, `mae-daemon` branches on `collab.p2p.enabled`. When on, it
+builds the iroh `Endpoint` from the key-mode identity and **activates listener + dialer + discovery +
+relay**, dialing known peer node-IDs for each shared KB — *in addition to* (not replacing) the local
+Unix-socket + the v0.14 TCP listener, so the editor and hub-mode clients are unaffected. When off, none
+of the mesh machinery starts (zero overhead). `mae-daemon doctor` reports P2P status (enabled, endpoint,
+discovery, relay reachability, peer count) — the ADR-027 visibility surface, available at the CLI for
+headless deployments.
+
 ## Adversarial / robustness review
 
 - **Untrusted/revoked peer dials in** → rejected at the iroh-identity↔`authorized_keys` check (same
