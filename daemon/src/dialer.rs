@@ -9,8 +9,9 @@
 //! session LIVE: subscribe to the owner's pushes and apply them as they arrive,
 //! reconnecting with bounded backoff on any drop (mobility, ADR-025).
 //!
-//! Inbound live sync (owner edits → us) + reconnect are implemented here. Outbound
-//! (our local edits → owner) is the next slice.
+//! Full bidirectional live sync: the owner's edits stream to us (inbound apply) and
+//! our local edits stream to the owner (outbound forward, via a doc-scoped local
+//! broadcaster subscription), with reconnect/backoff for mobility.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -35,6 +36,16 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
 const RECONNECT_MIN: Duration = Duration::from_secs(2);
 const RECONNECT_MAX: Duration = Duration::from_secs(60);
+
+/// A broadcaster session-id for a dialer's LOCAL subscription, drawn from the top of
+/// the u64 range so it never collides with a real editor/collab session id (those
+/// count up from a low base). Each peer session gets a distinct id so its own
+/// inbound applies (`broadcast_except(dialer_sid)`) don't echo back out to the owner.
+fn next_dialer_sid() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(u64::MAX);
+    NEXT.fetch_sub(1, Ordering::Relaxed)
+}
 
 /// What the initial pull of a peer session produced.
 #[derive(Debug, PartialEq, Eq)]
@@ -117,6 +128,7 @@ async fn peer_session(
     doc_store: &Arc<DocStore>,
     broadcaster: &SharedBroadcaster,
 ) -> Result<(), String> {
+    let dialer_sid = next_dialer_sid();
     let conn = connect_verify_anchor(local, ticket, doc_store).await?;
     let (mut send, recv) = conn.open_bi().await.map_err(|e| format!("open_bi: {e}"))?;
     let mut reader = BufReader::new(recv);
@@ -124,7 +136,16 @@ async fn peer_session(
     // Initial sync: kb/join carrying our current node SVs ⇒ the owner replies with a
     // full snapshot (fresh join) or per-node diffs (reconnect), applied non-
     // destructively (apply_update merges; never clobbers local edits).
-    match pull_kb(&mut send, &mut reader, doc_store, Some(broadcaster), ticket).await? {
+    match pull_kb(
+        &mut send,
+        &mut reader,
+        doc_store,
+        Some(broadcaster),
+        dialer_sid,
+        ticket,
+    )
+    .await?
+    {
         JoinOutcome::Pulled { nodes } => {
             info!(kb_id = %ticket.kb_id, nodes, "mesh peer: synced KB")
         }
@@ -134,20 +155,96 @@ async fn peer_session(
     // Subscribe so the owner's later edits stream to us as notifications.
     subscribe(&mut send).await?;
 
-    // Inbound loop: apply the owner's pushed updates until the link drops. (Pure
-    // read for now; outbound — forwarding our local edits — is the next slice, which
-    // adds a concurrent write arm.)
-    loop {
-        match mae_mcp::read_message(&mut reader).await {
-            Ok(Some(msg)) => {
-                if let Some((doc, update)) = parse_sync_update(&msg) {
-                    apply_doc(doc_store, Some(broadcaster), &doc, &update).await;
+    // Subscribe to our LOCAL broadcaster, doc-scoped to this KB's docs, so our own
+    // editor's edits (and any other local writer) are forwarded to the owner. Our
+    // inbound applies use `broadcast_except(dialer_sid)`, so they are NOT delivered
+    // back to this subscription — no echo loop.
+    let node_docs = kb_node_docs(doc_store, &ticket.kb_id).await;
+    let mut local_rx = {
+        // No `.await` while holding the std Mutex guard (it isn't Send).
+        let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
+        let rx = bc.subscribe(dialer_sid, vec!["sync_update".to_string()]);
+        bc.subscribe_doc(dialer_sid, &format!("kbc:{}", ticket.kb_id));
+        for node in &node_docs {
+            bc.subscribe_doc(dialer_sid, node);
+        }
+        rx
+    };
+
+    // Move the recv half into a reader task (read_message is not cancel-safe) so we
+    // can `select!` inbound applies against outbound forwards.
+    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<Result<String, String>>(64);
+    let reader_task = tokio::spawn(async move {
+        loop {
+            match mae_mcp::read_message(&mut reader).await {
+                Ok(Some(m)) => {
+                    if inbound_tx.send(Ok(m)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    let _ = inbound_tx.send(Err("eof".into())).await;
+                    break;
+                }
+                Err(e) => {
+                    let _ = inbound_tx.send(Err(e.to_string())).await;
+                    break;
                 }
             }
-            Ok(None) => return Ok(()), // clean EOF
-            Err(e) => return Err(format!("read: {e}")),
         }
-    }
+    });
+
+    let result = loop {
+        tokio::select! {
+            // INBOUND: the owner's pushed updates → apply locally (merge).
+            inbound = inbound_rx.recv() => match inbound {
+                Some(Ok(msg)) => {
+                    if let Some((doc, update)) = parse_sync_update(&msg) {
+                        apply_doc(doc_store, Some(broadcaster), dialer_sid, &doc, &update).await;
+                    }
+                }
+                Some(Err(e)) if e == "eof" => break Ok(()),
+                Some(Err(e)) => break Err(format!("read: {e}")),
+                None => break Ok(()),
+            },
+            // OUTBOUND: a local edit to one of this KB's docs → forward to the owner.
+            Some(event) = local_rx.recv() => {
+                if let EditorEvent::SyncUpdate { buffer_name, update_base64, .. } = event {
+                    let req = json!({
+                        "jsonrpc": "2.0", "id": 3, "method": "sync/update",
+                        "params": { "doc": buffer_name, "update": update_base64 }
+                    }).to_string();
+                    if let Err(e) = mae_mcp::write_framed(&mut send, req.as_bytes(), WRITE_TIMEOUT).await {
+                        break Err(format!("forward local edit: {e}"));
+                    }
+                }
+            }
+        }
+    };
+
+    // Clean up the local subscription + reader task before reconnecting.
+    broadcaster
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .unsubscribe(dialer_sid);
+    reader_task.abort();
+    result
+}
+
+/// The `kb:{node}` doc names currently in a KB's collection (for doc-scoped local
+/// subscription). Empty if the collection isn't present yet.
+async fn kb_node_docs(doc_store: &Arc<DocStore>, kb_id: &str) -> Vec<String> {
+    let coll_doc = format!("kbc:{kb_id}");
+    let Ok((state, _)) = doc_store.encode_state_and_sv(&coll_doc).await else {
+        return Vec::new();
+    };
+    let Ok(coll) = KbCollectionDoc::from_bytes(&state) else {
+        return Vec::new();
+    };
+    coll.list_nodes()
+        .into_iter()
+        .map(|(id, _)| format!("kb:{id}"))
+        .collect()
 }
 
 /// Dial the ticket's owner, verify identity (anti-spoof), and register the trust
@@ -196,7 +293,7 @@ pub async fn dial_and_join(
     let conn = connect_verify_anchor(local, ticket, doc_store).await?;
     let (mut send, recv) = conn.open_bi().await.map_err(|e| format!("open_bi: {e}"))?;
     let mut reader = BufReader::new(recv);
-    let outcome = pull_kb(&mut send, &mut reader, doc_store, None, ticket).await?;
+    let outcome = pull_kb(&mut send, &mut reader, doc_store, None, 0, ticket).await?;
     drop(send);
     conn.close(0u32.into(), b"bye");
     Ok(outcome)
@@ -205,11 +302,13 @@ pub async fn dial_and_join(
 /// Send `kb/join` (carrying our current node SVs for reconcile) and apply the reply.
 /// We are not subscribed yet, so the reply is the first — and only — message on the
 /// stream before we return.
+#[allow(clippy::too_many_arguments)]
 async fn pull_kb<W, R>(
     send: &mut W,
     reader: &mut R,
     doc_store: &Arc<DocStore>,
     broadcaster: Option<&SharedBroadcaster>,
+    exclude_sid: u64,
     ticket: &JoinTicket,
 ) -> Result<JoinOutcome, String>
 where
@@ -231,7 +330,7 @@ where
         .await
         .map_err(|e| format!("read kb/join: {e}"))?
         .ok_or_else(|| "owner closed without responding".to_string())?;
-    apply_join_response(&resp, &ticket.kb_id, doc_store, broadcaster).await
+    apply_join_response(&resp, &ticket.kb_id, doc_store, broadcaster, exclude_sid).await
 }
 
 /// Subscribe to the owner's `sync_update` pushes so its later edits stream to us.
@@ -276,6 +375,7 @@ async fn apply_join_response(
     kb_id: &str,
     doc_store: &Arc<DocStore>,
     broadcaster: Option<&SharedBroadcaster>,
+    exclude_sid: u64,
 ) -> Result<JoinOutcome, String> {
     let v: Value = serde_json::from_str(resp).map_err(|e| format!("bad response json: {e}"))?;
     if let Some(err) = v.get("error") {
@@ -292,7 +392,14 @@ async fn apply_join_response(
         .ok_or("response missing collection_state")?;
     let coll_bytes =
         base64_to_update(coll_b64).map_err(|e| format!("bad collection_state: {e}"))?;
-    apply_doc(doc_store, broadcaster, &format!("kbc:{kb_id}"), &coll_bytes).await;
+    apply_doc(
+        doc_store,
+        broadcaster,
+        exclude_sid,
+        &format!("kbc:{kb_id}"),
+        &coll_bytes,
+    )
+    .await;
 
     let mut nodes = 0usize;
     if let Some(arr) = result.get("nodes").and_then(|n| n.as_array()) {
@@ -312,7 +419,14 @@ async fn apply_join_response(
                 warn!(node = %id, "mesh join: undecodable node payload");
                 continue;
             };
-            apply_doc(doc_store, broadcaster, &format!("kb:{id}"), &update).await;
+            apply_doc(
+                doc_store,
+                broadcaster,
+                exclude_sid,
+                &format!("kb:{id}"),
+                &update,
+            )
+            .await;
             nodes += 1;
         }
     }
@@ -325,19 +439,26 @@ async fn apply_join_response(
 async fn apply_doc(
     doc_store: &Arc<DocStore>,
     broadcaster: Option<&SharedBroadcaster>,
+    exclude_sid: u64,
     doc_name: &str,
     update: &[u8],
 ) {
     match doc_store.apply_update(doc_name, update, None).await {
         Ok(result) => {
             if let Some(bc) = broadcaster {
+                // `broadcast_except(exclude_sid)` so the dialer's own local
+                // subscription (= the outbound-forward path) does NOT receive what we
+                // just applied from the owner — that would echo it straight back.
                 bc.lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .broadcast(&EditorEvent::SyncUpdate {
-                        buffer_name: doc_name.to_string(),
-                        update_base64: update_to_base64(update),
-                        wal_seq: result.wal_seq,
-                    });
+                    .broadcast_except(
+                        &EditorEvent::SyncUpdate {
+                            buffer_name: doc_name.to_string(),
+                            update_base64: update_to_base64(update),
+                            wal_seq: result.wal_seq,
+                        },
+                        exclude_sid,
+                    );
             }
         }
         Err(e) => warn!(doc = %doc_name, error = %e, "mesh: failed to apply remote update"),
@@ -569,6 +690,9 @@ mod tests {
             .await,
             "B should pull the node on join"
         );
+        // Let B's notifications/subscribe propagate to A before A edits (else A's
+        // session for B has no sync_update subscription yet and won't push it).
+        tokio::time::sleep(Duration::from_millis(300)).await;
         let before = b_store.state_vector("kb:concept:n").await.unwrap();
 
         // A edits the node AFTER B subscribed, and broadcasts it the way the server's
@@ -602,5 +726,68 @@ mod tests {
         .await;
         peer.abort();
         assert!(landed, "B should apply the owner's live edit");
+    }
+
+    #[tokio::test]
+    async fn live_session_forwards_local_edits_to_owner() {
+        let a_id = Arc::new(Identity::generate("owner-A"));
+        let b_id = Identity::generate("joiner-B");
+        let (addr, a_store, _a_bc) = serve_owner_kb(&a_id, "kbo", Some(&b_id.fingerprint())).await;
+
+        let b_endpoint = bind_endpoint(&b_id, RelayMode::Disabled).await.unwrap();
+        let b_store = mem_store();
+        let b_bc = bc();
+        let ticket = JoinTicket::new(addr, "kbo");
+
+        let peer = tokio::spawn(run_peer(
+            b_endpoint,
+            ticket,
+            Arc::clone(&b_store),
+            b_bc.clone(),
+        ));
+
+        // Wait for B to pull, then for its subscribe + local subscription to settle.
+        assert!(
+            wait_until(5, || {
+                let s = Arc::clone(&b_store);
+                async move { s.has_doc("kb:concept:n").await }
+            })
+            .await,
+            "B should pull on join"
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let a_before = a_store.state_vector("kb:concept:n").await.unwrap();
+
+        // B's "editor" edits the node locally and broadcasts it on B's broadcaster
+        // (the dialer is subscribed, doc-scoped to this KB) → forwarded to the owner.
+        let mut b_node = {
+            let (st, _) = b_store.encode_state_and_sv("kb:concept:n").await.unwrap();
+            TextSync::from_state(&st).unwrap()
+        };
+        let edit = b_node.insert(0, "B-EDIT ");
+        b_store
+            .apply_update("kb:concept:n", &edit, None)
+            .await
+            .unwrap();
+        b_bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
+            buffer_name: "kb:concept:n".to_string(),
+            update_base64: update_to_base64(&edit),
+            wal_seq: 0,
+        });
+
+        // The dialer forwards it; the owner applies it → its node state vector advances.
+        let landed = wait_until(5, || {
+            let s = Arc::clone(&a_store);
+            let before = a_before.clone();
+            async move {
+                s.state_vector("kb:concept:n")
+                    .await
+                    .map(|sv| sv != before)
+                    .unwrap_or(false)
+            }
+        })
+        .await;
+        peer.abort();
+        assert!(landed, "B's local edit should reach the owner");
     }
 }
