@@ -17,6 +17,7 @@ use mae_mcp::{McpToolRequest, McpToolResult};
 use mae_sync::encoding::{base64_to_update, update_to_base64};
 use mae_sync::kb::{
     derive_kb_client_id, update_new_op_authors, JoinPolicy, KbCollectionDoc, Role as SyncRole,
+    Transport,
 };
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -43,6 +44,7 @@ pub async fn handle_client_with_auth<R, W, A>(
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
+    transport: Transport,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send,
@@ -64,7 +66,16 @@ pub async fn handle_client_with_auth<R, W, A>(
             return;
         }
     };
-    handle_client_authenticated(reader, writer, peer, doc_store, broadcaster, start_time).await;
+    handle_client_authenticated(
+        reader,
+        writer,
+        peer,
+        doc_store,
+        broadcaster,
+        start_time,
+        transport,
+    )
+    .await;
 }
 
 /// Anonymous (no-auth) connection — used for the loopback/`none` mode.
@@ -74,6 +85,7 @@ pub async fn handle_client<R, W>(
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
+    transport: Transport,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -85,6 +97,7 @@ pub async fn handle_client<R, W>(
         doc_store,
         broadcaster,
         start_time,
+        transport,
     )
     .await;
 }
@@ -98,6 +111,7 @@ pub async fn handle_client_authenticated<R, W>(
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
+    transport: Transport,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -109,6 +123,7 @@ pub async fn handle_client_authenticated<R, W>(
         doc_store,
         broadcaster,
         start_time,
+        transport,
     )
     .await;
 }
@@ -129,6 +144,7 @@ async fn run_session<R, W>(
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
+    transport: Transport,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -247,7 +263,7 @@ async fn run_session<R, W>(
                 }
 
                 let mut response = if is_doc {
-                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), &mut session_docs).await
+                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), &mut session_docs, transport).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
@@ -539,6 +555,7 @@ async fn handle_doc_request(
         None,
         None,
         session_docs,
+        Transport::Hub,
     )
     .await
 }
@@ -622,13 +639,28 @@ async fn kb_access(
     kb_id: &str,
     principal: Option<&str>,
     op: KbOp,
+    transport: Transport,
 ) -> Result<AccessDecision, String> {
     let principal = match principal {
         Some(p) => p,
         None => return Ok(AccessDecision::Allow),
     };
     let coll = load_collection(doc_store, kb_id).await?;
-    match coll.role_of(principal) {
+    let role = coll.role_of(principal);
+    // Per-KB transport policy (ADR-018/025): a KB is reachable over a transport
+    // only if its policy exposes it there — EXCEPT the owner, who always reaches
+    // their own KB (e.g. their local editor over the hub socket) and is the one who
+    // manages exposure. Non-owner members + would-be joiners are transport-gated.
+    if role != Some(SyncRole::Owner) && !coll.transport_policy().allows(transport) {
+        let t = match transport {
+            Transport::Hub => "the hub",
+            Transport::P2p => "the P2P mesh",
+        };
+        return Ok(AccessDecision::Deny(format!(
+            "KB '{kb_id}' is not shared over {t}"
+        )));
+    }
+    match role {
         Some(role) => {
             // Hierarchical RBAC: owner ⊇ editor ⊇ viewer.
             let allowed = match op {
@@ -670,9 +702,10 @@ async fn deny_collection_smuggling(
     doc_store: &DocStore,
     doc_name: &str,
     principal: Option<&str>,
+    transport: Transport,
 ) -> Result<(), String> {
     if let Some(kb_id) = doc_name.strip_prefix("kbc:") {
-        match kb_access(doc_store, kb_id, principal, KbOp::Manage).await? {
+        match kb_access(doc_store, kb_id, principal, KbOp::Manage, transport).await? {
             AccessDecision::Allow => Ok(()),
             _ => Err(format!(
                 "only the owner may write the collection doc for KB '{kb_id}'"
@@ -696,6 +729,7 @@ async fn handle_doc_request_inner(
     auth_label: Option<&str>,
     auth_principal: Option<&str>,
     session_docs: &mut HashSet<String>,
+    transport: Transport,
 ) -> JsonRpcResponse {
     let request: JsonRpcRequest = match serde_json::from_str(msg) {
         Ok(r) => r,
@@ -739,7 +773,9 @@ async fn handle_doc_request_inner(
             };
             // ADR-018 membership-smuggling defense: a raw write to a collection doc
             // (`kbc:`) is owner-only.
-            if let Err(e) = deny_collection_smuggling(doc_store, &doc_name, auth_principal).await {
+            if let Err(e) =
+                deny_collection_smuggling(doc_store, &doc_name, auth_principal, transport).await
+            {
                 warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update denied (collection smuggling)");
                 return JsonRpcResponse::error(id, McpError::internal_error(e));
             }
@@ -1444,7 +1480,7 @@ async fn handle_doc_request_inner(
 
             // ADR-018 access gate (complete mediation): member → join; non-member
             // resolved by the KB's join policy (restrictive/invite/permissive).
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Join).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Join, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::AllowAutoJoin) => {
                     // permissive: auto-grant the least-privilege role (viewer).
@@ -1635,7 +1671,7 @@ async fn handle_doc_request_inner(
             info!(session = session_id, kb_id = %kb_id, node_id = %node_id, "kb/node_fetch");
 
             // Read access suffices (members only — a non-member is denied).
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Read).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Read, transport).await {
                 Ok(AccessDecision::Allow) | Ok(AccessDecision::AllowAutoJoin) => {}
                 Ok(AccessDecision::Deny(msg)) | Err(msg) => {
                     warn!(session = session_id, kb_id = %kb_id, reason = %msg, "kb/node_fetch denied");
@@ -1737,7 +1773,7 @@ async fn handle_doc_request_inner(
 
             // ADR-018: editing a node requires editor/owner role. Viewers and
             // non-members are denied (least privilege).
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Edit).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Edit, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(msg)) | Err(msg) => {
                     warn!(session = session_id, kb_id = %kb_id, reason = %msg, "kb/node_update denied");
@@ -1883,7 +1919,7 @@ async fn handle_doc_request_inner(
                 .and_then(SyncRole::parse)
                 .unwrap_or(SyncRole::Editor);
             // ADR-018: owner-only (Manage). The verified principal is the subject.
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(m)) | Err(m) => {
                     return JsonRpcResponse::error(id, McpError::internal_error(m));
@@ -1951,7 +1987,7 @@ async fn handle_doc_request_inner(
                     )
                 }
             };
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(m)) | Err(m) => {
                     return JsonRpcResponse::error(id, McpError::internal_error(m))
@@ -1998,7 +2034,7 @@ async fn handle_doc_request_inner(
                     )
                 }
             };
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(m)) | Err(m) => {
                     return JsonRpcResponse::error(id, McpError::internal_error(m))
@@ -2054,7 +2090,7 @@ async fn handle_doc_request_inner(
                 .as_str()
                 .and_then(SyncRole::parse)
                 .unwrap_or(SyncRole::Editor);
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(m)) | Err(m) => {
                     return JsonRpcResponse::error(id, McpError::internal_error(m))

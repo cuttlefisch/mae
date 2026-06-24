@@ -612,6 +612,7 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
                                         store,
                                         bc,
                                         server_start_time,
+                                        mae_sync::kb::Transport::Hub,
                                     )
                                     .await;
                                 }
@@ -632,6 +633,7 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
                                     store,
                                     bc,
                                     server_start_time,
+                                    mae_sync::kb::Transport::Hub,
                                 )
                                 .await;
                             }
@@ -647,6 +649,7 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
                                     store,
                                     bc,
                                     server_start_time,
+                                    mae_sync::kb::Transport::Hub,
                                 )
                                 .await;
                             }
@@ -657,6 +660,7 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
                                     store,
                                     bc,
                                     server_start_time,
+                                    mae_sync::kb::Transport::Hub,
                                 )
                                 .await;
                             }

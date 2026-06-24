@@ -198,6 +198,7 @@ pub async fn serve(
                 doc_store,
                 broadcaster,
                 start_time,
+                mae_sync::kb::Transport::P2p,
             )
             .await;
         });

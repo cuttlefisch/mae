@@ -203,6 +203,7 @@ async fn full_client_session_over_pipe() {
             store_clone,
             bc_clone,
             std::time::Instant::now(),
+            Transport::Hub,
         )
         .await;
     });
@@ -765,6 +766,7 @@ async fn kb_share_as(
         auth_label,
         auth_principal,
         session_docs,
+        Transport::Hub,
     )
     .await
 }
@@ -787,6 +789,7 @@ async fn dispatch_as(
         auth_label,
         auth_principal,
         docs,
+        Transport::Hub,
     )
     .await
 }
@@ -2214,5 +2217,84 @@ async fn kb_share_then_update_then_join_sees_latest() {
         joined_doc.body(),
         "evolved body with café and 日本語",
         "joined client should see the updated body, not the initial one"
+    );
+}
+
+#[tokio::test]
+async fn transport_policy_gate() {
+    use mae_sync::kb::TransportPolicy;
+
+    // Share a fresh "kbx" collection with the given transport policy + bob as a
+    // (non-owner) Editor member. `share_doc` replaces, so each call resets it.
+    async fn share(store: &DocStore, owner: &str, member: &str, policy: TransportPolicy) {
+        let mut coll = KbCollectionDoc::new_owned("KB", owner, "owner");
+        coll.set_transport_policy(policy);
+        coll.add_pending(member, "bob", "t0");
+        coll.approve(member, SyncRole::Editor);
+        store
+            .share_doc("kbc:kbx", &coll.encode_state())
+            .await
+            .unwrap();
+    }
+
+    let store = test_doc_store();
+    let owner = fp("owner");
+    let bob = fp("bob");
+
+    // --- p2p-only KB ---
+    share(&store, &owner, &bob, TransportPolicy::P2p).await;
+    // Owner over the hub: ALLOWED (owner bypass — the local editor reaches its own KB).
+    assert_eq!(
+        kb_access(&store, "kbx", Some(&owner), KbOp::Read, Transport::Hub)
+            .await
+            .unwrap(),
+        AccessDecision::Allow
+    );
+    // Non-owner member over the hub: DENIED (not exposed on the hub).
+    assert!(matches!(
+        kb_access(&store, "kbx", Some(&bob), KbOp::Read, Transport::Hub)
+            .await
+            .unwrap(),
+        AccessDecision::Deny(_)
+    ));
+    // Non-owner member over the mesh: ALLOWED.
+    assert_eq!(
+        kb_access(&store, "kbx", Some(&bob), KbOp::Read, Transport::P2p)
+            .await
+            .unwrap(),
+        AccessDecision::Allow
+    );
+
+    // --- hub-only KB ---
+    share(&store, &owner, &bob, TransportPolicy::Hub).await;
+    // Member over the mesh: DENIED (hub-only is not on the mesh).
+    assert!(matches!(
+        kb_access(&store, "kbx", Some(&bob), KbOp::Edit, Transport::P2p)
+            .await
+            .unwrap(),
+        AccessDecision::Deny(_)
+    ));
+    // A non-member's JOIN over the mesh is transport-gated too (before join policy).
+    let stranger = fp("stranger");
+    assert!(matches!(
+        kb_access(&store, "kbx", Some(&stranger), KbOp::Join, Transport::P2p)
+            .await
+            .unwrap(),
+        AccessDecision::Deny(_)
+    ));
+
+    // --- both ---
+    share(&store, &owner, &bob, TransportPolicy::Both).await;
+    assert_eq!(
+        kb_access(&store, "kbx", Some(&bob), KbOp::Read, Transport::Hub)
+            .await
+            .unwrap(),
+        AccessDecision::Allow
+    );
+    assert_eq!(
+        kb_access(&store, "kbx", Some(&bob), KbOp::Read, Transport::P2p)
+            .await
+            .unwrap(),
+        AccessDecision::Allow
     );
 }
