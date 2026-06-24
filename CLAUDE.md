@@ -155,7 +155,12 @@ All phases below are COMPLETE. See ROADMAP.md for granular milestone details.
 | 7. Documentation | Help system (862 KB nodes), tutorials, `:describe-configuration` | — |
 | 8. GUI Backend | winit + Skia, inline images, multi-cursor, magit-style git | 2,629 |
 
-**Current:** 5,863+ tests. **Next:** Org export & babel, PDF preview, module system.
+**Current:** v0.14.0 pending (PR #69) — collaborative **KB sharing** is now user-ready: trusted-peer mTLS
+auth, per-KB membership/roles/policy (Owner/Editor/Viewer, ADR-018), epoch-fenced write access (ADR-023),
+the ADR-024 attention bus, a magit-style `*KB Sharing*` management buffer (`SPC C K m`), and full
+introspection + lifecycle parity across the human (buffer + Scheme `(kb-…)` primitives) and the AI peer
+(`kb_sharing_status` + lifecycle MCP tools). See `docs/COLLABORATION.md`.
+**Next:** crypto-deps bump (hmac/sha2/rand alignment), hosted-edit (ADR-020 D1), ADR-021 audit log.
 
 ## Key Design Decisions Already Made
 
