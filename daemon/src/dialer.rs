@@ -152,8 +152,9 @@ async fn peer_session(
         JoinOutcome::Pending => return Err("pending owner approval".to_string()),
     }
 
-    // Subscribe so the owner's later edits stream to us as notifications.
-    subscribe(&mut send).await?;
+    // No explicit notifications/subscribe is needed: the owner's kb/join handler
+    // subscribed our session to `sync_update` (+ the KB's docs) AS OF the snapshot,
+    // so its edits stream to us with no missed-edit window (ADR-026 2c-3c).
 
     // Subscribe to our LOCAL broadcaster, doc-scoped to this KB's docs, so our own
     // editor's edits (and any other local writer) are forwarded to the owner. Our
@@ -331,18 +332,6 @@ where
         .map_err(|e| format!("read kb/join: {e}"))?
         .ok_or_else(|| "owner closed without responding".to_string())?;
     apply_join_response(&resp, &ticket.kb_id, doc_store, broadcaster, exclude_sid).await
-}
-
-/// Subscribe to the owner's `sync_update` pushes so its later edits stream to us.
-async fn subscribe<W: AsyncWrite + Unpin>(send: &mut W) -> Result<(), String> {
-    let req = json!({
-        "jsonrpc": "2.0", "id": 2, "method": "notifications/subscribe",
-        "params": { "types": ["sync_update"] }
-    })
-    .to_string();
-    mae_mcp::write_framed(send, req.as_bytes(), WRITE_TIMEOUT)
-        .await
-        .map_err(|e| format!("write subscribe: {e}"))
 }
 
 /// Our per-node state vectors for the KB (so the owner replies with diffs, not full
@@ -690,9 +679,8 @@ mod tests {
             .await,
             "B should pull the node on join"
         );
-        // Let B's notifications/subscribe propagate to A before A edits (else A's
-        // session for B has no sync_update subscription yet and won't push it).
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        // No settle needed: kb/join subscribed B to sync_update AS OF the snapshot
+        // (2c-3c), so an owner edit right after the pull is still pushed.
         let before = b_store.state_vector("kb:concept:n").await.unwrap();
 
         // A edits the node AFTER B subscribed, and broadcasts it the way the server's

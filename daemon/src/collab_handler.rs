@@ -1669,10 +1669,14 @@ async fn handle_doc_request_inner(
             session_docs.insert(collection_doc.clone());
             // ADR-020 liveness: the joining member is a connected client of the docs.
             let _ = doc_store.track_client_connect(&collection_doc).await;
-            broadcaster
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .subscribe_doc(session_id, &collection_doc);
+            {
+                let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
+                bc.subscribe_doc(session_id, &collection_doc);
+                // Subscribe to sync_update AS OF the join snapshot, so the owner's
+                // edits made between this snapshot and the member's separate
+                // notifications/subscribe are still pushed (no missed-edit window).
+                bc.add_event_sub(session_id, "sync_update");
+            }
 
             // Parse collection to get the list of node IDs belonging to this KB.
             let node_ids: Vec<String> = match KbCollectionDoc::from_bytes(&collection_state) {
