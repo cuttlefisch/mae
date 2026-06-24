@@ -106,6 +106,12 @@ Matrix and Keyhive rejected it.
 - **Honest-server assumptions remaining after A:** none for membership/write-authority. *Confidentiality*
   from a relaying daemon is **not** provided by A (a relay still sees plaintext CRDT) — that is the
   deferred E2E-encryption work, called out so it is not mistaken for solved.
+- **Membership ≠ connectivity (silent eviction by disconnect).** Membership is authoritative only via this
+  signed chain; it is **never** conferred or revoked by transport state. A member that goes offline (sleep,
+  dynamic-IP change, outage — ADR-025 §lifecycle) stays a member and re-syncs by node-id on return.
+  Removal is an explicit signed `prev_hash`-linked op, so a dropped/idle connection — or the v0.14 idle
+  *document* eviction — must **not** be read as membership loss. A peer that simply stops talking cannot be
+  treated as removed (that would be a relay-driven authority change, the exact thing A forbids).
 
 ## Consequences
 

@@ -101,11 +101,65 @@ of the mesh machinery starts (zero overhead). `mae-daemon doctor` reports P2P st
 discovery, relay reachability, peer count) — the ADR-027 visibility surface, available at the CLI for
 headless deployments.
 
+## Discovery, join tickets & connectivity lifecycle
+
+**Identity-addressed, never IP-addressed.** A peer is its **node-id** (the Ed25519 fingerprint, =
+`authorized_keys` principal); every IP/relay address is only a *routing hint*. The QUIC/TLS handshake
+proves the dialed key, surfaced as `Connection::remote_id()` — so we **always dial/accept by node-id and
+gate on `remote_id() ∈ authorized_keys`, and never derive identity or trust from an address.** This is
+the invariant the whole section rests on.
+
+**Bootstrap — the MAE KB-join ticket ("magnet link").** iroh-base 1.0 dropped the built-in node ticket,
+but `EndpointAddr` (node-id + relay URL + direct addrs) is serde-serializable, so a ticket is a small MAE
+construct that can also carry what an iroh ticket couldn't: the KB-id and an invite. A ticket is a
+base32/URL string (`mae://join/<blob>`) the owner mints with `kb-share --p2p <kb>` (or the `*KB Sharing*`
+buffer) and shares out-of-band (Signal, email, …):
+
+- the owner daemon's **`EndpointAddr`** — reachable *immediately*, including behind NAT via the relay,
+  before any DNS/Pkarr propagation;
+- the **KB-id** to join;
+- *(layered, see below)* an optional **owner-signed, expiring invite grant** (role + scope).
+
+First-join trust is **layered (decision):** *Phase 2* ships the address-only ticket — the joiner dials by
+node-id and lands in the existing pending-join queue (JoinPolicy / `kb_approve`, ADR-018), the owner
+approves, and the joiner is written into `authorized_keys` + the membership doc. *Phase 3* (ADR-026) adds
+the owner-signed expiring invite *inside* the ticket for pre-authorized one-step joins, verified against
+the signed-membership chain — no TOFU window, no manual approve. Tickets are **onboarding only**; after
+first contact the node-id is persisted and re-discovery is automatic.
+
+**Staying connected over time (dynamic residential IPs).** The node-id is stable (persisted key); only
+routing hints churn on a DHCP-lease renewal or ISP reassignment. Continuity comes from, in order:
+
+1. **Pkarr republish** — each daemon periodically re-publishes its current `EndpointAddr`, *signed by its
+   own key*, keyed by node-id, to the Pkarr DHT (n0's `address_lookup/pkarr`). An IP change → republish →
+   peers resolving the node-id get the fresh address. Primary "findable over time" mechanism.
+2. **Relay as stable rendezvous** — the home-relay URL is stable even when every direct addr dies, so a
+   reachable path always exists; iroh hole-punches back to direct when it can. Survives NAT rebinding.
+3. **Reconnect + anti-entropy** — the Phase-2 dialer holds a per-peer connection with backoff; on any drop
+   (sleep, IP change, outage) it re-resolves the node-id and runs **SV-reconcile (ADR-022)** to catch up.
+   Local-first: edits made while disconnected converge on reconnect.
+4. **Membership ≠ connectivity** — being a *member* lives in the signed, epoch-fenced `KbCollectionDoc`
+   (ADR-018/023/026), **not** in any connection. A peer offline for a week with two IP changes is still a
+   member; it reconnects by node-id and syncs. **Removal is an explicit signed membership op, never a
+   disconnect/idle timeout** — the v0.14 idle eviction frees *document memory* and MUST NOT be read as
+   membership loss; the mesh must not drop members on disconnect. (A *key* change is the only thing that
+   needs action — the Phase-5 signed old→new rotation link — because an IP change needs nothing.)
+
 ## Adversarial / robustness review
 
 - **Untrusted/revoked peer dials in** → rejected at the iroh-identity↔`authorized_keys` check (same
   principal model as ADR-017); transport auth is necessary but **not sufficient** — content/membership
   authority is enforced by ADR-026, never by mere connectivity.
+- **Address / IP spoofing (a peer puts a victim's IP in a ticket, or poisons DNS/Pkarr to advertise its
+  own IP under a victim's node-id)** → cannot impersonate: identity is the key, not the address, and the
+  TLS handshake yields a `remote_id()` that won't match the expected fingerprint (gate drops it). Pkarr
+  records are *self-signed by the node key*, so an attacker cannot publish a record for a node-id it does
+  not own. Residual impact is nuisance, not compromise: (a) a wasted RTT dialing a bad hint for a trusted
+  node-id (TLS fails → reject → retry via Pkarr/relay); (b) a redirect/**amplification** attempt (listing
+  a victim IP as a "direct address") which QUIC path validation (PATH_CHALLENGE before bulk data) blunts.
+  No content disclosure or injection — QUIC/TLS is end-to-end; the **relay sees only ciphertext** (it
+  learns metadata — which node-ids talk, when — but never content). Invariant: **never derive trust from
+  an address; dial node-ids, verify `remote_id()`.**
 - **Relay operator is hostile / offline** → relay sees only QUIC-encrypted bytes (and, post-ADR-026,
   signed/verifiable payloads); self-host + mDNS fallback removes the availability dependency. (Content
   confidentiality from a relay is ADR-007/E2E's job, deferred.)
@@ -132,3 +186,9 @@ is refused. Integration: two daemons on one host establish a direct mesh link an
 (reusing the `sync/*` catalog). NAT/relay: simulated symmetric-NAT pair converges via relay then upgrades
 to direct. Cross-OS: macOS + Linux CI for connect + discovery. Gate: v0.14 hub-mode collab tests stay
 green with `collab.p2p` disabled (no-regression).
+
+Discovery/lifecycle/spoofing: a join ticket round-trips (mint → parse → `EndpointAddr` + KB-id, no
+addr loss); a dial to a hint whose `remote_id()` ≠ the expected/authorized node-id is **rejected** (proves
+identity-over-address — extends the Phase-1 `authorize_peer`/`remote_id` tests); a member persists across a
+disconnect **and** a simulated address change, reconnecting by node-id and converging via SV-reconcile
+without re-approval (proves membership ≠ connectivity); idle *document* eviction does not drop membership.
