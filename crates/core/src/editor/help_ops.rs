@@ -397,7 +397,17 @@ fn render_body_line(line: &str, out: &mut String, links: &mut Vec<KbLinkSpan>) {
                         byte_end: link_end,
                         target: target.to_string(),
                     });
-                    cursor = i + 2 + end_rel + 2;
+                    let mut after = i + 2 + end_rel + 2; // past the closing ]]
+                                                         // Conceal a trailing `{w=.. c=..}` attribute group (ADR-030) so the
+                                                         // rendered view shows only the link, not the relationship metadata
+                                                         // (it stays in the source for the AI peer + the projector). Adjacent
+                                                         // only; a malformed/unclosed group is left as-is.
+                    if line[after..].starts_with('{') {
+                        if let Some(close) = line[after + 1..].find('}') {
+                            after += 1 + close + 1;
+                        }
+                    }
+                    cursor = after;
                     i = cursor;
                     continue;
                 }
@@ -1471,6 +1481,29 @@ mod tests {
         assert_eq!(out, "goto the buffer");
         assert_eq!(links[0].target, "concept:buffer");
         assert_eq!(&out[links[0].byte_start..links[0].byte_end], "the buffer");
+    }
+
+    #[test]
+    fn render_body_line_conceals_attribute_group() {
+        // ADR-030 (Phase C3): the trailing `{w=.. c=..}` group is hidden from the
+        // rendered view — only the link display shows; the link span is unaffected.
+        let mut out = String::new();
+        let mut links = Vec::new();
+        render_body_line(
+            "see [[concept:buffer|the buffer]]{w=0.8 c=0.9} now",
+            &mut out,
+            &mut links,
+        );
+        assert_eq!(out, "see the buffer now");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "concept:buffer");
+        assert_eq!(&out[links[0].byte_start..links[0].byte_end], "the buffer");
+
+        // A non-adjacent or unclosed brace is left intact.
+        let mut out2 = String::new();
+        let mut links2 = Vec::new();
+        render_body_line("[[concept:x]] {w=1}", &mut out2, &mut links2);
+        assert_eq!(out2, "concept:x {w=1}");
     }
 
     #[test]
