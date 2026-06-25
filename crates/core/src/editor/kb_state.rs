@@ -115,6 +115,13 @@ pub struct KbContext {
     /// hosting never implies peer broadcast and never survives into a daemon-less
     /// launch. Read via [`KbContext::daemon_hosts_primary`].
     daemon_hosts_primary: bool,
+    /// Runtime (NOT persisted): was the primary mirror left UN-preloaded at startup
+    /// (Phase D3 thin startup)? Set when `load_all` was skipped because the daemon
+    /// already hosts the primary. Gates lazy single-node hydration on edit — it must
+    /// fire as soon as the daemon READ layer is up (post-probe), NOT wait for the
+    /// collab write channel (which `daemon_hosts_primary` requires); otherwise an
+    /// edit in the startup→collab-connect window can't resolve an un-loaded node.
+    primary_thin: bool,
     /// Daemon control channel for synchronous control-socket ops (P2P ticket
     /// mint/join, …). Injected by the binary; `None` when no daemon is wired.
     daemon_control: Option<Arc<dyn DaemonControl>>,
@@ -256,6 +263,18 @@ impl KbContext {
         self.daemon_hosts_primary = hosting;
     }
 
+    /// Whether the primary mirror was left un-preloaded at startup (Phase D3 thin
+    /// startup). Gates lazy single-node hydration on edit.
+    pub fn primary_thin(&self) -> bool {
+        self.primary_thin
+    }
+
+    /// Mark the primary mirror as thin (preload skipped). Set at startup by the
+    /// binary when the daemon-host probe succeeds.
+    pub fn set_primary_thin(&mut self, thin: bool) {
+        self.primary_thin = thin;
+    }
+
     /// Build or rebuild the federated query layer from current stores.
     /// Call after store/instance_store changes (register, unregister, reimport).
     pub fn rebuild_query_layer(&mut self) {
@@ -325,6 +344,7 @@ impl KbContext {
             daemon_enabled: false,
             daemon_default: false,
             daemon_hosts_primary: false,
+            primary_thin: false,
             daemon_control: None,
             daemon_socket: default_daemon_socket(),
             daemon_cache_size: 200,

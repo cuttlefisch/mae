@@ -1204,6 +1204,10 @@ fn main() -> io::Result<()> {
                     && probe_daemon_hosts_primary(&editor.kb.daemon_socket);
                 if daemon_hosts_primary {
                     editor.kb.daemon_enabled = true;
+                    // Mark the mirror thin so lazy edit-hydration fires off the daemon
+                    // READ layer (available now), without waiting for the collab write
+                    // channel that `daemon_hosts_primary` requires.
+                    editor.kb.set_primary_thin(true);
                     info!(
                         "Phase D3: local daemon hosts the primary KB — thin startup \
                          (skipping the mirror preload; reads via daemon, lazy load on edit)"

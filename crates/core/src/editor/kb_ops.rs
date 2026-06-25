@@ -928,7 +928,10 @@ impl Editor {
     /// store only when the daemon can't serve it (offline robustness). No-op when
     /// already resident, not daemon-hosted, or absent everywhere.
     fn kb_ensure_node_loaded(&mut self, id: &str) {
-        if !self.kb.daemon_hosts_primary() || self.kb.primary.get(id).is_some() {
+        // Gate on the thin-mirror marker, NOT `daemon_hosts_primary` (which needs the
+        // collab write channel): hydration must work as soon as the daemon read layer
+        // is up — including the startup→collab-connect window.
+        if !self.kb.primary_thin() || self.kb.primary.get(id).is_some() {
             return;
         }
         // Prefer the daemon (authoritative, fresh content + correct lineage).
@@ -3818,6 +3821,7 @@ mod tests {
             ))
             .unwrap();
         editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.set_primary_thin(true);
         editor.kb.set_daemon_hosts_primary(true);
         editor.collab.kb_sync_mode = "on_save".into();
         // Thin startup: the mirror is empty.
@@ -3835,10 +3839,38 @@ mod tests {
         assert_eq!(n.body, "edited body");
     }
 
-    /// Phase D3: when the daemon does NOT host the primary, the lazy-load helper is
-    /// inert — a missing node stays missing (today's embedded behavior).
+    /// Phase D3c: the pre-connect window — a thin mirror with the daemon read layer
+    /// up but the collab WRITE channel NOT yet connected (`daemon_hosts_primary`
+    /// false). Hydration must still fire (gated on `primary_thin`), so an edit
+    /// resolves instead of failing with "No KB node".
     #[test]
-    fn kb_ensure_node_loaded_inert_without_daemon_hosting() {
+    fn kb_update_node_hydrates_in_pre_connect_window() {
+        let mut editor = Editor::new();
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store.seed_type_system().unwrap();
+        store
+            .insert_node(&mae_kb::Node::new(
+                "note:pc",
+                "PC",
+                mae_kb::NodeKind::Note,
+                "orig",
+            ))
+            .unwrap();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.set_primary_thin(true); // thin mirror...
+        assert!(!editor.kb.daemon_hosts_primary()); // ...but collab NOT connected yet
+        editor.collab.kb_sync_mode = "on_save".into();
+
+        editor
+            .kb_update_node("note:pc", None, Some("edited"), None)
+            .expect("edit must resolve in the pre-connect window");
+        assert_eq!(editor.kb.primary.get("note:pc").unwrap().body, "edited");
+    }
+
+    /// Phase D3: when the mirror is NOT thin (full preload, no daemon), the lazy-load
+    /// helper is inert — a missing node stays missing (today's embedded behavior).
+    #[test]
+    fn kb_ensure_node_loaded_inert_when_mirror_not_thin() {
         let mut editor = Editor::new();
         let store = mae_kb::CozoKbStore::open_mem().unwrap();
         store.seed_type_system().unwrap();
@@ -3851,11 +3883,11 @@ mod tests {
             ))
             .unwrap();
         editor.kb.store = Some(std::sync::Arc::new(store));
-        // daemon_hosts_primary is false (default).
+        // primary_thin is false (default — full preload).
         editor.kb_ensure_node_loaded("note:x");
         assert!(
             editor.kb.primary.get("note:x").is_none(),
-            "no lazy load without daemon hosting"
+            "no lazy load when the mirror isn't thin"
         );
     }
 
