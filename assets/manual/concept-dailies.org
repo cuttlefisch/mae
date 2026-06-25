@@ -33,6 +33,6 @@ Each daily note lives at `<dailies-dir>/YYYY-MM-DD.org` with a unique ID (`daily
 
 All file writes use a write-guard to prevent the filesystem watcher from triggering duplicate reimports.
 
-[[part_of:concept:org-mode][Part of Org-Mode]].
+[[concept:org-mode?rel=part_of][Part of Org-Mode]].
 
-See also: [[references:concept:knowledge-base][Knowledge Base]], [[references:concept:kb-workflows][KB Workflows]], [[references:concept:modules][Module System]]
+See also: [[concept:knowledge-base?rel=references][Knowledge Base]], [[concept:kb-workflows?rel=references][KB Workflows]], [[concept:modules?rel=references][Module System]]

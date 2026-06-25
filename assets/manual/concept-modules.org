@@ -55,4 +55,4 @@ mae_version = ">=0.9.0"
 ** Live reload
 `:module-reload <name>` unregisters and re-evaluates a module's autoloads without restarting the editor.
 
-See also: [[references:concept:package-system][Package System]], [[references:concept:flags][Flags]], [[concept:design-philosophy]], [[guide:extension-authoring]], [[index]]
+See also: [[concept:package-system?rel=references][Package System]], [[concept:flags?rel=references][Flags]], [[concept:design-philosophy]], [[guide:extension-authoring]], [[index]]

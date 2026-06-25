@@ -205,11 +205,10 @@ pub fn project_node(store: &CozoKbStore, node_id: &str, state: &[u8]) -> Result<
         .insert_node(&node)
         .map_err(|e| format!("project node '{node_id}': {e}"))?;
 
-    // Replace insert_node's generic links with the typed parse (ADR-030 / Phase C).
-    let known = store.known_rel_types().unwrap_or_default();
-    let known_ref = (!known.is_empty()).then_some(&known);
+    // Replace insert_node's generic links with the typed parse (ADR-030 / Phase C):
+    // rel/weight/confidence come from each link's inline `?query`.
     let links: Vec<(String, String, f64, f64)> =
-        mae_kb::org::parse_typed_links(&node.body, &node.id, known_ref)
+        mae_kb::org::parse_typed_links(&node.body, &node.id)
             .into_iter()
             .map(|l| (l.target, l.rel_type, l.weight, l.confidence))
             .collect();
@@ -261,7 +260,7 @@ mod tests {
         let doc = mae_sync::kb::KbNodeDoc::new(
             "concept:rope",
             "Rope",
-            "The rope buffer structure. See [[concept:buffer][the buffer]]{w=0.8 c=0.9}.",
+            "The rope buffer structure. See [[concept:buffer?w=0.8&c=0.9][the buffer]].",
             &["alpha".to_string()],
         );
         project_node(&store, "concept:rope", &doc.encode()).unwrap();
@@ -280,7 +279,7 @@ mod tests {
         );
 
         // The body link is projected as a TYPED edge with its in-text weight/confidence
-        // (ADR-030). Untyped → rel_type "references"; the attribute group sets w/c.
+        // (ADR-030). No `?rel=` → rel_type "references"; the `?w=&c=` query sets w/c.
         let links = store.links_from("concept:rope").unwrap();
         let link = links
             .iter()

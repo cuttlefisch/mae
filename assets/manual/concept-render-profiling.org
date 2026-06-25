@@ -28,6 +28,6 @@
 - Set conditional breakpoint: ~dap_set_breakpoint(source: "...", line: N, condition: "scale > 1.0")~
 - Step through the hot path, inspect variables
 
-[[part_of:concept:debugging][Part of Debugging]].
+[[concept:debugging?rel=part_of][Part of Debugging]].
 
 See also: [[concept:introspect]], [[concept:debugging]], [[concept:event-recording]], [[index]]

@@ -29,6 +29,6 @@
 ** Implementation
 The parser lives in `crates/core/src/editor/ex_parse.rs` (`parse_set_args()`). Value completion is in `crates/core/src/editor/file_ops.rs` (`complete_set_value()`).
 
-[[part_of:concept:options][Part of Editor Options]].
+[[concept:options?rel=part_of][Part of Editor Options]].
 
-See also: [[references:concept:command][Command]]
+See also: [[concept:command?rel=references][Command]]

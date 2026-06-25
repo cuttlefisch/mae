@@ -5,7 +5,7 @@
 #+title: Markdown
 #+filetags: :markdown:editing:
 
-**Markdown** in MAE provides structural editing for `.md` files, with the same UX as [[references:concept:org-mode][org-mode]] adapted for `#` headings.
+**Markdown** in MAE provides structural editing for `.md` files, with the same UX as [[concept:org-mode?rel=references][org-mode]] adapted for `#` headings.
 
 ** Core Features
 
@@ -41,4 +41,4 @@ Disable with `:set heading_scale false`.
 *** 7. Markdown Keymap
 The `markdown` keymap activates automatically for `.md` files and falls back to the `normal` keymap for unbound keys. All structural editing keys mirror the org-mode keymap.
 
-See also: [[references:concept:org-mode][Org-mode]], [[references:concept:options][Editor Options]]
+See also: [[concept:org-mode?rel=references][Org-mode]], [[concept:options?rel=references][Editor Options]]

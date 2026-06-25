@@ -7,7 +7,7 @@
 
 * AI Agent (Terminal)
 
-*Prerequisite:* [[requires:tutorial:ai-setup][AI Setup]]
+*Prerequisite:* [[tutorial:ai-setup?rel=requires][AI Setup]]
 
 The *AI Agent* (=SPC a a=) runs an external tool like Claude Code or gemini-cli in MAE's embedded terminal.
 

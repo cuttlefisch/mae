@@ -25,6 +25,6 @@ Click in the scrollbar column to jump to that scroll position.
 ** Nyan Mode
 `:set nyan_mode true` enables a rainbow progress bar in the status line, showing scroll position as a filled bar with a cat marker.
 
-[[part_of:concept:gui][Part of GUI Backend]].
+[[concept:gui?rel=part_of][Part of GUI Backend]].
 
-See also: [[references:concept:options][Editor Options]]
+See also: [[concept:options?rel=references][Editor Options]]

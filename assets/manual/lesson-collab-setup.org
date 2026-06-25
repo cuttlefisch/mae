@@ -7,7 +7,7 @@
 
 ** Setting Up Collaborative Editing
 
-This lesson [[teaches:concept:collaborative-state][teaches collaborative state]] and the [[teaches:concept:sync-engine][sync engine]]. It walks you through enabling real-time collaborative editing in MAE, from installing the daemon to sharing your first buffer with a peer.
+This lesson [[concept:collaborative-state?rel=teaches][teaches collaborative state]] and the [[concept:sync-engine?rel=teaches][sync engine]]. It walks you through enabling real-time collaborative editing in MAE, from installing the daemon to sharing your first buffer with a peer.
 
 *** Step 1 — Install the daemon
 

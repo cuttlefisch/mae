@@ -47,6 +47,6 @@ The `mae-daemon` binary is a **document hub**, not a source of truth. Documents 
 
 In solo mode the sync layer is still active locally — edits are yrs transactions — but no TCP connection is opened. This means switching from solo to loopback requires only `(set-option! "collab-server-address" "127.0.0.1:9473")` and a reconnect; no data migration is needed.
 
-This concept [[explains:concept:collaborative-state][explains Collaborative State]].
+This concept [[concept:collaborative-state?rel=explains][explains Collaborative State]].
 
-See also: [[references:concept:sync-engine][Sync Engine]], [[concept:collab-workflows]], [[concept:collaborative-state]], [[concept:adr-text-sync]], [[index]]
+See also: [[concept:sync-engine?rel=references][Sync Engine]], [[concept:collab-workflows]], [[concept:collaborative-state]], [[concept:adr-text-sync]], [[index]]

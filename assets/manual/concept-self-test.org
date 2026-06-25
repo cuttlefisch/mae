@@ -40,4 +40,4 @@ The self-test also validates the command palette (key commands must exist) and r
 ** Why this exists
 Unit tests validate individual components. The self-test validates the full AI↔editor integration: tool dispatch, permission checks, KB graph integrity, and command registration. It catches wiring bugs that unit tests can't reach.
 
-See also: [[references:concept:scheme-testing][Scheme Testing Framework]], [[concept:ai-as-peer]], [[concept:command]], [[concept:knowledge-base]], [[index]]
+See also: [[concept:scheme-testing?rel=references][Scheme Testing Framework]], [[concept:ai-as-peer]], [[concept:command]], [[concept:knowledge-base]], [[index]]

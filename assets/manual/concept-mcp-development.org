@@ -26,6 +26,6 @@ Shim: `mae-mcp-shim` (stdio <-> Unix socket bridge)
 - **Debugging MAE:** `dap_start` with `lldb-dap`, `debug_state` for inspection
 - **Testing changes:** `execute_command`, `self_test_suite` for E2E
 
-[[part_of:concept:ai-as-peer][Part of The AI as Peer Actor]].
+[[concept:ai-as-peer?rel=part_of][Part of The AI as Peer Actor]].
 
-See also: [[references:concept:agent-bootstrap][Agent Bootstrap]], [[references:concept:self-test][AI Self-Test]]
+See also: [[concept:agent-bootstrap?rel=references][Agent Bootstrap]], [[concept:self-test?rel=references][AI Self-Test]]

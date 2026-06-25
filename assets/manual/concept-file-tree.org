@@ -28,6 +28,6 @@ File type icons are Unicode emoji by default (no font dependency):
 ** Filtering
 Build artifacts and VCS directories (`target/`, `node_modules/`, `.git/`) are hidden automatically.
 
-[[part_of:concept:project][Part of Project]].
+[[concept:project?rel=part_of][Part of Project]].
 
-See also: [[cmd:find-file]], [[references:concept:buffer][Buffer]], [[references:concept:project][Project]]
+See also: [[cmd:find-file]], [[concept:buffer?rel=references][Buffer]], [[concept:project?rel=references][Project]]

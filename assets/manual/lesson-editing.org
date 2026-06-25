@@ -7,9 +7,9 @@
 
 ** Lesson 3: Editing
 
-Prerequisites: [[requires:lesson:modes][Lesson 2: Modes]]
+Prerequisites: [[lesson:modes?rel=requires][Lesson 2: Modes]]
 
-This lesson [[teaches:concept:command][teaches editing commands]].
+This lesson [[concept:command?rel=teaches][teaches editing commands]].
 
 *** Inserting text
   ~i~ — insert before cursor    ~a~ — insert after cursor

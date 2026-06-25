@@ -7,9 +7,9 @@
 
 ** Lesson 2: Modes
 
-MAE uses [[teaches:concept:mode][modal editing]] like Vim:
+MAE uses [[concept:mode?rel=teaches][modal editing]] like Vim:
 
-Prerequisites: [[requires:lesson:navigation][Lesson 1: Navigation]].
+Prerequisites: [[lesson:navigation?rel=requires][Lesson 1: Navigation]].
 
 - *Normal mode* (default) — navigation and commands
 - *Insert mode* — type text freely

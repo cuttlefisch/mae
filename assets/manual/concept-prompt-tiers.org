@@ -29,4 +29,4 @@ Place `pair-programmer.xml` or `pair-programmer-compact.xml` in:
 - `~/.config/mae/prompts/` (user override)
 - `.mae/prompts/` (project-local override)
 
-See also: [[explains:concept:ai-modes][AI Agent vs Chat]], [[references:concept:ai-as-peer][AI as Peer]]
+See also: [[concept:ai-modes?rel=explains][AI Agent vs Chat]], [[concept:ai-as-peer?rel=references][AI as Peer]]

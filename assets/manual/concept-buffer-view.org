@@ -11,6 +11,6 @@ Accessor methods: `buf.conversation()`, `buf.kb_view()`, `buf.git_status_view()`
 
 This replaced 6 `Option<T>` fields that were always mutually exclusive.
 
-[[part_of:concept:buffer][Part of Buffer]].
+[[concept:buffer?rel=part_of][Part of Buffer]].
 
-See also: [[references:concept:buffer-mode][BufferMode Trait]]
+See also: [[concept:buffer-mode?rel=references][BufferMode Trait]]
