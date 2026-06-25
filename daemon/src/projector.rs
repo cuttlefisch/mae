@@ -8,7 +8,54 @@
 //! graph (the ADR-029 determinism contract). This is the seam the change feed
 //! (`doc_store.apply_update`) drives, covering hub + p2p uniformly.
 
+use std::sync::Arc;
+
 use mae_kb::{CozoKbStore, KbStore, Node, NodeKind, NodeSource};
+use tokio::sync::mpsc;
+
+use crate::doc_store::DocStore;
+
+/// Drives the cozo projection from the doc_store change feed (ADR-029 B2). It reads a
+/// changed KB doc's current CRDT state from the doc_store and materializes it into the
+/// cozo query store. One mechanism for hub + p2p — both land at `doc_store.apply_update`,
+/// which emits to the feed.
+pub struct Projector {
+    doc_store: Arc<DocStore>,
+    cozo: Arc<CozoKbStore>,
+}
+
+impl Projector {
+    pub fn new(doc_store: Arc<DocStore>, cozo: Arc<CozoKbStore>) -> Self {
+        Self { doc_store, cozo }
+    }
+
+    /// Project one changed doc: read its current CRDT state from the doc_store and
+    /// write it into cozo. Node docs (`kb:`) materialize the node; collection docs
+    /// (`kbc:`) are handled in B3/B4. Reading the state outside the doc lock (the
+    /// channel decouples) keeps the projection off the write path.
+    pub async fn project_doc(&self, doc_name: &str) -> Result<(), String> {
+        if let Some(node_id) = doc_name.strip_prefix("kb:") {
+            let (state, _sv) = self
+                .doc_store
+                .encode_state_and_sv(doc_name)
+                .await
+                .map_err(|e| format!("read '{doc_name}': {e}"))?;
+            project_node(&self.cozo, node_id, &state)
+        } else {
+            // `kbc:` collection projection (manifest + node deletions) lands in B3/B4.
+            Ok(())
+        }
+    }
+
+    /// Drain the change feed, projecting each changed doc until the channel closes.
+    pub async fn run(self, mut rx: mpsc::UnboundedReceiver<String>) {
+        while let Some(doc_name) = rx.recv().await {
+            if let Err(e) = self.project_doc(&doc_name).await {
+                tracing::warn!(doc = %doc_name, error = %e, "projection failed");
+            }
+        }
+    }
+}
 
 /// Project a single KB node doc — the `KbNodeDoc` yrs state stored at `kb:{node_id}` —
 /// into the cozo query store: materialize the node (title/body/tags/kind) + its body
@@ -109,5 +156,52 @@ mod tests {
         let b = project_all(&CozoKbStore::open_mem().unwrap());
         assert_eq!(a, b, "the structural projection must be deterministic");
         assert_eq!(a.1, vec!["concept:a".to_string(), "concept:b".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn change_feed_drives_node_projection() {
+        // ADR-029 B2: a doc_store mutation on a KB node emits to the change feed; the
+        // Projector reads the new state and materializes it into cozo (the live loop
+        // that fixes the stale-daemon-store bug). An ephemeral doc emits nothing.
+        use crate::storage::SqliteBackend;
+
+        let doc_store = Arc::new(DocStore::new(
+            Arc::new(SqliteBackend::open_memory().unwrap()),
+            500,
+        ));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        doc_store.set_change_feed(tx);
+        let cozo = Arc::new(CozoKbStore::open_mem().unwrap());
+
+        // Mutate a KB node doc + an ephemeral doc.
+        let node = mae_sync::kb::KbNodeDoc::new("concept:x", "X", "body [[concept:y]]", &[]);
+        doc_store
+            .apply_update("kb:concept:x", &node.encode(), None)
+            .await
+            .unwrap();
+        let scratch = mae_sync::kb::KbNodeDoc::new("s", "S", "scratch", &[]);
+        doc_store
+            .apply_update("scratch:buf", &scratch.encode(), None)
+            .await
+            .unwrap();
+
+        // Only the durable KB doc is on the feed.
+        let changed = rx.recv().await.unwrap();
+        assert_eq!(changed, "kb:concept:x");
+        assert!(
+            rx.try_recv().is_err(),
+            "ephemeral docs must not emit changes"
+        );
+
+        // The projector materializes it into cozo.
+        let projector = Projector::new(Arc::clone(&doc_store), Arc::clone(&cozo));
+        projector.project_doc(&changed).await.unwrap();
+        let n = cozo.get_node("concept:x").unwrap().unwrap();
+        assert_eq!(n.title, "X");
+        assert!(cozo
+            .links_from("concept:x")
+            .unwrap()
+            .iter()
+            .any(|l| l.dst == "concept:y"));
     }
 }

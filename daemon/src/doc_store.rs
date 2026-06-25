@@ -82,6 +82,11 @@ pub struct DocStore {
     /// derives membership from the signed op-log instead of the relay-supplied
     /// `member_roles`. Owned KBs need no anchor (the daemon is itself the authority).
     kb_anchors: RwLock<HashMap<String, [u8; 32]>>,
+    /// Change-feed sender (ADR-029 B2): every mutation to a durable KB doc (`kbc:`/`kb:`)
+    /// emits its doc name here, so the projector re-derives the cozo projection. One
+    /// seam for hub (`collab_handler`) and p2p (`dialer`) — both land at `apply_update`.
+    /// Absent ⇒ no projector wired (e.g. a pure relay); emits are dropped.
+    change_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
 }
 
 /// Result of applying an update.
@@ -142,6 +147,7 @@ impl DocStore {
             kb_metas: RwLock::new(HashMap::new()),
             signer: std::sync::OnceLock::new(),
             kb_anchors: RwLock::new(HashMap::new()),
+            change_tx: std::sync::OnceLock::new(),
         }
     }
 
@@ -149,6 +155,22 @@ impl DocStore {
     /// key-auth mode; idempotent (a second call is ignored).
     pub fn set_signer(&self, identity: Arc<mae_mcp::identity::Identity>) {
         let _ = self.signer.set(identity);
+    }
+
+    /// Wire the projector change feed (ADR-029 B2). Called once at startup; idempotent.
+    /// After this, every durable-KB-doc mutation emits its doc name to `tx`.
+    pub fn set_change_feed(&self, tx: tokio::sync::mpsc::UnboundedSender<String>) {
+        let _ = self.change_tx.set(tx);
+    }
+
+    /// Emit a durable KB doc's name to the projector change feed (no-op if no projector
+    /// is wired, or for ephemeral docs). Non-blocking unbounded send.
+    fn emit_change(&self, doc_name: &str) {
+        if is_durable_doc(doc_name) {
+            if let Some(tx) = self.change_tx.get() {
+                let _ = tx.send(doc_name.to_string());
+            }
+        }
     }
 
     /// The daemon's signing identity, if running in key-auth mode.
@@ -324,6 +346,9 @@ impl DocStore {
             self.compact(doc_name).await?;
             debug!(doc = doc_name, "apply_update: compacted");
         }
+
+        // Notify the projector (ADR-029 B2) — covers hub + p2p (both land here).
+        self.emit_change(doc_name);
 
         Ok(ApplyResult {
             update: update.to_vec(),
@@ -662,6 +687,9 @@ impl DocStore {
             update_len = update.len(),
             "share_doc: document shared"
         );
+
+        // Notify the projector (ADR-029 B2).
+        self.emit_change(doc_name);
 
         Ok(ApplyResult {
             update: update.to_vec(),
