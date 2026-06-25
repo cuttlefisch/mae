@@ -10,7 +10,8 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use tracing::{debug, info};
+use sha2::{Digest, Sha256};
+use tracing::{debug, info, warn};
 
 /// Errors from storage operations.
 #[derive(Debug)]
@@ -118,9 +119,13 @@ impl SqlitePool {
                          doc_name TEXT PRIMARY KEY,
                          state BLOB NOT NULL,
                          wal_id INTEGER NOT NULL,
+                         hash TEXT NOT NULL DEFAULT '',
                          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
                      );",
                 )?;
+                // ADR-032 A5: migrate snapshot tables created before the integrity
+                // hash column. Errors (duplicate column on a fresh table) are ignored.
+                let _ = conn.execute("ALTER TABLE snapshots ADD COLUMN hash TEXT NOT NULL DEFAULT ''");
             }
             shards.push(std::sync::Mutex::new(conn));
         }
@@ -145,6 +150,7 @@ impl SqlitePool {
                  doc_name TEXT PRIMARY KEY,
                  state BLOB NOT NULL,
                  wal_id INTEGER NOT NULL,
+                 hash TEXT NOT NULL DEFAULT '',
                  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
              );",
         )?;
@@ -251,13 +257,29 @@ impl StorageBackend for SqliteBackend {
 
         // Load snapshot if exists.
         let mut snap_stmt =
-            conn.prepare("SELECT state, wal_id FROM snapshots WHERE doc_name = ?1")?;
+            conn.prepare("SELECT state, wal_id, hash FROM snapshots WHERE doc_name = ?1")?;
         snap_stmt.bind((1, doc_name))?;
 
         let (snapshot_bytes, wal_id_cutoff) = if let Ok(sqlite::State::Row) = snap_stmt.next() {
             let state = snap_stmt.read::<Vec<u8>, _>("state")?;
             let wal_id = snap_stmt.read::<i64, _>("wal_id")?;
-            (Some(state), wal_id)
+            let stored_hash = snap_stmt.read::<String, _>("hash")?;
+            // ADR-032 A5: verify snapshot integrity. An empty hash is a legacy snapshot
+            // (pre-A5), left unverified for back-compat. A non-empty hash that does not
+            // match the stored bytes means corruption — DISCARD the snapshot and degrade
+            // to a WAL-only load (cutoff 0) so the doc stays loadable and can self-heal
+            // via mesh re-sync / projection rebuild / backup restore, rather than
+            // silently serving corrupt state.
+            if !stored_hash.is_empty() && hex::encode(Sha256::digest(&state)) != stored_hash {
+                warn!(
+                    doc = doc_name,
+                    "snapshot integrity check FAILED — discarding corrupt snapshot; doc reloads \
+                     from WAL and heals via re-sync/rebuild (ADR-032 A5)"
+                );
+                (None, 0)
+            } else {
+                (Some(state), wal_id)
+            }
         } else {
             (None, 0)
         };
@@ -300,17 +322,20 @@ impl StorageBackend for SqliteBackend {
         state: &[u8],
         up_to_wal_id: u64,
     ) -> Result<(), StorageError> {
+        // ADR-032 A5: a content hash committed with the snapshot, verified on load.
+        let hash = hex::encode(Sha256::digest(state));
         let conn = self.pool.shard_for(doc_name).lock().unwrap();
         // Atomic: snapshot write + WAL trim in a single transaction.
         conn.execute("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<(), sqlite::Error> {
             let mut snap_stmt = conn.prepare(
-                "INSERT OR REPLACE INTO snapshots (doc_name, state, wal_id, updated_at)
-                 VALUES (?1, ?2, ?3, datetime('now'))",
+                "INSERT OR REPLACE INTO snapshots (doc_name, state, wal_id, hash, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, datetime('now'))",
             )?;
             snap_stmt.bind((1, doc_name))?;
             snap_stmt.bind((2, state))?;
             snap_stmt.bind((3, up_to_wal_id as i64))?;
+            snap_stmt.bind((4, hash.as_str()))?;
             snap_stmt.next()?;
 
             let mut del_stmt = conn.prepare("DELETE FROM wal WHERE doc_name = ?1 AND id <= ?2")?;
@@ -405,6 +430,35 @@ mod tests {
         assert_eq!(state.snapshot.as_deref(), Some(b"full-state".as_slice()));
         assert_eq!(state.wal_tail.len(), 1);
         assert_eq!(state.wal_tail[0].update, b"u3");
+    }
+
+    #[tokio::test]
+    async fn corrupt_snapshot_is_detected_and_discarded() {
+        // ADR-032 A5: a snapshot carries a content hash; on load, a mismatch (disk
+        // corruption / tampering) is detected and the corrupt snapshot is NOT served.
+        let backend = SqliteBackend::open_memory().unwrap();
+        backend.compact("d", b"valid-state", 0).await.unwrap();
+
+        // A valid (hash-matching) snapshot loads normally.
+        let ok = backend.load_document("d").await.unwrap().unwrap();
+        assert_eq!(ok.snapshot.as_deref(), Some(b"valid-state".as_slice()));
+
+        // Corrupt the snapshot bytes WITHOUT updating its hash.
+        {
+            let conn = backend.pool.shard_for("d").lock().unwrap();
+            let mut s = conn
+                .prepare("UPDATE snapshots SET state = ?1 WHERE doc_name = 'd'")
+                .unwrap();
+            s.bind((1, &b"tampered"[..])).unwrap();
+            s.next().unwrap();
+        }
+
+        // The corrupt snapshot is discarded (degraded to WAL-only, here empty).
+        let loaded = backend.load_document("d").await.unwrap();
+        assert!(
+            loaded.as_ref().is_none_or(|ds| ds.snapshot.is_none()),
+            "a corrupt snapshot must be discarded, not served"
+        );
     }
 
     #[tokio::test]
