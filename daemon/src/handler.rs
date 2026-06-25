@@ -179,6 +179,37 @@ pub async fn dispatch(
             }
         }
 
+        "kb/neighborhood" => {
+            let id = params["id"]
+                .as_str()
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
+            let depth = params["depth"].as_u64().unwrap_or(1) as u32;
+            let state = state.lock().await;
+            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
+            match ql.neighborhood(id, depth) {
+                Some(sg) => Ok(json!({
+                    "nodes": sg.nodes.iter().map(|(id, t)| json!([id, t])).collect::<Vec<_>>(),
+                    "edges": sg.edges.iter().map(|(s, d, r)| json!([s, d, r])).collect::<Vec<_>>(),
+                })),
+                None => Ok(json!({"nodes": [], "edges": []})),
+            }
+        }
+
+        "kb/related" => {
+            let id = params["id"]
+                .as_str()
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
+            let limit = std::cmp::min(params["limit"].as_u64().unwrap_or(10), 1000) as usize;
+            let state = state.lock().await;
+            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
+            let related: Vec<Value> = ql
+                .related(id, limit)
+                .into_iter()
+                .map(|(id, score)| json!([id, score]))
+                .collect();
+            Ok(json!(related))
+        }
+
         "kb/id_title_pairs" => {
             let prefix = params["prefix"].as_str();
             let state = state.lock().await;
@@ -275,14 +306,36 @@ pub async fn dispatch(
 
         // --- Lifecycle ---
         "daemon/status" => {
-            let state = state.lock().await;
-            let uptime = state.started_at.elapsed();
-            let store_count = 1 + state.instance_stores.len();
+            // Snapshot the fields, then drop the lock before the async doc_store scan
+            // (don't hold the state mutex across an await).
+            let (uptime, store_count, has_ql, reg_count, doc_store) = {
+                let state = state.lock().await;
+                (
+                    state.started_at.elapsed(),
+                    1 + state.instance_stores.len(),
+                    state.query_layer.is_some(),
+                    state.registry.instances.len(),
+                    state.doc_store.clone(),
+                )
+            };
+            // Phase D introspection: which KB collections does the daemon host, and
+            // does it host the primary (kbc:default)? Lets a connecting editor skip
+            // warming its own store and host/route the primary through the daemon.
+            let kb_collections = match doc_store {
+                Some(ds) => ds.list_collection_ids().await,
+                None => Vec::new(),
+            };
+            // "default" = KB_DEFAULT_NAME (the primary's canonical collab id).
+            let primary_exists = kb_collections
+                .iter()
+                .any(|c| c == "default" || c == "primary");
             Ok(json!({
                 "uptime_secs": uptime.as_secs(),
                 "stores": store_count,
-                "has_query_layer": state.query_layer.is_some(),
-                "registered_instances": state.registry.instances.len(),
+                "has_query_layer": has_ql,
+                "registered_instances": reg_count,
+                "kb_collections": kb_collections,
+                "primary_exists": primary_exists,
             }))
         }
 
@@ -627,6 +680,60 @@ mod tests {
         let state = Arc::new(Mutex::new(DaemonState::new()));
         let result = dispatch("nonexistent/method", json!({}), &state).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn neighborhood_and_related_without_store_are_not_ready() {
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let n = dispatch("kb/neighborhood", json!({"id": "concept:x"}), &state).await;
+        assert!(matches!(n, Err(DaemonError::NotReady)));
+        let r = dispatch("kb/related", json!({"id": "concept:x"}), &state).await;
+        assert!(matches!(r, Err(DaemonError::NotReady)));
+    }
+
+    #[tokio::test]
+    async fn status_reports_no_collections_without_doc_store() {
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let r = dispatch("daemon/status", json!({}), &state).await.unwrap();
+        assert_eq!(r["primary_exists"].as_bool(), Some(false));
+        assert_eq!(r["kb_collections"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn status_reports_hosted_collections_and_primary() {
+        use mae_daemon::doc_store::DocStore;
+        use mae_daemon::storage::SqliteBackend;
+        let ds = Arc::new(DocStore::new(
+            Arc::new(SqliteBackend::open_memory().unwrap()),
+            500,
+        ));
+        let c1 = mae_sync::kb::KbCollectionDoc::new("default", "owner");
+        ds.share_doc("kbc:default", &c1.encode_state())
+            .await
+            .unwrap();
+        let c2 = mae_sync::kb::KbCollectionDoc::new("notes", "owner");
+        ds.share_doc("kbc:notes", &c2.encode_state()).await.unwrap();
+
+        let mut st = DaemonState::new();
+        st.doc_store = Some(ds);
+        let state = Arc::new(Mutex::new(st));
+
+        let r = dispatch("daemon/status", json!({}), &state).await.unwrap();
+        assert_eq!(
+            r["primary_exists"].as_bool(),
+            Some(true),
+            "kbc:default ⇒ primary_exists"
+        );
+        let cols: Vec<String> = r["kb_collections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            cols.contains(&"default".to_string()) && cols.contains(&"notes".to_string()),
+            "got: {cols:?}"
+        );
     }
 
     #[tokio::test]
