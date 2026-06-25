@@ -151,6 +151,35 @@ impl Projector {
         Ok(())
     }
 
+    /// Rebuild a KB's cozo projection from its CRDT (ADR-029 self-heal / initial
+    /// projection): forget the cached manifest so every node re-projects, then run the
+    /// collection projection. Because the structural projection is deterministic, the
+    /// rebuilt cozo is identical to an incrementally-maintained one — so a corrupt or
+    /// deleted cozo store heals by replaying the CRDT. Returns the projected node count.
+    pub async fn rebuild_kb(&self, kb_id: &str) -> Result<usize, String> {
+        {
+            let mut idx = self.index.lock().unwrap();
+            if let Some(nodes) = idx.manifests.remove(kb_id) {
+                for node_id in nodes {
+                    if let Some(set) = idx.node_to_kbs.get_mut(&node_id) {
+                        set.remove(kb_id);
+                        if set.is_empty() {
+                            idx.node_to_kbs.remove(&node_id);
+                        }
+                    }
+                }
+            }
+        }
+        self.project_collection_change(kb_id).await?;
+        Ok(self
+            .index
+            .lock()
+            .unwrap()
+            .manifests
+            .get(kb_id)
+            .map_or(0, |s| s.len()))
+    }
+
     /// Drain the change feed, projecting each changed doc until the channel closes.
     pub async fn run(self, mut rx: mpsc::UnboundedReceiver<String>) {
         while let Some(doc_name) = rx.recv().await {
@@ -373,5 +402,35 @@ mod tests {
             store.get_node("concept:a").unwrap().is_some(),
             "kept nodes remain"
         );
+    }
+
+    #[tokio::test]
+    async fn rebuild_kb_reprojects_the_whole_kb_from_crdt() {
+        // ADR-029 self-heal: rebuild repopulates a KB's projection from the CRDT (e.g.
+        // after the cozo store is lost). The deterministic projection ⇒ identical result.
+        use crate::storage::SqliteBackend;
+        let doc_store = Arc::new(DocStore::new(
+            Arc::new(SqliteBackend::open_memory().unwrap()),
+            500,
+        ));
+        let stores = MemStores::new();
+        let projector = Projector::new(Arc::clone(&doc_store), stores.clone());
+
+        let a = mae_sync::kb::KbNodeDoc::new("concept:a", "A", "a", &[]);
+        doc_store
+            .apply_update("kb:concept:a", &a.encode(), None)
+            .await
+            .unwrap();
+        let mut coll = mae_sync::kb::KbCollectionDoc::new("kb1", "owner");
+        coll.add_node("concept:a", "A");
+        doc_store
+            .share_doc("kbc:kb1", &coll.encode_state())
+            .await
+            .unwrap();
+
+        let n = projector.rebuild_kb("kb1").await.unwrap();
+        assert_eq!(n, 1, "one node projected");
+        let store = stores.store_for("kb1").unwrap();
+        assert_eq!(store.get_node("concept:a").unwrap().unwrap().title, "A");
     }
 }
