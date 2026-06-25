@@ -82,6 +82,11 @@ pub struct DocStore {
     /// derives membership from the signed op-log instead of the relay-supplied
     /// `member_roles`. Owned KBs need no anchor (the daemon is itself the authority).
     kb_anchors: RwLock<HashMap<String, [u8; 32]>>,
+    /// Change-feed sender (ADR-029 B2): every mutation to a durable KB doc (`kbc:`/`kb:`)
+    /// emits its doc name here, so the projector re-derives the cozo projection. One
+    /// seam for hub (`collab_handler`) and p2p (`dialer`) — both land at `apply_update`.
+    /// Absent ⇒ no projector wired (e.g. a pure relay); emits are dropped.
+    change_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
 }
 
 /// Result of applying an update.
@@ -91,6 +96,43 @@ pub struct ApplyResult {
     pub update: Vec<u8>,
     /// The WAL sequence ID assigned to this update.
     pub wal_seq: u64,
+}
+
+/// Whether a document holds **durable KB content** — a KB collection (`kbc:{kb_id}`)
+/// or a KB node (`kb:{node_id}`) — versus ephemeral collab-session state.
+///
+/// Durability follows the KB-content naming contract (ADR-029/032): KB docs are the
+/// source of truth and must survive idle eviction. They may be dropped from memory
+/// (and lazy-reloaded on next access), but are **never deleted from storage** — so a
+/// hosted KB with no connected client is not destroyed. Everything else (e.g. a
+/// transient buffer-collab session) keeps the evict-and-delete behavior. A future
+/// refinement could make this an explicit per-doc flag (e.g. to distinguish a hosted
+/// KB from a transiently-previewed one); the prefix rule matches today's flows.
+pub(crate) fn is_durable_doc(name: &str) -> bool {
+    name.starts_with("kb:") || name.starts_with("kbc:")
+}
+
+/// Pick the least-recently-used **idle** (no connected client) document to memory-evict
+/// when the in-memory working set is full (ADR-032 A2). Uses `try_lock`, so a busy doc is
+/// skipped (never evict an in-use entry); returns `None` when nothing is evictable. The
+/// caller removes only the in-memory entry — the doc stays on disk and lazy-reloads.
+fn pick_lru_evictable(docs: &HashMap<String, Arc<Mutex<DocEntry>>>) -> Option<String> {
+    let mut victim: Option<(String, std::time::Instant)> = None;
+    for (name, entry) in docs.iter() {
+        if let Ok(doc) = entry.try_lock() {
+            if doc.connected_clients != 0 {
+                continue;
+            }
+            let older = match &victim {
+                Some((_, t)) => doc.last_activity < *t,
+                None => true,
+            };
+            if older {
+                victim = Some((name.clone(), doc.last_activity));
+            }
+        }
+    }
+    victim.map(|(n, _)| n)
 }
 
 impl DocStore {
@@ -105,6 +147,7 @@ impl DocStore {
             kb_metas: RwLock::new(HashMap::new()),
             signer: std::sync::OnceLock::new(),
             kb_anchors: RwLock::new(HashMap::new()),
+            change_tx: std::sync::OnceLock::new(),
         }
     }
 
@@ -112,6 +155,22 @@ impl DocStore {
     /// key-auth mode; idempotent (a second call is ignored).
     pub fn set_signer(&self, identity: Arc<mae_mcp::identity::Identity>) {
         let _ = self.signer.set(identity);
+    }
+
+    /// Wire the projector change feed (ADR-029 B2). Called once at startup; idempotent.
+    /// After this, every durable-KB-doc mutation emits its doc name to `tx`.
+    pub fn set_change_feed(&self, tx: tokio::sync::mpsc::UnboundedSender<String>) {
+        let _ = self.change_tx.set(tx);
+    }
+
+    /// Emit a durable KB doc's name to the projector change feed (no-op if no projector
+    /// is wired, or for ephemeral docs). Non-blocking unbounded send.
+    fn emit_change(&self, doc_name: &str) {
+        if is_durable_doc(doc_name) {
+            if let Some(tx) = self.change_tx.get() {
+                let _ = tx.send(doc_name.to_string());
+            }
+        }
     }
 
     /// The daemon's signing identity, if running in key-auth mode.
@@ -169,12 +228,25 @@ impl DocStore {
             return Ok(Arc::clone(entry));
         }
 
-        // Enforce max_documents limit.
+        // ADR-032 (Phase A2): max_documents bounds the IN-MEMORY working set, not the
+        // durable set. When full, memory-evict the least-recently-used idle doc (kept on
+        // disk, lazy-reloaded later) to make room — so a large KB loads via LRU instead of
+        // erroring. If every doc is actively connected, exceed the soft cap rather than
+        // fail a load.
         if self.max_documents > 0 && docs.len() >= self.max_documents {
-            return Err(StorageError::Sqlite(format!(
-                "document limit reached (max: {})",
-                self.max_documents
-            )));
+            match pick_lru_evictable(&docs) {
+                Some(victim) => {
+                    docs.remove(&victim);
+                    debug!(doc = %victim, "lru-evicted idle doc from memory to make room (retained on disk)");
+                }
+                None => {
+                    warn!(
+                        in_memory = docs.len(),
+                        max = self.max_documents,
+                        "doc working set over capacity but all docs active — growing past the soft cap"
+                    );
+                }
+            }
         }
 
         let (sync, wal_seq) = match self.storage.load_document(doc_name).await? {
@@ -274,6 +346,9 @@ impl DocStore {
             self.compact(doc_name).await?;
             debug!(doc = doc_name, "apply_update: compacted");
         }
+
+        // Notify the projector (ADR-029 B2) — covers hub + p2p (both land here).
+        self.emit_change(doc_name);
 
         Ok(ApplyResult {
             update: update.to_vec(),
@@ -522,9 +597,16 @@ impl DocStore {
             info!(count = evicted.len(), "evicted idle documents");
         }
 
-        // BUG B fix: delete evicted docs from storage so recovery doesn't reload them.
+        // BUG B fix: delete evicted EPHEMERAL docs from storage so recovery doesn't
+        // reload them. ADR-032: durable KB content (kbc:/kb:) is memory-evicted ONLY —
+        // never deleted — so a hosted KB with no connected client survives on disk and
+        // lazy-reloads on next access (it was compacted above, so the snapshot is fresh).
         drop(docs); // release write lock before async storage calls
         for name in &evicted {
+            if is_durable_doc(name) {
+                debug!(doc = %name, "evict_idle: durable KB doc memory-evicted, retained on disk");
+                continue;
+            }
             if let Err(e) = self.storage.delete_document(name).await {
                 warn!(doc = %name, error = %e, "storage delete after eviction failed");
             }
@@ -605,6 +687,9 @@ impl DocStore {
             update_len = update.len(),
             "share_doc: document shared"
         );
+
+        // Notify the projector (ADR-029 B2).
+        self.emit_change(doc_name);
 
         Ok(ApplyResult {
             update: update.to_vec(),
@@ -832,6 +917,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn durable_kb_doc_survives_idle_eviction() {
+        // ADR-032 (Phase A1): a hosted KB with no connected client must NOT be
+        // destroyed by idle eviction — durable KB docs (kbc:/kb:) are memory-evicted
+        // only, never deleted from disk; ephemeral docs keep the evict-and-delete path.
+        let store = test_store();
+
+        // A durable KB node doc with content; the sharer then disconnects.
+        let mut ts = TextSync::with_client_id("", 1);
+        let kb_update = ts.insert(0, "ZEPHYRINE");
+        store.share_doc("kb:concept:x", &kb_update).await.unwrap();
+        store.track_client_disconnect("kb:concept:x").await.unwrap();
+
+        // An ephemeral (non-KB) doc.
+        let mut ts2 = TextSync::with_client_id("", 2);
+        let eph_update = ts2.insert(0, "scratch");
+        store.share_doc("scratch:buf", &eph_update).await.unwrap();
+        store.track_client_disconnect("scratch:buf").await.unwrap();
+
+        // Idle-evict everything (threshold 0).
+        let evicted = store.evict_idle(0).await;
+        assert!(evicted.contains(&"kb:concept:x".to_string()));
+        assert!(evicted.contains(&"scratch:buf".to_string()));
+
+        // Both are dropped from memory.
+        assert!(!store.has_doc("kb:concept:x").await);
+        assert!(!store.has_doc("scratch:buf").await);
+
+        // The durable KB doc survives on disk and lazy-reloads with its content intact.
+        assert_eq!(
+            store.content("kb:concept:x").await.unwrap(),
+            "ZEPHYRINE",
+            "durable KB doc must survive idle eviction on disk"
+        );
+        // The ephemeral doc was deleted from storage → reloads empty.
+        assert_eq!(
+            store.content("scratch:buf").await.unwrap(),
+            "",
+            "ephemeral doc should be deleted from storage on eviction"
+        );
+    }
+
+    #[tokio::test]
     async fn evict_skips_active_docs() {
         let store = test_store();
 
@@ -962,27 +1089,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn max_documents_enforced_at_runtime() {
+    async fn max_documents_lru_evicts_to_make_room() {
+        // ADR-032 (Phase A2): max_documents bounds the in-memory working set; a load
+        // past the cap memory-evicts the LRU idle doc (kept on disk) instead of erroring.
         let backend = Arc::new(SqliteBackend::open_memory().unwrap());
         let store = DocStore::new(backend, 500).with_max_documents(2);
 
-        let mut ts = TextSync::with_client_id("", 1);
-        let u1 = ts.insert(0, "doc1 content");
-        let u2 = ts.insert(0, "doc2 content");
-
-        // First two documents succeed.
+        let mut ts1 = TextSync::with_client_id("", 1);
+        let u1 = ts1.insert(0, "one");
         store.apply_update("doc1", &u1, Some(1)).await.unwrap();
+        let mut ts2 = TextSync::with_client_id("", 2);
+        let u2 = ts2.insert(0, "two");
         store.apply_update("doc2", &u2, Some(2)).await.unwrap();
 
-        // Third document must fail with the limit error.
+        // The third load does NOT error — it LRU-evicts an idle doc from memory.
         let mut ts3 = TextSync::with_client_id("", 3);
-        let u3 = ts3.insert(0, "doc3 content");
-        let err = store.apply_update("doc3", &u3, Some(3)).await.unwrap_err();
-        let msg = err.to_string();
+        let u3 = ts3.insert(0, "three");
+        store.apply_update("doc3", &u3, Some(3)).await.unwrap();
         assert!(
-            msg.contains("document limit reached"),
-            "expected 'document limit reached' in error, got: {msg}"
+            store.document_count().await <= 2,
+            "in-memory working set must respect the cap"
         );
+
+        // All three are retrievable — the LRU-evicted one reloads from disk.
+        assert_eq!(store.content("doc1").await.unwrap(), "one");
+        assert_eq!(store.content("doc2").await.unwrap(), "two");
+        assert_eq!(store.content("doc3").await.unwrap(), "three");
+    }
+
+    #[tokio::test]
+    async fn large_kb_loads_past_the_memory_cap() {
+        // A KB with more node docs than the in-memory cap must fully load (every node
+        // retrievable), bounded by LRU memory eviction — the RoamNotes-scale case.
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = DocStore::new(backend, 500).with_max_documents(4);
+
+        for i in 0..20u32 {
+            let mut ts = TextSync::with_client_id("", i as u64 + 1);
+            let u = ts.insert(0, &format!("node {i}"));
+            store
+                .apply_update(&format!("kb:node:{i}"), &u, Some(i as u64 + 1))
+                .await
+                .unwrap();
+        }
+        assert!(
+            store.document_count().await <= 4,
+            "memory bounded by the cap, got {}",
+            store.document_count().await
+        );
+        // Every node is still retrievable (reloads from disk on access).
+        for i in 0..20u32 {
+            assert_eq!(
+                store.content(&format!("kb:node:{i}")).await.unwrap(),
+                format!("node {i}")
+            );
+        }
     }
 
     #[tokio::test]
