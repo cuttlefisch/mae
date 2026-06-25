@@ -454,6 +454,21 @@ impl DocStore {
         out
     }
 
+    /// Whether `name` exists durably — in memory OR persisted (a durable KB doc may
+    /// be idle-evicted from memory but still on disk). Unlike `has_doc` (memory
+    /// only), this avoids a false negative; used to guard a read so we don't
+    /// `get_or_create` (and thus materialize) an empty doc for a non-existent node.
+    pub async fn has_durable_doc(&self, name: &str) -> bool {
+        if self.has_doc(name).await {
+            return true;
+        }
+        self.storage
+            .list_documents()
+            .await
+            .map(|names| names.iter().any(|n| n == name))
+            .unwrap_or(false)
+    }
+
     /// Find a document by suffix matching. Returns the full doc name if exactly
     /// one document ends with `/<suffix>` or `:<suffix>`. Returns None if zero
     /// or multiple matches (ambiguous).

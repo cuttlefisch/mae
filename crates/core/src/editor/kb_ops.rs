@@ -398,10 +398,39 @@ impl Editor {
 
     /// Persist a node to the backing store (if present). Best-effort — logs errors.
     fn kb_persist_node(&self, node: &mae_kb::Node) {
+        // Phase D3b: when the daemon hosts the primary, the daemon's CRDT is the
+        // source of truth — retire the per-edit local write-through. Edits already
+        // reach the daemon (pending queue); the local cozo is refreshed in batch via
+        // snapshot-back on disconnect/shutdown and remains the daemon-less fallback.
+        if self.kb.daemon_hosts_primary() {
+            return;
+        }
         if let Some(ref store) = self.kb.store {
             if let Err(e) = store.update_node(node) {
                 tracing::warn!(node_id = %node.id, error = %e, "KB store write-through failed");
             }
+        }
+    }
+
+    /// Phase D3b: snapshot the in-memory primary mirror back to the local store so
+    /// the daemon-less fallback stays coherent after the per-edit write-through is
+    /// retired. Bypasses the retire guard (writes the store directly). Bounded by the
+    /// (lazy) mirror size — only nodes touched this session. Called on collab
+    /// disconnect + editor shutdown while the daemon hosts the primary.
+    pub fn kb_snapshot_primary_to_store(&self) {
+        let Some(ref store) = self.kb.store else {
+            return;
+        };
+        let mut n = 0usize;
+        for id in self.kb.primary.list_ids(None) {
+            if let Some(node) = self.kb.primary.get(&id) {
+                if store.update_node(node).is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        if n > 0 {
+            tracing::debug!(target: "kb_sync", count = n, "D3b: snapshot primary mirror → local store");
         }
     }
 
@@ -889,25 +918,44 @@ impl Editor {
     }
 
     /// Phase D3 (ADR-029): ensure node `id` is present in the in-memory primary
-    /// mirror, lazily loading it from the open local store on a miss. When the
-    /// daemon hosts the primary the mirror is NOT preloaded at startup (thin
-    /// startup) — but the edit path needs the node's CRDT lineage in `kb.primary`.
-    /// The store row carries the persisted `crdt_doc`, so a lazily-loaded node
-    /// keeps its shared lineage and a subsequent `upsert_with_crdt` chains onto it
-    /// (no divergence). No-op when already resident, not daemon-hosted, or absent.
+    /// mirror, lazily hydrating it on a miss. When the daemon hosts the primary the
+    /// mirror is NOT preloaded (thin startup), but the edit path needs the node WITH
+    /// its CRDT lineage in `kb.primary`.
+    ///
+    /// D3b — true thin client: hydrate from the **daemon's authoritative CRDT state**
+    /// (`node_crdt_state` → `apply_remote_update`, which adopts the daemon's lineage),
+    /// so the edit chains onto current shared state. Falls back to the open local
+    /// store only when the daemon can't serve it (offline robustness). No-op when
+    /// already resident, not daemon-hosted, or absent everywhere.
     fn kb_ensure_node_loaded(&mut self, id: &str) {
         if !self.kb.daemon_hosts_primary() || self.kb.primary.get(id).is_some() {
             return;
         }
+        // Prefer the daemon (authoritative, fresh content + correct lineage).
+        let daemon_state = self.kb.query_layer().and_then(|q| q.node_crdt_state(id));
+        if let Some(state) = daemon_state {
+            match self.kb.primary.apply_remote_update(id, &state) {
+                Ok(_) if self.kb.primary.get(id).is_some() => {
+                    tracing::debug!(target: "kb_sync", node_id = %id, "D3b: hydrated node from daemon for edit");
+                    return;
+                }
+                Ok(_) => {} // applied but node still absent — fall through to the store
+                Err(e) => {
+                    tracing::warn!(target: "kb_sync", node_id = %id, error = %e, "D3b: daemon hydrate failed; trying local store")
+                }
+            }
+        }
+        // Fallback: the open local store (daemon miss / offline). Its row carries the
+        // persisted `crdt_doc`, so the lineage is still preserved.
         if let Some(ref store) = self.kb.store {
             match store.get_node(id) {
                 Ok(Some(node)) => {
-                    tracing::debug!(target: "kb_sync", node_id = %id, "D3: lazily loaded node from store for edit");
+                    tracing::debug!(target: "kb_sync", node_id = %id, "D3b: hydrated node from local store (daemon unavailable)");
                     self.kb.primary.insert(node);
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    tracing::warn!(target: "kb_sync", node_id = %id, error = %e, "D3: lazy node load failed");
+                    tracing::warn!(target: "kb_sync", node_id = %id, error = %e, "D3b: lazy node load failed");
                 }
             }
         }
@@ -3808,6 +3856,51 @@ mod tests {
         assert!(
             editor.kb.primary.get("note:x").is_none(),
             "no lazy load without daemon hosting"
+        );
+    }
+
+    /// Phase D3b: while the daemon hosts the primary, the per-edit local
+    /// write-through is RETIRED (the daemon is the source of truth); snapshot-back
+    /// then persists the mirror to the store for the daemon-less fallback.
+    #[test]
+    fn kb_persist_retired_when_hosted_then_snapshot_restores() {
+        let mut editor = Editor::new();
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store.seed_type_system().unwrap();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.set_daemon_hosts_primary(true);
+        editor.collab.kb_sync_mode = "on_save".into();
+
+        // Create a node while hosted: it enters the mirror + the daemon queue, but
+        // the per-edit write-through is retired ⇒ the local store does NOT have it.
+        editor
+            .kb_create_node("note:r", "R", "body", mae_kb::NodeKind::Note)
+            .unwrap();
+        assert!(editor.kb.primary.get("note:r").is_some(), "node in mirror");
+        assert!(
+            editor
+                .kb
+                .store
+                .as_ref()
+                .unwrap()
+                .get_node("note:r")
+                .unwrap()
+                .is_none(),
+            "retire: per-edit write-through skipped while daemon-hosted"
+        );
+
+        // Snapshot-back persists the mirror → store (the daemon-less fallback).
+        editor.kb_snapshot_primary_to_store();
+        assert!(
+            editor
+                .kb
+                .store
+                .as_ref()
+                .unwrap()
+                .get_node("note:r")
+                .unwrap()
+                .is_some(),
+            "snapshot-back persists the mirror to the store"
         );
     }
 

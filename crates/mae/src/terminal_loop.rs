@@ -275,6 +275,12 @@ pub(crate) async fn run_terminal_loop(
             // Fire app-exit hook.
             editor.fire_hook("app-exit");
 
+            // Phase D3b: snapshot the daemon-hosted primary mirror back to the local
+            // store so per-edit-retired edits land in the daemon-less fallback.
+            if editor.kb.daemon_hosts_primary() {
+                editor.kb_snapshot_primary_to_store();
+            }
+
             // Persist history (skipped in clean mode)
             if !editor.clean_mode {
                 if let Err(e) = save_history(editor) {

@@ -210,6 +210,30 @@ pub async fn dispatch(
             Ok(json!(related))
         }
 
+        // Phase D3b (ADR-029): return a node's authoritative CRDT doc state from the
+        // doc_store so a thin-client editor can lazily hydrate the node — with its
+        // real lineage — into its edit mirror (the daemon is the source of truth, so
+        // the editor neither reads nor writes its own cozo for the hosted primary).
+        // Returns `null` for a node the daemon doesn't host (so the editor doesn't
+        // materialize an empty node).
+        "kb/node_crdt" => {
+            let id = params["id"]
+                .as_str()
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
+            let doc_store = { state.lock().await.doc_store.clone() };
+            let ds = doc_store.ok_or(DaemonError::NotReady)?;
+            let doc_name = format!("kb:{id}");
+            if !ds.has_durable_doc(&doc_name).await {
+                return Ok(Value::Null);
+            }
+            match ds.encode_state_and_sv(&doc_name).await {
+                Ok((node_state, _sv)) => Ok(json!({
+                    "state": mae_sync::encoding::update_to_base64(&node_state),
+                })),
+                Err(e) => Err(DaemonError::Internal(format!("encode '{doc_name}': {e}"))),
+            }
+        }
+
         "kb/id_title_pairs" => {
             let prefix = params["prefix"].as_str();
             let state = state.lock().await;
@@ -697,6 +721,35 @@ mod tests {
         let r = dispatch("daemon/status", json!({}), &state).await.unwrap();
         assert_eq!(r["primary_exists"].as_bool(), Some(false));
         assert_eq!(r["kb_collections"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn kb_node_crdt_returns_state_for_hosted_node_else_null() {
+        use mae_daemon::doc_store::DocStore;
+        use mae_daemon::storage::SqliteBackend;
+        let ds = Arc::new(DocStore::new(
+            Arc::new(SqliteBackend::open_memory().unwrap()),
+            500,
+        ));
+        let node = mae_sync::kb::KbNodeDoc::new("concept:x", "X", "body", &[]);
+        ds.share_doc("kb:concept:x", &node.encode()).await.unwrap();
+        let mut st = DaemonState::new();
+        st.doc_store = Some(ds);
+        let state = Arc::new(Mutex::new(st));
+
+        // Hosted node → base64 CRDT state.
+        let r = dispatch("kb/node_crdt", json!({"id": "concept:x"}), &state)
+            .await
+            .unwrap();
+        assert!(
+            r["state"].as_str().is_some(),
+            "hosted node must return CRDT state: {r}"
+        );
+        // Absent node → null (no spurious empty-doc materialization).
+        let r2 = dispatch("kb/node_crdt", json!({"id": "concept:absent"}), &state)
+            .await
+            .unwrap();
+        assert!(r2.is_null(), "absent node must return null, got: {r2}");
     }
 
     #[tokio::test]

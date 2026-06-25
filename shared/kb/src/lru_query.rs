@@ -363,6 +363,23 @@ impl KbQueryLayer for LruQueryLayer {
     fn invalidate(&self, id: &str) {
         self.invalidate(id);
     }
+
+    fn node_crdt_state(&self, id: &str) -> Option<Vec<u8>> {
+        let result = {
+            let mut client = self.client.lock().unwrap();
+            client.call("kb/node_crdt", json!({"id": id}))
+        };
+        match result {
+            Ok(val) => val
+                .get("state")
+                .and_then(|s| s.as_str())
+                .and_then(|s| mae_sync::encoding::base64_to_update(s).ok()),
+            Err(e) => {
+                tracing::debug!(error = %e, id, "LruQueryLayer: node_crdt fetch failed");
+                None
+            }
+        }
+    }
 }
 
 // --- JSON parsing helpers ---

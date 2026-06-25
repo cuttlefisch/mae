@@ -1128,6 +1128,12 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
         CollabEvent::Disconnected { reason } => {
             info!(reason = %reason, "collab disconnected");
             editor.collab.status = CollabStatus::Disconnected;
+            // Phase D3b: snapshot the mirror back to the local store BEFORE dropping
+            // the host flag, so this session's edits (whose per-edit write-through was
+            // retired) land in the daemon-less fallback. Cheap (only touched nodes).
+            if editor.kb.daemon_hosts_primary() {
+                editor.kb_snapshot_primary_to_store();
+            }
             // Phase D: hosting requires a live write channel — drop the runtime flag
             // and clear in-flight host shares so the next connect re-hosts cleanly.
             editor.collab.daemon_host_pending.clear();

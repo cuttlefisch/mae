@@ -2155,6 +2155,12 @@ impl GuiApp {
         // Fire app-exit hook.
         self.editor.fire_hook("app-exit");
 
+        // Phase D3b: snapshot the daemon-hosted primary mirror back to the local
+        // store so the per-edit-retired edits land in the daemon-less fallback.
+        if self.editor.kb.daemon_hosts_primary() {
+            self.editor.kb_snapshot_primary_to_store();
+        }
+
         // Persist history (skipped in clean mode)
         if !self.editor.clean_mode {
             if let Err(e) = bootstrap::save_history(&self.editor) {
