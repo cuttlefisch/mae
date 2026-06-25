@@ -5,7 +5,7 @@
 
 use mae_kb::query::KbQueryLayer;
 use mae_kb::store::SearchHit;
-use mae_kb::CozoKbStore;
+use mae_kb::{CozoKbStore, KbStore};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Instant;
@@ -379,7 +379,7 @@ pub async fn dispatch(
                 .get("policy")
                 .and_then(|v| v.as_str())
                 .and_then(mae_sync::kb::JoinPolicy::parse);
-            let (doc_store, broadcaster, owner) = {
+            let (doc_store, broadcaster, owner, kb_store) = {
                 let st = state.lock().await;
                 let doc_store = st.doc_store.clone().ok_or_else(|| {
                     DaemonError::Internal(
@@ -394,25 +394,63 @@ pub async fn dispatch(
                 let owner = st.owner.clone().ok_or_else(|| {
                     DaemonError::Internal("daemon owner identity unavailable".into())
                 })?;
-                (doc_store, broadcaster, owner)
+                // The CozoDB store backing this KB (primary or a named instance), so
+                // a fresh share can SEED node content — not just the collection.
+                let kb_store = resolve_kb_store(&st, &kb_id);
+                (doc_store, broadcaster, owner, kb_store)
             };
-            let created =
-                establish_p2p_share(&doc_store, &broadcaster, &owner, &kb_id, transport, policy)
-                    .await?;
+            // Build the collection + node states from the daemon's KB store (outside
+            // the state lock — `load_all` is a blocking CozoDB read). Reuses the same
+            // `KnowledgeBase::to_collection` the editor's `kb/share` uses, so the
+            // seeded node docs are byte-identical. Absent store / empty KB ⇒ an empty
+            // collection (still a valid mesh share at collection level).
+            let seed = match kb_store {
+                Some(store) => {
+                    let nodes = store
+                        .load_all()
+                        .map_err(|e| DaemonError::Internal(format!("load KB nodes: {e}")))?;
+                    let mut kb = mae_kb::KnowledgeBase::new();
+                    for node in nodes {
+                        kb.insert(node);
+                    }
+                    Some(
+                        kb.to_collection(&kb_id, &owner.fingerprint(), &[])
+                            .map_err(|e| {
+                                DaemonError::Internal(format!(
+                                    "build collection from KB store: {e}"
+                                ))
+                            })?,
+                    )
+                }
+                None => None,
+            };
+            let (created, node_count) = establish_p2p_share(
+                &doc_store,
+                &broadcaster,
+                &owner,
+                &kb_id,
+                transport,
+                policy,
+                seed,
+            )
+            .await?;
             Ok(json!({
                 "kb_id": kb_id,
                 "owner": owner.fingerprint(),
                 "transport": transport.as_str(),
                 "policy": policy.map(|p| p.as_str()),
                 "created": created,
+                "nodes": node_count,
                 "status": "shared",
                 "message": format!(
-                    "KB '{kb_id}' is shared over the P2P mesh (transport={}{}). Mint a join \
-                     ticket to invite a peer.",
+                    "KB '{kb_id}' is shared over the P2P mesh (transport={}{}, {} node{}). \
+                     Mint a join ticket to invite a peer.",
                     transport.as_str(),
                     policy
                         .map(|p| format!(", policy={}", p.as_str()))
                         .unwrap_or_default(),
+                    node_count,
+                    if node_count == 1 { "" } else { "s" },
                 ),
             }))
         }
@@ -421,13 +459,31 @@ pub async fn dispatch(
     }
 }
 
+/// A store-seeded collection ready to share: the collection doc (manifest +
+/// owner/policy) plus each node's `(node_id, encoded yrs state)`.
+type SeededCollection = (mae_sync::kb::KbCollectionDoc, Vec<(String, Vec<u8>)>);
+
+/// Resolve the CozoDB store backing `kb_id` (a KB *name*): the primary KB's own
+/// store, or a named instance's store. `None` when the name isn't registered with
+/// this daemon — the share still proceeds at collection level, just without seeded
+/// node content.
+fn resolve_kb_store(st: &DaemonState, kb_id: &str) -> Option<Arc<CozoKbStore>> {
+    let inst = st.registry.find(kb_id)?;
+    if inst.primary {
+        st.store.clone()
+    } else {
+        st.instance_stores.get(&inst.uuid).cloned()
+    }
+}
+
 /// Establish (or widen) a P2P mesh share for `kb_id` directly via the control
-/// socket — the daemon's self-sufficient `kb-share-p2p` path (ADR-025). Creates
-/// the `kbc:{kb_id}` collection owned by this daemon and exposed on the mesh if it
-/// doesn't exist; otherwise widens the existing collection's transport policy to
-/// include P2p (and optionally sets the join policy). Returns `created` (true on a
-/// fresh collection). Mirrors the owner-binding + transport-widen of the TCP
-/// `kb/share` handler, sourced from this daemon's identity instead of a session.
+/// socket — the daemon's self-sufficient `kb-share-p2p` path (ADR-025). On a FRESH
+/// share it creates the `kbc:{kb_id}` collection owned by this daemon, **seeds its
+/// node docs** (`seed` = the collection + node states built from the daemon KB
+/// store, byte-identical to the editor's `kb/share`), and exposes it on the mesh;
+/// on a re-share it widens the existing collection's transport policy (+ optional
+/// join policy) WITHOUT clobbering daemon-side membership or nodes (B-12). Returns
+/// `(created, node_count)`.
 async fn establish_p2p_share(
     doc_store: &Arc<mae_daemon::doc_store::DocStore>,
     broadcaster: &mae_mcp::broadcast::SharedBroadcaster,
@@ -435,7 +491,8 @@ async fn establish_p2p_share(
     kb_id: &str,
     transport: mae_sync::kb::TransportPolicy,
     policy: Option<mae_sync::kb::JoinPolicy>,
-) -> Result<bool, DaemonError> {
+    seed: Option<SeededCollection>,
+) -> Result<(bool, usize), DaemonError> {
     let owner_fp = owner.fingerprint();
     let collection_doc = format!("kbc:{kb_id}");
 
@@ -463,8 +520,8 @@ async fn establish_p2p_share(
     }
 
     if doc_store.has_doc(&collection_doc).await {
-        // Existing collection (B-12: never clobber daemon-side membership) — widen
-        // transport to include the mesh + optionally adjust the join policy.
+        // Existing collection (B-12: never clobber daemon-side membership or nodes)
+        // — widen transport to include the mesh + optionally adjust the join policy.
         let (state_bytes, _sv) = doc_store
             .encode_state_and_sv(&collection_doc)
             .await
@@ -483,10 +540,17 @@ async fn establish_p2p_share(
                 persist(doc_store, broadcaster, &collection_doc, &update).await?;
             }
         }
-        Ok(false)
+        Ok((false, coll.list_nodes().len()))
     } else {
-        // Fresh collection owned by this daemon, exposed on the mesh.
-        let mut coll = mae_sync::kb::KbCollectionDoc::new(kb_id, &owner_fp);
+        // Fresh collection owned by this daemon, exposed on the mesh. Start from the
+        // store-seeded collection (with its node manifest already populated by
+        // `to_collection`) when available, else an empty one.
+        let (mut coll, node_states) = seed.unwrap_or_else(|| {
+            (
+                mae_sync::kb::KbCollectionDoc::new(kb_id, &owner_fp),
+                Vec::new(),
+            )
+        });
         coll.set_owner(&owner_fp, owner.label());
         coll.set_transport_policy(transport);
         if let Some(p) = policy {
@@ -496,7 +560,21 @@ async fn establish_p2p_share(
             .share_doc(&collection_doc, &coll.encode_state())
             .await
             .map_err(|e| DaemonError::Internal(format!("share collection: {e}")))?;
-        Ok(true)
+        // Seed each node doc (`kb:{node_id}`) so a joining peer pulls real content,
+        // not just the manifest. Same naming + encoding as the TCP `kb/share` path.
+        for (node_id, state) in &node_states {
+            let node_doc = format!("kb:{node_id}");
+            let res = if doc_store.has_doc(&node_doc).await {
+                doc_store
+                    .apply_update(&node_doc, state, None)
+                    .await
+                    .map(|_| ())
+            } else {
+                doc_store.share_doc(&node_doc, state).await.map(|_| ())
+            };
+            res.map_err(|e| DaemonError::Internal(format!("seed node '{node_id}': {e}")))?;
+        }
+        Ok((true, node_states.len()))
     }
 }
 
@@ -715,5 +793,78 @@ mod tests {
         assert_eq!(coll.transport_policy(), TransportPolicy::Both);
         assert!(coll.transport_policy().allows(Transport::P2p));
         assert!(coll.transport_policy().allows(Transport::Hub));
+    }
+
+    #[tokio::test]
+    async fn share_kb_seeds_node_content_from_the_store() {
+        use mae_sync::kb::{KbCollectionDoc, KbNodeDoc};
+        // An in-memory KB store holding one node with real content.
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        let mut node = mae_kb::Node::new(
+            "collabtest:overview",
+            "Overview",
+            mae_kb::NodeKind::Concept,
+            "the ZEPHYRINE protocol",
+        );
+        node.tags = vec!["alpha".to_string()];
+        store.insert_node(&node).unwrap();
+
+        // Wire that store into the daemon state as the primary KB named "collabtest".
+        let (state, _owner) = share_kb_state();
+        {
+            let mut st = state.lock().await;
+            st.store = Some(Arc::new(store));
+            st.registry.instances.push(mae_kb::federation::KbInstance {
+                uuid: "u1".to_string(),
+                name: "collabtest".to_string(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: true,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+            });
+        }
+
+        let result = dispatch(
+            "p2p/share_kb",
+            json!({"kb_id": "collabtest", "policy": "permissive"}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["created"].as_bool(), Some(true));
+        assert_eq!(
+            result["nodes"].as_u64(),
+            Some(1),
+            "the node should be seeded"
+        );
+
+        // The collection manifest lists the node; the node doc carries the content
+        // (so a joining peer pulls real content, not just the manifest).
+        let doc_store = state.lock().await.doc_store.clone().unwrap();
+        let (cbytes, _) = doc_store
+            .encode_state_and_sv("kbc:collabtest")
+            .await
+            .unwrap();
+        assert_eq!(
+            KbCollectionDoc::from_bytes(&cbytes)
+                .unwrap()
+                .list_nodes()
+                .len(),
+            1
+        );
+        let (nbytes, _) = doc_store
+            .encode_state_and_sv("kb:collabtest:overview")
+            .await
+            .unwrap();
+        let node_doc = KbNodeDoc::from_bytes(&nbytes).unwrap();
+        assert!(
+            node_doc.body().contains("ZEPHYRINE"),
+            "seeded node doc must carry the body content"
+        );
     }
 }
