@@ -171,6 +171,34 @@ impl DaemonClient {
         Ok(format!("Join recorded for {kb_id}."))
     }
 
+    /// Establish (or widen) a P2P mesh share for `kb_id` via the daemon's
+    /// `p2p/share_kb` control method — creates/exposes the `kbc:{kb_id}` collection
+    /// on the mesh so a joining peer can actually pull it. Call this BEFORE
+    /// `mint_p2p_ticket`: a minted ticket is only joinable once the KB is shared.
+    /// `transport` (hub|p2p|both, default p2p) and `policy` (restrictive|invite|
+    /// permissive, default unchanged) are optional. Returns the daemon's
+    /// confirmation message. Shared by the editor's `DaemonControl` impl and the
+    /// `mae` CLI (ADR-025 §"Driving surfaces").
+    pub fn share_kb_p2p(
+        &mut self,
+        kb_id: &str,
+        transport: Option<&str>,
+        policy: Option<&str>,
+    ) -> Result<String, DaemonClientError> {
+        let mut params = json!({ "kb_id": kb_id });
+        if let Some(t) = transport {
+            params["transport"] = json!(t);
+        }
+        if let Some(p) = policy {
+            params["policy"] = json!(p);
+        }
+        let result = self.call("p2p/share_kb", params)?;
+        if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+            return Ok(msg.to_string());
+        }
+        Ok(format!("KB '{kb_id}' shared over the P2P mesh."))
+    }
+
     fn call_inner(&mut self, method: &str, params: &Value) -> Result<Value, DaemonClientError> {
         self.ensure_connected()?;
 

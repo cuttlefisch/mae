@@ -33,6 +33,18 @@ pub struct DaemonState {
     /// owner `EndpointAddr` + KB-id the Phase-2 mesh dialer will dial. Recorded
     /// here now; the dial + TOFU trust happen when the dialer lands (#89).
     pub pending_p2p_joins: Vec<crate::ticket::JoinTicket>,
+    /// The collab server's collaborative-document store (kbc:*/node docs), shared
+    /// with the TCP/mesh listeners. Present once `spawn_collab_server` has wired it
+    /// in. Lets the local control socket *establish* a P2P share (`p2p/share_kb`)
+    /// — create/widen the collection doc to the mesh — without a collab session.
+    pub doc_store: Option<Arc<mae_daemon::doc_store::DocStore>>,
+    /// The collab event broadcaster, so a control-socket share is observed by
+    /// connected sync sessions (parity with `kb/share` over TCP).
+    pub broadcaster: Option<mae_mcp::broadcast::SharedBroadcaster>,
+    /// This daemon's key-mode identity — the OWNER principal stamped on any
+    /// collection established via `p2p/share_kb` (mirrors the TCP `kb/share`
+    /// owner-binding to the authenticated principal).
+    pub owner: Option<Arc<mae_mcp::identity::Identity>>,
 }
 
 impl DaemonState {
@@ -45,6 +57,9 @@ impl DaemonState {
             started_at: Instant::now(),
             p2p_endpoint: None,
             pending_p2p_joins: Vec::new(),
+            doc_store: None,
+            broadcaster: None,
+            owner: None,
         }
     }
 
@@ -337,7 +352,151 @@ pub async fn dispatch(
             }))
         }
 
+        // Establish (or widen) a P2P mesh share for a KB straight from the control
+        // socket — the self-sufficient `kb-share-p2p` path (ADR-025 §"Driving
+        // surfaces"). Unlike `kb/share` (which needs a collab session carrying the
+        // owner's collection), this creates the `kbc:{kb_id}` collection owned by
+        // THIS daemon and exposes it on the mesh, so the CLI and the editor command
+        // can both share without an open collab session. Mint a ticket afterwards.
+        "p2p/share_kb" => {
+            let kb_id = params
+                .get("kb_id")
+                .and_then(|v| v.as_str())
+                .ok_or(DaemonError::InvalidParams(
+                    "p2p/share_kb requires a string 'kb_id'",
+                ))?
+                .to_string();
+            // This IS the P2P surface, so default exposure = the mesh; callers may
+            // pass hub|p2p|both to widen differently.
+            let transport = params
+                .get("transport")
+                .and_then(|v| v.as_str())
+                .and_then(mae_sync::kb::TransportPolicy::parse)
+                .unwrap_or(mae_sync::kb::TransportPolicy::P2p);
+            // Optional join policy (restrictive|invite|permissive). None = leave the
+            // collection's default/existing policy untouched.
+            let policy = params
+                .get("policy")
+                .and_then(|v| v.as_str())
+                .and_then(mae_sync::kb::JoinPolicy::parse);
+            let (doc_store, broadcaster, owner) = {
+                let st = state.lock().await;
+                let doc_store = st.doc_store.clone().ok_or_else(|| {
+                    DaemonError::Internal(
+                        "P2P sharing is unavailable — enable collab key mode + the mesh \
+                         (`mae setup-collab --p2p`) and restart the daemon"
+                            .to_string(),
+                    )
+                })?;
+                let broadcaster = st.broadcaster.clone().ok_or_else(|| {
+                    DaemonError::Internal("collab broadcaster unavailable".into())
+                })?;
+                let owner = st.owner.clone().ok_or_else(|| {
+                    DaemonError::Internal("daemon owner identity unavailable".into())
+                })?;
+                (doc_store, broadcaster, owner)
+            };
+            let created =
+                establish_p2p_share(&doc_store, &broadcaster, &owner, &kb_id, transport, policy)
+                    .await?;
+            Ok(json!({
+                "kb_id": kb_id,
+                "owner": owner.fingerprint(),
+                "transport": transport.as_str(),
+                "policy": policy.map(|p| p.as_str()),
+                "created": created,
+                "status": "shared",
+                "message": format!(
+                    "KB '{kb_id}' is shared over the P2P mesh (transport={}{}). Mint a join \
+                     ticket to invite a peer.",
+                    transport.as_str(),
+                    policy
+                        .map(|p| format!(", policy={}", p.as_str()))
+                        .unwrap_or_default(),
+                ),
+            }))
+        }
+
         _ => Err(DaemonError::MethodNotFound(method.to_string())),
+    }
+}
+
+/// Establish (or widen) a P2P mesh share for `kb_id` directly via the control
+/// socket — the daemon's self-sufficient `kb-share-p2p` path (ADR-025). Creates
+/// the `kbc:{kb_id}` collection owned by this daemon and exposed on the mesh if it
+/// doesn't exist; otherwise widens the existing collection's transport policy to
+/// include P2p (and optionally sets the join policy). Returns `created` (true on a
+/// fresh collection). Mirrors the owner-binding + transport-widen of the TCP
+/// `kb/share` handler, sourced from this daemon's identity instead of a session.
+async fn establish_p2p_share(
+    doc_store: &Arc<mae_daemon::doc_store::DocStore>,
+    broadcaster: &mae_mcp::broadcast::SharedBroadcaster,
+    owner: &mae_mcp::identity::Identity,
+    kb_id: &str,
+    transport: mae_sync::kb::TransportPolicy,
+    policy: Option<mae_sync::kb::JoinPolicy>,
+) -> Result<bool, DaemonError> {
+    let owner_fp = owner.fingerprint();
+    let collection_doc = format!("kbc:{kb_id}");
+
+    // Persist a collection update + broadcast it to any subscribed sync session
+    // (parity with the TCP `kb/share` persist+broadcast).
+    async fn persist(
+        doc_store: &mae_daemon::doc_store::DocStore,
+        broadcaster: &mae_mcp::broadcast::SharedBroadcaster,
+        collection_doc: &str,
+        update: &[u8],
+    ) -> Result<(), DaemonError> {
+        let result = doc_store
+            .apply_update(collection_doc, update, None)
+            .await
+            .map_err(|e| DaemonError::Internal(format!("persist collection: {e}")))?;
+        broadcaster
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .broadcast(&mae_mcp::broadcast::EditorEvent::SyncUpdate {
+                buffer_name: collection_doc.to_string(),
+                update_base64: mae_sync::encoding::update_to_base64(update),
+                wal_seq: result.wal_seq,
+            });
+        Ok(())
+    }
+
+    if doc_store.has_doc(&collection_doc).await {
+        // Existing collection (B-12: never clobber daemon-side membership) — widen
+        // transport to include the mesh + optionally adjust the join policy.
+        let (state_bytes, _sv) = doc_store
+            .encode_state_and_sv(&collection_doc)
+            .await
+            .map_err(|e| DaemonError::Internal(format!("load collection: {e}")))?;
+        let mut coll = mae_sync::kb::KbCollectionDoc::from_bytes(&state_bytes)
+            .map_err(|e| DaemonError::Internal(format!("bad collection: {e}")))?;
+        let raw = coll.transport_policy_raw();
+        let widened = raw.map_or(transport, |c| c.union(transport));
+        if Some(widened) != raw {
+            let update = coll.set_transport_policy(widened);
+            persist(doc_store, broadcaster, &collection_doc, &update).await?;
+        }
+        if let Some(p) = policy {
+            if coll.join_policy() != p {
+                let update = coll.set_join_policy(p);
+                persist(doc_store, broadcaster, &collection_doc, &update).await?;
+            }
+        }
+        Ok(false)
+    } else {
+        // Fresh collection owned by this daemon, exposed on the mesh.
+        let mut coll = mae_sync::kb::KbCollectionDoc::new(kb_id, &owner_fp);
+        coll.set_owner(&owner_fp, owner.label());
+        coll.set_transport_policy(transport);
+        if let Some(p) = policy {
+            coll.set_join_policy(p);
+        }
+        doc_store
+            .share_doc(&collection_doc, &coll.encode_state())
+            .await
+            .map_err(|e| DaemonError::Internal(format!("share collection: {e}")))?;
+        Ok(true)
     }
 }
 
@@ -476,5 +635,85 @@ mod tests {
         .await;
         assert!(matches!(result, Err(DaemonError::InvalidParams(_))));
         assert!(state.lock().await.pending_p2p_joins.is_empty());
+    }
+
+    /// Build a `DaemonState` wired for `p2p/share_kb`: an in-memory doc_store, a
+    /// broadcaster, and an owner identity (mirrors `spawn_collab_server`).
+    fn share_kb_state() -> (Arc<Mutex<DaemonState>>, Arc<mae_mcp::identity::Identity>) {
+        let backend = Arc::new(mae_daemon::storage::SqliteBackend::open_memory().unwrap());
+        let doc_store = Arc::new(mae_daemon::doc_store::DocStore::new(backend, 0));
+        let owner = Arc::new(mae_mcp::identity::Identity::generate("daemon"));
+        let broadcaster: mae_mcp::broadcast::SharedBroadcaster = Arc::new(std::sync::Mutex::new(
+            mae_mcp::broadcast::EventBroadcaster::new(),
+        ));
+        let mut st = DaemonState::new();
+        st.doc_store = Some(doc_store);
+        st.broadcaster = Some(broadcaster);
+        st.owner = Some(Arc::clone(&owner));
+        (Arc::new(Mutex::new(st)), owner)
+    }
+
+    #[tokio::test]
+    async fn share_kb_requires_kb_id() {
+        let (state, _owner) = share_kb_state();
+        let result = dispatch("p2p/share_kb", json!({}), &state).await;
+        assert!(matches!(result, Err(DaemonError::InvalidParams(_))));
+    }
+
+    #[tokio::test]
+    async fn share_kb_without_collab_is_an_error() {
+        // No doc_store/owner wired (collab off or non-key mode) → actionable error,
+        // never a silent success.
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let result = dispatch("p2p/share_kb", json!({"kb_id": "concept:x"}), &state).await;
+        assert!(matches!(result, Err(DaemonError::Internal(_))));
+    }
+
+    #[tokio::test]
+    async fn share_kb_creates_a_mesh_collection_then_widens() {
+        use mae_sync::kb::{JoinPolicy, KbCollectionDoc, Transport, TransportPolicy};
+        let (state, owner) = share_kb_state();
+
+        // First share: creates the collection, owned by this daemon, on the mesh.
+        let result = dispatch(
+            "p2p/share_kb",
+            json!({"kb_id": "concept:x", "policy": "permissive"}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["created"].as_bool(), Some(true));
+        assert_eq!(result["transport"].as_str(), Some("p2p"));
+        assert_eq!(result["status"].as_str(), Some("shared"));
+
+        // The collection now exists with owner = this daemon, P2p exposure, and the
+        // requested permissive join policy — so a mesh peer can actually pull it.
+        let doc_store = state.lock().await.doc_store.clone().unwrap();
+        let (bytes, _sv) = doc_store
+            .encode_state_and_sv("kbc:concept:x")
+            .await
+            .unwrap();
+        let coll = KbCollectionDoc::from_bytes(&bytes).unwrap();
+        assert_eq!(coll.owner(), owner.fingerprint());
+        assert!(coll.transport_policy().allows(Transport::P2p));
+        assert_eq!(coll.join_policy(), JoinPolicy::Permissive);
+
+        // Re-share as hub → widens to Both (the mesh exposure is preserved, B-12).
+        let result = dispatch(
+            "p2p/share_kb",
+            json!({"kb_id": "concept:x", "transport": "hub"}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["created"].as_bool(), Some(false));
+        let (bytes, _sv) = doc_store
+            .encode_state_and_sv("kbc:concept:x")
+            .await
+            .unwrap();
+        let coll = KbCollectionDoc::from_bytes(&bytes).unwrap();
+        assert_eq!(coll.transport_policy(), TransportPolicy::Both);
+        assert!(coll.transport_policy().allows(Transport::P2p));
+        assert!(coll.transport_policy().allows(Transport::Hub));
     }
 }

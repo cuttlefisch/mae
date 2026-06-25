@@ -470,6 +470,18 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
             // owns. Only key mode signs; psk/none keep the legacy unsigned path.
             doc_store.set_signer(Arc::clone(&identity));
 
+            // ADR-025 §"Driving surfaces": expose the collab doc_store + broadcaster
+            // + owner identity to the local control socket, so `p2p/share_kb` can
+            // ESTABLISH a mesh share (create/widen the collection doc to P2p) without
+            // a collab session — the CLI/editor self-sufficient `kb-share-p2p` path.
+            // Key mode only: a P2P share needs the owner-signing identity.
+            {
+                let mut st = state.lock().await;
+                st.doc_store = Some(Arc::clone(&doc_store));
+                st.broadcaster = Some(broadcaster.clone());
+                st.owner = Some(Arc::clone(&identity));
+            }
+
             // P2P mesh (ADR-025 / #88): reuse this key-mode identity as the iroh
             // node identity and gate inbound peers on the same authorized_keys
             // set, sharing the doc_store + broadcaster with the TCP listener.

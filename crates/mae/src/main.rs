@@ -165,6 +165,18 @@ fn apply_collab_launch_overrides(editor: &mut Editor, connect_addr: Option<&str>
 struct DaemonControlClient(std::sync::Mutex<mae_mcp::daemon_client::DaemonClient>);
 
 impl mae_core::DaemonControl for DaemonControlClient {
+    fn share_kb_p2p(
+        &self,
+        kb_id: &str,
+        transport: Option<&str>,
+        policy: Option<&str>,
+    ) -> Result<String, String> {
+        self.0
+            .lock()
+            .map_err(|_| "daemon control channel is poisoned".to_string())?
+            .share_kb_p2p(kb_id, transport, policy)
+            .map_err(|e| e.to_string())
+    }
     fn mint_p2p_ticket(&self, kb_id: &str) -> Result<String, String> {
         self.0
             .lock()
@@ -409,27 +421,31 @@ fn main() -> io::Result<()> {
             }
         }
     }
-    // `mae kb-share-p2p [KB-ID] [--socket PATH]`: mint a P2P join ticket via the
-    // running daemon and print it to stdout (pipe-friendly). The CLI surface of
-    // the `kb-share-p2p` command / `(kb-share-p2p)` Scheme primitive / `kb_share_p2p`
-    // MCP tool — same `DaemonClient::mint_p2p_ticket` backend (ADR-025 §"Driving
-    // surfaces").
+    // `mae kb-share-p2p [KB-ID] [--policy P] [--transport T] [--socket PATH]`:
+    // ESTABLISH the P2P mesh share (create/expose `kbc:{kb_id}` on the mesh) AND
+    // mint a join ticket, printing the ticket to stdout (pipe-friendly). Share
+    // first, mint second: a ticket is only joinable once the KB is actually shared
+    // (ADR-025 §"Driving surfaces"). The CLI surface of the `kb-share-p2p` command /
+    // `(kb-share-p2p)` Scheme primitive / `kb_share_p2p` MCP tool.
     if args.get(1).is_some_and(|a| a == "kb-share-p2p") {
         let kb_id = args
             .get(2)
             .filter(|a| !a.starts_with("--"))
             .cloned()
             .unwrap_or_else(|| "default".to_string());
-        let socket = args
-            .iter()
-            .position(|a| a == "--socket")
-            .and_then(|i| args.get(i + 1))
-            .cloned()
-            .unwrap_or_else(|| {
-                mae_mcp::daemon_client::default_daemon_socket()
-                    .to_string_lossy()
-                    .into_owned()
-            });
+        let flag = |name: &str| -> Option<String> {
+            args.iter()
+                .position(|a| a == name)
+                .and_then(|i| args.get(i + 1))
+                .cloned()
+        };
+        let policy = flag("--policy");
+        let transport = flag("--transport");
+        let socket = flag("--socket").unwrap_or_else(|| {
+            mae_mcp::daemon_client::default_daemon_socket()
+                .to_string_lossy()
+                .into_owned()
+        });
         let mut client = mae_mcp::daemon_client::DaemonClient::new(&socket);
         if let Err(e) = client.connect() {
             eprintln!(
@@ -438,6 +454,15 @@ fn main() -> io::Result<()> {
             );
             std::process::exit(1);
         }
+        // 1. Establish the share so there's something to pull.
+        match client.share_kb_p2p(&kb_id, transport.as_deref(), policy.as_deref()) {
+            Ok(msg) => eprintln!("{msg}"),
+            Err(e) => {
+                eprintln!("error: kb-share-p2p '{kb_id}' (share step): {e}");
+                std::process::exit(1);
+            }
+        }
+        // 2. Mint the join ticket.
         match client.mint_p2p_ticket(&kb_id) {
             Ok(ticket) => {
                 // Just the ticket on stdout, so it pipes cleanly (e.g. | qrencode).
@@ -445,7 +470,7 @@ fn main() -> io::Result<()> {
                 std::process::exit(0);
             }
             Err(e) => {
-                eprintln!("error: kb-share-p2p '{kb_id}': {e}");
+                eprintln!("error: kb-share-p2p '{kb_id}' (mint step): {e}");
                 std::process::exit(1);
             }
         }

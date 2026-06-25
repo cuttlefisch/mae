@@ -34,6 +34,19 @@ pub(crate) fn default_daemon_socket() -> PathBuf {
 /// surfaces"). New P2P actions add one method here + thin shims, never
 /// surface-specific logic.
 pub trait DaemonControl: Send + Sync {
+    /// Establish (or widen) the P2P mesh share for `kb_id` via the daemon's
+    /// `p2p/share_kb` control method — exposes the `kbc:{kb_id}` collection on the
+    /// mesh so a joining peer can actually pull it. Optional `transport`
+    /// (hub|p2p|both) + `policy` (restrictive|invite|permissive). Call this BEFORE
+    /// minting: a ticket is only joinable once the KB is shared. Returns the
+    /// daemon's confirmation, or a human-readable error.
+    fn share_kb_p2p(
+        &self,
+        kb_id: &str,
+        transport: Option<&str>,
+        policy: Option<&str>,
+    ) -> Result<String, String>;
+
     /// Mint a shareable P2P join ticket ("magnet link") for `kb_id` via the
     /// daemon's `p2p/mint_ticket` control method. Returns the `mae://join/…`
     /// string, or a human-readable error (daemon down, P2P disabled, …).
@@ -192,6 +205,11 @@ impl KbContext {
              P2P with `mae setup-collab --p2p`"
                 .to_string()
         })?;
+        // Establish the mesh share FIRST (default transport=p2p; default join policy =
+        // the collection's Invite — joins go pending for owner approval), THEN mint a
+        // ticket: a minted ticket is only joinable once the KB is actually shared
+        // over the mesh (ADR-025 §"Driving surfaces").
+        control.share_kb_p2p(kb_id, None, None)?;
         control.mint_p2p_ticket(kb_id)
     }
 
@@ -309,6 +327,14 @@ mod tests {
     /// testable without a running daemon.
     struct StubControl(Result<String, String>);
     impl DaemonControl for StubControl {
+        fn share_kb_p2p(
+            &self,
+            _kb_id: &str,
+            _transport: Option<&str>,
+            _policy: Option<&str>,
+        ) -> Result<String, String> {
+            self.0.clone()
+        }
         fn mint_p2p_ticket(&self, _kb_id: &str) -> Result<String, String> {
             self.0.clone()
         }
