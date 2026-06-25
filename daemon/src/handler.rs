@@ -234,6 +234,23 @@ pub async fn dispatch(
             }
         }
 
+        "kb/todo_nodes" => {
+            // Phase D thin-client: the agenda buffer was mirror-only. Serve all
+            // TODO-bearing nodes as full (serde) nodes — minus the heavy crdt_doc
+            // lineage, which the agenda doesn't need.
+            let state = state.lock().await;
+            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
+            let nodes: Vec<Value> = ql
+                .todo_nodes()
+                .into_iter()
+                .map(|mut n| {
+                    n.crdt_doc = None;
+                    serde_json::to_value(&n).unwrap_or(Value::Null)
+                })
+                .collect();
+            Ok(json!(nodes))
+        }
+
         "kb/id_title_pairs" => {
             let prefix = params["prefix"].as_str();
             let state = state.lock().await;
@@ -713,6 +730,8 @@ mod tests {
         assert!(matches!(n, Err(DaemonError::NotReady)));
         let r = dispatch("kb/related", json!({"id": "concept:x"}), &state).await;
         assert!(matches!(r, Err(DaemonError::NotReady)));
+        let t = dispatch("kb/todo_nodes", json!({}), &state).await;
+        assert!(matches!(t, Err(DaemonError::NotReady)));
     }
 
     #[tokio::test]
