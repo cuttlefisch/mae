@@ -7,7 +7,7 @@ the KB backend — reframes cozo as a *projection*), ADR-006 (collaborative stat
 principle #11 (CRDT-first sync).
 **Feeds:** ADR-030 (in-text relationship grammar / parser-as-projector), ADR-031 (derived
 intelligence), ADR-032 (durable CRDT store), ADR-033 (operation coordination), ADR-034
-(cross-peer derived-artifact sharing).
+(cross-peer derived-artifact sharing), ADR-035 (editor↔daemon boundary — the daemon is optional).
 
 ## Context
 
@@ -85,7 +85,9 @@ intelligence — maintained locally by every daemon that holds a CRDT replica.
 
 6. **The daemon owns truth + projection + intelligence; the editor is a client** (Phase D): when
    a daemon is present the editor edits via the CRDT and queries the daemon's cozo via RPC,
-   keeping no second durable master. A daemon-less editor runs an embedded equivalent.
+   keeping no second durable master. **The daemon is OPTIONAL, not required** — a daemon-less editor
+   runs the embedded in-process equivalent as the default *floor* (`daemon_mode=off`), not merely a
+   fallback. ADR-035 formalizes the editor↔daemon boundary + the `daemon_mode` behavior-set.
 
 ### Per-configuration behavior
 
