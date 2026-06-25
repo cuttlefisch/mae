@@ -71,6 +71,12 @@ pub trait KbQueryLayer: Send + Sync {
         Vec::new()
     }
 
+    /// Evict cached entries for node `id` (Phase D3b). A no-op for layers without a
+    /// cache (`CozoQueryLayer`, `FederatedQuery`); `LruQueryLayer` overrides it. The
+    /// editor calls this when a KB node changes remotely (a `sync_update` from the
+    /// daemon) so the next daemon-routed read returns fresh content, not a stale hit.
+    fn invalidate(&self, _id: &str) {}
+
     /// Return all known namespace prefixes (e.g., "cmd:", "concept:").
     fn namespace_prefixes(&self) -> Vec<String> {
         let mut prefixes = std::collections::HashSet::new();

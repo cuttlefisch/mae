@@ -961,6 +961,13 @@ impl Editor {
             if let Some(node) = node {
                 self.kb_persist_node_in(&target, &node);
             }
+            // Phase D3b: the node changed remotely — evict the daemon LRU entry so the
+            // next daemon-routed read returns the fresh content (no-op for the local
+            // query layer, which has no cache). Keeps reads consistent without a full
+            // mirror when several editors share a daemon-hosted KB.
+            if let Some(q) = self.kb.query_layer() {
+                q.invalidate(node_id);
+            }
         }
         tracing::debug!(target: "kb_sync", node_id = %node_id, owner = ?target, changed, "recv: applied remote kb update");
         Ok(changed)

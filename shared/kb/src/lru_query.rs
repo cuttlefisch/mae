@@ -357,6 +357,12 @@ impl KbQueryLayer for LruQueryLayer {
             }
         }
     }
+
+    // Phase D3b: route the trait-level invalidate to the inherent cache eviction
+    // (inherent method resolution takes precedence, so this is not recursive).
+    fn invalidate(&self, id: &str) {
+        self.invalidate(id);
+    }
 }
 
 // --- JSON parsing helpers ---
