@@ -44,10 +44,16 @@ compute is ADR-034; this ADR defines the local mechanism each peer runs.)
    differ slightly across peers running different models — acceptable for RAG, and the reason
    embeddings are explicitly *not* CRDT truth.
 
-5. **Enrichment runs on a coordinator** (ADR-033 lease): KB-wide enrichment/embedding is executed
-   by a single coordinator (owner default / elected) rather than every daemon, and its results are
-   shared (relationships as CRDT content per ADR-030; vectors via ADR-034). This is what prevents
-   N peers from re-spending compute/AI tokens.
+5. **Enrichment is a local projection; multi-peer enrichment is coordinated.** Like FTS, embeddings
+   are derived locally from content — a single-user, daemon-less editor (`daemon_mode=off`, ADR-035)
+   computes its own vectors/enrichment in-process; no daemon or coordinator is required. The
+   coordinator pattern is purely a **multi-peer deduplication** optimization: when *several peers*
+   share a KB, KB-wide enrichment/embedding runs on a single coordinator (owner default / elected,
+   ADR-033 lease) rather than every daemon, and its results are shared (relationships as CRDT content
+   per ADR-030; vectors via ADR-034) — which is what prevents N peers from re-spending compute/AI
+   tokens. The prerequisite for *any* of this is an embedding provider, which MAE does not yet ship
+   (the binding constraint — see ADR-035's feasibility analysis), so enrichment is future work
+   regardless of daemon mode.
 
 6. **Hygiene/health** scans run against the cozo projection (already on the daemon scheduler);
    suggestions that are worth sharing are written into the source text as authored content
