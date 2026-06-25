@@ -795,6 +795,99 @@ impl Editor {
         }
     }
 
+    /// Recompute whether the daemon is hosting the primary KB right now (Phase D,
+    /// ADR-029). The **single writer** of `daemon_hosts_primary`: hosting is on iff
+    /// the user opted in (`daemon_default`), a daemon read layer is wired
+    /// (`has_daemon`), and the collab write channel is connected (so primary edits
+    /// can reach the daemon's CRDT). Call after daemon connect, on collab
+    /// connect/disconnect, and on `set_option("daemon_default", …)`.
+    ///
+    /// Deliberately distinct from the durable `registry.primary_shared` (peer-share
+    /// intent): hosting is runtime-only, so it never implies peer broadcast and never
+    /// leaks into a later daemon-less launch. The collab connection in the typical
+    /// setup is the local daemon; distinguishing a remote peer from the local daemon
+    /// is a later refinement (the gate is opt-in via `daemon_default`).
+    pub fn refresh_daemon_host_state(&mut self) {
+        let hosting = self.kb.daemon_default
+            && self.kb.has_daemon()
+            && matches!(
+                self.collab.status,
+                crate::editor::CollabStatus::Connected { .. }
+            );
+        self.kb.set_daemon_hosts_primary(hosting);
+    }
+
+    /// The collab id a node's edits should sync under, or `None` if this node's
+    /// KB doesn't sync. The single broadcast gate (ADR-019 + Phase D): an owning
+    /// KB with a durable share marker (`kb_collab_id_of`), or — for the primary —
+    /// the daemon-hosted "default" when `daemon_hosts_primary`. Gated on
+    /// `kb_sync_mode == "on_save"`. Shared by update/create/delete.
+    fn kb_sync_target(&self, owner: &Option<String>) -> Option<String> {
+        if self.collab.kb_sync_mode != "on_save" {
+            return None;
+        }
+        self.kb_collab_id_of(owner).or_else(|| {
+            (owner.is_none() && self.kb.daemon_hosts_primary())
+                .then(|| crate::editor::KB_DEFAULT_NAME.to_string())
+        })
+    }
+
+    /// CRDT-upsert `node` on its owning in-memory KB and enqueue the resulting
+    /// `kb/node_update` to EXACTLY ONE queue (ADR-020 single-source emit): the
+    /// crash-durable SQLite pending queue when a store exists (persisted at edit
+    /// time, even offline), else the transient in-memory fallback. The peer's
+    /// stable, epoch-rotated `client_id` authors the edit (ADR-020 B-16 / ADR-023).
+    /// Shared by `kb_update_node` + `kb_create_node`.
+    fn kb_enqueue_node_crdt(
+        &mut self,
+        owner: &Option<String>,
+        kb_id: &str,
+        node_id: &str,
+        node: mae_kb::Node,
+    ) {
+        let cid = self.kb_client_id_for(kb_id);
+        let update_bytes = match owner {
+            None => self.kb.primary.upsert_with_crdt(node, cid),
+            Some(uuid) => self
+                .kb
+                .instances
+                .get_mut(uuid)
+                .and_then(|kb| kb.upsert_with_crdt(node, cid)),
+        };
+        let Some(update_bytes) = update_bytes else {
+            return;
+        };
+        if let Some(ref store) = self.kb.store {
+            match store.push_pending_update(kb_id, node_id, &update_bytes) {
+                Ok(()) => {
+                    tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, bytes = update_bytes.len(), "edit: persisted to durable pending queue (survives offline + restart)")
+                }
+                Err(e) => {
+                    tracing::warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, error = %e, "edit: failed to persist durable pending update")
+                }
+            }
+        } else {
+            self.collab.pending_kb_updates.push((
+                kb_id.to_string(),
+                node_id.to_string(),
+                update_bytes,
+            ));
+        }
+    }
+
+    /// Phase D1.1: enqueue a collection-manifest op (`kb/collection_node_*`) so a
+    /// created node joins the daemon's `kbc:` manifest (projector materializes it)
+    /// or a deleted one leaves it. Best-effort (drained when connected; creates also
+    /// self-heal on the reconnect re-share).
+    fn kb_enqueue_manifest_op(&mut self, kb_id: &str, node_id: &str, title: &str, add: bool) {
+        self.collab.pending_kb_manifest.push((
+            kb_id.to_string(),
+            node_id.to_string(),
+            title.to_string(),
+            add,
+        ));
+    }
+
     /// Apply a remote CRDT update to a KB node, routing it to its **owning**
     /// store — primary or the owning federated instance — not always primary
     /// (ADR-019 receive-side federation; mirror of the write-side fix). For a
@@ -893,7 +986,18 @@ impl Editor {
         let node =
             mae_kb::Node::new(id, title, kind, body).with_source(mae_kb::NodeSource::Manual, 0);
         self.kb_persist_node(&node);
-        self.kb.primary.insert(node);
+        // Phase D1.1 (ADR-029): a created node on a daemon-hosted (or shared) primary
+        // must reach the daemon's CRDT — author it via `upsert_with_crdt` (enqueues the
+        // node doc) AND add it to the `kbc:` manifest, so the projector materializes it.
+        // Otherwise a create would only sync on its first edit. Non-syncing → plain
+        // insert (today's embedded behavior).
+        let owner: Option<String> = None;
+        if let Some(kb_id) = self.kb_sync_target(&owner) {
+            self.kb_enqueue_node_crdt(&owner, &kb_id, id, node);
+            self.kb_enqueue_manifest_op(&kb_id, id, title, true);
+        } else {
+            self.kb.primary.insert(node);
+        }
         self.set_status(format!("KB node created: {}", id));
         Ok(())
     }
@@ -931,6 +1035,15 @@ impl Editor {
                     kb.remove(id);
                 }
             }
+        }
+        // Phase D1.1 (ADR-029): if this node's KB syncs to the daemon, remove it from
+        // the `kbc:` manifest so the projector deletes it from the daemon's projection.
+        // (The node doc itself is left orphaned + idle-evicted.) Best-effort: an
+        // offline delete is NOT healed by the reconnect re-share (a CRDT merge only
+        // adds), so it propagates only when connected — acceptable while the local cozo
+        // remains authoritative (durable manifest ops land in D3).
+        if let Some(kb_id) = self.kb_sync_target(&owner) {
+            self.kb_enqueue_manifest_op(&kb_id, id, "", false);
         }
         self.set_status(format!("KB node deleted: {}", id));
         Ok(())
@@ -1095,11 +1208,7 @@ impl Editor {
         // (ADR-019)? Derived from the owning instance's `shared`/`collab_id`,
         // not the transient `shared_kbs` cache — so edits broadcast even right
         // after a restart, before the cache is reconstructed.
-        let shared_kb_id = if self.collab.kb_sync_mode == "on_save" {
-            self.kb_collab_id_of(&owner)
-        } else {
-            None
-        };
+        let shared_kb_id = self.kb_sync_target(&owner);
         tracing::debug!(
             target: "kb_sync",
             node_id = %id,
@@ -1110,46 +1219,9 @@ impl Editor {
         );
 
         if let Some(kb_id) = shared_kb_id {
-            // CRDT-aware upsert on the OWNING in-memory KB to generate update bytes
-            // for broadcasting. ADR-020 B-16: use this peer's STABLE, UNIQUE
-            // client_id (not a hardcoded 1 — two peers sharing a client_id collide
-            // and their concurrent edits diverge). ADR-023: rotated by THIS KB's
-            // authorization epoch so a role-changed member authors under their
-            // current-epoch client_id (the daemon fences any stale-epoch lineage).
-            let cid = self.kb_client_id_for(&kb_id);
-            let update_bytes = match &owner {
-                None => self.kb.primary.upsert_with_crdt(updated, cid),
-                Some(uuid) => self
-                    .kb
-                    .instances
-                    .get_mut(uuid)
-                    .and_then(|kb| kb.upsert_with_crdt(updated, cid)),
-            };
-            if let Some(update_bytes) = update_bytes {
-                // ADR-020 single-source emit: enqueue to EXACTLY ONE queue. With a
-                // durable store, the CRDT update goes to the crash-durable SQLite
-                // pending queue (acked only on daemon-confirm); without a store it
-                // falls back to the transient in-memory queue. Enqueuing to both
-                // (the old behaviour) caused every shared edit to be sent twice.
-                if let Some(ref store) = self.kb.store {
-                    // ADR-020: persist to the durable queue at EDIT time — including
-                    // while OFFLINE (no connection check here). This is the crash-
-                    // durability point (the row exists before any reconnect/drain);
-                    // logged so the offline enqueue is greppable, not invisible.
-                    match store.push_pending_update(&kb_id, id, &update_bytes) {
-                        Ok(()) => {
-                            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %id, bytes = update_bytes.len(), "edit: persisted to durable pending queue (survives offline + restart)")
-                        }
-                        Err(e) => {
-                            tracing::warn!(target: "kb_sync", kb_id = %kb_id, node_id = %id, error = %e, "edit: failed to persist durable pending update")
-                        }
-                    }
-                } else {
-                    self.collab
-                        .pending_kb_updates
-                        .push((kb_id, id.to_string(), update_bytes));
-                }
-            }
+            // CRDT-aware upsert on the OWNING in-memory KB → enqueue the kb/node_update
+            // (durable or transient; ADR-020 B-16 / ADR-023 epoch-rotated client_id).
+            self.kb_enqueue_node_crdt(&owner, &kb_id, id, updated);
             // Persist the updated node to its owning store.
             let persisted = match &owner {
                 None => self.kb.primary.get(id).cloned(),
@@ -3470,6 +3542,86 @@ mod tests {
         );
     }
 
+    /// Phase D (ADR-029): when the daemon hosts the primary, a primary-node edit
+    /// must queue a CRDT update under the canonical "default" collab id — even
+    /// though the user never ran `kb-share` (durable `primary_shared` stays false).
+    #[test]
+    fn kb_update_node_daemon_hosted_primary_queues_under_default() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "note:alpha",
+            "Alpha",
+            mae_kb::NodeKind::Note,
+            "body",
+        ));
+        editor.collab.kb_sync_mode = "on_save".into();
+        // Daemon hosts the primary at runtime; no durable peer-share marker.
+        editor.kb.set_daemon_hosts_primary(true);
+        assert!(!editor.kb.registry.primary_shared);
+
+        assert!(editor.collab.pending_kb_updates.is_empty());
+        editor
+            .kb_update_node("note:alpha", None, Some("edited"), None)
+            .unwrap();
+        assert_eq!(
+            editor.collab.pending_kb_updates.len(),
+            1,
+            "daemon-hosted primary edit must queue a kb/node_update"
+        );
+        let (kb_id, node_id, _bytes) = &editor.collab.pending_kb_updates[0];
+        assert_eq!(kb_id, crate::editor::KB_DEFAULT_NAME);
+        assert_eq!(node_id, "note:alpha");
+        // Hosting is runtime-only — it must NOT have stamped the durable marker.
+        assert!(
+            !editor.kb.registry.primary_shared,
+            "daemon-hosting must not durably mark the primary as peer-shared"
+        );
+    }
+
+    /// Phase D: with the daemon NOT hosting and no durable share, a primary edit
+    /// stays local (no broadcast) — today's embedded behavior is unchanged.
+    #[test]
+    fn kb_update_node_unhosted_primary_does_not_queue() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "note:beta",
+            "Beta",
+            mae_kb::NodeKind::Note,
+            "body",
+        ));
+        editor.collab.kb_sync_mode = "on_save".into();
+        assert!(!editor.kb.daemon_hosts_primary());
+        assert!(!editor.kb.registry.primary_shared);
+
+        editor
+            .kb_update_node("note:beta", None, Some("edited"), None)
+            .unwrap();
+        assert!(
+            editor.collab.pending_kb_updates.is_empty(),
+            "un-hosted, un-shared primary edit must not queue"
+        );
+    }
+
+    /// Phase D: `refresh_daemon_host_state` is the single writer of the runtime
+    /// flag and requires BOTH the opt-in option and a live daemon connection.
+    #[test]
+    fn refresh_daemon_host_state_requires_optin_and_connection() {
+        let mut editor = Editor::new();
+        // Force the flag on, then prove refresh clears it without the preconditions.
+        editor.kb.set_daemon_hosts_primary(true);
+        editor.kb.daemon_default = false;
+        editor.refresh_daemon_host_state();
+        assert!(!editor.kb.daemon_hosts_primary(), "no opt-in ⇒ not hosting");
+
+        // Opt in, but with no daemon read layer / not Connected ⇒ still not hosting.
+        editor.kb.daemon_default = true;
+        editor.refresh_daemon_host_state();
+        assert!(
+            !editor.kb.daemon_hosts_primary(),
+            "opt-in without a connected daemon ⇒ not hosting"
+        );
+    }
+
     /// I-9: deleting an instance node must resolve it (not "No KB node").
     #[test]
     fn kb_delete_node_resolves_federated_instance() {
@@ -3491,6 +3643,76 @@ mod tests {
             .get("uuid-collabtest")
             .and_then(|kb| kb.get("collabtest:beta"))
             .is_none());
+    }
+
+    /// Phase D1.1: creating a node on a daemon-hosted primary must emit the node
+    /// doc AND a collection-manifest add (so the projector materializes it — not
+    /// just on first edit).
+    #[test]
+    fn kb_create_node_daemon_hosted_emits_doc_and_manifest_add() {
+        let mut editor = Editor::new();
+        editor.collab.kb_sync_mode = "on_save".into();
+        editor.kb.set_daemon_hosts_primary(true);
+
+        assert!(editor.collab.pending_kb_updates.is_empty());
+        assert!(editor.collab.pending_kb_manifest.is_empty());
+        editor
+            .kb_create_node("note:new", "New", "body", mae_kb::NodeKind::Note)
+            .unwrap();
+
+        // Node doc enqueued (transient queue — no durable store in a unit test).
+        assert_eq!(editor.collab.pending_kb_updates.len(), 1);
+        assert_eq!(
+            editor.collab.pending_kb_updates[0].0,
+            crate::editor::KB_DEFAULT_NAME
+        );
+        assert_eq!(editor.collab.pending_kb_updates[0].1, "note:new");
+        // Manifest add enqueued (kb_id, node_id, title, add=true).
+        assert_eq!(editor.collab.pending_kb_manifest.len(), 1);
+        let (kb_id, node_id, title, add) = &editor.collab.pending_kb_manifest[0];
+        assert_eq!(kb_id, crate::editor::KB_DEFAULT_NAME);
+        assert_eq!(node_id, "note:new");
+        assert_eq!(title, "New");
+        assert!(*add);
+        // And the node exists in the in-memory primary KB.
+        assert!(editor.kb.primary.get("note:new").is_some());
+    }
+
+    /// Phase D1.1: with no daemon hosting, a create stays local — no CRDT/manifest
+    /// traffic (embedded behavior unchanged).
+    #[test]
+    fn kb_create_node_unhosted_stays_local() {
+        let mut editor = Editor::new();
+        editor.collab.kb_sync_mode = "on_save".into();
+        editor
+            .kb_create_node("note:loc", "Local", "body", mae_kb::NodeKind::Note)
+            .unwrap();
+        assert!(editor.collab.pending_kb_updates.is_empty());
+        assert!(editor.collab.pending_kb_manifest.is_empty());
+        assert!(editor.kb.primary.get("note:loc").is_some());
+    }
+
+    /// Phase D1.1: deleting a node on a daemon-hosted primary enqueues a
+    /// collection-manifest remove (so the projector drops it from cozo).
+    #[test]
+    fn kb_delete_node_daemon_hosted_enqueues_manifest_remove() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "note:del",
+            "Del",
+            mae_kb::NodeKind::Note,
+            "b",
+        ));
+        editor.collab.kb_sync_mode = "on_save".into();
+        editor.kb.set_daemon_hosts_primary(true);
+
+        editor.kb_delete_node("note:del").unwrap();
+        assert_eq!(editor.collab.pending_kb_manifest.len(), 1);
+        let (kb_id, node_id, _title, add) = &editor.collab.pending_kb_manifest[0];
+        assert_eq!(kb_id, crate::editor::KB_DEFAULT_NAME);
+        assert_eq!(node_id, "note:del");
+        assert!(!*add, "delete must enqueue a manifest REMOVE");
+        assert!(editor.kb.primary.get("note:del").is_none());
     }
 
     /// Helper: a registry instance marked shared (uuid = "uuid-ct", collab_id =

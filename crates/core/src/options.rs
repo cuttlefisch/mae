@@ -489,6 +489,9 @@ impl OptionRegistry {
                 opt!("daemon_cache_size", &["daemon-cache-size"],
                     "Maximum nodes in LRU cache (0 = unbounded)",
                     OptionKind::Int, "200", Some("daemon.cache_size"), &[]),
+                opt!("daemon_default", &["daemon-default"],
+                    "When a local daemon is connected, host the primary KB on it (CRDT source of truth) instead of the editor's on-disk store (Phase D)",
+                    OptionKind::Bool, "false", Some("daemon.host_primary"), &[]),
             ],
         }
     }

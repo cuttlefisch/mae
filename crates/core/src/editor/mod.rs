@@ -316,6 +316,12 @@ pub struct CollabState {
     /// Shared KB tracking: kb_id → set of node_ids being synced.
     /// Populated on KbShared (host) and KbJoined (guest) events.
     pub shared_kbs: HashMap<String, HashSet<String>>,
+    /// Phase D (ADR-029): kb_ids for which a *daemon-host* share is in flight
+    /// (auto-hosting the primary on connect). Consumed on the matching `KbShared`
+    /// to route it down the runtime-only host path (NO durable `primary_shared`
+    /// marker — hosting must not imply peer-share or survive a daemon-less launch).
+    /// Also a once-per-connection guard against re-enqueuing the host share.
+    pub daemon_host_pending: HashSet<String>,
     /// KB sync mode: "manual" (explicit :kb-sync), "on_save" (auto on node edit).
     pub kb_sync_mode: String,
     /// Epoch-fence resolution: "prompt" (raise the ADR-024 Accept/Keep/Stash
@@ -326,6 +332,11 @@ pub struct CollabState {
     /// fallback used only when there is no durable store; store-backed updates
     /// live in the SQLite pending queue (ADR-020 single-source emit).
     pub pending_kb_updates: Vec<(String, String, Vec<u8>)>, // (kb_id, node_id, update_bytes)
+    /// Phase D1.1 (ADR-029): pending collection-manifest ops to send — `(kb_id,
+    /// node_id, title, add)`. A *created* node joins the daemon's `kbc:` manifest
+    /// (so the projector materializes it); a *deleted* one leaves it. Best-effort
+    /// (drained when connected); creates also self-heal via the reconnect re-share.
+    pub pending_kb_manifest: Vec<(String, String, String, bool)>,
     /// Durable-queue rowids of `kb/node_update`s currently on the wire awaiting the
     /// daemon's apply-confirmation (ADR-020 queue→send→confirm→ack). Prevents the
     /// drain from re-sending an in-flight row every tick; cleared on ack, requeue,
@@ -414,6 +425,8 @@ impl CollabState {
             pending_awareness: None,
             last_awareness_sent: std::time::Instant::now(),
             shared_kbs: HashMap::new(),
+            daemon_host_pending: HashSet::new(),
+            pending_kb_manifest: Vec::new(),
             kb_sync_mode: KB_SYNC_MODE_DEFAULT.to_string(),
             fence_resolution: "prompt".to_string(),
             pending_kb_updates: Vec::new(),

@@ -234,6 +234,15 @@ pub enum CollabCommand {
         role: String,
         add: bool,
     },
+    /// Phase D1.1 (ADR-029): add/remove a node in a KB's collection manifest so the
+    /// daemon's projector materializes the create/removes the delete. The node doc
+    /// itself rides `KbNodeUpdate`; this carries only the manifest membership.
+    KbCollectionNode {
+        kb_id: String,
+        node_id: String,
+        title: String,
+        add: bool,
+    },
     /// Approve a pending join request as `role` (owner-only, ADR-018).
     KbApprove {
         kb_id: String,
@@ -493,6 +502,22 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         }
         if in_mem > 0 {
             tracing::debug!(target: "kb_sync", count = in_mem, "drain: flushed in-memory kb updates");
+        }
+
+        // Phase D1.1: drain collection-manifest ops (created/deleted nodes) →
+        // kb/collection_node_*. Best-effort: only sent when connected; creates also
+        // self-heal on the reconnect re-share (which rebuilds the full manifest).
+        for (kb_id, node_id, title, add) in std::mem::take(&mut editor.collab.pending_kb_manifest) {
+            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, add, "drain: send kb/collection_node");
+            let cmd = CollabCommand::KbCollectionNode {
+                kb_id,
+                node_id,
+                title,
+                add,
+            };
+            if collab_tx.try_send(cmd).is_err() {
+                warn!("collab command channel full — KB manifest op dropped");
+            }
         }
     }
 
@@ -872,6 +897,7 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::KbAdoptNode { .. } => "kb-adopt-node",
         CollabCommand::KbNodeUpdate { .. } => "kb-node-update",
         CollabCommand::KbMember { .. } => "kb-member",
+        CollabCommand::KbCollectionNode { .. } => "kb-collection-node",
     }
 }
 
@@ -1070,11 +1096,42 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 info!(count = resubscribed, "reconnect: re-subscribing shared KBs");
             }
 
+            // Phase D (ADR-029): if opted in, host the primary KB on the daemon as a
+            // "shared-with-self" collection (kbc:default). refresh_daemon_host_state()
+            // flips the runtime gate now that we're Connected; if hosting and not
+            // already in flight this connection, enqueue ONE host-only share — the
+            // idempotent kb/share imports the primary into the daemon's CRDT, which the
+            // projector materializes. host_only routing (no durable marker) is keyed by
+            // daemon_host_pending, consumed on the KbShared confirm.
+            editor.refresh_daemon_host_state();
+            if editor.kb.daemon_hosts_primary() {
+                let kb_id = mae_core::KB_DEFAULT_NAME.to_string();
+                if editor.collab.daemon_host_pending.insert(kb_id.clone()) {
+                    let node_ids: Vec<String> = editor.kb.primary.list_ids(None);
+                    info!(
+                        kb = %kb_id,
+                        nodes = node_ids.len(),
+                        "Phase D: hosting primary KB on daemon (host-only share)"
+                    );
+                    editor
+                        .collab
+                        .reconnect_intents
+                        .push_back(CollabIntent::ShareKb {
+                            kb_name: kb_id,
+                            node_ids,
+                        });
+                }
+            }
+
             editor.mark_full_redraw();
         }
         CollabEvent::Disconnected { reason } => {
             info!(reason = %reason, "collab disconnected");
             editor.collab.status = CollabStatus::Disconnected;
+            // Phase D: hosting requires a live write channel — drop the runtime flag
+            // and clear in-flight host shares so the next connect re-hosts cleanly.
+            editor.collab.daemon_host_pending.clear();
+            editor.refresh_daemon_host_state();
             // Re-subscribe on the next connect (ADR-019).
             editor.collab.subscribed_kbs.clear();
             // ADR-020: any kb/node_update whose apply-confirmation was still in flight
@@ -1660,26 +1717,41 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 };
             editor.collab.shared_kbs.insert(kb_id.clone(), node_ids);
 
-            // ADR-019: stamp the DURABLE share marker so "this KB syncs" survives
-            // editor restart / reconnect (the transient `shared_kbs` set above is
-            // only a cache; the emit gate now reads these markers). Persisted to
-            // the XDG-first registry. Only on a confirmed share.
-            let now = mae_kb::data_dir::chrono_now_iso();
-            if kb_id == mae_core::KB_DEFAULT_NAME || kb_id == "primary" {
-                editor.kb.registry.primary_shared = true;
-                editor.kb.registry.primary_collab_id = Some(kb_id.clone());
-            } else if let Some(inst) = editor.kb.registry.find_mut(&kb_id) {
-                inst.shared = true;
-                inst.collab_id = Some(kb_id.clone());
-                inst.last_sync = Some(now);
-            }
-            if let Some(dir) = editor.mae_data_dir() {
-                if let Err(e) = editor.kb.registry.save(&dir) {
-                    warn!(kb = %kb_id, error = %e, "failed to persist shared-KB registry marker");
+            // Phase D (ADR-029): was this a daemon-host share (auto-hosting the
+            // primary) rather than a user/peer share? Consume the in-flight marker.
+            // Host shares are runtime-only — they must NOT stamp the durable
+            // `primary_shared` marker (which would imply peer-share and persist into a
+            // later daemon-less launch). The collection + node docs are already on the
+            // daemon (the point of hosting); we only refresh the runtime gate.
+            if editor.collab.daemon_host_pending.remove(&kb_id) {
+                editor.refresh_daemon_host_state();
+                tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_count, "host: primary hosted on daemon CRDT (runtime, no durable marker)");
+                editor.set_status(format!(
+                    "KB '{}' hosted on daemon ({} nodes)",
+                    kb_id, node_count
+                ));
+            } else {
+                // ADR-019: stamp the DURABLE share marker so "this KB syncs" survives
+                // editor restart / reconnect (the transient `shared_kbs` set above is
+                // only a cache; the emit gate now reads these markers). Persisted to
+                // the XDG-first registry. Only on a confirmed share.
+                let now = mae_kb::data_dir::chrono_now_iso();
+                if kb_id == mae_core::KB_DEFAULT_NAME || kb_id == "primary" {
+                    editor.kb.registry.primary_shared = true;
+                    editor.kb.registry.primary_collab_id = Some(kb_id.clone());
+                } else if let Some(inst) = editor.kb.registry.find_mut(&kb_id) {
+                    inst.shared = true;
+                    inst.collab_id = Some(kb_id.clone());
+                    inst.last_sync = Some(now);
                 }
+                if let Some(dir) = editor.mae_data_dir() {
+                    if let Err(e) = editor.kb.registry.save(&dir) {
+                        warn!(kb = %kb_id, error = %e, "failed to persist shared-KB registry marker");
+                    }
+                }
+                tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_count, "share: durable marker stamped");
+                editor.set_status(format!("KB '{}' shared ({} nodes)", kb_id, node_count));
             }
-            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_count, "share: durable marker stamped");
-            editor.set_status(format!("KB '{}' shared ({} nodes)", kb_id, node_count));
             refresh_collab_status_if_open(editor);
         }
         CollabEvent::KbJoined {
@@ -2995,6 +3067,29 @@ async fn run_collab_task(
                                 }
                             }
                         }
+                        // Phase D1.1: collection-manifest add/remove (best-effort,
+                        // fire-and-forget — the daemon broadcasts the kbc: change and the
+                        // projector reconciles; no response tracking needed).
+                        CollabCommand::KbCollectionNode { kb_id, node_id, title, add } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let method = if add {
+                                    "kb/collection_node_add"
+                                } else {
+                                    "kb/collection_node_remove"
+                                };
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req_id,
+                                    "method": method,
+                                    "params": { "kb_id": kb_id, "node_id": node_id, "title": title }
+                                });
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    let _ = write_framed(w, &body, write_timeout).await;
+                                }
+                            }
+                        }
                         CollabCommand::KbApprove { kb_id, principal, role } => {
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
@@ -4244,6 +4339,17 @@ async fn handle_disconnected_cmd(
                     message: format!("Not connected — cannot manage KB '{kb_id}'"),
                 },
             );
+        }
+        // Phase D1.1: a manifest op that arrives while disconnected is dropped
+        // silently (background op, no user-facing error) — the reconnect re-share
+        // rebuilds the full manifest, healing missed creates.
+        CollabCommand::KbCollectionNode {
+            kb_id,
+            node_id,
+            add,
+            ..
+        } => {
+            debug!(kb = %kb_id, node = %node_id, add, "not connected — KB manifest op dropped (heals on reconnect re-share)");
         }
     }
 }

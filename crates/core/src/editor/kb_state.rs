@@ -104,6 +104,17 @@ pub struct KbContext {
     daemon_query: Option<Arc<dyn KbQueryLayer>>,
     /// Whether daemon connection is enabled.
     pub daemon_enabled: bool,
+    /// Option (`daemon_default`): when a local daemon is connected, host the
+    /// primary KB on it (CRDT source of truth) instead of the editor's on-disk
+    /// store (Phase D, ADR-029). Opt-in; default off. Persisted via `set-save`.
+    pub daemon_default: bool,
+    /// Runtime single-source-of-truth (NOT persisted): is the daemon hosting the
+    /// primary KB *right now*? Computed only by `Editor::refresh_daemon_host_state`
+    /// from `daemon_default` + daemon read-layer presence + collab connectivity.
+    /// Distinct from the durable `registry.primary_shared` (peer-share intent), so
+    /// hosting never implies peer broadcast and never survives into a daemon-less
+    /// launch. Read via [`KbContext::daemon_hosts_primary`].
+    daemon_hosts_primary: bool,
     /// Daemon control channel for synchronous control-socket ops (P2P ticket
     /// mint/join, …). Injected by the binary; `None` when no daemon is wired.
     daemon_control: Option<Arc<dyn DaemonControl>>,
@@ -231,6 +242,20 @@ impl KbContext {
         self.daemon_query.is_some()
     }
 
+    /// Whether the daemon is hosting the primary KB right now (Phase D). The
+    /// runtime gate for routing primary edits to the daemon's CRDT + (later
+    /// phases) skipping the local cozo. Written only by
+    /// `Editor::refresh_daemon_host_state`.
+    pub fn daemon_hosts_primary(&self) -> bool {
+        self.daemon_hosts_primary
+    }
+
+    /// Set the runtime daemon-hosts-primary flag. Internal to
+    /// `Editor::refresh_daemon_host_state` — do not toggle elsewhere.
+    pub(crate) fn set_daemon_hosts_primary(&mut self, hosting: bool) {
+        self.daemon_hosts_primary = hosting;
+    }
+
     /// Build or rebuild the federated query layer from current stores.
     /// Call after store/instance_store changes (register, unregister, reimport).
     pub fn rebuild_query_layer(&mut self) {
@@ -298,6 +323,8 @@ impl KbContext {
             query: None,
             daemon_query: None,
             daemon_enabled: false,
+            daemon_default: false,
+            daemon_hosts_primary: false,
             daemon_control: None,
             daemon_socket: default_daemon_socket(),
             daemon_cache_size: 200,

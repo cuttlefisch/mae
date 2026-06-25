@@ -425,6 +425,102 @@ async fn kb_share_preserves_membership_on_owner_reshare() {
     );
 }
 
+/// Phase D1.1 (ADR-029): `kb/collection_node_add`/`_remove` mutate the collection
+/// manifest (`kbc:`) so the projector materializes a created node / drops a deleted
+/// one. The daemon computes the update server-side (mirrors `kb/add_member`).
+#[tokio::test]
+async fn kb_collection_node_add_remove_updates_manifest() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut sd = HashSet::new();
+
+    // Share a collection that starts with one node.
+    let mut coll = KbCollectionDoc::new("testkb", "alice");
+    coll.add_node("testkb:n1", "One");
+    let share = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "kb/share",
+        "params": {
+            "kb_id": "testkb", "name": "testkb",
+            "collection_state": update_to_base64(&coll.encode_state()), "nodes": []
+        }
+    });
+    handle_doc_request(
+        &share.to_string(),
+        &store,
+        &bc,
+        std::time::Instant::now(),
+        0,
+        &mut sd,
+    )
+    .await;
+
+    // Add a node to the manifest via the new RPC.
+    let add = serde_json::json!({
+        "jsonrpc": "2.0", "id": 2, "method": "kb/collection_node_add",
+        "params": { "kb_id": "testkb", "node_id": "testkb:n2", "title": "Two" }
+    });
+    let resp = handle_doc_request(
+        &add.to_string(),
+        &store,
+        &bc,
+        std::time::Instant::now(),
+        0,
+        &mut sd,
+    )
+    .await;
+    assert!(
+        resp.error.is_none(),
+        "collection_node_add failed: {:?}",
+        resp.error
+    );
+    let ids: Vec<String> = load_collection(&store, "testkb")
+        .await
+        .unwrap()
+        .list_nodes()
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        ids.contains(&"testkb:n2".to_string()),
+        "added node must be in the manifest: {ids:?}"
+    );
+
+    // Remove the original node.
+    let rm = serde_json::json!({
+        "jsonrpc": "2.0", "id": 3, "method": "kb/collection_node_remove",
+        "params": { "kb_id": "testkb", "node_id": "testkb:n1" }
+    });
+    let resp = handle_doc_request(
+        &rm.to_string(),
+        &store,
+        &bc,
+        std::time::Instant::now(),
+        0,
+        &mut sd,
+    )
+    .await;
+    assert!(
+        resp.error.is_none(),
+        "collection_node_remove failed: {:?}",
+        resp.error
+    );
+    let ids: Vec<String> = load_collection(&store, "testkb")
+        .await
+        .unwrap()
+        .list_nodes()
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(
+        !ids.contains(&"testkb:n1".to_string()),
+        "removed node must be gone: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"testkb:n2".to_string()),
+        "the added node remains: {ids:?}"
+    );
+}
+
 #[tokio::test]
 async fn sync_update_missing_doc_returns_error() {
     let store = test_doc_store();
