@@ -401,6 +401,25 @@ Failure mode.** Log one row per action in your note file with a probe slug.
   authorized_keys)`; the peer gets no KB.
 - **Evidence:** the reject log line.
 
+### S13 — mDNS LAN discovery (the fast-path)
+
+- **Setup:** alice and bob on the **same LAN**; both editors started with collab on
+  (each registers a `_mae-sync._tcp.local` mDNS service via `collab-start`).
+- **Action:** on bob, `:collab-discover` (MCP `collab_discover`).
+- **Expected:** bob's discovered-peers list includes **alice** (her `user`, the
+  resolved `host:port`, `kb_count` from the TXT record); each side **filters out its
+  own** service.
+- **Acceptance:** alice appears in bob's discovery list with the correct port +
+  kb_count; bob never lists himself. Verify the reverse (alice discovers bob).
+- **Evidence:** `:collab-discover` output; the daemon's `registered mDNS service` /
+  `discovered MAE peer via mDNS` log lines.
+- **Note (scope):** mDNS today advertises the **hub** TCP endpoint + `user_name` (it
+  predates the mesh). It is the LAN *discovery* fast-path (ADR-025); wiring a
+  discovered peer's **iroh node-id** into a mesh dial (so a LAN join needs no manual
+  ticket exchange) is a follow-up — for now, exchange the ticket out-of-band (S1/S2)
+  even on a LAN. The register→browse→**resolve** round-trip itself is covered by the
+  gated `mdns_round_trip_discovers_a_registered_peer` test (`MAE_MDNS_E2E=1`).
+
 ### Matrix summary
 
 | # | Scenario | Headline assertion |
@@ -417,6 +436,7 @@ Failure mode.** Log one row per action in your note file with a probe slug.
 | S10 | Spoofing | wrong node-id never joins; no anchor on failure |
 | S11 | Transport policy | hub-only not mesh-reachable; owner-bypass |
 | S12 | Unauthorized | non-authorized peer rejected at gate |
+| S13 | mDNS LAN discovery | each editor discovers the other's `_mae-sync._tcp` service (self-filtered) |
 
 A scenario **passes** only when the assertion is confirmed on **both** machines with
 evidence (a peer's content changed / a deny logged) — never just "an update was

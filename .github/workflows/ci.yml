@@ -181,6 +181,18 @@ jobs:
       - name: Daemon check-config
         run: cd daemon && cargo run -- --check-config
         timeout-minutes: 1
+      # mDNS LAN-discovery round-trip (register → browse → resolve). Best-effort:
+      # depends on multicast on the runner, which shared CI can't guarantee, so it's
+      # `continue-on-error` — it gives live signal when it works but never gates the
+      # build on multicast availability/timing. The deterministic parse-path tests
+      # (build_discovered_peer_*) run unconditionally in the `check` job.
+      - name: mDNS discovery round-trip (best-effort)
+        run: cargo test --package mae --bin mae mdns_round_trip -- --nocapture
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          MAE_MDNS_E2E: "1"
+          RUST_LOG: "mae=debug,warn"
 
   containers:
     name: container / smoke + new-user
