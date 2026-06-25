@@ -107,6 +107,29 @@ pub(crate) fn is_durable_doc(name: &str) -> bool {
     name.starts_with("kb:") || name.starts_with("kbc:")
 }
 
+/// Pick the least-recently-used **idle** (no connected client) document to memory-evict
+/// when the in-memory working set is full (ADR-032 A2). Uses `try_lock`, so a busy doc is
+/// skipped (never evict an in-use entry); returns `None` when nothing is evictable. The
+/// caller removes only the in-memory entry — the doc stays on disk and lazy-reloads.
+fn pick_lru_evictable(docs: &HashMap<String, Arc<Mutex<DocEntry>>>) -> Option<String> {
+    let mut victim: Option<(String, std::time::Instant)> = None;
+    for (name, entry) in docs.iter() {
+        if let Ok(doc) = entry.try_lock() {
+            if doc.connected_clients != 0 {
+                continue;
+            }
+            let older = match &victim {
+                Some((_, t)) => doc.last_activity < *t,
+                None => true,
+            };
+            if older {
+                victim = Some((name.clone(), doc.last_activity));
+            }
+        }
+    }
+    victim.map(|(n, _)| n)
+}
+
 impl DocStore {
     pub fn new(storage: Arc<dyn StorageBackend>, compact_threshold: u64) -> Self {
         DocStore {
@@ -183,12 +206,25 @@ impl DocStore {
             return Ok(Arc::clone(entry));
         }
 
-        // Enforce max_documents limit.
+        // ADR-032 (Phase A2): max_documents bounds the IN-MEMORY working set, not the
+        // durable set. When full, memory-evict the least-recently-used idle doc (kept on
+        // disk, lazy-reloaded later) to make room — so a large KB loads via LRU instead of
+        // erroring. If every doc is actively connected, exceed the soft cap rather than
+        // fail a load.
         if self.max_documents > 0 && docs.len() >= self.max_documents {
-            return Err(StorageError::Sqlite(format!(
-                "document limit reached (max: {})",
-                self.max_documents
-            )));
+            match pick_lru_evictable(&docs) {
+                Some(victim) => {
+                    docs.remove(&victim);
+                    debug!(doc = %victim, "lru-evicted idle doc from memory to make room (retained on disk)");
+                }
+                None => {
+                    warn!(
+                        in_memory = docs.len(),
+                        max = self.max_documents,
+                        "doc working set over capacity but all docs active — growing past the soft cap"
+                    );
+                }
+            }
         }
 
         let (sync, wal_seq) = match self.storage.load_document(doc_name).await? {
@@ -1025,27 +1061,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn max_documents_enforced_at_runtime() {
+    async fn max_documents_lru_evicts_to_make_room() {
+        // ADR-032 (Phase A2): max_documents bounds the in-memory working set; a load
+        // past the cap memory-evicts the LRU idle doc (kept on disk) instead of erroring.
         let backend = Arc::new(SqliteBackend::open_memory().unwrap());
         let store = DocStore::new(backend, 500).with_max_documents(2);
 
-        let mut ts = TextSync::with_client_id("", 1);
-        let u1 = ts.insert(0, "doc1 content");
-        let u2 = ts.insert(0, "doc2 content");
-
-        // First two documents succeed.
+        let mut ts1 = TextSync::with_client_id("", 1);
+        let u1 = ts1.insert(0, "one");
         store.apply_update("doc1", &u1, Some(1)).await.unwrap();
+        let mut ts2 = TextSync::with_client_id("", 2);
+        let u2 = ts2.insert(0, "two");
         store.apply_update("doc2", &u2, Some(2)).await.unwrap();
 
-        // Third document must fail with the limit error.
+        // The third load does NOT error — it LRU-evicts an idle doc from memory.
         let mut ts3 = TextSync::with_client_id("", 3);
-        let u3 = ts3.insert(0, "doc3 content");
-        let err = store.apply_update("doc3", &u3, Some(3)).await.unwrap_err();
-        let msg = err.to_string();
+        let u3 = ts3.insert(0, "three");
+        store.apply_update("doc3", &u3, Some(3)).await.unwrap();
         assert!(
-            msg.contains("document limit reached"),
-            "expected 'document limit reached' in error, got: {msg}"
+            store.document_count().await <= 2,
+            "in-memory working set must respect the cap"
         );
+
+        // All three are retrievable — the LRU-evicted one reloads from disk.
+        assert_eq!(store.content("doc1").await.unwrap(), "one");
+        assert_eq!(store.content("doc2").await.unwrap(), "two");
+        assert_eq!(store.content("doc3").await.unwrap(), "three");
+    }
+
+    #[tokio::test]
+    async fn large_kb_loads_past_the_memory_cap() {
+        // A KB with more node docs than the in-memory cap must fully load (every node
+        // retrievable), bounded by LRU memory eviction — the RoamNotes-scale case.
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = DocStore::new(backend, 500).with_max_documents(4);
+
+        for i in 0..20u32 {
+            let mut ts = TextSync::with_client_id("", i as u64 + 1);
+            let u = ts.insert(0, &format!("node {i}"));
+            store
+                .apply_update(&format!("kb:node:{i}"), &u, Some(i as u64 + 1))
+                .await
+                .unwrap();
+        }
+        assert!(
+            store.document_count().await <= 4,
+            "memory bounded by the cap, got {}",
+            store.document_count().await
+        );
+        // Every node is still retrievable (reloads from disk on access).
+        for i in 0..20u32 {
+            assert_eq!(
+                store.content(&format!("kb:node:{i}")).await.unwrap(),
+                format!("node {i}")
+            );
+        }
     }
 
     #[tokio::test]
