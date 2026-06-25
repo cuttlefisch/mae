@@ -70,7 +70,7 @@ sequenceDiagram
     DS-->>P: replicate CRDT op (transport-agnostic)
     DS->>PJ: change feed (changed node)
     PJ->>PJ: parse text → nodes + typed links (deterministic)
-    PJ->>CZ: upsert nodes/links/FTS; schedule embed (content-hash cache)
+    PJ->>CZ: upsert nodes/links/FTS, schedule embed (content-hash cache)
     U->>D: query (search / graph / vector / RAG)
     D->>CZ: read (fast, local)
     CZ-->>U: results
@@ -161,9 +161,9 @@ mandatory.
 flowchart LR
     SRC["same source CRDT + pinned model"] --> COORD["coordinator computes once"]
     COORD -->|"relationships → CRDT text (ADR-030)"| FREE["syncs free — no peer re-runs AI"]
-    COORD -->|"embeddings → content-addressed cache<br/>key (content_hash, model, chunk)"| CACHE["members FETCH, not recompute"]
-    LOCAL["structural graph + FTS"] -->|cheap, deterministic| PERPEER["each peer rebuilds locally"]
-    CACHE -.->|membership-gated trust (ADR-026)| MEMBER["member only; non-member ignored"]
+    COORD -->|"embeddings → content-addressed cache, key (content_hash, model, chunk)"| CACHE["members FETCH, not recompute"]
+    LOCAL["structural graph + FTS"] -->|"cheap, deterministic"| PERPEER["each peer rebuilds locally"]
+    CACHE -.->|"membership-gated trust (ADR-026)"| MEMBER["member only; non-member ignored"]
 ```
 
 Three-way split: reproducible-as-content → **into the CRDT** (free sync); expensive non-textual
