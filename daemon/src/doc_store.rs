@@ -93,6 +93,20 @@ pub struct ApplyResult {
     pub wal_seq: u64,
 }
 
+/// Whether a document holds **durable KB content** — a KB collection (`kbc:{kb_id}`)
+/// or a KB node (`kb:{node_id}`) — versus ephemeral collab-session state.
+///
+/// Durability follows the KB-content naming contract (ADR-029/032): KB docs are the
+/// source of truth and must survive idle eviction. They may be dropped from memory
+/// (and lazy-reloaded on next access), but are **never deleted from storage** — so a
+/// hosted KB with no connected client is not destroyed. Everything else (e.g. a
+/// transient buffer-collab session) keeps the evict-and-delete behavior. A future
+/// refinement could make this an explicit per-doc flag (e.g. to distinguish a hosted
+/// KB from a transiently-previewed one); the prefix rule matches today's flows.
+pub(crate) fn is_durable_doc(name: &str) -> bool {
+    name.starts_with("kb:") || name.starts_with("kbc:")
+}
+
 impl DocStore {
     pub fn new(storage: Arc<dyn StorageBackend>, compact_threshold: u64) -> Self {
         DocStore {
@@ -522,9 +536,16 @@ impl DocStore {
             info!(count = evicted.len(), "evicted idle documents");
         }
 
-        // BUG B fix: delete evicted docs from storage so recovery doesn't reload them.
+        // BUG B fix: delete evicted EPHEMERAL docs from storage so recovery doesn't
+        // reload them. ADR-032: durable KB content (kbc:/kb:) is memory-evicted ONLY —
+        // never deleted — so a hosted KB with no connected client survives on disk and
+        // lazy-reloads on next access (it was compacted above, so the snapshot is fresh).
         drop(docs); // release write lock before async storage calls
         for name in &evicted {
+            if is_durable_doc(name) {
+                debug!(doc = %name, "evict_idle: durable KB doc memory-evicted, retained on disk");
+                continue;
+            }
             if let Err(e) = self.storage.delete_document(name).await {
                 warn!(doc = %name, error = %e, "storage delete after eviction failed");
             }
@@ -828,6 +849,48 @@ mod tests {
             docs.is_empty(),
             "storage should be empty after eviction, got: {:?}",
             docs
+        );
+    }
+
+    #[tokio::test]
+    async fn durable_kb_doc_survives_idle_eviction() {
+        // ADR-032 (Phase A1): a hosted KB with no connected client must NOT be
+        // destroyed by idle eviction — durable KB docs (kbc:/kb:) are memory-evicted
+        // only, never deleted from disk; ephemeral docs keep the evict-and-delete path.
+        let store = test_store();
+
+        // A durable KB node doc with content; the sharer then disconnects.
+        let mut ts = TextSync::with_client_id("", 1);
+        let kb_update = ts.insert(0, "ZEPHYRINE");
+        store.share_doc("kb:concept:x", &kb_update).await.unwrap();
+        store.track_client_disconnect("kb:concept:x").await.unwrap();
+
+        // An ephemeral (non-KB) doc.
+        let mut ts2 = TextSync::with_client_id("", 2);
+        let eph_update = ts2.insert(0, "scratch");
+        store.share_doc("scratch:buf", &eph_update).await.unwrap();
+        store.track_client_disconnect("scratch:buf").await.unwrap();
+
+        // Idle-evict everything (threshold 0).
+        let evicted = store.evict_idle(0).await;
+        assert!(evicted.contains(&"kb:concept:x".to_string()));
+        assert!(evicted.contains(&"scratch:buf".to_string()));
+
+        // Both are dropped from memory.
+        assert!(!store.has_doc("kb:concept:x").await);
+        assert!(!store.has_doc("scratch:buf").await);
+
+        // The durable KB doc survives on disk and lazy-reloads with its content intact.
+        assert_eq!(
+            store.content("kb:concept:x").await.unwrap(),
+            "ZEPHYRINE",
+            "durable KB doc must survive idle eviction on disk"
+        );
+        // The ephemeral doc was deleted from storage → reloads empty.
+        assert_eq!(
+            store.content("scratch:buf").await.unwrap(),
+            "",
+            "ephemeral doc should be deleted from storage on eviction"
         );
     }
 
