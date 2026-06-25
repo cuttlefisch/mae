@@ -29,10 +29,10 @@ Choose your track:
 Each track is a linked sequence of short lessons. Follow the *Next:* links at the bottom.
 
 ** Tracks
-- [[contains:tutorial:vim-familiar][Vim-Familiar Track]] -- for experienced Vim users
-- [[contains:tutorial:what-is-modal][Modal Editing Track]] -- for newcomers to modal editing
-- [[contains:tutorial:ai-setup][AI Setup Track]] -- configure AI providers and tools
-- [[contains:tutorial:collab-setup][Collaboration Track]] -- share buffers and KBs across machines
+- [[tutorial:vim-familiar?rel=contains][Vim-Familiar Track]] -- for experienced Vim users
+- [[tutorial:what-is-modal?rel=contains][Modal Editing Track]] -- for newcomers to modal editing
+- [[tutorial:ai-setup?rel=contains][AI Setup Track]] -- configure AI providers and tools
+- [[tutorial:collab-setup?rel=contains][Collaboration Track]] -- share buffers and KBs across machines
 
 See also: [[id:tutor:index][Lesson-style Tutorial]], [[id:index][Help Index]]
 

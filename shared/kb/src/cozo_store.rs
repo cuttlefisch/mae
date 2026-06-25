@@ -1378,6 +1378,28 @@ impl CozoKbStore {
         Ok(())
     }
 
+    /// Replace ALL of a node's outgoing links with the given typed links (ADR-030
+    /// projection): clear every link from `src`, then insert each
+    /// `(dst, rel_type, weight, confidence)`. Used by the daemon projector to wire the
+    /// typed graph parsed from a node's source text, superseding the generic links
+    /// `insert_node` wires. Idempotent — re-projecting the same node yields the same set.
+    pub fn replace_node_links(
+        &self,
+        src: &str,
+        links: &[(String, String, f64, f64)],
+    ) -> Result<(), KbStoreError> {
+        self.run_mut_params(
+            r#"?[src, dst, rel_type] := *links{src, dst, rel_type}, src = $id
+               :rm links {src, dst, rel_type}"#,
+            btree_params([("id", dv_str(src))]),
+        )
+        .map_err(cozo_err)?;
+        for (dst, rel_type, weight, confidence) in links {
+            self.add_typed_link_with_confidence(src, dst, rel_type, *weight, *confidence)?;
+        }
+        Ok(())
+    }
+
     /// Query links filtered by relationship type.
     pub fn links_typed(&self, id: &str, rel_type: &str) -> Result<Vec<Link>, KbStoreError> {
         let result = self

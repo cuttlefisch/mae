@@ -191,11 +191,10 @@ impl Projector {
 }
 
 /// Project a single KB node doc — the `KbNodeDoc` yrs state stored at `kb:{node_id}` —
-/// into the cozo query store: materialize the node (title/body/tags/kind) + its body
-/// links + FTS via `insert_node` (which parses `[[…]]` links and maintains the index).
-/// Idempotent: re-projecting the same state upserts the same node and replaces its
-/// links. Typed-link metadata (rel_type/weight/confidence from an extended in-text
-/// grammar) lands with ADR-030 in Phase C; B1 is the structural backbone.
+/// into the cozo query store: materialize the node (title/body/tags/kind) + FTS, then
+/// wire the **typed** link graph parsed from the node's source text (ADR-030: rel_type/
+/// weight/confidence live in the text). Deterministic + idempotent — re-projecting the
+/// same state yields the same node + link set.
 pub fn project_node(store: &CozoKbStore, node_id: &str, state: &[u8]) -> Result<(), String> {
     let doc = mae_sync::kb::KbNodeDoc::from_bytes(state)
         .map_err(|e| format!("parse node doc '{node_id}': {e}"))?;
@@ -205,6 +204,17 @@ pub fn project_node(store: &CozoKbStore, node_id: &str, state: &[u8]) -> Result<
     store
         .insert_node(&node)
         .map_err(|e| format!("project node '{node_id}': {e}"))?;
+
+    // Replace insert_node's generic links with the typed parse (ADR-030 / Phase C):
+    // rel/weight/confidence come from each link's inline `?query`.
+    let links: Vec<(String, String, f64, f64)> =
+        mae_kb::org::parse_typed_links(&node.body, &node.id)
+            .into_iter()
+            .map(|l| (l.target, l.rel_type, l.weight, l.confidence))
+            .collect();
+    store
+        .replace_node_links(&node.id, &links)
+        .map_err(|e| format!("project links for '{node_id}': {e}"))?;
     Ok(())
 }
 
@@ -250,7 +260,7 @@ mod tests {
         let doc = mae_sync::kb::KbNodeDoc::new(
             "concept:rope",
             "Rope",
-            "The rope buffer structure. See [[concept:buffer]] for usage.",
+            "The rope buffer structure. See [[concept:buffer?w=0.8&c=0.9][the buffer]].",
             &["alpha".to_string()],
         );
         project_node(&store, "concept:rope", &doc.encode()).unwrap();
@@ -268,12 +278,16 @@ mod tests {
             "FTS should find the node"
         );
 
-        // The body link is projected into the graph.
+        // The body link is projected as a TYPED edge with its in-text weight/confidence
+        // (ADR-030). No `?rel=` → rel_type "references"; the `?w=&c=` query sets w/c.
         let links = store.links_from("concept:rope").unwrap();
-        assert!(
-            links.iter().any(|l| l.dst == "concept:buffer"),
-            "the body link should be projected into the graph, got: {links:?}"
-        );
+        let link = links
+            .iter()
+            .find(|l| l.dst == "concept:buffer")
+            .unwrap_or_else(|| panic!("link not projected, got: {links:?}"));
+        assert_eq!(link.rel_type, "references");
+        assert_eq!(link.weight, 0.8);
+        assert_eq!(link.confidence, 0.9);
     }
 
     #[test]

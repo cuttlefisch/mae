@@ -7,7 +7,7 @@
 
 * AI Chat (Built-in)
 
-*Prerequisite:* [[requires:tutorial:ai-setup][AI Setup]]
+*Prerequisite:* [[tutorial:ai-setup?rel=requires][AI Setup]]
 
 The *AI Chat* (=SPC a p=) is MAE's native conversation interface.
 

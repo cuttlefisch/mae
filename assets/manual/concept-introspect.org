@@ -27,6 +27,6 @@ The AI calls the ~introspect~ tool and receives a structured JSON report.
 - Shell not responding -> check shell section for process status.
 - AI behaving oddly -> check AI section for session state.
 
-[[part_of:concept:debugging][Part of Debugging]].
+[[concept:debugging?rel=part_of][Part of Debugging]].
 
 See also: [[concept:watchdog]], [[concept:event-recording]], [[concept:ai-as-peer]], [[index]]

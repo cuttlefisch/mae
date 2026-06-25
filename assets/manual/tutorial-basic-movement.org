@@ -7,7 +7,7 @@
 
 * Basic Movement
 
-*Prerequisite:* [[requires:tutorial:what-is-modal][What Is Modal Editing?]]
+*Prerequisite:* [[tutorial:what-is-modal?rel=requires][What Is Modal Editing?]]
 
 All movement happens in *Normal mode* (press Escape if you're elsewhere).
 

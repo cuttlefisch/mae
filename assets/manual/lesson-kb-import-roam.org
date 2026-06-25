@@ -7,7 +7,7 @@
 
 ** Lesson 13: Importing Your Knowledge Base
 
-Prerequisites: [[requires:lesson:observability][Lesson 12: Observability]]
+Prerequisites: [[lesson:observability?rel=requires][Lesson 12: Observability]]
 
 If you have an org-roam directory (or any directory of ~.org~ files with ~:ID:~ properties), you can register it as a federated KB instance in MAE.
 
@@ -55,4 +55,4 @@ Removes from registry and frees memory. Your org files are untouched.
 
 *Prev:* [[lesson:observability][Lesson 12]]  |  *Index:* [[tutor:index][Tutorial]]
 
-See also: [[teaches:concept:kb-federation][KB Federation]], [[concept:kb-workflows]], [[concept:kb-vs-alternatives]]
+See also: [[concept:kb-federation?rel=teaches][KB Federation]], [[concept:kb-workflows]], [[concept:kb-vs-alternatives]]

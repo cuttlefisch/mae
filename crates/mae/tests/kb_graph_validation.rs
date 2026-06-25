@@ -73,8 +73,8 @@ fn write_org_fixtures(dir: &std::path::Path) {
 :END:
 #+title: Buffer
 
-A buffer is the unit of editable content. [[references:concept:window][See windows]].
-[[references:concept:mode]]
+A buffer is the unit of editable content. [[concept:window?rel=references][See windows]].
+[[concept:mode?rel=references]]
 "#,
         ),
         (
@@ -85,7 +85,7 @@ A buffer is the unit of editable content. [[references:concept:window][See windo
 :END:
 #+title: Mode
 
-Modes control which keymap is active. [[references:concept:buffer]]
+Modes control which keymap is active. [[concept:buffer?rel=references]]
 "#,
         ),
         (
@@ -96,8 +96,8 @@ Modes control which keymap is active. [[references:concept:buffer]]
 :END:
 #+title: Window
 
-A window is a view onto a [[references:concept:buffer][buffer]].
-[[part_of:concept:mode]]
+A window is a view onto a [[concept:buffer?rel=references][buffer]].
+[[concept:mode?rel=part_of]]
 "#,
         ),
         (
@@ -108,7 +108,7 @@ A window is a view onto a [[references:concept:buffer][buffer]].
 :END:
 #+title: The AI as Peer Actor
 
-The AI is a peer, not a plugin. [[references:concept:scheme-api]]
+The AI is a peer, not a plugin. [[concept:scheme-api?rel=references]]
 "#,
         ),
         (
@@ -119,7 +119,7 @@ The AI is a peer, not a plugin. [[references:concept:scheme-api]]
 :END:
 #+title: Knowledge Base
 
-The KB stores nodes and typed links. [[references:concept:buffer]]
+The KB stores nodes and typed links. [[concept:buffer?rel=references]]
 "#,
         ),
         (
@@ -130,7 +130,7 @@ The KB stores nodes and typed links. [[references:concept:buffer]]
 :END:
 #+title: Embedded Terminal
 
-Full terminal emulator inside MAE. [[part_of:concept:buffer]]
+Full terminal emulator inside MAE. [[concept:buffer?rel=part_of]]
 "#,
         ),
         (
@@ -141,7 +141,7 @@ Full terminal emulator inside MAE. [[part_of:concept:buffer]]
 :END:
 #+title: Scheme API
 
-~50 functions for buffer/window/command access. [[references:concept:buffer]]
+~50 functions for buffer/window/command access. [[concept:buffer?rel=references]]
 "#,
         ),
         (
@@ -152,7 +152,7 @@ Full terminal emulator inside MAE. [[part_of:concept:buffer]]
 :END:
 #+title: Debugging (DAP)
 
-DAP client, debug panel, breakpoints. [[references:concept:buffer]]
+DAP client, debug panel, breakpoints. [[concept:buffer?rel=references]]
 "#,
         ),
         (
@@ -163,7 +163,7 @@ DAP client, debug panel, breakpoints. [[references:concept:buffer]]
 :END:
 #+title: Command
 
-Commands are the shared API. [[references:concept:scheme-api]]
+Commands are the shared API. [[concept:scheme-api?rel=references]]
 "#,
         ),
         (
@@ -174,7 +174,7 @@ Commands are the shared API. [[references:concept:scheme-api]]
 :END:
 #+title: Watchdog
 
-Event loop stall detection. [[part_of:concept:debugging]]
+Event loop stall detection. [[concept:debugging?rel=part_of]]
 "#,
         ),
         (
@@ -185,7 +185,7 @@ Event loop stall detection. [[part_of:concept:debugging]]
 :END:
 #+title: Event Recording
 
-Session capture and JSON export. [[part_of:concept:debugging]]
+Session capture and JSON export. [[concept:debugging?rel=part_of]]
 "#,
         ),
         (
@@ -196,7 +196,7 @@ Session capture and JSON export. [[part_of:concept:debugging]]
 :END:
 #+title: Introspect
 
-AI diagnostic snapshot. [[part_of:concept:debugging]]
+AI diagnostic snapshot. [[concept:debugging?rel=part_of]]
 "#,
         ),
         (
@@ -207,7 +207,7 @@ AI diagnostic snapshot. [[part_of:concept:debugging]]
 :END:
 #+title: Hooks
 
-Scheme extension points for editor events. [[references:concept:scheme-api]]
+Scheme extension points for editor events. [[concept:scheme-api?rel=references]]
 "#,
         ),
         (
@@ -218,7 +218,7 @@ Scheme extension points for editor events. [[references:concept:scheme-api]]
 :END:
 #+title: Collaborative State
 
-Vision: text + visual + KB sync. [[references:concept:buffer]]
+Vision: text + visual + KB sync. [[concept:buffer?rel=references]]
 "#,
         ),
         (
@@ -230,8 +230,8 @@ Vision: text + visual + KB sync. [[references:concept:buffer]]
 #+title: Sync Engine
 
 yrs (Yjs Rust) CRDT for collaborative state.
-This concept [[implements:concept:collaborative-state][implements Collaborative State]].
-[[references:concept:buffer]]
+This concept [[concept:collaborative-state?rel=implements][implements Collaborative State]].
+[[concept:buffer?rel=references]]
 "#,
         ),
         (
@@ -242,7 +242,7 @@ This concept [[implements:concept:collaborative-state][implements Collaborative 
 :END:
 #+title: Editor Options
 
-Configuring MAE from Scheme. [[references:concept:scheme-api]]
+Configuring MAE from Scheme. [[concept:scheme-api?rel=references]]
 "#,
         ),
         (
@@ -254,7 +254,7 @@ Configuring MAE from Scheme. [[references:concept:scheme-api]]
 #+title: Option Registry
 
 Single source of truth for settings.
-This concept [[implements:concept:options][implements Editor Options]].
+This concept [[concept:options?rel=implements][implements Editor Options]].
 "#,
         ),
         (
@@ -265,7 +265,7 @@ This concept [[implements:concept:options][implements Editor Options]].
 :END:
 #+title: AI Agent vs Chat
 
-When to use each AI interface. [[references:concept:ai-as-peer]]
+When to use each AI interface. [[concept:ai-as-peer?rel=references]]
 "#,
         ),
         (
@@ -276,7 +276,7 @@ When to use each AI interface. [[references:concept:ai-as-peer]]
 :END:
 #+title: KB Federation
 
-Multi-instance knowledge sharing. [[references:concept:knowledge-base]]
+Multi-instance knowledge sharing. [[concept:knowledge-base?rel=references]]
 "#,
         ),
         // Lesson chain: 12 lessons with requires + teaches typed links
@@ -289,7 +289,7 @@ Multi-instance knowledge sharing. [[references:concept:knowledge-base]]
 #+title: Lesson 1: Navigation
 #+filetags: :tutorial:
 
-This lesson covers [[teaches:concept:buffer][buffers]] and [[teaches:concept:window][windows]].
+This lesson covers [[concept:buffer?rel=teaches][buffers]] and [[concept:window?rel=teaches][windows]].
 "#,
         ),
         (
@@ -301,8 +301,8 @@ This lesson covers [[teaches:concept:buffer][buffers]] and [[teaches:concept:win
 #+title: Lesson 2: Modes
 #+filetags: :tutorial:
 
-MAE uses [[teaches:concept:mode][modal editing]].
-Prerequisites: [[requires:lesson:navigation][Lesson 1]].
+MAE uses [[concept:mode?rel=teaches][modal editing]].
+Prerequisites: [[lesson:navigation?rel=requires][Lesson 1]].
 "#,
         ),
         (
@@ -314,8 +314,8 @@ Prerequisites: [[requires:lesson:navigation][Lesson 1]].
 #+title: Lesson 3: Editing
 #+filetags: :tutorial:
 
-This lesson [[teaches:concept:command][teaches editing commands]].
-Prerequisites: [[requires:lesson:modes][Lesson 2]].
+This lesson [[concept:command?rel=teaches][teaches editing commands]].
+Prerequisites: [[lesson:modes?rel=requires][Lesson 2]].
 "#,
         ),
         (
@@ -327,8 +327,8 @@ Prerequisites: [[requires:lesson:modes][Lesson 2]].
 #+title: Lesson 4: Files & Buffers
 #+filetags: :tutorial:
 
-A [[teaches:concept:buffer][buffer]] is the unit of editable content.
-Prerequisites: [[requires:lesson:editing][Lesson 3]].
+A [[concept:buffer?rel=teaches][buffer]] is the unit of editable content.
+Prerequisites: [[lesson:editing?rel=requires][Lesson 3]].
 "#,
         ),
         (
@@ -340,9 +340,9 @@ Prerequisites: [[requires:lesson:editing][Lesson 3]].
 #+title: Lesson 5: AI Features
 #+filetags: :tutorial:
 
-MAE treats AI as a [[teaches:concept:ai-as-peer][peer actor]].
-[[teaches:concept:ai-modes][AI commands]]
-Prerequisites: [[requires:lesson:files][Lesson 4]].
+MAE treats AI as a [[concept:ai-as-peer?rel=teaches][peer actor]].
+[[concept:ai-modes?rel=teaches][AI commands]]
+Prerequisites: [[lesson:files?rel=requires][Lesson 4]].
 "#,
         ),
         (
@@ -354,8 +354,8 @@ Prerequisites: [[requires:lesson:files][Lesson 4]].
 #+title: Lesson 6: Scheme REPL
 #+filetags: :tutorial:
 
-MAE is extensible via R7RS Scheme. [[teaches:concept:scheme-api][Scheme API]].
-Prerequisites: [[requires:lesson:ai][Lesson 5]].
+MAE is extensible via R7RS Scheme. [[concept:scheme-api?rel=teaches][Scheme API]].
+Prerequisites: [[lesson:ai?rel=requires][Lesson 5]].
 "#,
         ),
         (
@@ -367,8 +367,8 @@ Prerequisites: [[requires:lesson:ai][Lesson 5]].
 #+title: Lesson 7: LSP
 #+filetags: :tutorial:
 
-LSP [[teaches:concept:command][commands]] give you code navigation.
-Prerequisites: [[requires:lesson:scheme][Lesson 6]].
+LSP [[concept:command?rel=teaches][commands]] give you code navigation.
+Prerequisites: [[lesson:scheme?rel=requires][Lesson 6]].
 "#,
         ),
         (
@@ -380,8 +380,8 @@ Prerequisites: [[requires:lesson:scheme][Lesson 6]].
 #+title: Lesson 8: Terminal
 #+filetags: :tutorial:
 
-MAE embeds a full [[teaches:concept:terminal][terminal emulator]].
-Prerequisites: [[requires:lesson:lsp][Lesson 7]].
+MAE embeds a full [[concept:terminal?rel=teaches][terminal emulator]].
+Prerequisites: [[lesson:lsp?rel=requires][Lesson 7]].
 "#,
         ),
         (
@@ -393,8 +393,8 @@ Prerequisites: [[requires:lesson:lsp][Lesson 7]].
 #+title: Lesson 9: Help System
 #+filetags: :tutorial:
 
-MAE's help is a [[teaches:concept:knowledge-base][knowledge base]].
-Prerequisites: [[requires:lesson:terminal][Lesson 8]].
+MAE's help is a [[concept:knowledge-base?rel=teaches][knowledge base]].
+Prerequisites: [[lesson:terminal?rel=requires][Lesson 8]].
 "#,
         ),
         (
@@ -406,8 +406,8 @@ Prerequisites: [[requires:lesson:terminal][Lesson 8]].
 #+title: Lesson 10: Leader Keys
 #+filetags: :tutorial:
 
-See also: [[teaches:concept:command][Commands]].
-Prerequisites: [[requires:lesson:help][Lesson 9]].
+See also: [[concept:command?rel=teaches][Commands]].
+Prerequisites: [[lesson:help?rel=requires][Lesson 9]].
 "#,
         ),
         (
@@ -419,8 +419,8 @@ Prerequisites: [[requires:lesson:help][Lesson 9]].
 #+title: Lesson 11: Debugging
 #+filetags: :tutorial:
 
-MAE has a [[teaches:concept:debugging][DAP client]].
-Prerequisites: [[requires:lesson:leader][Lesson 10]].
+MAE has a [[concept:debugging?rel=teaches][DAP client]].
+Prerequisites: [[lesson:leader?rel=requires][Lesson 10]].
 "#,
         ),
         (
@@ -432,10 +432,10 @@ Prerequisites: [[requires:lesson:leader][Lesson 10]].
 #+title: Lesson 12: Observability
 #+filetags: :tutorial:
 
-The [[teaches:concept:watchdog][watchdog]] monitors the event loop.
-[[teaches:concept:event-recording][Event recording]] captures events.
-[[teaches:concept:introspect][introspect]] provides diagnostics.
-Prerequisites: [[requires:lesson:debugging][Lesson 11]].
+The [[concept:watchdog?rel=teaches][watchdog]] monitors the event loop.
+[[concept:event-recording?rel=teaches][Event recording]] captures events.
+[[concept:introspect?rel=teaches][introspect]] provides diagnostics.
+Prerequisites: [[lesson:debugging?rel=requires][Lesson 11]].
 "#,
         ),
         // Verbatim block test — links inside should NOT be parsed
@@ -447,7 +447,7 @@ Prerequisites: [[requires:lesson:debugging][Lesson 11]].
 :END:
 #+title: Org Link Syntax
 
-Typed links use =[[REL_TYPE:NODE_ID]]= syntax.
+Typed links use =[[NODE_ID?rel=REL_TYPE]]= syntax.
 
 #+begin_example
 :PROPERTIES:
@@ -457,7 +457,7 @@ Typed links use =[[REL_TYPE:NODE_ID]]= syntax.
 See [[concept:also-fake]] inside example.
 #+end_example
 
-See also: [[references:concept:knowledge-base]]
+See also: [[concept:knowledge-base?rel=references]]
 "#,
         ),
         // Tutorial nodes
@@ -469,8 +469,8 @@ See also: [[references:concept:knowledge-base]]
 :END:
 #+title: Getting Started
 
-Progressive guide. [[contains:tutorial:vim-familiar]]
-[[contains:tutorial:ai-setup]]
+Progressive guide. [[tutorial:vim-familiar?rel=contains]]
+[[tutorial:ai-setup?rel=contains]]
 "#,
         ),
         (
@@ -481,7 +481,7 @@ Progressive guide. [[contains:tutorial:vim-familiar]]
 :END:
 #+title: What Carries Over from Vim
 
-[[teaches:lesson:navigation][Teaches: Navigation]]
+[[lesson:navigation?rel=teaches][Teaches: Navigation]]
 "#,
         ),
         (
@@ -492,7 +492,7 @@ Progressive guide. [[contains:tutorial:vim-familiar]]
 :END:
 #+title: AI Setup
 
-[[teaches:concept:ai-as-peer][Teaches: AI as Peer]]
+[[concept:ai-as-peer?rel=teaches][Teaches: AI as Peer]]
 "#,
         ),
         // Multi-node file (file + heading with separate ID)
@@ -504,7 +504,7 @@ Progressive guide. [[contains:tutorial:vim-familiar]]
 :END:
 #+title: Multi-Node Test
 
-Parent node body. [[references:concept:buffer]]
+Parent node body. [[concept:buffer?rel=references]]
 
 ** Child Section
 :PROPERTIES:
@@ -512,7 +512,7 @@ Parent node body. [[references:concept:buffer]]
 :KIND: concept
 :END:
 
-Child body. [[part_of:concept:multi-parent]]
+Child body. [[concept:multi-parent?rel=part_of]]
 "#,
         ),
         // Fragment link test
@@ -525,7 +525,7 @@ Child body. [[part_of:concept:multi-parent]]
 #+title: Fragment Test
 
 See [[concept:buffer#rope-internals]] for details.
-See [[teaches:concept:scheme-api#hooks]] for hooks.
+See [[concept:scheme-api#hooks?rel=teaches]] for hooks.
 "#,
         ),
     ];

@@ -40,4 +40,4 @@ On a LAN, `:collab-discover` uses mDNS (`_mae-sync._tcp.local`) to find peers ru
 ** PSK Authentication
 Set `collab_psk` or `collab_psk_command` to enable HMAC-SHA256 mutual authentication. Both client and server must share the same key.
 
-See also: [[concept:knowledge-base]], [[concept:collab-architecture]], [[references:concept:sync-engine][Sync Engine]], [[concept:adr-kb-crdt]], [[index]]
+See also: [[concept:knowledge-base]], [[concept:collab-architecture]], [[concept:sync-engine?rel=references][Sync Engine]], [[concept:adr-kb-crdt]], [[index]]

@@ -7,9 +7,9 @@
 
 ** Lesson 6: Scheme REPL
 
-Prerequisites: [[requires:lesson:ai][Lesson 5: AI Features]]
+Prerequisites: [[lesson:ai?rel=requires][Lesson 5: AI Features]]
 
-MAE is extensible via R7RS Scheme (mae-scheme). This lesson [[teaches:concept:scheme-api][teaches the Scheme API]]. [[concept:hooks][Hooks]] let Scheme code react to editor events.
+MAE is extensible via R7RS Scheme (mae-scheme). This lesson [[concept:scheme-api?rel=teaches][teaches the Scheme API]]. [[concept:hooks][Hooks]] let Scheme code react to editor events.
 
 *** Evaluate expressions
   ~SPC e e~ — evaluate current line

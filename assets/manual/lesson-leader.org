@@ -7,7 +7,7 @@
 
 ** Lesson 10: Leader Keys
 
-Prerequisites: [[requires:lesson:help][Lesson 9: Help System]]
+Prerequisites: [[lesson:help?rel=requires][Lesson 9: Help System]]
 
 ~SPC~ is the leader key (Doom Emacs style). Press ~SPC~ and wait to see available sub-keys in the which-key popup.
 
@@ -28,6 +28,6 @@ Prerequisites: [[requires:lesson:help][Lesson 9: Help System]]
 
 See [[key:leader-keys][full leader key reference]] for the complete list.
 
-See also: [[teaches:concept:command][Commands]], [[index][Help Index]]
+See also: [[concept:command?rel=teaches][Commands]], [[index][Help Index]]
 
 *Prev:* [[lesson:help][Lesson 9]]  |  *Next:* [[lesson:debugging][Lesson 11: Debugging]]  |  *Index:* [[tutor:index][Tutorial]]

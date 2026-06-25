@@ -7,7 +7,7 @@
 
 * What Carries Over from Vim
 
-[[teaches:lesson:navigation][Teaches: Navigation]]
+[[lesson:navigation?rel=teaches][Teaches: Navigation]]
 
 If you know Vim, you already know most of MAE. These all work as expected:
 

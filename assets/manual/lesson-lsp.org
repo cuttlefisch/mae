@@ -7,11 +7,11 @@
 
 ** Lesson 7: LSP
 
-Prerequisites: [[requires:lesson:scheme][Lesson 6: Scheme REPL]]
+Prerequisites: [[lesson:scheme?rel=requires][Lesson 6: Scheme REPL]]
 
 MAE has first-class LSP (Language Server Protocol) support.
 LSP starts automatically when you open a supported file type.
-LSP [[teaches:concept:command][commands]] give you code navigation, diagnostics, and refactoring.
+LSP [[concept:command?rel=teaches][commands]] give you code navigation, diagnostics, and refactoring.
 
 *** Navigation
 | Key | Command | Description |

@@ -34,4 +34,4 @@ Write-side: `SharedState` (Arc<Mutex>) accumulates `pending_*` fields during eva
 Read-side: `inject_editor_state()` snapshots editor state as globals before eval.
 Apply: `apply_to_editor()` drains pending changes after eval.
 
-See also: [[references:concept:hooks][Hooks]], [[references:concept:options][Editor Options]], [[index]]
+See also: [[concept:hooks?rel=references][Hooks]], [[concept:options?rel=references][Editor Options]], [[index]]

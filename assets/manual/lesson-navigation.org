@@ -24,6 +24,6 @@ MAE uses vi-style movement keys in [[concept:mode][Normal mode]].
 
 Try opening a file and moving around with these keys!
 
-This lesson covers [[teaches:concept:buffer][buffers]] and [[teaches:concept:window][windows]] — the fundamental units of content and display.
+This lesson covers [[concept:buffer?rel=teaches][buffers]] and [[concept:window?rel=teaches][windows]] — the fundamental units of content and display.
 
 *Next:* [[lesson:modes][Lesson 2: Modes]]  |  *Index:* [[tutor:index][Tutorial]]

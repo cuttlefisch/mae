@@ -34,6 +34,6 @@ Inspect: `(display-buffer-policy "help")` or `SPC h D` ([[cmd:describe-display-p
 *** Emacs Comparison
 Emacs: `display-buffer-alist` (29 action functions, regex matching, order-dependent). Doom: `set-popup-rules!` (simpler but still regex). MAE: enum dispatch by BufferKind -- O(1), no order bugs, no regex.
 
-[[part_of:concept:gui][Part of GUI Backend]].
+[[concept:gui?rel=part_of][Part of GUI Backend]].
 
-See also: [[references:concept:buffer][Buffer]], [[references:concept:window][Window]], [[references:concept:buffer-mode][BufferMode Trait]]
+See also: [[concept:buffer?rel=references][Buffer]], [[concept:window?rel=references][Window]], [[concept:buffer-mode?rel=references][BufferMode Trait]]

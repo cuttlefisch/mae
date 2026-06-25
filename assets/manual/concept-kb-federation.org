@@ -61,4 +61,4 @@ When you register a directory, MAE creates `eor-instance.org` with the instance 
 - `:kb-instances` -- list registered instances.
 - `:kb-health` -- health report (orphans, broken links, namespace counts).
 
-See also: [[references:concept:knowledge-base][Knowledge Base]], [[references:concept:kb-workflows][KB Workflows]], [[lesson:kb-import-roam]]
+See also: [[concept:knowledge-base?rel=references][Knowledge Base]], [[concept:kb-workflows?rel=references][KB Workflows]], [[lesson:kb-import-roam]]

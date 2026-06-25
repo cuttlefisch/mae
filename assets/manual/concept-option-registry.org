@@ -23,6 +23,6 @@ Kinds: `Bool`, `String`, `Float`, `Int`, `Theme`.
 ** Range clamping
 Options with numeric types are clamped to valid ranges in `set_option()` to prevent rendering corruption (e.g. heading_scale ≤0 → infinite loop).
 
-This concept [[implements:concept:options][implements Editor Options]].
+This concept [[concept:options?rel=implements][implements Editor Options]].
 
 See also: [[concept:command]], [[concept:hooks]], [[index]]

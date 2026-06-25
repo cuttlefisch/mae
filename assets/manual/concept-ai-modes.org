@@ -45,6 +45,6 @@ Both interfaces respect:
 - **Budget limits:** `budget_warn_tokens`, `budget_limit_tokens`
 - **API keys:** env vars (ANTHROPIC_API_KEY, etc.) or `api_key_command`
 
-This concept is [[explains:concept:ai-as-peer][explained by The AI as Peer Actor]].
+This concept is [[concept:ai-as-peer?rel=explains][explained by The AI as Peer Actor]].
 
-See also: [[references:concept:prompt-tiers][Prompt Tiers]], [[tutorial:ai-setup]], [[concept:ai-as-peer]], [[index]]
+See also: [[concept:prompt-tiers?rel=references][Prompt Tiers]], [[tutorial:ai-setup]], [[concept:ai-as-peer]], [[index]]

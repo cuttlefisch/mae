@@ -63,4 +63,4 @@ mae-daemon --bind 0.0.0.0:9473
 - `:collab-status` — live connection state, document list, peer cursors
 - `mae doctor` (CLI) — checks daemon process, port binding, WAL integrity
 
-See also: [[references:concept:collab-architecture][Collaborative Editing Architecture]], [[lesson:collab-setup]], [[concept:sync-engine]], [[index]]
+See also: [[concept:collab-architecture?rel=references][Collaborative Editing Architecture]], [[lesson:collab-setup]], [[concept:sync-engine]], [[index]]

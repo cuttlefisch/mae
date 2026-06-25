@@ -26,6 +26,6 @@ The ~event_recording~ AI tool can dump the current recording buffer for automate
 - *Macros:* replay a recorded sequence (planned).
 - *Testing:* validate that a sequence of inputs produces expected state.
 
-[[part_of:concept:debugging][Part of Debugging]].
+[[concept:debugging?rel=part_of][Part of Debugging]].
 
 See also: [[concept:watchdog]], [[concept:introspect]], [[index]]

@@ -7,9 +7,9 @@
 
 ** Lesson 4: Files & Buffers
 
-Prerequisites: [[requires:lesson:editing][Lesson 3: Editing]]
+Prerequisites: [[lesson:editing?rel=requires][Lesson 3: Editing]]
 
-A [[teaches:concept:buffer][buffer]] is the unit of editable content in MAE.
+A [[concept:buffer?rel=teaches][buffer]] is the unit of editable content in MAE.
 
 *** File commands
   ~:w~ — [[cmd:save][save]] file

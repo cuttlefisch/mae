@@ -7,7 +7,7 @@
 
 * AI Setup
 
-[[teaches:concept:ai-as-peer][Teaches: AI as Peer]]
+[[concept:ai-as-peer?rel=teaches][Teaches: AI as Peer]]
 
 MAE has two AI interfaces: *AI Chat* (built-in, =SPC a p=) and *AI Agent* (terminal, =SPC a a=). This guide walks you through configuring either one.
 

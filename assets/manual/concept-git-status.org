@@ -52,6 +52,6 @@ Press `TAB` on a file entry to expand/collapse its inline diff. Each hunk can be
 3. Stage files/hunks with `s`.
 4. Commit with `c c` (opens a commit message buffer).
 
-[[part_of:concept:project][Part of Project]].
+[[concept:project?rel=part_of][Part of Project]].
 
-See also: [[references:concept:project][Project]], [[references:concept:terminal][Embedded Terminal]], [[references:concept:buffer-mode][BufferMode Trait]]
+See also: [[concept:project?rel=references][Project]], [[concept:terminal?rel=references][Embedded Terminal]], [[concept:buffer-mode?rel=references][BufferMode Trait]]

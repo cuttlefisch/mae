@@ -25,8 +25,8 @@ yrs `YText` is the source of truth for collaborative state. ropey remains the re
 | Visual element | `YMap { position, style, children }` | Design system |
 | KB node | `YMap { title: YText, body: YText, tags: YArray }` | Knowledge base |
 
-This concept [[implements:concept:collaborative-state][implements Collaborative State]].
+This concept [[concept:collaborative-state?rel=implements][implements Collaborative State]].
 
-Documented by: [[documents:concept:adr-text-sync][ADR-002: Text Sync]]
+Documented by: [[concept:adr-text-sync?rel=documents][ADR-002: Text Sync]]
 
 See also: [[concept:collaborative-state]], [[concept:adr-text-sync]], [[concept:adr-kb-crdt]]

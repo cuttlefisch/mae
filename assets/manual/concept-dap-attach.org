@@ -32,6 +32,6 @@ You can debug one MAE instance from another — attach to the target's PID and s
 ** AI tool
 The ~dap_start~ AI tool supports an ~attach~ mode with ~pid~ parameter.
 
-[[part_of:concept:debugging][Part of Debugging]].
+[[concept:debugging?rel=part_of][Part of Debugging]].
 
 See also: [[concept:debugging]], [[cmd:debug-start]], [[index]]

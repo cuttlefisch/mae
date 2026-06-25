@@ -50,7 +50,8 @@ fn main() {
         .expect("failed to persist nodes to CozoDB");
     eprintln!("  Persisted code-generated: {persisted} nodes");
 
-    // Seed type system first (needed for known_rel_types during org parsing).
+    // Seed the relationship-type system (registry for type validation +
+    // introspection; ADR-030 link parsing reads rel from each link's `?query`).
     store
         .seed_type_system()
         .expect("failed to seed type system");
@@ -59,7 +60,6 @@ fn main() {
     // Parse org files from assets/manual/ and ingest into the store.
     let manual_dir = PathBuf::from("assets/manual");
     if manual_dir.is_dir() {
-        let known_types = store.known_rel_types().unwrap_or_default();
         let mut all_nodes = Vec::new();
         let mut all_typed_links = Vec::new();
         let mut all_transclusions = Vec::new();
@@ -81,7 +81,7 @@ fn main() {
                     continue;
                 }
             };
-            let result = mae_kb::org::parse_org_multi_result(&content, Some(&known_types));
+            let result = mae_kb::org::parse_org_multi_result(&content);
             all_nodes.extend(result.nodes);
             all_typed_links.extend(result.typed_links);
             all_transclusions.extend(result.transclusions);

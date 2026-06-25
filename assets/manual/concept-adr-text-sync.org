@@ -25,6 +25,6 @@ Use yrs (Yjs Rust port) as the sync engine for all collaborative state. Dual str
 
 Full ADR: `docs/adr/002-text-sync-model.md`
 
-This ADR [[documents:concept:sync-engine][documents the Sync Engine]].
+This ADR [[concept:sync-engine?rel=documents][documents the Sync Engine]].
 
 See also: [[concept:sync-engine]], [[concept:collaborative-state]], [[concept:adr-kb-crdt]]
