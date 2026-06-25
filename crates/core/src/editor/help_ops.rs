@@ -378,13 +378,19 @@ fn render_body_line(line: &str, out: &mut String, links: &mut Vec<KbLinkSpan>) {
         if bytes[i] == b'[' && bytes[i + 1] == b'[' {
             if let Some(end_rel) = line[i + 2..].find("]]") {
                 let inner = &line[i + 2..i + 2 + end_rel];
-                let (target, display) = match inner.find('|') {
-                    Some(bar) => (inner[..bar].trim(), inner[bar + 1..].trim()),
-                    None => {
-                        let t = inner.trim();
-                        (t, t)
-                    }
+                let (target_raw, display_opt) = match inner.find('|') {
+                    Some(bar) => (inner[..bar].trim(), Some(inner[bar + 1..].trim())),
+                    None => (inner.trim(), None),
                 };
+                // Strip the ADR-030 `?query` relationship metadata from the target:
+                // it's authored CRDT truth (read by the projector + AI peer), never
+                // shown. The `#fragment` (before `?`) is kept for node resolution.
+                let target = match target_raw.find('?') {
+                    Some(p) => target_raw[..p].trim_end(),
+                    None => target_raw,
+                };
+                // Bare links (no `|display`) show the clean node id, not the query.
+                let display = display_opt.unwrap_or(target);
                 if !target.is_empty() {
                     // Emit text before the link
                     out.push_str(&line[cursor..i]);
@@ -397,7 +403,7 @@ fn render_body_line(line: &str, out: &mut String, links: &mut Vec<KbLinkSpan>) {
                         byte_end: link_end,
                         target: target.to_string(),
                     });
-                    cursor = i + 2 + end_rel + 2;
+                    cursor = i + 2 + end_rel + 2; // past the closing ]]
                     i = cursor;
                     continue;
                 }
@@ -1471,6 +1477,41 @@ mod tests {
         assert_eq!(out, "goto the buffer");
         assert_eq!(links[0].target, "concept:buffer");
         assert_eq!(&out[links[0].byte_start..links[0].byte_end], "the buffer");
+    }
+
+    #[test]
+    fn render_body_line_strips_query_metadata() {
+        // ADR-030 (Phase C): the in-target `?rel=…&w=…` metadata is hidden from the
+        // rendered view — only the display shows; the span target is the clean id.
+        let mut out = String::new();
+        let mut links = Vec::new();
+        render_body_line(
+            "see [[concept:buffer?rel=teaches&w=0.8|the buffer]] now",
+            &mut out,
+            &mut links,
+        );
+        assert_eq!(out, "see the buffer now");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "concept:buffer");
+        assert_eq!(&out[links[0].byte_start..links[0].byte_end], "the buffer");
+
+        // A bare link (no |display) shows the clean node id, query stripped.
+        let mut out2 = String::new();
+        let mut links2 = Vec::new();
+        render_body_line("[[concept:x?rel=cites]]", &mut out2, &mut links2);
+        assert_eq!(out2, "concept:x");
+        assert_eq!(links2[0].target, "concept:x");
+
+        // Fragment (before the query) is retained for node resolution.
+        let mut out3 = String::new();
+        let mut links3 = Vec::new();
+        render_body_line(
+            "[[concept:rope#arch?rel=implements|ropes]]",
+            &mut out3,
+            &mut links3,
+        );
+        assert_eq!(out3, "ropes");
+        assert_eq!(links3[0].target, "concept:rope#arch");
     }
 
     #[test]

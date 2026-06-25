@@ -140,6 +140,6 @@ The `dashboard` module is the simplest complete example. See `modules/dashboard/
 
 For a more complex example with module-owned keymaps, see `modules/file-tree/`.
 
-This guide [[explains:concept:modules][explains the Module System]] and [[explains:concept:scheme-api][explains the Scheme API]].
+This guide [[concept:modules?rel=explains][explains the Module System]] and [[concept:scheme-api?rel=explains][explains the Scheme API]].
 
 See also: [[concept:modules]], [[concept:flags]], [[concept:design-philosophy]], [[concept:package-system]], [[concept:scheme-api]], [[index]]

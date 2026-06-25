@@ -22,6 +22,6 @@ The watchdog is always active but only logs at ~trace~ level:
 ** Why this exists
 Emacs has no built-in stall detection — when it hangs, you get a spinning cursor and no diagnostic information. MAE's watchdog provides actionable data immediately.
 
-[[part_of:concept:ai-as-peer][Part of The AI as Peer Actor]].
+[[concept:ai-as-peer?rel=part_of][Part of The AI as Peer Actor]].
 
 See also: [[concept:event-recording]], [[concept:introspect]], [[index]]

@@ -26,39 +26,76 @@ The [[concept:mode][modal editing system]] is inspired by vi.
 
 * Typed Links
 
-Typed links express the /relationship type/ between two nodes:
+Typed links express the /relationship type/ and metadata of an edge
+between two nodes. Relationship metadata lives as *orderless key-value
+attributes* in the link target's query string (ADR-030):
 
-=[[REL_TYPE:NODE_ID]]= or =[[REL_TYPE:NODE_ID][display]]=
+#+begin_example
+[[NODE_ID?rel=REL_TYPE]]
+[[NODE_ID?rel=REL_TYPE][display]]
+[[NODE_ID?rel=REL_TYPE&w=0.8&c=0.95][display]]
+#+end_example
 
-The REL_TYPE prefix is separated from the NODE_ID by the /first/ colon.
-Since node IDs already contain colons (e.g., =concept:buffer=), the
-parser distinguishes typed links by checking whether the prefix before
-the first colon is a known relationship type.
+The grammar for a link *target* is:
+
+#+begin_example
+TARGET = NODE_ID [ "#" FRAGMENT ] [ "?" KEY "=" VALUE ( "&" KEY "=" VALUE )* ]
+#+end_example
+
+The =NODE_ID= is always clean (e.g. =concept:buffer= — its colons are
+part of the id, never a relationship prefix). All edge metadata is in
+the =?query=. This is the URI-query model: orderless and extensible.
+
+** Recognized Attributes
+
+| Key                  | Meaning                                  | Default        |
+|----------------------+------------------------------------------+----------------|
+| =rel=                | relationship type (see table below)      | =references=   |
+| =w= (or =weight=)    | edge weight, clamped to 0–1              | =1.0=          |
+| =c= (=conf=/=confidence=) | edge confidence, clamped to 0–1     | =1.0=          |
+
+Attributes are *orderless* — =?rel=teaches&w=0.8= and =?w=0.8&rel=teaches=
+are equivalent. A malformed numeric value falls back to its default
+(it never drops the link).
+
+** Custom / Future Attributes
+
+Any key the parser does not recognize is *preserved verbatim* (in source
+order) and ignored by the graph today — so new edge attributes need no
+grammar change:
+
+#+begin_example
+[[concept:buffer?rel=cites&since=2026-06&by=ai&strength=hard][buffers]]
+#+end_example
+
+Here =rel= is recognized; =since=, =by=, and =strength= round-trip as
+custom attributes that future tooling can read. The AI peer authoring
+enrichment links should follow the same grammar.
 
 ** Available Relationship Types
 
 | Type             | Meaning                                  | Example                                       |
 |------------------+------------------------------------------+-----------------------------------------------|
-| =implements=     | A implements B                           | =[[implements:concept:options]]=               |
-| =teaches=        | A teaches/covers B                       | =[[teaches:concept:buffer]]=                   |
-| =requires=       | A requires B as prerequisite             | =[[requires:lesson:navigation]]=               |
-| =references=     | A references B (generic cross-ref)       | =[[references:concept:scheme-api]]=            |
-| =part_of=        | A is a component/subpart of B            | =[[part_of:concept:mode]]=                     |
-| =contains=       | A contains B as a member                 | =[[contains:tutorial:vim-familiar]]=           |
-| =documents=      | A documents/describes B                  | =[[documents:concept:sync-engine]]=            |
-| =explains=       | A explains B in detail                   | =[[explains:concept:collaborative-state]]=     |
-| =extends=        | A extends/enhances B                     | =[[extends:concept:buffer]]=                   |
-| =contradicts=    | A contradicts/disagrees with B           | =[[contradicts:concept:old-design]]=           |
-| =supersedes=     | A replaces/supersedes B                  | =[[supersedes:concept:legacy-store]]=          |
-| =related_to=     | A is related to B (weak association)     | =[[related_to:concept:window]]=                |
-| =configures=     | A configures/parameterizes B             | =[[configures:option:theme]]=                  |
-| =binds=          | A binds a key to B                       | =[[binds:cmd:save]]=                           |
-| =categorized_under= | A belongs to category B              | =[[categorized_under:category:editing]]=       |
-| =federated_from= | A was imported from instance B           | =[[federated_from:instance:roam-notes]]=       |
-| =assigned_to=    | Task A is assigned to person B           | =[[assigned_to:user:alice]]=                   |
-| =belongs_to_sprint= | Task A is in sprint B                 | =[[belongs_to_sprint:sprint:v0.13]]=           |
-| =subtask_of=     | Task A is a subtask of B                 | =[[subtask_of:task:refactor-kb]]=              |
-| =blocks_task=    | Task A blocks task B                     | =[[blocks_task:task:release-v1]]=              |
+| =implements=     | A implements B                           | =[[concept:options?rel=implements]]=               |
+| =teaches=        | A teaches/covers B                       | =[[concept:buffer?rel=teaches]]=                   |
+| =requires=       | A requires B as prerequisite             | =[[lesson:navigation?rel=requires]]=               |
+| =references=     | A references B (generic cross-ref)       | =[[concept:scheme-api?rel=references]]=            |
+| =part_of=        | A is a component/subpart of B            | =[[concept:mode?rel=part_of]]=                     |
+| =contains=       | A contains B as a member                 | =[[tutorial:vim-familiar?rel=contains]]=           |
+| =documents=      | A documents/describes B                  | =[[concept:sync-engine?rel=documents]]=            |
+| =explains=       | A explains B in detail                   | =[[concept:collaborative-state?rel=explains]]=     |
+| =extends=        | A extends/enhances B                     | =[[concept:buffer?rel=extends]]=                   |
+| =contradicts=    | A contradicts/disagrees with B           | =[[concept:old-design?rel=contradicts]]=           |
+| =supersedes=     | A replaces/supersedes B                  | =[[concept:legacy-store?rel=supersedes]]=          |
+| =related_to=     | A is related to B (weak association)     | =[[concept:window?rel=related_to]]=                |
+| =configures=     | A configures/parameterizes B             | =[[option:theme?rel=configures]]=                  |
+| =binds=          | A binds a key to B                       | =[[cmd:save?rel=binds]]=                           |
+| =categorized_under= | A belongs to category B              | =[[category:editing?rel=categorized_under]]=       |
+| =federated_from= | A was imported from instance B           | =[[instance:roam-notes?rel=federated_from]]=       |
+| =assigned_to=    | Task A is assigned to person B           | =[[user:alice?rel=assigned_to]]=                   |
+| =belongs_to_sprint= | Task A is in sprint B                 | =[[sprint:v0.13?rel=belongs_to_sprint]]=           |
+| =subtask_of=     | Task A is a subtask of B                 | =[[task:refactor-kb?rel=subtask_of]]=              |
+| =blocks_task=    | Task A blocks task B                     | =[[task:release-v1?rel=blocks_task]]=              |
 
 ** Usage in Org Files
 
@@ -66,9 +103,9 @@ Typed links appear inline in the body text, just like standard links:
 
 #+begin_example
 This lesson teaches the fundamentals of buffer navigation.
-See [[teaches:concept:buffer]] and [[teaches:concept:window]].
+See [[concept:buffer?rel=teaches]] and [[concept:window?rel=teaches]].
 
-Prerequisites: [[requires:lesson:modes]].
+Prerequisites: [[lesson:modes?rel=requires]].
 #+end_example
 
 When the org parser encounters a typed link, it:
@@ -83,14 +120,15 @@ Fragment links address a specific section or block within a node:
 
 - =[[NODE_ID#heading-slug]]= — named heading fragment
 - =[[NODE_ID#3]]= — numeric block index (0-based)
-- =[[REL_TYPE:NODE_ID#fragment]]= — typed link with fragment
+- =[[NODE_ID#fragment?rel=REL_TYPE]]= — typed link with fragment
+  (the =#fragment= comes /before/ the =?query=)
 
 Examples:
 
 #+begin_example
 See [[concept:buffer#rope-internals]] for the data structure.
 Block 3 covers cursors: [[concept:mode#3]].
-This section teaches: [[teaches:concept:scheme-api#hooks]].
+This section teaches: [[concept:scheme-api#hooks?rel=teaches]].
 #+end_example
 
 Fragment navigation:
@@ -134,6 +172,6 @@ The =:KIND:= property maps to [[concept:knowledge-base][NodeKind]]:
 
 * See Also
 
-- [[references:concept:knowledge-base]]
-- [[references:concept:org-mode]]
-- [[references:concept:kb-federation]]
+- [[concept:knowledge-base?rel=references]]
+- [[concept:org-mode?rel=references]]
+- [[concept:kb-federation?rel=references]]

@@ -21,6 +21,6 @@ The **BufferMode** trait (`buffer_mode.rs`) is the contract every buffer kind im
 
 `BufferKind` implements `BufferMode`. New buffer types add trait arms, not scattered matches.
 
-[[part_of:concept:mode][Part of Mode]].
+[[concept:mode?rel=part_of][Part of Mode]].
 
-See also: [[references:concept:buffer][Buffer]], [[references:concept:keymap-inheritance][Keymap Inheritance]]
+See also: [[concept:buffer?rel=references][Buffer]], [[concept:keymap-inheritance?rel=references][Keymap Inheritance]]

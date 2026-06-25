@@ -7,7 +7,7 @@
 
 * Basic Editing
 
-*Prerequisite:* [[requires:tutorial:basic-movement][Basic Movement]]
+*Prerequisite:* [[tutorial:basic-movement?rel=requires][Basic Movement]]
 
 ** Entering Insert mode
 - =i= -- insert before cursor

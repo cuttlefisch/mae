@@ -7,9 +7,9 @@
 
 ** Lesson 8: Terminal
 
-Prerequisites: [[requires:lesson:lsp][Lesson 7: LSP]]
+Prerequisites: [[lesson:lsp?rel=requires][Lesson 7: LSP]]
 
-MAE embeds a full [[teaches:concept:terminal][terminal emulator]].
+MAE embeds a full [[concept:terminal?rel=teaches][terminal emulator]].
 
 *** Commands
   ~SPC o t~ — open terminal

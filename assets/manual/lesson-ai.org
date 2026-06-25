@@ -7,11 +7,11 @@
 
 ** Lesson 5: AI Features
 
-Prerequisites: [[requires:lesson:files][Lesson 4: Files & Buffers]]
+Prerequisites: [[lesson:files?rel=requires][Lesson 4: Files & Buffers]]
 
-MAE treats the AI agent as a [[teaches:concept:ai-as-peer][peer actor]] — it calls the same primitives as you.
+MAE treats the AI agent as a [[concept:ai-as-peer?rel=teaches][peer actor]] — it calls the same primitives as you.
 
-*** [[teaches:concept:ai-modes][AI commands]]
+*** [[concept:ai-modes?rel=teaches][AI commands]]
 - ~SPC a p~ — *[[cmd:ai-prompt]]* (send a message / open conversation)
 - ~SPC a a~ — *[[cmd:open-ai-agent]]* (launch a dedicated AI agent in a shell)
 - ~SPC a c~ — *[[cmd:ai-cancel]]* (cancel an in-flight AI operation)

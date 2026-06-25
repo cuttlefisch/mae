@@ -28,6 +28,6 @@
 ** Safety
 Inline markup spans intentionally exclude `markup.heading` — heading spans would trigger `line_heading_scale()` in `compute_layout()`, breaking uniform line heights in conversation buffers.
 
-[[part_of:concept:org-mode][Part of Org-Mode]].
+[[concept:org-mode?rel=part_of][Part of Org-Mode]].
 
 See also: [[concept:options]], [[concept:buffer]], [[concept:ai-as-peer]]

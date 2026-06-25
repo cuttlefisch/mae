@@ -530,9 +530,9 @@ pub fn import_org_dir_to_store(
             }
         }
 
-        // Parse with typed link support (query known rel types from store).
-        let known_rel_types = store.known_rel_types().ok();
-        let parse_result = parse_org_multi_result(&content, known_rel_types.as_ref());
+        // Parse with typed-link support (ADR-030: rel/weight/confidence are
+        // encoded inline in each link's `?query`, so no rel-type table is needed).
+        let parse_result = parse_org_multi_result(&content);
         if parse_result.nodes.is_empty() {
             report.nodes_skipped += 1;
             continue;

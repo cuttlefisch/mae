@@ -30,14 +30,37 @@ The relationship graph is what makes MAE a graph KB; its lifecycle must be **rel
 (option B). The text is the authoritative representation; the cozo `links` graph is a derived,
 incrementally-maintained projection produced by the parser.
 
-1. **Extend the existing link grammar** to carry relationship metadata while keeping the rendered
-   view clean. The base form `[[REL_TYPE:NODE_ID][display]]` is preserved; metadata is added as a
-   trailing property form (exact syntax finalized in implementation, e.g. an attribute group
-   `[[teaches:concept:buffer][display]]{w=0.8 conf=0.9}` or an org-link-parameter convention).
-   Constraints: (a) the **default rendered view shows only the display text** (no metadata clutter
-   — `markup.link`), (b) the **raw text remains the canonical source** AI reads when parsing a
-   node, (c) backward-compatible with existing `[[…]]` links (absent metadata ⇒ defaults:
-   `rel_type=references`, `weight`/`confidence` unset).
+1. **Link grammar — orderless key-value attributes in the target (FINALIZED).** A link is
+   `[[TARGET][DESCRIPTION]]` where
+
+       TARGET = NODE_ID [ "#" FRAGMENT ] [ "?" KV ( "&" KV )* ]
+       KV     = KEY "=" VALUE
+
+   All relationship metadata lives as **orderless, extensible key-value pairs** in the target's
+   query, alongside a **clean NODE_ID** (not a prefix on it):
+
+       [[concept:buffer?rel=teaches&w=0.8&c=0.95][the buffer]]
+
+   - **Recognized keys (today):** `rel` (relationship type, default `references`), `w`/`weight`,
+     and `c`/`conf`/`confidence` (each 0–1, clamped; default 1.0).
+   - **Unknown keys are parsed into a generic `attrs` map and preserved verbatim** in the source
+     text — so a future key (`?rel=cites&since=2026-06&by=ai&strength=hard`) needs **no grammar
+     change**: today's parser tolerates + carries it, tomorrow's code reads it from `attrs`. This
+     is the URI-query model (orderless, extensible); org-roam/wikilinks have no inline
+     edge-attribute equivalent, so we extend past them deliberately.
+   - **Graceful parsing:** any key order; unknown/custom keys are kept (ignored by the graph
+     today); a malformed/non-finite value falls back to its default; a bad query never drops the
+     link.
+   - **Clean break (no users yet):** the legacy `REL_TYPE:NODE_ID` prefix form is **removed**, not
+     maintained — the shipped manual KB is refactored to the new syntax. This eliminates the
+     prefix's rel/node-id namespace ambiguity (`foo:bar` was rel:node *or* a `foo:`-namespaced id).
+   - **Rendering:** auto-concealed — the query is inside `[[…]]`, hidden by the existing link
+     rendering (only the DESCRIPTION shows); link resolution strips the query + fragment to recover
+     NODE_ID. No special-case concealment.
+   - **Docs:** the grammar is documented as a first-class manual KB node (`concept:kb-link-syntax`)
+     to remove ambiguity for humans + the AI peer.
+
+   Supersedes the C1 first cut (an appended `{…}` slug) and the `REL_TYPE:` prefix form.
 
 2. **The parser is the canonical projector.** `parse_typed_links`/`parse_org_multi_result`
    (extended for the new metadata) is the single deterministic function `text → (nodes, typed

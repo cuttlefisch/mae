@@ -7,9 +7,9 @@
 
 ** Lesson 9: Help System
 
-Prerequisites: [[requires:lesson:terminal][Lesson 8: Terminal]]
+Prerequisites: [[lesson:terminal?rel=requires][Lesson 8: Terminal]]
 
-MAE's help is a [[teaches:concept:knowledge-base][knowledge base]] — the same data the AI queries via ~kb_*~ tools.
+MAE's help is a [[concept:knowledge-base?rel=teaches][knowledge base]] — the same data the AI queries via ~kb_*~ tools.
 
 *** Help commands
   ~SPC h h~ — [[cmd:help][open help index]]

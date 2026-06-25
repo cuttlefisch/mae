@@ -13,4 +13,4 @@ A **command** is a named, documented operation with a stable string identifier. 
 
 This is the *entire* reason MAE has the ergonomics it has -- there is exactly one API and it has three callers.
 
-See also: [[references:concept:ai-as-peer][The AI as Peer Actor]], [[concept:command]]
+See also: [[concept:ai-as-peer?rel=references][The AI as Peer Actor]], [[concept:command]]

@@ -35,6 +35,6 @@ MAE parses `:w`, `:q`, `:x` commands using a token grammar rather than hardcoded
 ** Implementation
 The tokenizer lives in `crates/core/src/editor/ex_parse.rs`. `parse_write_quit()` returns `Option<Vec<ExWriteQuit>>` -- None for non-matching commands, Some for valid compound commands.
 
-[[part_of:concept:command][Part of Command]].
+[[concept:command?rel=part_of][Part of Command]].
 
-See also: [[references:concept:options][Editor Options]]
+See also: [[concept:options?rel=references][Editor Options]]

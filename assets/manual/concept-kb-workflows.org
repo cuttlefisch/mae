@@ -39,4 +39,4 @@ Quick version: `:kb-register MyNotes ~/org-roam`
 ** AI access
 The AI agent uses the same tools: `kb_search`, `kb_get`, `kb_graph`. It sees everything you see. Ask it: "find notes about X" or "import my KB at ~/RoamNotes".
 
-See also: [[references:concept:knowledge-base][Knowledge Base]], [[references:concept:kb-federation][KB Federation]]
+See also: [[concept:knowledge-base?rel=references][Knowledge Base]], [[concept:kb-federation?rel=references][KB Federation]]

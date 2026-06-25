@@ -7,7 +7,7 @@
 
 * What Is Modal Editing?
 
-[[teaches:concept:mode][Teaches: Modes]]
+[[concept:mode?rel=teaches][Teaches: Modes]]
 
 In most editors, pressing =j= types the letter "j". In MAE, what a key does depends on which *mode* you're in.
 

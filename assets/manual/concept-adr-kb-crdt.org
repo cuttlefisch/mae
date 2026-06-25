@@ -28,6 +28,6 @@ SQLite remains the persistence backend — yrs document bytes stored as BLOBs. F
 
 Full ADR: `docs/adr/005-kb-crdt.md`
 
-This ADR [[documents:concept:knowledge-base][documents the Knowledge Base]].
+This ADR [[concept:knowledge-base?rel=documents][documents the Knowledge Base]].
 
 See also: [[concept:sync-engine]], [[concept:knowledge-base]], [[concept:collaborative-state]]

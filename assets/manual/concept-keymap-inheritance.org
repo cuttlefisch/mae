@@ -29,6 +29,6 @@ The kernel also creates an empty `leader` keymap, populated by the embedded
 (bound WITHOUT an `SPC` prefix) and is consulted by the transient leader keypad
 regardless of which keymap flavor is active. See [[concept:keymap-flavors]].
 
-[[part_of:concept:mode][Part of Mode]].
+[[concept:mode?rel=part_of][Part of Mode]].
 
-See also: [[references:concept:mode][Mode]], [[references:concept:buffer-mode][BufferMode Trait]]
+See also: [[concept:mode?rel=references][Mode]], [[concept:buffer-mode?rel=references][BufferMode Trait]]

@@ -5,7 +5,7 @@
 #+title: Mode
 #+filetags: :data-model:modal-editing:
 
-MAE is **modal** like Vim. The current [[references:concept:mode][Mode]] determines which keymap is active.
+MAE is **modal** like Vim. The current [[concept:mode?rel=references][Mode]] determines which keymap is active.
 
 ** Modes
 - **Normal** -- movement and commands (default).
@@ -15,8 +15,8 @@ MAE is **modal** like Vim. The current [[references:concept:mode][Mode]] determi
 - **Search** -- `/` incremental search.
 - **ConversationInput** -- typing into the AI prompt.
 - **FilePicker** -- fuzzy file open overlay.
-- **ShellInsert** -- raw keyboard passthrough to [[references:concept:terminal][embedded terminal]].
+- **ShellInsert** -- raw keyboard passthrough to [[concept:terminal?rel=references][embedded terminal]].
 
-Mode transitions are commands -- see [[cmd:enter-normal-mode]], [[cmd:enter-insert-mode]], [[cmd:enter-command-mode]]. The AI agent can trigger them too (that's the point of [[references:concept:ai-as-peer][The AI as Peer Actor]]).
+Mode transitions are commands -- see [[cmd:enter-normal-mode]], [[cmd:enter-insert-mode]], [[cmd:enter-command-mode]]. The AI agent can trigger them too (that's the point of [[concept:ai-as-peer?rel=references][The AI as Peer Actor]]).
 
 See also: [[key:normal-mode]]

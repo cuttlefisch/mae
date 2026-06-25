@@ -43,4 +43,4 @@ How MAE's knowledge base compares to Obsidian and Roam Research.
 4. **Ownership means exit.** Your org files are yours. No account, no sync service, no API key required to read your own notes.
 5. **Performance at the editor layer.** In-memory graph with pre-lowercased search cache. FTS5 with porter stemmer. Sub-millisecond search across thousands of nodes. No Electron, no browser runtime.
 
-See also: [[references:concept:knowledge-base][Knowledge Base]], [[references:concept:kb-federation][KB Federation]], [[references:concept:kb-workflows][KB Workflows]]
+See also: [[concept:knowledge-base?rel=references][Knowledge Base]], [[concept:kb-federation?rel=references][KB Federation]], [[concept:kb-workflows?rel=references][KB Workflows]]

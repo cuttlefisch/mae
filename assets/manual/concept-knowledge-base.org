@@ -16,7 +16,7 @@ MAE's **knowledge base** is a typed graph database backed by CozoDB (Datalog). I
 
 ** Node namespaces
 - `index` -- the entry page.
-- `cmd:<name>` -- one per registered [[references:concept:command][Command]] (auto-generated).
+- `cmd:<name>` -- one per registered [[concept:command?rel=references][Command]] (auto-generated).
 - `concept:<slug>` -- architectural concepts (hand-authored).
 - `key:<context>` -- keybinding summaries.
 - `option:<name>` -- editor options.
@@ -37,11 +37,11 @@ MAE's **knowledge base** is a typed graph database backed by CozoDB (Datalog). I
 - **Views**: 6 pre-built flavors (kanban, backlog, sprint, timeline, agenda, custom).
 
 ** Federation
-The KB supports multiple instances: a local KB (seed + user help) plus N external instances registered from org-roam directories. See [[references:concept:kb-federation][KB Federation]].
+The KB supports multiple instances: a local KB (seed + user help) plus N external instances registered from org-roam directories. See [[concept:kb-federation?rel=references][KB Federation]].
 
 ** AI surface
 Core tools: `kb_get`, `kb_search`, `kb_list`, `kb_links_from`, `kb_links_to`, `kb_graph`, `kb_health`. Graph tools: `kb_agenda`, `kb_history`, `kb_restore`, `kb_view_query`, `kb_vector_search`, `kb_raw_query`, `kb_shortest_path`, `kb_neighborhood`, `kb_add_link`, `kb_search_context`. Federation: `kb_register`, `kb_unregister`, `kb_reimport`, `kb_instances`.
 
-See also: [[references:concept:kb-federation][KB Federation]], [[references:concept:kb-workflows][KB Workflows]], [[references:concept:kb-sharing][KB Sharing]], [[references:concept:kb-vs-alternatives][KB vs Alternatives]], [[references:concept:ai-as-peer][The AI as Peer Actor]], [[index]]
+See also: [[concept:kb-federation?rel=references][KB Federation]], [[concept:kb-workflows?rel=references][KB Workflows]], [[concept:kb-sharing?rel=references][KB Sharing]], [[concept:kb-vs-alternatives?rel=references][KB vs Alternatives]], [[concept:ai-as-peer?rel=references][The AI as Peer Actor]], [[index]]
 
-Documented by: [[documents:concept:adr-kb-crdt][ADR-005: KB as CRDT]]
+Documented by: [[concept:adr-kb-crdt?rel=documents][ADR-005: KB as CRDT]]

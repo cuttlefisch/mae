@@ -41,4 +41,4 @@ mae --test tests/collab-e2e/test_smoke.scm  # Single file
 ** Key Principle: One Op Per Step
 Each `it-test` is one eval→apply cycle. Pending mutations (`buffer-insert`, `goto-char`, etc.) execute during `apply_to_editor` after eval completes. Multiple mutations in one step may execute in unexpected order — split them.
 
-See also: [[references:concept:test-runner][Test Runner]], [[scheme:describe-group]], [[scheme:it-test]], [[index]]
+See also: [[concept:test-runner?rel=references][Test Runner]], [[scheme:describe-group]], [[scheme:it-test]], [[index]]

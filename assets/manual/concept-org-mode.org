@@ -52,4 +52,4 @@ Press `Enter` on a link to follow it. Internal links jump to headings; external 
 - `/italic/` text is rendered in italics.
 - **Emphasis Markers**: Use `:set org_hide_emphasis_markers true` to hide the surrounding `*` and `/` characters.
 
-See also: [[references:concept:markdown][Markdown]], [[references:concept:knowledge-base][Knowledge Base]], [[references:concept:options][Editor Options]]
+See also: [[concept:markdown?rel=references][Markdown]], [[concept:knowledge-base?rel=references][Knowledge Base]], [[concept:options?rel=references][Editor Options]]

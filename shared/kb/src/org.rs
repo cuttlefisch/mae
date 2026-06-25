@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// A parsed link from org content with typed relationship info.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedLink {
     /// Full node ID (e.g., "concept:buffer").
     pub target: String,
@@ -30,6 +30,15 @@ pub struct ParsedLink {
     pub rel_type: String,
     /// Optional block index or heading slug (from `#fragment`).
     pub fragment: Option<String>,
+    /// Relationship weight 0–1 (ADR-030 in-text grammar, default 1.0).
+    pub weight: f64,
+    /// Relationship confidence 0–1 (default 1.0; lower for AI-inferred links).
+    pub confidence: f64,
+    /// Unrecognized query attributes, preserved verbatim + in source order
+    /// (ADR-030 extensibility: a future `?key=val` needs no grammar change —
+    /// parsed here today, read by tomorrow's code). Recognized keys
+    /// (rel/w/weight/c/conf/confidence) are NOT duplicated here.
+    pub attrs: Vec<(String, String)>,
 }
 
 /// Result of parsing an org file, including structured metadata
@@ -398,16 +407,14 @@ fn scan_heading_properties(lines: &[&str]) -> (Option<String>, HashMap<String, S
 
 /// Extract typed links from org content.
 ///
-/// Recognizes both org-roam `[[id:UUID][display]]` and typed links
-/// `[[REL_TYPE:NODE_ID][display]]` where REL_TYPE is a known relationship type.
-/// If `known_rel_types` is None, all links default to "references".
+/// Recognizes org-roam `[[id:UUID][display]]` and the ADR-030 in-text grammar
+/// `[[NODE_ID[#FRAGMENT][?rel=X&w=Y&c=Z&…]][display]]`, where all relationship
+/// metadata lives as orderless key-value attributes in the target's query (see
+/// [`classify_link`]). Absent a query, links default to `rel_type=references`,
+/// `weight=confidence=1.0`.
 ///
 /// The `source_id` is the ID of the node containing these links.
-pub fn parse_typed_links(
-    body: &str,
-    source_id: &str,
-    known_rel_types: Option<&HashSet<String>>,
-) -> Vec<ParsedLink> {
+pub fn parse_typed_links(body: &str, source_id: &str) -> Vec<ParsedLink> {
     let code_ranges = crate::compute_code_block_ranges(body);
     let in_code = |pos: usize| -> bool { code_ranges.iter().any(|&(s, e)| pos >= s && pos < e) };
 
@@ -441,13 +448,13 @@ pub fn parse_typed_links(
                 // Strip id: prefix if present
                 let target_str = target_raw.strip_prefix("id:").unwrap_or(target_raw).trim();
 
+                let link_end = link_start + 2 + rel_end + 2; // past the closing ]]
+
                 if !target_str.is_empty() {
-                    let display_text = display.unwrap_or(target_str).to_string();
-                    let link = classify_link(target_str, display_text, known_rel_types);
-                    out.push(link);
+                    out.push(classify_link(target_str, display));
                 }
 
-                i = link_start + 2 + rel_end + 2;
+                i = link_end;
                 continue;
             }
         }
@@ -457,46 +464,84 @@ pub fn parse_typed_links(
     out
 }
 
-/// Classify a link target into (rel_type, node_id, fragment).
-///
-/// Format: `REL_TYPE:NODE_ID#fragment` where REL_TYPE must be in known_rel_types.
-/// If no known rel_type prefix matches, the entire string is the node ID
-/// and rel_type defaults to "references".
-fn classify_link(
-    target: &str,
-    display: String,
-    known_rel_types: Option<&HashSet<String>>,
-) -> ParsedLink {
-    // Split fragment
-    let (target_no_frag, fragment) = match target.find('#') {
-        Some(pos) => (&target[..pos], Some(target[pos + 1..].to_string())),
+/// Split a link target `NODE_ID[#FRAGMENT][?QUERY]` (ADR-030) into its parts.
+/// Query is delimited by the first `?`; fragment by the first `#` in the
+/// remaining path. Node IDs never contain `?`/`#`, so this is unambiguous.
+fn split_link_target(target: &str) -> (&str, Option<String>, Option<&str>) {
+    let (path, query) = match target.find('?') {
+        Some(p) => (&target[..p], Some(&target[p + 1..])),
         None => (target, None),
     };
+    let (node_id, fragment) = match path.find('#') {
+        Some(p) => (&path[..p], Some(path[p + 1..].to_string())),
+        None => (path, None),
+    };
+    (node_id, fragment, query)
+}
 
-    // Try to match typed prefix: "teaches:concept:buffer" → rel_type="teaches", node_id="concept:buffer"
-    if let Some(rel_types) = known_rel_types {
-        if let Some(colon_pos) = target_no_frag.find(':') {
-            let candidate_type = &target_no_frag[..colon_pos];
-            if rel_types.contains(candidate_type) {
-                let node_id = &target_no_frag[colon_pos + 1..];
-                if !node_id.is_empty() {
-                    return ParsedLink {
-                        target: node_id.to_string(),
-                        display,
-                        rel_type: candidate_type.to_string(),
-                        fragment,
-                    };
-                }
+/// Parse a link target's query string `rel=X&w=Y&c=Z&custom=…` (ADR-030) into
+/// `(rel_type, weight, confidence, attrs)`. Orderless and extensible:
+/// - **Recognized** keys are `rel`, `w`/`weight`, `c`/`conf`/`confidence`
+///   (numerics clamped to 0–1; malformed/non-finite values fall back to the
+///   default rather than dropping the link).
+/// - **Unrecognized** keys are collected verbatim into `attrs` (source order),
+///   so custom/future attributes round-trip without a grammar change.
+///
+/// `rel_type` is returned as `None` when unset (caller defaults to `references`).
+fn parse_link_query(query: &str) -> (Option<String>, f64, f64, Vec<(String, String)>) {
+    let mut rel_type = None;
+    let mut weight = 1.0;
+    let mut confidence = 1.0;
+    let mut attrs = Vec::new();
+    let parse_unit = |v: &str, slot: &mut f64| {
+        if let Ok(f) = v.parse::<f64>() {
+            if f.is_finite() {
+                *slot = f.clamp(0.0, 1.0);
             }
         }
+    };
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, value) = match pair.split_once('=') {
+            Some((k, v)) => (k.trim(), v.trim()),
+            None => (pair.trim(), ""),
+        };
+        match key {
+            "rel" => {
+                if !value.is_empty() {
+                    rel_type = Some(value.to_string());
+                }
+            }
+            "w" | "weight" => parse_unit(value, &mut weight),
+            "c" | "conf" | "confidence" => parse_unit(value, &mut confidence),
+            "" => {}
+            _ => attrs.push((key.to_string(), value.to_string())),
+        }
     }
+    (rel_type, weight, confidence, attrs)
+}
 
-    // No typed prefix — default to "references"
+/// Classify a link target into a [`ParsedLink`] per the ADR-030 grammar
+/// `NODE_ID[#FRAGMENT][?rel=X&w=Y&c=Z&…]`. Relationship metadata is read from the
+/// orderless query (see [`parse_link_query`]); absent it, `rel_type` defaults to
+/// `references` and weight/confidence to 1.0. `display` defaults to the bare
+/// NODE_ID when the link has no `[display]` part.
+fn classify_link(target: &str, display: Option<&str>) -> ParsedLink {
+    let (node_id, fragment, query) = split_link_target(target);
+    let (rel_type, weight, confidence, attrs) = match query {
+        Some(q) => parse_link_query(q),
+        None => (None, 1.0, 1.0, Vec::new()),
+    };
     ParsedLink {
-        target: target_no_frag.to_string(),
-        display,
-        rel_type: "references".to_string(),
+        target: node_id.to_string(),
+        display: display.unwrap_or(node_id).to_string(),
+        rel_type: rel_type.unwrap_or_else(|| "references".to_string()),
         fragment,
+        weight,
+        confidence,
+        attrs,
     }
 }
 
@@ -507,15 +552,17 @@ fn classify_link(
 /// internal link scanner (which uses `[[…]]`). If a `[[` has no matching
 /// `]]` before a nested `[[`, it's treated as literal text.
 ///
-/// Also handles typed links: `[[teaches:concept:buffer][text]]` →
-/// `[[concept:buffer|text]]` (strips the relationship type prefix from
-/// the body so the existing link renderer works).
+/// Also strips ADR-030 relationship metadata from the rendered link:
+/// `[[concept:buffer?rel=teaches&w=0.8][text]]` → `[[concept:buffer|text]]`
+/// (the `?query` is projector input, not display — the fragment is kept for
+/// node resolution).
 pub fn rewrite_links(body: &str) -> String {
-    rewrite_links_with_types(body, None)
+    rewrite_links_with_types(body)
 }
 
-/// Rewrite links, stripping typed prefixes when `known_rel_types` is provided.
-pub fn rewrite_links_with_types(body: &str, known_rel_types: Option<&HashSet<String>>) -> String {
+/// Rewrite links for display, stripping any ADR-030 `?query` metadata from the
+/// target (kept only in the canonical source text for the projector).
+pub fn rewrite_links_with_types(body: &str) -> String {
     let code_ranges = crate::compute_code_block_ranges(body);
     let in_code_block =
         |pos: usize| -> bool { code_ranges.iter().any(|&(s, e)| pos >= s && pos < e) };
@@ -554,35 +601,27 @@ pub fn rewrite_links_with_types(body: &str, known_rel_types: Option<&HashSet<Str
                         Some(sep) => (&inner[..sep], Some(&inner[sep + 2..])),
                         None => (inner, None),
                     };
-                    if let Some(uuid) = target_raw.strip_prefix("id:") {
+                    // Strip ADR-030 `?query` metadata — display/resolution use the
+                    // bare NODE_ID[#FRAGMENT]; the query lives only in source text.
+                    let target_clean = match target_raw.find('?') {
+                        Some(p) => &target_raw[..p],
+                        None => target_raw,
+                    };
+                    if let Some(uuid) = target_clean.strip_prefix("id:") {
                         let uuid = uuid.trim();
                         out.push_str("[[");
-                        // Strip fragment from ID for display, keep it for node resolution
+                        // Keep fragment for node resolution.
                         out.push_str(uuid);
                         if let Some(d) = display {
                             out.push('|');
                             out.push_str(d);
                         }
                         out.push_str("]]");
-                    } else if is_typed_link(target_raw, known_rel_types) {
-                        // Typed link: [[teaches:concept:buffer][text]]
-                        // Strip the rel_type prefix, rewrite as [[concept:buffer|text]]
-                        let colon_pos = target_raw.find(':').unwrap();
-                        let node_id = &target_raw[colon_pos + 1..];
-                        // Strip fragment for KB link format
-                        let node_id_no_frag = node_id.split('#').next().unwrap_or(node_id);
-                        out.push_str("[[");
-                        out.push_str(node_id_no_frag);
-                        if let Some(d) = display {
-                            out.push('|');
-                            out.push_str(d);
-                        }
-                        out.push_str("]]");
-                    } else if is_kb_node_id(target_raw) {
+                    } else if is_kb_node_id(target_clean) {
                         // Internal KB link (concept:buffer, key:normal-mode, etc.)
                         // — preserve as [[target|display]] for the help renderer.
                         out.push_str("[[");
-                        out.push_str(target_raw);
+                        out.push_str(target_clean);
                         if let Some(d) = display {
                             out.push('|');
                             out.push_str(d);
@@ -645,29 +684,12 @@ fn is_kb_node_id(target: &str) -> bool {
     KB_NAMESPACES.iter().any(|ns| target.starts_with(ns))
 }
 
-/// Check if a link target starts with a known typed relationship prefix.
-fn is_typed_link(target: &str, known_rel_types: Option<&HashSet<String>>) -> bool {
-    let Some(rel_types) = known_rel_types else {
-        return false;
-    };
-    if let Some(colon_pos) = target.find(':') {
-        let candidate = &target[..colon_pos];
-        // Must have content after the prefix
-        rel_types.contains(candidate) && target.len() > colon_pos + 1
-    } else {
-        false
-    }
-}
-
 /// Parse an org file into an `OrgParseResult` with typed links and transclusions.
 ///
 /// This is the rich version of `parse_org_multi()` that extracts relationship
-/// types from typed link syntax and TRANSCLUDE directives.
-pub fn parse_org_multi_result(
-    content: &str,
-    known_rel_types: Option<&HashSet<String>>,
-) -> OrgParseResult {
-    let nodes = parse_org_multi_with_types(content, known_rel_types);
+/// types from the ADR-030 in-text link grammar and TRANSCLUDE directives.
+pub fn parse_org_multi_result(content: &str) -> OrgParseResult {
+    let nodes = parse_org_multi_with_types(content);
     let mut typed_links = Vec::new();
     let mut transclusions = Vec::new();
 
@@ -678,7 +700,7 @@ pub fn parse_org_multi_result(
 
     // File-level node links: scan the entire file header area
     if let Some(ref file_id) = header.file_id {
-        let links = parse_typed_links(content, file_id, known_rel_types);
+        let links = parse_typed_links(content, file_id);
         for link in links {
             typed_links.push((file_id.clone(), link));
         }
@@ -705,7 +727,7 @@ pub fn parse_org_multi_result(
             .map(|(idx, _, _)| *idx)
             .unwrap_or(lines.len());
         let body_raw = lines[start..end].join("\n");
-        let links = parse_typed_links(&body_raw, hid, known_rel_types);
+        let links = parse_typed_links(&body_raw, hid);
         for link in links {
             typed_links.push((hid.clone(), link));
         }
@@ -757,18 +779,16 @@ pub fn parse_org_multi_result(
     }
 }
 
-/// Like `parse_org_multi` but strips typed link prefixes from rewritten bodies.
-fn parse_org_multi_with_types(
-    content: &str,
-    known_rel_types: Option<&HashSet<String>>,
-) -> Vec<Node> {
+/// Like `parse_org_multi` but strips ADR-030 `?query` link metadata from
+/// rewritten bodies.
+fn parse_org_multi_with_types(content: &str) -> Vec<Node> {
     let header = parse_file_header(content);
     let lines: Vec<&str> = content.lines().collect();
     let mut out: Vec<Node> = Vec::new();
 
     if let Some(id) = header.file_id.clone() {
         let title = header.file_title.clone().unwrap_or_else(|| id.clone());
-        let body = rewrite_links_with_types(content, known_rel_types);
+        let body = rewrite_links_with_types(content);
         let kind = header.kind.unwrap_or(NodeKind::Note);
         let mut node = Node::new(id, title, kind, body).with_tags(header.file_tags.clone());
         if !header.aliases.is_empty() {
@@ -802,7 +822,7 @@ fn parse_org_multi_with_types(
             continue;
         };
         let body_raw = lines[start..end].join("\n");
-        let body = rewrite_links_with_types(&body_raw, known_rel_types);
+        let body = rewrite_links_with_types(&body_raw);
         let mut tags = header.file_tags.clone();
         tags.extend(headings[hi].2.tags.clone());
         // Extract :KIND: from heading properties if present
@@ -1270,13 +1290,11 @@ After example [[id:def][another link]].";
     #[test]
     fn parse_typed_links_skips_example_blocks() {
         let body = "\
-[[teaches:concept:buffer][real typed link]]
+[[concept:buffer?rel=teaches][real typed link]]
 #+begin_example
-[[teaches:concept:fake][inside example]]
+[[concept:fake?rel=teaches][inside example]]
 #+end_example";
-        let mut known = std::collections::HashSet::new();
-        known.insert("teaches".to_string());
-        let links = parse_typed_links(body, "test", Some(&known));
+        let links = parse_typed_links(body, "test");
         assert_eq!(
             links.len(),
             1,
@@ -1287,10 +1305,8 @@ After example [[id:def][another link]].";
 
     #[test]
     fn parse_typed_links_skips_verbatim_spans() {
-        let body = "See [[teaches:concept:buffer]] and =[[teaches:concept:fake]]=.";
-        let mut known = std::collections::HashSet::new();
-        known.insert("teaches".to_string());
-        let links = parse_typed_links(body, "test", Some(&known));
+        let body = "See [[concept:buffer?rel=teaches]] and =[[concept:fake?rel=teaches]]=.";
+        let links = parse_typed_links(body, "test");
         assert_eq!(links.len(), 1, "should skip link in verbatim span");
         assert_eq!(links[0].target, "concept:buffer");
     }
@@ -1380,24 +1396,74 @@ Body.
 
     #[test]
     fn typed_link_parsing() {
-        let known: HashSet<String> = ["teaches", "implements", "references"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let body = "See [[teaches:concept:buffer][Buffer Management]] for details.";
-        let links = parse_typed_links(body, "test-node", Some(&known));
+        // ADR-030: rel lives in the target query `?rel=…`.
+        let body = "See [[concept:buffer?rel=teaches][Buffer Management]] for details.";
+        let links = parse_typed_links(body, "test-node");
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].rel_type, "teaches");
         assert_eq!(links[0].target, "concept:buffer");
         assert_eq!(links[0].display, "Buffer Management");
         assert_eq!(links[0].fragment, None);
+        // No w/c attributes → weight/confidence default to 1.0.
+        assert_eq!(links[0].weight, 1.0);
+        assert_eq!(links[0].confidence, 1.0);
+    }
+
+    #[test]
+    fn link_weight_and_confidence_attributes() {
+        // ADR-030: `?rel=…&w=…&c=…` carries the relationship metadata in the target.
+        let body =
+            "see [[concept:buffer?rel=teaches&w=0.8&c=0.95][the buffer]] then [[concept:plain]]";
+        let links = parse_typed_links(body, "src");
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].rel_type, "teaches");
+        assert_eq!(links[0].target, "concept:buffer");
+        assert_eq!(links[0].display, "the buffer");
+        assert_eq!(links[0].weight, 0.8);
+        assert_eq!(links[0].confidence, 0.95);
+        // The second link has no query → defaults.
+        assert_eq!(links[1].target, "concept:plain");
+        assert_eq!(links[1].rel_type, "references");
+        assert_eq!(links[1].weight, 1.0);
+        assert_eq!(links[1].confidence, 1.0);
+    }
+
+    #[test]
+    fn link_attrs_orderless_clamped_and_extensible() {
+        // Keys are orderless (c before w before rel); out-of-range numerics clamp;
+        // a malformed numeric falls back to default; unknown keys are preserved
+        // verbatim in `attrs` (ADR-030 extensibility) without dropping the link.
+        let links = parse_typed_links(
+            "[[concept:x?c=0.95&w=0.8&rel=cites]] \
+             [[concept:y?w=2.0&c=-0.5&w=bogus]] \
+             [[concept:z?rel=cites&since=2026-06&by=ai]]",
+            "src",
+        );
+        assert_eq!(links.len(), 3);
+        // Orderless: c/w/rel parsed regardless of position.
+        assert_eq!(links[0].rel_type, "cites");
+        assert_eq!((links[0].weight, links[0].confidence), (0.8, 0.95));
+        // Clamp 2.0→1.0, -0.5→0.0; the later malformed `w=bogus` leaves w at 1.0.
+        assert_eq!(links[1].target, "concept:y");
+        assert_eq!((links[1].weight, links[1].confidence), (1.0, 0.0));
+        // Custom keys round-trip in attrs (source order), link kept.
+        assert_eq!(links[2].rel_type, "cites");
+        assert_eq!(
+            links[2].attrs,
+            vec![
+                ("since".to_string(), "2026-06".to_string()),
+                ("by".to_string(), "ai".to_string()),
+            ]
+        );
+        // Recognized keys are NOT duplicated into attrs.
+        assert!(links[2].attrs.iter().all(|(k, _)| k != "rel"));
     }
 
     #[test]
     fn typed_link_with_fragment() {
-        let known: HashSet<String> = ["implements"].iter().map(|s| s.to_string()).collect();
-        let body = "See [[implements:concept:rope#architecture][Rope Internals]].";
-        let links = parse_typed_links(body, "src", Some(&known));
+        // Grammar order: NODE_ID `#`FRAGMENT then `?`QUERY.
+        let body = "See [[concept:rope#architecture?rel=implements][Rope Internals]].";
+        let links = parse_typed_links(body, "src");
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].rel_type, "implements");
         assert_eq!(links[0].target, "concept:rope");
@@ -1406,33 +1472,36 @@ Body.
 
     #[test]
     fn untyped_link_defaults_to_references() {
-        let known: HashSet<String> = ["teaches"].iter().map(|s| s.to_string()).collect();
         let body = "See [[concept:buffer][Buffer Management]].";
-        let links = parse_typed_links(body, "src", Some(&known));
+        let links = parse_typed_links(body, "src");
         assert_eq!(links.len(), 1);
-        // "concept" is not in known_rel_types, so it defaults to "references"
+        // No `?rel=` → defaults to "references"; the colon namespace is part of the id.
         assert_eq!(links[0].rel_type, "references");
         assert_eq!(links[0].target, "concept:buffer");
     }
 
     #[test]
-    fn typed_link_without_known_types_defaults() {
-        let body = "See [[teaches:concept:buffer][Buffer]].";
-        let links = parse_typed_links(body, "src", None);
+    fn link_without_display_defaults_to_node_id() {
+        // No `[display]` part → display falls back to the bare NODE_ID (query stripped).
+        let body = "See [[concept:buffer?rel=teaches&w=0.5]].";
+        let links = parse_typed_links(body, "src");
         assert_eq!(links.len(), 1);
-        assert_eq!(links[0].rel_type, "references");
-        // Without known types, "teaches:concept:buffer" is treated as one target
-        assert_eq!(links[0].target, "teaches:concept:buffer");
+        assert_eq!(links[0].target, "concept:buffer");
+        assert_eq!(links[0].display, "concept:buffer");
+        assert_eq!(links[0].weight, 0.5);
     }
 
     #[test]
-    fn rewrite_links_strips_typed_prefix() {
-        let known: HashSet<String> = ["teaches"].iter().map(|s| s.to_string()).collect();
-        let body = "See [[teaches:concept:buffer][Buffer Management]].";
-        let out = rewrite_links_with_types(body, Some(&known));
+    fn rewrite_links_strips_query_metadata() {
+        let body = "See [[concept:buffer?rel=teaches&w=0.8][Buffer Management]].";
+        let out = rewrite_links(body);
         assert!(
             out.contains("[[concept:buffer|Buffer Management]]"),
-            "typed prefix should be stripped: {out}"
+            "query metadata should be stripped for display: {out}"
+        );
+        assert!(
+            !out.contains('?'),
+            "no query should leak into display: {out}"
         );
     }
 
@@ -1479,7 +1548,7 @@ Body.
 
 Body text.
 ";
-        let result = parse_org_multi_result(content, None);
+        let result = parse_org_multi_result(content);
         assert_eq!(result.nodes.len(), 1);
         assert_eq!(result.nodes[0].kind, NodeKind::Concept);
     }
@@ -1495,7 +1564,7 @@ Body text.
 
 Body text.
 ";
-        let result = parse_org_multi_result(content, None);
+        let result = parse_org_multi_result(content);
         assert_eq!(result.nodes.len(), 1);
         assert_eq!(
             result.nodes[0].aliases,
@@ -1514,7 +1583,7 @@ Body text.
 
 Body text.
 ";
-        let result = parse_org_multi_result(content, None);
+        let result = parse_org_multi_result(content);
         assert_eq!(result.nodes.len(), 1);
         assert_eq!(result.nodes[0].kind, NodeKind::Lesson);
     }
@@ -1531,7 +1600,7 @@ Body text.
 
 Body text.
 ";
-        let result = parse_org_multi_result(content, None);
+        let result = parse_org_multi_result(content);
         assert_eq!(result.transclusions.len(), 2);
         assert_eq!(
             result.transclusions[0],
@@ -1553,10 +1622,6 @@ Body text.
 
     #[test]
     fn parse_org_multi_result_typed_links() {
-        let known: HashSet<String> = ["teaches", "implements"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
         let content = "\
 :PROPERTIES:
 :ID: lesson:navigation
@@ -1564,10 +1629,10 @@ Body text.
 :END:
 #+title: Navigation
 
-Learn about [[teaches:concept:buffer][buffers]] and [[implements:concept:rope][ropes]].
+Learn about [[concept:buffer?rel=teaches][buffers]] and [[concept:rope?rel=implements][ropes]].
 Also see [[concept:window][windows]].
 ";
-        let result = parse_org_multi_result(content, Some(&known));
+        let result = parse_org_multi_result(content);
         assert_eq!(result.nodes.len(), 1);
         assert_eq!(result.typed_links.len(), 3);
 

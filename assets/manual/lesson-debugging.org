@@ -7,9 +7,9 @@
 
 ** Lesson 11: Debugging
 
-Prerequisites: [[requires:lesson:leader][Lesson 10: Leader Keys]]
+Prerequisites: [[lesson:leader?rel=requires][Lesson 10: Leader Keys]]
 
-MAE has a built-in [[teaches:concept:debugging][DAP client]] for debugging any language.
+MAE has a built-in [[concept:debugging?rel=teaches][DAP client]] for debugging any language.
 
 *** Starting a debug session
   ~:debug-start~ or ~SPC d s~ — launch debuggee with adapter

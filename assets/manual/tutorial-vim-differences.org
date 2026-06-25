@@ -7,9 +7,9 @@
 
 * What's Different from Vim
 
-*Prerequisite:* [[requires:tutorial:vim-familiar][What Carries Over from Vim]]
+*Prerequisite:* [[tutorial:vim-familiar?rel=requires][What Carries Over from Vim]]
 
-[[teaches:concept:mode][Teaches: Modes]]
+[[concept:mode?rel=teaches][Teaches: Modes]]
 
 ** SPC leader instead of backslash
 MAE uses *Space* as the leader key (Doom Emacs style). This gives access to 14+ command groups:
