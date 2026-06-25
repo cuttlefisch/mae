@@ -14,6 +14,18 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+/// The default `mae-daemon` control-socket path — the **single source of truth**
+/// shared by the daemon (which binds it) and every client (CLI + editor) so they
+/// can never drift. Resolves `$XDG_RUNTIME_DIR/mae-daemon.sock` (e.g.
+/// `/run/user/1000/mae-daemon.sock`), falling back to the temp dir when no runtime
+/// dir is set — matching the daemon's `dirs::runtime_dir().unwrap_or(temp_dir)`.
+pub fn default_daemon_socket() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("mae-daemon.sock")
+}
+
 /// Error type for daemon client operations.
 #[derive(Debug)]
 pub enum DaemonClientError {

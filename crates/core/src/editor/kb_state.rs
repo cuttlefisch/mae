@@ -11,6 +11,18 @@ use mae_kb::query::KbQueryLayer;
 use super::kb_ops::KbWatcherStats;
 use super::CaptureState;
 
+/// Default `mae-daemon` control-socket path: `$XDG_RUNTIME_DIR/mae-daemon.sock`
+/// (e.g. `/run/user/1000/mae-daemon.sock`), falling back to the temp dir. Must
+/// match the daemon's bind path and `mae_mcp::daemon_client::default_daemon_socket`
+/// — kept as a tiny std-only twin here because `mae-core` does not depend on
+/// `mae-mcp`. Used for the field default + the `daemon_socket` option's "auto" value.
+pub(crate) fn default_daemon_socket() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("mae-daemon.sock")
+}
+
 /// Synchronous daemon control-socket operations the editor needs but cannot
 /// perform itself — `mae-core` deliberately does not depend on `mae-mcp` /
 /// `DaemonClient`. The binary injects a concrete `DaemonClient`-backed
@@ -269,7 +281,7 @@ impl KbContext {
             daemon_query: None,
             daemon_enabled: false,
             daemon_control: None,
-            daemon_socket: std::path::PathBuf::from("/tmp/mae-daemon.sock"),
+            daemon_socket: default_daemon_socket(),
             daemon_cache_size: 200,
             watcher_enabled: true,
             watcher_debounce_ms: 500,

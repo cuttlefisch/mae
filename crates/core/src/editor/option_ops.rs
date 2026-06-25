@@ -756,7 +756,14 @@ impl super::Editor {
                 self.kb.daemon_enabled = parse_option_bool(value)?;
             }
             "daemon_socket" => {
-                self.kb.daemon_socket = std::path::PathBuf::from(value);
+                // Empty ⇒ auto-resolve to the daemon's runtime socket (the option's
+                // default), so a config with `daemon.socket = ""` / an unset value
+                // still connects without a hardcoded path.
+                self.kb.daemon_socket = if value.trim().is_empty() {
+                    crate::editor::kb_state::default_daemon_socket()
+                } else {
+                    std::path::PathBuf::from(value)
+                };
             }
             "daemon_cache_size" => {
                 let v = parse_option_int(value)?;

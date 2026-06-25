@@ -425,7 +425,11 @@ fn main() -> io::Result<()> {
             .position(|a| a == "--socket")
             .and_then(|i| args.get(i + 1))
             .cloned()
-            .unwrap_or_else(|| "/tmp/mae-daemon.sock".to_string());
+            .unwrap_or_else(|| {
+                mae_mcp::daemon_client::default_daemon_socket()
+                    .to_string_lossy()
+                    .into_owned()
+            });
         let mut client = mae_mcp::daemon_client::DaemonClient::new(&socket);
         if let Err(e) = client.connect() {
             eprintln!(
@@ -465,7 +469,11 @@ fn main() -> io::Result<()> {
             .position(|a| a == "--socket")
             .and_then(|i| args.get(i + 1))
             .cloned()
-            .unwrap_or_else(|| "/tmp/mae-daemon.sock".to_string());
+            .unwrap_or_else(|| {
+                mae_mcp::daemon_client::default_daemon_socket()
+                    .to_string_lossy()
+                    .into_owned()
+            });
         let mut client = mae_mcp::daemon_client::DaemonClient::new(&socket);
         if let Err(e) = client.connect() {
             eprintln!(

@@ -273,9 +273,9 @@ impl Default for SyncConfig {
 
 impl Default for DaemonConfig {
     fn default() -> Self {
-        let runtime_dir = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir);
         Self {
-            socket: runtime_dir.join("mae-daemon.sock"),
+            // Shared resolver — clients (CLI + editor) default to the SAME path.
+            socket: mae_mcp::daemon_client::default_daemon_socket(),
             watcher_interval_ms: 500,
             maintenance_interval_secs: 3600,
             sync_interval_secs: 30,
