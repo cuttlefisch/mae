@@ -6,6 +6,7 @@
 pub mod checkpoint;
 pub mod collab_handler;
 pub mod doc_store;
+pub mod projector;
 pub mod storage;
 
 /// Short git SHA of this build (`-dirty` if the tree had uncommitted changes,
