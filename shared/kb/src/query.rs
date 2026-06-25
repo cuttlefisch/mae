@@ -85,6 +85,13 @@ pub trait KbQueryLayer: Send + Sync {
         None
     }
 
+    /// All nodes carrying a TODO state, for the agenda buffer (Phase D thin-client:
+    /// the agenda was mirror-only). Default empty (non-cozo layers); `CozoQueryLayer`
+    /// + `LruQueryLayer` implement it. The editor applies state/priority/tag filters.
+    fn todo_nodes(&self) -> Vec<Node> {
+        Vec::new()
+    }
+
     /// Return all known namespace prefixes (e.g., "cmd:", "concept:").
     fn namespace_prefixes(&self) -> Vec<String> {
         let mut prefixes = std::collections::HashSet::new();
@@ -165,6 +172,12 @@ impl KbQueryLayer for CozoQueryLayer {
 
     fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
         self.store.related(id, limit).unwrap_or_default()
+    }
+
+    fn todo_nodes(&self) -> Vec<Node> {
+        self.store
+            .agenda_query(&crate::AgendaFilter::Todo(None))
+            .unwrap_or_default()
     }
 }
 
@@ -321,6 +334,20 @@ impl KbQueryLayer for FederatedQuery {
         }
         Vec::new()
     }
+
+    fn todo_nodes(&self) -> Vec<Node> {
+        let mut out = self.primary.todo_nodes();
+        let mut seen: std::collections::HashSet<String> =
+            out.iter().map(|n| n.id.clone()).collect();
+        for (_, inst) in &self.instances {
+            for n in inst.todo_nodes() {
+                if seen.insert(n.id.clone()) {
+                    out.push(n);
+                }
+            }
+        }
+        out
+    }
 }
 
 /// Fallback query layer wrapping an in-memory `KnowledgeBase`.
@@ -437,6 +464,16 @@ impl KbQueryLayer for InMemoryQueryLayer {
     fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
         self.kb.lock().unwrap().related(id, limit)
     }
+
+    fn todo_nodes(&self) -> Vec<Node> {
+        self.kb
+            .lock()
+            .unwrap()
+            .todo_nodes()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -495,6 +532,70 @@ mod tests {
         assert!(federated.contains("only:inst"));
         let node = federated.get("only:inst").unwrap();
         assert_eq!(node.title, "Instance Only");
+    }
+
+    #[test]
+    fn todo_nodes_via_query_layers() {
+        // Cozo layer: only TODO-bearing nodes come back.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CozoKbStore::open(tmp.path().join("todo.cozo")).unwrap());
+        store
+            .insert_node(&Node::new("task:a", "Do A", NodeKind::Task, "").with_todo_state("TODO"))
+            .unwrap();
+        store
+            .insert_node(&Node::new("task:b", "Do B", NodeKind::Task, "").with_todo_state("DONE"))
+            .unwrap();
+        store
+            .insert_node(&Node::new("note:c", "Plain note", NodeKind::Note, ""))
+            .unwrap();
+
+        let cozo = Arc::new(CozoQueryLayer::new(store));
+        let todos = cozo.todo_nodes();
+        let ids: Vec<_> = todos.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"task:a"));
+        assert!(ids.contains(&"task:b"));
+        assert!(!ids.contains(&"note:c"));
+
+        // In-memory layer mirrors the same TODO set.
+        let mut kb = crate::KnowledgeBase::new();
+        kb.insert(Node::new("task:x", "X", NodeKind::Task, "").with_todo_state("TODO"));
+        kb.insert(Node::new("note:y", "Y", NodeKind::Note, ""));
+        let mem = InMemoryQueryLayer::new(kb);
+        let mem_todos = mem.todo_nodes();
+        assert_eq!(mem_todos.len(), 1);
+        assert_eq!(mem_todos[0].id, "task:x");
+
+        // Federated layer dedups primary over instance and unions instance-only.
+        let mut federated = FederatedQuery::new(cozo);
+        let tmp2 = tempfile::tempdir().unwrap();
+        let store2 = Arc::new(CozoKbStore::open(tmp2.path().join("inst.cozo")).unwrap());
+        store2
+            .insert_node(&Node::new("task:a", "Dup", NodeKind::Task, "").with_todo_state("TODO"))
+            .unwrap();
+        store2
+            .insert_node(
+                &Node::new("task:z", "Inst only", NodeKind::Task, "").with_todo_state("TODO"),
+            )
+            .unwrap();
+        federated.add_instance("inst".into(), Arc::new(CozoQueryLayer::new(store2)));
+        let fed_ids: Vec<_> = federated
+            .todo_nodes()
+            .into_iter()
+            .map(|n| n.id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        assert!(fed_ids.contains(&"task:a".to_string()));
+        assert!(fed_ids.contains(&"task:z".to_string()));
+        // Deduped: task:a appears once.
+        assert_eq!(
+            federated
+                .todo_nodes()
+                .iter()
+                .filter(|n| n.id == "task:a")
+                .count(),
+            1
+        );
     }
 
     #[test]

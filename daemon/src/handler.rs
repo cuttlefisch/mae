@@ -234,6 +234,23 @@ pub async fn dispatch(
             }
         }
 
+        "kb/todo_nodes" => {
+            // Phase D thin-client: the agenda buffer was mirror-only. Serve all
+            // TODO-bearing nodes as full (serde) nodes — minus the heavy crdt_doc
+            // lineage, which the agenda doesn't need.
+            let state = state.lock().await;
+            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
+            let nodes: Vec<Value> = ql
+                .todo_nodes()
+                .into_iter()
+                .map(|mut n| {
+                    n.crdt_doc = None;
+                    serde_json::to_value(&n).unwrap_or(Value::Null)
+                })
+                .collect();
+            Ok(json!(nodes))
+        }
+
         "kb/id_title_pairs" => {
             let prefix = params["prefix"].as_str();
             let state = state.lock().await;
@@ -713,6 +730,53 @@ mod tests {
         assert!(matches!(n, Err(DaemonError::NotReady)));
         let r = dispatch("kb/related", json!({"id": "concept:x"}), &state).await;
         assert!(matches!(r, Err(DaemonError::NotReady)));
+        let t = dispatch("kb/todo_nodes", json!({}), &state).await;
+        assert!(matches!(t, Err(DaemonError::NotReady)));
+    }
+
+    #[tokio::test]
+    async fn todo_nodes_rpc_serves_todo_set_without_crdt_doc() {
+        // A store with a TODO node, a DONE node, and a plain note.
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(
+                &mae_kb::Node::new("task:a", "Do A", mae_kb::NodeKind::Task, "body")
+                    .with_todo_state("TODO"),
+            )
+            .unwrap();
+        store
+            .insert_node(
+                &mae_kb::Node::new("task:b", "Do B", mae_kb::NodeKind::Task, "")
+                    .with_todo_state("DONE"),
+            )
+            .unwrap();
+        store
+            .insert_node(&mae_kb::Node::new(
+                "note:c",
+                "Plain",
+                mae_kb::NodeKind::Note,
+                "",
+            ))
+            .unwrap();
+
+        let mut st = DaemonState::new();
+        st.store = Some(Arc::new(store));
+        st.rebuild_query_layer();
+        let state = Arc::new(Mutex::new(st));
+
+        let r = dispatch("kb/todo_nodes", json!({}), &state).await.unwrap();
+        let arr = r.as_array().expect("todo_nodes returns a JSON array");
+        let ids: Vec<&str> = arr.iter().filter_map(|n| n["id"].as_str()).collect();
+        assert!(ids.contains(&"task:a"), "TODO node present: {ids:?}");
+        assert!(ids.contains(&"task:b"), "DONE node present: {ids:?}");
+        assert!(!ids.contains(&"note:c"), "plain note excluded: {ids:?}");
+        // The heavy lineage is stripped to keep the payload lean.
+        for n in arr {
+            assert!(
+                n.get("crdt_doc").is_none_or(|v| v.is_null()),
+                "crdt_doc must be cleared in the RPC payload: {n}"
+            );
+        }
     }
 
     #[tokio::test]
