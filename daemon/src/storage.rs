@@ -125,7 +125,8 @@ impl SqlitePool {
                 )?;
                 // ADR-032 A5: migrate snapshot tables created before the integrity
                 // hash column. Errors (duplicate column on a fresh table) are ignored.
-                let _ = conn.execute("ALTER TABLE snapshots ADD COLUMN hash TEXT NOT NULL DEFAULT ''");
+                let _ =
+                    conn.execute("ALTER TABLE snapshots ADD COLUMN hash TEXT NOT NULL DEFAULT ''");
             }
             shards.push(std::sync::Mutex::new(conn));
         }

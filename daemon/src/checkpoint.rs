@@ -207,7 +207,10 @@ mod tests {
         let mut coll = mae_sync::kb::KbCollectionDoc::new("kb1", "owner");
         coll.add_node("n1", "Node 1");
         coll.add_node("n2", "Node 2");
-        store.share_doc("kbc:kb1", &coll.encode_state()).await.unwrap();
+        store
+            .share_doc("kbc:kb1", &coll.encode_state())
+            .await
+            .unwrap();
 
         let n1 = mae_sync::kb::KbNodeDoc::new("n1", "Node 1", "body one", &[]);
         store.share_doc("kb:n1", &n1.encode()).await.unwrap();
@@ -240,9 +243,15 @@ mod tests {
 
         // A node-content change moves the hash.
         let n1 = mae_sync::kb::KbNodeDoc::new("n1", "Node 1", "EDITED", &[]);
-        store.apply_update("kb:n1", &n1.encode(), None).await.unwrap();
+        store
+            .apply_update("kb:n1", &n1.encode(), None)
+            .await
+            .unwrap();
         let c = checkpoint_kb(&store, "kb1").await.unwrap();
-        assert_ne!(a.content_hash, c.content_hash, "edited content ⇒ different hash");
+        assert_ne!(
+            a.content_hash, c.content_hash,
+            "edited content ⇒ different hash"
+        );
     }
 
     #[tokio::test]
@@ -264,9 +273,15 @@ mod tests {
         // Node bodies restored (semantic round-trip — the docs are KbNodeDoc maps,
         // not plain text, so check the structured state, not doc_store.content()).
         let (n1s, _) = dst.encode_state_and_sv("kb:n1").await.unwrap();
-        assert_eq!(mae_sync::kb::KbNodeDoc::from_bytes(&n1s).unwrap().body(), "body one");
+        assert_eq!(
+            mae_sync::kb::KbNodeDoc::from_bytes(&n1s).unwrap().body(),
+            "body one"
+        );
         let (n2s, _) = dst.encode_state_and_sv("kb:n2").await.unwrap();
-        assert_eq!(mae_sync::kb::KbNodeDoc::from_bytes(&n2s).unwrap().body(), "body two");
+        assert_eq!(
+            mae_sync::kb::KbNodeDoc::from_bytes(&n2s).unwrap().body(),
+            "body two"
+        );
     }
 
     #[tokio::test]
