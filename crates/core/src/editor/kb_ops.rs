@@ -795,6 +795,28 @@ impl Editor {
         }
     }
 
+    /// Recompute whether the daemon is hosting the primary KB right now (Phase D,
+    /// ADR-029). The **single writer** of `daemon_hosts_primary`: hosting is on iff
+    /// the user opted in (`daemon_default`), a daemon read layer is wired
+    /// (`has_daemon`), and the collab write channel is connected (so primary edits
+    /// can reach the daemon's CRDT). Call after daemon connect, on collab
+    /// connect/disconnect, and on `set_option("daemon_default", …)`.
+    ///
+    /// Deliberately distinct from the durable `registry.primary_shared` (peer-share
+    /// intent): hosting is runtime-only, so it never implies peer broadcast and never
+    /// leaks into a later daemon-less launch. The collab connection in the typical
+    /// setup is the local daemon; distinguishing a remote peer from the local daemon
+    /// is a later refinement (the gate is opt-in via `daemon_default`).
+    pub fn refresh_daemon_host_state(&mut self) {
+        let hosting = self.kb.daemon_default
+            && self.kb.has_daemon()
+            && matches!(
+                self.collab.status,
+                crate::editor::CollabStatus::Connected { .. }
+            );
+        self.kb.set_daemon_hosts_primary(hosting);
+    }
+
     /// Apply a remote CRDT update to a KB node, routing it to its **owning**
     /// store — primary or the owning federated instance — not always primary
     /// (ADR-019 receive-side federation; mirror of the write-side fix). For a
@@ -1096,7 +1118,14 @@ impl Editor {
         // not the transient `shared_kbs` cache — so edits broadcast even right
         // after a restart, before the cache is reconstructed.
         let shared_kb_id = if self.collab.kb_sync_mode == "on_save" {
-            self.kb_collab_id_of(&owner)
+            self.kb_collab_id_of(&owner).or_else(|| {
+                // Phase D (ADR-029): when the daemon hosts the primary, route primary
+                // edits to its CRDT under the canonical "default" collab id — even if
+                // the user never ran `kb-share`. Consistent with `kb_collab_id_of`'s
+                // primary fallback, so a later explicit share reuses the same kbc:default.
+                (owner.is_none() && self.kb.daemon_hosts_primary())
+                    .then(|| crate::editor::KB_DEFAULT_NAME.to_string())
+            })
         } else {
             None
         };
@@ -3467,6 +3496,86 @@ mod tests {
         assert!(
             editor.collab.pending_kb_updates.is_empty(),
             "unshared KB must not broadcast even with a stale cache entry"
+        );
+    }
+
+    /// Phase D (ADR-029): when the daemon hosts the primary, a primary-node edit
+    /// must queue a CRDT update under the canonical "default" collab id — even
+    /// though the user never ran `kb-share` (durable `primary_shared` stays false).
+    #[test]
+    fn kb_update_node_daemon_hosted_primary_queues_under_default() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "note:alpha",
+            "Alpha",
+            mae_kb::NodeKind::Note,
+            "body",
+        ));
+        editor.collab.kb_sync_mode = "on_save".into();
+        // Daemon hosts the primary at runtime; no durable peer-share marker.
+        editor.kb.set_daemon_hosts_primary(true);
+        assert!(!editor.kb.registry.primary_shared);
+
+        assert!(editor.collab.pending_kb_updates.is_empty());
+        editor
+            .kb_update_node("note:alpha", None, Some("edited"), None)
+            .unwrap();
+        assert_eq!(
+            editor.collab.pending_kb_updates.len(),
+            1,
+            "daemon-hosted primary edit must queue a kb/node_update"
+        );
+        let (kb_id, node_id, _bytes) = &editor.collab.pending_kb_updates[0];
+        assert_eq!(kb_id, crate::editor::KB_DEFAULT_NAME);
+        assert_eq!(node_id, "note:alpha");
+        // Hosting is runtime-only — it must NOT have stamped the durable marker.
+        assert!(
+            !editor.kb.registry.primary_shared,
+            "daemon-hosting must not durably mark the primary as peer-shared"
+        );
+    }
+
+    /// Phase D: with the daemon NOT hosting and no durable share, a primary edit
+    /// stays local (no broadcast) — today's embedded behavior is unchanged.
+    #[test]
+    fn kb_update_node_unhosted_primary_does_not_queue() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "note:beta",
+            "Beta",
+            mae_kb::NodeKind::Note,
+            "body",
+        ));
+        editor.collab.kb_sync_mode = "on_save".into();
+        assert!(!editor.kb.daemon_hosts_primary());
+        assert!(!editor.kb.registry.primary_shared);
+
+        editor
+            .kb_update_node("note:beta", None, Some("edited"), None)
+            .unwrap();
+        assert!(
+            editor.collab.pending_kb_updates.is_empty(),
+            "un-hosted, un-shared primary edit must not queue"
+        );
+    }
+
+    /// Phase D: `refresh_daemon_host_state` is the single writer of the runtime
+    /// flag and requires BOTH the opt-in option and a live daemon connection.
+    #[test]
+    fn refresh_daemon_host_state_requires_optin_and_connection() {
+        let mut editor = Editor::new();
+        // Force the flag on, then prove refresh clears it without the preconditions.
+        editor.kb.set_daemon_hosts_primary(true);
+        editor.kb.daemon_default = false;
+        editor.refresh_daemon_host_state();
+        assert!(!editor.kb.daemon_hosts_primary(), "no opt-in ⇒ not hosting");
+
+        // Opt in, but with no daemon read layer / not Connected ⇒ still not hosting.
+        editor.kb.daemon_default = true;
+        editor.refresh_daemon_host_state();
+        assert!(
+            !editor.kb.daemon_hosts_primary(),
+            "opt-in without a connected daemon ⇒ not hosting"
         );
     }
 

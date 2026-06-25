@@ -186,6 +186,7 @@ impl super::Editor {
             "daemon_enabled" => self.kb.daemon_enabled.to_string(),
             "daemon_socket" => self.kb.daemon_socket.display().to_string(),
             "daemon_cache_size" => self.kb.daemon_cache_size.to_string(),
+            "daemon_default" => self.kb.daemon_default.to_string(),
             "fill_column" => self.fill_column.to_string(),
             "notify_route_info" => self.notifications.route_info.as_str().to_string(),
             "notify_route_success" => self.notifications.route_success.as_str().to_string(),
@@ -754,6 +755,11 @@ impl super::Editor {
             }
             "daemon_enabled" => {
                 self.kb.daemon_enabled = parse_option_bool(value)?;
+            }
+            "daemon_default" => {
+                self.kb.daemon_default = parse_option_bool(value)?;
+                // Recompute whether the daemon hosts the primary right now (Phase D).
+                self.refresh_daemon_host_state();
             }
             "daemon_socket" => {
                 // Empty ⇒ auto-resolve to the daemon's runtime socket (the option's

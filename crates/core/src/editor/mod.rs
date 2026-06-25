@@ -316,6 +316,12 @@ pub struct CollabState {
     /// Shared KB tracking: kb_id → set of node_ids being synced.
     /// Populated on KbShared (host) and KbJoined (guest) events.
     pub shared_kbs: HashMap<String, HashSet<String>>,
+    /// Phase D (ADR-029): kb_ids for which a *daemon-host* share is in flight
+    /// (auto-hosting the primary on connect). Consumed on the matching `KbShared`
+    /// to route it down the runtime-only host path (NO durable `primary_shared`
+    /// marker — hosting must not imply peer-share or survive a daemon-less launch).
+    /// Also a once-per-connection guard against re-enqueuing the host share.
+    pub daemon_host_pending: HashSet<String>,
     /// KB sync mode: "manual" (explicit :kb-sync), "on_save" (auto on node edit).
     pub kb_sync_mode: String,
     /// Epoch-fence resolution: "prompt" (raise the ADR-024 Accept/Keep/Stash
@@ -414,6 +420,7 @@ impl CollabState {
             pending_awareness: None,
             last_awareness_sent: std::time::Instant::now(),
             shared_kbs: HashMap::new(),
+            daemon_host_pending: HashSet::new(),
             kb_sync_mode: KB_SYNC_MODE_DEFAULT.to_string(),
             fence_resolution: "prompt".to_string(),
             pending_kb_updates: Vec::new(),

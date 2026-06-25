@@ -2285,6 +2285,59 @@ fn collab_kb_shared_populates_tracking() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Phase D (ADR-029): a *daemon-host* share (auto-hosting the primary) must NOT
+/// stamp the durable `primary_shared` marker — hosting is runtime-only, so it
+/// never implies peer-share and never leaks into a later daemon-less launch. The
+/// in-flight `daemon_host_pending` marker routes the KbShared down the host path.
+#[test]
+fn collab_kb_shared_daemon_host_skips_durable_marker() {
+    let mut editor = Editor::new();
+    let tmp = std::env::temp_dir().join(format!("mae-phased-host-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    editor.data_dir_override = Some(tmp.clone());
+
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "node-1",
+        "Title 1",
+        mae_kb::NodeKind::Note,
+        "body 1",
+    ));
+    // Mark the host share in flight (as the Connected handler does before the share).
+    editor
+        .collab
+        .daemon_host_pending
+        .insert("default".to_string());
+
+    handle_collab_event(
+        &mut editor,
+        CollabEvent::KbShared {
+            kb_id: "default".to_string(),
+            node_count: 1,
+            collection_state: Vec::new(),
+        },
+    );
+
+    // The pending marker is consumed (host path taken)...
+    assert!(
+        !editor.collab.daemon_host_pending.contains("default"),
+        "host-only KbShared must consume the in-flight marker"
+    );
+    // ...and the DURABLE peer-share marker is NOT stamped or persisted.
+    assert!(
+        !editor.kb.registry.primary_shared,
+        "daemon-host share must NOT durably mark the primary as peer-shared"
+    );
+    assert!(
+        editor.kb.registry.primary_collab_id.is_none(),
+        "daemon-host share must not set a durable collab id"
+    );
+    assert!(
+        !tmp.join("kb-registry.toml").exists(),
+        "runtime-only hosting must not persist a registry marker"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// I-9 + ADR-019: sharing a *named federated instance* tracks its node IDs by
 /// resolving name→uuid (cache) AND stamps the DURABLE registry marker
 /// (`shared`/`collab_id`) so the share survives editor restart.
