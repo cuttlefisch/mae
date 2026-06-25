@@ -43,7 +43,8 @@ blocklist, quorum) and is fully tested.
 | **Live bidirectional sync** (inbound apply + outbound forward, echo-safe) | ✅ | `daemon/src/dialer.rs` |
 | Reconnect + bounded exponential backoff (mobility) | ✅ | `daemon/src/dialer.rs` |
 | `kb-join` full 4-surface parity (CLI / command / Scheme / MCP) | ✅ | editor + `shared/mcp/src/daemon_client.rs` |
-| `kb-share-p2p` full 4-surface parity | ✅ (prior) | editor + daemon |
+| **`kb-share-p2p` establishes the share *then* mints** (`p2p/share_kb` control method) | ✅ | `daemon/src/handler.rs`, editor + CLI |
+| `kb-share-p2p` full 4-surface parity (CLI / command / Scheme / MCP) | ✅ | editor + daemon |
 | `mae setup-collab --p2p` | ✅ (prior) | `crates/mae/src/main.rs` |
 
 ### Deferred / next (ADR-tracked)
@@ -79,13 +80,32 @@ All green on `feat/p2p-setup-and-mesh`:
 - **`mae-sync`** — 200 lib tests, incl. 29 membership tests (op-log append/converge,
   derivation, strong-removal resolver oracles — concurrent/mutual/re-add/tiebreak,
   cascade, blocklist, quorum). Run: `cargo test -p mae-sync --lib`.
-- **daemon** — 95 lib + 39 bin tests, incl. the real two-endpoint **loopback mesh**
+- **daemon** — 95 lib + 42 bin tests, incl. the real two-endpoint **loopback mesh**
   dialer tests (pull + peer-verify, node-id-mismatch reject, **inbound live apply**,
-  **outbound forward**), the signed-op-log handler tests, and `kb_access` derived-path
-  tests. Run: `cd daemon && cargo test`.
+  **outbound forward**), the signed-op-log handler tests, `kb_access` derived-path
+  tests, and the **`p2p/share_kb`** control-method tests (create / widen-to-Both /
+  no-collab error). Run: `cd daemon && cargo test`.
 - **mae-mcp** — broadcast `add_event_sub` (the join-subscribe-window close);
-  `DaemonClient` join/mint. Run from `check` job.
-- **editor** — `kb_state` join/share backend delegation tests.
+  `DaemonClient` join/mint/**share**. Run from `check` job.
+- **editor** — `kb_state` join/share backend delegation tests (`share_p2p` now
+  shares-then-mints).
+
+### Validated on two real daemon processes (2026-06-25)
+
+A two-isolated-daemon precheck (alice + bob, separate XDG dirs / identities /
+sockets / collab ports, real iroh QUIC) ran the **full onboarding** end to end and
+**found + fixed** the load-bearing gap that `kb-share-p2p` previously only *minted*
+a ticket without establishing the share (a dialing peer hit *"KB is not shared over
+the P2P mesh"* — nothing to pull). With the `p2p/share_kb` fix:
+
+1. alice `kb-share-p2p collabtest --policy permissive` → fresh `kbc:collabtest` on
+   the mesh + ticket;
+2. bob `kb-join <ticket>` → bob's dialer dials alice, anti-spoof-verifies, **auto-joins
+   (permissive) and pulls + persists** the collection;
+3. alice widens transport → **propagates live** to bob over the open session.
+
+(Node *content* sync between two real daemons is exercised by the in-process
+dialer tests; the editor-driven two-machine run is the manual acceptance gate.)
 
 ### CI coverage (what the PR will exercise)
 
