@@ -56,6 +56,7 @@ blocklist, quorum) and is fully tested.
 | E2E content encryption | A relay still sees plaintext CRDT. BeeKEM/Noise, own ADR. |
 | Key/identity rotation propagation | #92. |
 | Dedicated mesh **e2e shell script** | The in-process daemon tests already run a real two-endpoint loopback mesh; a full-process `scripts/collab-p2p-mesh-e2e.sh` is the follow-up (the two-machine manual run covers it now). |
+| **Node-content seeding in `p2p/share_kb`** | The control-socket share establishes the `kbc:` collection (owner/membership/policy/**transport exposure**) so a peer can join + converge it, but does not yet copy the KB's **node docs** from the daemon KB store into the collab doc_store. Full node content currently flows from the editor's `:kb-share` (which uploads node states over the collab session); a follow-up seeds nodes from `state.store` so the headless CLI share is content-complete too. |
 | Data lifecycle (ADR-028) | Signed membership checkpoints + compaction/backup/rollback. |
 
 ## Architecture (one paragraph)

@@ -270,10 +270,18 @@ Failure mode.** Log one row per action in your note file with a probe slug.
 ### S1 — Share over the mesh + mint a ticket (alice)
 
 - **Action:** `mae kb-share-p2p collabtest` (or `:kb-share-p2p`, `(kb-share-p2p
-  "collabtest")`, MCP `kb_share_p2p`). Then share the printed `mae://join/…` ticket
-  with bob out-of-band.
-- **Expected:** a `mae://join/…` string is printed; the KB's transport policy now
-  exposes p2p.
+  "collabtest")`, MCP `kb_share_p2p`). The command now **establishes the mesh share
+  first** (creates/exposes `kbc:collabtest` over p2p, default join policy = invite)
+  **then mints** — share the printed `mae://join/…` ticket with bob out-of-band.
+  Add `--policy permissive` to let bob auto-join (skip the approval step), or
+  `--policy invite` (default) to require alice's approval in S3.
+- **Expected:** a `mae://join/…` string is printed (stdout); a share confirmation on
+  stderr; the KB's transport policy now exposes p2p.
+- **Note (content):** the CLI share establishes the *collection* (membership/policy/
+  transport). For real KB **node content** (the `ZEPHYRINE` check in S2), share from
+  an editor that has `collabtest` loaded — `:kb-share collabtest` uploads the node
+  states — then `:kb-share-p2p` widens it to the mesh. (Headless node-seeding is a
+  tracked follow-up; see P2P_MESH_STATUS.md.)
 - **Acceptance:** ticket parses (`mae://join/` prefix); alice daemon logs the mesh
   endpoint bound; `kb_sharing_status` shows the KB as p2p-shared.
 - **Evidence:** the ticket; daemon log `P2P mesh endpoint bound`.
