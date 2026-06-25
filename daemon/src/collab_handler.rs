@@ -521,9 +521,22 @@ async fn handle_doc_notification_inner(
         // arrives here it was sent without an `id` — a client protocol bug that would
         // otherwise be silently dropped (exactly the ADR-020 B-8 kb/node_update bug).
         // Make it LOUD so the next such regression is caught immediately, not chased.
-        "sync/update" | "sync/full_state" | "sync/state_vector" | "sync/share" | "sync/resync"
-        | "kb/node_update" | "kb/node_fetch" | "kb/share" | "kb/join" | "kb/leave"
-        | "kb/add_member" | "kb/remove_member" | "kb/approve_member" | "kb/set_policy" => {
+        "sync/update"
+        | "sync/full_state"
+        | "sync/state_vector"
+        | "sync/share"
+        | "sync/resync"
+        | "kb/node_update"
+        | "kb/node_fetch"
+        | "kb/share"
+        | "kb/join"
+        | "kb/leave"
+        | "kb/collection_node_add"
+        | "kb/collection_node_remove"
+        | "kb/add_member"
+        | "kb/remove_member"
+        | "kb/approve_member"
+        | "kb/set_policy" => {
             warn!(
                 session = session_id,
                 method,
@@ -2103,6 +2116,74 @@ async fn handle_doc_request_inner(
                     JsonRpcResponse::success(
                         id,
                         serde_json::json!({ "kb_id": kb_id, "member": member, "added": add }),
+                    )
+                }
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+            }
+        }
+
+        // Phase D1.1 (ADR-029): add/remove a node in a KB's collection manifest
+        // (`kbc:{kb_id}`). The projector materializes manifest membership into cozo, so
+        // this is how a *created* node joins the daemon's projection and a *deleted* one
+        // leaves it (the node doc itself rides `kb/node_update`). Daemon computes the
+        // collection update server-side (mirrors `kb/add_member`); authorized at Editor
+        // level (KbOp::Edit) like a node edit, and broadcast to other subscribers.
+        "kb/collection_node_add" | "kb/collection_node_remove" => {
+            let add = request.method == "kb/collection_node_add";
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            let node_id = match params["node_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'node_id' field".to_string()),
+                    );
+                }
+            };
+            let title = params["title"].as_str().unwrap_or("");
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Edit, transport).await {
+                Ok(AccessDecision::Allow) => {}
+                Ok(AccessDecision::Deny(m)) | Err(m) => {
+                    return JsonRpcResponse::error(id, McpError::internal_error(m));
+                }
+                Ok(_) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!("not authorized to edit KB '{kb_id}'")),
+                    );
+                }
+            }
+            let mut coll = match load_collection(doc_store, &kb_id).await {
+                Ok(c) => c,
+                Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+            };
+            let update = if add {
+                coll.add_node(&node_id, title)
+            } else {
+                coll.remove_node(&node_id)
+            };
+            match persist_and_broadcast_collection(
+                doc_store,
+                broadcaster,
+                session_id,
+                &kb_id,
+                &update,
+            )
+            .await
+            {
+                Ok(_) => {
+                    info!(session = session_id, kb_id = %kb_id, node_id = %node_id, add, "kb collection-manifest change");
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({ "kb_id": kb_id, "node_id": node_id, "added": add }),
                     )
                 }
                 Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),

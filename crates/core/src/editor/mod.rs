@@ -332,6 +332,11 @@ pub struct CollabState {
     /// fallback used only when there is no durable store; store-backed updates
     /// live in the SQLite pending queue (ADR-020 single-source emit).
     pub pending_kb_updates: Vec<(String, String, Vec<u8>)>, // (kb_id, node_id, update_bytes)
+    /// Phase D1.1 (ADR-029): pending collection-manifest ops to send — `(kb_id,
+    /// node_id, title, add)`. A *created* node joins the daemon's `kbc:` manifest
+    /// (so the projector materializes it); a *deleted* one leaves it. Best-effort
+    /// (drained when connected); creates also self-heal via the reconnect re-share.
+    pub pending_kb_manifest: Vec<(String, String, String, bool)>,
     /// Durable-queue rowids of `kb/node_update`s currently on the wire awaiting the
     /// daemon's apply-confirmation (ADR-020 queue→send→confirm→ack). Prevents the
     /// drain from re-sending an in-flight row every tick; cleared on ack, requeue,
@@ -421,6 +426,7 @@ impl CollabState {
             last_awareness_sent: std::time::Instant::now(),
             shared_kbs: HashMap::new(),
             daemon_host_pending: HashSet::new(),
+            pending_kb_manifest: Vec::new(),
             kb_sync_mode: KB_SYNC_MODE_DEFAULT.to_string(),
             fence_resolution: "prompt".to_string(),
             pending_kb_updates: Vec::new(),

@@ -234,6 +234,15 @@ pub enum CollabCommand {
         role: String,
         add: bool,
     },
+    /// Phase D1.1 (ADR-029): add/remove a node in a KB's collection manifest so the
+    /// daemon's projector materializes the create/removes the delete. The node doc
+    /// itself rides `KbNodeUpdate`; this carries only the manifest membership.
+    KbCollectionNode {
+        kb_id: String,
+        node_id: String,
+        title: String,
+        add: bool,
+    },
     /// Approve a pending join request as `role` (owner-only, ADR-018).
     KbApprove {
         kb_id: String,
@@ -493,6 +502,22 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         }
         if in_mem > 0 {
             tracing::debug!(target: "kb_sync", count = in_mem, "drain: flushed in-memory kb updates");
+        }
+
+        // Phase D1.1: drain collection-manifest ops (created/deleted nodes) →
+        // kb/collection_node_*. Best-effort: only sent when connected; creates also
+        // self-heal on the reconnect re-share (which rebuilds the full manifest).
+        for (kb_id, node_id, title, add) in std::mem::take(&mut editor.collab.pending_kb_manifest) {
+            tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, add, "drain: send kb/collection_node");
+            let cmd = CollabCommand::KbCollectionNode {
+                kb_id,
+                node_id,
+                title,
+                add,
+            };
+            if collab_tx.try_send(cmd).is_err() {
+                warn!("collab command channel full — KB manifest op dropped");
+            }
         }
     }
 
@@ -872,6 +897,7 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::KbAdoptNode { .. } => "kb-adopt-node",
         CollabCommand::KbNodeUpdate { .. } => "kb-node-update",
         CollabCommand::KbMember { .. } => "kb-member",
+        CollabCommand::KbCollectionNode { .. } => "kb-collection-node",
     }
 }
 
@@ -3041,6 +3067,29 @@ async fn run_collab_task(
                                 }
                             }
                         }
+                        // Phase D1.1: collection-manifest add/remove (best-effort,
+                        // fire-and-forget — the daemon broadcasts the kbc: change and the
+                        // projector reconciles; no response tracking needed).
+                        CollabCommand::KbCollectionNode { kb_id, node_id, title, add } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let method = if add {
+                                    "kb/collection_node_add"
+                                } else {
+                                    "kb/collection_node_remove"
+                                };
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req_id,
+                                    "method": method,
+                                    "params": { "kb_id": kb_id, "node_id": node_id, "title": title }
+                                });
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    let _ = write_framed(w, &body, write_timeout).await;
+                                }
+                            }
+                        }
                         CollabCommand::KbApprove { kb_id, principal, role } => {
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
@@ -4290,6 +4339,17 @@ async fn handle_disconnected_cmd(
                     message: format!("Not connected — cannot manage KB '{kb_id}'"),
                 },
             );
+        }
+        // Phase D1.1: a manifest op that arrives while disconnected is dropped
+        // silently (background op, no user-facing error) — the reconnect re-share
+        // rebuilds the full manifest, healing missed creates.
+        CollabCommand::KbCollectionNode {
+            kb_id,
+            node_id,
+            add,
+            ..
+        } => {
+            debug!(kb = %kb_id, node = %node_id, add, "not connected — KB manifest op dropped (heals on reconnect re-share)");
         }
     }
 }
