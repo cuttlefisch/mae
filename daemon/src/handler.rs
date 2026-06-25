@@ -331,7 +331,8 @@ pub async fn dispatch(
                 "peer": peer,
                 "status": "recorded",
                 "message": format!(
-                    "Join recorded for KB '{kb_id}' from peer {peer}. The mesh dialer connects it (Phase 2); the owner must approve your join."
+                    "Join recorded for KB '{kb_id}' from peer {peer}. Your daemon's mesh dialer \
+                     will connect and pull it once the owner approves your join."
                 ),
             }))
         }

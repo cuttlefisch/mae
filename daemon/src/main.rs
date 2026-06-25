@@ -753,6 +753,16 @@ fn run_check_config() {
             }
         }
 
+        // [collab.p2p] — the iroh mesh transport (ADR-025).
+        println!("  p2p.enabled: {}", config.collab.p2p.enabled);
+        if config.collab.p2p.enabled {
+            println!("    p2p.relay: {}", config.collab.p2p.relay);
+            println!(
+                "    p2p.connection_gate: {}",
+                config.collab.p2p.connection_gate
+            );
+        }
+
         let issues = config.check_collab();
         if !issues.is_empty() {
             eprintln!("Collab configuration issues:");
