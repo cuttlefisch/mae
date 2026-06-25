@@ -984,6 +984,10 @@
           "kind": "mod"
         },
         {
+          "name": "membership",
+          "kind": "mod"
+        },
+        {
           "name": "text",
           "kind": "mod"
         },
@@ -1293,6 +1297,14 @@
     },
     {
       "name": "kb-share",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-share-p2p",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-join-ticket",
       "source": "crates/scheme/src/runtime.rs"
     },
     {

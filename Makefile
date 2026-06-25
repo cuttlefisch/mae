@@ -62,6 +62,11 @@ build-tui:
 build-daemon:
 	cd daemon && $(CARGO) build --release
 
+## verify-binary: fail if a RUNNING mae/mae-daemon differs from the fresh build
+## (two-machine testing guard — prevents testing a fix against a stale binary).
+verify-binary:
+	@sh scripts/verify-binary.sh
+
 ## dev: compile a debug binary (faster compile, includes debug info)
 dev:
 	$(CARGO) build $(FEAT_FLAG)

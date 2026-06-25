@@ -63,6 +63,7 @@ impl Client {
                 store,
                 broadcaster,
                 std::time::Instant::now(),
+                mae_sync::kb::Transport::Hub,
             )
             .await;
         });

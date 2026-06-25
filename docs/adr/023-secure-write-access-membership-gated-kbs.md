@@ -1,7 +1,9 @@
 # ADR-023: Secure write-access for membership-gated KBs (epoch-fenced rebase)
 
-**Status:** Accepted (design). Core enforcement implemented; unpredictable-token hardening + the
-ADR-021 audit log are follow-ups.
+**Status:** Accepted; implemented. Core epoch-fenced enforcement + the **unpredictable-token
+hardening landed** (#72, PR #99) — so the fence is no longer pre-rotation-vulnerable and the
+peer-enforceable variant (ADR-026 §A5) is unblocked. The ADR-021 generalized audit log remains a
+follow-up (the ADR-026 signed membership op-log is the membership-side hash-chained record).
 **Extends:** ADR-017 (mTLS-as-identity), ADR-018 (identity-anchored RBAC access control), ADR-020
 (replicated KB CRDT artifact), ADR-022 (SV-reconcile on (re)join — the cascade vector).
 
@@ -76,6 +78,17 @@ ops) and re-authors any kept edits under `C_now`. A malicious client that *re-se
 is rejected again (its new ops are still from the stale client_id). Re-making content under `C_now` is
 just an editor making current edits (allowed + auditable) — the dangerous property, silent bulk laundering
 of a pre-grant lineage, is gone.
+
+> **Mesh extension (ADR-026).** This mechanism is *server-authoritative* — enforced only on the daemon
+> that owns the doc. In the P2P daemon mesh (ADR-025), a relaying peer is **not** trusted, so ADR-026
+> makes the same fence **peer-enforceable**: each member's epoch lives in the **signed membership op-log**
+> (so it is unforgeable by a relay, not just by a client), and any receiving peer re-applies the *exact*
+> `derive_kb_client_id(fingerprint, epoch)` rule locally before accepting an op. The epoch-advance triggers
+> here (role change ⇒ advance; fresh grant ⇒ epoch 0) and the rebase semantics are unchanged — ADR-026
+> only moves *where* they are enforced (daemon-only → every peer). **#72** (unpredictable, daemon-issued
+> epoch token, the documented "epoch not persisted across remove/re-add" hardening above) is a **hard
+> prerequisite** for the peer-side fence: a guessable epoch lets an attacker precompute a future-epoch
+> client_id and defeat a peer's fence just as it would the daemon's.
 
 ## Adversarial exploit-path review
 

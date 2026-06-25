@@ -17,7 +17,9 @@ use mae_mcp::{McpToolRequest, McpToolResult};
 use mae_sync::encoding::{base64_to_update, update_to_base64};
 use mae_sync::kb::{
     derive_kb_client_id, update_new_op_authors, JoinPolicy, KbCollectionDoc, Role as SyncRole,
+    Transport,
 };
+use mae_sync::membership::{derive_valid_members, MembershipAction};
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -43,6 +45,7 @@ pub async fn handle_client_with_auth<R, W, A>(
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
+    transport: Transport,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send,
@@ -64,7 +67,16 @@ pub async fn handle_client_with_auth<R, W, A>(
             return;
         }
     };
-    handle_client_authenticated(reader, writer, peer, doc_store, broadcaster, start_time).await;
+    handle_client_authenticated(
+        reader,
+        writer,
+        peer,
+        doc_store,
+        broadcaster,
+        start_time,
+        transport,
+    )
+    .await;
 }
 
 /// Anonymous (no-auth) connection — used for the loopback/`none` mode.
@@ -74,6 +86,7 @@ pub async fn handle_client<R, W>(
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
+    transport: Transport,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -85,6 +98,7 @@ pub async fn handle_client<R, W>(
         doc_store,
         broadcaster,
         start_time,
+        transport,
     )
     .await;
 }
@@ -98,6 +112,7 @@ pub async fn handle_client_authenticated<R, W>(
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
+    transport: Transport,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -109,6 +124,7 @@ pub async fn handle_client_authenticated<R, W>(
         doc_store,
         broadcaster,
         start_time,
+        transport,
     )
     .await;
 }
@@ -129,6 +145,7 @@ async fn run_session<R, W>(
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
+    transport: Transport,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -247,7 +264,7 @@ async fn run_session<R, W>(
                 }
 
                 let mut response = if is_doc {
-                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), &mut session_docs).await
+                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), &mut session_docs, transport).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
@@ -539,6 +556,7 @@ async fn handle_doc_request(
         None,
         None,
         session_docs,
+        Transport::Hub,
     )
     .await
 }
@@ -603,12 +621,90 @@ async fn persist_and_broadcast_collection(
 
 /// A coarse monotonic-ish timestamp (unix seconds) for pending-request ordering.
 fn now_stamp() -> String {
+    now_unix().to_string()
+}
+
+/// Unix seconds (0 on a pre-epoch clock).
+fn now_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-        .to_string()
+}
+
+/// Mirror a membership mutation into the KB's **signed op-log** (ADR-026), so peers
+/// can verify membership without trusting a relay. A no-op unless this daemon owns
+/// the KB — i.e. its key-mode signer's fingerprint equals the collection owner; the
+/// relay/hub (psk/none) path stays unsigned. Seeds the genesis owner self-admit
+/// first if the log is empty, then appends the op for `subject`, persisting +
+/// broadcasting each. The `epoch` is read back from the legacy `member_roles`
+/// mutation the caller already applied, so derived and legacy epochs agree.
+///
+/// Best-effort: a signing/persist failure is logged, never fatal — the legacy
+/// `member_roles` map remains authoritative until `kb_access` switches to derived
+/// membership (slice 2b-6c).
+#[allow(clippy::too_many_arguments)]
+async fn append_signed_membership(
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    session_id: u64,
+    kb_id: &str,
+    coll: &mut KbCollectionDoc,
+    action: MembershipAction,
+    subject: &str,
+    role: Option<SyncRole>,
+    can_invite: bool,
+    expires_at: Option<u64>,
+) {
+    let Some(signer) = doc_store.signer() else {
+        return;
+    };
+    let owner = coll.owner();
+    if owner.is_empty() || signer.fingerprint() != owner {
+        return; // not an owned KB — the relay/hub path stays unsigned
+    }
+    let secret = signer.secret_bytes();
+    let pubkey = signer.public().to_bytes();
+    let now = now_unix();
+
+    // Seed the genesis owner self-admit (the anchored root) if the log is empty.
+    if coll.oplog_head().is_none() {
+        let g = coll.build_membership_op(
+            kb_id,
+            MembershipAction::Admit,
+            &owner,
+            Some(SyncRole::Owner),
+            true,
+            &owner,
+            now,
+            None,
+            0,
+        );
+        let gsig = g.sign(&secret);
+        let gupdate = coll.append_signed_op(&g, &gsig, &pubkey);
+        if let Err(e) =
+            persist_and_broadcast_collection(doc_store, broadcaster, session_id, kb_id, &gupdate)
+                .await
+        {
+            warn!(kb_id = %kb_id, error = %e, "failed to persist membership genesis op");
+            return;
+        }
+    }
+
+    // The op mirroring this mutation, authored by the owner (the daemon signs as
+    // owner). Epoch = the value the legacy mutation just assigned to `subject`.
+    let epoch = coll.epoch_of(subject);
+    let op = coll.build_membership_op(
+        kb_id, action, subject, role, can_invite, &owner, now, expires_at, epoch,
+    );
+    let sig = op.sign(&secret);
+    let update = coll.append_signed_op(&op, &sig, &pubkey);
+    if let Err(e) =
+        persist_and_broadcast_collection(doc_store, broadcaster, session_id, kb_id, &update).await
+    {
+        warn!(kb_id = %kb_id, error = %e, "failed to persist signed membership op");
+    }
 }
 
 /// ADR-018 complete-mediation access engine: every KB operation routes through
@@ -622,13 +718,39 @@ async fn kb_access(
     kb_id: &str,
     principal: Option<&str>,
     op: KbOp,
+    transport: Transport,
 ) -> Result<AccessDecision, String> {
     let principal = match principal {
         Some(p) => p,
         None => return Ok(AccessDecision::Allow),
     };
     let coll = load_collection(doc_store, kb_id).await?;
-    match coll.role_of(principal) {
+    // ADR-026: for a KB JOINED from a relay we don't trust, an external anchor (the
+    // join-ticket node-id) is registered — derive membership from the SIGNED op-log
+    // rather than the relay-supplied `member_roles`. Owned / un-anchored KBs keep
+    // the locally-authoritative legacy `member_roles` (the daemon owns that state).
+    let role = match doc_store.kb_anchor(kb_id).await {
+        Some(anchor) if coll.oplog_head().is_some() => {
+            derive_valid_members(&coll.oplog_ops(), &anchor, now_unix())
+                .get(principal)
+                .map(|m| m.role)
+        }
+        _ => coll.role_of(principal),
+    };
+    // Per-KB transport policy (ADR-018/025): a KB is reachable over a transport
+    // only if its policy exposes it there — EXCEPT the owner, who always reaches
+    // their own KB (e.g. their local editor over the hub socket) and is the one who
+    // manages exposure. Non-owner members + would-be joiners are transport-gated.
+    if role != Some(SyncRole::Owner) && !coll.transport_policy().allows(transport) {
+        let t = match transport {
+            Transport::Hub => "the hub",
+            Transport::P2p => "the P2P mesh",
+        };
+        return Ok(AccessDecision::Deny(format!(
+            "KB '{kb_id}' is not shared over {t}"
+        )));
+    }
+    match role {
         Some(role) => {
             // Hierarchical RBAC: owner ⊇ editor ⊇ viewer.
             let allowed = match op {
@@ -670,9 +792,10 @@ async fn deny_collection_smuggling(
     doc_store: &DocStore,
     doc_name: &str,
     principal: Option<&str>,
+    transport: Transport,
 ) -> Result<(), String> {
     if let Some(kb_id) = doc_name.strip_prefix("kbc:") {
-        match kb_access(doc_store, kb_id, principal, KbOp::Manage).await? {
+        match kb_access(doc_store, kb_id, principal, KbOp::Manage, transport).await? {
             AccessDecision::Allow => Ok(()),
             _ => Err(format!(
                 "only the owner may write the collection doc for KB '{kb_id}'"
@@ -696,6 +819,7 @@ async fn handle_doc_request_inner(
     auth_label: Option<&str>,
     auth_principal: Option<&str>,
     session_docs: &mut HashSet<String>,
+    transport: Transport,
 ) -> JsonRpcResponse {
     let request: JsonRpcRequest = match serde_json::from_str(msg) {
         Ok(r) => r,
@@ -739,7 +863,9 @@ async fn handle_doc_request_inner(
             };
             // ADR-018 membership-smuggling defense: a raw write to a collection doc
             // (`kbc:`) is owner-only.
-            if let Err(e) = deny_collection_smuggling(doc_store, &doc_name, auth_principal).await {
+            if let Err(e) =
+                deny_collection_smuggling(doc_store, &doc_name, auth_principal, transport).await
+            {
                 warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update denied (collection smuggling)");
                 return JsonRpcResponse::error(id, McpError::internal_error(e));
             }
@@ -1347,6 +1473,36 @@ async fn handle_doc_request_inner(
                 .unwrap_or_else(|e| e.into_inner())
                 .subscribe_doc(session_id, &collection_doc);
 
+            // Transport exposure (ADR-018/025): the `transport` param (hub|p2p|both,
+            // default hub) WIDENS the KB's policy from its stored value, so a first
+            // p2p-share is P2p-only while `kb-share` + `kb-share-p2p` becomes Both
+            // (unlike membership, transport is owner-set metadata — safe on
+            // re-share). This is how `kb-share-p2p` *establishes* a mesh-exposed KB.
+            let requested_transport = params["transport"]
+                .as_str()
+                .and_then(mae_sync::kb::TransportPolicy::parse)
+                .unwrap_or(mae_sync::kb::TransportPolicy::Hub);
+            if let Ok(mut coll) = load_collection(doc_store, &kb_id).await {
+                let raw = coll.transport_policy_raw();
+                let new = raw.map_or(requested_transport, |c| c.union(requested_transport));
+                if Some(new) != raw {
+                    let update = coll.set_transport_policy(new);
+                    if let Err(e) = persist_and_broadcast_collection(
+                        doc_store,
+                        broadcaster,
+                        session_id,
+                        &kb_id,
+                        &update,
+                    )
+                    .await
+                    {
+                        warn!(kb_id = %kb_id, error = %e, "kb/share: failed to set transport policy");
+                    } else {
+                        info!(kb_id = %kb_id, transport = %new.as_str(), "kb/share: transport exposure set");
+                    }
+                }
+            }
+
             // Store each node doc.
             let nodes = params["nodes"].as_array();
             let mut node_count: u64 = 0;
@@ -1444,7 +1600,7 @@ async fn handle_doc_request_inner(
 
             // ADR-018 access gate (complete mediation): member → join; non-member
             // resolved by the KB's join policy (restrictive/invite/permissive).
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Join).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Join, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::AllowAutoJoin) => {
                     // permissive: auto-grant the least-privilege role (viewer).
@@ -1513,10 +1669,14 @@ async fn handle_doc_request_inner(
             session_docs.insert(collection_doc.clone());
             // ADR-020 liveness: the joining member is a connected client of the docs.
             let _ = doc_store.track_client_connect(&collection_doc).await;
-            broadcaster
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .subscribe_doc(session_id, &collection_doc);
+            {
+                let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
+                bc.subscribe_doc(session_id, &collection_doc);
+                // Subscribe to sync_update AS OF the join snapshot, so the owner's
+                // edits made between this snapshot and the member's separate
+                // notifications/subscribe are still pushed (no missed-edit window).
+                bc.add_event_sub(session_id, "sync_update");
+            }
 
             // Parse collection to get the list of node IDs belonging to this KB.
             let node_ids: Vec<String> = match KbCollectionDoc::from_bytes(&collection_state) {
@@ -1635,7 +1795,7 @@ async fn handle_doc_request_inner(
             info!(session = session_id, kb_id = %kb_id, node_id = %node_id, "kb/node_fetch");
 
             // Read access suffices (members only — a non-member is denied).
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Read).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Read, transport).await {
                 Ok(AccessDecision::Allow) | Ok(AccessDecision::AllowAutoJoin) => {}
                 Ok(AccessDecision::Deny(msg)) | Err(msg) => {
                     warn!(session = session_id, kb_id = %kb_id, reason = %msg, "kb/node_fetch denied");
@@ -1737,7 +1897,7 @@ async fn handle_doc_request_inner(
 
             // ADR-018: editing a node requires editor/owner role. Viewers and
             // non-members are denied (least privilege).
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Edit).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Edit, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(msg)) | Err(msg) => {
                     warn!(session = session_id, kb_id = %kb_id, reason = %msg, "kb/node_update denied");
@@ -1883,7 +2043,7 @@ async fn handle_doc_request_inner(
                 .and_then(SyncRole::parse)
                 .unwrap_or(SyncRole::Editor);
             // ADR-018: owner-only (Manage). The verified principal is the subject.
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(m)) | Err(m) => {
                     return JsonRpcResponse::error(id, McpError::internal_error(m));
@@ -1920,6 +2080,25 @@ async fn handle_doc_request_inner(
             .await
             {
                 Ok(_) => {
+                    // ADR-026: mirror the change into the signed op-log (owned KBs).
+                    let (action, signed_role) = if add {
+                        (MembershipAction::Admit, Some(role))
+                    } else {
+                        (MembershipAction::Remove, None)
+                    };
+                    append_signed_membership(
+                        doc_store,
+                        broadcaster,
+                        session_id,
+                        &kb_id,
+                        &mut coll,
+                        action,
+                        &member,
+                        signed_role,
+                        false,
+                        None,
+                    )
+                    .await;
                     info!(session = session_id, kb_id = %kb_id, member = %member, add, role = role.as_str(), "kb membership change");
                     JsonRpcResponse::success(
                         id,
@@ -1951,7 +2130,7 @@ async fn handle_doc_request_inner(
                     )
                 }
             };
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(m)) | Err(m) => {
                     return JsonRpcResponse::error(id, McpError::internal_error(m))
@@ -1998,7 +2177,7 @@ async fn handle_doc_request_inner(
                     )
                 }
             };
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(m)) | Err(m) => {
                     return JsonRpcResponse::error(id, McpError::internal_error(m))
@@ -2054,7 +2233,7 @@ async fn handle_doc_request_inner(
                 .as_str()
                 .and_then(SyncRole::parse)
                 .unwrap_or(SyncRole::Editor);
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage).await {
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(m)) | Err(m) => {
                     return JsonRpcResponse::error(id, McpError::internal_error(m))
@@ -2081,6 +2260,20 @@ async fn handle_doc_request_inner(
             .await
             {
                 Ok(_) => {
+                    // ADR-026: an approval is a signed Admit in the op-log.
+                    append_signed_membership(
+                        doc_store,
+                        broadcaster,
+                        session_id,
+                        &kb_id,
+                        &mut coll,
+                        MembershipAction::Admit,
+                        &principal,
+                        Some(role),
+                        false,
+                        None,
+                    )
+                    .await;
                     info!(session = session_id, kb_id = %kb_id, principal = %principal, role = role.as_str(), "kb/approve_member: complete");
                     JsonRpcResponse::success(
                         id,

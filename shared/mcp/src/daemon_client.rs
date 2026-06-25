@@ -14,6 +14,18 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+/// The default `mae-daemon` control-socket path — the **single source of truth**
+/// shared by the daemon (which binds it) and every client (CLI + editor) so they
+/// can never drift. Resolves `$XDG_RUNTIME_DIR/mae-daemon.sock` (e.g.
+/// `/run/user/1000/mae-daemon.sock`), falling back to the temp dir when no runtime
+/// dir is set — matching the daemon's `dirs::runtime_dir().unwrap_or(temp_dir)`.
+pub fn default_daemon_socket() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("mae-daemon.sock")
+}
+
 /// Error type for daemon client operations.
 #[derive(Debug)]
 pub enum DaemonClientError {
@@ -123,6 +135,68 @@ impl DaemonClient {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// Mint a P2P join ticket ("magnet link") for `kb_id` via the daemon's
+    /// `p2p/mint_ticket` control method, returning the `mae://join/…` string.
+    /// Shared by the editor's `DaemonControl` impl and the `mae` CLI so both
+    /// drive the identical backend (ADR-025 §"Driving surfaces").
+    pub fn mint_p2p_ticket(&mut self, kb_id: &str) -> Result<String, DaemonClientError> {
+        let result = self.call("p2p/mint_ticket", json!({ "kb_id": kb_id }))?;
+        result
+            .get("ticket")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| DaemonClientError::RpcError {
+                code: -32603,
+                message: "daemon p2p/mint_ticket returned no ticket".to_string(),
+            })
+    }
+
+    /// Queue a P2P join from a `ticket` ("magnet link") via the daemon's
+    /// `p2p/join_ticket` control method. The background dialer then connects + pulls
+    /// the KB (after the owner approves). Returns the daemon's human-readable
+    /// confirmation message. Shared by the editor's `DaemonControl` impl and the
+    /// `mae` CLI (ADR-025 §"Driving surfaces").
+    pub fn join_p2p_ticket(&mut self, ticket: &str) -> Result<String, DaemonClientError> {
+        let result = self.call("p2p/join_ticket", json!({ "ticket": ticket }))?;
+        // Prefer the daemon's friendly message; fall back to a kb_id confirmation.
+        if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+            return Ok(msg.to_string());
+        }
+        let kb_id = result
+            .get("kb_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("the KB");
+        Ok(format!("Join recorded for {kb_id}."))
+    }
+
+    /// Establish (or widen) a P2P mesh share for `kb_id` via the daemon's
+    /// `p2p/share_kb` control method — creates/exposes the `kbc:{kb_id}` collection
+    /// on the mesh so a joining peer can actually pull it. Call this BEFORE
+    /// `mint_p2p_ticket`: a minted ticket is only joinable once the KB is shared.
+    /// `transport` (hub|p2p|both, default p2p) and `policy` (restrictive|invite|
+    /// permissive, default unchanged) are optional. Returns the daemon's
+    /// confirmation message. Shared by the editor's `DaemonControl` impl and the
+    /// `mae` CLI (ADR-025 §"Driving surfaces").
+    pub fn share_kb_p2p(
+        &mut self,
+        kb_id: &str,
+        transport: Option<&str>,
+        policy: Option<&str>,
+    ) -> Result<String, DaemonClientError> {
+        let mut params = json!({ "kb_id": kb_id });
+        if let Some(t) = transport {
+            params["transport"] = json!(t);
+        }
+        if let Some(p) = policy {
+            params["policy"] = json!(p);
+        }
+        let result = self.call("p2p/share_kb", params)?;
+        if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+            return Ok(msg.to_string());
+        }
+        Ok(format!("KB '{kb_id}' shared over the P2P mesh."))
     }
 
     fn call_inner(&mut self, method: &str, params: &Value) -> Result<Value, DaemonClientError> {

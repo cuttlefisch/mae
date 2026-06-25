@@ -1,6 +1,10 @@
 # ADR-027: Collaboration & P2P observability
 
-**Status:** Accepted (design). Implemented *incrementally alongside* each P2P phase (not a trailing pass).
+**Status:** Accepted (design); **partially implemented.** Foundational tracing exists (the `kb_sync`
+edit-flow target + symmetric daemon collab `info!`/`warn!`, and the dialer's `mesh peer …` lifecycle
+logs from PR #102). The **mesh-specific surfaces are NOT yet built**: the `*Mesh*` introspection buffer,
+`collab-doctor` mesh mode, and exported metrics (#93, Phase 6). #79 (migrate set_status emitters to the
+attention bus) is a predecessor for the notification surfaces.
 **Extends:** ADR-024 (notification attention bus), ADR-001 (`$/debug`), ADR-006 (collab engine).
 **Feeds:** ADR-025 (mesh transport), ADR-026 (peer-verifiable integrity).
 
@@ -33,8 +37,11 @@ membership-chain verify pass/fail, **convergence lag**, partition/heal events, g
 decisions. Exposed via the daemon JSON-RPC (`$/debug` extension) and an **optional** metrics endpoint
 (off by default; localhost-bound; documented).
 
-**3. Operator + AI-peer visibility (parity, principle #3).** All three actors see the same mesh state
-from **one builder** (the `kb_sharing_snapshot` pattern extended):
+**3. Operator + AI-peer visibility (parity, principle #3).** This is the **read** half of parity; the
+**drive** half — every lifecycle *action* (enable/share/join/approve/leave) exposed across CLI + editor
+command + Scheme + MCP over one backend — is ADR-025 §"Driving surfaces". Together they guarantee a human
+(editor or shell) and an AI peer can both *see* and *do* the entire mesh workflow. All three actors see the
+same mesh state from **one builder** (the `kb_sharing_snapshot` pattern extended):
 - A **`*Mesh*` introspection buffer** (magit-style, via the shared sectioned-buffer infra): peer table —
   fingerprint, label, direct/relay, RTT, shared KBs, last-sync, verification status; per-KB convergence.
 - **`collab-doctor` gains a mesh mode** (reachability, relay health, partition detection, clock/epoch

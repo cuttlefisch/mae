@@ -35,6 +35,7 @@ toml = "1.1"
 sha2 = "0.11"
 hex = "0.4"
 iroh = "1.0.0"
+data-encoding = "2"
 
 [dev-dependencies]
 hex = "0.4"

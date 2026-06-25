@@ -158,6 +158,99 @@ fn apply_collab_launch_overrides(editor: &mut Editor, connect_addr: Option<&str>
 /// the GUI path can use winit's `EventLoop::run_app()` on the main thread
 /// (required by Wayland/macOS compositors) with tokio on a background thread.
 ///
+/// Binary-side [`mae_core::DaemonControl`] impl: a [`DaemonClient`] behind a
+/// `Mutex` (the trait method is `&self`, but `DaemonClient::call` needs `&mut
+/// self`). Injected into `editor.kb` so the editor's P2P share surfaces reach the
+/// daemon control socket without `mae-core` depending on `mae-mcp`.
+struct DaemonControlClient(std::sync::Mutex<mae_mcp::daemon_client::DaemonClient>);
+
+impl mae_core::DaemonControl for DaemonControlClient {
+    fn share_kb_p2p(
+        &self,
+        kb_id: &str,
+        transport: Option<&str>,
+        policy: Option<&str>,
+    ) -> Result<String, String> {
+        self.0
+            .lock()
+            .map_err(|_| "daemon control channel is poisoned".to_string())?
+            .share_kb_p2p(kb_id, transport, policy)
+            .map_err(|e| e.to_string())
+    }
+    fn mint_p2p_ticket(&self, kb_id: &str) -> Result<String, String> {
+        self.0
+            .lock()
+            .map_err(|_| "daemon control channel is poisoned".to_string())?
+            .mint_p2p_ticket(kb_id)
+            .map_err(|e| e.to_string())
+    }
+    fn join_p2p_ticket(&self, ticket: &str) -> Result<String, String> {
+        self.0
+            .lock()
+            .map_err(|_| "daemon control channel is poisoned".to_string())?
+            .join_p2p_ticket(ticket)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Enable the P2P daemon mesh (ADR-025) by writing `[collab.p2p]` to the local
+/// `daemon.toml` (XDG-resolved, same dir as `config.toml`). Ensures key-mode auth
+/// (the mesh authenticates peers by Ed25519 key) without clobbering an existing
+/// mode. Value-based TOML edit: preserves other keys (not comments). Returns the
+/// path written. For a *remote* daemon the admin sets `[collab.p2p]` there.
+fn enable_daemon_p2p(relay: &str) -> io::Result<std::path::PathBuf> {
+    let path = config::config_path()
+        .parent()
+        .map(|p| p.join("daemon.toml"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "cannot resolve config dir"))?;
+
+    let mut doc: toml::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| toml::from_str(&s).ok())
+        .unwrap_or_else(|| toml::Value::Table(Default::default()));
+
+    let root = doc.as_table_mut().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "daemon.toml root is not a table",
+        )
+    })?;
+    let collab = root
+        .entry("collab".to_string())
+        .or_insert_with(|| toml::Value::Table(Default::default()))
+        .as_table_mut()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "[collab] is not a table"))?;
+
+    // The mesh has no PSK/anonymous path — ensure key mode if unset (don't
+    // override a deliberate existing choice; `--check-config` flags a mismatch).
+    {
+        let auth = collab
+            .entry("auth".to_string())
+            .or_insert_with(|| toml::Value::Table(Default::default()));
+        if let Some(auth) = auth.as_table_mut() {
+            auth.entry("mode".to_string())
+                .or_insert_with(|| toml::Value::String("key".to_string()));
+        }
+    }
+
+    let p2p = collab
+        .entry("p2p".to_string())
+        .or_insert_with(|| toml::Value::Table(Default::default()))
+        .as_table_mut()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "[collab.p2p] is not a table"))?;
+    p2p.insert("enabled".to_string(), toml::Value::Boolean(true));
+    p2p.insert("relay".to_string(), toml::Value::String(relay.to_string()));
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(
+        &path,
+        toml::to_string_pretty(&doc).map_err(io::Error::other)?,
+    )?;
+    Ok(path)
+}
+
 /// Emacs lesson: Emacs's event loop is synchronous and single-threaded.
 /// Retrofitting concurrency required 23,901 commits across 3 GC branches.
 /// We use async from day one so the AI agent can operate as a peer.
@@ -223,8 +316,12 @@ fn main() -> io::Result<()> {
         println!("  --print-config-path     Print the config file path and exit");
         println!("  --print-config-template Print the default commented template to stdout");
         println!("  --collab-identity       Print this editor's collab peer identity (for `mae-daemon authorize`)");
-        println!("  setup-collab [--server ADDR] [--ssh-key PATH]");
-        println!("                          One-command key-mode setup: identity + init.scm (optionally reuse an SSH key)");
+        println!("  setup-collab [--server ADDR] [--ssh-key PATH] [--p2p]");
+        println!("                          One-command key-mode setup: identity + init.scm (--p2p also enables the daemon mesh)");
+        println!("  kb-share-p2p [KB-ID] [--socket PATH]");
+        println!("                          Mint a P2P join ticket (mae://join/…) via the daemon and print it");
+        println!("  kb-join <ticket> [--socket PATH]");
+        println!("                          Queue a P2P join from a mae://join/… ticket (the dialer pulls the KB)");
         println!("  --gui                   Force GUI backend (default on a desktop session; auto-off over SSH/tty)");
         println!("  --no-gui, --tui, -nw    Force terminal mode (like emacs -nw)");
         println!("  --connect [ADDR]        Connect to daemon (like emacsclient -c)");
@@ -324,6 +421,104 @@ fn main() -> io::Result<()> {
             }
         }
     }
+    // `mae kb-share-p2p [KB-ID] [--policy P] [--transport T] [--socket PATH]`:
+    // ESTABLISH the P2P mesh share (create/expose `kbc:{kb_id}` on the mesh) AND
+    // mint a join ticket, printing the ticket to stdout (pipe-friendly). Share
+    // first, mint second: a ticket is only joinable once the KB is actually shared
+    // (ADR-025 §"Driving surfaces"). The CLI surface of the `kb-share-p2p` command /
+    // `(kb-share-p2p)` Scheme primitive / `kb_share_p2p` MCP tool.
+    if args.get(1).is_some_and(|a| a == "kb-share-p2p") {
+        let kb_id = args
+            .get(2)
+            .filter(|a| !a.starts_with("--"))
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+        let flag = |name: &str| -> Option<String> {
+            args.iter()
+                .position(|a| a == name)
+                .and_then(|i| args.get(i + 1))
+                .cloned()
+        };
+        let policy = flag("--policy");
+        let transport = flag("--transport");
+        let socket = flag("--socket").unwrap_or_else(|| {
+            mae_mcp::daemon_client::default_daemon_socket()
+                .to_string_lossy()
+                .into_owned()
+        });
+        let mut client = mae_mcp::daemon_client::DaemonClient::new(&socket);
+        if let Err(e) = client.connect() {
+            eprintln!(
+                "error: cannot reach mae-daemon at {socket}: {e}\n\
+                 start it with `mae-daemon` and enable P2P with `mae setup-collab --p2p`."
+            );
+            std::process::exit(1);
+        }
+        // 1. Establish the share so there's something to pull.
+        match client.share_kb_p2p(&kb_id, transport.as_deref(), policy.as_deref()) {
+            Ok(msg) => eprintln!("{msg}"),
+            Err(e) => {
+                eprintln!("error: kb-share-p2p '{kb_id}' (share step): {e}");
+                std::process::exit(1);
+            }
+        }
+        // 2. Mint the join ticket.
+        match client.mint_p2p_ticket(&kb_id) {
+            Ok(ticket) => {
+                // Just the ticket on stdout, so it pipes cleanly (e.g. | qrencode).
+                println!("{ticket}");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("error: kb-share-p2p '{kb_id}' (mint step): {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // `mae kb-join <ticket> [--socket PATH]`: queue a P2P join from a "magnet link"
+    // via the running daemon. The CLI surface of the `kb-join-p2p` command /
+    // `(kb-join-ticket)` Scheme primitive / `kb_join_p2p` MCP tool — same
+    // `DaemonClient::join_p2p_ticket` backend (ADR-025 §"Driving surfaces"). The
+    // background dialer then connects + pulls the KB once the owner approves.
+    if args.get(1).is_some_and(|a| a == "kb-join") {
+        let ticket = match args.get(2).filter(|a| !a.starts_with("--")) {
+            Some(t) => t.clone(),
+            None => {
+                eprintln!("usage: mae kb-join <mae://join/…ticket> [--socket PATH]");
+                std::process::exit(2);
+            }
+        };
+        let socket = args
+            .iter()
+            .position(|a| a == "--socket")
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .unwrap_or_else(|| {
+                mae_mcp::daemon_client::default_daemon_socket()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        let mut client = mae_mcp::daemon_client::DaemonClient::new(&socket);
+        if let Err(e) = client.connect() {
+            eprintln!(
+                "error: cannot reach mae-daemon at {socket}: {e}\n\
+                 start it with `mae-daemon` and enable P2P with `mae setup-collab --p2p`."
+            );
+            std::process::exit(1);
+        }
+        match client.join_p2p_ticket(&ticket) {
+            Ok(msg) => {
+                println!("{msg}");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("error: kb-join: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // `mae setup-collab [--server <addr>]`: idempotent one-command key-mode setup.
     // Generates the peer identity (if absent), persists collab key-mode options to
     // init.scm, and prints the `mae-daemon authorize` line for the admin.
@@ -409,6 +604,31 @@ fn main() -> io::Result<()> {
                 println!("On the daemon host, authorize this peer:");
                 println!("  mae-daemon authorize {}", id.public().to_line());
                 println!();
+                // --p2p: also flip on the iroh daemon mesh (ADR-025) in the local
+                // daemon.toml, so this host's daemon joins the global P2P mesh.
+                if args.iter().any(|a| a == "--p2p") {
+                    match enable_daemon_p2p("default") {
+                        Ok(path) => {
+                            println!("✓ P2P mesh enabled in {}:", path.display());
+                            println!("    [collab.p2p] enabled = true, relay = \"default\"");
+                            println!("    (ensured [collab.auth] mode = \"key\")");
+                            println!("  Restart the daemon to apply: `mae-daemon`");
+                            println!(
+                                "  For a REMOTE daemon, set [collab.p2p] in its daemon.toml instead."
+                            );
+                            println!();
+                            println!("  Share a KB over the mesh:  mae kb-share-p2p <kb-id>");
+                            println!(
+                                "  Join a shared KB:          mae kb-join <mae://join/…ticket>"
+                            );
+                            println!();
+                        }
+                        Err(e) => {
+                            eprintln!("error: enabling P2P in daemon.toml: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
                 println!("Then launch `mae` — it auto-connects; accept the daemon's");
                 println!("key on first connect (verify the fingerprint, then press y).");
                 return Ok(());
@@ -1168,6 +1388,18 @@ fn main() -> io::Result<()> {
                 editor
                     .kb
                     .set_daemon_query_layer(Some(std::sync::Arc::new(lru)));
+
+                // Wire a second client as the control channel for P2P lifecycle
+                // ops (ticket mint/join) — the first was consumed by the LRU layer.
+                let mut control = mae_mcp::daemon_client::DaemonClient::new(&socket);
+                match control.connect() {
+                    Ok(()) => editor.kb.set_daemon_control(Some(std::sync::Arc::new(
+                        DaemonControlClient(std::sync::Mutex::new(control)),
+                    ))),
+                    Err(e) => {
+                        warn!(error = %e, "daemon control channel unavailable (P2P share disabled)")
+                    }
+                }
             }
             Err(e) => {
                 warn!(

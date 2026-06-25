@@ -1127,6 +1127,22 @@ fn kb_share_no_arg_shares_active_default_instance() {
 }
 
 #[test]
+fn kb_share_p2p_is_dispatched_and_errors_without_a_daemon() {
+    // The `kb-share-p2p` command is recognized; with no daemon control wired it
+    // is handled gracefully (actionable status), not unrecognized. The happy path
+    // (a real ticket) is covered by the daemon-side + DaemonControl tests.
+    let mut editor = Editor::new();
+    assert!(
+        editor.execute_command("kb-share-p2p"),
+        "kb-share-p2p must be a recognized command"
+    );
+    assert!(
+        !editor.kb.has_daemon_control(),
+        "no daemon wired in a bare editor"
+    );
+}
+
+#[test]
 fn kb_join_with_id_targets_that_kb() {
     // `:kb-join <id>` must join THAT KB, not the active instance — otherwise a
     // member of one KB silently joins the wrong collection.

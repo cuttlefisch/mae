@@ -103,6 +103,14 @@ pub struct P2pConfig {
     /// hole-punch), `"disabled"` (LAN/direct only, the mDNS fast-path), or a
     /// self-hosted relay URL.
     pub relay: String,
+    /// Connection-trust gate (ADR-025):
+    /// - `"authorized_keys"` (**default**): hard-reject any peer not already in
+    ///   `authorized_keys` at connect — a closed mesh whose peer set the admin
+    ///   manages. Conservative / security-forward.
+    /// - `"open"`: admit any iroh-authenticated peer to *connect* (we always know
+    ///   who via the verified `remote_id`); per-KB access stays fully mediated by
+    ///   membership + JoinPolicy. Enables the frictionless magnet-link join.
+    pub connection_gate: String,
 }
 
 impl Default for P2pConfig {
@@ -110,7 +118,17 @@ impl Default for P2pConfig {
         P2pConfig {
             enabled: false,
             relay: "default".to_string(),
+            connection_gate: "authorized_keys".to_string(),
         }
+    }
+}
+
+impl P2pConfig {
+    /// Whether the connection gate is `open` (admit any authenticated peer to
+    /// connect; access stays membership-gated). Unknown values fall back to the
+    /// conservative closed gate.
+    pub fn gate_open(&self) -> bool {
+        self.connection_gate == "open"
     }
 }
 
@@ -255,9 +273,9 @@ impl Default for SyncConfig {
 
 impl Default for DaemonConfig {
     fn default() -> Self {
-        let runtime_dir = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir);
         Self {
-            socket: runtime_dir.join("mae-daemon.sock"),
+            // Shared resolver — clients (CLI + editor) default to the SAME path.
+            socket: mae_mcp::daemon_client::default_daemon_socket(),
             watcher_interval_ms: 500,
             maintenance_interval_secs: 3600,
             sync_interval_secs: 30,
@@ -427,6 +445,13 @@ impl DaemonConfig {
             if let Err(e) = crate::p2p::relay_mode_from_config(&c.p2p.relay) {
                 issues.push(e);
             }
+            // Validate the connection-trust gate.
+            if !matches!(c.p2p.connection_gate.as_str(), "open" | "authorized_keys") {
+                issues.push(format!(
+                    "unknown collab.p2p.connection_gate '{}' (supported: 'authorized_keys', 'open')",
+                    c.p2p.connection_gate
+                ));
+            }
         }
 
         issues
@@ -516,5 +541,37 @@ mod tests {
             issues.iter().any(|i| i.contains("collab.p2p.relay")),
             "a malformed relay value must be flagged; got: {issues:?}"
         );
+    }
+
+    #[test]
+    fn p2p_connection_gate_defaults_to_closed() {
+        let config = DaemonConfig::default();
+        // Security-forward default: hard-reject unknown peers (Phase-1 behavior).
+        assert_eq!(config.collab.p2p.connection_gate, "authorized_keys");
+        assert!(!config.collab.p2p.gate_open());
+    }
+
+    #[test]
+    fn p2p_rejects_unknown_connection_gate() {
+        let mut config = DaemonConfig::default();
+        config.collab.p2p.enabled = true;
+        config.collab.auth.mode = "key".to_string();
+        config.collab.p2p.connection_gate = "wide-open".to_string();
+        let issues = config.check_collab();
+        assert!(
+            issues.iter().any(|i| i.contains("connection_gate")),
+            "an unknown connection_gate must be flagged; got: {issues:?}"
+        );
+        // The valid values pass.
+        for gate in ["open", "authorized_keys"] {
+            config.collab.p2p.connection_gate = gate.to_string();
+            assert!(
+                !config
+                    .check_collab()
+                    .iter()
+                    .any(|i| i.contains("connection_gate")),
+                "'{gate}' should be accepted"
+            );
+        }
     }
 }

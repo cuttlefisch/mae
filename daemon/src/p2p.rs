@@ -21,16 +21,19 @@
 //! activated from daemon startup behind `[collab.p2p]`. The outbound peer dialer
 //! + gossip/anti-entropy mesh land in Phase 2 (#89).
 
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
 
 use iroh::endpoint::presets;
-use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl, SecretKey};
+use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr};
 use mae_daemon::collab_handler;
 use mae_daemon::doc_store::DocStore;
 use mae_mcp::broadcast::SharedBroadcaster;
 use mae_mcp::identity::{AuthorizedKeys, Identity, PeerIdentity, PublicKey};
 use tracing::{info, warn};
+
+use crate::ticket::JoinTicket;
 
 /// ALPN for the MAE collab mesh protocol over iroh/QUIC.
 pub const MAE_ALPN: &[u8] = b"mae-sync/0";
@@ -74,6 +77,34 @@ pub(crate) fn relay_mode_from_config(relay: &str) -> Result<RelayMode, String> {
     }
 }
 
+/// Rewrite an unspecified bind IP (`0.0.0.0` / `[::]`) to loopback so the socket
+/// is actually dialable when it lands in a ticket's direct-address hints or a
+/// relay-less local dial.
+pub(crate) fn loopback_if_unspecified(mut sa: SocketAddr) -> SocketAddr {
+    if sa.ip().is_unspecified() {
+        sa.set_ip(if sa.is_ipv4() {
+            Ipv4Addr::LOCALHOST.into()
+        } else {
+            Ipv6Addr::LOCALHOST.into()
+        });
+    }
+    sa
+}
+
+/// Mint a shareable [`JoinTicket`] for `kb_id` from this mesh endpoint's current
+/// address — its node-id plus whatever relay + direct addresses iroh currently
+/// knows (`endpoint.addr()`), augmented with the bound UDP sockets so a LAN /
+/// relay-disabled endpoint still carries a dialable direct address. Synchronous
+/// and non-blocking (never calls `online()`), so it is safe on a request path.
+pub fn mint_ticket(endpoint: &Endpoint, kb_id: impl Into<String>) -> JoinTicket {
+    let mut addr = endpoint.addr();
+    for sa in endpoint.bound_sockets() {
+        addr.addrs
+            .insert(TransportAddr::Ip(loopback_if_unspecified(sa)));
+    }
+    JoinTicket::new(addr, kb_id)
+}
+
 /// Resolve a connecting peer's **verified** Ed25519 key (`remote_id()`) to a
 /// `PeerIdentity`, or `None` if it is not present in `authorized_keys`.
 ///
@@ -104,6 +135,34 @@ pub(crate) fn authorize_peer(
     })
 }
 
+/// Resolve a connecting mesh peer's identity per the connection-trust gate
+/// (ADR-025), re-reading `authorized_keys` **per accept** (I-10; fail-secure):
+/// - a peer in `authorized_keys` always resolves to its labelled identity;
+/// - else if `gate_open`, admit it with a **bare-fingerprint** identity — we
+///   know *who* via the verified `remote_id`, and per-KB access is still fully
+///   mediated by `kb_access` (membership + JoinPolicy), so an unknown peer gets
+///   a connection but no KB access it isn't entitled to;
+/// - else (closed gate) reject the connection at the transport.
+fn resolve_mesh_peer(
+    pubkey: [u8; 32],
+    authorized_keys_path: &std::path::Path,
+    gate_open: bool,
+) -> Option<PeerIdentity> {
+    if let Some(peer) = authorize_peer(pubkey, &AuthorizedKeys::load(authorized_keys_path)) {
+        return Some(peer);
+    }
+    if gate_open {
+        let pk = PublicKey::from_bytes(&pubkey, None)?;
+        let fingerprint = pk.fingerprint();
+        return Some(PeerIdentity {
+            label: fingerprint.clone(),
+            fingerprint,
+            pubkey,
+        });
+    }
+    None
+}
+
 /// Accept loop for the mesh endpoint. Each inbound connection is gated on its
 /// `remote_id()` being in `authorized_keys` (see [`authorize_peer`]); authorized
 /// peers are handed to the **same** `handle_client_authenticated` the editor's
@@ -115,13 +174,14 @@ pub(crate) fn authorize_peer(
 /// response like the TCP path. Mesh multiplexing/gossip is Phase 2 (#89).
 pub async fn serve(
     endpoint: Endpoint,
-    authorized: Arc<AuthorizedKeys>,
+    authorized_keys_path: std::path::PathBuf,
+    gate_open: bool,
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: Instant,
 ) {
     while let Some(incoming) = endpoint.accept().await {
-        let authorized = Arc::clone(&authorized);
+        let authorized_keys_path = authorized_keys_path.clone();
         let doc_store = Arc::clone(&doc_store);
         let broadcaster = broadcaster.clone();
         tokio::spawn(async move {
@@ -140,13 +200,16 @@ pub async fn serve(
                 }
             };
 
-            // Gate on the peer's verified key being authorized.
+            // Gate on the peer's verified key being authorized. Re-read
+            // authorized_keys **per accept** (I-10) so `mae-daemon authorize` /
+            // `revoke` and TOFU-approve take effect on the running mesh without a
+            // restart — fail-secure: a missing/unreadable file ⇒ empty ⇒ deny.
             let pubkey = *conn.remote_id().as_bytes();
-            let Some(peer) = authorize_peer(pubkey, &authorized) else {
+            let Some(peer) = resolve_mesh_peer(pubkey, &authorized_keys_path, gate_open) else {
                 let fp = PublicKey::from_bytes(&pubkey, None)
                     .map(|k| k.fingerprint())
                     .unwrap_or_default();
-                warn!(fingerprint = %fp, "rejecting mesh peer absent from authorized_keys");
+                warn!(fingerprint = %fp, "rejecting mesh peer (closed gate, not in authorized_keys)");
                 conn.close(1u32.into(), b"unauthorized");
                 return;
             };
@@ -167,6 +230,7 @@ pub async fn serve(
                 doc_store,
                 broadcaster,
                 start_time,
+                mae_sync::kb::Transport::P2p,
             )
             .await;
         });
@@ -194,6 +258,23 @@ mod tests {
         ep.close().await;
     }
 
+    /// SECURITY: the membership principal (`mae_sync::membership::fingerprint_of`)
+    /// MUST equal the mcp identity fingerprint byte-for-byte, or signed membership
+    /// ops would name a principal the access gate can't match. Guards the
+    /// STANDARD_NO_PAD base64 + SHA256 format agreement across the two crates.
+    #[test]
+    fn membership_fingerprint_matches_mcp_identity() {
+        for label in ["alice", "bob", "owner-x"] {
+            let id = Identity::generate(label);
+            let pk = id.public().to_bytes();
+            assert_eq!(
+                mae_sync::membership::fingerprint_of(&pk),
+                id.fingerprint(),
+                "membership principal must equal the mcp identity fingerprint"
+            );
+        }
+    }
+
     /// The `collab.p2p.relay` config string maps to the right `RelayMode`, and a
     /// non-keyword non-URL value is a reported error (not a silent fallback).
     #[test]
@@ -214,6 +295,37 @@ mod tests {
             relay_mode_from_config("not a relay").is_err(),
             "a non-keyword, non-URL value must be a reported error"
         );
+    }
+
+    /// `mint_ticket` yields a shareable ticket whose node-id is this endpoint's
+    /// trusted-peer key, carries the KB-id, and includes a dialable direct address
+    /// (from the bound sockets even with no relay), round-tripping as text.
+    #[tokio::test]
+    async fn mint_ticket_carries_identity_kb_and_a_dialable_addr() {
+        let id = Identity::generate("owner");
+        let endpoint = bind_endpoint(&id, RelayMode::Disabled).await.unwrap();
+
+        let ticket = mint_ticket(&endpoint, "concept:architecture");
+
+        // Node-id == the endpoint identity (the principal a joiner verifies).
+        assert_eq!(ticket.node_id(), endpoint.id());
+        assert_eq!(ticket.kb_id, "concept:architecture");
+        // At least one direct address, none left unspecified (all dialable).
+        let has_dialable = ticket
+            .endpoint
+            .addrs
+            .iter()
+            .any(|a| matches!(a, TransportAddr::Ip(sa) if !sa.ip().is_unspecified()));
+        assert!(
+            has_dialable,
+            "ticket carries a dialable direct address: {:?}",
+            ticket.endpoint.addrs
+        );
+        // Text round-trip is stable.
+        let parsed: JoinTicket = ticket.to_string().parse().unwrap();
+        assert_eq!(parsed, ticket);
+
+        endpoint.close().await;
     }
 
     /// The mesh access gate (ADR-025): a key in `authorized_keys` resolves to a
@@ -247,6 +359,53 @@ mod tests {
         );
     }
 
+    /// The mesh gate re-reads authorized_keys **per accept** (I-10): authorize /
+    /// revoke take effect with no restart and no in-memory snapshot. A missing
+    /// file denies (fail-secure).
+    #[test]
+    fn mesh_gate_reloads_authorized_keys_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let ak_path = dir.path().join("authorized_keys");
+        let peer = Identity::generate("peer");
+        let peer_pub = peer.public().to_bytes();
+
+        // Absent file ⇒ deny.
+        assert!(resolve_mesh_peer(peer_pub, &ak_path, false).is_none());
+
+        // Authorize → the next call admits, live (no restart).
+        let mut ak = AuthorizedKeys::load(&ak_path);
+        ak.add(PublicKey::from_bytes(&peer_pub, Some("peer".to_string())).unwrap())
+            .unwrap();
+        let admitted = resolve_mesh_peer(peer_pub, &ak_path, false).expect("authorized after add");
+        assert_eq!(admitted.pubkey, peer_pub);
+
+        assert_eq!(admitted.label, "peer", "labelled identity for a known peer");
+
+        // Revoke → the next call denies, live.
+        ak.revoke_by_fingerprint(&admitted.fingerprint).unwrap();
+        assert!(resolve_mesh_peer(peer_pub, &ak_path, false).is_none());
+    }
+
+    /// The `open` connection gate admits an UNKNOWN authenticated peer with a
+    /// bare-fingerprint identity (per-KB access stays membership-gated), while the
+    /// closed gate rejects it.
+    #[test]
+    fn open_gate_admits_unknown_peers_as_bare_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let ak_path = dir.path().join("authorized_keys"); // empty
+        let stranger = Identity::generate("stranger").public().to_bytes();
+
+        // Closed gate: unknown peer rejected.
+        assert!(resolve_mesh_peer(stranger, &ak_path, false).is_none());
+
+        // Open gate: admitted with identity = its own fingerprint + a real
+        // principal, so kb_access sees an authenticated non-member.
+        let peer = resolve_mesh_peer(stranger, &ak_path, true).expect("open gate admits");
+        assert!(peer.is_authenticated());
+        assert_eq!(peer.label, peer.fingerprint);
+        assert_eq!(peer.principal(), Some(peer.fingerprint.as_str()));
+    }
+
     /// End-to-end transport proof: two endpoints connect over iroh and round-trip a
     /// **Content-Length-framed** mae_mcp message through `open_bi`/`accept_bi`
     /// streams — confirming the QUIC streams drop into the existing framing, and the
@@ -254,8 +413,7 @@ mod tests {
     /// `authorized_keys` gate input).
     #[tokio::test]
     async fn two_endpoints_round_trip_a_framed_message() {
-        use iroh::{EndpointAddr, TransportAddr};
-        use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+        use iroh::EndpointAddr;
         use std::time::Duration;
         use tokio::io::BufReader;
 
@@ -269,24 +427,15 @@ mod tests {
         // `RelayMode::Disabled` there is no relay home and DNS/Pkarr discovery
         // never resolves on localhost, so `online()`/`addr()` would block forever
         // (a 20-min hang in CI). Instead, hand the connector the acceptor's bound
-        // UDP socket(s) directly, rewriting the unspecified bind IP (0.0.0.0 / [::])
-        // to loopback so it is actually dialable. Compute this BEFORE moving the
-        // acceptor into the accept task.
+        // UDP socket(s) directly, rewriting the unspecified bind IP to loopback so
+        // it is actually dialable. Compute this BEFORE moving the acceptor into the
+        // accept task.
         let acc_addr = EndpointAddr::from_parts(
             acceptor.id(),
             acceptor
                 .bound_sockets()
                 .into_iter()
-                .map(|mut sa: SocketAddr| {
-                    if sa.ip().is_unspecified() {
-                        sa.set_ip(if sa.is_ipv4() {
-                            Ipv4Addr::LOCALHOST.into()
-                        } else {
-                            Ipv6Addr::LOCALHOST.into()
-                        });
-                    }
-                    TransportAddr::Ip(sa)
-                }),
+                .map(|sa| TransportAddr::Ip(loopback_if_unspecified(sa))),
         );
 
         // Acceptor: accept one connection, read a framed message, echo it back.

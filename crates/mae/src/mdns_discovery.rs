@@ -133,44 +133,24 @@ impl MdnsManager {
                                 continue;
                             }
                         }
-                        let user_name = info
-                            .get_property_val_str("user")
-                            .unwrap_or("unknown")
-                            .to_string();
-                        let version = info
-                            .get_property_val_str("version")
-                            .unwrap_or("?")
-                            .to_string();
-                        let kb_count: u32 = info
-                            .get_property_val_str("kb_count")
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0);
-                        let port = info.get_port();
-                        let addresses = info.get_addresses();
-                        let host = addresses
+                        let addrs: Vec<std::net::IpAddr> = info
+                            .get_addresses()
                             .iter()
-                            .find(|a| a.is_ipv4())
-                            .or_else(|| {
-                                warn!(instance = %instance, "no IPv4 address found for mDNS peer, falling back to IPv6 or localhost");
-                                addresses.iter().next()
-                            })
-                            .map(|a| a.to_string())
-                            .unwrap_or_else(|| "127.0.0.1".to_string());
-                        let address = format!("{}:{}", host, port);
-
+                            .map(|s| s.to_ip_addr())
+                            .collect();
+                        let peer = build_discovered_peer(
+                            info.get_property_val_str("user"),
+                            info.get_property_val_str("version"),
+                            info.get_property_val_str("kb_count"),
+                            &addrs,
+                            info.get_port(),
+                        );
                         debug!(
                             instance = %instance,
-                            user = %user_name,
-                            address = %address,
+                            user = %peer.user_name,
+                            address = %peer.address,
                             "discovered MAE peer via mDNS"
                         );
-
-                        let peer = DiscoveredPeer {
-                            user_name,
-                            address,
-                            version,
-                            kb_count,
-                        };
                         if let Ok(mut map) = discovered.lock() {
                             map.insert(instance, peer);
                         }
@@ -205,6 +185,32 @@ impl MdnsManager {
     }
 }
 
+/// Build a [`DiscoveredPeer`] from the fields a resolved mDNS service exposes — the
+/// parse path the browse loop drives. Takes primitives (not an mdns-sd type), so it
+/// is pure + unit-testable without multicast: applies the TXT defaults
+/// (`user`→"unknown", `version`→"?", non-numeric/absent `kb_count`→0) and selects an
+/// address (IPv4-preferred, else the first, else loopback).
+fn build_discovered_peer(
+    user: Option<&str>,
+    version: Option<&str>,
+    kb_count: Option<&str>,
+    addresses: &[std::net::IpAddr],
+    port: u16,
+) -> DiscoveredPeer {
+    let host = addresses
+        .iter()
+        .find(|a| a.is_ipv4())
+        .or_else(|| addresses.first())
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    DiscoveredPeer {
+        user_name: user.unwrap_or("unknown").to_string(),
+        address: format!("{host}:{port}"),
+        version: version.unwrap_or("?").to_string(),
+        kb_count: kb_count.and_then(|s| s.parse().ok()).unwrap_or(0),
+    }
+}
+
 impl Drop for MdnsManager {
     fn drop(&mut self) {
         self.unregister();
@@ -217,17 +223,7 @@ impl Drop for MdnsManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn mdns_manager_creation() {
-        // May fail on CI without network — just verify the API compiles.
-        let result = MdnsManager::new();
-        // On systems without multicast, this might fail — that's OK.
-        if let Ok(mgr) = result {
-            assert!(!mgr.is_registered());
-            assert!(mgr.discovered_peers().is_empty());
-        }
-    }
+    use std::time::Duration;
 
     #[test]
     fn discovered_peer_clone_and_debug() {
@@ -243,39 +239,105 @@ mod tests {
         assert!(format!("{:?}", peer).contains("alice"));
     }
 
-    #[test]
-    fn register_and_unregister_lifecycle() {
-        let result = MdnsManager::new();
-        if let Ok(mut mgr) = result {
-            // Register may fail on CI without multicast — that's expected.
-            let reg_result = mgr.register("test-user", 19473, 2);
-            if reg_result.is_ok() {
-                assert!(mgr.is_registered());
-                mgr.unregister();
-                assert!(!mgr.is_registered());
-            }
-        }
+    // --- the parse path the browse loop drives (deterministic, no multicast) ---
+
+    fn ip(s: &str) -> std::net::IpAddr {
+        s.parse().unwrap()
     }
 
     #[test]
-    fn browse_discovers_self_filtered() {
-        // This test verifies the browse API compiles and self-filtering logic.
-        // Actual mDNS discovery needs multicast networking.
-        let result = MdnsManager::new();
-        if let Ok(mut mgr) = result {
-            if mgr.register("browse-test", 29473, 0).is_ok() {
-                // Start browsing — should filter out our own service.
-                if mgr.start_browse().is_ok() {
-                    // Give mDNS a moment to discover.
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                    // Our own service should NOT appear in discovered peers.
-                    let peers = mgr.discovered_peers();
-                    assert!(
-                        !peers.iter().any(|p| p.user_name == "browse-test"),
-                        "should filter out our own mDNS service"
-                    );
-                }
+    fn build_discovered_peer_reads_txt_and_address() {
+        let peer = build_discovered_peer(
+            Some("alice"),
+            Some("1"),
+            Some("3"),
+            &[ip("192.168.1.10")],
+            9473,
+        );
+        assert_eq!(peer.user_name, "alice");
+        assert_eq!(peer.version, "1");
+        assert_eq!(peer.kb_count, 3);
+        assert_eq!(peer.address, "192.168.1.10:9473");
+    }
+
+    #[test]
+    fn build_discovered_peer_defaults_for_missing_txt() {
+        // No TXT + no address → safe defaults (never panics on a sparse peer).
+        let peer = build_discovered_peer(None, None, None, &[], 1234);
+        assert_eq!(peer.user_name, "unknown");
+        assert_eq!(peer.version, "?");
+        assert_eq!(peer.kb_count, 0);
+        assert_eq!(peer.address, "127.0.0.1:1234");
+    }
+
+    #[test]
+    fn build_discovered_peer_garbage_kb_count_is_zero() {
+        let peer = build_discovered_peer(Some("bob"), None, Some("not-a-number"), &[], 5555);
+        assert_eq!(peer.kb_count, 0);
+    }
+
+    #[test]
+    fn build_discovered_peer_prefers_ipv4_over_ipv6() {
+        // A peer advertising both v6 and v4 → we pick v4 for the connect address.
+        let peer = build_discovered_peer(
+            Some("carol"),
+            Some("1"),
+            Some("0"),
+            &[ip("fe80::1"), ip("10.0.0.7")],
+            9473,
+        );
+        assert_eq!(peer.address, "10.0.0.7:9473");
+    }
+
+    // --- real register → browse → discover round-trip (needs LAN multicast) ---
+    // Gated behind MAE_MDNS_E2E=1 so it asserts real discovery where multicast is
+    // available (a CI step + local runs) and is cleanly SKIPPED elsewhere — never a
+    // permissive pass that succeeds whether or not discovery actually works.
+
+    #[test]
+    fn mdns_round_trip_discovers_a_registered_peer() {
+        if std::env::var("MAE_MDNS_E2E").is_err() {
+            eprintln!("skipping mDNS round-trip — set MAE_MDNS_E2E=1 to run (needs multicast)");
+            return;
+        }
+
+        // A server registers a service; a separate manager browses and must resolve
+        // it with the advertised TXT props — and must NOT surface its OWN service.
+        let mut server = MdnsManager::new().expect("server mDNS daemon");
+        server.register("alice-rt", 39473, 5).expect("register");
+        assert!(server.is_registered());
+
+        let mut client = MdnsManager::new().expect("client mDNS daemon");
+        client
+            .register("bob-rt", 39474, 0)
+            .expect("client register");
+        client.start_browse().expect("browse");
+        assert!(client.is_browsing());
+
+        let mut found = None;
+        for _ in 0..150 {
+            std::thread::sleep(Duration::from_millis(100));
+            let peers = client.discovered_peers();
+            // Self-filter: the client never discovers its own bob-rt service.
+            assert!(
+                !peers.iter().any(|p| p.user_name == "bob-rt"),
+                "client must filter out its own service"
+            );
+            if let Some(p) = peers.into_iter().find(|p| p.user_name == "alice-rt") {
+                found = Some(p);
+                break;
             }
         }
+        let peer = found.expect("client should discover the registered peer within 15s");
+        assert_eq!(peer.kb_count, 5, "TXT kb_count propagated");
+        assert_eq!(peer.version, "1");
+        assert!(
+            peer.address.ends_with(":39473"),
+            "discovered the server's port: {}",
+            peer.address
+        );
+
+        server.unregister();
+        assert!(!server.is_registered());
     }
 }

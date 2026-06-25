@@ -12,10 +12,12 @@
 //! collaboration, and services that outlive the editor session.
 
 mod config;
+mod dialer;
 mod handler;
 pub mod hygiene;
 mod p2p;
 mod scheduler;
+mod ticket;
 
 use config::DaemonConfig;
 use handler::DaemonState;
@@ -224,7 +226,7 @@ async fn main() {
             // Non-fatal: KB service continues, collab disabled
             warn!("collab service disabled due to config errors");
         } else {
-            spawn_collab_server(&config).await;
+            spawn_collab_server(&config, Arc::clone(&state)).await;
         }
     } else {
         info!("collab service disabled in config");
@@ -287,10 +289,11 @@ async fn main() {
 async fn spawn_p2p_mesh(
     p2p: &config::P2pConfig,
     identity: &mae_mcp::identity::Identity,
-    authorized: Arc<mae_mcp::identity::AuthorizedKeys>,
+    authorized_keys_path: std::path::PathBuf,
     doc_store: Arc<doc_store::DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
+    state: Arc<Mutex<DaemonState>>,
 ) {
     let relay_mode = match p2p::relay_mode_from_config(&p2p.relay) {
         Ok(mode) => mode,
@@ -309,19 +312,33 @@ async fn spawn_p2p_mesh(
     info!(
         fingerprint = %identity.fingerprint(),
         relay = %p2p.relay,
-        authorized = authorized.len(),
-        "P2P mesh endpoint bound (ADR-025); accepting authorized peers"
+        connection_gate = %p2p.connection_gate,
+        authorized = mae_mcp::identity::AuthorizedKeys::load(&authorized_keys_path).len(),
+        "P2P mesh endpoint bound (ADR-025); accepting peers"
     );
+    // Publish a clone to the control-socket state so `p2p/mint_ticket` can build
+    // join tickets; the accept loop below owns the original.
+    state.lock().await.p2p_endpoint = Some(endpoint.clone());
+    // Background dialer (ADR-025/026): drain `p2p/join_ticket` requests and pull the
+    // joined KBs (dial by node-id, verify, anchor, fetch). Shares the doc_store with
+    // the accept loop so a pulled KB is immediately served onward.
+    tokio::spawn(dialer::run_dialer(
+        Arc::clone(&state),
+        Arc::clone(&doc_store),
+        broadcaster.clone(),
+        endpoint.clone(),
+    ));
     tokio::spawn(p2p::serve(
         endpoint,
-        authorized,
+        authorized_keys_path,
+        p2p.gate_open(),
         doc_store,
         broadcaster,
         start_time,
     ));
 }
 
-async fn spawn_collab_server(config: &DaemonConfig) {
+async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState>>) {
     let collab = &config.collab;
 
     // Open collab storage
@@ -448,17 +465,38 @@ async fn spawn_collab_server(config: &DaemonConfig) {
             }
             let authorized = Arc::new(authorized);
 
+            // ADR-026: install the daemon identity as the membership signer, so the
+            // mutation handlers sign + append op-log entries for KBs this daemon
+            // owns. Only key mode signs; psk/none keep the legacy unsigned path.
+            doc_store.set_signer(Arc::clone(&identity));
+
+            // ADR-025 §"Driving surfaces": expose the collab doc_store + broadcaster
+            // + owner identity to the local control socket, so `p2p/share_kb` can
+            // ESTABLISH a mesh share (create/widen the collection doc to P2p) without
+            // a collab session — the CLI/editor self-sufficient `kb-share-p2p` path.
+            // Key mode only: a P2P share needs the owner-signing identity.
+            {
+                let mut st = state.lock().await;
+                st.doc_store = Some(Arc::clone(&doc_store));
+                st.broadcaster = Some(broadcaster.clone());
+                st.owner = Some(Arc::clone(&identity));
+            }
+
             // P2P mesh (ADR-025 / #88): reuse this key-mode identity as the iroh
             // node identity and gate inbound peers on the same authorized_keys
             // set, sharing the doc_store + broadcaster with the TCP listener.
             if collab.p2p.enabled {
+                // Pass the authorized_keys PATH (not a snapshot): the mesh gate
+                // re-reads it per accept so authorize/revoke/approve take effect
+                // live (I-10).
                 spawn_p2p_mesh(
                     &collab.p2p,
                     &identity,
-                    Arc::clone(&authorized),
+                    ak_path.clone(),
                     Arc::clone(&doc_store),
                     broadcaster.clone(),
                     server_start_time,
+                    Arc::clone(&state),
                 )
                 .await;
             }
@@ -606,6 +644,7 @@ async fn spawn_collab_server(config: &DaemonConfig) {
                                         store,
                                         bc,
                                         server_start_time,
+                                        mae_sync::kb::Transport::Hub,
                                     )
                                     .await;
                                 }
@@ -626,6 +665,7 @@ async fn spawn_collab_server(config: &DaemonConfig) {
                                     store,
                                     bc,
                                     server_start_time,
+                                    mae_sync::kb::Transport::Hub,
                                 )
                                 .await;
                             }
@@ -641,6 +681,7 @@ async fn spawn_collab_server(config: &DaemonConfig) {
                                     store,
                                     bc,
                                     server_start_time,
+                                    mae_sync::kb::Transport::Hub,
                                 )
                                 .await;
                             }
@@ -651,6 +692,7 @@ async fn spawn_collab_server(config: &DaemonConfig) {
                                     store,
                                     bc,
                                     server_start_time,
+                                    mae_sync::kb::Transport::Hub,
                                 )
                                 .await;
                             }
@@ -721,6 +763,16 @@ fn run_check_config() {
                     config.collab.auth.authorized_key_count()
                 );
             }
+        }
+
+        // [collab.p2p] — the iroh mesh transport (ADR-025).
+        println!("  p2p.enabled: {}", config.collab.p2p.enabled);
+        if config.collab.p2p.enabled {
+            println!("    p2p.relay: {}", config.collab.p2p.relay);
+            println!(
+                "    p2p.connection_gate: {}",
+                config.collab.p2p.connection_gate
+            );
         }
 
         let issues = config.check_collab();

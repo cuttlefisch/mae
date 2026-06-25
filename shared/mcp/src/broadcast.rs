@@ -194,6 +194,18 @@ impl EventBroadcaster {
         }
     }
 
+    /// Add a single event-type subscription without clobbering existing ones
+    /// (idempotent). Used by `kb/join` so a member is subscribed to `sync_update`
+    /// AS OF the join snapshot — closing the window where the owner's edits between
+    /// the snapshot and a separate `notifications/subscribe` could be missed.
+    pub fn add_event_sub(&mut self, session_id: u64, event_type: &str) {
+        if let Some(entry) = self.clients.get_mut(&session_id) {
+            if !entry.event_subs.iter().any(|s| s == event_type) {
+                entry.event_subs.push(event_type.to_string());
+            }
+        }
+    }
+
     /// Subscribe a client to a specific document's events.
     /// Called when a client shares, joins, or sends updates to a document.
     pub fn subscribe_doc(&mut self, session_id: u64, doc_id: &str) {
@@ -603,5 +615,31 @@ mod tests {
         };
         bc.broadcast(&event_other);
         assert!(rx.recv().await.is_some(), "should still receive other.rs");
+    }
+
+    #[tokio::test]
+    async fn add_event_sub_is_additive_and_idempotent() {
+        let mut bc = EventBroadcaster::new();
+        // Start with no event subscriptions (as a fresh kb/join session has).
+        let mut rx = bc.subscribe(1, vec![]);
+        let event = EditorEvent::SyncUpdate {
+            buffer_name: "doc.rs".to_string(),
+            update_base64: "ZA==".to_string(),
+            wal_seq: 1,
+        };
+        // Not subscribed to sync_update yet ⇒ not delivered.
+        bc.broadcast(&event);
+        assert!(rx.try_recv().is_err(), "no sync_update sub yet");
+
+        // kb/join adds it (twice — must be idempotent) without clobbering.
+        bc.add_event_sub(1, "sync_update");
+        bc.add_event_sub(1, "sync_update");
+        bc.broadcast(&event);
+        assert!(rx.recv().await.is_some(), "delivered after add_event_sub");
+
+        // Adding a second type keeps the first.
+        bc.add_event_sub(1, "peer_joined");
+        bc.broadcast(&event);
+        assert!(rx.recv().await.is_some(), "sync_update still active");
     }
 }

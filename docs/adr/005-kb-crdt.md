@@ -1,6 +1,8 @@
 # ADR-005: Knowledge Base Nodes as CRDT Documents
 
-**Status**: Accepted
+**Status**: Accepted — **storage model superseded by ADR-011** (CozoDB-first KB storage; SQLite-BLOB
+persistence dropped, org files become import/export only). The CRDT-node *concept* carries forward
+(ADR-006/020/022/026); the SQLite-as-persistence framing here is historical.
 **Date**: 2026-05-17
 **KB Source**: `concept:adr-kb-crdt`
 

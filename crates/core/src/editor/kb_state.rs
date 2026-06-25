@@ -11,6 +11,54 @@ use mae_kb::query::KbQueryLayer;
 use super::kb_ops::KbWatcherStats;
 use super::CaptureState;
 
+/// Default `mae-daemon` control-socket path: `$XDG_RUNTIME_DIR/mae-daemon.sock`
+/// (e.g. `/run/user/1000/mae-daemon.sock`), falling back to the temp dir. Must
+/// match the daemon's bind path and `mae_mcp::daemon_client::default_daemon_socket`
+/// — kept as a tiny std-only twin here because `mae-core` does not depend on
+/// `mae-mcp`. Used for the field default + the `daemon_socket` option's "auto" value.
+pub(crate) fn default_daemon_socket() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("mae-daemon.sock")
+}
+
+/// Synchronous daemon control-socket operations the editor needs but cannot
+/// perform itself — `mae-core` deliberately does not depend on `mae-mcp` /
+/// `DaemonClient`. The binary injects a concrete `DaemonClient`-backed
+/// implementation, exactly like [`KbContext::set_daemon_query_layer`].
+///
+/// This is the **single backend** behind every P2P lifecycle surface (editor
+/// command, Scheme primitive, MCP tool) — the contract that lets a human (editor
+/// or CLI) and an AI peer drive the mesh identically (ADR-025 §"Driving
+/// surfaces"). New P2P actions add one method here + thin shims, never
+/// surface-specific logic.
+pub trait DaemonControl: Send + Sync {
+    /// Establish (or widen) the P2P mesh share for `kb_id` via the daemon's
+    /// `p2p/share_kb` control method — exposes the `kbc:{kb_id}` collection on the
+    /// mesh so a joining peer can actually pull it. Optional `transport`
+    /// (hub|p2p|both) + `policy` (restrictive|invite|permissive). Call this BEFORE
+    /// minting: a ticket is only joinable once the KB is shared. Returns the
+    /// daemon's confirmation, or a human-readable error.
+    fn share_kb_p2p(
+        &self,
+        kb_id: &str,
+        transport: Option<&str>,
+        policy: Option<&str>,
+    ) -> Result<String, String>;
+
+    /// Mint a shareable P2P join ticket ("magnet link") for `kb_id` via the
+    /// daemon's `p2p/mint_ticket` control method. Returns the `mae://join/…`
+    /// string, or a human-readable error (daemon down, P2P disabled, …).
+    fn mint_p2p_ticket(&self, kb_id: &str) -> Result<String, String>;
+
+    /// Queue a P2P join from a `ticket` ("magnet link") via the daemon's
+    /// `p2p/join_ticket` control method. The background dialer then connects +
+    /// pulls the KB (after the owner approves). Returns a human-readable
+    /// confirmation, or an error (daemon down, P2P disabled, malformed ticket).
+    fn join_p2p_ticket(&self, ticket: &str) -> Result<String, String>;
+}
+
 /// Knowledge base context: backing store, federation, watchers, and config.
 pub struct KbContext {
     /// Primary knowledge base instance (manual + user notes + AI-facing kb_* tools).
@@ -56,6 +104,9 @@ pub struct KbContext {
     daemon_query: Option<Arc<dyn KbQueryLayer>>,
     /// Whether daemon connection is enabled.
     pub daemon_enabled: bool,
+    /// Daemon control channel for synchronous control-socket ops (P2P ticket
+    /// mint/join, …). Injected by the binary; `None` when no daemon is wired.
+    daemon_control: Option<Arc<dyn DaemonControl>>,
     /// Daemon Unix socket path.
     pub daemon_socket: std::path::PathBuf,
     /// LRU cache capacity (0 = unbounded).
@@ -125,6 +176,54 @@ impl KbContext {
     /// Set the daemon-backed LRU query layer.
     pub fn set_daemon_query_layer(&mut self, layer: Option<Arc<dyn KbQueryLayer>>) {
         self.daemon_query = layer;
+    }
+
+    /// Inject the daemon control channel (binary-provided, `DaemonClient`-backed).
+    pub fn set_daemon_control(&mut self, control: Option<Arc<dyn DaemonControl>>) {
+        self.daemon_control = control;
+    }
+
+    /// Whether a daemon control channel is wired (P2P control ops are available).
+    pub fn has_daemon_control(&self) -> bool {
+        self.daemon_control.is_some()
+    }
+
+    /// A clone of the injected daemon control channel, if any. Lets other
+    /// subsystems (e.g. the Scheme runtime's `SharedState`) drive the same backend
+    /// off the editor thread.
+    pub fn daemon_control(&self) -> Option<Arc<dyn DaemonControl>> {
+        self.daemon_control.clone()
+    }
+
+    /// Mint a P2P join ticket ("magnet link") for `kb_id` over the daemon control
+    /// channel. The **single backend** behind the `kb-share-p2p` command, the
+    /// `(kb-share-p2p)` Scheme primitive, and the `kb_share_p2p` MCP tool — so
+    /// the human and the AI peer drive the identical action (ADR-025 parity).
+    pub fn share_p2p(&self, kb_id: &str) -> Result<String, String> {
+        let control = self.daemon_control.as_deref().ok_or_else(|| {
+            "not connected to a daemon — start one with `mae setup-daemon` and enable \
+             P2P with `mae setup-collab --p2p`"
+                .to_string()
+        })?;
+        // Establish the mesh share FIRST (default transport=p2p; default join policy =
+        // the collection's Invite — joins go pending for owner approval), THEN mint a
+        // ticket: a minted ticket is only joinable once the KB is actually shared
+        // over the mesh (ADR-025 §"Driving surfaces").
+        control.share_kb_p2p(kb_id, None, None)?;
+        control.mint_p2p_ticket(kb_id)
+    }
+
+    /// Queue a P2P join from a `ticket` over the daemon control channel. The
+    /// **single backend** behind the `kb-join-p2p` command, the `(kb-join-ticket)`
+    /// Scheme primitive, and the `kb_join_p2p` MCP tool — human + AI peer drive the
+    /// identical action (ADR-025 parity). The background dialer does the dial+pull.
+    pub fn join_p2p(&self, ticket: &str) -> Result<String, String> {
+        let control = self.daemon_control.as_deref().ok_or_else(|| {
+            "not connected to a daemon — start one with `mae setup-daemon` and enable \
+             P2P with `mae setup-collab --p2p`"
+                .to_string()
+        })?;
+        control.join_p2p_ticket(ticket)
     }
 
     /// Whether a daemon query layer is active.
@@ -199,7 +298,8 @@ impl KbContext {
             query: None,
             daemon_query: None,
             daemon_enabled: false,
-            daemon_socket: std::path::PathBuf::from("/tmp/mae-daemon.sock"),
+            daemon_control: None,
+            daemon_socket: default_daemon_socket(),
             daemon_cache_size: 200,
             watcher_enabled: true,
             watcher_debounce_ms: 500,
@@ -215,5 +315,84 @@ impl KbContext {
             dailies_dir: None,
             daily_chain_gap_max: 90,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stub control channel returning a fixed result — stands in for the
+    /// binary's `DaemonClient`-backed impl so the single-backend dispatch is
+    /// testable without a running daemon.
+    struct StubControl(Result<String, String>);
+    impl DaemonControl for StubControl {
+        fn share_kb_p2p(
+            &self,
+            _kb_id: &str,
+            _transport: Option<&str>,
+            _policy: Option<&str>,
+        ) -> Result<String, String> {
+            self.0.clone()
+        }
+        fn mint_p2p_ticket(&self, _kb_id: &str) -> Result<String, String> {
+            self.0.clone()
+        }
+        fn join_p2p_ticket(&self, _ticket: &str) -> Result<String, String> {
+            self.0.clone()
+        }
+    }
+
+    fn ctx() -> KbContext {
+        KbContext::new(mae_kb::KnowledgeBase::new())
+    }
+
+    #[test]
+    fn share_p2p_without_daemon_control_is_an_actionable_error() {
+        let kb = ctx();
+        assert!(!kb.has_daemon_control());
+        let err = kb.share_p2p("concept:x").unwrap_err();
+        assert!(
+            err.contains("daemon"),
+            "error should point the user at the daemon: {err}"
+        );
+    }
+
+    #[test]
+    fn share_p2p_delegates_to_the_injected_control() {
+        let mut kb = ctx();
+        kb.set_daemon_control(Some(Arc::new(StubControl(Ok(
+            "mae://join/STUB".to_string()
+        )))));
+        assert!(kb.has_daemon_control());
+        assert_eq!(kb.share_p2p("concept:x").unwrap(), "mae://join/STUB");
+
+        // Backend errors propagate verbatim — every surface shows the same message.
+        kb.set_daemon_control(Some(Arc::new(StubControl(Err(
+            "P2P mesh not enabled".into()
+        )))));
+        assert_eq!(kb.share_p2p("k").unwrap_err(), "P2P mesh not enabled");
+    }
+
+    #[test]
+    fn join_p2p_without_daemon_control_is_an_actionable_error() {
+        let kb = ctx();
+        let err = kb.join_p2p("mae://join/x").unwrap_err();
+        assert!(
+            err.contains("daemon"),
+            "error should point the user at the daemon: {err}"
+        );
+    }
+
+    #[test]
+    fn join_p2p_delegates_to_the_injected_control() {
+        let mut kb = ctx();
+        kb.set_daemon_control(Some(Arc::new(StubControl(Ok("Join recorded".into())))));
+        assert_eq!(kb.join_p2p("mae://join/x").unwrap(), "Join recorded");
+
+        kb.set_daemon_control(Some(Arc::new(StubControl(Err(
+            "malformed join ticket".into()
+        )))));
+        assert_eq!(kb.join_p2p("garbage").unwrap_err(), "malformed join ticket");
     }
 }
