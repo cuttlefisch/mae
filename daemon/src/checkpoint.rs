@@ -31,9 +31,119 @@ pub struct KbCheckpoint {
     pub content_hash: String,
 }
 
+/// Magic + version header for the portable checkpoint artifact.
+const CHECKPOINT_MAGIC: &[u8] = b"MAEKB1\n";
+
 impl KbCheckpoint {
     pub fn node_count(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// Serialize to a portable, self-describing artifact (length-prefixed binary).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(CHECKPOINT_MAGIC);
+        write_bytes(&mut out, self.kb_id.as_bytes());
+        write_bytes(&mut out, self.content_hash.as_bytes());
+        write_bytes(&mut out, &self.collection_state);
+        out.extend_from_slice(&(self.nodes.len() as u64).to_le_bytes());
+        for (id, state) in &self.nodes {
+            write_bytes(&mut out, id.as_bytes());
+            write_bytes(&mut out, state);
+        }
+        out
+    }
+
+    /// Parse an artifact and **verify integrity** (recomputed hash must match the
+    /// stored one — ADR-032 A5). Errors on bad magic, truncation, or hash mismatch.
+    pub fn from_bytes(buf: &[u8]) -> Result<KbCheckpoint, String> {
+        let mut r = Reader::new(buf);
+        if r.take(CHECKPOINT_MAGIC.len())? != CHECKPOINT_MAGIC {
+            return Err("not a MAE KB checkpoint (bad magic)".to_string());
+        }
+        let kb_id = r.read_string()?;
+        let content_hash = r.read_string()?;
+        let collection_state = r.read_bytes()?;
+        let n = r.read_u64()? as usize;
+        let mut nodes = Vec::with_capacity(n);
+        for _ in 0..n {
+            let id = r.read_string()?;
+            let state = r.read_bytes()?;
+            nodes.push((id, state));
+        }
+        let recomputed = checkpoint_hash(&kb_id, &collection_state, &nodes);
+        if recomputed != content_hash {
+            return Err(format!(
+                "checkpoint integrity check failed: content hash mismatch for '{kb_id}'"
+            ));
+        }
+        Ok(KbCheckpoint {
+            kb_id,
+            collection_state,
+            nodes,
+            content_hash,
+        })
+    }
+}
+
+/// Export `kb_id` as a portable, content-hashed checkpoint artifact (backup / migration).
+pub async fn export_kb(doc_store: &DocStore, kb_id: &str) -> Result<Vec<u8>, String> {
+    Ok(checkpoint_kb(doc_store, kb_id).await?.to_bytes())
+}
+
+/// Import (restore) a KB from an artifact: verify integrity, then write the collection +
+/// node docs into the doc_store. Restore semantics — replaces `kb_id` if it exists.
+pub async fn import_kb(doc_store: &DocStore, artifact: &[u8]) -> Result<KbCheckpoint, String> {
+    let cp = KbCheckpoint::from_bytes(artifact)?;
+    doc_store
+        .share_doc(&format!("kbc:{}", cp.kb_id), &cp.collection_state)
+        .await
+        .map_err(|e| format!("restore collection '{}': {e}", cp.kb_id))?;
+    for (id, state) in &cp.nodes {
+        doc_store
+            .share_doc(&format!("kb:{id}"), state)
+            .await
+            .map_err(|e| format!("restore node '{id}': {e}"))?;
+    }
+    Ok(cp)
+}
+
+fn write_bytes(out: &mut Vec<u8>, b: &[u8]) {
+    out.extend_from_slice(&(b.len() as u64).to_le_bytes());
+    out.extend_from_slice(b);
+}
+
+/// Minimal bounds-checked cursor for parsing the checkpoint artifact.
+struct Reader<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(buf: &'a [u8]) -> Self {
+        Reader { buf, pos: 0 }
+    }
+    fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
+        let end = self
+            .pos
+            .checked_add(n)
+            .ok_or("checkpoint length overflow")?;
+        if end > self.buf.len() {
+            return Err("truncated checkpoint artifact".to_string());
+        }
+        let s = &self.buf[self.pos..end];
+        self.pos = end;
+        Ok(s)
+    }
+    fn read_u64(&mut self) -> Result<u64, String> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+    fn read_bytes(&mut self) -> Result<Vec<u8>, String> {
+        let n = self.read_u64()? as usize;
+        Ok(self.take(n)?.to_vec())
+    }
+    fn read_string(&mut self) -> Result<String, String> {
+        String::from_utf8(self.read_bytes()?).map_err(|_| "invalid utf8 in checkpoint".to_string())
     }
 }
 
@@ -133,5 +243,45 @@ mod tests {
         store.apply_update("kb:n1", &n1.encode(), None).await.unwrap();
         let c = checkpoint_kb(&store, "kb1").await.unwrap();
         assert_ne!(a.content_hash, c.content_hash, "edited content ⇒ different hash");
+    }
+
+    #[tokio::test]
+    async fn export_import_round_trips_a_kb() {
+        // Export from a source store, import into a FRESH store, assert the KB restored.
+        let src = DocStore::new(Arc::new(SqliteBackend::open_memory().unwrap()), 500);
+        seed_kb(&src).await;
+        let artifact = export_kb(&src, "kb1").await.unwrap();
+
+        let dst = DocStore::new(Arc::new(SqliteBackend::open_memory().unwrap()), 500);
+        let cp = import_kb(&dst, &artifact).await.unwrap();
+        assert_eq!(cp.node_count(), 2);
+
+        // Collection manifest restored.
+        let (coll_state, _) = dst.encode_state_and_sv("kbc:kb1").await.unwrap();
+        let coll = mae_sync::kb::KbCollectionDoc::from_bytes(&coll_state).unwrap();
+        assert_eq!(coll.list_nodes().len(), 2);
+
+        // Node bodies restored (semantic round-trip — the docs are KbNodeDoc maps,
+        // not plain text, so check the structured state, not doc_store.content()).
+        let (n1s, _) = dst.encode_state_and_sv("kb:n1").await.unwrap();
+        assert_eq!(mae_sync::kb::KbNodeDoc::from_bytes(&n1s).unwrap().body(), "body one");
+        let (n2s, _) = dst.encode_state_and_sv("kb:n2").await.unwrap();
+        assert_eq!(mae_sync::kb::KbNodeDoc::from_bytes(&n2s).unwrap().body(), "body two");
+    }
+
+    #[tokio::test]
+    async fn corrupt_artifact_fails_integrity() {
+        let src = DocStore::new(Arc::new(SqliteBackend::open_memory().unwrap()), 500);
+        seed_kb(&src).await;
+        let mut artifact = export_kb(&src, "kb1").await.unwrap();
+
+        // Flip the last payload byte → recomputed hash won't match (or parse fails).
+        let last = artifact.len() - 1;
+        artifact[last] ^= 0xff;
+        let err = KbCheckpoint::from_bytes(&artifact).unwrap_err();
+        assert!(
+            err.contains("integrity") || err.contains("truncated") || err.contains("mismatch"),
+            "expected an integrity/parse failure, got: {err}"
+        );
     }
 }
