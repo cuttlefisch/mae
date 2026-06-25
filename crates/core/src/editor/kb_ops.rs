@@ -888,6 +888,31 @@ impl Editor {
         ));
     }
 
+    /// Phase D3 (ADR-029): ensure node `id` is present in the in-memory primary
+    /// mirror, lazily loading it from the open local store on a miss. When the
+    /// daemon hosts the primary the mirror is NOT preloaded at startup (thin
+    /// startup) — but the edit path needs the node's CRDT lineage in `kb.primary`.
+    /// The store row carries the persisted `crdt_doc`, so a lazily-loaded node
+    /// keeps its shared lineage and a subsequent `upsert_with_crdt` chains onto it
+    /// (no divergence). No-op when already resident, not daemon-hosted, or absent.
+    fn kb_ensure_node_loaded(&mut self, id: &str) {
+        if !self.kb.daemon_hosts_primary() || self.kb.primary.get(id).is_some() {
+            return;
+        }
+        if let Some(ref store) = self.kb.store {
+            match store.get_node(id) {
+                Ok(Some(node)) => {
+                    tracing::debug!(target: "kb_sync", node_id = %id, "D3: lazily loaded node from store for edit");
+                    self.kb.primary.insert(node);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(target: "kb_sync", node_id = %id, error = %e, "D3: lazy node load failed");
+                }
+            }
+        }
+    }
+
     /// Apply a remote CRDT update to a KB node, routing it to its **owning**
     /// store — primary or the owning federated instance — not always primary
     /// (ADR-019 receive-side federation; mirror of the write-side fix). For a
@@ -1005,6 +1030,8 @@ impl Editor {
     /// Delete a KB node from the local knowledge base.
     /// Rejects deleting seed nodes (built-in help).
     pub fn kb_delete_node(&mut self, id: &str) -> Result<(), String> {
+        // Phase D3: lazily load the node into the thin-startup mirror so it resolves.
+        self.kb_ensure_node_loaded(id);
         // Resolve across primary ∪ federated instances (I-9), like update/read.
         let owner = self
             .kb_owner_of(id)
@@ -1174,6 +1201,9 @@ impl Editor {
         body: Option<&str>,
         tags: Option<Vec<String>>,
     ) -> Result<(), String> {
+        // Phase D3: thin-startup mirror may not hold this node yet — lazily load it
+        // (with its CRDT lineage) from the open store before resolving the owner.
+        self.kb_ensure_node_loaded(id);
         // Resolve the node across primary ∪ federated instances (I-9): a shared
         // KB lives in `instances` on the host that registered it, and in
         // `primary` on a peer that joined it. The write path must find it in
@@ -3713,6 +3743,65 @@ mod tests {
         assert_eq!(node_id, "note:del");
         assert!(!*add, "delete must enqueue a manifest REMOVE");
         assert!(editor.kb.primary.get("note:del").is_none());
+    }
+
+    /// Phase D3: on a thin startup (mirror NOT preloaded) the daemon-hosted edit
+    /// path must lazily load the node — with its persisted CRDT lineage — from the
+    /// open store, so the edit resolves + chains onto the shared lineage.
+    #[test]
+    fn kb_update_node_lazily_loads_from_store_when_daemon_hosted() {
+        let mut editor = Editor::new();
+        // A store holding a node that is NOT in the in-memory mirror.
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store.seed_type_system().unwrap();
+        store
+            .insert_node(&mae_kb::Node::new(
+                "note:lazy",
+                "Lazy",
+                mae_kb::NodeKind::Note,
+                "orig body",
+            ))
+            .unwrap();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.set_daemon_hosts_primary(true);
+        editor.collab.kb_sync_mode = "on_save".into();
+        // Thin startup: the mirror is empty.
+        assert!(editor.kb.primary.get("note:lazy").is_none());
+
+        // Editing must lazily load the node from the store, then apply the edit.
+        editor
+            .kb_update_node("note:lazy", None, Some("edited body"), None)
+            .unwrap();
+        let n = editor
+            .kb
+            .primary
+            .get("note:lazy")
+            .expect("node lazily loaded into mirror");
+        assert_eq!(n.body, "edited body");
+    }
+
+    /// Phase D3: when the daemon does NOT host the primary, the lazy-load helper is
+    /// inert — a missing node stays missing (today's embedded behavior).
+    #[test]
+    fn kb_ensure_node_loaded_inert_without_daemon_hosting() {
+        let mut editor = Editor::new();
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store.seed_type_system().unwrap();
+        store
+            .insert_node(&mae_kb::Node::new(
+                "note:x",
+                "X",
+                mae_kb::NodeKind::Note,
+                "b",
+            ))
+            .unwrap();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        // daemon_hosts_primary is false (default).
+        editor.kb_ensure_node_loaded("note:x");
+        assert!(
+            editor.kb.primary.get("note:x").is_none(),
+            "no lazy load without daemon hosting"
+        );
     }
 
     /// Helper: a registry instance marked shared (uuid = "uuid-ct", collab_id =
