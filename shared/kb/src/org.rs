@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// A parsed link from org content with typed relationship info.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedLink {
     /// Full node ID (e.g., "concept:buffer").
     pub target: String,
@@ -30,6 +30,10 @@ pub struct ParsedLink {
     pub rel_type: String,
     /// Optional block index or heading slug (from `#fragment`).
     pub fragment: Option<String>,
+    /// Relationship weight 0–1 (ADR-030 in-text grammar, default 1.0).
+    pub weight: f64,
+    /// Relationship confidence 0–1 (default 1.0; lower for AI-inferred links).
+    pub confidence: f64,
 }
 
 /// Result of parsing an org file, including structured metadata
@@ -441,13 +445,31 @@ pub fn parse_typed_links(
                 // Strip id: prefix if present
                 let target_str = target_raw.strip_prefix("id:").unwrap_or(target_raw).trim();
 
+                let link_end = link_start + 2 + rel_end + 2; // past the closing ]]
+                                                             // Optional trailing attribute group `{w=.. c=..}` (ADR-030), immediately
+                                                             // adjacent (no space) so prose braces aren't mistaken for link metadata.
+                let (weight, confidence, next_i) = if body[link_end..].starts_with('{') {
+                    match body[link_end + 1..].find('}') {
+                        Some(close) => {
+                            let (w, c) =
+                                parse_link_attrs(&body[link_end + 1..link_end + 1 + close]);
+                            (w, c, link_end + 1 + close + 1)
+                        }
+                        None => (1.0, 1.0, link_end),
+                    }
+                } else {
+                    (1.0, 1.0, link_end)
+                };
+
                 if !target_str.is_empty() {
                     let display_text = display.unwrap_or(target_str).to_string();
-                    let link = classify_link(target_str, display_text, known_rel_types);
+                    let mut link = classify_link(target_str, display_text, known_rel_types);
+                    link.weight = weight;
+                    link.confidence = confidence;
                     out.push(link);
                 }
 
-                i = link_start + 2 + rel_end + 2;
+                i = next_i;
                 continue;
             }
         }
@@ -455,6 +477,33 @@ pub fn parse_typed_links(
         i += ch.len_utf8();
     }
     out
+}
+
+/// Parse a trailing link attribute group's body (e.g. `w=0.8 c=0.9`) → (weight,
+/// confidence), each clamped to 0–1 (ADR-030). Missing keys default to 1.0; unknown
+/// keys and malformed/non-finite values are ignored — a bad attribute group never
+/// drops the link. Accepts `w`/`weight` and `c`/`conf`/`confidence`.
+fn parse_link_attrs(s: &str) -> (f64, f64) {
+    let mut weight = 1.0;
+    let mut confidence = 1.0;
+    for tok in s.split_whitespace() {
+        let Some((k, v)) = tok.split_once('=') else {
+            continue;
+        };
+        let Ok(f) = v.trim().parse::<f64>() else {
+            continue;
+        };
+        if !f.is_finite() {
+            continue;
+        }
+        let f = f.clamp(0.0, 1.0);
+        match k.trim() {
+            "w" | "weight" => weight = f,
+            "c" | "conf" | "confidence" => confidence = f,
+            _ => {}
+        }
+    }
+    (weight, confidence)
 }
 
 /// Classify a link target into (rel_type, node_id, fragment).
@@ -485,6 +534,8 @@ fn classify_link(
                         display,
                         rel_type: candidate_type.to_string(),
                         fragment,
+                        weight: 1.0,
+                        confidence: 1.0,
                     };
                 }
             }
@@ -497,6 +548,8 @@ fn classify_link(
         display,
         rel_type: "references".to_string(),
         fragment,
+        weight: 1.0,
+        confidence: 1.0,
     }
 }
 
@@ -1391,6 +1444,46 @@ Body.
         assert_eq!(links[0].target, "concept:buffer");
         assert_eq!(links[0].display, "Buffer Management");
         assert_eq!(links[0].fragment, None);
+        // No attribute group → weight/confidence default to 1.0.
+        assert_eq!(links[0].weight, 1.0);
+        assert_eq!(links[0].confidence, 1.0);
+    }
+
+    #[test]
+    fn link_weight_and_confidence_attributes() {
+        // ADR-030: a trailing `{w=.. c=..}` group carries the relationship metadata.
+        let known: HashSet<String> = ["teaches"].iter().map(|s| s.to_string()).collect();
+        let body =
+            "see [[teaches:concept:buffer][the buffer]]{w=0.8 c=0.95} then [[concept:plain]]";
+        let links = parse_typed_links(body, "src", Some(&known));
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].rel_type, "teaches");
+        assert_eq!(links[0].target, "concept:buffer");
+        assert_eq!(links[0].display, "the buffer");
+        assert_eq!(links[0].weight, 0.8);
+        assert_eq!(links[0].confidence, 0.95);
+        // The second link has no group → defaults.
+        assert_eq!(links[1].target, "concept:plain");
+        assert_eq!(links[1].weight, 1.0);
+        assert_eq!(links[1].confidence, 1.0);
+    }
+
+    #[test]
+    fn link_attrs_clamp_and_tolerate_malformed() {
+        // Out-of-range values are clamped; a malformed group is ignored (link kept);
+        // a non-adjacent brace (after a space) is NOT consumed as link metadata.
+        let links = parse_typed_links(
+            "[[concept:x]]{w=2.0 c=-0.5} [[concept:y]]{garbage} [[concept:z]] {w=0.5}",
+            "src",
+            None,
+        );
+        assert_eq!(links.len(), 3);
+        assert_eq!(links[0].weight, 1.0); // 2.0 clamped
+        assert_eq!(links[0].confidence, 0.0); // -0.5 clamped
+        assert_eq!((links[1].weight, links[1].confidence), (1.0, 1.0)); // garbage → defaults
+        assert_eq!(links[1].target, "concept:y");
+        assert_eq!((links[2].weight, links[2].confidence), (1.0, 1.0)); // brace not adjacent
+        assert_eq!(links[2].target, "concept:z");
     }
 
     #[test]
