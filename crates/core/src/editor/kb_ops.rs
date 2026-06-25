@@ -1706,7 +1706,7 @@ impl Editor {
     /// Returns (instance_name_or_none, node) pairs, deduplicated by node ID.
     /// Local results take priority over federated.
     /// Respects `kb_search_sort` option: "relevance" (default), "activity", "alphabetical".
-    pub fn kb_federated_search(&self, query: &str) -> Vec<(Option<String>, &mae_kb::Node)> {
+    pub fn kb_federated_search(&self, query: &str) -> Vec<(Option<String>, mae_kb::Node)> {
         self.kb_federated_search_scoped(query, &mae_kb::KbScope::All)
     }
 
@@ -1721,7 +1721,7 @@ impl Editor {
         &self,
         query: &str,
         scope: &mae_kb::KbScope,
-    ) -> Vec<(Option<String>, &mae_kb::Node)> {
+    ) -> Vec<(Option<String>, mae_kb::Node)> {
         use mae_kb::KbScope;
         let use_activity = self.kb.search_sort == "activity";
         let use_alpha = self.kb.search_sort == "alphabetical";
@@ -1746,8 +1746,8 @@ impl Editor {
             }
         };
 
-        let mut results: Vec<(Option<String>, &mae_kb::Node)> = Vec::new();
-        let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut results: Vec<(Option<String>, mae_kb::Node)> = Vec::new();
+        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Does the primary participate under this scope? The primary's registry
         // name is matched for the Named case.
@@ -1765,10 +1765,27 @@ impl Editor {
         };
 
         if include_primary {
-            for id in rank(&self.kb.primary) {
-                if let Some(node) = self.kb.primary.get(&id) {
-                    if seen_ids.insert(&node.id) {
-                        results.push((None, node));
+            if self.kb.primary_thin() {
+                // Thin primary (Phase D): the in-memory mirror is empty; the daemon
+                // holds the primary. Rank + fetch owned nodes via the query layer
+                // (daemon LRU). Relevance order — the "activity" sort needs in-memory
+                // scoring, so it degrades to relevance here (honest, not silent: the
+                // daemon-hosted primary has no local activity log).
+                if let Some(ql) = self.kb.query_layer() {
+                    for hit in ql.search(query, self.kb.search_max_results) {
+                        if let Some(node) = ql.get(&hit.id) {
+                            if seen_ids.insert(node.id.clone()) {
+                                results.push((None, node));
+                            }
+                        }
+                    }
+                }
+            } else {
+                for id in rank(&self.kb.primary) {
+                    if let Some(node) = self.kb.primary.get(&id) {
+                        if seen_ids.insert(node.id.clone()) {
+                            results.push((None, node.clone()));
+                        }
                     }
                 }
             }
@@ -1789,8 +1806,8 @@ impl Editor {
             let inst_name = inst.map(|i| i.name.clone());
             for id in rank(kb) {
                 if let Some(node) = kb.get(&id) {
-                    if seen_ids.insert(&node.id) {
-                        results.push((inst_name.clone(), node));
+                    if seen_ids.insert(node.id.clone()) {
+                        results.push((inst_name.clone(), node.clone()));
                     }
                 }
             }
@@ -3170,7 +3187,7 @@ mod tests {
         let _test_dirs = with_test_dirs(&mut editor);
         editor.kb_register("TestNotes", dir.path());
 
-        let count_federated = |r: &[(Option<String>, &mae_kb::Node)]| {
+        let count_federated = |r: &[(Option<String>, mae_kb::Node)]| {
             r.iter().filter(|(name, _)| name.is_some()).count()
         };
 
@@ -3837,6 +3854,41 @@ mod tests {
             .get("note:lazy")
             .expect("node lazily loaded into mirror");
         assert_eq!(n.body, "edited body");
+    }
+
+    /// Phase D (#118): on a thin primary the in-memory mirror is empty, so federated
+    /// search must source the primary's ranked hits + owned nodes from the query layer
+    /// (daemon LRU), not from `kb.primary`. Without the routing the agenda's sibling
+    /// surface — search — silently returns nothing under a daemon-hosted primary.
+    #[test]
+    fn federated_search_routes_primary_via_query_layer_when_thin() {
+        let mut editor = Editor::new();
+        let store = std::sync::Arc::new(mae_kb::CozoKbStore::open_mem().unwrap());
+        store.seed_type_system().unwrap();
+        store
+            .insert_node(&mae_kb::Node::new(
+                "note:thin",
+                "Findable Thin Node",
+                mae_kb::NodeKind::Note,
+                "body",
+            ))
+            .unwrap();
+        // Inject the store as the daemon query layer + mark the primary thin.
+        editor
+            .kb
+            .set_daemon_query_layer(Some(std::sync::Arc::new(mae_kb::CozoQueryLayer::new(
+                store,
+            ))));
+        editor.kb.set_primary_thin(true);
+
+        // The in-memory mirror is empty...
+        assert!(editor.kb.primary.get("note:thin").is_none());
+        // ...but federated search still finds the node, routed via the query layer.
+        let results = editor.kb_federated_search("findable");
+        assert!(
+            results.iter().any(|(_, n)| n.id == "note:thin"),
+            "thin-primary search must route through the query layer"
+        );
     }
 
     /// Phase D3c: the pre-connect window — a thin mirror with the daemon read layer
