@@ -4,6 +4,7 @@
 > Protocol + scenarios: [`p2p-mesh-two-machine-testing.md`](p2p-mesh-two-machine-testing.md).
 > Sibling (do not edit): [`p2p-test-notes-alice.md`](p2p-test-notes-alice.md).
 > The v0.14 logs (`collab-test-notes-*.md`) are case-study material — do not touch.
+> Rotate resolved issues + ✅ rows into `docs/p2p-test-notes-bob.archive-YYYYMMDD.md` past ~800 lines (protocol §0.2).
 
 ## Environment (this machine)
 

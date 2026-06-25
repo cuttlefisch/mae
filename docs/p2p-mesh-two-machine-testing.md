@@ -61,6 +61,18 @@ Read this first. It is how the two machines stay in sync without a screen share.
   for, and note the log line number:
   `echo "===== S4 $(date -u +%FT%TZ) =====" >> ~/.local/share/mae/daemon.log` (or
   your `RUST_LOG` sink). Then `grep -n` from that marker.
+- **Rotate when the file gets large.** A multi-machine round can run for **a week+**
+  (the v0.14 cycle did, and its bob log hit ~2.4k lines) — a single growing file
+  becomes costly for an AI tester to re-read each turn. When your active note file
+  feels heavy (rule of thumb: **> ~800 lines**), rotate:
+  1. Move **resolved `P-NN` issues** and **completed/✅ scenario rows** into a dated
+     archive beside it — `docs/p2p-test-notes-<you>.archive-YYYYMMDD.md` — under a
+     `## Archived <date>` heading. Commit it (nothing is lost — it's still in git +
+     the archive, for the case study).
+  2. Keep the **active** file lean: the current `Environment` block, **OPEN** issues,
+     in-progress / not-yet-run scenarios, and recent handoffs.
+  This keeps each turn's read cheap without losing the audit trail. Archive files are
+  never edited again (append-only history); the active file is the working surface.
 
 ### 0.3 Information sharing — the branch is the channel
 
