@@ -4,6 +4,70 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- *(daemon)* Clients default to the daemon's actual socket path (precheck #2) ([70236ef](https://github.com/cuttlefisch/mae/commit/70236ef84f1e27c2bd22694773b710345ef2752e))
+- *(daemon)* Surface [collab.p2p] in --check-config + refresh kb-join message (precheck #1/#4) ([4d47b35](https://github.com/cuttlefisch/mae/commit/4d47b3593f9c2c5c9e64d602d51b4d86fee5734c))
+
+### Documentation
+
+- *(adr)* Discovery lifecycle, join tickets + address-spoofing threat model ([e093351](https://github.com/cuttlefisch/mae/commit/e0933513c644894874392d2c5b7b3473edcc9817))
+- *(adr)* Pin CLI/editor/Scheme/MCP action parity for the P2P workflow ([b9a43f7](https://github.com/cuttlefisch/mae/commit/b9a43f71c241d766eba0104c1d7a3135606121d9))
+- *(adr)* Pin hub + mesh coexistence as a supported invariant (ADR-025) ([0d0094c](https://github.com/cuttlefisch/mae/commit/0d0094c78734ec6ac207a46132b3ad9e302a2da4))
+- *(adr)* Pin Phase-2a mesh access mechanisms (ADR-018/025) ([5642df5](https://github.com/cuttlefisch/mae/commit/5642df53332acc8960680379aaeb14947508d5ed))
+- *(adr)* Op-log membership model + mobility + data lifecycle (P2P 2b design) ([51bb05c](https://github.com/cuttlefisch/mae/commit/51bb05c3a6da0ce1e1ddf7269c18992374d2775e))
+- *(p2p)* Status + two-machine (alice/bob) testing guide + repro helpers ([272e18e](https://github.com/cuttlefisch/mae/commit/272e18e0e7d195a00be355c1512dfa0dc6d8edaa))
+- *(adr)* Refresh status lines to reflect shipped P2P phases (accuracy pass) ([1ae1dd3](https://github.com/cuttlefisch/mae/commit/1ae1dd3301b911ed3721e9432c7519960c71ce0d))
+- *(p2p)* Prime the alice/bob note files with the S1–S13 scenario tables ([813162e](https://github.com/cuttlefisch/mae/commit/813162ea5ea33076ab2e7f21394667df53ecee69))
+- *(p2p)* Add note-file rotation to the testing protocol (week+ rounds) ([0c8d6a7](https://github.com/cuttlefisch/mae/commit/0c8d6a7ef7246883ed9dcc41ff00f5dd4d5c410c))
+- *(p2p)* Record p2p/share_kb (share-then-mint) + two-daemon validation ([3fdbf0d](https://github.com/cuttlefisch/mae/commit/3fdbf0deec5cfb6b23eeb89d4bd10b24ce298bb8))
+- *(p2p)* Note node-content seeding follow-up + --policy in the test guide ([23b73e1](https://github.com/cuttlefisch/mae/commit/23b73e16f76e4499b9136496063cb2fe33d27bc4))
+- *(p2p)* Document the two node-content paths + seeding precondition ([70e6d31](https://github.com/cuttlefisch/mae/commit/70e6d3194f456511573e6eef0e8bd5cdd46c9232))
+- *(adr)* KB data-architecture redesign — ADR-029..034 + multi-peer arch doc ([21b0802](https://github.com/cuttlefisch/mae/commit/21b08023bc1a5cb06f958ed27726c983ba3ff63f))
+- *(arch)* Fix mermaid rendering in kb-multi-peer (sections 3 + 7) ([7b1452b](https://github.com/cuttlefisch/mae/commit/7b1452b813480d6c2806991531a09a078fbb91b6))
+
+### Features
+
+- *(p2p)* JoinTicket — the shareable "magnet link" bootstrap primitive (ADR-025) ([99ce402](https://github.com/cuttlefisch/mae/commit/99ce4022abb948074dffe703de5e7c0cd40191ee))
+- *(p2p)* Mint_ticket — build a JoinTicket from the live mesh endpoint (ADR-025) ([e422ed8](https://github.com/cuttlefisch/mae/commit/e422ed871a28459f190592099cd6ba9e9e8f4055))
+- *(p2p)* P2p/mint_ticket control method on the KB socket (ADR-025, #101) ([5232260](https://github.com/cuttlefisch/mae/commit/5232260b3bed41a8f96983e2732893202cc24762))
+- *(p2p)* DaemonControl trait — single backend for the P2P share surfaces ([e3a7333](https://github.com/cuttlefisch/mae/commit/e3a73337bf437d49e2ab769432e70e7d093a7e68))
+- *(p2p)* Wire the editor's daemon control channel for P2P share ([e030b2f](https://github.com/cuttlefisch/mae/commit/e030b2f58786ffdb72005b7003aff3650a34f251))
+- *(p2p)* Kb-share-p2p across command, MCP tool & Scheme primitive ([61e2cf0](https://github.com/cuttlefisch/mae/commit/61e2cf05867d028ab11c22ec6d2529667466e0d0))
+- *(p2p)* Mae kb-share-p2p CLI — the 4th parity surface (ADR-025) ([8ae36ce](https://github.com/cuttlefisch/mae/commit/8ae36cec64d93d8069dd15247304d3dac6c43aae))
+- *(p2p)* P2p/join_ticket — accept a magnet link, record the dial target (#101) ([88c5be8](https://github.com/cuttlefisch/mae/commit/88c5be8d67fbef1c40f88eec8e7b6ed7abfb2fb1))
+- *(p2p)* Mae setup-collab --p2p — enable the daemon mesh (ADR-025/#94) ([b33bd9d](https://github.com/cuttlefisch/mae/commit/b33bd9def19910df59bde023a57636a92275f5c9))
+- *(p2p)* Per-KB TransportPolicy on KbCollectionDoc (P2a, ADR-018/025) ([5b87eef](https://github.com/cuttlefisch/mae/commit/5b87eef3521af5e5074ba7c44b5f6fdb2516e572))
+- *(p2p)* Enforce per-KB transport policy in kb_access (P2a, ADR-018/025) ([b3406ba](https://github.com/cuttlefisch/mae/commit/b3406ba48c344e9fc5476bfbf99a4f6b6fa8ab16))
+- *(p2p)* Live-reload the mesh access gate per accept (P2a/I-10) ([d1799c4](https://github.com/cuttlefisch/mae/commit/d1799c4faa2a9fa2af5de81f88738643b7b58812))
+- *(p2p)* Configurable mesh connection-trust gate (P2a, ADR-025) ([d6b0d7b](https://github.com/cuttlefisch/mae/commit/d6b0d7bf4204cfc9c96565719e8e36e9d80af0ec))
+- *(p2p)* Kb/share establishes transport exposure (P2a slice 5, ADR-018/025) ([68ca225](https://github.com/cuttlefisch/mae/commit/68ca225f35334891f04a1ef6252df17c6e098517))
+- *(p2p)* Signed membership op — the ADR-026 cryptographic foundation (P2b) ([3fa43b0](https://github.com/cuttlefisch/mae/commit/3fa43b0fd6624e15f95cf268de1aaf26afb8e6bc))
+- *(p2p)* SignedMembershipOp record — op-log entry type (P2b-2, ADR-026) ([634ecf7](https://github.com/cuttlefisch/mae/commit/634ecf71631004fa26058087bfbff156dc45daf3))
+- *(sync)* Signed membership op-log storage + two-phase append (P2P 2b-2) ([cfb04ce](https://github.com/cuttlefisch/mae/commit/cfb04ce54fe8aa64590e41599db7d60c9156b21e))
+- *(sync)* Derive_valid_members — peer-side membership replay (P2P 2b-3) ([a3c5c5a](https://github.com/cuttlefisch/mae/commit/a3c5c5aeea1472f094ec01a976375d2becef6b09))
+- *(sync)* Strong-removal resolver — concurrent membership convergence (P2P 2b-4) ([63d8630](https://github.com/cuttlefisch/mae/commit/63d8630587b0ceea21ff8570f77572f68a7d5cbd))
+- *(sync)* Inviter-removal cascade policy (P2P 2b-5) ([9d3de2d](https://github.com/cuttlefisch/mae/commit/9d3de2d821072ff507fde1d0c4b5d1295f826655))
+- *(sync)* Local blocklist + MembershipView options (P2P 2b-5b/1) ([46cf861](https://github.com/cuttlefisch/mae/commit/46cf86103f3a72c6c7c929088e134870afcd7e9c))
+- *(sync)* Quorum governance — m-of-n co-signed removal (P2P 2b-5b/2) ([a33535b](https://github.com/cuttlefisch/mae/commit/a33535b068cd7ef5cc9a8e48c502db331683c8c7))
+- *(daemon)* Sign membership ops into the op-log on add/remove (P2P 2b-6a) ([338a72f](https://github.com/cuttlefisch/mae/commit/338a72f5cd1fc2f84d0653562e8e5fb64480a4e4))
+- *(daemon)* Sign approvals into the membership op-log (P2P 2b-6b) ([ec3a712](https://github.com/cuttlefisch/mae/commit/ec3a712427ad0c4aea85b6c77c95eda419f2446a))
+- *(daemon)* Kb_access verifies membership from the signed op-log (P2P 2b-6c) ([4405d54](https://github.com/cuttlefisch/mae/commit/4405d54697b180a94f2a70686b294e3b893e1add))
+- *(daemon)* Outbound mesh dialer — dial, verify, anchor, pull a KB (P2P 2c-1) ([742fd5d](https://github.com/cuttlefisch/mae/commit/742fd5dde81dbd1a7c55350de791a819e0c0adf2))
+- *(daemon)* Background dialer drains join tickets + retries (P2P 2c-2) ([41d3867](https://github.com/cuttlefisch/mae/commit/41d38675e4c39e0c1748d7a92c9e6ed2ec6aef7f))
+- *(collab)* Kb-join — full 4-surface P2P join parity (P2P 2a) ([f7323ae](https://github.com/cuttlefisch/mae/commit/f7323ae5719de1f783cd303e38d9ac16d87162d8))
+- *(daemon)* Live mesh sync — persistent sessions + inbound apply (P2P 2c-3a) ([f399dc3](https://github.com/cuttlefisch/mae/commit/f399dc3b08e2121c6a2812cb782fd15a4a5e82c9))
+- *(daemon)* Bidirectional live mesh sync — outbound forwarding (P2P 2c-3b) ([aded14b](https://github.com/cuttlefisch/mae/commit/aded14bab82dae9c33c72f604b4e0d8cbbe7cd84))
+- *(collab)* Close the join→subscribe missed-edit window (P2P 2c-3c) ([f80ff48](https://github.com/cuttlefisch/mae/commit/f80ff4897147f475b379fbf7e6f78d4cfdfbfb8d))
+- *(p2p)* Kb-share-p2p establishes the mesh share before minting (Phase 2a) ([fdec8d8](https://github.com/cuttlefisch/mae/commit/fdec8d8fa990e7e8c6025da697d219ca461d07b4))
+- *(p2p)* Seed node content in p2p/share_kb from the daemon KB store ([8954d65](https://github.com/cuttlefisch/mae/commit/8954d657f4121098f5a4bae9639ab8ca1357441d))
+
+### Testing
+
+- *(mdns)* Real round-trip + deterministic parse coverage (replaces no-op tests) ([6c12c7c](https://github.com/cuttlefisch/mae/commit/6c12c7cc6c5559650771feac4b7e30f5889f5d6a))
+
+## [0.14.1] - 2026-06-24
+
 ### CI
 
 - Stop recompiling the mae crate for the install-artifacts step ([4af6daa](https://github.com/cuttlefisch/mae/commit/4af6daa7fd22d1528032099b959bf33398fb94bd))
@@ -26,6 +90,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(deps)* Coordinated RustCrypto realignment + rand 0.10 (#87, #51) ([b48c371](https://github.com/cuttlefisch/mae/commit/b48c37142291ade3b955d21146fba2171952290d))
+- Bump version to 0.14.1 ([e6f4398](https://github.com/cuttlefisch/mae/commit/e6f439868e0defc6fb57cdf861df939e269775b1))
 
 ### Refactor
 
