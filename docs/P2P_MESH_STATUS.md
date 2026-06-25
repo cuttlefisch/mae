@@ -45,7 +45,29 @@ blocklist, quorum) and is fully tested.
 | `kb-join` full 4-surface parity (CLI / command / Scheme / MCP) | ✅ | editor + `shared/mcp/src/daemon_client.rs` |
 | **`kb-share-p2p` establishes the share *then* mints** (`p2p/share_kb` control method) | ✅ | `daemon/src/handler.rs`, editor + CLI |
 | `kb-share-p2p` full 4-surface parity (CLI / command / Scheme / MCP) | ✅ | editor + daemon |
+| **Node content over the mesh** (two reachable paths — see below) | ✅ | `daemon/src/{handler,collab_handler,dialer}.rs` |
 | `mae setup-collab --p2p` | ✅ (prior) | `crates/mae/src/main.rs` |
+
+### How node *content* reaches a joining peer
+
+A peer pulls the collection manifest (`kbc:{kb_id}`) then each listed `kb:{node_id}`
+node doc (`dialer.rs` `kb_node_docs`). Those node docs reach the daemon two ways:
+
+1. **Editor flow (the common path, reachable today).** `:kb-share <kb>` uploads the
+   editor's node states to the daemon doc_store + manifests them; `:kb-share-p2p`
+   then *widens* that existing collection to the mesh **without clobbering the nodes
+   or membership** (B-12, `handler.rs` widen branch). The joining peer pulls full
+   content. ✅ end-to-end.
+2. **Headless/CLI flow (daemon-hosted KB).** A FRESH `p2p/share_kb` seeds node docs
+   straight from the daemon's own KB store — `resolve_kb_store` → `load_all` →
+   `KnowledgeBase::to_collection` (the same builder `kb/share` uses) → `share_doc`
+   each `kb:{node_id}`. Reaches a peer with **no editor/collab session**. Unit-tested
+   (`share_kb_seeds_node_content_from_the_store`). **Precondition:** the KB must be a
+   *registered instance* in the daemon's KB store (a KB-server scenario). A fresh
+   relay daemon has no named instances, so a bare `mae kb-share-p2p <name>` there
+   shares an empty collection (`0 nodes`) — by design: seeding from the *primary*
+   store under an arbitrary name was rejected as a privacy leak (it would expose the
+   operator's whole KB under any name).
 
 ### Deferred / next (ADR-tracked)
 
@@ -56,7 +78,8 @@ blocklist, quorum) and is fully tested.
 | E2E content encryption | A relay still sees plaintext CRDT. BeeKEM/Noise, own ADR. |
 | Key/identity rotation propagation | #92. |
 | Dedicated mesh **e2e shell script** | The in-process daemon tests already run a real two-endpoint loopback mesh; a full-process `scripts/collab-p2p-mesh-e2e.sh` is the follow-up (the two-machine manual run covers it now). |
-| **Node-content seeding in `p2p/share_kb`** | The control-socket share establishes the `kbc:` collection (owner/membership/policy/**transport exposure**) so a peer can join + converge it, but does not yet copy the KB's **node docs** from the daemon KB store into the collab doc_store. Full node content currently flows from the editor's `:kb-share` (which uploads node states over the collab session); a follow-up seeds nodes from `state.store` so the headless CLI share is content-complete too. |
+| **Headless daemon KB ingest** | The cozo-seeding path (flow 2 above) is reachable only once a KB is a *registered instance* in the daemon's KB store. There is no headless `mae-daemon ingest <org>` to populate that store without an editor — so a fully-headless content share needs this. The editor flow (flow 1) covers content for the common case today. |
+| **Editor single-command content `:kb-share-p2p`** | Today the editor's `:kb-share-p2p` (control-socket `p2p/share_kb`) doesn't upload the editor's *in-memory* nodes; for content you run `:kb-share` first (flow 1). A future variant drives `kb/share transport=p2p` over the collab session so one command uploads + exposes (the original "Slice 5b"). |
 | Data lifecycle (ADR-028) | Signed membership checkpoints + compaction/backup/rollback. |
 
 ## Architecture (one paragraph)
@@ -81,11 +104,12 @@ All green on `feat/p2p-setup-and-mesh`:
 - **`mae-sync`** — 200 lib tests, incl. 29 membership tests (op-log append/converge,
   derivation, strong-removal resolver oracles — concurrent/mutual/re-add/tiebreak,
   cascade, blocklist, quorum). Run: `cargo test -p mae-sync --lib`.
-- **daemon** — 95 lib + 42 bin tests, incl. the real two-endpoint **loopback mesh**
+- **daemon** — 95 lib + 43 bin tests, incl. the real two-endpoint **loopback mesh**
   dialer tests (pull + peer-verify, node-id-mismatch reject, **inbound live apply**,
   **outbound forward**), the signed-op-log handler tests, `kb_access` derived-path
   tests, and the **`p2p/share_kb`** control-method tests (create / widen-to-Both /
-  no-collab error). Run: `cd daemon && cargo test`.
+  no-collab error / **node-content seeding from the KB store**). Run: `cd daemon &&
+  cargo test`.
 - **mae-mcp** — broadcast `add_event_sub` (the join-subscribe-window close);
   `DaemonClient` join/mint/**share**. Run from `check` job.
 - **editor** — `kb_state` join/share backend delegation tests (`share_p2p` now

@@ -277,11 +277,12 @@ Failure mode.** Log one row per action in your note file with a probe slug.
   `--policy invite` (default) to require alice's approval in S3.
 - **Expected:** a `mae://join/…` string is printed (stdout); a share confirmation on
   stderr; the KB's transport policy now exposes p2p.
-- **Note (content):** the CLI share establishes the *collection* (membership/policy/
-  transport). For real KB **node content** (the `ZEPHYRINE` check in S2), share from
-  an editor that has `collabtest` loaded — `:kb-share collabtest` uploads the node
-  states — then `:kb-share-p2p` widens it to the mesh. (Headless node-seeding is a
-  tracked follow-up; see P2P_MESH_STATUS.md.)
+- **Note (content):** for real KB **node content** (the `ZEPHYRINE` check in S2), use
+  the editor flow — `:kb-share collabtest` uploads the node states to the daemon, then
+  `:kb-share-p2p` widens it to the mesh (the widen preserves the nodes). The CLI
+  `mae kb-share-p2p` only seeds content when `collabtest` is a *registered instance* in
+  the daemon's own KB store (a KB-server scenario); a fresh daemon shares `0 nodes`.
+  See "How node content reaches a peer" in P2P_MESH_STATUS.md.
 - **Acceptance:** ticket parses (`mae://join/` prefix); alice daemon logs the mesh
   endpoint bound; `kb_sharing_status` shows the KB as p2p-shared.
 - **Evidence:** the ticket; daemon log `P2P mesh endpoint bound`.
