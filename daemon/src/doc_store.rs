@@ -427,6 +427,48 @@ impl DocStore {
         docs.contains_key(name)
     }
 
+    /// List all KB collection ids hosted here (`kbc:{id}` → `id`), unioning the
+    /// in-memory set with the persisted set (a durable collection may be idle-
+    /// evicted from memory but still on disk). Deduped + sorted. Phase D
+    /// introspection: lets a connecting editor ask "does the daemon host my
+    /// primary KB?" before warming its own store.
+    pub async fn list_collection_ids(&self) -> Vec<String> {
+        let mut ids = std::collections::HashSet::new();
+        {
+            let docs = self.docs.read().await;
+            for name in docs.keys() {
+                if let Some(id) = name.strip_prefix("kbc:") {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+        if let Ok(names) = self.storage.list_documents().await {
+            for name in names {
+                if let Some(id) = name.strip_prefix("kbc:") {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+        let mut out: Vec<String> = ids.into_iter().collect();
+        out.sort();
+        out
+    }
+
+    /// Whether `name` exists durably — in memory OR persisted (a durable KB doc may
+    /// be idle-evicted from memory but still on disk). Unlike `has_doc` (memory
+    /// only), this avoids a false negative; used to guard a read so we don't
+    /// `get_or_create` (and thus materialize) an empty doc for a non-existent node.
+    pub async fn has_durable_doc(&self, name: &str) -> bool {
+        if self.has_doc(name).await {
+            return true;
+        }
+        self.storage
+            .list_documents()
+            .await
+            .map(|names| names.iter().any(|n| n == name))
+            .unwrap_or(false)
+    }
+
     /// Find a document by suffix matching. Returns the full doc name if exactly
     /// one document ends with `/<suffix>` or `:<suffix>`. Returns None if zero
     /// or multiple matches (ambiguous).
@@ -773,6 +815,35 @@ mod tests {
     fn test_store() -> DocStore {
         let backend = Arc::new(SqliteBackend::open_memory().unwrap());
         DocStore::new(backend, 500)
+    }
+
+    #[tokio::test]
+    async fn list_collection_ids_returns_hosted_kbc_ids() {
+        let store = test_store();
+        // Two collections + a node doc (which must NOT be counted as a collection).
+        let c1 = mae_sync::kb::KbCollectionDoc::new("default", "owner");
+        store
+            .share_doc("kbc:default", &c1.encode_state())
+            .await
+            .unwrap();
+        let c2 = mae_sync::kb::KbCollectionDoc::new("notes", "owner");
+        store
+            .share_doc("kbc:notes", &c2.encode_state())
+            .await
+            .unwrap();
+        let node = mae_sync::kb::KbNodeDoc::new("concept:x", "X", "body", &[]);
+        store
+            .share_doc("kb:concept:x", &node.encode())
+            .await
+            .unwrap();
+
+        let ids = store.list_collection_ids().await;
+        assert!(ids.contains(&"default".to_string()), "ids: {ids:?}");
+        assert!(ids.contains(&"notes".to_string()), "ids: {ids:?}");
+        assert!(
+            !ids.iter().any(|i| i.contains("concept:x")),
+            "node docs must not be listed as collections: {ids:?}"
+        );
     }
 
     #[tokio::test]

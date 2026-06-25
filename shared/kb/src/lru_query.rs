@@ -329,14 +329,104 @@ impl KbQueryLayer for LruQueryLayer {
         }
     }
 
-    fn neighborhood(&self, _id: &str, _depth: u32) -> Option<SubGraph> {
-        // Neighborhood is complex — not yet implemented via daemon RPC
-        // Falls back to None (caller can use local store if available)
-        None
+    fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
+        // Not cached — graph views are infrequent + the result is large.
+        let result = {
+            let mut client = self.client.lock().unwrap();
+            client.call("kb/neighborhood", json!({"id": id, "depth": depth}))
+        };
+        match result {
+            Ok(val) => parse_subgraph(&val),
+            Err(e) => {
+                tracing::debug!(error = %e, id, "LruQueryLayer: neighborhood failed");
+                None
+            }
+        }
+    }
+
+    fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
+        let result = {
+            let mut client = self.client.lock().unwrap();
+            client.call("kb/related", json!({"id": id, "limit": limit}))
+        };
+        match result {
+            Ok(val) => parse_related(&val),
+            Err(e) => {
+                tracing::debug!(error = %e, id, "LruQueryLayer: related failed");
+                Vec::new()
+            }
+        }
+    }
+
+    // Phase D3b: route the trait-level invalidate to the inherent cache eviction
+    // (inherent method resolution takes precedence, so this is not recursive).
+    fn invalidate(&self, id: &str) {
+        self.invalidate(id);
+    }
+
+    fn node_crdt_state(&self, id: &str) -> Option<Vec<u8>> {
+        let result = {
+            let mut client = self.client.lock().unwrap();
+            client.call("kb/node_crdt", json!({"id": id}))
+        };
+        match result {
+            Ok(val) => val
+                .get("state")
+                .and_then(|s| s.as_str())
+                .and_then(|s| mae_sync::encoding::base64_to_update(s).ok()),
+            Err(e) => {
+                tracing::debug!(error = %e, id, "LruQueryLayer: node_crdt fetch failed");
+                None
+            }
+        }
     }
 }
 
 // --- JSON parsing helpers ---
+
+/// Parse `{"nodes": [[id,title],…], "edges": [[src,dst,rel],…]}` (kb/neighborhood).
+fn parse_subgraph(val: &Value) -> Option<SubGraph> {
+    let nodes = val
+        .get("nodes")?
+        .as_array()?
+        .iter()
+        .filter_map(|n| {
+            let a = n.as_array()?;
+            Some((
+                a.first()?.as_str()?.to_string(),
+                a.get(1)?.as_str()?.to_string(),
+            ))
+        })
+        .collect();
+    let edges = val
+        .get("edges")?
+        .as_array()?
+        .iter()
+        .filter_map(|e| {
+            let a = e.as_array()?;
+            Some((
+                a.first()?.as_str()?.to_string(),
+                a.get(1)?.as_str()?.to_string(),
+                a.get(2)?.as_str()?.to_string(),
+            ))
+        })
+        .collect();
+    Some(SubGraph { nodes, edges })
+}
+
+/// Parse `[[id, score], …]` (kb/related).
+fn parse_related(val: &Value) -> Vec<(String, f64)> {
+    val.as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|pair| {
+                    let p = pair.as_array()?;
+                    Some((p.first()?.as_str()?.to_string(), p.get(1)?.as_f64()?))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 fn parse_node_from_json(val: &Value) -> Option<Node> {
     let id = val.get("id")?.as_str()?;
@@ -461,6 +551,42 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].src, "a");
         assert_eq!(links[0].dst, "b");
+    }
+
+    #[test]
+    fn parse_subgraph_basic() {
+        // Mirrors the kb/neighborhood response shape: [id,title] nodes + [src,dst,rel] edges.
+        let val = json!({
+            "nodes": [["concept:a", "A"], ["concept:b", "B"]],
+            "edges": [["concept:a", "concept:b", "references"]],
+        });
+        let sg = parse_subgraph(&val).expect("subgraph parses");
+        assert_eq!(sg.nodes.len(), 2);
+        assert_eq!(sg.nodes[0], ("concept:a".to_string(), "A".to_string()));
+        assert_eq!(sg.edges.len(), 1);
+        assert_eq!(
+            sg.edges[0],
+            (
+                "concept:a".to_string(),
+                "concept:b".to_string(),
+                "references".to_string()
+            )
+        );
+        // Empty neighborhood is a valid (Some) result, not an error.
+        let empty = parse_subgraph(&json!({"nodes": [], "edges": []})).unwrap();
+        assert!(empty.nodes.is_empty() && empty.edges.is_empty());
+    }
+
+    #[test]
+    fn parse_related_basic() {
+        // kb/related response: [[id, score], …].
+        let val = json!([["concept:a", 0.8], ["concept:b", 0.4]]);
+        let rel = parse_related(&val);
+        assert_eq!(rel.len(), 2);
+        assert_eq!(rel[0], ("concept:a".to_string(), 0.8));
+        // Malformed entries are skipped, not panicked on.
+        let messy = json!([["ok", 0.5], ["missing-score"], "not-a-pair"]);
+        assert_eq!(parse_related(&messy), vec![("ok".to_string(), 0.5)]);
     }
 
     #[test]

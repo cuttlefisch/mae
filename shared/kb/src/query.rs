@@ -71,6 +71,20 @@ pub trait KbQueryLayer: Send + Sync {
         Vec::new()
     }
 
+    /// Evict cached entries for node `id` (Phase D3b). A no-op for layers without a
+    /// cache (`CozoQueryLayer`, `FederatedQuery`); `LruQueryLayer` overrides it. The
+    /// editor calls this when a KB node changes remotely (a `sync_update` from the
+    /// daemon) so the next daemon-routed read returns fresh content, not a stale hit.
+    fn invalidate(&self, _id: &str) {}
+
+    /// Fetch a node's authoritative CRDT doc state from the daemon (Phase D3b), for
+    /// lazy edit hydration on a thin client: the editor applies this to its in-memory
+    /// mirror to obtain the node WITH its real lineage before editing. Default `None`
+    /// (no daemon / non-RPC layers); `LruQueryLayer` overrides via `kb/node_crdt`.
+    fn node_crdt_state(&self, _id: &str) -> Option<Vec<u8>> {
+        None
+    }
+
     /// Return all known namespace prefixes (e.g., "cmd:", "concept:").
     fn namespace_prefixes(&self) -> Vec<String> {
         let mut prefixes = std::collections::HashSet::new();

@@ -338,6 +338,17 @@ impl super::Editor {
 
     /// Capture a node's current local field values (for keep-mine / stash).
     fn kb_capture_fields(&self, node_id: &str) -> Option<crate::editor::ReauthorFields> {
+        // Phase D3c: prefer the query layer so a thin-mirror (daemon-hosted) node
+        // still resolves; fall back to the in-memory KB when there's no query layer.
+        if let Some(q) = self.kb.query_layer() {
+            if let Some(n) = q.get(node_id) {
+                return Some(crate::editor::ReauthorFields {
+                    title: n.title,
+                    body: n.body,
+                    tags: n.tags,
+                });
+            }
+        }
         let owner = self.kb_owner_of(node_id)?;
         let node = match &owner {
             None => self.kb.primary.get(node_id)?,

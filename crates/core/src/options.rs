@@ -490,7 +490,7 @@ impl OptionRegistry {
                     "Maximum nodes in LRU cache (0 = unbounded)",
                     OptionKind::Int, "200", Some("daemon.cache_size"), &[]),
                 opt!("daemon_default", &["daemon-default"],
-                    "When a local daemon is connected, host the primary KB on it (CRDT source of truth) instead of the editor's on-disk store (Phase D)",
+                    "EXPERIMENTAL (Phase D, ADR-029): when a local daemon hosts the primary KB, host + thin-start it on the daemon (CRDT source of truth) instead of the editor's on-disk store. Default off. Known gaps until the thin-client ADR: agenda + ranked KB search are not yet daemon-routed and read empty under a thin mirror.",
                     OptionKind::Bool, "false", Some("daemon.host_primary"), &[]),
             ],
         }

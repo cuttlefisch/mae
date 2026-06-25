@@ -152,6 +152,27 @@ fn apply_collab_launch_overrides(editor: &mut Editor, connect_addr: Option<&str>
     }
 }
 
+/// Phase D3 (ADR-029): cheap, bounded startup probe — does a local daemon already
+/// host the primary KB (`kbc:default`)? If so, the editor skips the expensive
+/// `load_all` mirror preload and resolves reads via the daemon instead (the open
+/// store still yields individual nodes lazily on edit). Fast-fails when no daemon
+/// is listening; a short read timeout bounds the worst case so startup never hangs
+/// on a wedged daemon — on any error we fall through to the full local init.
+fn probe_daemon_hosts_primary(socket: &std::path::Path) -> bool {
+    let mut client = mae_mcp::daemon_client::DaemonClient::new(socket);
+    client.set_timeout(std::time::Duration::from_millis(750));
+    if client.connect().is_err() {
+        return false;
+    }
+    match client.call("daemon/status", serde_json::json!({})) {
+        Ok(v) => v
+            .get("primary_exists")
+            .and_then(|p| p.as_bool())
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
 /// Entry point for the MAE editor.
 ///
 /// Plain `fn main()` — the tokio runtime is constructed manually so that
@@ -1172,6 +1193,27 @@ fn main() -> io::Result<()> {
                     ),
                     Err(e) => warn!(error = %e, "failed to migrate legacy KB layout"),
                 }
+                // Phase D3 (ADR-029): if opted in and a local daemon already hosts the
+                // primary KB, take the THIN startup path — skip the O(n) `load_all`
+                // mirror preload. Reads resolve via the daemon (LRU layer, wired below);
+                // the store handle is still opened so the durable pending queue, the
+                // lazy single-node load on edit, and the daemon-less fallback keep
+                // working. We force `daemon_enabled` so the read LRU is wired. On any
+                // probe failure we fall through to the full local init (unchanged).
+                let daemon_hosts_primary = editor.kb.daemon_default
+                    && probe_daemon_hosts_primary(&editor.kb.daemon_socket);
+                if daemon_hosts_primary {
+                    editor.kb.daemon_enabled = true;
+                    // Mark the mirror thin so lazy edit-hydration fires off the daemon
+                    // READ layer (available now), without waiting for the collab write
+                    // channel that `daemon_hosts_primary` requires.
+                    editor.kb.set_primary_thin(true);
+                    info!(
+                        "Phase D3: local daemon hosts the primary KB — thin startup \
+                         (skipping the mirror preload; reads via daemon, lazy load on edit)"
+                    );
+                }
+
                 // Initialize primary KB store (CozoDB) for user data.
                 let kb_root = kb_data_dir.root();
                 let cozo_path = kb_root.join("primary.cozo");
@@ -1190,19 +1232,24 @@ fn main() -> io::Result<()> {
                             warn!(error = %e, "failed to seed KB views");
                         }
 
-                        // Load user nodes from primary store into in-memory KB.
-                        match store.load_all() {
-                            Ok(user_nodes) if !user_nodes.is_empty() => {
-                                let count = user_nodes.len();
-                                for node in user_nodes {
-                                    editor.kb.primary.insert(node);
+                        // Load user nodes into the in-memory mirror — UNLESS the daemon
+                        // hosts the primary (Phase D3): skip the bulk preload; nodes load
+                        // lazily from this open store on edit (`kb_ensure_node_loaded`).
+                        if daemon_hosts_primary {
+                            info!("Phase D3: mirror preload skipped (daemon-hosted primary)");
+                        } else {
+                            match store.load_all() {
+                                Ok(user_nodes) if !user_nodes.is_empty() => {
+                                    let count = user_nodes.len();
+                                    for node in user_nodes {
+                                        editor.kb.primary.insert(node);
+                                    }
+                                    debug!(count, "loaded user KB nodes from primary store");
                                 }
-
-                                debug!(count, "loaded user KB nodes from primary store");
-                            }
-                            Ok(_) => {} // empty store, nothing to load
-                            Err(e) => {
-                                warn!(error = %e, "failed to load user nodes from primary store");
+                                Ok(_) => {} // empty store, nothing to load
+                                Err(e) => {
+                                    warn!(error = %e, "failed to load user nodes from primary store");
+                                }
                             }
                         }
 
@@ -2111,6 +2158,12 @@ impl GuiApp {
 
         // Fire app-exit hook.
         self.editor.fire_hook("app-exit");
+
+        // Phase D3b: snapshot the daemon-hosted primary mirror back to the local
+        // store so the per-edit-retired edits land in the daemon-less fallback.
+        if self.editor.kb.daemon_hosts_primary() {
+            self.editor.kb_snapshot_primary_to_store();
+        }
 
         // Persist history (skipped in clean mode)
         if !self.editor.clean_mode {
