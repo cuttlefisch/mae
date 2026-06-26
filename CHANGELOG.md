@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Features
+
+- *(sync)* Op-set pure layer — seal/merge/open for encrypted nodes (ADR-037, #146 Phase 1) (#147) ([f76ad7c](https://github.com/cuttlefisch/mae/commit/f76ad7ca15b22d5f335b58728ffba407c9908eaa))
+
+## [0.14.9] - 2026-06-26
+
+### Miscellaneous
+
+- Bump version to 0.14.9 ([c48936e](https://github.com/cuttlefisch/mae/commit/c48936ef64a62d78f08b88484bdcce76ce9fbe7e))
+
 ## [0.14.8] - 2026-06-26
 
 ### Bug Fixes
