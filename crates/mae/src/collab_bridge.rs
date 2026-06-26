@@ -1042,6 +1042,8 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             info!(address = %address, peers = peer_count, "collab connected");
             editor.collab.status = CollabStatus::Connected { peer_count };
             editor.set_status(format!("Connected to {} ({} peers)", address, peer_count));
+            // Proactively surface the daemon state (ADR-035 PR C-b).
+            editor.notify_daemon_connected(peer_count);
             // WU3: On reconnect, re-share buffers that still have CRDT state (offline recovery).
             let offline_docs: Vec<(String, Vec<u8>)> = editor
                 .buffers
@@ -1128,6 +1130,10 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
         CollabEvent::Disconnected { reason } => {
             info!(reason = %reason, "collab disconnected");
             editor.collab.status = CollabStatus::Disconnected;
+            // Proactively surface the loss BEFORE the host/share state is torn down
+            // below, so `has_active_shares()` still sees that we were syncing and
+            // raises the sticky "deferred, not lost" badge (ADR-035 PR C-b).
+            editor.notify_daemon_disconnected(&reason);
             // Phase D3b: snapshot the mirror back to the local store BEFORE dropping
             // the host flag, so this session's edits (whose per-edit write-through was
             // retired) land in the daemon-less fallback. Cheap (only touched nodes).
