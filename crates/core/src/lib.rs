@@ -86,12 +86,12 @@ pub use debug::{
 pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
     is_builtin_node, BlameEntry, BlameOverlay, CaptureState, CodeActionItem, CodeActionMenu,
-    CollabIntent, CollabStatus, CompletionItem, DaemonControl, Diagnostic, DiagnosticSeverity,
-    DiagnosticStore, DocumentHighlightRange, EditRecord, Editor, HighlightKind, HoverPopup,
-    InputLock, JoinedNode, KbCollabAction, LspLocation, LspRange, LspServerInfo, LspServerStatus,
-    PeekReferenceLocation, PeekReferencesState, PeekState, SignatureHelpInfo, SignatureHelpState,
-    SymbolOutlineEntry, SymbolOutlineState, DEFAULT_COLLAB_ADDRESS, DEFAULT_COLLAB_PORT,
-    KB_DEFAULT_NAME, KB_SYNC_MODE_DEFAULT,
+    CollabIntent, CollabStatus, CompletionItem, DaemonControl, DaemonMode, Diagnostic,
+    DiagnosticSeverity, DiagnosticStore, DocumentHighlightRange, EditRecord, Editor, HighlightKind,
+    HoverPopup, InputLock, JoinedNode, KbCollabAction, LspLocation, LspRange, LspServerInfo,
+    LspServerStatus, PeekReferenceLocation, PeekReferencesState, PeekState, SignatureHelpInfo,
+    SignatureHelpState, SymbolOutlineEntry, SymbolOutlineState, DEFAULT_COLLAB_ADDRESS,
+    DEFAULT_COLLAB_PORT, KB_DEFAULT_NAME, KB_SYNC_MODE_DEFAULT,
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;

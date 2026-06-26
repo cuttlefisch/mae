@@ -3,6 +3,7 @@ mod ai_event_handler;
 mod bootstrap;
 mod collab_bridge;
 mod config;
+mod daemon_supervisor;
 mod dap_bridge;
 mod doctor;
 #[cfg(feature = "gui")]
@@ -1441,6 +1442,16 @@ fn main() -> io::Result<()> {
         // so a restarted editor's broadcast gate + status reflect what syncs (the
         // re-subscribe to RECEIVE happens on the Connected event).
         editor.reconstruct_kb_sync_gate();
+    }
+
+    // On-demand auto-spawn (ADR-035 `daemon_mode`): if configured `on-demand` and
+    // nothing is already listening, spawn + await a co-located mae-daemon before we
+    // try to attach below. `shared` never spawns (it attaches to an externally
+    // managed daemon); `off` skips this entirely. Best-effort — a failed spawn
+    // falls through to the in-process KB (the attach below just warns + uses local).
+    if editor.kb.daemon_mode == mae_core::DaemonMode::OnDemand {
+        let socket = editor.kb.daemon_socket.clone();
+        daemon_supervisor::ensure_on_demand_daemon(editor.kb.daemon_mode, &socket);
     }
 
     // Optionally connect to mae-daemon for LRU-cached KB access.
