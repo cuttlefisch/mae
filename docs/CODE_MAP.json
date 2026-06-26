@@ -1688,6 +1688,18 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "daemon-available?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "daemon-status",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "feature-available?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "collab-synced-buffers",
       "source": "crates/scheme/src/runtime.rs"
     },

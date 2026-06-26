@@ -23,6 +23,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "kb_approve" => execute_kb_approve(editor, &call.arguments),
         "kb_set_policy" => execute_kb_set_policy(editor, &call.arguments),
         "kb_sharing_status" => execute_kb_sharing_status(editor, &call.arguments),
+        "daemon_status" => execute_daemon_status(editor, &call.arguments),
         _ => return None,
     };
     Some(result)
@@ -56,6 +57,18 @@ fn execute_kb_sharing_status(editor: &Editor, args: &Value) -> Result<String, St
         return serde_json::to_string(&entry).map_err(|e| e.to_string());
     }
     serde_json::to_string(&snapshot).map_err(|e| e.to_string())
+}
+
+/// AI-peer introspection: daemon state + per-feature availability (ADR-035
+/// capability model). The SAME data the `(daemon-status)` Scheme primitive and
+/// the editor surfaces show (CLAUDE.md #3 the AI is a peer, #7 one model). An
+/// optional `feature` id (e.g. "p2p-sharing") scopes to one feature's
+/// availability with the why + how-to-fix.
+fn execute_daemon_status(editor: &Editor, args: &Value) -> Result<String, String> {
+    if let Some(feature) = args.get("feature").and_then(|v| v.as_str()) {
+        return Ok(editor.feature_availability_json(feature));
+    }
+    Ok(editor.daemon_status_json())
 }
 
 fn execute_collab_connect(editor: &mut Editor, args: &Value) -> Result<String, String> {

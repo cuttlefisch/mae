@@ -3648,6 +3648,61 @@ impl SchemeRuntime {
             move |_args: &[Value]| Ok(Value::string(kb_sharing_json.clone())),
         );
 
+        // --- Daemon capability parity (ADR-035) ---
+        // The human (commands/buffers), the AI peer (MCP `daemon_status`), and
+        // Scheme all read the SAME capability model: is a daemon present, and is a
+        // given daemon-dependent feature available right now (with the why + fix).
+        // Re-captured each sync so it stays fresh, like kb-sharing-status above.
+
+        // (daemon-available?) — is a daemon present (control or read layer)?
+        let daemon_present = editor.daemon_available();
+        self.vm.register_fn(
+            "daemon-available?",
+            "Whether a daemon is present (control or read layer) right now.",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::Bool(daemon_present)),
+        );
+
+        // (daemon-status) — JSON: daemon state + per-feature availability.
+        let daemon_status_json = editor.daemon_status_json();
+        self.vm.register_fn(
+            "daemon-status",
+            "JSON snapshot of daemon state + per-feature availability (ADR-035 capability model).",
+            Arity::Fixed(0),
+            move |_args: &[Value]| Ok(Value::string(daemon_status_json.clone())),
+        );
+
+        // (feature-available? FEATURE-ID) — JSON availability for one feature
+        // (e.g. "p2p-sharing", "continuous-sync", "kb-hosting"). Per-id JSON is
+        // precomputed at registration; the closure looks the id up.
+        let feature_json: std::collections::HashMap<String, String> =
+            mae_core::editor::DaemonFeature::ALL
+                .iter()
+                .map(|f| (f.id().to_string(), editor.feature_availability_json(f.id())))
+                .collect();
+        let feature_ids: Vec<String> = mae_core::editor::DaemonFeature::ALL
+            .iter()
+            .map(|f| f.id().to_string())
+            .collect();
+        self.vm.register_fn(
+            "feature-available?",
+            "JSON availability of a daemon-dependent feature by id (ADR-035 capability model).",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "feature-available?")?;
+                let norm = id.trim().to_ascii_lowercase().replace('_', "-");
+                let json = feature_json.get(&norm).cloned().unwrap_or_else(|| {
+                    let known = feature_ids
+                        .iter()
+                        .map(|i| format!("\"{i}\""))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!("{{\"error\":\"unknown feature '{id}'\",\"known\":[{known}]}}")
+                });
+                Ok(Value::string(json))
+            },
+        );
+
         // (collab-synced-buffers)
         let synced_names: Vec<String> = editor.collab.synced_buffers.iter().cloned().collect();
         self.vm.register_fn(
@@ -4985,6 +5040,45 @@ mod tests {
             json.contains("\"owner\""),
             "snapshot shows the owner role: {json}"
         );
+    }
+
+    #[test]
+    fn daemon_capability_primitives_expose_the_model() {
+        // ADR-035 parity: Scheme sees the same capability model as AI + commands.
+        let mut rt = new_runtime();
+        let editor = Editor::new(); // no daemon wired → floor only
+        rt.inject_editor_state(&editor);
+
+        // (daemon-available?) → #f with no daemon.
+        assert_eq!(rt.eval("(daemon-available?)").unwrap(), "#f");
+
+        // (daemon-status) → JSON naming the mode + features.
+        let status = rt.eval("(daemon-status)").unwrap();
+        assert!(status.contains("\"mode\""), "status has mode: {status}");
+        assert!(
+            status.contains("p2p-sharing"),
+            "status enumerates features: {status}"
+        );
+
+        // (feature-available? "p2p-sharing") → unavailable + a fix, with no daemon.
+        let p2p = rt.eval("(feature-available? \"p2p-sharing\")").unwrap();
+        assert!(p2p.contains("\"requirement\":\"requires\""), "p2p: {p2p}");
+        assert!(
+            p2p.contains("\"available\":false"),
+            "p2p unavailable w/o daemon: {p2p}"
+        );
+        assert!(p2p.contains("\"fix\""), "p2p carries a fix: {p2p}");
+
+        // local-kb is the floor — always available.
+        let local = rt.eval("(feature-available? \"local-kb\")").unwrap();
+        assert!(
+            local.contains("\"available\":true"),
+            "local-kb always available: {local}"
+        );
+
+        // Unknown id → an error object naming known ids.
+        let bogus = rt.eval("(feature-available? \"nope\")").unwrap();
+        assert!(bogus.contains("\"error\""), "unknown id errors: {bogus}");
     }
 
     #[test]
