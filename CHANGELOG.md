@@ -6,6 +6,68 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(kb)* Phase D3c — pre-connect edit window + thin-mirror reroute + experimental flag ([d6db523](https://github.com/cuttlefisch/mae/commit/d6db52394f701bf5c8606165b5d781cecf7620db))
+
+### CI
+
+- Harden cargo dependency fetching against HTTP/2 network flakes (#127) ([4046116](https://github.com/cuttlefisch/mae/commit/404611669ec031480179ddbcb8a61b3175e67572))
+
+### Documentation
+
+- *(adr)* Finalize ADR-030 link grammar — orderless key-value attrs in the target ([2a2b8df](https://github.com/cuttlefisch/mae/commit/2a2b8df06ce7bbb1f0382e91a351bf5f155b1b87))
+- *(adr)* ADR-035 — editor↔daemon boundary + daemon_mode (daemon is optional) ([6e2181e](https://github.com/cuttlefisch/mae/commit/6e2181e47cff6d8ef55953de0a1ee6f6a16cd5e8))
+- *(adr)* Reconcile ADR-014 + ADR-031 with ADR-035 (daemon optional, in-process floor) (#121) ([4c08871](https://github.com/cuttlefisch/mae/commit/4c088717769a354dd9f0b05221bf220b6c8a8971))
+- *(adr)* ADR-036 signed content ops + ADR-037 E2E content encryption ([f195435](https://github.com/cuttlefisch/mae/commit/f195435485d27016d6d40692abc11d6142535b3e))
+
+### Features
+
+- *(daemon)* Durable KB docs survive idle eviction (Phase A1, ADR-032) ([bd9d7d8](https://github.com/cuttlefisch/mae/commit/bd9d7d8c6efd332daf7ad48af97bfc9acb3c6707))
+- *(daemon)* Max_documents is an LRU memory bound, not a hard cap (Phase A2, ADR-032) ([94b2714](https://github.com/cuttlefisch/mae/commit/94b27141d4a7e0cd3a9acb02b6feb30d9e92d3e6))
+- *(daemon)* Atomic KB checkpoint — content-hashed CRDT capture (Phase A3, ADR-032) ([61ef903](https://github.com/cuttlefisch/mae/commit/61ef9030a252971b240720335ce3fb6490504c95))
+- *(daemon)* KB backup / restore / export (Phase A4, ADR-032) ([4652253](https://github.com/cuttlefisch/mae/commit/4652253cf6f5c089ab2cab19df54c9a689f6002d))
+- *(daemon)* Snapshot integrity — content-hash + verify on load (Phase A5, ADR-032) ([9549243](https://github.com/cuttlefisch/mae/commit/954924305cea1380aa2915f4bed1fa2fbdea93a2))
+- *(daemon)* Projector core — node CRDT doc → cozo (Phase B1, ADR-029) ([8cbe791](https://github.com/cuttlefisch/mae/commit/8cbe791513819792430abef6a5d9f57bade1ef97))
+- *(daemon)* Live change feed — doc_store → projector (Phase B2, ADR-029) ([716ccf2](https://github.com/cuttlefisch/mae/commit/716ccf2107a621a305b240f45e308d8185665a97))
+- *(daemon)* Per-KB projection router + collection projection (Phase B3, ADR-029) ([ee2e9fd](https://github.com/cuttlefisch/mae/commit/ee2e9fd4cc7981cd18fe79f5036ad3312c160962))
+- *(daemon)* Rebuild-from-CRDT self-heal path (Phase B4, ADR-029) ([6dd595e](https://github.com/cuttlefisch/mae/commit/6dd595ee49ac1a5e7ff48e22f00ee14152b50727))
+- *(kb)* Phase D1 — host the primary KB on the daemon (route writes), ADR-029 ([787533c](https://github.com/cuttlefisch/mae/commit/787533cbb22f762ad2746ef0b9a5afd172fa2cd8))
+- *(kb)* In-text link weight/confidence grammar (Phase C1, ADR-030) ([14d2074](https://github.com/cuttlefisch/mae/commit/14d207451a1146ce1b751677a2e002feb909cdfa))
+- *(kb,daemon)* Projector wires the typed link graph from text (Phase C2, ADR-030) ([5c30fe1](https://github.com/cuttlefisch/mae/commit/5c30fe1b85758b12429d0b507cbe175613b7dc2c))
+- *(editor)* Conceal the {w= c=} link attribute group in the rendered view (Phase C3, ADR-030) ([bad7866](https://github.com/cuttlefisch/mae/commit/bad78669967f7c89c5ecf7db749530cd2d7e8ede))
+- *(kb)* ADR-030 link grammar — orderless key-value attrs in the target ([2c6f462](https://github.com/cuttlefisch/mae/commit/2c6f462e741e37d1627771761204cf8d1712be92))
+- *(kb)* Phase D1.1 — route KB create/delete through the daemon CRDT ([86dc943](https://github.com/cuttlefisch/mae/commit/86dc94308a7138e4a58f0e9389d3f324c23c9827))
+- *(kb)* Phase D2 — daemon read RPCs + introspection + LRU completion (ADR-029) ([dcd523a](https://github.com/cuttlefisch/mae/commit/dcd523aa12c059b33d070b4de1f214de49d9468b))
+- *(kb)* Phase D3a — daemon-aware thin startup + lazy edit hydration (ADR-029) ([965efc5](https://github.com/cuttlefisch/mae/commit/965efc5c1d35a263931d7ae51cc9b80d9e7c73e0))
+- *(kb)* Phase D3b (part) — invalidate the daemon read cache on remote KB edits ([fe454fc](https://github.com/cuttlefisch/mae/commit/fe454fcd769e66adec7cf1c8ed547e716bcf847f))
+- *(kb)* Phase D3b — daemon-hydration retire (true thin client, ADR-029) ([e330599](https://github.com/cuttlefisch/mae/commit/e330599245c31ba694c453f2aad18a52ac419ec5))
+- *(kb)* Close thin-client read-routing gap (agenda + search + health) [#118] (#120) ([be20639](https://github.com/cuttlefisch/mae/commit/be20639172661057be054be37ade42259a638b77))
+- *(daemon)* Report version in daemon/status (ADR-035 version-skew foundation) (#123) ([da6df06](https://github.com/cuttlefisch/mae/commit/da6df06afc154372895a848f5de693bf841df30c))
+- *(daemon)* Daemon_mode behavior-set option (off/on-demand/shared) — ADR-035 (#122) ([ea29a94](https://github.com/cuttlefisch/mae/commit/ea29a94806edfa68c48dde0305ab93a85b043378))
+- *(daemon)* Editor-side version-skew check on daemon attach (ADR-035) (#124) ([378272e](https://github.com/cuttlefisch/mae/commit/378272e12d8936ae17d561fa7643dad3d2713318))
+- *(daemon)* On-demand auto-spawn of a co-located mae-daemon (ADR-035 PR B) [#119] (#125) ([d22b67b](https://github.com/cuttlefisch/mae/commit/d22b67bc370634048b774536a4b41543913f7eed))
+- *(daemon)* DaemonRequirement capability model + human/AI/Scheme parity (ADR-035 PR C) [#119] (#126) ([7f84981](https://github.com/cuttlefisch/mae/commit/7f849811c021e5900ab3448ff8e8a6aef68866c5))
+- *(daemon)* Proactive daemon-state notifications (ADR-035 PR C-b) (#128) ([f32a257](https://github.com/cuttlefisch/mae/commit/f32a2573475c9b2d96e92aeccd9235dfb3106d32))
+- *(daemon)* Session-long supervision of the on-demand daemon (ADR-035 PR B2) (#129) ([d59bf57](https://github.com/cuttlefisch/mae/commit/d59bf572754c692c19371f405c957059d967b9b3))
+- *(sync)* Derive quorum governance from the signed op-log (ADR-026 §A4, #132) ([87630e8](https://github.com/cuttlefisch/mae/commit/87630e816e74c1fb0c21d229aab84f955083dcb1))
+
+### Testing
+
+- *(kb)* Migrate kb_graph_validation fixtures to ADR-030 link grammar ([ce971a7](https://github.com/cuttlefisch/mae/commit/ce971a76dd966f725ca8272976a9292ba1fd2de4))
+- *(sync)* Concurrent + shuffled-order quorum/governance tests (no cherry-picks) ([3d3de60](https://github.com/cuttlefisch/mae/commit/3d3de601109a570065cd7c768ee3911ede598c31))
+- *(daemon)* Reliable real-daemon lifecycle harness + e2e (ADR-035, #136) ([8db27b1](https://github.com/cuttlefisch/mae/commit/8db27b116c7a4506db16d6b432a42ace8b619332))
+
+### Build
+
+- Disable incremental compilation to stop unbounded target/ growth (#130) ([0d06c21](https://github.com/cuttlefisch/mae/commit/0d06c21784bfaa85d8b21ed6f90d3cf4f2be3b48))
+
+### Style
+
+- *(daemon)* Rustfmt the Phase A files (CI fmt fix) ([c8b254a](https://github.com/cuttlefisch/mae/commit/c8b254a289be23e6391e147b998681f127788cce))
+
+## [0.14.2] - 2026-06-25
+
+### Bug Fixes
+
 - *(daemon)* Clients default to the daemon's actual socket path (precheck #2) ([70236ef](https://github.com/cuttlefisch/mae/commit/70236ef84f1e27c2bd22694773b710345ef2752e))
 - *(daemon)* Surface [collab.p2p] in --check-config + refresh kb-join message (precheck #1/#4) ([4d47b35](https://github.com/cuttlefisch/mae/commit/4d47b3593f9c2c5c9e64d602d51b4d86fee5734c))
 
@@ -61,6 +123,10 @@ All notable changes to this project will be documented in this file.
 - *(collab)* Close the join→subscribe missed-edit window (P2P 2c-3c) ([f80ff48](https://github.com/cuttlefisch/mae/commit/f80ff4897147f475b379fbf7e6f78d4cfdfbfb8d))
 - *(p2p)* Kb-share-p2p establishes the mesh share before minting (Phase 2a) ([fdec8d8](https://github.com/cuttlefisch/mae/commit/fdec8d8fa990e7e8c6025da697d219ca461d07b4))
 - *(p2p)* Seed node content in p2p/share_kb from the daemon KB store ([8954d65](https://github.com/cuttlefisch/mae/commit/8954d657f4121098f5a4bae9639ab8ca1357441d))
+
+### Miscellaneous
+
+- Bump version to 0.14.2 ([3921d03](https://github.com/cuttlefisch/mae/commit/3921d03a9e0dc44707b84870c38314942a17f8c5))
 
 ### Testing
 
