@@ -371,6 +371,11 @@ pub async fn dispatch(
                 .iter()
                 .any(|c| c == "default" || c == "primary");
             Ok(json!({
+                // Daemon crate version — the version-skew signal an editor compares
+                // against its own before attaching (ADR-035 supervision guardrail;
+                // a co-located on-demand daemon must match the editor that spawned
+                // it). A finer build-id can layer on later if semver proves coarse.
+                "version": env!("CARGO_PKG_VERSION"),
                 "uptime_secs": uptime.as_secs(),
                 "stores": store_count,
                 "has_query_layer": has_ql,
@@ -714,6 +719,12 @@ mod tests {
         let result = dispatch("daemon/status", json!({}), &state).await.unwrap();
         assert!(result["uptime_secs"].as_u64().is_some());
         assert_eq!(result["stores"].as_u64(), Some(1));
+        // Version is reported for the editor's version-skew check (ADR-035).
+        assert_eq!(
+            result["version"].as_str(),
+            Some(env!("CARGO_PKG_VERSION")),
+            "daemon/status must report the daemon version"
+        );
     }
 
     #[tokio::test]
