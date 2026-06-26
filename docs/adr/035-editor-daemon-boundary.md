@@ -72,6 +72,14 @@ LRU). The split yields: *editor crash ≠ data loss; daemon crash ≠ editor cra
 daemon's state is WAL + CRDT, **daemon death is recoverable**, mae's deliberate divergence from Emacs's
 lose-unsaved-state daemon.
 
+**Read-routing gate (load-bearing rule).** The editor routes KB *reads* through the daemon **only when
+the daemon actually hosts the primary** (`primary_exists`) **or the editor started thin** with no local
+mirror (`should_attach_daemon_reads(primary_exists, primary_thin)`). A freshly spawned **on-demand**
+daemon serves its *own empty* `daemon-kb.cozo`, separate from the editor's `primary.cozo`; attaching its
+LRU unconditionally would **shadow the local KB with emptiness**. So daemon presence (collab / control /
+persistence) is **decoupled** from daemon read-routing (only when it hosts the KB) — otherwise reads stay
+local. This also hardens the pre-existing `daemon_enabled` path against attaching to an empty daemon.
+
 ## `daemon_mode` behavior-set
 
 One `:set-save`-persistable option `daemon_mode` (config_key `daemon.mode`); supersedes the
