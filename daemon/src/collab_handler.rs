@@ -19,7 +19,9 @@ use mae_sync::kb::{
     derive_kb_client_id, update_new_op_authors, JoinPolicy, KbCollectionDoc, Role as SyncRole,
     Transport,
 };
-use mae_sync::membership::{derive_valid_members, MembershipAction};
+use mae_sync::membership::{
+    derive_governance, derive_valid_members_governed, Governance, MembershipAction, MembershipView,
+};
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -536,7 +538,9 @@ async fn handle_doc_notification_inner(
         | "kb/add_member"
         | "kb/remove_member"
         | "kb/approve_member"
-        | "kb/set_policy" => {
+        | "kb/set_policy"
+        | "kb/set_governance"
+        | "kb/revoke" => {
             warn!(
                 session = session_id,
                 method,
@@ -720,6 +724,76 @@ async fn append_signed_membership(
     }
 }
 
+/// Append a signed strong-removal (`Revoke`) of `subject`, authored by THIS
+/// daemon's own signer — the m-of-n quorum co-sign primitive (ADR-026 §A4).
+///
+/// Unlike [`append_signed_membership`] (genesis-owner-only, owned-KB housekeeping
+/// that mirrors a legacy `member_roles` mutation), any **current `Role::Owner`**
+/// member may co-sign here: on a joined/anchored KB each admin's own daemon
+/// contributes one *distinct-author* `Revoke`, and `derive_valid_members_governed`
+/// tallies them against the `Quorum{threshold}` (a lone admin never reaches it).
+/// Op-log-only — the derived gate ([`kb_access`]) is what enforces the removal, so
+/// there is no legacy `member_roles` write. Returns `Err` (defense-in-depth behind
+/// the `kb_access(Manage)` check) if there is no signer or the signer is not a
+/// current owner / `subject` is not a current member.
+async fn append_signed_revoke(
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    session_id: u64,
+    kb_id: &str,
+    coll: &mut KbCollectionDoc,
+    subject: &str,
+) -> Result<(), String> {
+    let signer = doc_store
+        .signer()
+        .ok_or_else(|| "no signing identity (psk/none mode cannot revoke)".to_string())?;
+    if coll.oplog_head().is_none() {
+        return Err(format!("KB '{kb_id}' has no signed membership log"));
+    }
+    // The genesis trust anchor: the external anchor registered for a JOINED KB,
+    // else this daemon's own key (it IS the genesis owner of a KB it hosts).
+    let anchor = match doc_store.kb_anchor(kb_id).await {
+        Some(a) => a,
+        None => signer.public().to_bytes(),
+    };
+    let now = now_unix();
+    let ops = coll.oplog_ops();
+    let governance = derive_governance(&ops, &anchor);
+    let members =
+        derive_valid_members_governed(&ops, &anchor, now, governance, &MembershipView::default());
+    let signer_fp = signer.fingerprint();
+    if members.get(&signer_fp).map(|m| m.role) != Some(SyncRole::Owner) {
+        return Err(format!(
+            "signer is not a current owner of KB '{kb_id}'; cannot revoke"
+        ));
+    }
+    if !members.contains_key(subject) {
+        return Err(format!(
+            "'{subject}' is not a current member of KB '{kb_id}'"
+        ));
+    }
+    // Author = THIS signer (so distinct admins tally as distinct co-signatures).
+    let secret = signer.secret_bytes();
+    let pubkey = signer.public().to_bytes();
+    let epoch = coll.epoch_of(subject);
+    let op = coll.build_membership_op(
+        kb_id,
+        MembershipAction::Revoke,
+        subject,
+        None,
+        false,
+        &signer_fp,
+        now,
+        None,
+        epoch,
+    );
+    let sig = op.sign(&secret);
+    let update = coll.append_signed_op(&op, &sig, &pubkey);
+    persist_and_broadcast_collection(doc_store, broadcaster, session_id, kb_id, &update)
+        .await
+        .map(|_| ())
+}
+
 /// ADR-018 complete-mediation access engine: every KB operation routes through
 /// here. Resolves the caller's role from its cryptographic **principal** (key
 /// fingerprint — never a label), then decides by hierarchical RBAC role × the
@@ -744,9 +818,22 @@ async fn kb_access(
     // the locally-authoritative legacy `member_roles` (the daemon owns that state).
     let role = match doc_store.kb_anchor(kb_id).await {
         Some(anchor) if coll.oplog_head().is_some() => {
-            derive_valid_members(&coll.oplog_ops(), &anchor, now_unix())
-                .get(principal)
-                .map(|m| m.role)
+            // ADR-026 §A4: read the owner-declared governance from the op-log, then
+            // derive membership under it — so a `Quorum{m}` KB enforces m-of-n
+            // co-signed removals (and an Owner removed by quorum loses access here)
+            // exactly as every honest peer derives it. `SingleOwner` (the default)
+            // reduces to the prior single-author rule.
+            let ops = coll.oplog_ops();
+            let governance = derive_governance(&ops, &anchor);
+            derive_valid_members_governed(
+                &ops,
+                &anchor,
+                now_unix(),
+                governance,
+                &MembershipView::default(),
+            )
+            .get(principal)
+            .map(|m| m.role)
         }
         _ => coll.role_of(principal),
     };
@@ -2242,6 +2329,147 @@ async fn handle_doc_request_inner(
                     JsonRpcResponse::success(
                         id,
                         serde_json::json!({ "kb_id": kb_id, "policy": policy.as_str() }),
+                    )
+                }
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+            }
+        }
+
+        // ADR-026 §A4: set the KB's governance rule (`single-owner` | `quorum:N`),
+        // recorded as an owner-signed `SetGovernance` op in the membership log so
+        // every peer derives the same rule. Genesis-owner-only: changing the rule is
+        // anchored to the trust root (`derive_governance` counts only the anchored
+        // owner's op), so a non-owner daemon — which can only join, never sign as the
+        // owner — is rejected with a clear error rather than a silent no-op.
+        "kb/set_governance" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    )
+                }
+            };
+            let governance = match params["governance"]
+                .as_str()
+                .and_then(Governance::parse_spec)
+            {
+                Some(g) => g,
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error(
+                            "governance must be single-owner|quorum:N (N>=1)".to_string(),
+                        ),
+                    )
+                }
+            };
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
+                Ok(AccessDecision::Allow) => {}
+                Ok(AccessDecision::Deny(m)) | Err(m) => {
+                    return JsonRpcResponse::error(id, McpError::internal_error(m))
+                }
+                Ok(_) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
+                    )
+                }
+            }
+            let mut coll = match load_collection(doc_store, &kb_id).await {
+                Ok(c) => c,
+                Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+            };
+            // Only the genesis owner's signature counts toward `derive_governance`;
+            // reject up front so the caller never sees a false success.
+            match doc_store.signer() {
+                Some(s) if s.fingerprint() == coll.owner() && !coll.owner().is_empty() => {}
+                _ => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!(
+                            "only the owner of KB '{kb_id}' may set its governance"
+                        )),
+                    )
+                }
+            }
+            append_signed_membership(
+                doc_store,
+                broadcaster,
+                session_id,
+                &kb_id,
+                &mut coll,
+                MembershipAction::SetGovernance,
+                &governance.to_spec(),
+                None,
+                false,
+                None,
+            )
+            .await;
+            info!(session = session_id, kb_id = %kb_id, governance = %governance.to_spec(), "kb/set_governance");
+            JsonRpcResponse::success(
+                id,
+                serde_json::json!({ "kb_id": kb_id, "governance": governance.to_spec() }),
+            )
+        }
+
+        // ADR-026 §A4: strong-removal of a member, the m-of-n quorum co-sign
+        // primitive. Each current owner's daemon contributes one distinct-author
+        // `Revoke`; under `Quorum{m}` the member is removed once m distinct owners
+        // have co-signed (under `SingleOwner` a single owner's revoke suffices).
+        // Authorized at Manage (any current owner) — distinct from `kb/remove_member`
+        // (genesis-owner-only owned-KB housekeeping).
+        "kb/revoke" => {
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    )
+                }
+            };
+            let member = match params["member"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'member' field".to_string()),
+                    )
+                }
+            };
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
+                Ok(AccessDecision::Allow) => {}
+                Ok(AccessDecision::Deny(m)) | Err(m) => {
+                    return JsonRpcResponse::error(id, McpError::internal_error(m))
+                }
+                Ok(_) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
+                    )
+                }
+            }
+            let mut coll = match load_collection(doc_store, &kb_id).await {
+                Ok(c) => c,
+                Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+            };
+            match append_signed_revoke(
+                doc_store,
+                broadcaster,
+                session_id,
+                &kb_id,
+                &mut coll,
+                &member,
+            )
+            .await
+            {
+                Ok(()) => {
+                    info!(session = session_id, kb_id = %kb_id, member = %member, "kb/revoke: signed co-removal appended");
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({ "kb_id": kb_id, "member": member, "revoked": true }),
                     )
                 }
                 Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
