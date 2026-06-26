@@ -502,10 +502,11 @@ impl Editor {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "not set".to_string());
 
-        let daemon_status = if self.kb.daemon_enabled {
-            "enabled"
-        } else {
-            "disabled"
+        // Surface the configured mode (ADR-035), not just enabled/disabled.
+        let daemon_status = match self.kb.daemon_mode {
+            crate::editor::DaemonMode::Off => "off (in-process KB)",
+            crate::editor::DaemonMode::OnDemand => "on-demand",
+            crate::editor::DaemonMode::Shared => "shared",
         };
 
         format!(
