@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.7] - 2026-06-26
+## [0.14.8] - 2026-06-26
 
 ### Bug Fixes
 
 - *(mesh)* Stop the dialer's reconnect loop on a terminal reject (#133) ([910eca5](https://github.com/cuttlefisch/mae/commit/910eca55bd7af7194aba7528dab4c42a1901dc58))
+
+### Features
+
+- *(sync)* E2E content-encryption crypto + key-distribution foundation (ADR-037, #131) ([8829785](https://github.com/cuttlefisch/mae/commit/8829785ccf8188d04384cb7c8426ca3f9ff4cc21))
+
+### Miscellaneous
+
+- Bump version to 0.14.8 ([2237b9e](https://github.com/cuttlefisch/mae/commit/2237b9e26497804c27e28b172e3ee49137ca27e9))
+
+## [0.14.7] - 2026-06-26
 
 ### Miscellaneous
 
