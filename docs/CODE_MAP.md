@@ -402,6 +402,7 @@ Source: `shared/sync/src/lib.rs`
 | `encoding` | mod |
 | `kb` | mod |
 | `membership` | mod |
+| `op_set` | mod |
 | `text` | mod |
 | `wire` | mod |
 | `SyncError` | enum |
