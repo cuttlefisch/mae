@@ -28,6 +28,17 @@ pub enum DaemonRequirement {
     Requires,
 }
 
+impl DaemonRequirement {
+    /// Stable wire string for introspection (Scheme/AI parity).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DaemonRequirement::None => "none",
+            DaemonRequirement::Recommends => "recommends",
+            DaemonRequirement::Requires => "requires",
+        }
+    }
+}
+
 /// The runtime daemon state a feature's availability is evaluated against. Built
 /// from the editor's daemon/collab state ([`super::Editor::daemon_state_snapshot`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +86,21 @@ impl FeatureAvailability {
             FeatureAvailability::Unavailable { .. } => "unavailable",
         }
     }
+    /// Why a feature is degraded/unavailable (for introspection surfaces).
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            FeatureAvailability::Available => None,
+            FeatureAvailability::Degraded { reason }
+            | FeatureAvailability::Unavailable { reason, .. } => Some(reason),
+        }
+    }
+    /// How to make an unavailable feature available.
+    pub fn fix(&self) -> Option<&str> {
+        match self {
+            FeatureAvailability::Unavailable { fix, .. } => Some(fix),
+            _ => None,
+        }
+    }
 }
 
 /// Features whose behavior depends on the daemon. The set the capability model
@@ -117,6 +143,36 @@ fn enable_daemon_hint(mode: DaemonMode) -> &'static str {
 }
 
 impl DaemonFeature {
+    /// Every modeled feature, for enumerating availability (introspection).
+    pub const ALL: [DaemonFeature; 7] = [
+        DaemonFeature::LocalKb,
+        DaemonFeature::KbHosting,
+        DaemonFeature::CrossSessionPersistence,
+        DaemonFeature::MultiFrontendSharing,
+        DaemonFeature::P2pKbSharing,
+        DaemonFeature::ContinuousSharedSync,
+        DaemonFeature::MeshMembership,
+    ];
+
+    /// Stable kebab-case id used by `(feature-available? …)` + the MCP tool.
+    pub fn id(self) -> &'static str {
+        match self {
+            DaemonFeature::LocalKb => "local-kb",
+            DaemonFeature::KbHosting => "kb-hosting",
+            DaemonFeature::CrossSessionPersistence => "cross-session-persistence",
+            DaemonFeature::MultiFrontendSharing => "multi-frontend-sharing",
+            DaemonFeature::P2pKbSharing => "p2p-sharing",
+            DaemonFeature::ContinuousSharedSync => "continuous-sync",
+            DaemonFeature::MeshMembership => "mesh-membership",
+        }
+    }
+
+    /// Parse a feature id (accepts `_` or `-`), for the Scheme/AI surfaces.
+    pub fn from_id(s: &str) -> Option<DaemonFeature> {
+        let norm = s.trim().to_ascii_lowercase().replace('_', "-");
+        DaemonFeature::ALL.into_iter().find(|f| f.id() == norm)
+    }
+
     /// This feature's tier.
     pub fn requirement(self) -> DaemonRequirement {
         match self {
@@ -222,6 +278,71 @@ impl super::Editor {
     /// actionable reason instead of a silently failed call.
     pub fn feature_availability(&self, feature: DaemonFeature) -> FeatureAvailability {
         feature.availability(&self.daemon_state_snapshot())
+    }
+
+    /// JSON snapshot of daemon state + per-feature availability. The SAME data the
+    /// `(daemon-status)` Scheme primitive and the `daemon_status` MCP tool expose
+    /// (CLAUDE.md #3 the AI is a peer, #7 Scheme-accessible). `{}` on failure.
+    pub fn daemon_status_json(&self) -> String {
+        let snap = self.daemon_state_snapshot();
+        let features: Vec<serde_json::Value> = DaemonFeature::ALL
+            .into_iter()
+            .map(|f| {
+                let av = f.availability(&snap);
+                serde_json::json!({
+                    "id": f.id(),
+                    "label": f.label(),
+                    "requirement": f.requirement().as_str(),
+                    "availability": av.label(),
+                    "reason": av.reason(),
+                    "fix": av.fix(),
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "mode": snap.mode.as_str(),
+            "daemon_present": snap.daemon_present(),
+            "control_wired": snap.control_wired,
+            "read_layer_up": snap.read_layer_up,
+            "collab_connected": snap.collab_connected,
+            "hosting_primary": snap.hosting_primary,
+            "features": features,
+        })
+        .to_string()
+    }
+
+    /// Is a daemon present (control or read layer) right now? Backs
+    /// `(daemon-available?)`.
+    pub fn daemon_available(&self) -> bool {
+        self.daemon_state_snapshot().daemon_present()
+    }
+
+    /// Availability of a single feature by id, as a JSON object
+    /// (`{available, requirement, reason, fix}`) — backs `(feature-available? id)`
+    /// + the MCP tool. Returns an `error` object for an unknown id.
+    pub fn feature_availability_json(&self, feature_id: &str) -> String {
+        match DaemonFeature::from_id(feature_id) {
+            Some(f) => {
+                let av = self.feature_availability(f);
+                serde_json::json!({
+                    "id": f.id(),
+                    "requirement": f.requirement().as_str(),
+                    "available": av.is_available(),
+                    "availability": av.label(),
+                    "reason": av.reason(),
+                    "fix": av.fix(),
+                })
+                .to_string()
+            }
+            None => {
+                let known: Vec<&str> = DaemonFeature::ALL.iter().map(|f| f.id()).collect();
+                serde_json::json!({
+                    "error": format!("unknown feature '{feature_id}'"),
+                    "known": known,
+                })
+                .to_string()
+            }
+        }
     }
 }
 

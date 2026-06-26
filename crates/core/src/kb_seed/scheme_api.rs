@@ -626,6 +626,28 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
             "(kb-sharing-status)",
             "kb-sharing",
         ),
+        // Daemon capability model (ADR-035)
+        (
+            "daemon-available?",
+            "(daemon-available?)",
+            "Return #t when a daemon is present (control or read layer) right now, #f otherwise. The same capability model the AI peer (daemon_status MCP tool) and editor surfaces read.",
+            "(if (daemon-available?) (kb-share-p2p \"notes\") (set-status \"start a daemon first\"))",
+            "kb-sharing",
+        ),
+        (
+            "daemon-status",
+            "(daemon-status)",
+            "Return a JSON snapshot of daemon state + per-feature availability (mode, present/connected/hosting, and each daemon-dependent feature's requirement + availability with reason/fix). Parse it Scheme-side.",
+            "(daemon-status)",
+            "kb-sharing",
+        ),
+        (
+            "feature-available?",
+            "(feature-available? FEATURE-ID)",
+            "Return a JSON object describing a daemon-dependent feature's availability by id (e.g. \"p2p-sharing\", \"continuous-sync\", \"kb-hosting\"): {available, requirement, reason, fix}. Lets scripts gate on a Requires/Recommends feature with an actionable reason.",
+            "(feature-available? \"p2p-sharing\")",
+            "kb-sharing",
+        ),
         // Advice system
         (
             "advice-add!",

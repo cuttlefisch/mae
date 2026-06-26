@@ -581,6 +581,9 @@ Source: `shared/sync/src/lib.rs`
 | `buffer-text` | `crates/scheme/src/runtime.rs` |
 | `collab-status` | `crates/scheme/src/runtime.rs` |
 | `kb-sharing-status` | `crates/scheme/src/runtime.rs` |
+| `daemon-available?` | `crates/scheme/src/runtime.rs` |
+| `daemon-status` | `crates/scheme/src/runtime.rs` |
+| `feature-available?` | `crates/scheme/src/runtime.rs` |
 | `collab-synced-buffers` | `crates/scheme/src/runtime.rs` |
 | `collab-confirmed-shares` | `crates/scheme/src/runtime.rs` |
 | `buffer-sync-enabled?` | `crates/scheme/src/runtime.rs` |

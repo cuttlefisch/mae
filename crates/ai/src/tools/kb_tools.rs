@@ -585,6 +585,23 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             permission: Some(PermissionTier::ReadOnly),
         },
         ToolDefinition {
+            name: "daemon_status".into(),
+            description: "Introspect daemon state + per-feature availability (ADR-035 capability model): the configured daemon_mode, whether a daemon is present/connected/hosting, and for each daemon-dependent feature its requirement (none|recommends|requires) and current availability (available|degraded|unavailable) with the reason + how-to-fix. Read-only. Call this BEFORE a daemon-dependent action (e.g. P2P KB sharing, continuous shared sync) to know whether it will work and, if not, exactly what to tell the user to do.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "feature".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Optional: scope to one feature by id (e.g. 'p2p-sharing', 'continuous-sync', 'kb-hosting', 'mesh-membership', 'multi-frontend-sharing', 'cross-session-persistence'). Omit for the full snapshot of all features.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "kb_share".into(),
             description: "Share a knowledge base for collaborative editing via the connected daemon. Shares all nodes in the named KB instance (NOT the active/default KB unless you name it).".into(),
             parameters: ToolParameters {
