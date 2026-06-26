@@ -178,6 +178,13 @@ jobs:
         env:
           MAE_TCP_E2E: "1"
           RUST_LOG: "mae_daemon=debug,warn"
+      - name: Daemon-boundary e2e (real spawn / supervise / circuit-breaker)
+        # Drives the editor's on-demand spawn → readiness → daemon/status →
+        # watchdog-restart → circuit-breaker path against the REAL daemon built
+        # above (ADR-035 #136). Skips elsewhere (no MAE_DAEMON_BIN); here the daemon
+        # exists so it runs. The DaemonTestEnv harness reaps every spawn (no leaks).
+        run: MAE_DAEMON_BIN="$(pwd)/daemon/target/debug/mae-daemon" cargo test -p mae --bin mae daemon_lifecycle_e2e -- --test-threads=1 --nocapture
+        timeout-minutes: 5
       - name: KB lifecycle E2E (CozoDB)
         run: cargo test --package mae --test kb_lifecycle_e2e -- --ignored --test-threads=1 --nocapture
         timeout-minutes: 5
