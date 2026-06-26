@@ -45,9 +45,12 @@ mae/                              (repo root)
 ### Editor Process (mae)
 
 Owns all interactive state: buffers, modes, keybindings, rendering, undo/redo,
-AI conversation, LSP/DAP. Uses a **bounded LRU cache** (200 nodes ≈ 400KB)
-backed by daemon RPC for KB access when daemon is connected. Falls back to
-local sled-backed CozoDB when daemon is unavailable.
+AI conversation, LSP/DAP. The **local sled-backed embedded CozoDB is the floor**
+— a daemon-less editor runs the full KB (read/edit, agenda, search, projection)
+in-process, standalone (ADR-035, `daemon_mode=off`). When a daemon is connected,
+the editor *optimizes* KB access through a **bounded LRU cache** (200 nodes ≈
+400KB) backed by daemon RPC instead of the local store — an optimization, not a
+requirement.
 
 ### Daemon Process (mae-daemon)
 
@@ -55,7 +58,10 @@ Owns KB persistence (CozoDB+SQLite), background maintenance, file watching,
 ingestion pipeline. Communicates via JSON-RPC over Unix socket using the same
 Content-Length framing as the MCP server.
 
-The daemon is **optional** — the editor works standalone with local sled KB.
+The daemon is **optional** — the editor works standalone with the local sled KB
+as its floor (ADR-035). The daemon earns its place only by an objective value
+category — SHARED across frontends, OUTLIVES editor sessions, COORDINATES peers,
+or DURABILITY — never as a hard dependency for single-user KB/AI/IDE features.
 
 ### LRU Cache + Daemon RPC
 
