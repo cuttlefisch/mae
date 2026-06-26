@@ -641,6 +641,67 @@ pub async fn verify_content_op(
         .map_err(|e| format!("signed content op rejected: {e:?}"))
 }
 
+/// Resolve a KB's content trust anchor (the genesis owner pubkey): the registered
+/// external anchor for a JOINED KB, else this daemon's own signer key when it is the
+/// collection's owner (an OWNED KB — A is its own authority). `None` when neither
+/// holds (un-anchored + not ours), in which case the caller applies the legacy gate.
+pub async fn resolve_content_anchor(doc_store: &DocStore, kb_id: &str) -> Option<[u8; 32]> {
+    if let Some(a) = doc_store.kb_anchor(kb_id).await {
+        return Some(a);
+    }
+    let signer = doc_store.signer()?;
+    let coll = load_collection(doc_store, kb_id).await.ok()?;
+    if !coll.owner().is_empty() && coll.owner() == signer.fingerprint() {
+        Some(signer.public().to_bytes())
+    } else {
+        None
+    }
+}
+
+/// ADR-036 §D3 relay-receive verification — the single check shared by the dialer
+/// (a joiner receiving the owner's pushes) and the `sync/update` handler (the owner
+/// receiving a joiner's relayed edit). `header` is the wire `content_header` (if
+/// any). For a `kb:{node}` doc on a KB with a resolvable anchor it reconstructs the
+/// signed op (re-binding `kb_id`/`node_id` from trusted local context, so a header
+/// signed for a different node fails) and verifies the author is a current Editor+
+/// member at the op's epoch. On success returns the header to carry onward; an
+/// unsigned op errors when `require_signed` (the mesh policy) and is otherwise
+/// accepted as legacy (`Ok(None)`). Non-KB / un-anchored docs pass through (`Ok(None)`).
+pub async fn verify_relayed_content_op(
+    doc_store: &DocStore,
+    kb_id: &str,
+    doc: &str,
+    update: &[u8],
+    header: Option<&serde_json::Value>,
+    require_signed: bool,
+) -> Result<Option<serde_json::Value>, String> {
+    let Some(node_id) = doc.strip_prefix("kb:") else {
+        return Ok(None); // collection/non-KB doc — not a content op
+    };
+    let Some(anchor) = resolve_content_anchor(doc_store, kb_id).await else {
+        return Ok(None); // un-anchored + not ours — legacy gate applies
+    };
+    let header = match header {
+        Some(h) if h.get("sig").is_some() => h,
+        _ => {
+            return if require_signed {
+                Err(format!(
+                    "unsigned content op for KB '{kb_id}' node '{node_id}' rejected on the mesh (ADR-036 require-signed)"
+                ))
+            } else {
+                Ok(None) // hub migration: accept legacy unsigned
+            };
+        }
+    };
+    let mut params = header.clone();
+    params["kb_id"] = serde_json::json!(kb_id);
+    params["node_id"] = serde_json::json!(node_id);
+    let signed = SignedContentOp::from_params(&params, update.to_vec())
+        .ok_or_else(|| "malformed signed content op header".to_string())?;
+    verify_content_op(doc_store, kb_id, &anchor, &signed).await?;
+    Ok(Some(signed.header_params()))
+}
+
 /// Persist a collection update + broadcast it to other subscribers. Returns wal_seq.
 async fn persist_and_broadcast_collection(
     doc_store: &DocStore,
@@ -1042,6 +1103,32 @@ async fn handle_doc_request_inner(
             }
             let client_id = params["client_id"].as_u64();
 
+            // ADR-036 §D3 (B→A): a content op arriving over the mesh — a peer daemon's
+            // forwarded edit — is re-verified against THIS KB's membership before
+            // apply, because the relaying peer is untrusted (even a member's *daemon*
+            // could lie). The joiner's dialer sends `kb_id`; require-signed on P2p, the
+            // hub accepts legacy unsigned during migration. Same shared check as the
+            // dialer's inbound path. On success the verified header is carried onward.
+            let mut sync_content_header: Option<serde_json::Value> = None;
+            if let Some(kb_id) = params.get("kb_id").and_then(|v| v.as_str()) {
+                match verify_relayed_content_op(
+                    doc_store,
+                    kb_id,
+                    &doc_name,
+                    &update_bytes,
+                    params.get("content_header"),
+                    matches!(transport, Transport::P2p),
+                )
+                .await
+                {
+                    Ok(verified) => sync_content_header = verified,
+                    Err(e) => {
+                        warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update: SIGNED CONTENT OP REJECTED (ADR-036)");
+                        return JsonRpcResponse::error(id, McpError::internal_error(e));
+                    }
+                }
+            }
+
             match doc_store
                 .apply_update(&doc_name, &update_bytes, client_id)
                 .await
@@ -1055,7 +1142,7 @@ async fn handle_doc_request_inner(
                                 buffer_name: doc_name.clone(),
                                 update_base64: update_to_base64(&result.update),
                                 wal_seq: result.wal_seq,
-                                content_header: None,
+                                content_header: sync_content_header,
                             },
                             session_id,
                         );

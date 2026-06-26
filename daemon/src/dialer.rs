@@ -202,8 +202,12 @@ async fn peer_session(
             inbound = inbound_rx.recv() => match inbound {
                 Some(Ok(msg)) => {
                     if let Some((doc, update, header)) = parse_sync_update(&msg) {
-                        match verify_relayed_op(doc_store, &ticket.kb_id, &doc, &update, header.as_ref()).await {
-                            Ok(()) => apply_doc(doc_store, Some(broadcaster), dialer_sid, &doc, &update, header).await,
+                        // Mesh require-signed: the owner is an untrusted relay, so an
+                        // unsigned/forged/mis-attributed op is rejected (shared check).
+                        match mae_daemon::collab_handler::verify_relayed_content_op(
+                            doc_store, &ticket.kb_id, &doc, &update, header.as_ref(), true,
+                        ).await {
+                            Ok(verified) => apply_doc(doc_store, Some(broadcaster), dialer_sid, &doc, &update, verified).await,
                             Err(e) => warn!(kb_id = %ticket.kb_id, doc = %doc, reason = %e, "mesh: REJECTED relayed content op (ADR-036)"),
                         }
                     }
@@ -216,7 +220,12 @@ async fn peer_session(
             // carrying the signed authorship header so the owner re-verifies it.
             Some(event) = local_rx.recv() => {
                 if let EditorEvent::SyncUpdate { buffer_name, update_base64, content_header, .. } = event {
-                    let mut params = json!({ "doc": buffer_name, "update": update_base64 });
+                    // Include kb_id (this session's KB) so the OWNER can resolve the
+                    // KB's membership to re-verify our relayed op (ADR-036 §D3, B→A) —
+                    // sync/update otherwise carries only the bare doc name.
+                    let mut params = json!({
+                        "doc": buffer_name, "update": update_base64, "kb_id": ticket.kb_id,
+                    });
                     if let Some(h) = content_header {
                         params["content_header"] = h;
                     }
@@ -468,40 +477,6 @@ async fn apply_doc(
         }
         Err(e) => warn!(doc = %doc_name, error = %e, "mesh: failed to apply remote update"),
     }
-}
-
-/// ADR-036 §D3 on the relay path: verify a content op pushed by an (untrusted) peer
-/// daemon before applying it. `kb_id` is the dialer session's KB (so the signed
-/// `kb_id`/`node_id` the author bound are reconstructed from trusted local context,
-/// not the wire). A `kb:{node}` op on an **anchored** KB MUST carry a valid signed
-/// header whose author is a current Editor+ member at the op's epoch — an unsigned op
-/// is rejected (mesh require-signed, ADR-036 migration). Non-KB / un-anchored docs
-/// (collection sync, hub-only) pass through. Delegates the membership check to the
-/// shared `verify_content_op` so the mesh and editor→daemon paths can't drift.
-async fn verify_relayed_op(
-    doc_store: &Arc<DocStore>,
-    kb_id: &str,
-    doc: &str,
-    update: &[u8],
-    header: Option<&Value>,
-) -> Result<(), String> {
-    let Some(node_id) = doc.strip_prefix("kb:") else {
-        return Ok(()); // collection/non-KB doc — not a content op
-    };
-    let Some(anchor) = doc_store.kb_anchor(kb_id).await else {
-        return Ok(()); // un-anchored (we own it / hub-only) — legacy gate applies
-    };
-    let header = header.ok_or_else(|| {
-        format!("unsigned content op for anchored KB '{kb_id}' node '{node_id}' rejected on the mesh (ADR-036 require-signed)")
-    })?;
-    // Re-bind kb_id/node_id from the trusted session; header fields + payload from the
-    // wire. A header signed for a different node fails `verify_signed` here.
-    let mut params = header.clone();
-    params["kb_id"] = json!(kb_id);
-    params["node_id"] = json!(node_id);
-    let signed = mae_sync::content_ops::SignedContentOp::from_params(&params, update.to_vec())
-        .ok_or_else(|| "malformed signed content op header".to_string())?;
-    mae_daemon::collab_handler::verify_content_op(doc_store, kb_id, &anchor, &signed).await
 }
 
 /// Extract `(doc_name, update_bytes, content_header)` from an inbound
@@ -945,26 +920,49 @@ mod tests {
             .apply_update("kb:concept:n", &edit, None)
             .await
             .unwrap();
-        b_bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
-            buffer_name: "kb:concept:n".to_string(),
-            update_base64: update_to_base64(&edit),
-            wal_seq: 0,
-            content_header: None,
-        });
-
-        // The dialer forwards it; the owner applies it → its node state vector advances.
-        let landed = wait_until(5, || {
-            let s = Arc::clone(&a_store);
-            let before = a_before.clone();
+        let push_b = |header: Option<serde_json::Value>| {
+            b_bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
+                buffer_name: "kb:concept:n".to_string(),
+                update_base64: update_to_base64(&edit),
+                wal_seq: 0,
+                content_header: header,
+            });
+        };
+        let a_changed = |a_store: &Arc<DocStore>, a_before: &[u8]| {
+            let s = Arc::clone(a_store);
+            let before = a_before.to_vec();
             async move {
                 s.state_vector("kb:concept:n")
                     .await
                     .map(|sv| sv != before)
                     .unwrap_or(false)
             }
-        })
-        .await;
+        };
+
+        // B→A direction (ADR-036 §D3): the owner re-verifies the joiner's relayed op,
+        // because B's *daemon* is an untrusted relay. (bad) an UNSIGNED edit and one
+        // forged-signed by a NON-MEMBER are rejected by the OWNER ...
+        push_b(None);
+        let stranger = Identity::generate("stranger");
+        push_b(Some(
+            sign_content_op(&stranger, "kbo", "concept:n", 0, &edit).header_params(),
+        ));
+        assert!(
+            !wait_until(2, || a_changed(&a_store, &a_before)).await,
+            "owner must reject B's unsigned + non-member-forged relayed edits"
+        );
+
+        // ... (valid) B (a real member) signs its OWN edit → the owner verifies it
+        // against the KB membership and applies it (selective: bad rejected, good
+        // applied on the same live session).
+        push_b(Some(
+            sign_content_op(&b_id, "kbo", "concept:n", 0, &edit).header_params(),
+        ));
+        let landed = wait_until(5, || a_changed(&a_store, &a_before)).await;
         peer.abort();
-        assert!(landed, "B's local edit should reach the owner");
+        assert!(
+            landed,
+            "owner must apply B's VALID signed edit (B→A relay verified, selective)"
+        );
     }
 }
