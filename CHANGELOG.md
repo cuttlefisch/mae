@@ -2,7 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.14.5] - 2026-06-26
+
+### Features
+
+- *(sync)* Kb/node_update wire serde for SignedContentOp (ADR-036 D2/D3) ([b7c98c3](https://github.com/cuttlefisch/mae/commit/b7c98c35d2d396a77f1000eae9deeb81a7068c50))
+- *(daemon)* Verify signed content ops on apply for anchored KBs (ADR-036 D3, #91) ([d1f0a75](https://github.com/cuttlefisch/mae/commit/d1f0a75aef4ac001feb88044f42e13fcbba00769))
+- *(sync)* Kb_node_update_request_signed — editor's signed-request builder (ADR-036, #91) ([0cf28f3](https://github.com/cuttlefisch/mae/commit/0cf28f3351eda3e6333de2b83221fac7fb23d2f0))
+- *(editor)* Sign content ops on push (ADR-036 D2, #91) ([fabceed](https://github.com/cuttlefisch/mae/commit/fabceedbd78bf84755a3bf2758b0ff5fe83d5324))
+
+### Miscellaneous
+
+- Bump version to 0.14.5 ([33a2cc4](https://github.com/cuttlefisch/mae/commit/33a2cc468906e8ca1582f761d595a905d4fe6994))
+
+## [0.14.4] - 2026-06-26
 
 ### Features
 
