@@ -173,6 +173,27 @@ fn probe_daemon_hosts_primary(socket: &std::path::Path) -> bool {
     }
 }
 
+/// ADR-035 version-skew guardrail (editor side): compare the editor's own
+/// version against a daemon's reported `version` (added to `daemon/status`).
+/// Returns a human-readable warning when they differ — version skew is the #1
+/// long-lived-daemon failure mode (a daemon built from a different release can
+/// speak a drifted protocol/schema). MAE's crates are version-bumped in lockstep
+/// by the release pipeline, so an equal version means a matching build.
+///
+/// Returns `None` when the versions match or the daemon didn't report one (an
+/// older daemon predating the field — nothing to compare, so don't cry wolf).
+fn daemon_version_skew(editor_version: &str, daemon_status: &serde_json::Value) -> Option<String> {
+    let daemon_version = daemon_status.get("version").and_then(|v| v.as_str())?;
+    if daemon_version == editor_version {
+        return None;
+    }
+    Some(format!(
+        "mae-daemon version {daemon_version} differs from this editor's version \
+         {editor_version}; a version-skewed daemon may behave unexpectedly. Restart it \
+         with the matching build (the `mae-daemon` from this install) to clear this."
+    ))
+}
+
 /// Entry point for the MAE editor.
 ///
 /// Plain `fn main()` — the tokio runtime is constructed manually so that
@@ -1431,6 +1452,14 @@ fn main() -> io::Result<()> {
         match client.connect() {
             Ok(()) => {
                 info!(socket = %socket.display(), cache_size, "connected to mae-daemon");
+                // Version-skew guardrail (ADR-035): flag a mismatched daemon before
+                // we route reads through it. Best-effort — a status/version failure
+                // never blocks the attach (graceful: the daemon is still usable).
+                if let Ok(status) = client.call("daemon/status", serde_json::json!({})) {
+                    if let Some(msg) = daemon_version_skew(env!("CARGO_PKG_VERSION"), &status) {
+                        warn!("{}", msg);
+                    }
+                }
                 let lru = mae_kb::lru_query::LruQueryLayer::new(client, cache_size);
                 editor
                     .kb
@@ -3024,7 +3053,30 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_available_from_env, parse_truthy, should_use_gui};
+    use super::{daemon_version_skew, display_available_from_env, parse_truthy, should_use_gui};
+
+    // --- daemon_version_skew (ADR-035 version-pin) ------------------------
+
+    #[test]
+    fn version_skew_matches_is_silent() {
+        let status = serde_json::json!({"version": "0.14.2", "uptime_secs": 3});
+        assert_eq!(daemon_version_skew("0.14.2", &status), None);
+    }
+
+    #[test]
+    fn version_skew_mismatch_warns_with_both_versions() {
+        let status = serde_json::json!({"version": "0.13.9"});
+        let msg = daemon_version_skew("0.14.2", &status).expect("mismatch must warn");
+        assert!(msg.contains("0.13.9"), "names daemon version: {msg}");
+        assert!(msg.contains("0.14.2"), "names editor version: {msg}");
+    }
+
+    #[test]
+    fn version_skew_absent_field_is_silent() {
+        // An older daemon predating the version field — nothing to compare.
+        let status = serde_json::json!({"uptime_secs": 1});
+        assert_eq!(daemon_version_skew("0.14.2", &status), None);
+    }
 
     // --- gui_display_available policy -------------------------------------
 
