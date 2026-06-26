@@ -1102,8 +1102,15 @@ impl super::Editor {
         lines.push("================".to_string());
         lines.push(String::new());
 
-        // Try CozoDB store first (accurate typed link data), fall back to in-memory.
-        let store_report = self.kb.store.as_ref().and_then(|s| s.health_report().ok());
+        // Prefer the query layer (Phase D: the daemon's cozo under a thin primary,
+        // else the local cozo via FederatedQuery), then the local store, then the
+        // in-memory mirror. Under a thin primary the local store/mirror are empty, so
+        // routing through the query layer is what makes the report accurate.
+        let store_report = self
+            .kb
+            .query_layer()
+            .and_then(|q| q.health_report())
+            .or_else(|| self.kb.store.as_ref().and_then(|s| s.health_report().ok()));
 
         if let Some(ref report) = store_report {
             lines.push(format!(
@@ -1251,20 +1258,30 @@ impl super::Editor {
             lines.push(String::new());
         }
 
-        // Stale nodes (source file deleted — always from in-memory).
-        let stale_nodes = self.kb.primary.detect_stale_nodes();
-        lines.push(format!("Stale Nodes ({})", stale_nodes.len()));
-        lines.push("-------------------".to_string());
-        if stale_nodes.is_empty() {
-            lines.push("  (none)".to_string());
+        // Stale nodes (source file deleted — detected from the in-memory mirror).
+        // Under a thin primary the mirror is empty and there is no daemon RPC for
+        // stale detection yet, so report that honestly instead of a misleading
+        // "(none)" (no silent caps — #118 tracks the daemon-side capability).
+        if self.kb.primary_thin() {
+            lines.push("Stale Nodes".to_string());
+            lines.push("-------------------".to_string());
+            lines.push("  (not available — primary is daemon-hosted; stale".to_string());
+            lines.push("   detection has no daemon RPC yet — see #118)".to_string());
         } else {
-            for s in &stale_nodes {
-                lines.push(format!(
-                    "  {} — {} (was: {})",
-                    s.id,
-                    s.title,
-                    s.source_file.display()
-                ));
+            let stale_nodes = self.kb.primary.detect_stale_nodes();
+            lines.push(format!("Stale Nodes ({})", stale_nodes.len()));
+            lines.push("-------------------".to_string());
+            if stale_nodes.is_empty() {
+                lines.push("  (none)".to_string());
+            } else {
+                for s in &stale_nodes {
+                    lines.push(format!(
+                        "  {} — {} (was: {})",
+                        s.id,
+                        s.title,
+                        s.source_file.display()
+                    ));
+                }
             }
         }
         lines.push(String::new());

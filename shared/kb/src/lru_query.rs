@@ -380,6 +380,27 @@ impl KbQueryLayer for LruQueryLayer {
             }
         }
     }
+
+    fn todo_nodes(&self) -> Vec<Node> {
+        let result = {
+            let mut client = self.client.lock().unwrap();
+            client.call("kb/todo_nodes", json!({}))
+        };
+        match result {
+            Ok(val) => val
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| serde_json::from_value::<Node>(v.clone()).ok())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(e) => {
+                tracing::debug!(error = %e, "LruQueryLayer: todo_nodes failed");
+                Vec::new()
+            }
+        }
+    }
 }
 
 // --- JSON parsing helpers ---
