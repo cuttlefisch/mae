@@ -186,6 +186,12 @@ pub struct KbContext {
     pub daemon_socket: std::path::PathBuf,
     /// LRU cache capacity (0 = unbounded).
     pub daemon_cache_size: usize,
+    /// Consecutive failed-to-stay-up restarts of an `on-demand` daemon the editor
+    /// owns (ADR-035 PR B2 supervision). The binary's health-check watchdog bumps
+    /// this each time it finds the daemon down and re-spawns it, and resets it to 0
+    /// when a check finds the daemon healthy. A circuit-breaker stops re-spawning
+    /// once it crosses the limit, so a daemon that won't stay up can't respawn-loop.
+    pub daemon_restart_failures: u32,
 
     // --- Options ---
     /// KB option: enable/disable file watchers.
@@ -425,6 +431,7 @@ impl KbContext {
             daemon_control: None,
             daemon_socket: default_daemon_socket(),
             daemon_cache_size: 200,
+            daemon_restart_failures: 0,
             watcher_enabled: true,
             watcher_debounce_ms: 500,
             max_drain_events: 100,
