@@ -614,6 +614,7 @@ async fn establish_p2p_share(
                 buffer_name: collection_doc.to_string(),
                 update_base64: mae_sync::encoding::update_to_base64(update),
                 wal_seq: result.wal_seq,
+                content_header: None,
             });
         Ok(())
     }

@@ -55,6 +55,7 @@ pub fn drain_and_broadcast(
                 buffer_name: buffer_name.clone(),
                 update_base64: update_b64.clone(),
                 wal_seq: 0,
+                content_header: None,
             };
             bc.broadcast(&event);
 
