@@ -45,7 +45,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual
 
 # Default target: release build
 all: build
@@ -353,8 +353,20 @@ doctor:
 	printf "\nTUI-only (make build-tui) needs only rustc + cargo.\n"
 
 ## clean: remove all build artefacts
+## clean: remove ALL build artifacts (both workspaces) — forces a full rebuild
 clean:
 	$(CARGO) clean
+	cd daemon && $(CARGO) clean
+
+## clean-cache: reclaim regenerable compilation caches (both workspaces) WITHOUT
+## a full rebuild. Cargo never garbage-collects incremental session dirs from past
+## code states, so on a heavily-branched workspace they grow without bound (we hit
+## ~370 GB). Incremental is now off by default (.cargo/config.toml), but this stays
+## as the fast disk-reclaim if any incremental data is produced (e.g. via
+## CARGO_INCREMENTAL=1). Safe: pure cache, no final artifacts removed.
+clean-cache:
+	rm -rf target/*/incremental daemon/target/*/incremental
+	@echo "Reclaimed incremental caches (both workspaces)."
 
 ## manual-kb: build the pre-built manual KB (CozoDB file + SHA-256 checksum)
 manual-kb:
