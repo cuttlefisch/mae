@@ -36,11 +36,16 @@ pub fn should_attach_daemon_reads(primary_exists: bool, primary_thin: bool) -> b
     primary_exists || primary_thin
 }
 
-/// Resolve the `mae-daemon` binary: prefer the one sitting next to the running
-/// editor (a release installs them side by side, so an on-demand daemon matches
-/// the editor that spawns it — the version-pin precondition), then fall back to
-/// `PATH`. Returns a bare `mae-daemon` when the exe path can't be determined.
+/// Resolve the `mae-daemon` binary: an explicit `MAE_DAEMON_BIN` override first
+/// (ops/packaging escape hatch + how integration tests point at the built daemon),
+/// then the one sitting next to the running editor (a release installs them side
+/// by side, so an on-demand daemon matches the editor that spawns it — the
+/// version-pin precondition), then `PATH`. Returns a bare `mae-daemon` when the
+/// exe path can't be determined.
 pub fn resolve_daemon_binary() -> PathBuf {
+    if let Some(bin) = std::env::var_os("MAE_DAEMON_BIN") {
+        return PathBuf::from(bin);
+    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let sibling = dir.join("mae-daemon");
@@ -298,12 +303,242 @@ mod tests {
 
     #[test]
     fn resolve_binary_is_absolute_or_bare() {
-        // Either a real sibling path (absolute) or the bare PATH fallback.
+        // Either a real sibling path (absolute), a MAE_DAEMON_BIN override, or the
+        // bare PATH fallback.
         let b = resolve_daemon_binary();
         assert!(
             b.is_absolute() || b == Path::new("mae-daemon"),
             "unexpected daemon binary path: {}",
             b.display()
         );
+    }
+
+    // --- Real-daemon test harness (ADR-035, #136) ------------------------------
+    //
+    // The pure decision fns above are necessary but not sufficient: the audited gap
+    // was that NOTHING spawned a real daemon + attached + supervised it. The harness
+    // below drives the actual spawn → readiness → status → restart → circuit path
+    // against a REAL mae-daemon — RELIABLY. Three loose ends, all closed here:
+    //   1. ISOLATION: a temp XDG_RUNTIME_DIR gives a unique Unix socket, and a
+    //      collab-disabled config means the daemon never binds the FIXED TCP port
+    //      9473 (which would collide with the user's daemon AND our own restarts).
+    //   2. NO LEAKS: the supervisor spawns daemons DETACHED, and `daemon/shutdown`
+    //      only closes the connection (it does not stop the process) — so cleanup
+    //      cannot rely on an RPC or a Child handle. `DaemonTestEnv` REAPS every
+    //      daemon under its temp XDG on Drop (RAII), so a panicking test never
+    //      leaks a process.
+    //   3. NO RACES: it holds a process-wide env lock for its lifetime.
+    //
+    // Linux-gated (the reaper scans /proc for the temp-XDG marker); the supervisor's
+    // pure logic is covered cross-platform by the tests above. Skips cleanly when
+    // the daemon binary isn't built, so `cargo test -p mae` stays green without it;
+    // the CI Server-Client job builds the daemon + sets MAE_DAEMON_BIN to run it.
+
+    #[cfg(target_os = "linux")]
+    fn find_daemon_binary() -> Option<PathBuf> {
+        if let Ok(bin) = std::env::var("MAE_DAEMON_BIN") {
+            let p = PathBuf::from(bin);
+            return p.exists().then_some(p);
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        [
+            "daemon/target/debug/mae-daemon",
+            "daemon/target/release/mae-daemon",
+            "target/debug/mae-daemon",
+            "target/release/mae-daemon",
+        ]
+        .into_iter()
+        .map(|r| root.join(r))
+        .find(|p| p.exists())
+    }
+
+    /// Poll `daemon_responds` until it matches `want` or the deadline passes.
+    #[cfg(target_os = "linux")]
+    fn wait_for(socket: &Path, want: bool, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        loop {
+            if daemon_responds(socket, Duration::from_millis(500)) == want {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A leak-proof, fully-isolated environment for real-daemon tests: temp XDG (a
+    /// unique socket, collab disabled so no 9473 collision), `MAE_DAEMON_BIN` set,
+    /// and a `/proc` reaper that kills every daemon under this temp XDG on Drop —
+    /// so no test ever leaks a daemon, even on a panicking assertion. Holds the env
+    /// lock for its lifetime so parallel tests can't race on the process env.
+    #[cfg(target_os = "linux")]
+    struct DaemonTestEnv {
+        _tmp: tempfile::TempDir,
+        runtime: PathBuf,
+        socket: PathBuf,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl DaemonTestEnv {
+        /// `None` when the daemon binary isn't built — the caller skips cleanly.
+        fn new() -> Option<Self> {
+            let bin = find_daemon_binary()?;
+            // Tolerate a poisoned lock (a prior test panicked) — we still serialize.
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let tmp = tempfile::tempdir().unwrap();
+            let runtime = tmp.path().join("run");
+            let config = tmp.path().join("config");
+            std::fs::create_dir_all(&runtime).unwrap();
+            let cfg_dir = config.join("mae");
+            std::fs::create_dir_all(&cfg_dir).unwrap();
+            std::fs::write(cfg_dir.join("daemon.toml"), "[collab]\nenabled = false\n").unwrap();
+            std::env::set_var("XDG_RUNTIME_DIR", &runtime);
+            std::env::set_var("XDG_DATA_HOME", tmp.path().join("data"));
+            std::env::set_var("XDG_CONFIG_HOME", &config);
+            std::env::set_var("MAE_DAEMON_BIN", &bin);
+            let socket = runtime.join("mae-daemon.sock");
+            Some(Self {
+                _tmp: tmp,
+                runtime,
+                socket,
+                _lock: lock,
+            })
+        }
+
+        fn socket(&self) -> &Path {
+            &self.socket
+        }
+
+        /// Kill every process whose `XDG_RUNTIME_DIR` is this env's temp dir — the
+        /// reliable reclaim for the supervisor's DETACHED spawns (there is no Child
+        /// handle, and `daemon/shutdown` only closes the connection). Returns the
+        /// number reaped, then waits for the socket to go quiet.
+        fn reap(&self) -> usize {
+            let marker = format!("XDG_RUNTIME_DIR={}", self.runtime.display());
+            let mut killed = 0;
+            if let Ok(entries) = std::fs::read_dir("/proc") {
+                for e in entries.flatten() {
+                    let name = e.file_name();
+                    let name = name.to_string_lossy();
+                    if name.is_empty() || !name.bytes().all(|b| b.is_ascii_digit()) {
+                        continue;
+                    }
+                    // /proc/<pid>/environ is NUL-separated KEY=VALUE.
+                    if let Ok(environ) = std::fs::read(e.path().join("environ")) {
+                        if environ.split(|&b| b == 0).any(|kv| kv == marker.as_bytes()) {
+                            let _ = std::process::Command::new("kill")
+                                .args(["-9", &name])
+                                .status();
+                            killed += 1;
+                        }
+                    }
+                }
+            }
+            wait_for(&self.socket, false, Duration::from_secs(5));
+            killed
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for DaemonTestEnv {
+        fn drop(&mut self) {
+            // RAII reclaim — runs even when the test body panicked (no leaked daemon).
+            self.reap();
+            std::env::remove_var("XDG_RUNTIME_DIR");
+            std::env::remove_var("XDG_DATA_HOME");
+            std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("MAE_DAEMON_BIN");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn daemon_lifecycle_e2e_spawn_supervise_circuit() {
+        let Some(env) = DaemonTestEnv::new() else {
+            eprintln!("SKIP daemon_lifecycle_e2e: mae-daemon not built (set MAE_DAEMON_BIN)");
+            return;
+        };
+        let socket = env.socket().to_path_buf();
+        // No catch_unwind needed — `env`'s Drop reaper reclaims on panic too.
+
+        // 1. Nothing is listening on a fresh temp socket.
+        assert!(
+            !daemon_responds(&socket, Duration::from_millis(500)),
+            "starts clean"
+        );
+
+        // 2. on-demand ensure spawns a REAL daemon + reaches readiness.
+        assert!(
+            ensure_on_demand_daemon(DaemonMode::OnDemand, &socket),
+            "ensure_on_demand_daemon spawns + reaches readiness"
+        );
+        assert!(
+            wait_for(&socket, true, Duration::from_secs(10)),
+            "daemon up"
+        );
+
+        // 3. The real daemon/status answers + reports its version (the version-skew
+        //    handshake's data source — end-to-end vs the #124 unit test).
+        let mut c = mae_mcp::daemon_client::DaemonClient::new(&socket);
+        c.set_timeout(Duration::from_secs(2));
+        c.connect().expect("connect to the live daemon");
+        let status = c.call("daemon/status", serde_json::json!({})).unwrap();
+        assert!(
+            status.get("version").and_then(|v| v.as_str()).is_some(),
+            "daemon/status reports a version: {status}"
+        );
+        drop(c);
+
+        // 4. Supervision while healthy resets a prior failure count.
+        let mut editor = mae_core::Editor::new();
+        editor.kb.daemon_mode = DaemonMode::OnDemand;
+        editor.kb.daemon_socket = socket.clone();
+        editor.kb.daemon_restart_failures = 3;
+        supervise_daemon(&mut editor);
+        assert_eq!(
+            editor.kb.daemon_restart_failures, 0,
+            "healthy ⇒ counter reset"
+        );
+
+        // 5. KILL it (reliably, via the reaper) → supervision RESTARTS it (the
+        //    watchdog — the audited gap).
+        assert!(env.reap() >= 1, "reaped the running daemon");
+        assert!(
+            wait_for(&socket, false, Duration::from_secs(5)),
+            "daemon down after reap"
+        );
+        supervise_daemon(&mut editor);
+        assert_eq!(
+            editor.kb.daemon_restart_failures, 1,
+            "down ⇒ one restart counted"
+        );
+        assert!(
+            wait_for(&socket, true, Duration::from_secs(10)),
+            "watchdog re-spawned the daemon"
+        );
+
+        // 6. Circuit-breaker: at the limit, a down daemon is NOT re-spawned.
+        editor.kb.daemon_restart_failures = MAX_DAEMON_RESTARTS;
+        env.reap();
+        let notifs_before = editor.notifications.outstanding_count();
+        supervise_daemon(&mut editor);
+        assert_eq!(
+            editor.kb.daemon_restart_failures, MAX_DAEMON_RESTARTS,
+            "circuit open ⇒ no further restart attempt"
+        );
+        assert!(
+            !daemon_responds(&socket, Duration::from_millis(500)),
+            "circuit open ⇒ daemon stays down (not respawned)"
+        );
+        assert!(
+            editor.notifications.outstanding_count() > notifs_before,
+            "circuit open raises a sticky warning"
+        );
+        // `env` drops here → reaper reclaims any survivor + restores the env.
     }
 }
