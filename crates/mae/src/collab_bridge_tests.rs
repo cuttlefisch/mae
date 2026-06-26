@@ -1,5 +1,20 @@
 use super::*;
 
+/// ADR-037 §2b: a fresh, empty content-encryption context for the message-handler
+/// tests that don't exercise encryption (the temporaries live for the call). Tests
+/// that DO exercise encryption build a `KbCryptoCtx` explicitly with real state.
+macro_rules! kb_ctx {
+    () => {
+        &mut KbCryptoCtx {
+            content_keys: &mut std::collections::HashMap::new(),
+            op_sets: &mut std::collections::HashMap::new(),
+            node_to_kb: &mut std::collections::HashMap::new(),
+            seen_ops: &mut std::collections::HashMap::new(),
+            signing_identity: None,
+        }
+    };
+}
+
 #[test]
 fn fence_auto_resolution_reauthors_in_background_without_prompt() {
     // P4: collab_fence_resolution = "auto" resolves a fenced edit silently —
@@ -945,6 +960,7 @@ async fn handle_incoming_sync_update_notification_serde_format() {
         &mut pending,
         &mut shared,
         &mut std::collections::HashMap::new(),
+        kb_ctx!(),
     );
     let event = rx.try_recv().unwrap();
     match event {
@@ -982,6 +998,7 @@ async fn handle_incoming_sync_update_notification_legacy_format() {
         &mut pending,
         &mut shared,
         &mut std::collections::HashMap::new(),
+        kb_ctx!(),
     );
     let event = rx.try_recv().unwrap();
     match event {
@@ -1010,6 +1027,7 @@ async fn handle_response_list_docs() {
         &tx,
         &mut shared,
         &mut std::collections::HashMap::new(),
+        kb_ctx!(),
     );
     let event = rx.try_recv().unwrap();
     match event {
@@ -1043,6 +1061,7 @@ async fn handle_response_share_buffer() {
         &tx,
         &mut shared,
         &mut seq,
+        kb_ctx!(),
     );
     assert!(shared.contains(&"test.rs".to_string()));
     // WU2: seq_tracker should be seeded from share response wal_seq.
@@ -1082,6 +1101,7 @@ async fn handle_response_kb_join_subscribes_to_collection_and_node_docs() {
         &tx,
         &mut shared,
         &mut seq,
+        kb_ctx!(),
     );
     assert!(
         shared.contains(&"kbc:testkb".to_string()),
@@ -1116,6 +1136,7 @@ async fn handle_response_join_seeds_seq_tracker() {
         &tx,
         &mut shared,
         &mut seq,
+        kb_ctx!(),
     );
 
     // WU2: seq_tracker should be seeded from join response wal_seq.
@@ -1133,7 +1154,7 @@ async fn handle_incoming_logs_null_id_response() {
     let mut seq = std::collections::HashMap::new();
 
     let msg = r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#;
-    handle_incoming_message(msg, &tx, &mut pending, &mut shared, &mut seq);
+    handle_incoming_message(msg, &tx, &mut pending, &mut shared, &mut seq, kb_ctx!());
 
     // Should not emit any event (the warning is logged by tracing).
     assert!(rx.try_recv().is_err());
@@ -1362,6 +1383,7 @@ async fn share_failure_emits_share_failed() {
         &tx,
         &mut shared,
         &mut std::collections::HashMap::new(),
+        kb_ctx!(),
     );
 
     let event = rx.try_recv().unwrap();
@@ -1509,6 +1531,7 @@ async fn server_notification_processed_after_command_burst() {
             &mut pending,
             &mut shared,
             &mut std::collections::HashMap::new(),
+            kb_ctx!(),
         );
     }
 
@@ -1554,6 +1577,7 @@ async fn unsubscribed_doc_sync_update_ignored() {
         &mut pending,
         &mut shared,
         &mut std::collections::HashMap::new(),
+        kb_ctx!(),
     );
     // No event should be emitted for the unsubscribed doc.
     assert!(
@@ -1746,6 +1770,7 @@ async fn handle_response_save_intent_ok() {
         &tx,
         &mut shared,
         &mut std::collections::HashMap::new(),
+        kb_ctx!(),
     );
     let event = rx.try_recv().unwrap();
     match event {
@@ -1784,6 +1809,7 @@ async fn handle_response_save_intent_conflict() {
         &tx,
         &mut shared,
         &mut std::collections::HashMap::new(),
+        kb_ctx!(),
     );
     let event = rx.try_recv().unwrap();
     assert!(
@@ -1811,6 +1837,7 @@ async fn kb_join_pending_response_is_distinct() {
         &tx,
         &mut shared,
         &mut std::collections::HashMap::new(),
+        kb_ctx!(),
     );
     match rx.try_recv().unwrap() {
         CollabEvent::StatusReport { lines } => {
@@ -1839,6 +1866,7 @@ async fn kb_join_denied_response_is_distinct() {
         &tx,
         &mut shared,
         &mut std::collections::HashMap::new(),
+        kb_ctx!(),
     );
     match rx.try_recv().unwrap() {
         CollabEvent::Error { message } => {
@@ -1867,6 +1895,7 @@ async fn kb_join_success_response_emits_joined() {
         &tx,
         &mut shared,
         &mut std::collections::HashMap::new(),
+        kb_ctx!(),
     );
     assert!(
         matches!(rx.try_recv().unwrap(), CollabEvent::KbJoined { .. }),
@@ -2223,7 +2252,7 @@ async fn parse_sharer_left_notification() {
                 }
             }
         }"#;
-    handle_incoming_message(msg, &tx, &mut pending, &mut shared, &mut seq);
+    handle_incoming_message(msg, &tx, &mut pending, &mut shared, &mut seq, kb_ctx!());
     let event = rx.try_recv().unwrap();
     match event {
         CollabEvent::SharerLeft { doc_id } => {
@@ -2735,9 +2764,10 @@ fn build_kb_node_update_request_signs_with_identity_else_unsigned() {
     // Signed: the daemon's parser reconstructs the op, the signature verifies, and
     // the author + epoch + node_id are exactly what the editor stamped. (Plaintext KB:
     // no content key ⇒ the payload is the plaintext update, op-set state unchanged.)
-    let (req, op_set) =
+    let (req, op_set, op_id) =
         build_kb_node_update_request(7, "kb1", "concept:n", &update, 3, Some(&id), None, &[]);
     assert!(op_set.is_empty(), "no content key ⇒ no op-set");
+    assert!(op_id.is_none(), "no content key ⇒ nothing sealed");
     assert_eq!(req["id"], 7, "still a request (carries an id)");
     let parsed = SignedContentOp::from_params(&req["params"], update.clone())
         .expect("signed request parses");
@@ -2754,7 +2784,7 @@ fn build_kb_node_update_request_signs_with_identity_else_unsigned() {
     assert_eq!(parsed.op.node_id, "concept:n");
 
     // Unsigned (psk/none): no authorship header ⇒ the legacy path.
-    let (unsigned, _) =
+    let (unsigned, _, _) =
         build_kb_node_update_request(8, "kb1", "concept:n", &update, 3, None, None, &[]);
     assert!(
         SignedContentOp::from_params(&unsigned["params"], update).is_none(),
@@ -2779,7 +2809,7 @@ fn build_kb_node_update_request_seals_on_encrypted_kb() {
     let mut node = KbNodeDoc::new_with_client_id("n1", "", "", &[], 5);
 
     // Seal op 0 (the node structure), then a title edit — accumulating the op-set.
-    let (_r0, op_set0) = build_kb_node_update_request(
+    let (_r0, op_set0, id0) = build_kb_node_update_request(
         1,
         "kb1",
         "n1",
@@ -2789,9 +2819,11 @@ fn build_kb_node_update_request_seals_on_encrypted_kb() {
         Some(&key),
         &[],
     );
+    assert!(id0.is_some(), "sealing yields an op_id");
     let edit = node.set_title("Secret");
-    let (req, op_set) =
+    let (req, op_set, id1) =
         build_kb_node_update_request(2, "kb1", "n1", &edit, 0, Some(&id), Some(&key), &op_set0);
+    assert_ne!(id0, id1, "distinct ops get distinct ids");
 
     // The wire payload is the OUTER op-set op, signed + verifying — and is NOT the
     // plaintext edit. The op-set bytes carry no plaintext.
@@ -3148,5 +3180,327 @@ fn drain_discover_peers_does_not_send_command() {
     assert!(
         rx.try_recv().is_err(),
         "DiscoverPeers should not send any CollabCommand"
+    );
+}
+
+// ───────────────────────── ADR-037 §2b: live content-encryption wiring ─────────────
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Hand-build an encoded KB collection op-log: owner self-admit (genesis) + an admit per
+/// member, with `key` wrapped to each member when `encrypted`. Mirrors what the Phase 3
+/// daemon lifecycle will emit; here it's the fixture the network task derives from.
+fn build_e2e_collection(
+    kb_id: &str,
+    owner: &mae_mcp::identity::Identity,
+    members: &[&mae_mcp::identity::Identity],
+    key: &mae_sync::content_crypto::ContentKey,
+    encrypted: bool,
+) -> Vec<u8> {
+    use mae_sync::kb::Role;
+    use mae_sync::membership::MembershipAction;
+    let mut coll = mae_sync::kb::KbCollectionDoc::new_owned(kb_id, &owner.fingerprint(), "owner");
+    if encrypted {
+        coll.set_encryption(mae_sync::kb::Encryption::E2e);
+    }
+    // Genesis: owner self-admit (first op ⇒ prev_hash empty) — the trust anchor.
+    let g = coll.build_membership_op(
+        kb_id,
+        MembershipAction::Admit,
+        &owner.fingerprint(),
+        Some(Role::Owner),
+        true,
+        &owner.fingerprint(),
+        0,
+        None,
+        0,
+    );
+    let gsig = g.sign(&owner.secret_bytes());
+    coll.append_signed_op(&g, &gsig, &owner.public().to_bytes());
+    // Owner admits each member, wrapping the content key to them (encrypted only).
+    for (i, m) in members.iter().enumerate() {
+        let mut a = coll.build_membership_op(
+            kb_id,
+            MembershipAction::Admit,
+            &m.fingerprint(),
+            Some(Role::Editor),
+            false,
+            &owner.fingerprint(),
+            (i + 1) as u64,
+            None,
+            0,
+        );
+        if encrypted {
+            a.wrapped_key = Some(
+                mae_sync::content_crypto::wrap_to_member(key, &m.public().to_bytes()).unwrap(),
+            );
+        }
+        let asig = a.sign(&owner.secret_bytes());
+        coll.append_signed_op(&a, &asig, &owner.public().to_bytes());
+    }
+    coll.encode_state()
+}
+
+/// Derive recovers the per-KB content key for EVERY member (two distinct identities, not
+/// a single-identity tautology), excludes a non-member, and returns nothing for an
+/// unencrypted KB (the `Encryption::E2e` gate).
+#[test]
+fn derive_kb_content_key_recovers_for_members_excludes_others() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::ContentKey;
+
+    let owner = Identity::generate("owner");
+    let m1 = Identity::generate("m1");
+    let m2 = Identity::generate("m2");
+    let stranger = Identity::generate("stranger");
+    let key = ContentKey::generate();
+
+    let coll = build_e2e_collection("kb1", &owner, &[&m1, &m2], &key, true);
+    assert_eq!(
+        derive_kb_content_key(&coll, &m1)
+            .expect("m1 recovers")
+            .as_bytes(),
+        key.as_bytes(),
+        "member m1 derives the exact content key",
+    );
+    assert_eq!(
+        derive_kb_content_key(&coll, &m2)
+            .expect("m2 recovers")
+            .as_bytes(),
+        key.as_bytes(),
+        "a SECOND distinct member also derives the exact key",
+    );
+    assert!(
+        derive_kb_content_key(&coll, &stranger).is_none(),
+        "a non-member's secret opens no wrap ⇒ no key",
+    );
+    let plain = build_e2e_collection("kb1", &owner, &[&m1], &key, false);
+    assert!(
+        derive_kb_content_key(&plain, &m1).is_none(),
+        "unencrypted KB ⇒ no content key, even for an admitted member (the E2e gate)",
+    );
+}
+
+/// Full seam round-trip: the SEND side seals two CAUSALLY DEPENDENT edits into the op-set
+/// (no plaintext on the wire), and the RECEIVE seam opens + emits them so they materialize
+/// to the correct final text — exercising the causal-order apply the op-set guarantees.
+#[test]
+fn encrypted_node_seals_on_send_and_materializes_on_receive() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::ContentKey;
+    use mae_sync::kb::KbNodeDoc;
+    use std::collections::{BTreeSet, HashMap};
+    use std::sync::Arc;
+
+    let sender = Arc::new(Identity::generate("sender"));
+    let key = ContentKey::generate();
+
+    // Two successive title edits are causally dependent — the exact case yrs does NOT
+    // converge if applied out of order (the bug class the op-set layer caught).
+    let mut node = KbNodeDoc::new_with_client_id("n1", "", "", &[], 7);
+    let init = node.encode_state();
+    let e1 = node.set_title("Secret");
+    let e2 = node.set_title("SecretFinal");
+
+    let mut op_set: Vec<u8> = Vec::new();
+    let mut payloads: Vec<Vec<u8>> = Vec::new();
+    for upd in [&init, &e1, &e2] {
+        let (req, new_state, op_id) = build_kb_node_update_request(
+            1,
+            "kb1",
+            "n1",
+            upd,
+            0,
+            Some(&sender),
+            Some(&key),
+            &op_set,
+        );
+        assert!(op_id.is_some(), "each push seals an op");
+        op_set = new_state;
+        payloads.push(
+            mae_sync::encoding::base64_to_update(req["params"]["update"].as_str().unwrap())
+                .unwrap(),
+        );
+    }
+    // Nothing on the wire leaks the plaintext title.
+    for p in &payloads {
+        assert!(
+            !contains_subslice(p, b"SecretFinal") && !contains_subslice(p, b"Secret"),
+            "a sealed wire payload must not contain plaintext",
+        );
+    }
+
+    // RECEIVER holds the key for kb1 and knows n1 → kb1.
+    let (tx, mut rx) = mpsc::channel(100);
+    let mut content_keys = HashMap::new();
+    content_keys.insert("kb1".to_string(), key.clone());
+    let mut node_to_kb = HashMap::new();
+    node_to_kb.insert("n1".to_string(), "kb1".to_string());
+    let mut op_sets: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut seen: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for p in &payloads {
+        route_kb_node_update(
+            "n1",
+            p.clone(),
+            &content_keys,
+            &node_to_kb,
+            &mut op_sets,
+            &mut seen,
+            &tx,
+        );
+    }
+    drop(tx);
+
+    let mut updates = Vec::new();
+    while let Ok(evt) = rx.try_recv() {
+        if let CollabEvent::KbNodeUpdate {
+            update_bytes,
+            kb_id,
+            node_id,
+        } = evt
+        {
+            assert_eq!(kb_id, "kb1", "decrypted update is attributed to its KB");
+            assert_eq!(node_id, "n1");
+            updates.push(update_bytes);
+        }
+    }
+    assert_eq!(updates.len(), 3, "all three sealed ops open as plaintext");
+    // Materialize in the emitted (causal) order → the correct final title.
+    let mut materialized = KbNodeDoc::from_bytes(&updates[0]).expect("first op is the node state");
+    materialized.apply_update(&updates[1]).unwrap();
+    materialized.apply_update(&updates[2]).unwrap();
+    assert_eq!(
+        materialized.title(),
+        "SecretFinal",
+        "causal-ordered apply of the decrypted ops yields the final edit",
+    );
+
+    // A FRESH JOINER receives the ENTIRE accumulated op-set in ONE update (the join
+    // snapshot) — so the seam must open all three ops in causal order from a single
+    // call, not rely on them arriving pre-ordered. This is the real ordering stress.
+    let (tx2, mut rx2) = mpsc::channel(100);
+    let mut op_sets2: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut seen2: HashMap<String, BTreeSet<String>> = HashMap::new();
+    route_kb_node_update(
+        "n1",
+        op_set.clone(),
+        &content_keys,
+        &node_to_kb,
+        &mut op_sets2,
+        &mut seen2,
+        &tx2,
+    );
+    drop(tx2);
+    let mut joiner = Vec::new();
+    while let Ok(evt) = rx2.try_recv() {
+        if let CollabEvent::KbNodeUpdate { update_bytes, .. } = evt {
+            joiner.push(update_bytes);
+        }
+    }
+    assert_eq!(
+        joiner.len(),
+        3,
+        "a fresh joiner opens the whole op-set at once"
+    );
+    let mut joined = KbNodeDoc::from_bytes(&joiner[0]).expect("first opened op is the node state");
+    joined.apply_update(&joiner[1]).unwrap();
+    joined.apply_update(&joiner[2]).unwrap();
+    assert_eq!(
+        joined.title(),
+        "SecretFinal",
+        "the single-shot op-set opens in causal order (node-create before each edit)",
+    );
+}
+
+/// Without the key the receive seam passes ciphertext THROUGH verbatim (never plaintext);
+/// with the key, replaying the same payload is idempotent (`seen_ops` emits each op once).
+#[test]
+fn receive_passthrough_without_key_and_idempotent_with_key() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::ContentKey;
+    use mae_sync::kb::KbNodeDoc;
+    use std::collections::{BTreeSet, HashMap};
+    use std::sync::Arc;
+
+    let sender = Arc::new(Identity::generate("sender"));
+    let key = ContentKey::generate();
+    let mut node = KbNodeDoc::new_with_client_id("n1", "", "", &[], 7);
+    let edit = node.set_title("Secret");
+    let (req, _state, _id) =
+        build_kb_node_update_request(1, "kb1", "n1", &edit, 0, Some(&sender), Some(&key), &[]);
+    let payload =
+        mae_sync::encoding::base64_to_update(req["params"]["update"].as_str().unwrap()).unwrap();
+
+    // (a) NON-MEMBER receiver: knows the node→kb mapping but holds no key ⇒ passthrough
+    // of the exact ciphertext bytes (this is the relay/non-member's view — opaque).
+    let (tx_a, mut rx_a) = mpsc::channel(100);
+    let empty_keys: HashMap<String, ContentKey> = HashMap::new();
+    let mut node_to_kb = HashMap::new();
+    node_to_kb.insert("n1".to_string(), "kb1".to_string());
+    let mut op_sets_a: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut seen_a: HashMap<String, BTreeSet<String>> = HashMap::new();
+    route_kb_node_update(
+        "n1",
+        payload.clone(),
+        &empty_keys,
+        &node_to_kb,
+        &mut op_sets_a,
+        &mut seen_a,
+        &tx_a,
+    );
+    drop(tx_a);
+    let mut a_events = Vec::new();
+    while let Ok(evt) = rx_a.try_recv() {
+        if let CollabEvent::KbNodeUpdate { update_bytes, .. } = evt {
+            a_events.push(update_bytes);
+        }
+    }
+    assert_eq!(a_events.len(), 1, "passthrough emits the update once");
+    assert_eq!(
+        a_events[0], payload,
+        "no key ⇒ the ciphertext passes through verbatim"
+    );
+    assert!(
+        !contains_subslice(&a_events[0], b"Secret"),
+        "the relay's view is ciphertext, never plaintext",
+    );
+
+    // (b) MEMBER receiver: opens once; replaying the SAME payload emits NOTHING the
+    // second time (seen_ops dedupe — guards against re-applying the daemon's echoes).
+    let (tx_b, mut rx_b) = mpsc::channel(100);
+    let mut keys_b = HashMap::new();
+    keys_b.insert("kb1".to_string(), key.clone());
+    let mut op_sets_b: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut seen_b: HashMap<String, BTreeSet<String>> = HashMap::new();
+    route_kb_node_update(
+        "n1",
+        payload.clone(),
+        &keys_b,
+        &node_to_kb,
+        &mut op_sets_b,
+        &mut seen_b,
+        &tx_b,
+    );
+    route_kb_node_update(
+        "n1",
+        payload.clone(),
+        &keys_b,
+        &node_to_kb,
+        &mut op_sets_b,
+        &mut seen_b,
+        &tx_b,
+    );
+    drop(tx_b);
+    let mut b_count = 0;
+    while let Ok(evt) = rx_b.try_recv() {
+        if matches!(evt, CollabEvent::KbNodeUpdate { .. }) {
+            b_count += 1;
+        }
+    }
+    assert_eq!(
+        b_count, 1,
+        "a duplicated op-set update materializes its op exactly once"
     );
 }
