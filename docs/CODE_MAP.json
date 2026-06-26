@@ -996,6 +996,10 @@
           "kind": "mod"
         },
         {
+          "name": "op_set",
+          "kind": "mod"
+        },
+        {
           "name": "text",
           "kind": "mod"
         },
