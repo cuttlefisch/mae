@@ -4,6 +4,7 @@
 //! between yrs YText and ropey Rope for rendering.
 
 pub mod awareness;
+pub mod content_ops;
 pub mod encoding;
 pub mod kb;
 pub mod membership;
