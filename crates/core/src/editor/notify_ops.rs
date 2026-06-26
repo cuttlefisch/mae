@@ -421,6 +421,63 @@ impl super::Editor {
         ));
         true
     }
+
+    // --- Proactive daemon-state notifications (ADR-024 + ADR-035 PR C-b) -------
+    //
+    // Daemon connect/loss was previously only visible on-demand (the *Collab
+    // Status* buffer). These raise an attention-bus notification so the user is
+    // told proactively — and, critically, a daemon lost *while sharing* surfaces
+    // as a sticky badge that makes the divergence guarantee explicit (offline
+    // edits are deferred, not lost). All share one key so the latest state
+    // supersedes the previous (connect clears a prior disconnect).
+
+    /// Whether collaborative sharing is active right now — a daemon-hosted
+    /// primary, synced/confirmed shared buffers, or shared KB collections. Drives
+    /// how loudly a daemon disconnect is surfaced (sharing → divergence risk).
+    pub fn has_active_shares(&self) -> bool {
+        self.kb.daemon_hosts_primary()
+            || !self.collab.synced_buffers.is_empty()
+            || !self.collab.confirmed_shares.is_empty()
+            || !self.collab.kb_collection_state.is_empty()
+    }
+
+    /// Proactively surface that the daemon/collab connection came up.
+    pub fn notify_daemon_connected(&mut self, peer_count: usize) {
+        self.notify(
+            crate::notifications::Notification::success("collab", "Daemon connected")
+                .key("daemon:connection")
+                .body(format!(
+                    "Syncing with {peer_count} peer(s); shared KBs are live."
+                )),
+        );
+    }
+
+    /// Proactively surface that the daemon/collab connection went down. When
+    /// sharing/hosting was active, warn loudly (sticky → badge) and state the
+    /// guarantee explicitly: offline edits stay durable and converge on reconnect
+    /// — deferred, not lost (the user's divergence concern). Otherwise a low-key
+    /// info toast (working locally is the floor, not an error).
+    pub fn notify_daemon_disconnected(&mut self, reason: &str) {
+        if self.has_active_shares() {
+            self.notify(
+                crate::notifications::Notification::warning(
+                    "collab",
+                    "Daemon lost — shared KBs not syncing",
+                )
+                .key("daemon:connection")
+                .body(format!(
+                    "Disconnected ({reason}). Your edits stay durable and will \
+                     converge on reconnect — deferred, not lost."
+                )),
+            );
+        } else {
+            self.notify(
+                crate::notifications::Notification::info("collab", "Daemon disconnected")
+                    .key("daemon:connection")
+                    .body(format!("Disconnected ({reason}). Working locally.")),
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -435,6 +492,50 @@ mod tests {
         ed.notify(Notification::info("test", "hello world"));
         assert_eq!(ed.status_msg, "hello world");
         assert_eq!(ed.notifications.outstanding_count(), 0);
+    }
+
+    #[test]
+    fn daemon_disconnect_without_shares_is_low_key() {
+        // No sharing active → an info toast, not a sticky badge (working locally
+        // is the floor, not an error).
+        let mut ed = Editor::new();
+        assert!(!ed.has_active_shares());
+        ed.notify_daemon_disconnected("server closed");
+        assert_eq!(
+            ed.notifications.outstanding_count(),
+            0,
+            "info is not sticky"
+        );
+        assert_eq!(ed.notifications.badge_severity(), None);
+    }
+
+    #[test]
+    fn daemon_disconnect_while_sharing_raises_sticky_badge() {
+        // Sharing active → a sticky Warning that shows in the attention badge and
+        // states the divergence guarantee (deferred, not lost).
+        let mut ed = Editor::new();
+        ed.collab.synced_buffers.insert("notes.org".to_string());
+        assert!(ed.has_active_shares());
+        ed.notify_daemon_disconnected("network lost");
+        assert_eq!(ed.notifications.outstanding_count(), 1, "warning is sticky");
+        assert_eq!(
+            ed.notifications.badge_severity(),
+            Some(Severity::Warning),
+            "lost-while-sharing shows in the badge"
+        );
+    }
+
+    #[test]
+    fn daemon_connect_supersedes_a_prior_disconnect() {
+        // Same key → reconnect clears the disconnect badge (one connection state).
+        let mut ed = Editor::new();
+        ed.collab.synced_buffers.insert("notes.org".to_string());
+        ed.notify_daemon_disconnected("blip");
+        assert_eq!(ed.notifications.outstanding_count(), 1);
+        ed.notify_daemon_connected(2);
+        // Success is not sticky, and it shares the key, so the badge clears.
+        assert_eq!(ed.notifications.outstanding_count(), 0);
+        assert_eq!(ed.notifications.badge_severity(), None);
     }
 
     #[test]
