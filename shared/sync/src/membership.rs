@@ -33,6 +33,11 @@ pub enum MembershipAction {
     SetRole,
     /// Revoke an outstanding invite / admission for `subject`.
     Revoke,
+    /// Set the KB's [`Governance`] (ADR-026 §A4). Owner-authored; `subject` carries
+    /// the governance spec (see [`Governance::to_spec`]), not a principal. Inert to
+    /// membership derivation (it admits/removes no one — `build_members` skips
+    /// non-`Admit` ops); read separately by [`derive_governance`].
+    SetGovernance,
 }
 
 impl MembershipAction {
@@ -42,6 +47,7 @@ impl MembershipAction {
             MembershipAction::Remove => "remove",
             MembershipAction::SetRole => "set_role",
             MembershipAction::Revoke => "revoke",
+            MembershipAction::SetGovernance => "set_governance",
         }
     }
     pub fn parse(s: &str) -> Option<MembershipAction> {
@@ -50,6 +56,7 @@ impl MembershipAction {
             "remove" => Some(MembershipAction::Remove),
             "set_role" => Some(MembershipAction::SetRole),
             "revoke" => Some(MembershipAction::Revoke),
+            "set_governance" => Some(MembershipAction::SetGovernance),
             _ => None,
         }
     }
@@ -271,6 +278,35 @@ pub enum Governance {
     /// (each a `Revoke`/`Remove` op for the same target); a lone compromised admin
     /// cannot unilaterally remove another. `m`-of-`n` over the `Role::Owner` set.
     Quorum { threshold: usize },
+}
+
+impl Governance {
+    /// Canonical spec string carried in a `SetGovernance` op's `subject` field (so
+    /// it is signed + hash-chained like any op): `single-owner` | `quorum:N`.
+    pub fn to_spec(self) -> String {
+        match self {
+            Governance::SingleOwner => "single-owner".to_string(),
+            Governance::Quorum { threshold } => format!("quorum:{threshold}"),
+        }
+    }
+
+    /// Parse a `SetGovernance` spec. `quorum:N` requires `N >= 1` (a 0 threshold is
+    /// meaningless and rejected); `quorum:1` is exactly single-owner-removal and is
+    /// accepted as `Quorum{1}` (the tally generalizes it). Unknown ⇒ `None`.
+    pub fn parse_spec(s: &str) -> Option<Governance> {
+        let s = s.trim();
+        if s == "single-owner" {
+            return Some(Governance::SingleOwner);
+        }
+        if let Some(n) = s.strip_prefix("quorum:") {
+            let threshold: usize = n.parse().ok()?;
+            if threshold == 0 {
+                return None;
+            }
+            return Some(Governance::Quorum { threshold });
+        }
+        None
+    }
 }
 
 /// Derive the current valid membership by replaying the signed op-log against the
@@ -560,7 +596,49 @@ fn authorized(
             let owner_protected = governance == Governance::SingleOwner && op.subject == owner;
             author.role == Role::Owner && !owner_protected && mp.contains_key(&op.subject)
         }
+        // Governance is owner-managed (ADR-026 §A4). The op is inert to the member
+        // map (`build_members` skips non-Admit ops); this only keeps it in the
+        // valid set when owner-authored so `derive_governance` can read it.
+        MembershipAction::SetGovernance => author.role == Role::Owner,
     }
+}
+
+/// Derive the KB's active [`Governance`] from the signed op-log (ADR-026 §A4).
+/// Owner-rooted + deterministic: the **latest** crypto-valid `SetGovernance` op
+/// authored by the anchored owner, in causal order, wins; absent/unparseable ⇒
+/// the [`Governance::SingleOwner`] default (matches v0.14). Governance is read
+/// *before* membership (`derive_valid_members_governed`) and passed in — the owner
+/// is the trust anchor, so owner-authored governance ops are trusted without the
+/// circularity of "quorum decides who the owner is." A compromised owner is
+/// handled by every peer's local blocklist (§A4), not here.
+pub fn derive_governance(ops: &[SignedMembershipOp], anchor_owner_pubkey: &[u8; 32]) -> Governance {
+    // Crypto-valid ops only, indexed by chain_hash (mirrors derive_valid_members §1).
+    let crypto: Vec<&SignedMembershipOp> = ops.iter().filter(|o| o.verify_signed()).collect();
+    let by_hash: BTreeMap<String, &SignedMembershipOp> =
+        crypto.iter().map(|o| (o.chain_hash(), *o)).collect();
+    // Anchor: the genesis owner self-admit signed by the external trust root.
+    let genesis = match crypto.iter().find(|o| {
+        o.op.prev_hash.is_empty()
+            && o.op.action == MembershipAction::Admit
+            && o.op.subject == o.op.author
+            && &o.author_pubkey == anchor_owner_pubkey
+    }) {
+        Some(g) => g,
+        None => return Governance::SingleOwner, // no trusted root ⇒ default
+    };
+    let owner = genesis.op.subject.clone();
+    // Latest owner-authored SetGovernance in deterministic causal order.
+    let order = causal_order(&by_hash, &genesis.chain_hash());
+    let mut gov = Governance::SingleOwner;
+    for h in &order {
+        let o = &by_hash[h].op;
+        if o.action == MembershipAction::SetGovernance && o.author == owner {
+            if let Some(g) = Governance::parse_spec(&o.subject) {
+                gov = g; // later ops in causal order override earlier ones
+            }
+        }
+    }
+    gov
 }
 
 /// Membership as of one op's causal position — the final member map over just the
@@ -925,6 +1003,335 @@ mod tests {
             m.is_empty(),
             "genesis not signed by the anchor ⇒ no members"
         );
+    }
+
+    /// Build + sign a `SetGovernance` op authored by `author` (spec in `subject`).
+    fn set_gov(author: &Id, gov: Governance, prev: &str) -> SignedMembershipOp {
+        make(
+            author,
+            MembershipAction::SetGovernance,
+            &gov.to_spec(),
+            None,
+            false,
+            None,
+            prev,
+        )
+    }
+
+    #[test]
+    fn governance_spec_roundtrips() {
+        for g in [
+            Governance::SingleOwner,
+            Governance::Quorum { threshold: 1 },
+            Governance::Quorum { threshold: 3 },
+        ] {
+            assert_eq!(Governance::parse_spec(&g.to_spec()), Some(g));
+        }
+        assert_eq!(Governance::parse_spec("quorum:0"), None, "0 rejected");
+        assert_eq!(Governance::parse_spec("garbage"), None);
+        assert_eq!(Governance::parse_spec("quorum:x"), None);
+    }
+
+    #[test]
+    fn governance_defaults_to_single_owner() {
+        let owner = id(1);
+        let g = genesis(&owner);
+        assert_eq!(
+            derive_governance(&[g], &owner.pubkey),
+            Governance::SingleOwner
+        );
+    }
+
+    #[test]
+    fn governance_owner_sets_quorum_latest_wins() {
+        let owner = id(1);
+        let g = genesis(&owner);
+        let sg1 = set_gov(&owner, Governance::Quorum { threshold: 2 }, &g.chain_hash());
+        let sg2 = set_gov(&owner, Governance::SingleOwner, &sg1.chain_hash());
+        // Only sg1: quorum is active.
+        assert_eq!(
+            derive_governance(&[g.clone(), sg1.clone()], &owner.pubkey),
+            Governance::Quorum { threshold: 2 }
+        );
+        // sg1 then sg2: the later op (single-owner) wins.
+        assert_eq!(
+            derive_governance(&[g, sg1, sg2], &owner.pubkey),
+            Governance::SingleOwner
+        );
+    }
+
+    #[test]
+    fn governance_non_owner_op_is_ignored() {
+        // Adversarial: a member (even an admin) cannot weaken governance — only the
+        // anchored owner's SetGovernance counts.
+        let owner = id(1);
+        let mallory = id(2);
+        let g = genesis(&owner);
+        // Owner admits mallory as an owner-role admin (the strongest non-anchor case).
+        let admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &mallory.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        // Mallory tries to set quorum:1 (would let a lone admin remove the owner).
+        let forged = set_gov(
+            &mallory,
+            Governance::Quorum { threshold: 1 },
+            &admit.chain_hash(),
+        );
+        assert_eq!(
+            derive_governance(&[g, admit, forged], &owner.pubkey),
+            Governance::SingleOwner,
+            "a non-owner SetGovernance must not take effect"
+        );
+    }
+
+    #[test]
+    fn governance_op_is_inert_to_membership() {
+        // A SetGovernance op's `subject` ("quorum:2") must never be admitted as a
+        // member, and the op must not perturb the derived member set.
+        let owner = id(1);
+        let g = genesis(&owner);
+        let sg = set_gov(&owner, Governance::Quorum { threshold: 2 }, &g.chain_hash());
+        let m = derive_valid_members(&[g, sg], &owner.pubkey, 100);
+        assert_eq!(m.len(), 1, "only the owner is a member");
+        assert!(m.contains_key(&owner.fp));
+        assert!(!m.contains_key("quorum:2"), "the spec is never a principal");
+    }
+
+    #[test]
+    fn governance_from_log_feeds_quorum_removal() {
+        // End-to-end: governance sourced from the signed log reaches the (already
+        // tested) quorum tally — under quorum:2, two distinct admins co-removing the
+        // owner takes effect (single-owner would protect the owner).
+        let owner = id(1);
+        let a = id(2);
+        let b = id(3);
+        let g = genesis(&owner);
+        let sg = set_gov(&owner, Governance::Quorum { threshold: 2 }, &g.chain_hash());
+        let admit_a = make(
+            &owner,
+            MembershipAction::Admit,
+            &a.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &sg.chain_hash(),
+        );
+        let admit_b = make(
+            &owner,
+            MembershipAction::Admit,
+            &b.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &admit_a.chain_hash(),
+        );
+        let rm_a = make(
+            &a,
+            MembershipAction::Remove,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &admit_b.chain_hash(),
+        );
+        let rm_b = make(
+            &b,
+            MembershipAction::Remove,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &rm_a.chain_hash(),
+        );
+        let ops = vec![g, sg, admit_a, admit_b, rm_a, rm_b];
+
+        let gov = derive_governance(&ops, &owner.pubkey);
+        assert_eq!(gov, Governance::Quorum { threshold: 2 });
+        let members = derive_valid_members_governed(
+            &ops,
+            &owner.pubkey,
+            100,
+            gov,
+            &MembershipView::default(),
+        );
+        assert!(
+            !members.contains_key(&owner.fp),
+            "quorum of 2 admins removes even the owner (governance read from the log)"
+        );
+        assert!(members.contains_key(&a.fp) && members.contains_key(&b.fp));
+    }
+
+    #[test]
+    fn quorum_removes_owner_via_concurrent_removal_branches() {
+        // The REALISTIC case (the linear test above is the easy one): two admins
+        // remove the owner CONCURRENTLY — sibling ops off the same parent, not a
+        // tidy sequence. The tally must still reach threshold, and — critically —
+        // the derived set must be IDENTICAL under any apply order (it's a CRDT).
+        let owner = id(1);
+        let a = id(2);
+        let b = id(3);
+        let g = genesis(&owner);
+        let sg = set_gov(&owner, Governance::Quorum { threshold: 2 }, &g.chain_hash());
+        let admit_a = make(
+            &owner,
+            MembershipAction::Admit,
+            &a.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &sg.chain_hash(),
+        );
+        let admit_b = make(
+            &owner,
+            MembershipAction::Admit,
+            &b.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &admit_a.chain_hash(),
+        );
+        // CONCURRENT removals: both children of admit_b (same prev_hash) — neither
+        // is in the other's causal past.
+        let rm_a = make(
+            &a,
+            MembershipAction::Remove,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &admit_b.chain_hash(),
+        );
+        let rm_b = make(
+            &b,
+            MembershipAction::Remove,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &admit_b.chain_hash(),
+        );
+        let ops = vec![g, sg, admit_a, admit_b, rm_a, rm_b];
+
+        let gov = derive_governance(&ops, &owner.pubkey);
+        let derive = |o: &[SignedMembershipOp]| {
+            derive_valid_members_governed(o, &owner.pubkey, 100, gov, &MembershipView::default())
+        };
+        let m = derive(&ops);
+        assert!(
+            !m.contains_key(&owner.fp),
+            "two CONCURRENT admin removals reach quorum:2 and remove the owner"
+        );
+        assert!(m.contains_key(&a.fp) && m.contains_key(&b.fp));
+        // Order-independence — the property that linear tests can't prove.
+        let mut rev = ops.clone();
+        rev.reverse();
+        assert_eq!(derive(&rev), m, "reversed apply order ⇒ identical members");
+        let mut rot = ops.clone();
+        rot.rotate_left(3);
+        assert_eq!(derive(&rot), m, "rotated apply order ⇒ identical members");
+        assert_eq!(
+            derive_governance(&rev, &owner.pubkey),
+            gov,
+            "governance derivation is order-independent too"
+        );
+    }
+
+    #[test]
+    fn quorum_threshold_above_voter_count_protects_the_owner() {
+        // quorum:3 but only two non-owner admins exist — the tally can never reach
+        // three distinct removal authors (the owner won't sign their own removal),
+        // so the owner survives even with both others voting. Guards against an
+        // off-by-one in the threshold comparison.
+        let owner = id(1);
+        let a = id(2);
+        let b = id(3);
+        let g = genesis(&owner);
+        let sg = set_gov(&owner, Governance::Quorum { threshold: 3 }, &g.chain_hash());
+        let admit_a = make(
+            &owner,
+            MembershipAction::Admit,
+            &a.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &sg.chain_hash(),
+        );
+        let admit_b = make(
+            &owner,
+            MembershipAction::Admit,
+            &b.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &admit_a.chain_hash(),
+        );
+        let rm_a = make(
+            &a,
+            MembershipAction::Remove,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &admit_b.chain_hash(),
+        );
+        let rm_b = make(
+            &b,
+            MembershipAction::Remove,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &admit_b.chain_hash(),
+        );
+        let ops = vec![g, sg, admit_a, admit_b, rm_a, rm_b];
+        let gov = derive_governance(&ops, &owner.pubkey);
+        let m = derive_valid_members_governed(
+            &ops,
+            &owner.pubkey,
+            100,
+            gov,
+            &MembershipView::default(),
+        );
+        assert!(
+            m.contains_key(&owner.fp),
+            "threshold 3 > 2 voters ⇒ the owner cannot be removed"
+        );
+    }
+
+    #[test]
+    fn concurrent_set_governance_resolves_deterministically() {
+        // Two owner-authored SetGovernance ops as CONCURRENT siblings (both off
+        // genesis) — a relay could deliver them in any order. derive_governance must
+        // pick the SAME one on every peer (causal_order tiebreaks siblings by
+        // ascending chain_hash, so the higher-hash sibling is applied last + wins).
+        let owner = id(1);
+        let g = genesis(&owner);
+        let sg_two = set_gov(&owner, Governance::Quorum { threshold: 2 }, &g.chain_hash());
+        let sg_three = set_gov(&owner, Governance::Quorum { threshold: 3 }, &g.chain_hash());
+        let ops = vec![g, sg_two.clone(), sg_three.clone()];
+
+        let gov = derive_governance(&ops, &owner.pubkey);
+        let expected = if sg_two.chain_hash() > sg_three.chain_hash() {
+            Governance::Quorum { threshold: 2 }
+        } else {
+            Governance::Quorum { threshold: 3 }
+        };
+        assert_eq!(
+            gov, expected,
+            "higher-chain_hash sibling wins, deterministically"
+        );
+        let mut rev = ops.clone();
+        rev.reverse();
+        assert_eq!(derive_governance(&rev, &owner.pubkey), gov);
+        let mut rot = ops.clone();
+        rot.rotate_left(1);
+        assert_eq!(derive_governance(&rot, &owner.pubkey), gov);
     }
 
     #[test]
