@@ -52,27 +52,25 @@ impl Editor {
             source_file: None,
         });
 
-        // Collect matching nodes from KB indexes.
-        let nodes: Vec<_> = if let Some(ref states) = filter.todo_states {
-            let mut result = Vec::new();
-            for state in states {
-                for node in self.kb.primary.nodes_by_todo_state(state) {
-                    if matches_filter(node, filter) {
-                        result.push(node.clone());
+        // Collect matching TODO nodes via the query layer (Phase D: so the agenda
+        // works under a thin daemon-hosted mirror — the daemon's cozo serves the
+        // TODO set); the in-memory KB is the fallback when there's no query layer.
+        // State filtering is applied here (the query layer returns the full TODO set).
+        let all_todo: Vec<mae_kb::Node> = match self.kb.query_layer() {
+            Some(q) => q.todo_nodes(),
+            None => self.kb.primary.todo_nodes().into_iter().cloned().collect(),
+        };
+        let nodes: Vec<mae_kb::Node> = all_todo
+            .into_iter()
+            .filter(|node| {
+                if let Some(ref states) = filter.todo_states {
+                    if !node.todo_state.as_ref().is_some_and(|s| states.contains(s)) {
+                        return false;
                     }
                 }
-            }
-            result
-        } else {
-            // All TODO nodes
-            self.kb
-                .primary
-                .todo_nodes()
-                .into_iter()
-                .filter(|n| matches_filter(n, filter))
-                .cloned()
-                .collect()
-        };
+                matches_filter(node, filter)
+            })
+            .collect();
 
         if nodes.is_empty() {
             lines.push(AgendaLine {
