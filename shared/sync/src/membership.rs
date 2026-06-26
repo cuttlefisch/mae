@@ -1168,6 +1168,173 @@ mod tests {
     }
 
     #[test]
+    fn quorum_removes_owner_via_concurrent_removal_branches() {
+        // The REALISTIC case (the linear test above is the easy one): two admins
+        // remove the owner CONCURRENTLY — sibling ops off the same parent, not a
+        // tidy sequence. The tally must still reach threshold, and — critically —
+        // the derived set must be IDENTICAL under any apply order (it's a CRDT).
+        let owner = id(1);
+        let a = id(2);
+        let b = id(3);
+        let g = genesis(&owner);
+        let sg = set_gov(&owner, Governance::Quorum { threshold: 2 }, &g.chain_hash());
+        let admit_a = make(
+            &owner,
+            MembershipAction::Admit,
+            &a.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &sg.chain_hash(),
+        );
+        let admit_b = make(
+            &owner,
+            MembershipAction::Admit,
+            &b.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &admit_a.chain_hash(),
+        );
+        // CONCURRENT removals: both children of admit_b (same prev_hash) — neither
+        // is in the other's causal past.
+        let rm_a = make(
+            &a,
+            MembershipAction::Remove,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &admit_b.chain_hash(),
+        );
+        let rm_b = make(
+            &b,
+            MembershipAction::Remove,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &admit_b.chain_hash(),
+        );
+        let ops = vec![g, sg, admit_a, admit_b, rm_a, rm_b];
+
+        let gov = derive_governance(&ops, &owner.pubkey);
+        let derive = |o: &[SignedMembershipOp]| {
+            derive_valid_members_governed(o, &owner.pubkey, 100, gov, &MembershipView::default())
+        };
+        let m = derive(&ops);
+        assert!(
+            !m.contains_key(&owner.fp),
+            "two CONCURRENT admin removals reach quorum:2 and remove the owner"
+        );
+        assert!(m.contains_key(&a.fp) && m.contains_key(&b.fp));
+        // Order-independence — the property that linear tests can't prove.
+        let mut rev = ops.clone();
+        rev.reverse();
+        assert_eq!(derive(&rev), m, "reversed apply order ⇒ identical members");
+        let mut rot = ops.clone();
+        rot.rotate_left(3);
+        assert_eq!(derive(&rot), m, "rotated apply order ⇒ identical members");
+        assert_eq!(
+            derive_governance(&rev, &owner.pubkey),
+            gov,
+            "governance derivation is order-independent too"
+        );
+    }
+
+    #[test]
+    fn quorum_threshold_above_voter_count_protects_the_owner() {
+        // quorum:3 but only two non-owner admins exist — the tally can never reach
+        // three distinct removal authors (the owner won't sign their own removal),
+        // so the owner survives even with both others voting. Guards against an
+        // off-by-one in the threshold comparison.
+        let owner = id(1);
+        let a = id(2);
+        let b = id(3);
+        let g = genesis(&owner);
+        let sg = set_gov(&owner, Governance::Quorum { threshold: 3 }, &g.chain_hash());
+        let admit_a = make(
+            &owner,
+            MembershipAction::Admit,
+            &a.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &sg.chain_hash(),
+        );
+        let admit_b = make(
+            &owner,
+            MembershipAction::Admit,
+            &b.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &admit_a.chain_hash(),
+        );
+        let rm_a = make(
+            &a,
+            MembershipAction::Remove,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &admit_b.chain_hash(),
+        );
+        let rm_b = make(
+            &b,
+            MembershipAction::Remove,
+            &owner.fp,
+            None,
+            false,
+            None,
+            &admit_b.chain_hash(),
+        );
+        let ops = vec![g, sg, admit_a, admit_b, rm_a, rm_b];
+        let gov = derive_governance(&ops, &owner.pubkey);
+        let m = derive_valid_members_governed(
+            &ops,
+            &owner.pubkey,
+            100,
+            gov,
+            &MembershipView::default(),
+        );
+        assert!(
+            m.contains_key(&owner.fp),
+            "threshold 3 > 2 voters ⇒ the owner cannot be removed"
+        );
+    }
+
+    #[test]
+    fn concurrent_set_governance_resolves_deterministically() {
+        // Two owner-authored SetGovernance ops as CONCURRENT siblings (both off
+        // genesis) — a relay could deliver them in any order. derive_governance must
+        // pick the SAME one on every peer (causal_order tiebreaks siblings by
+        // ascending chain_hash, so the higher-hash sibling is applied last + wins).
+        let owner = id(1);
+        let g = genesis(&owner);
+        let sg_two = set_gov(&owner, Governance::Quorum { threshold: 2 }, &g.chain_hash());
+        let sg_three = set_gov(&owner, Governance::Quorum { threshold: 3 }, &g.chain_hash());
+        let ops = vec![g, sg_two.clone(), sg_three.clone()];
+
+        let gov = derive_governance(&ops, &owner.pubkey);
+        let expected = if sg_two.chain_hash() > sg_three.chain_hash() {
+            Governance::Quorum { threshold: 2 }
+        } else {
+            Governance::Quorum { threshold: 3 }
+        };
+        assert_eq!(
+            gov, expected,
+            "higher-chain_hash sibling wins, deterministically"
+        );
+        let mut rev = ops.clone();
+        rev.reverse();
+        assert_eq!(derive_governance(&rev, &owner.pubkey), gov);
+        let mut rot = ops.clone();
+        rot.rotate_left(1);
+        assert_eq!(derive_governance(&rot, &owner.pubkey), gov);
+    }
+
+    #[test]
     fn derive_valid_inviter_chain_admits_transitively() {
         let owner = id(1);
         let alice = id(2);
