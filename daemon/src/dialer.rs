@@ -800,12 +800,14 @@ mod tests {
         assert!(landed, "B should apply the owner's live edit");
     }
 
-    /// ADR-036 mesh require-signed + relay-can't-forge, the negative oracle: B rejects
-    /// (1) an UNSIGNED relayed edit and (2) one forged-signed by a NON-MEMBER — its
-    /// node state never advances. A relaying daemon can neither strip the signature
-    /// nor inject content under an identity it doesn't hold.
+    /// ADR-036 mesh verification, the SELECTIVE oracle: B rejects three distinct bad
+    /// relayed edits (unsigned → require-signed; non-member-signed → NotAMember; real
+    /// member at a stale epoch → StaleEpoch) AND still applies a valid owner edit on
+    /// the same live session. The trailing positive case is the point: a bare
+    /// assert-the-SV-didn't-move test would pass just as well if the session had
+    /// quietly died — proving rejection is the verifier working, not a dead pipe.
     #[tokio::test]
-    async fn live_session_rejects_unsigned_and_forged_edits() {
+    async fn live_session_mesh_verification_is_selective() {
         let a_id = Arc::new(Identity::generate("owner-A"));
         let b_id = Identity::generate("joiner-B");
         let (addr, a_store, a_bc) = serve_owner_kb(&a_id, "kbl", Some(&b_id.fingerprint())).await;
@@ -838,39 +840,67 @@ mod tests {
         };
         let edit = a_node.insert(0, "FORGED ");
 
-        // (1) UNSIGNED relayed edit → rejected (mesh require-signed).
-        a_bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
-            buffer_name: "kb:concept:n".to_string(),
-            update_base64: update_to_base64(&edit),
-            wal_seq: 0,
-            content_header: None,
-        });
-        // (2) Forged: validly signed, but by a NON-MEMBER stranger → NotAMember.
-        let stranger = Identity::generate("stranger");
-        let forged = sign_content_op(&stranger, "kbl", "concept:n", 0, &edit);
-        a_bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
-            buffer_name: "kb:concept:n".to_string(),
-            update_base64: update_to_base64(&edit),
-            wal_seq: 0,
-            content_header: Some(forged.header_params()),
-        });
-
-        // Neither is applied: B's node state vector stays put through the window.
-        let advanced = wait_until(2, || {
-            let s = Arc::clone(&b_store);
-            let before = before.clone();
+        let push = |bc: &SharedBroadcaster, upd: &[u8], header: Option<serde_json::Value>| {
+            bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
+                buffer_name: "kb:concept:n".to_string(),
+                update_base64: update_to_base64(upd),
+                wal_seq: 0,
+                content_header: header,
+            });
+        };
+        let sv_advanced = |b_store: &Arc<DocStore>, before: &[u8]| {
+            let s = Arc::clone(b_store);
+            let before = before.to_vec();
             async move {
                 s.state_vector("kb:concept:n")
                     .await
                     .map(|sv| sv != before)
                     .unwrap_or(false)
             }
-        })
-        .await;
-        peer.abort();
+        };
+
+        // Three DISTINCT rejection paths, each exercising a different `admit` failure:
+        // (1) UNSIGNED → mesh require-signed; (2) signed by a NON-MEMBER stranger →
+        // NotAMember; (3) signed by a REAL MEMBER (B) but at a STALE epoch (its grant
+        // is epoch 0) → StaleEpoch. None must apply.
+        push(&a_bc, &edit, None);
+        let stranger = Identity::generate("stranger");
+        push(
+            &a_bc,
+            &edit,
+            Some(sign_content_op(&stranger, "kbl", "concept:n", 0, &edit).header_params()),
+        );
+        push(
+            &a_bc,
+            &edit,
+            Some(sign_content_op(&b_id, "kbl", "concept:n", 999, &edit).header_params()),
+        );
+
+        let advanced = wait_until(2, || sv_advanced(&b_store, &before)).await;
         assert!(
             !advanced,
-            "B must reject the unsigned + non-member-forged relayed edits"
+            "B must reject the unsigned + non-member + stale-epoch relayed edits"
+        );
+
+        // SELECTIVE, not a dead session: a VALID owner-signed edit on the SAME live
+        // session IS applied — proving the rejections above were the verifier doing
+        // its job, not the connection having quietly died (the trap a bare
+        // assert-absence test would mask).
+        let valid_edit = {
+            let (st, _) = a_store.encode_state_and_sv("kb:concept:n").await.unwrap();
+            let mut node = TextSync::from_state(&st).unwrap();
+            node.insert(0, "VALID ")
+        };
+        push(
+            &a_bc,
+            &valid_edit,
+            Some(sign_content_op(&a_id, "kbl", "concept:n", 0, &valid_edit).header_params()),
+        );
+        let applied = wait_until(5, || sv_advanced(&b_store, &before)).await;
+        peer.abort();
+        assert!(
+            applied,
+            "B must APPLY a valid owner edit on the same session (rejection is selective, session alive)"
         );
     }
 
