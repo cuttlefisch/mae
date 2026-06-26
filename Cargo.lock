@@ -40,6 +40,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aead"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
+dependencies = [
+ "crypto-common 0.1.7",
+ "generic-array",
+]
+
+[[package]]
 name = "ahash"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -586,6 +596,17 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chacha20"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3613f74bd2eac03dad61bd53dbe620703d4371614fe0bc3b9f04dd36fe4e818"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures 0.2.17",
+]
+
+[[package]]
+name = "chacha20"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
@@ -593,6 +614,19 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "chacha20poly1305"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10cd79432192d1c0f4e1a0fef9527696cc039165d729fb41b3f4f4f354c2dc35"
+dependencies = [
+ "aead",
+ "chacha20 0.9.1",
+ "cipher",
+ "poly1305",
+ "zeroize",
 ]
 
 [[package]]
@@ -665,6 +699,7 @@ checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
 dependencies = [
  "crypto-common 0.1.7",
  "inout",
+ "zeroize",
 ]
 
 [[package]]
@@ -1047,6 +1082,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
+ "rand_core 0.6.4",
  "typenum",
 ]
 
@@ -2756,7 +2792,7 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "base64 0.22.1",
  "crossterm",
@@ -2792,7 +2828,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2810,11 +2846,11 @@ dependencies = [
 
 [[package]]
 name = "mae-babel"
-version = "0.14.2"
+version = "0.14.7"
 
 [[package]]
 name = "mae-canvas"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -2822,7 +2858,7 @@ dependencies = [
 
 [[package]]
 name = "mae-core"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "criterion",
  "hex",
@@ -2867,7 +2903,7 @@ dependencies = [
 
 [[package]]
 name = "mae-dap"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "mae-core",
  "serde",
@@ -2878,18 +2914,18 @@ dependencies = [
 
 [[package]]
 name = "mae-export"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "mae-babel",
 ]
 
 [[package]]
 name = "mae-format"
-version = "0.14.2"
+version = "0.14.7"
 
 [[package]]
 name = "mae-gui"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -2903,7 +2939,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "cozo",
  "hex",
@@ -2923,14 +2959,14 @@ dependencies = [
 
 [[package]]
 name = "mae-lookup"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-lsp"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -2940,14 +2976,14 @@ dependencies = [
 
 [[package]]
 name = "mae-make"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2969,7 +3005,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -2981,7 +3017,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "base64 0.22.1",
  "libc",
@@ -2993,7 +3029,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
@@ -3002,18 +3038,20 @@ dependencies = [
 
 [[package]]
 name = "mae-snippets"
-version = "0.14.2"
+version = "0.14.7"
 
 [[package]]
 name = "mae-spell"
-version = "0.14.2"
+version = "0.14.7"
 
 [[package]]
 name = "mae-sync"
-version = "0.14.2"
+version = "0.14.7"
 dependencies = [
  "base64 0.22.1",
+ "chacha20poly1305",
  "criterion",
+ "curve25519-dalek",
  "ed25519-dalek",
  "hex",
  "rand 0.10.1",
@@ -3024,6 +3062,7 @@ dependencies = [
  "similar",
  "tempfile",
  "tracing",
+ "x25519-dalek",
  "yrs",
 ]
 
@@ -3740,6 +3779,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
+name = "opaque-debug"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
 name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4129,6 +4174,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "poly1305"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8159bd90725d2df49889a078b54f4f79e87f1f8a8444194cdca81d38f5393abf"
+dependencies = [
+ "cpufeatures 0.2.17",
+ "opaque-debug",
+ "universal-hash",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4345,7 +4401,7 @@ version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
 dependencies = [
- "chacha20",
+ "chacha20 0.10.1",
  "getrandom 0.4.2",
  "rand_core 0.10.1",
 ]
@@ -6361,6 +6417,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
+name = "universal-hash"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
+dependencies = [
+ "crypto-common 0.1.7",
+ "subtle",
+]
+
+[[package]]
 name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7300,6 +7366,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
+name = "x25519-dalek"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
+dependencies = [
+ "curve25519-dalek",
+ "rand_core 0.6.4",
+ "serde",
+ "zeroize",
+]
+
+[[package]]
 name = "x509-parser"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7447,6 +7525,20 @@ name = "zeroize"
 version = "1.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "zerotrie"

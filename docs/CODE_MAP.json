@@ -976,6 +976,10 @@
           "kind": "mod"
         },
         {
+          "name": "content_crypto",
+          "kind": "mod"
+        },
+        {
           "name": "content_ops",
           "kind": "mod"
         },

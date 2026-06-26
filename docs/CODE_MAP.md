@@ -397,6 +397,7 @@ Source: `shared/sync/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `awareness` | mod |
+| `content_crypto` | mod |
 | `content_ops` | mod |
 | `encoding` | mod |
 | `kb` | mod |

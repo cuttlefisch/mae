@@ -93,6 +93,13 @@ pub struct MembershipOp {
     pub epoch: u64,
     /// Hex of the previous op's [`chain_hash`](Self::chain_hash); `""` = genesis.
     pub prev_hash: String,
+    /// ADR-037 §D2: on an `Admit`, the per-KB content key **wrapped to `subject`'s
+    /// key** (`content_crypto::wrap_to_member`), so the signed log itself delivers the
+    /// content key to a new member — no key server. `None` for unencrypted KBs and
+    /// non-Admit ops. When `Some`, the op uses the `maememb/v2` canonical encoding (the
+    /// wrapped key is part of the signed bytes); `None` keeps the byte-identical `v1`
+    /// encoding so every pre-encryption op still verifies.
+    pub wrapped_key: Option<Vec<u8>>,
 }
 
 impl MembershipOp {
@@ -106,7 +113,15 @@ impl MembershipOp {
             b.push(0);
         }
         let mut b = Vec::new();
-        field(&mut b, "maememb/v1");
+        // Versioned for backward compatibility: a `wrapped_key`-bearing op (ADR-037)
+        // is `v2` and appends the wrapped key; an op without one emits BYTE-IDENTICAL
+        // `v1` bytes, so every signature created before encryption still verifies.
+        let version = if self.wrapped_key.is_some() {
+            "maememb/v2"
+        } else {
+            "maememb/v1"
+        };
+        field(&mut b, version);
         field(&mut b, &self.kb_id);
         field(&mut b, self.action.as_str());
         field(&mut b, &self.subject);
@@ -120,6 +135,9 @@ impl MembershipOp {
         );
         field(&mut b, &self.epoch.to_string());
         field(&mut b, &self.prev_hash);
+        if let Some(wk) = &self.wrapped_key {
+            field(&mut b, &hex::encode(wk));
+        }
         b
     }
 
@@ -641,6 +659,49 @@ pub fn derive_governance(ops: &[SignedMembershipOp], anchor_owner_pubkey: &[u8; 
     gov
 }
 
+/// ADR-037 §D2: recover **this peer's** per-KB content key from the signed op-log —
+/// the confidentiality counterpart to [`derive_governance`]. Deterministic +
+/// owner-rooted: the **latest** crypto-valid op authored by the anchored owner that
+/// targets me (`subject == my_fingerprint`) and carries a `wrapped_key`, in causal
+/// order, wins — so a rotation re-wrap supersedes the original admit. Unwrap it with
+/// my Ed25519 secret. `None` ⇒ an unencrypted KB, no key delivered to me, or a wrap
+/// that doesn't open for me. Trustless + peer-derivable, no key server.
+///
+/// Removal-correctness falls out for free: on rotation the owner re-wraps the new key
+/// **only to remaining members**, so a removed member has no new wrapped op and this
+/// returns their *old* key — they can still read history they already had, but not
+/// content encrypted under the rotated key (ADR-037 §D3).
+pub fn derive_content_key(
+    ops: &[SignedMembershipOp],
+    anchor_owner_pubkey: &[u8; 32],
+    my_fingerprint: &str,
+    my_ed25519_secret: &[u8; 32],
+) -> Option<crate::content_crypto::ContentKey> {
+    // Crypto-valid ops only, indexed by chain_hash (mirrors derive_governance §1).
+    let crypto: Vec<&SignedMembershipOp> = ops.iter().filter(|o| o.verify_signed()).collect();
+    let by_hash: BTreeMap<String, &SignedMembershipOp> =
+        crypto.iter().map(|o| (o.chain_hash(), *o)).collect();
+    let genesis = crypto.iter().find(|o| {
+        o.op.prev_hash.is_empty()
+            && o.op.action == MembershipAction::Admit
+            && o.op.subject == o.op.author
+            && &o.author_pubkey == anchor_owner_pubkey
+    })?;
+    let owner = genesis.op.subject.clone();
+    let order = causal_order(&by_hash, &genesis.chain_hash());
+    // Latest owner-authored wrapped key targeting me wins (rotation supersedes admit).
+    let mut latest: Option<&Vec<u8>> = None;
+    for h in &order {
+        let o = &by_hash[h].op;
+        if o.author == owner && o.subject == my_fingerprint {
+            if let Some(wk) = &o.wrapped_key {
+                latest = Some(wk);
+            }
+        }
+    }
+    crate::content_crypto::unwrap_as_member(latest?, my_ed25519_secret).ok()
+}
+
 /// Membership as of one op's causal position — the final member map over just the
 /// **valid ancestors** of that op (its causal past, a linear chain). Used to judge
 /// capability (b). Passes the full `anc` map through so removal-dominance and
@@ -795,6 +856,7 @@ mod tests {
             expires_at: Some(1_700_086_400),
             epoch: 0,
             prev_hash: prev_hash.into(),
+            wrapped_key: None,
         }
     }
 
@@ -957,6 +1019,7 @@ mod tests {
             expires_at,
             epoch: 0,
             prev_hash: prev.into(),
+            wrapped_key: None,
         };
         let sig = op.sign(&author.secret);
         SignedMembershipOp {
@@ -964,6 +1027,143 @@ mod tests {
             sig,
             author_pubkey: author.pubkey,
         }
+    }
+
+    /// Build + sign an `Admit` that carries an ADR-037 `wrapped_key` (a v2 op).
+    fn make_wrapped(
+        author: &Id,
+        subject: &str,
+        wrapped: Vec<u8>,
+        prev: &str,
+    ) -> SignedMembershipOp {
+        let op = MembershipOp {
+            kb_id: "KB".into(),
+            action: MembershipAction::Admit,
+            subject: subject.into(),
+            role: Some(Role::Editor),
+            can_invite: false,
+            author: author.fp.clone(),
+            issued_at: 1,
+            expires_at: None,
+            epoch: 0,
+            prev_hash: prev.into(),
+            wrapped_key: Some(wrapped),
+        };
+        let sig = op.sign(&author.secret);
+        SignedMembershipOp {
+            op,
+            sig,
+            author_pubkey: author.pubkey,
+        }
+    }
+
+    #[test]
+    fn v1_op_stays_compatible_and_v2_binds_the_wrapped_key() {
+        let owner = id(1);
+        let m = id(2);
+        // No wrapped key ⇒ byte-identical v1 encoding, still signs + verifies (the
+        // regression guard for the canonical-bytes change — existing ops are safe).
+        let v1 = make(
+            &owner,
+            MembershipAction::Admit,
+            &m.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            "",
+        );
+        assert!(
+            v1.op.canonical_bytes().starts_with(b"maememb/v1\0"),
+            "no wrap ⇒ v1"
+        );
+        assert!(v1.verify_signed(), "a v1 op still verifies");
+        // A wrapped key ⇒ v2, signs + verifies, and tampering the key breaks the sig
+        // (the wrapped key is part of the signed bytes — a relay can't swap it).
+        let v2 = make_wrapped(&owner, &m.fp, vec![1, 2, 3, 4], "");
+        assert!(
+            v2.op.canonical_bytes().starts_with(b"maememb/v2\0"),
+            "wrap ⇒ v2"
+        );
+        assert!(v2.verify_signed(), "a v2 op verifies");
+        let mut tampered = v2.clone();
+        tampered.op.wrapped_key = Some(vec![9, 9, 9, 9]);
+        assert!(
+            !tampered.verify_signed(),
+            "tampering the wrapped key breaks the signature"
+        );
+    }
+
+    #[test]
+    fn derive_content_key_delivers_to_members_excludes_others_and_rotates() {
+        use crate::content_crypto::{wrap_to_member, ContentKey};
+        let owner = id(1);
+        let m1 = id(2);
+        let m2 = id(3);
+        let stranger = id(4);
+        let k = ContentKey::generate();
+
+        let g = genesis(&owner);
+        // Owner admits m1 + m2, each with k wrapped to THEM; plus a no-wrap path.
+        let a1 = make_wrapped(
+            &owner,
+            &m1.fp,
+            wrap_to_member(&k, &m1.pubkey).unwrap(),
+            &g.chain_hash(),
+        );
+        let a2 = make_wrapped(
+            &owner,
+            &m2.fp,
+            wrap_to_member(&k, &m2.pubkey).unwrap(),
+            &a1.chain_hash(),
+        );
+        let ops = vec![g.clone(), a1.clone(), a2.clone()];
+
+        let derived = |ops: &[SignedMembershipOp], who: &Id| {
+            derive_content_key(ops, &owner.pubkey, &who.fp, &who.secret).map(|c| *c.as_bytes())
+        };
+        assert_eq!(derived(&ops, &m1), Some(*k.as_bytes()), "m1 recovers k");
+        assert_eq!(derived(&ops, &m2), Some(*k.as_bytes()), "m2 recovers k");
+        assert!(
+            derived(&ops, &stranger).is_none(),
+            "a non-member recovers nothing"
+        );
+
+        // A NON-OWNER cannot inject a key: m1 forges a wrapped op targeting the
+        // stranger — derive ignores it (only the anchored owner distributes keys).
+        let forged = make_wrapped(
+            &m1,
+            &stranger.fp,
+            wrap_to_member(&k, &stranger.pubkey).unwrap(),
+            &a2.chain_hash(),
+        );
+        let mut ops_forged = ops.clone();
+        ops_forged.push(forged);
+        assert!(
+            derived(&ops_forged, &stranger).is_none(),
+            "non-owner key injection ignored"
+        );
+
+        // ROTATION (selective): owner re-wraps a NEW key k' to m1 only (m2 is being
+        // removed). m1 follows to k'; m2 has no re-wrap ⇒ stuck at the old k — proving
+        // exclusion alongside continued access, not a dead no-op.
+        let k2 = ContentKey::generate();
+        let rewrap = make_wrapped(
+            &owner,
+            &m1.fp,
+            wrap_to_member(&k2, &m1.pubkey).unwrap(),
+            &a2.chain_hash(),
+        );
+        let ops2 = vec![g, a1, a2, rewrap];
+        assert_eq!(
+            derived(&ops2, &m1),
+            Some(*k2.as_bytes()),
+            "m1 follows the rotation to k'"
+        );
+        assert_eq!(
+            derived(&ops2, &m2),
+            Some(*k.as_bytes()),
+            "m2 excluded from k', stuck at old k"
+        );
     }
 
     /// Genesis = the owner self-admit (the anchored root of every valid log).
