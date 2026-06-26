@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Features
+
+- *(daemon)* Quorum governance in the kb_access gate + kb/revoke (ADR-026, #132) ([1dbf487](https://github.com/cuttlefisch/mae/commit/1dbf4877615d14c289c04d415eb30effa5f628d5))
+
+### Miscellaneous
+
+- Bump version to 0.14.4 ([b821203](https://github.com/cuttlefisch/mae/commit/b821203463c52d36e5f0cb0b9402b9dbf09fc141))
+
 ## [0.14.3] - 2026-06-26
 
 ### Bug Fixes
@@ -49,7 +59,7 @@ All notable changes to this project will be documented in this file.
 - *(daemon)* Proactive daemon-state notifications (ADR-035 PR C-b) (#128) ([f32a257](https://github.com/cuttlefisch/mae/commit/f32a2573475c9b2d96e92aeccd9235dfb3106d32))
 - *(daemon)* Session-long supervision of the on-demand daemon (ADR-035 PR B2) (#129) ([d59bf57](https://github.com/cuttlefisch/mae/commit/d59bf572754c692c19371f405c957059d967b9b3))
 - *(sync)* Derive quorum governance from the signed op-log (ADR-026 §A4, #132) ([87630e8](https://github.com/cuttlefisch/mae/commit/87630e816e74c1fb0c21d229aab84f955083dcb1))
-- *(daemon)* Quorum governance in the kb_access gate + kb/revoke (ADR-026, #132) ([1dbf487](https://github.com/cuttlefisch/mae/commit/1dbf4877615d14c289c04d415eb30effa5f628d5))
+- *(sync)* Signed content ops — peer-verifiable authorship layer (ADR-036, #91) ([2463095](https://github.com/cuttlefisch/mae/commit/2463095181bbeb7f911daf4e93d12abc8b8ed997))
 
 ### Miscellaneous
 
