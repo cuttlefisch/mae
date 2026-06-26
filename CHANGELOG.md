@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.6] - 2026-06-26
+
+### Features
+
+- *(mesh)* Verify relayed content ops on the dialer path (ADR-036 §D3, #91) ([669889b](https://github.com/cuttlefisch/mae/commit/669889b4fd983997650548be09c8db571bb7bf53))
+- *(mesh)* Owner re-verifies a joiner's relayed content op (ADR-036 §D3, B→A, #142) ([142a9d6](https://github.com/cuttlefisch/mae/commit/142a9d66d5da189888b405073c94c72df4f91677))
+
+### Miscellaneous
+
+- Bump version to 0.14.6 ([5d634ad](https://github.com/cuttlefisch/mae/commit/5d634ad498dbf97c63c6a9e888722e980294bd6e))
+
+### Testing
+
+- *(mesh)* Strengthen the relay-verification oracle — selective, not assert-absence ([bc402da](https://github.com/cuttlefisch/mae/commit/bc402da7a4fd8560b26236595f41811173f578c8))
+
 ## [0.14.5] - 2026-06-26
 
 ### Features
