@@ -3,6 +3,7 @@ mod ai_event_handler;
 mod bootstrap;
 mod collab_bridge;
 mod config;
+mod daemon_supervisor;
 mod dap_bridge;
 mod doctor;
 #[cfg(feature = "gui")]
@@ -1443,6 +1444,16 @@ fn main() -> io::Result<()> {
         editor.reconstruct_kb_sync_gate();
     }
 
+    // On-demand auto-spawn (ADR-035 `daemon_mode`): if configured `on-demand` and
+    // nothing is already listening, spawn + await a co-located mae-daemon before we
+    // try to attach below. `shared` never spawns (it attaches to an externally
+    // managed daemon); `off` skips this entirely. Best-effort — a failed spawn
+    // falls through to the in-process KB (the attach below just warns + uses local).
+    if editor.kb.daemon_mode == mae_core::DaemonMode::OnDemand {
+        let socket = editor.kb.daemon_socket.clone();
+        daemon_supervisor::ensure_on_demand_daemon(editor.kb.daemon_mode, &socket);
+    }
+
     // Optionally connect to mae-daemon for LRU-cached KB access.
     // Falls back gracefully to local sled KB if daemon is unavailable.
     if editor.kb.daemon_enabled {
@@ -1452,21 +1463,41 @@ fn main() -> io::Result<()> {
         match client.connect() {
             Ok(()) => {
                 info!(socket = %socket.display(), cache_size, "connected to mae-daemon");
-                // Version-skew guardrail (ADR-035): flag a mismatched daemon before
-                // we route reads through it. Best-effort — a status/version failure
-                // never blocks the attach (graceful: the daemon is still usable).
-                if let Ok(status) = client.call("daemon/status", serde_json::json!({})) {
-                    if let Some(msg) = daemon_version_skew(env!("CARGO_PKG_VERSION"), &status) {
+                // One daemon/status round-trip drives two ADR-035 guardrails:
+                // (1) version skew — warn on a mismatched daemon; (2) read routing
+                // — only attach the daemon LRU when it actually hosts the primary
+                // (or we're thin with no local mirror). A freshly spawned on-demand
+                // daemon serves its own empty daemon-kb.cozo, so attaching its LRU
+                // would shadow the editor's local KB with nothing. Best-effort: a
+                // status failure never blocks the attach.
+                let status = client.call("daemon/status", serde_json::json!({})).ok();
+                if let Some(ref s) = status {
+                    if let Some(msg) = daemon_version_skew(env!("CARGO_PKG_VERSION"), s) {
                         warn!("{}", msg);
                     }
                 }
-                let lru = mae_kb::lru_query::LruQueryLayer::new(client, cache_size);
-                editor
-                    .kb
-                    .set_daemon_query_layer(Some(std::sync::Arc::new(lru)));
+                let primary_exists = status
+                    .as_ref()
+                    .and_then(|s| s.get("primary_exists").and_then(|p| p.as_bool()))
+                    .unwrap_or(false);
+                if daemon_supervisor::should_attach_daemon_reads(
+                    primary_exists,
+                    editor.kb.primary_thin(),
+                ) {
+                    let lru = mae_kb::lru_query::LruQueryLayer::new(client, cache_size);
+                    editor
+                        .kb
+                        .set_daemon_query_layer(Some(std::sync::Arc::new(lru)));
+                    info!("routing KB reads through the daemon (hosts primary)");
+                } else {
+                    info!(
+                        "daemon connected but does not host the primary KB; \
+                         KB reads stay local"
+                    );
+                }
 
                 // Wire a second client as the control channel for P2P lifecycle
-                // ops (ticket mint/join) — the first was consumed by the LRU layer.
+                // ops (ticket mint/join) — independent of the read path above.
                 let mut control = mae_mcp::daemon_client::DaemonClient::new(&socket);
                 match control.connect() {
                     Ok(()) => editor.kb.set_daemon_control(Some(std::sync::Arc::new(
