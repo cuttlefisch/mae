@@ -524,6 +524,7 @@ const COLL_POLICY_KEY: &str = "join_policy"; // restrictive|invite|permissive
 const COLL_PENDING_KEY: &str = "pending"; // YMap<fingerprint -> {label,requested_at}>
 const COLL_RETIRED_KEY: &str = "retired"; // YMap<fingerprint -> last epoch> (#72 tombstone)
 const COLL_TRANSPORT_POLICY_KEY: &str = "transport_policy"; // hub|p2p|both (absent ⇒ hub)
+const COLL_ENCRYPTION_KEY: &str = "encryption"; // ADR-037: none|e2e (absent ⇒ none)
 /// ADR-026 signed membership op-log: `YMap<chain_hash -> op record>` — the
 /// append-only, CRDT *set* of signed membership ops (keyed by each op's
 /// `chain_hash` so concurrent appends converge). Validity is *derived* by every
@@ -544,6 +545,7 @@ const OP_EPOCH_KEY: &str = "epoch"; // ADR-023 authorization epoch assigned to s
 const OP_PREV_KEY: &str = "prev_hash"; // chain_hash of the author's view-head ("" = genesis)
 const OP_SIG_KEY: &str = "sig"; // hex(64-byte Ed25519 signature)
 const OP_PUBKEY_KEY: &str = "author_pubkey"; // hex(32-byte Ed25519 public key)
+const OP_WRAPPED_KEY: &str = "wrapped_key"; // ADR-037: hex(content key wrapped to subject); absent = none
 const MEMBER_ROLE_KEY: &str = "role";
 const MEMBER_LABEL_KEY: &str = "label";
 /// ADR-023: per-member monotonic authorization epoch, bumped by the daemon on
@@ -694,6 +696,35 @@ impl TransportPolicy {
             (Hub, Hub) => Hub,
             (P2p, P2p) => P2p,
             _ => Both,
+        }
+    }
+}
+
+/// ADR-037 per-KB content-encryption mode. `None` (the default, and what every
+/// absent flag reads as) keeps v0.14 KBs plaintext + unchanged; `E2e` marks the KB's
+/// content ops as encrypted under a per-KB content key distributed via the membership
+/// op-log. The opt-in is per-KB and on the collection doc, mirroring `TransportPolicy`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Encryption {
+    /// Plaintext content ops (default; absent flag).
+    #[default]
+    None,
+    /// End-to-end encrypted content ops (per-KB content key, ADR-037).
+    E2e,
+}
+
+impl Encryption {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Encryption::None => "none",
+            Encryption::E2e => "e2e",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Encryption> {
+        match s {
+            "none" => Some(Encryption::None),
+            "e2e" => Some(Encryption::E2e),
+            _ => None,
         }
     }
 }
@@ -1056,6 +1087,18 @@ impl KbCollectionDoc {
             .and_then(|s| TransportPolicy::parse(&s))
     }
 
+    /// ADR-037 content-encryption mode for this KB; absent ⇒ [`Encryption::None`]
+    /// (plaintext, the v0.14 default). The wiring reads this to decide whether content
+    /// ops are encrypted under the per-KB content key.
+    pub fn encryption(&self) -> Encryption {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        root.get(&txn, COLL_ENCRYPTION_KEY)
+            .map(|v| v.to_string(&txn))
+            .and_then(|s| Encryption::parse(&s))
+            .unwrap_or_default()
+    }
+
     /// Pending join requests (invite policy).
     pub fn pending(&self) -> Vec<PendingRequest> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
@@ -1282,6 +1325,15 @@ impl KbCollectionDoc {
         txn.encode_update_v1()
     }
 
+    /// Set this KB's ADR-037 content-encryption mode (owner op). Returns the encoded
+    /// yrs update for persist+broadcast, like the other collection setters.
+    pub fn set_encryption(&mut self, mode: Encryption) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        root.insert(&mut txn, COLL_ENCRYPTION_KEY, mode.as_str());
+        txn.encode_update_v1()
+    }
+
     /// Record a pending join request (idempotent re-request).
     pub fn add_pending(&mut self, principal: &str, label: &str, requested_at: &str) -> Vec<u8> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
@@ -1383,6 +1435,12 @@ impl KbCollectionDoc {
                     .and_then(|s| s.parse::<u64>().ok())
                     .unwrap_or(0),
                 prev_hash: get(OP_PREV_KEY).unwrap_or_default(),
+                // ADR-037: present only on encrypted-KB admits. A malformed hex value
+                // decodes to None — the op then derives as v1, fails its v2 signature,
+                // and is dropped by `verify_signed`, so it can't smuggle a bad key.
+                wrapped_key: get(OP_WRAPPED_KEY)
+                    .filter(|s| !s.is_empty())
+                    .and_then(|s| hex::decode(s).ok()),
             },
             sig,
             author_pubkey: pubkey,
@@ -1464,6 +1522,9 @@ impl KbCollectionDoc {
             expires_at,
             epoch,
             prev_hash: self.oplog_head().unwrap_or_default(),
+            // ADR-037: the caller sets this on an encrypted-KB admit (then signs);
+            // the daemon's existing membership flows leave it None (v1, unchanged).
+            wrapped_key: None,
         }
     }
 
@@ -1511,6 +1572,10 @@ impl KbCollectionDoc {
         rec.insert(&mut txn, OP_PREV_KEY, op.prev_hash.as_str());
         rec.insert(&mut txn, OP_SIG_KEY, hex::encode(sig));
         rec.insert(&mut txn, OP_PUBKEY_KEY, hex::encode(author_pubkey));
+        // ADR-037: only written for an encrypted-KB admit (absent ⇒ v1, unchanged).
+        if let Some(wk) = &op.wrapped_key {
+            rec.insert(&mut txn, OP_WRAPPED_KEY, hex::encode(wk));
+        }
         txn.encode_update_v1()
     }
 
@@ -2275,6 +2340,18 @@ mod tests {
         coll.set_transport_policy(TransportPolicy::Both);
         assert_eq!(coll.transport_policy(), TransportPolicy::Both);
         assert!(coll.transport_policy().allows(Transport::P2p));
+    }
+
+    #[test]
+    fn collection_encryption_defaults_to_none_and_round_trips() {
+        // ADR-037: a pre-feature / freshly-shared KB is plaintext (absent flag), so
+        // v0.14 KBs are unchanged; the owner can opt a KB into E2E.
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
+        assert_eq!(coll.encryption(), Encryption::None, "absent flag ⇒ None");
+        coll.set_encryption(Encryption::E2e);
+        assert_eq!(coll.encryption(), Encryption::E2e, "round-trips E2e");
+        assert_eq!(Encryption::parse("e2e"), Some(Encryption::E2e));
+        assert_eq!(Encryption::parse("bogus"), None);
     }
 
     #[test]

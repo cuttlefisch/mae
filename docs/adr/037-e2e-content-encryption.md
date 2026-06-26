@@ -124,3 +124,37 @@ a **member decrypts + converges** (SV advances); after a member is removed + key
 peer **cannot read** subsequent ops. Confidentiality is asserted independent of transport (same result
 hub vs mesh). Cross-OS (principle #13). If ADR-only this stage, the ADR is reviewable on its own and the
 oracle lands with the implementation.
+
+## Implementation note (2026-06-26): daemon sync-model — the foundation vs the wiring
+
+Building #131 surfaced a constraint not obvious from §D1's "encrypt the yrs payload, daemon stays
+key-blind": **the daemon today is NOT an opaque relay of content.** It *yrs-merges* every node update
+(`doc_store::apply_update` → `doc.sync.apply_update`) and computes *state-vector diffs* for sync-reconcile
+(`encode_diff_and_sv`); the ADR-023 epoch fence also parses the update (`update_new_op_authors`). **All
+three require plaintext.** So an opaque ciphertext payload breaks CRDT-merge + SV-reconcile at the daemon —
+the §D1–D3 first cut is therefore **larger than a focused slice**. (The epoch fence is the one part that
+falls away: ADR-036's *signed header* already carries epoch+author in plaintext, so `verify_content_op`
+authorizes without parsing the yrs update.)
+
+**Consequence for the design.** An encrypted KB needs an **op-set sync model**: the daemon merges a CRDT
+*set* of signed+encrypted op blobs (keyed by op hash) key-blind — set-union + op-set reconcile instead of
+yrs SV-diff — and **members** materialize the text by decrypting + replaying ops in causal order. The yrs
+CRDT still operates on plaintext (§D1), but **at the member, not the daemon**. This is the ADR-029
+"CRDT/op-log as truth" model applied to the encrypted path.
+
+**What landed (#131 foundation, this PR — `shared/sync`, pure + unit-tested, no daemon/editor change):**
+- `content_crypto`: XChaCha20-Poly1305 AEAD + a sealed-box key wrap (ephemeral X25519 ECDH → SHA-256 KDF
+  → AEAD) that wraps the content key to a member's **Ed25519 identity** (standard libsodium
+  `*_to_curve25519` map; self-consistency proven across many identities).
+- `MembershipOp.wrapped_key` (§D2 channel) — backward-compatible `maememb/v2` canonical encoding (v1 ops
+  byte-identical, still verify); `derive_content_key` recovers this peer's key from the signed log,
+  rotation-aware (latest owner-authored wrap wins; a non-re-wrapped removed member is excluded from `k'`
+  for free).
+- `Encryption { None | E2e }` per-KB flag on the collection doc (mirrors `TransportPolicy`; absent ⇒ none,
+  v0.14 unchanged).
+
+**Deferred to the op-set wiring (follow-up design + issue):** the daemon op-set storage + key-blind
+set-merge + op-set reconcile; editor encrypt-on-push (`build_kb_node_update_request`) /
+decrypt-on-receive (`run_collab_task`); eager re-wrap on `Remove` (§D3); the live 2-daemon confidentiality
+oracle. Recorded so the foundation is **not mistaken for end-to-end confidentiality** — content is not yet
+encrypted on the wire; this PR is the crypto + key-distribution substrate the wiring builds on.
