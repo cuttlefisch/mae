@@ -53,6 +53,13 @@ pub enum EditorEvent {
         /// WAL sequence ID for this update (0 if not persisted).
         #[serde(default)]
         wal_seq: u64,
+        /// ADR-036: the signed authorship header for a KB node-edit content op
+        /// (`SignedContentOp::header_params`), carried verbatim so a peer daemon can
+        /// re-verify a **relayed** edit (author ≠ the relaying connection). `None`
+        /// for non-KB buffers and legacy unsigned ops. Additive + `skip_serializing_
+        /// if None`, so the wire stays backward-compatible.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_header: Option<serde_json::Value>,
     },
     /// A peer joined a collaborative session.
     #[serde(rename = "peer_joined")]
@@ -442,6 +449,7 @@ mod tests {
             buffer_name: "test.rs".to_string(),
             update_base64: "AQIDBA==".to_string(),
             wal_seq: 0,
+            content_header: None,
         };
         bc.broadcast(&event);
 
@@ -471,6 +479,7 @@ mod tests {
             buffer_name: "test.rs".to_string(),
             update_base64: "AQIDBA==".to_string(),
             wal_seq: 1,
+            content_header: None,
         };
         bc.broadcast_except(&event, 1); // exclude session 1
 
@@ -493,6 +502,7 @@ mod tests {
             buffer_name: "foo.rs".to_string(),
             update_base64: "dGVzdA==".to_string(),
             wal_seq: 0,
+            content_header: None,
         };
         bc.broadcast(&event);
 
@@ -517,6 +527,7 @@ mod tests {
             buffer_name: "alpha.rs".to_string(),
             update_base64: "YWxwaGE=".to_string(),
             wal_seq: 1,
+            content_header: None,
         };
         bc.broadcast(&event_alpha);
         assert!(rx_a.recv().await.is_some(), "A should receive alpha event");
@@ -563,16 +574,19 @@ mod tests {
             buffer_name: "a.rs".to_string(),
             update_base64: "YQ==".to_string(),
             wal_seq: 1,
+            content_header: None,
         };
         let event_b = EditorEvent::SyncUpdate {
             buffer_name: "b.rs".to_string(),
             update_base64: "Yg==".to_string(),
             wal_seq: 2,
+            content_header: None,
         };
         let event_c = EditorEvent::SyncUpdate {
             buffer_name: "c.rs".to_string(),
             update_base64: "Yw==".to_string(),
             wal_seq: 3,
+            content_header: None,
         };
 
         bc.broadcast(&event_a);
@@ -596,6 +610,7 @@ mod tests {
             buffer_name: "doc.rs".to_string(),
             update_base64: "ZA==".to_string(),
             wal_seq: 1,
+            content_header: None,
         };
         bc.broadcast(&event);
         assert!(rx.recv().await.is_some(), "should receive before unsub");
@@ -612,6 +627,7 @@ mod tests {
             buffer_name: "other.rs".to_string(),
             update_base64: "bw==".to_string(),
             wal_seq: 2,
+            content_header: None,
         };
         bc.broadcast(&event_other);
         assert!(rx.recv().await.is_some(), "should still receive other.rs");
@@ -626,6 +642,7 @@ mod tests {
             buffer_name: "doc.rs".to_string(),
             update_base64: "ZA==".to_string(),
             wal_seq: 1,
+            content_header: None,
         };
         // Not subscribed to sync_update yet ⇒ not delivered.
         bc.broadcast(&event);

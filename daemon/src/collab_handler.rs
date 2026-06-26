@@ -610,6 +610,37 @@ async fn load_collection(doc_store: &DocStore, kb_id: &str) -> Result<KbCollecti
     KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))
 }
 
+/// ADR-036 §D3: verify a signed content op against this peer's **derived, anchored**
+/// membership — the content author (from the signed header, not the connection) must
+/// be a current Editor+ member at the op's epoch. Shared by the editor→daemon
+/// `kb/node_update` path and the daemon→daemon dialer relay path so there is ONE
+/// authorship check, not two that could drift (principle #8). `anchor` is the KB's
+/// registered trust root; the caller has already established the KB is anchored and
+/// decided its policy for *unsigned* ops (the hub accepts them as legacy; the mesh
+/// rejects them — ADR-036 migration). Returns `Err` with a human reason on any
+/// failure, for the caller to surface (ADR-024). `pub` so the `dialer` (bin crate)
+/// shares this exact check on the relay path.
+pub async fn verify_content_op(
+    doc_store: &DocStore,
+    kb_id: &str,
+    anchor: &[u8; 32],
+    signed: &SignedContentOp,
+) -> Result<(), String> {
+    let coll = load_collection(doc_store, kb_id).await?;
+    let ops = coll.oplog_ops();
+    let governance = derive_governance(&ops, anchor);
+    let members = derive_valid_members_governed(
+        &ops,
+        anchor,
+        now_unix(),
+        governance,
+        &MembershipView::default(),
+    );
+    signed
+        .admit(&members)
+        .map_err(|e| format!("signed content op rejected: {e:?}"))
+}
+
 /// Persist a collection update + broadcast it to other subscribers. Returns wal_seq.
 async fn persist_and_broadcast_collection(
     doc_store: &DocStore,
@@ -631,6 +662,7 @@ async fn persist_and_broadcast_collection(
                 buffer_name: collection_doc,
                 update_base64: update_to_base64(update),
                 wal_seq: result.wal_seq,
+                content_header: None,
             },
             session_id,
         );
@@ -1023,6 +1055,7 @@ async fn handle_doc_request_inner(
                                 buffer_name: doc_name.clone(),
                                 update_base64: update_to_base64(&result.update),
                                 wal_seq: result.wal_seq,
+                                content_header: None,
                             },
                             session_id,
                         );
@@ -1358,6 +1391,7 @@ async fn handle_doc_request_inner(
                                 buffer_name: doc_name.clone(),
                                 update_base64: update_to_base64(&result.update),
                                 wal_seq: result.wal_seq,
+                                content_header: None,
                             },
                             session_id,
                         );
@@ -2027,37 +2061,27 @@ async fn handle_doc_request_inner(
             // over the trusted local socket keeps the legacy gate below. An unsigned
             // op (no header) falls through to that legacy epoch fence — the migration
             // path (mesh-side require-signed lands with the dialer-relay slice).
+            // When verified, the authorship header is carried into the broadcast (and
+            // thus the dialer's relay to peers) so a downstream peer re-verifies the
+            // same op — `verify_content_op` is the single check shared with the mesh
+            // relay path (principle #8).
+            let mut content_header: Option<serde_json::Value> = None;
             if let Some(anchor) = doc_store.kb_anchor(&kb_id).await {
                 if let Some(signed) = SignedContentOp::from_params(&params, update_bytes.clone()) {
-                    let coll = match load_collection(doc_store, &kb_id).await {
-                        Ok(c) => c,
-                        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
-                    };
-                    let ops = coll.oplog_ops();
-                    let governance = derive_governance(&ops, &anchor);
-                    let members = derive_valid_members_governed(
-                        &ops,
-                        &anchor,
-                        now_unix(),
-                        governance,
-                        &MembershipView::default(),
-                    );
-                    if let Err(e) = signed.admit(&members) {
+                    if let Err(e) = verify_content_op(doc_store, &kb_id, &anchor, &signed).await {
                         warn!(
                             session = session_id, kb_id = %kb_id, node_id = %node_id,
-                            author = %signed.op.author, reason = ?e,
+                            author = %signed.op.author, reason = %e,
                             "kb/node_update: SIGNED CONTENT OP REJECTED (ADR-036)"
                         );
-                        return JsonRpcResponse::error(
-                            id,
-                            McpError::internal_error(format!("signed content op rejected: {e:?}")),
-                        );
+                        return JsonRpcResponse::error(id, McpError::internal_error(e));
                     }
                     info!(
                         session = session_id, kb_id = %kb_id, node_id = %node_id,
                         author = %signed.op.author,
                         "kb/node_update: signed content op verified (ADR-036)"
                     );
+                    content_header = Some(signed.header_params());
                 }
             }
 
@@ -2150,6 +2174,9 @@ async fn handle_doc_request_inner(
                                 buffer_name: node_doc.clone(),
                                 update_base64: update_to_base64(&result.update),
                                 wal_seq: result.wal_seq,
+                                // Relay the verified authorship header so a peer daemon
+                                // re-verifies this op (ADR-036 mesh propagation).
+                                content_header,
                             },
                             session_id,
                         );
@@ -2756,6 +2783,7 @@ async fn handle_sync_tool(
                         buffer_name: doc.clone(),
                         update_base64: update_to_base64(&result.update),
                         wal_seq: result.wal_seq,
+                        content_header: None,
                     });
                     McpToolResult {
                         success: true,
