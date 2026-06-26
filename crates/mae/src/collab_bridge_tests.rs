@@ -2677,6 +2677,7 @@ fn collab_kb_drain_pending_updates_sends_commands() {
             kb_id,
             node_id,
             update,
+            epoch: _,
             pending_rowid,
         } => {
             assert_eq!(kb_id, "kb-1");
@@ -2697,6 +2698,7 @@ fn collab_kb_drain_pending_updates_sends_commands() {
             kb_id,
             node_id,
             update,
+            epoch: _,
             pending_rowid,
         } => {
             assert_eq!(kb_id, "kb-1");
@@ -2715,6 +2717,45 @@ fn collab_kb_drain_pending_updates_sends_commands() {
 
     // Pending list should be drained.
     assert!(editor.collab.pending_kb_updates.is_empty());
+}
+
+/// ADR-036 §D2: the editor's sign-on-push builder signs with a key-mode identity
+/// (the request parses back + verifies, carrying this editor's author + the KB
+/// epoch), and falls back to a legacy unsigned op when there is no identity
+/// (psk/none mode).
+#[test]
+fn build_kb_node_update_request_signs_with_identity_else_unsigned() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_ops::SignedContentOp;
+    use std::sync::Arc;
+
+    let update = vec![1u8, 0, 2, 0, 9];
+    let id = Arc::new(Identity::generate("editor"));
+
+    // Signed: the daemon's parser reconstructs the op, the signature verifies, and
+    // the author + epoch + node_id are exactly what the editor stamped.
+    let req = build_kb_node_update_request(7, "kb1", "concept:n", &update, 3, Some(&id));
+    assert_eq!(req["id"], 7, "still a request (carries an id)");
+    let parsed = SignedContentOp::from_params(&req["params"], update.clone())
+        .expect("signed request parses");
+    assert!(parsed.verify_signed(), "the editor's signature verifies");
+    assert_eq!(
+        parsed.op.author,
+        id.fingerprint(),
+        "authored by this editor"
+    );
+    assert_eq!(
+        parsed.op.epoch, 3,
+        "the KB epoch is carried into the header"
+    );
+    assert_eq!(parsed.op.node_id, "concept:n");
+
+    // Unsigned (psk/none): no authorship header ⇒ the legacy path.
+    let unsigned = build_kb_node_update_request(8, "kb1", "concept:n", &update, 3, None);
+    assert!(
+        SignedContentOp::from_params(&unsigned["params"], update).is_none(),
+        "no identity ⇒ legacy unsigned op"
+    );
 }
 
 #[test]

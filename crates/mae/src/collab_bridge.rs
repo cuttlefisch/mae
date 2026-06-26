@@ -225,6 +225,11 @@ pub enum CollabCommand {
         kb_id: String,
         node_id: String,
         update: Vec<u8>,
+        /// The KB's current authorization epoch (ADR-023) at enqueue, captured on
+        /// the editor thread (which holds `kb_epochs`) so the network task — which
+        /// holds the signing identity but not editor state — can stamp the ADR-036
+        /// signed authorship header without a round-trip.
+        epoch: u64,
         pending_rowid: Option<i64>,
     },
     /// Add or remove a peer (by principal) from a KB's members (owner-only).
@@ -472,10 +477,12 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
                 continue;
             }
             tracing::debug!(target: "kb_sync", kb_id = %pu.kb_id, node_id = %pu.node_id, rowid = pu.rowid, bytes = pu.update_bytes.len(), "drain: send kb/node_update (durable)");
+            let epoch = editor.collab.kb_epochs.get(&pu.kb_id).copied().unwrap_or(0);
             let cmd = CollabCommand::KbNodeUpdate {
                 kb_id: pu.kb_id,
                 node_id: pu.node_id,
                 update: pu.update_bytes,
+                epoch,
                 pending_rowid: Some(pu.rowid),
             };
             if collab_tx.try_send(cmd).is_err() {
@@ -490,10 +497,12 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         let in_mem = editor.collab.pending_kb_updates.len();
         for (kb_id, node_id, update) in std::mem::take(&mut editor.collab.pending_kb_updates) {
             tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, bytes = update.len(), "drain: send kb/node_update (in-mem)");
+            let epoch = editor.collab.kb_epochs.get(&kb_id).copied().unwrap_or(0);
             let cmd = CollabCommand::KbNodeUpdate {
                 kb_id,
                 node_id,
                 update,
+                epoch,
                 pending_rowid: None,
             };
             if collab_tx.try_send(cmd).is_err() {
@@ -713,6 +722,9 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             kb_id,
             node_id,
             update,
+            // This intent path is not a live producer (node updates flow via the
+            // drain, which stamps the real epoch); 0 is the unsigned/epoch-0 default.
+            epoch: 0,
             pending_rowid: None,
         },
         CollabIntent::KbAdoptNode { kb_id, node_id } => {
@@ -2503,6 +2515,57 @@ fn spawn_reader_task<R: tokio::io::AsyncBufRead + Unpin + Send + 'static>(
     msg_rx
 }
 
+/// Build a `kb/node_update` JSON-RPC request, signing the ADR-036 authorship header
+/// when a key-mode `signing_identity` is present (else the legacy unsigned form).
+///
+/// This is where the editor's **sign-on-push** (ADR-036 §D2) lives — kept a pure
+/// function out of the network loop so it is directly unit-testable. The author is
+/// this editor's own fingerprint; `epoch` is the KB's authorization epoch captured
+/// on the editor thread (carried in `CollabCommand::KbNodeUpdate`). `base_sv` is left
+/// empty: per ADR-036 §D4 the yrs SV + the daemon's epoch fence carry replay safety,
+/// so the signature binds author + epoch + payload, and a node-SV binding is a
+/// documented future refinement (not a security boundary here).
+fn build_kb_node_update_request(
+    req_id: u64,
+    kb_id: &str,
+    node_id: &str,
+    update: &[u8],
+    epoch: u64,
+    signing_identity: Option<&std::sync::Arc<mae_mcp::identity::Identity>>,
+) -> serde_json::Value {
+    let update_b64 = mae_sync::encoding::update_to_base64(update);
+    match signing_identity {
+        Some(id) => {
+            let op = mae_sync::content_ops::ContentOp {
+                kb_id: kb_id.to_string(),
+                node_id: node_id.to_string(),
+                base_sv: Vec::new(),
+                author: id.fingerprint(),
+                epoch,
+                issued_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            };
+            let sig = op.sign(&id.secret_bytes(), update);
+            let signed = mae_sync::content_ops::SignedContentOp {
+                op,
+                payload: update.to_vec(),
+                sig,
+                author_pubkey: id.public().to_bytes(),
+            };
+            mae_sync::wire::kb_node_update_request_signed(
+                req_id,
+                kb_id,
+                node_id,
+                &update_b64,
+                signed.header_params(),
+            )
+        }
+        None => mae_sync::wire::kb_node_update_request(req_id, kb_id, node_id, &update_b64),
+    }
+}
+
 /// Background task that owns the TCP connection to the state server.
 ///
 /// Receives commands from the main thread, manages the connection lifecycle,
@@ -2534,6 +2597,15 @@ async fn run_collab_task(
             ClientTransport::Plain { psk, key_id }
         }
         other => other,
+    };
+    // ADR-036 D2: the signing identity for content ops — present only in key mode
+    // (the editor holds its Ed25519 key for mTLS/JSON-key auth). psk/none mode has
+    // no per-identity key, so its ops stay unsigned (the legacy/hub path).
+    let signing_identity: Option<std::sync::Arc<mae_mcp::identity::Identity>> = match &transport {
+        ClientTransport::KeyTls { identity, .. } | ClientTransport::KeyJson { identity, .. } => {
+            Some(identity.clone())
+        }
+        ClientTransport::Plain { .. } => None,
     };
     match &transport {
         ClientTransport::KeyTls { .. } => {
@@ -3013,7 +3085,7 @@ async fn run_collab_task(
                                 }
                             }
                         }
-                        CollabCommand::KbNodeUpdate { kb_id, node_id, update, pending_rowid } => {
+                        CollabCommand::KbNodeUpdate { kb_id, node_id, update, epoch, pending_rowid } => {
                             // ADR-020: a kb/node_update is a REQUEST (carries an `id`),
                             // built via the shared `mae_sync::wire` constructor so the
                             // editor and the daemon (+ tests) serialise identically. The
@@ -3026,11 +3098,15 @@ async fn run_collab_task(
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
                                 next_request_id += 1;
-                                let req = mae_sync::wire::kb_node_update_request(
+                                // ADR-036 D2: sign the authorship header when we hold
+                                // a key-mode identity (else legacy unsigned).
+                                let req = build_kb_node_update_request(
                                     req_id,
                                     &kb_id,
                                     &node_id,
-                                    &mae_sync::encoding::update_to_base64(&update),
+                                    &update,
+                                    epoch,
+                                    signing_identity.as_ref(),
                                 );
                                 match serde_json::to_vec(&req) {
                                     Ok(body) => match write_framed(w, &body, write_timeout).await {
@@ -4327,6 +4403,9 @@ async fn handle_disconnected_cmd(
             kb_id,
             node_id,
             update,
+            // Re-derived from `kb_epochs` at the next drain, so the stale epoch isn't
+            // carried across the requeue.
+            epoch: _,
             pending_rowid,
         } => {
             // ADR-020 durability: not connected — re-queue (don't drop) so the

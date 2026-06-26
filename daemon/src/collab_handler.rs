@@ -14,6 +14,7 @@ use mae_mcp::identity::PeerIdentity;
 use mae_mcp::protocol::{JsonRpcRequest, JsonRpcResponse, McpError, ToolInfo};
 use mae_mcp::session::ClientSession;
 use mae_mcp::{McpToolRequest, McpToolResult};
+use mae_sync::content_ops::SignedContentOp;
 use mae_sync::encoding::{base64_to_update, update_to_base64};
 use mae_sync::kb::{
     derive_kb_client_id, update_new_op_authors, JoinPolicy, KbCollectionDoc, Role as SyncRole,
@@ -2013,6 +2014,52 @@ async fn handle_doc_request_inner(
             }
 
             let node_doc = format!("kb:{node_id}");
+
+            // ADR-036 §D3 SIGNED CONTENT OP VERIFICATION. If the op carries a signed
+            // authorship header, the content AUTHOR (from the *signed header*, not the
+            // connection principal) must be a current Editor+ member at the op's
+            // epoch, and the signature must bind that author to this exact
+            // (kb_id, node_id, payload). This is what makes a *relayed* edit
+            // peer-verifiable: a hostile relay can neither forge an edit nor
+            // mis-attribute one (the node_id is signed, so a header claiming a
+            // different node than it carries fails `verify_signed`). Enforced for an
+            // ANCHORED (joined) KB, whose authority IS the signed op-log; an owned KB
+            // over the trusted local socket keeps the legacy gate below. An unsigned
+            // op (no header) falls through to that legacy epoch fence — the migration
+            // path (mesh-side require-signed lands with the dialer-relay slice).
+            if let Some(anchor) = doc_store.kb_anchor(&kb_id).await {
+                if let Some(signed) = SignedContentOp::from_params(&params, update_bytes.clone()) {
+                    let coll = match load_collection(doc_store, &kb_id).await {
+                        Ok(c) => c,
+                        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+                    };
+                    let ops = coll.oplog_ops();
+                    let governance = derive_governance(&ops, &anchor);
+                    let members = derive_valid_members_governed(
+                        &ops,
+                        &anchor,
+                        now_unix(),
+                        governance,
+                        &MembershipView::default(),
+                    );
+                    if let Err(e) = signed.admit(&members) {
+                        warn!(
+                            session = session_id, kb_id = %kb_id, node_id = %node_id,
+                            author = %signed.op.author, reason = ?e,
+                            "kb/node_update: SIGNED CONTENT OP REJECTED (ADR-036)"
+                        );
+                        return JsonRpcResponse::error(
+                            id,
+                            McpError::internal_error(format!("signed content op rejected: {e:?}")),
+                        );
+                    }
+                    info!(
+                        session = session_id, kb_id = %kb_id, node_id = %node_id,
+                        author = %signed.op.author,
+                        "kb/node_update: signed content op verified (ADR-036)"
+                    );
+                }
+            }
 
             // ADR-023 (B-19) EPOCH FENCE — the security core. `kb_access` above
             // confirmed the sender's *current* role permits editing, but a granted

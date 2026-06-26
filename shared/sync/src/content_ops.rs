@@ -184,6 +184,67 @@ impl SignedContentOp {
         }
         Ok(())
     }
+
+    /// The ADR-036 authorship-header fields to merge into a `kb/node_update`
+    /// request's `params` (alongside the existing `kb_id` / `node_id` / `update`).
+    /// `kb_id` / `node_id` are NOT re-emitted here — they are the request's own
+    /// params and [`from_params`](Self::from_params) reads them back from there, so
+    /// the two can never disagree. Binary fields are base64 (STANDARD). Absence of
+    /// these fields on the wire = a legacy unsigned op (the migration path).
+    pub fn header_params(&self) -> serde_json::Value {
+        use base64::Engine;
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        serde_json::json!({
+            "author": self.op.author,
+            "epoch": self.op.epoch,
+            "issued_at": self.op.issued_at,
+            "base_sv": b64(&self.op.base_sv),
+            "sig": b64(&self.sig),
+            "author_pubkey": b64(&self.author_pubkey),
+        })
+    }
+
+    /// Reconstruct a [`SignedContentOp`] from a `kb/node_update` request's `params`
+    /// plus the already-decoded yrs `payload`. `kb_id` / `node_id` are read from the
+    /// request params (not the header), binding the signed `node_id` to the doc the
+    /// daemon will actually apply to. Returns `None` for a **legacy unsigned op**
+    /// (no `sig` field) — the caller then takes the unsigned path. Returns `None` on
+    /// a *malformed* header too (missing/!base64/wrong-length field): a partial or
+    /// corrupt header is never silently downgraded to "trusted-unsigned"; it is
+    /// simply not a valid signed op, and the daemon's policy decides whether an
+    /// unsigned op is acceptable on that transport.
+    pub fn from_params(params: &serde_json::Value, payload: Vec<u8>) -> Option<Self> {
+        use base64::Engine;
+        let sig_b64 = params.get("sig")?.as_str()?; // absent ⇒ legacy unsigned ⇒ None
+        let b64 = |v: &serde_json::Value, k: &str| -> Option<Vec<u8>> {
+            base64::engine::general_purpose::STANDARD
+                .decode(v.get(k)?.as_str()?)
+                .ok()
+        };
+        let kb_id = params.get("kb_id")?.as_str()?.to_string();
+        let node_id = params.get("node_id")?.as_str()?.to_string();
+        let author = params.get("author")?.as_str()?.to_string();
+        let epoch = params.get("epoch")?.as_u64()?;
+        let issued_at = params.get("issued_at")?.as_u64()?;
+        let base_sv = b64(params, "base_sv")?;
+        let sig = base64::engine::general_purpose::STANDARD
+            .decode(sig_b64)
+            .ok()?;
+        let author_pubkey: [u8; 32] = b64(params, "author_pubkey")?.try_into().ok()?;
+        Some(SignedContentOp {
+            op: ContentOp {
+                kb_id,
+                node_id,
+                base_sv,
+                author,
+                epoch,
+                issued_at,
+            },
+            payload,
+            sig,
+            author_pubkey,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -383,5 +444,89 @@ mod tests {
         let (_s, pubkey, fp) = ident(10);
         assert!(fp.starts_with("SHA256:"));
         assert_eq!(fingerprint_of(&pubkey), fp);
+    }
+
+    /// Full wire roundtrip: sign → emit header params (merged into a real
+    /// kb/node_update params object) → `from_params` reconstructs the IDENTICAL op,
+    /// and it still verifies (the signature survives the base64 round-trip + the
+    /// kb_id/node_id are re-bound from the request params).
+    #[test]
+    fn header_params_roundtrips_through_from_params() {
+        let (secret, pubkey, fp) = ident(11);
+        let op = sample(&fp, 12);
+        let payload = b"\x00\x01yrs-delta";
+        let sig = op.sign(&secret, payload);
+        let signed = SignedContentOp {
+            op,
+            payload: payload.to_vec(),
+            sig,
+            author_pubkey: pubkey,
+        };
+        // Build the FULL params object exactly as the wire constructor would: the
+        // request's own kb_id/node_id/update + the merged authorship header.
+        let mut params = serde_json::json!({
+            "kb_id": signed.op.kb_id,
+            "node_id": signed.op.node_id,
+            "update": "ignored-the-daemon-decodes-this-separately",
+        });
+        let header = signed.header_params();
+        for (k, v) in header.as_object().unwrap() {
+            params[k] = v.clone();
+        }
+
+        let parsed = SignedContentOp::from_params(&params, payload.to_vec())
+            .expect("a signed op round-trips");
+        assert_eq!(parsed, signed, "every field survives the wire encoding");
+        assert!(parsed.verify_signed(), "the signature still verifies");
+    }
+
+    #[test]
+    fn from_params_returns_none_for_legacy_unsigned() {
+        // A v0.14 unsigned kb/node_update (no `sig`) ⇒ None ⇒ caller takes the
+        // unsigned path. Not an error, just "not a signed op".
+        let params = serde_json::json!({
+            "kb_id": "kb1", "node_id": "concept:buffer", "update": "abc",
+        });
+        assert!(SignedContentOp::from_params(&params, vec![1, 2, 3]).is_none());
+    }
+
+    #[test]
+    fn from_params_returns_none_for_a_malformed_header() {
+        use base64::Engine;
+        let (secret, pubkey, fp) = ident(13);
+        let op = sample(&fp, 0);
+        let payload = b"x";
+        let sig = op.sign(&secret, payload);
+        let signed = SignedContentOp {
+            op,
+            payload: payload.to_vec(),
+            sig,
+            author_pubkey: pubkey,
+        };
+        let base = |signed: &SignedContentOp| {
+            let mut p = serde_json::json!({
+                "kb_id": signed.op.kb_id, "node_id": signed.op.node_id, "update": "x",
+            });
+            for (k, v) in signed.header_params().as_object().unwrap() {
+                p[k] = v.clone();
+            }
+            p
+        };
+
+        // A present-but-corrupt sig (not base64) is NOT downgraded to unsigned.
+        let mut p = base(&signed);
+        p["sig"] = serde_json::json!("!!!not-base64!!!");
+        assert!(SignedContentOp::from_params(&p, payload.to_vec()).is_none());
+
+        // A wrong-length author_pubkey (not 32 bytes) is rejected.
+        let mut p = base(&signed);
+        p["author_pubkey"] =
+            serde_json::json!(base64::engine::general_purpose::STANDARD.encode([0u8; 16]));
+        assert!(SignedContentOp::from_params(&p, payload.to_vec()).is_none());
+
+        // A missing field (epoch dropped) is rejected.
+        let mut p = base(&signed);
+        p.as_object_mut().unwrap().remove("epoch");
+        assert!(SignedContentOp::from_params(&p, payload.to_vec()).is_none());
     }
 }
