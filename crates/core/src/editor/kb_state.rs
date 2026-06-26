@@ -275,11 +275,10 @@ impl KbContext {
     /// `(kb-share-p2p)` Scheme primitive, and the `kb_share_p2p` MCP tool — so
     /// the human and the AI peer drive the identical action (ADR-025 parity).
     pub fn share_p2p(&self, kb_id: &str) -> Result<String, String> {
-        let control = self.daemon_control.as_deref().ok_or_else(|| {
-            "not connected to a daemon — start one with `mae setup-daemon` and enable \
-             P2P with `mae setup-collab --p2p`"
-                .to_string()
-        })?;
+        let control = self
+            .daemon_control
+            .as_deref()
+            .ok_or_else(|| self.p2p_unavailable_message())?;
         // Establish the mesh share FIRST (default transport=p2p; default join policy =
         // the collection's Invite — joins go pending for owner approval), THEN mint a
         // ticket: a minted ticket is only joinable once the KB is actually shared
@@ -293,12 +292,32 @@ impl KbContext {
     /// Scheme primitive, and the `kb_join_p2p` MCP tool — human + AI peer drive the
     /// identical action (ADR-025 parity). The background dialer does the dial+pull.
     pub fn join_p2p(&self, ticket: &str) -> Result<String, String> {
-        let control = self.daemon_control.as_deref().ok_or_else(|| {
-            "not connected to a daemon — start one with `mae setup-daemon` and enable \
-             P2P with `mae setup-collab --p2p`"
-                .to_string()
-        })?;
+        let control = self
+            .daemon_control
+            .as_deref()
+            .ok_or_else(|| self.p2p_unavailable_message())?;
         control.join_p2p_ticket(ticket)
+    }
+
+    /// The actionable "P2P needs a daemon" message, sourced from the capability
+    /// model (ADR-035) so every P2P surface gives identical, mode-aware advice
+    /// instead of a bespoke string. `collab_connected` is not tracked on
+    /// `KbContext` and is irrelevant to the P2P gate (which keys on the control
+    /// channel); the Editor-level snapshot fills it in for sync-related features.
+    fn p2p_unavailable_message(&self) -> String {
+        let snapshot = crate::editor::DaemonStateSnapshot {
+            mode: self.daemon_mode,
+            control_wired: self.daemon_control.is_some(),
+            read_layer_up: self.daemon_query.is_some(),
+            collab_connected: false,
+            hosting_primary: self.daemon_hosts_primary,
+        };
+        match crate::editor::DaemonFeature::P2pKbSharing.availability(&snapshot) {
+            crate::editor::FeatureAvailability::Unavailable { reason, fix } => {
+                format!("{reason} — {fix}")
+            }
+            _ => "P2P KB sharing is unavailable".to_string(),
+        }
     }
 
     /// Whether a daemon query layer is active.

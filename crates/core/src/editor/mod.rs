@@ -3,6 +3,7 @@ pub mod ai_state;
 mod babel_ops;
 mod changes;
 mod command;
+pub mod daemon_capability;
 mod dap_ops;
 pub mod dap_state;
 mod debug_panel_ops;
@@ -47,6 +48,9 @@ mod visual;
 
 pub use ai_state::AiState;
 pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
+pub use daemon_capability::{
+    DaemonFeature, DaemonRequirement, DaemonStateSnapshot, FeatureAvailability,
+};
 pub use dap_state::DapContext;
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use help_ops::is_builtin_node;
