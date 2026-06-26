@@ -5,6 +5,13 @@ on:
     types: [closed]
     branches: [main]
 
+env:
+  # Harden dependency fetching against transient network flakes (curl HTTP/2
+  # framing errors mid-fetch). See ci.yml for the full rationale.
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 jobs:
   bump:
     if: github.event.pull_request.merged == true

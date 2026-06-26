@@ -8,6 +8,13 @@ on:
 permissions:
   issues: write
 
+env:
+  # Harden dependency fetching against transient network flakes (curl HTTP/2
+  # framing errors mid-fetch). See ci.yml for the full rationale.
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 jobs:
   check-sha2:
     name: Test sha2 0.11 compatibility
