@@ -6,7 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(editor)* Live E2E content-encryption wiring (ADR-037, #146 Phase 2b) (#149) ([606f0bb](https://github.com/cuttlefisch/mae/commit/606f0bb6fafa848998dec23c13c0b86defb86db1))
+
+## [0.14.11] - 2026-06-26
+
+### Features
+
 - *(editor)* Seal content ops on push + content-key find-half (ADR-037, #146 Phase 2a) (#148) ([9b007fd](https://github.com/cuttlefisch/mae/commit/9b007fda55e2911969e1254d3580b61e7311ffd5))
+
+### Miscellaneous
+
+- Bump version to 0.14.11 ([5f9323c](https://github.com/cuttlefisch/mae/commit/5f9323cc2c33600527ea7d9fb91a6ae5f5a74c6b))
 
 ## [0.14.10] - 2026-06-26
 
