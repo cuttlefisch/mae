@@ -1,0 +1,26 @@
+# Cargo configuration for the MAE workspaces (editor + daemon).
+#
+# Discovered hierarchically from the build cwd upward, so this one file applies to
+# BOTH the editor workspace (repo root) and the daemon workspace (`daemon/`).
+
+[build]
+# Disable incremental compilation. Cargo only garbage-collects incremental session
+# dirs for the *current* fingerprint at the end of a successful build — it never
+# reclaims the dirs left behind by *past* code states (other branches/commits). On
+# a large, heavily-branched workspace whose debug artifacts are huge (CozoDB +
+# Skia), those orphaned session dirs accumulate without bound: we hit ~370 GB in
+# target/debug/incremental (hundreds of dirs per crate, spanning months).
+#
+# Turning incremental off removes that entire failure mode — there are no
+# per-fingerprint session dirs to leak. The cost is that a changed crate recompiles
+# in full rather than function-by-function, but on this workspace the link step
+# (one big binary, statically linking cozo/skia) dominates rebuild time anyway, so
+# the practical hit is small.
+#
+# Want the incremental edit-loop back for a focused session on one crate? Override
+# per-invocation without editing this file:  CARGO_INCREMENTAL=1 cargo build -p mae-core
+#
+# (This does NOT bound target/debug/deps, which also accrues stale test/dep
+# binaries from past code states over time — run `make clean` periodically for a
+# full reclaim, or `make clean-cache` to drop just the regenerable caches.)
+incremental = false
