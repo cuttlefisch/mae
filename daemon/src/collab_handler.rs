@@ -610,6 +610,98 @@ async fn load_collection(doc_store: &DocStore, kb_id: &str) -> Result<KbCollecti
     KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))
 }
 
+/// ADR-036 §D3: verify a signed content op against this peer's **derived, anchored**
+/// membership — the content author (from the signed header, not the connection) must
+/// be a current Editor+ member at the op's epoch. Shared by the editor→daemon
+/// `kb/node_update` path and the daemon→daemon dialer relay path so there is ONE
+/// authorship check, not two that could drift (principle #8). `anchor` is the KB's
+/// registered trust root; the caller has already established the KB is anchored and
+/// decided its policy for *unsigned* ops (the hub accepts them as legacy; the mesh
+/// rejects them — ADR-036 migration). Returns `Err` with a human reason on any
+/// failure, for the caller to surface (ADR-024). `pub` so the `dialer` (bin crate)
+/// shares this exact check on the relay path.
+pub async fn verify_content_op(
+    doc_store: &DocStore,
+    kb_id: &str,
+    anchor: &[u8; 32],
+    signed: &SignedContentOp,
+) -> Result<(), String> {
+    let coll = load_collection(doc_store, kb_id).await?;
+    let ops = coll.oplog_ops();
+    let governance = derive_governance(&ops, anchor);
+    let members = derive_valid_members_governed(
+        &ops,
+        anchor,
+        now_unix(),
+        governance,
+        &MembershipView::default(),
+    );
+    signed
+        .admit(&members)
+        .map_err(|e| format!("signed content op rejected: {e:?}"))
+}
+
+/// Resolve a KB's content trust anchor (the genesis owner pubkey): the registered
+/// external anchor for a JOINED KB, else this daemon's own signer key when it is the
+/// collection's owner (an OWNED KB — A is its own authority). `None` when neither
+/// holds (un-anchored + not ours), in which case the caller applies the legacy gate.
+pub async fn resolve_content_anchor(doc_store: &DocStore, kb_id: &str) -> Option<[u8; 32]> {
+    if let Some(a) = doc_store.kb_anchor(kb_id).await {
+        return Some(a);
+    }
+    let signer = doc_store.signer()?;
+    let coll = load_collection(doc_store, kb_id).await.ok()?;
+    if !coll.owner().is_empty() && coll.owner() == signer.fingerprint() {
+        Some(signer.public().to_bytes())
+    } else {
+        None
+    }
+}
+
+/// ADR-036 §D3 relay-receive verification — the single check shared by the dialer
+/// (a joiner receiving the owner's pushes) and the `sync/update` handler (the owner
+/// receiving a joiner's relayed edit). `header` is the wire `content_header` (if
+/// any). For a `kb:{node}` doc on a KB with a resolvable anchor it reconstructs the
+/// signed op (re-binding `kb_id`/`node_id` from trusted local context, so a header
+/// signed for a different node fails) and verifies the author is a current Editor+
+/// member at the op's epoch. On success returns the header to carry onward; an
+/// unsigned op errors when `require_signed` (the mesh policy) and is otherwise
+/// accepted as legacy (`Ok(None)`). Non-KB / un-anchored docs pass through (`Ok(None)`).
+pub async fn verify_relayed_content_op(
+    doc_store: &DocStore,
+    kb_id: &str,
+    doc: &str,
+    update: &[u8],
+    header: Option<&serde_json::Value>,
+    require_signed: bool,
+) -> Result<Option<serde_json::Value>, String> {
+    let Some(node_id) = doc.strip_prefix("kb:") else {
+        return Ok(None); // collection/non-KB doc — not a content op
+    };
+    let Some(anchor) = resolve_content_anchor(doc_store, kb_id).await else {
+        return Ok(None); // un-anchored + not ours — legacy gate applies
+    };
+    let header = match header {
+        Some(h) if h.get("sig").is_some() => h,
+        _ => {
+            return if require_signed {
+                Err(format!(
+                    "unsigned content op for KB '{kb_id}' node '{node_id}' rejected on the mesh (ADR-036 require-signed)"
+                ))
+            } else {
+                Ok(None) // hub migration: accept legacy unsigned
+            };
+        }
+    };
+    let mut params = header.clone();
+    params["kb_id"] = serde_json::json!(kb_id);
+    params["node_id"] = serde_json::json!(node_id);
+    let signed = SignedContentOp::from_params(&params, update.to_vec())
+        .ok_or_else(|| "malformed signed content op header".to_string())?;
+    verify_content_op(doc_store, kb_id, &anchor, &signed).await?;
+    Ok(Some(signed.header_params()))
+}
+
 /// Persist a collection update + broadcast it to other subscribers. Returns wal_seq.
 async fn persist_and_broadcast_collection(
     doc_store: &DocStore,
@@ -631,6 +723,7 @@ async fn persist_and_broadcast_collection(
                 buffer_name: collection_doc,
                 update_base64: update_to_base64(update),
                 wal_seq: result.wal_seq,
+                content_header: None,
             },
             session_id,
         );
@@ -1010,6 +1103,32 @@ async fn handle_doc_request_inner(
             }
             let client_id = params["client_id"].as_u64();
 
+            // ADR-036 §D3 (B→A): a content op arriving over the mesh — a peer daemon's
+            // forwarded edit — is re-verified against THIS KB's membership before
+            // apply, because the relaying peer is untrusted (even a member's *daemon*
+            // could lie). The joiner's dialer sends `kb_id`; require-signed on P2p, the
+            // hub accepts legacy unsigned during migration. Same shared check as the
+            // dialer's inbound path. On success the verified header is carried onward.
+            let mut sync_content_header: Option<serde_json::Value> = None;
+            if let Some(kb_id) = params.get("kb_id").and_then(|v| v.as_str()) {
+                match verify_relayed_content_op(
+                    doc_store,
+                    kb_id,
+                    &doc_name,
+                    &update_bytes,
+                    params.get("content_header"),
+                    matches!(transport, Transport::P2p),
+                )
+                .await
+                {
+                    Ok(verified) => sync_content_header = verified,
+                    Err(e) => {
+                        warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update: SIGNED CONTENT OP REJECTED (ADR-036)");
+                        return JsonRpcResponse::error(id, McpError::internal_error(e));
+                    }
+                }
+            }
+
             match doc_store
                 .apply_update(&doc_name, &update_bytes, client_id)
                 .await
@@ -1023,6 +1142,7 @@ async fn handle_doc_request_inner(
                                 buffer_name: doc_name.clone(),
                                 update_base64: update_to_base64(&result.update),
                                 wal_seq: result.wal_seq,
+                                content_header: sync_content_header,
                             },
                             session_id,
                         );
@@ -1358,6 +1478,7 @@ async fn handle_doc_request_inner(
                                 buffer_name: doc_name.clone(),
                                 update_base64: update_to_base64(&result.update),
                                 wal_seq: result.wal_seq,
+                                content_header: None,
                             },
                             session_id,
                         );
@@ -2027,37 +2148,27 @@ async fn handle_doc_request_inner(
             // over the trusted local socket keeps the legacy gate below. An unsigned
             // op (no header) falls through to that legacy epoch fence — the migration
             // path (mesh-side require-signed lands with the dialer-relay slice).
+            // When verified, the authorship header is carried into the broadcast (and
+            // thus the dialer's relay to peers) so a downstream peer re-verifies the
+            // same op — `verify_content_op` is the single check shared with the mesh
+            // relay path (principle #8).
+            let mut content_header: Option<serde_json::Value> = None;
             if let Some(anchor) = doc_store.kb_anchor(&kb_id).await {
                 if let Some(signed) = SignedContentOp::from_params(&params, update_bytes.clone()) {
-                    let coll = match load_collection(doc_store, &kb_id).await {
-                        Ok(c) => c,
-                        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
-                    };
-                    let ops = coll.oplog_ops();
-                    let governance = derive_governance(&ops, &anchor);
-                    let members = derive_valid_members_governed(
-                        &ops,
-                        &anchor,
-                        now_unix(),
-                        governance,
-                        &MembershipView::default(),
-                    );
-                    if let Err(e) = signed.admit(&members) {
+                    if let Err(e) = verify_content_op(doc_store, &kb_id, &anchor, &signed).await {
                         warn!(
                             session = session_id, kb_id = %kb_id, node_id = %node_id,
-                            author = %signed.op.author, reason = ?e,
+                            author = %signed.op.author, reason = %e,
                             "kb/node_update: SIGNED CONTENT OP REJECTED (ADR-036)"
                         );
-                        return JsonRpcResponse::error(
-                            id,
-                            McpError::internal_error(format!("signed content op rejected: {e:?}")),
-                        );
+                        return JsonRpcResponse::error(id, McpError::internal_error(e));
                     }
                     info!(
                         session = session_id, kb_id = %kb_id, node_id = %node_id,
                         author = %signed.op.author,
                         "kb/node_update: signed content op verified (ADR-036)"
                     );
+                    content_header = Some(signed.header_params());
                 }
             }
 
@@ -2150,6 +2261,9 @@ async fn handle_doc_request_inner(
                                 buffer_name: node_doc.clone(),
                                 update_base64: update_to_base64(&result.update),
                                 wal_seq: result.wal_seq,
+                                // Relay the verified authorship header so a peer daemon
+                                // re-verifies this op (ADR-036 mesh propagation).
+                                content_header,
                             },
                             session_id,
                         );
@@ -2756,6 +2870,7 @@ async fn handle_sync_tool(
                         buffer_name: doc.clone(),
                         update_base64: update_to_base64(&result.update),
                         wal_seq: result.wal_seq,
+                        content_header: None,
                     });
                     McpToolResult {
                         success: true,

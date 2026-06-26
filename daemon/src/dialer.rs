@@ -197,23 +197,40 @@ async fn peer_session(
 
     let result = loop {
         tokio::select! {
-            // INBOUND: the owner's pushed updates → apply locally (merge).
+            // INBOUND: the owner's pushed updates → verify authorship (ADR-036), then
+            // apply locally (merge). A forged/mis-attributed/unsigned op is rejected.
             inbound = inbound_rx.recv() => match inbound {
                 Some(Ok(msg)) => {
-                    if let Some((doc, update)) = parse_sync_update(&msg) {
-                        apply_doc(doc_store, Some(broadcaster), dialer_sid, &doc, &update).await;
+                    if let Some((doc, update, header)) = parse_sync_update(&msg) {
+                        // Mesh require-signed: the owner is an untrusted relay, so an
+                        // unsigned/forged/mis-attributed op is rejected (shared check).
+                        match mae_daemon::collab_handler::verify_relayed_content_op(
+                            doc_store, &ticket.kb_id, &doc, &update, header.as_ref(), true,
+                        ).await {
+                            Ok(verified) => apply_doc(doc_store, Some(broadcaster), dialer_sid, &doc, &update, verified).await,
+                            Err(e) => warn!(kb_id = %ticket.kb_id, doc = %doc, reason = %e, "mesh: REJECTED relayed content op (ADR-036)"),
+                        }
                     }
                 }
                 Some(Err(e)) if e == "eof" => break Ok(()),
                 Some(Err(e)) => break Err(format!("read: {e}")),
                 None => break Ok(()),
             },
-            // OUTBOUND: a local edit to one of this KB's docs → forward to the owner.
+            // OUTBOUND: a local edit to one of this KB's docs → forward to the owner,
+            // carrying the signed authorship header so the owner re-verifies it.
             Some(event) = local_rx.recv() => {
-                if let EditorEvent::SyncUpdate { buffer_name, update_base64, .. } = event {
+                if let EditorEvent::SyncUpdate { buffer_name, update_base64, content_header, .. } = event {
+                    // Include kb_id (this session's KB) so the OWNER can resolve the
+                    // KB's membership to re-verify our relayed op (ADR-036 §D3, B→A) —
+                    // sync/update otherwise carries only the bare doc name.
+                    let mut params = json!({
+                        "doc": buffer_name, "update": update_base64, "kb_id": ticket.kb_id,
+                    });
+                    if let Some(h) = content_header {
+                        params["content_header"] = h;
+                    }
                     let req = json!({
-                        "jsonrpc": "2.0", "id": 3, "method": "sync/update",
-                        "params": { "doc": buffer_name, "update": update_base64 }
+                        "jsonrpc": "2.0", "id": 3, "method": "sync/update", "params": params
                     }).to_string();
                     if let Err(e) = mae_mcp::write_framed(&mut send, req.as_bytes(), WRITE_TIMEOUT).await {
                         break Err(format!("forward local edit: {e}"));
@@ -381,12 +398,15 @@ async fn apply_join_response(
         .ok_or("response missing collection_state")?;
     let coll_bytes =
         base64_to_update(coll_b64).map_err(|e| format!("bad collection_state: {e}"))?;
+    // The join snapshot is the owner's authoritative state (not an individual signed
+    // content op), so it carries no authorship header.
     apply_doc(
         doc_store,
         broadcaster,
         exclude_sid,
         &format!("kbc:{kb_id}"),
         &coll_bytes,
+        None,
     )
     .await;
 
@@ -414,6 +434,7 @@ async fn apply_join_response(
                 exclude_sid,
                 &format!("kb:{id}"),
                 &update,
+                None,
             )
             .await;
             nodes += 1;
@@ -431,6 +452,7 @@ async fn apply_doc(
     exclude_sid: u64,
     doc_name: &str,
     update: &[u8],
+    content_header: Option<Value>,
 ) {
     match doc_store.apply_update(doc_name, update, None).await {
         Ok(result) => {
@@ -445,6 +467,9 @@ async fn apply_doc(
                             buffer_name: doc_name.to_string(),
                             update_base64: update_to_base64(update),
                             wal_seq: result.wal_seq,
+                            // Carry the verified header onward (local subscribers + a
+                            // further mesh hop re-verify the same op, ADR-036).
+                            content_header,
                         },
                         exclude_sid,
                     );
@@ -454,10 +479,11 @@ async fn apply_doc(
     }
 }
 
-/// Extract `(doc_name, update_bytes)` from an inbound `notifications/sync_update`.
-/// `EditorEvent` is `#[serde(tag = "type", content = "data")]`, so the payload is
-/// `params.event.data.{buffer_name, update_base64}`.
-fn parse_sync_update(msg: &str) -> Option<(String, Vec<u8>)> {
+/// Extract `(doc_name, update_bytes, content_header)` from an inbound
+/// `notifications/sync_update`. `EditorEvent` is `#[serde(tag = "type", content =
+/// "data")]`, so the payload is `params.event.data.{buffer_name, update_base64,
+/// content_header?}`. `content_header` (ADR-036) is absent for legacy/unsigned ops.
+fn parse_sync_update(msg: &str) -> Option<(String, Vec<u8>, Option<Value>)> {
     let v: Value = serde_json::from_str(msg).ok()?;
     if v.get("method")?.as_str()? != "notifications/sync_update" {
         return None;
@@ -465,7 +491,8 @@ fn parse_sync_update(msg: &str) -> Option<(String, Vec<u8>)> {
     let data = v.get("params")?.get("event")?.get("data")?;
     let doc = data.get("buffer_name")?.as_str()?.to_string();
     let update = base64_to_update(data.get("update_base64")?.as_str()?).ok()?;
-    Some((doc, update))
+    let header = data.get("content_header").cloned();
+    Some((doc, update, header))
 }
 
 #[cfg(test)]
@@ -586,6 +613,32 @@ mod tests {
         false
     }
 
+    /// Sign a content op as `id` — the editor's sign-on-push (ADR-036 §D2),
+    /// reproduced at the test layer so the live-mesh tests exercise real signatures.
+    fn sign_content_op(
+        id: &Identity,
+        kb_id: &str,
+        node_id: &str,
+        epoch: u64,
+        payload: &[u8],
+    ) -> mae_sync::content_ops::SignedContentOp {
+        let op = mae_sync::content_ops::ContentOp {
+            kb_id: kb_id.to_string(),
+            node_id: node_id.to_string(),
+            base_sv: vec![],
+            author: id.fingerprint(),
+            epoch,
+            issued_at: 0,
+        };
+        let sig = op.sign(&id.secret_bytes(), payload);
+        mae_sync::content_ops::SignedContentOp {
+            op,
+            payload: payload.to_vec(),
+            sig,
+            author_pubkey: id.public().to_bytes(),
+        }
+    }
+
     #[tokio::test]
     async fn dial_and_join_pulls_and_peer_verifies() {
         let a_id = Arc::new(Identity::generate("owner-A"));
@@ -694,10 +747,16 @@ mod tests {
             .apply_update("kb:concept:n", &edit, None)
             .await
             .unwrap();
+        // A (the owner = a member) SIGNS the edit (ADR-036): the broadcast carries the
+        // authorship header, so B verifies it against the derived op-log membership
+        // (owner ⊇ editor at epoch 0) before applying — this is the relay-can't-forge
+        // guarantee end-to-end on a real 2-endpoint mesh.
+        let signed = sign_content_op(&a_id, "kbl", "concept:n", 0, &edit);
         a_bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
             buffer_name: "kb:concept:n".to_string(),
             update_base64: update_to_base64(&edit),
             wal_seq: 0,
+            content_header: Some(signed.header_params()),
         });
 
         // B receives + applies it live: its node state vector advances.
@@ -714,6 +773,110 @@ mod tests {
         .await;
         peer.abort();
         assert!(landed, "B should apply the owner's live edit");
+    }
+
+    /// ADR-036 mesh verification, the SELECTIVE oracle: B rejects three distinct bad
+    /// relayed edits (unsigned → require-signed; non-member-signed → NotAMember; real
+    /// member at a stale epoch → StaleEpoch) AND still applies a valid owner edit on
+    /// the same live session. The trailing positive case is the point: a bare
+    /// assert-the-SV-didn't-move test would pass just as well if the session had
+    /// quietly died — proving rejection is the verifier working, not a dead pipe.
+    #[tokio::test]
+    async fn live_session_mesh_verification_is_selective() {
+        let a_id = Arc::new(Identity::generate("owner-A"));
+        let b_id = Identity::generate("joiner-B");
+        let (addr, a_store, a_bc) = serve_owner_kb(&a_id, "kbl", Some(&b_id.fingerprint())).await;
+
+        let b_endpoint = bind_endpoint(&b_id, RelayMode::Disabled).await.unwrap();
+        let b_store = mem_store();
+        let b_bc = bc();
+        let ticket = JoinTicket::new(addr, "kbl");
+        let peer = tokio::spawn(run_peer(
+            b_endpoint,
+            ticket,
+            Arc::clone(&b_store),
+            b_bc.clone(),
+        ));
+        assert!(
+            wait_until(5, || {
+                let s = Arc::clone(&b_store);
+                async move { s.has_doc("kb:concept:n").await }
+            })
+            .await,
+            "B should pull the node on join"
+        );
+        let before = b_store.state_vector("kb:concept:n").await.unwrap();
+
+        // A genuine edit A makes locally (so the yrs bytes are valid) — but relayed
+        // two illegitimate ways.
+        let mut a_node = {
+            let (st, _) = a_store.encode_state_and_sv("kb:concept:n").await.unwrap();
+            TextSync::from_state(&st).unwrap()
+        };
+        let edit = a_node.insert(0, "FORGED ");
+
+        let push = |bc: &SharedBroadcaster, upd: &[u8], header: Option<serde_json::Value>| {
+            bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
+                buffer_name: "kb:concept:n".to_string(),
+                update_base64: update_to_base64(upd),
+                wal_seq: 0,
+                content_header: header,
+            });
+        };
+        let sv_advanced = |b_store: &Arc<DocStore>, before: &[u8]| {
+            let s = Arc::clone(b_store);
+            let before = before.to_vec();
+            async move {
+                s.state_vector("kb:concept:n")
+                    .await
+                    .map(|sv| sv != before)
+                    .unwrap_or(false)
+            }
+        };
+
+        // Three DISTINCT rejection paths, each exercising a different `admit` failure:
+        // (1) UNSIGNED → mesh require-signed; (2) signed by a NON-MEMBER stranger →
+        // NotAMember; (3) signed by a REAL MEMBER (B) but at a STALE epoch (its grant
+        // is epoch 0) → StaleEpoch. None must apply.
+        push(&a_bc, &edit, None);
+        let stranger = Identity::generate("stranger");
+        push(
+            &a_bc,
+            &edit,
+            Some(sign_content_op(&stranger, "kbl", "concept:n", 0, &edit).header_params()),
+        );
+        push(
+            &a_bc,
+            &edit,
+            Some(sign_content_op(&b_id, "kbl", "concept:n", 999, &edit).header_params()),
+        );
+
+        let advanced = wait_until(2, || sv_advanced(&b_store, &before)).await;
+        assert!(
+            !advanced,
+            "B must reject the unsigned + non-member + stale-epoch relayed edits"
+        );
+
+        // SELECTIVE, not a dead session: a VALID owner-signed edit on the SAME live
+        // session IS applied — proving the rejections above were the verifier doing
+        // its job, not the connection having quietly died (the trap a bare
+        // assert-absence test would mask).
+        let valid_edit = {
+            let (st, _) = a_store.encode_state_and_sv("kb:concept:n").await.unwrap();
+            let mut node = TextSync::from_state(&st).unwrap();
+            node.insert(0, "VALID ")
+        };
+        push(
+            &a_bc,
+            &valid_edit,
+            Some(sign_content_op(&a_id, "kbl", "concept:n", 0, &valid_edit).header_params()),
+        );
+        let applied = wait_until(5, || sv_advanced(&b_store, &before)).await;
+        peer.abort();
+        assert!(
+            applied,
+            "B must APPLY a valid owner edit on the same session (rejection is selective, session alive)"
+        );
     }
 
     #[tokio::test]
@@ -757,25 +920,49 @@ mod tests {
             .apply_update("kb:concept:n", &edit, None)
             .await
             .unwrap();
-        b_bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
-            buffer_name: "kb:concept:n".to_string(),
-            update_base64: update_to_base64(&edit),
-            wal_seq: 0,
-        });
-
-        // The dialer forwards it; the owner applies it → its node state vector advances.
-        let landed = wait_until(5, || {
-            let s = Arc::clone(&a_store);
-            let before = a_before.clone();
+        let push_b = |header: Option<serde_json::Value>| {
+            b_bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
+                buffer_name: "kb:concept:n".to_string(),
+                update_base64: update_to_base64(&edit),
+                wal_seq: 0,
+                content_header: header,
+            });
+        };
+        let a_changed = |a_store: &Arc<DocStore>, a_before: &[u8]| {
+            let s = Arc::clone(a_store);
+            let before = a_before.to_vec();
             async move {
                 s.state_vector("kb:concept:n")
                     .await
                     .map(|sv| sv != before)
                     .unwrap_or(false)
             }
-        })
-        .await;
+        };
+
+        // B→A direction (ADR-036 §D3): the owner re-verifies the joiner's relayed op,
+        // because B's *daemon* is an untrusted relay. (bad) an UNSIGNED edit and one
+        // forged-signed by a NON-MEMBER are rejected by the OWNER ...
+        push_b(None);
+        let stranger = Identity::generate("stranger");
+        push_b(Some(
+            sign_content_op(&stranger, "kbo", "concept:n", 0, &edit).header_params(),
+        ));
+        assert!(
+            !wait_until(2, || a_changed(&a_store, &a_before)).await,
+            "owner must reject B's unsigned + non-member-forged relayed edits"
+        );
+
+        // ... (valid) B (a real member) signs its OWN edit → the owner verifies it
+        // against the KB membership and applies it (selective: bad rejected, good
+        // applied on the same live session).
+        push_b(Some(
+            sign_content_op(&b_id, "kbo", "concept:n", 0, &edit).header_params(),
+        ));
+        let landed = wait_until(5, || a_changed(&a_store, &a_before)).await;
         peer.abort();
-        assert!(landed, "B's local edit should reach the owner");
+        assert!(
+            landed,
+            "owner must apply B's VALID signed edit (B→A relay verified, selective)"
+        );
     }
 }
