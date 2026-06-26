@@ -8,6 +8,14 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Harden dependency fetching against transient network flakes. The daemon's
+  # iroh/hickory (QUIC P2P) deps occasionally trip cargo's HTTP/2 multiplexing
+  # mid-fetch with "[16] Error in the HTTP2 framing layer" (curl CURLE_HTTP2),
+  # failing an otherwise-clean `cargo build`. Force HTTP/1.1, retry transient
+  # fetch errors, and use the git CLI (robust retry/resume) for any git deps.
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
   check:
