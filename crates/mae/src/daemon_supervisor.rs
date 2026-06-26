@@ -26,6 +26,16 @@ pub fn should_spawn(mode: DaemonMode, daemon_responds: bool) -> bool {
     matches!(mode, DaemonMode::OnDemand) && !daemon_responds
 }
 
+/// Should the editor route KB *reads* through the daemon (attach the LRU read
+/// layer)? Only when the daemon actually hosts the primary KB (`primary_exists`),
+/// OR when the editor started thin and therefore has no local mirror to fall back
+/// on (`primary_thin`). A freshly spawned/empty daemon (e.g. on-demand first
+/// launch) hosts nothing, so routing reads to it would shadow the local KB with
+/// emptiness — in that case keep reads local. Pure + unit-tested.
+pub fn should_attach_daemon_reads(primary_exists: bool, primary_thin: bool) -> bool {
+    primary_exists || primary_thin
+}
+
 /// Resolve the `mae-daemon` binary: prefer the one sitting next to the running
 /// editor (a release installs them side by side, so an on-demand daemon matches
 /// the editor that spawns it — the version-pin precondition), then fall back to
@@ -130,6 +140,20 @@ mod tests {
         // off is the in-process floor.
         assert!(!should_spawn(DaemonMode::Off, false));
         assert!(!should_spawn(DaemonMode::Off, true));
+    }
+
+    #[test]
+    fn attach_reads_only_when_hosted_or_thin() {
+        // Daemon hosts the primary → route reads through it.
+        assert!(should_attach_daemon_reads(true, false));
+        // Thin startup (no local mirror) → must use the daemon even if the probe
+        // momentarily says no.
+        assert!(should_attach_daemon_reads(false, true));
+        // Fresh/empty daemon + a local mirror present → keep reads local (the fix:
+        // don't shadow the local KB with an empty daemon).
+        assert!(!should_attach_daemon_reads(false, false));
+        // Both → attach.
+        assert!(should_attach_daemon_reads(true, true));
     }
 
     #[test]
