@@ -6,7 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(editor)* Seal content ops on push + content-key find-half (ADR-037, #146 Phase 2a) (#148) ([9b007fd](https://github.com/cuttlefisch/mae/commit/9b007fda55e2911969e1254d3580b61e7311ffd5))
+
+## [0.14.10] - 2026-06-26
+
+### Features
+
 - *(sync)* Op-set pure layer — seal/merge/open for encrypted nodes (ADR-037, #146 Phase 1) (#147) ([f76ad7c](https://github.com/cuttlefisch/mae/commit/f76ad7ca15b22d5f335b58728ffba407c9908eaa))
+
+### Miscellaneous
+
+- Bump version to 0.14.10 ([e409e69](https://github.com/cuttlefisch/mae/commit/e409e6918d694aefc3a8b87c70b086c0d0610552))
 
 ## [0.14.9] - 2026-06-26
 
