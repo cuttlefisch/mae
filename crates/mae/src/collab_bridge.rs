@@ -2535,7 +2535,7 @@ fn build_kb_node_update_request(
     signing_identity: Option<&std::sync::Arc<mae_mcp::identity::Identity>>,
     content_key: Option<&mae_sync::content_crypto::ContentKey>,
     op_set_state: &[u8],
-) -> (serde_json::Value, Vec<u8>) {
+) -> (serde_json::Value, Vec<u8>, Option<String>) {
     // ADR-037 E2E (#146): on an encrypted KB, the PLAINTEXT node update is sealed into
     // the op-set — encrypt under the content key, build the outer YMap-insert op
     // (stamped with the epoch client_id so the daemon's ADR-023 fence still authorizes
@@ -2543,22 +2543,25 @@ fn build_kb_node_update_request(
     // sign: the daemon verifies authorship over the ciphertext-bearing op, key-blind).
     // The returned op-set state advances by the sealed op. Without a content key the
     // plaintext update is the payload (today's behaviour) and the state is unchanged.
-    let (payload, new_op_set_state): (Vec<u8>, Vec<u8>) = match (content_key, signing_identity) {
-        (Some(key), Some(id)) => {
-            let client_id = mae_sync::kb::derive_kb_client_id(&id.fingerprint(), epoch);
-            match mae_sync::op_set::seal_op(op_set_state, key, update, client_id) {
-                Ok((_op_id, outer)) => {
-                    let merged = mae_sync::op_set::merge(op_set_state, &outer)
-                        .unwrap_or_else(|_| op_set_state.to_vec());
-                    (outer, merged)
+    // `sealed_op_id` is `Some` only when we sealed — the caller records it in
+    // `seen_ops` so the daemon's echo of our own op isn't re-materialized.
+    let (payload, new_op_set_state, sealed_op_id): (Vec<u8>, Vec<u8>, Option<String>) =
+        match (content_key, signing_identity) {
+            (Some(key), Some(id)) => {
+                let client_id = mae_sync::kb::derive_kb_client_id(&id.fingerprint(), epoch);
+                match mae_sync::op_set::seal_op(op_set_state, key, update, client_id) {
+                    Ok((op_id, outer)) => {
+                        let merged = mae_sync::op_set::merge(op_set_state, &outer)
+                            .unwrap_or_else(|_| op_set_state.to_vec());
+                        (outer, merged, Some(op_id))
+                    }
+                    // Sealing can't fail for a valid op-set, but fail safe: keep the
+                    // plaintext payload rather than dropping the edit.
+                    Err(_) => (update.to_vec(), op_set_state.to_vec(), None),
                 }
-                // Sealing can't fail for a valid op-set, but fail safe: keep the
-                // plaintext payload rather than dropping the edit.
-                Err(_) => (update.to_vec(), op_set_state.to_vec()),
             }
-        }
-        _ => (update.to_vec(), op_set_state.to_vec()),
-    };
+            _ => (update.to_vec(), op_set_state.to_vec(), None),
+        };
 
     let payload_b64 = mae_sync::encoding::update_to_base64(&payload);
     let request = match signing_identity {
@@ -2591,7 +2594,96 @@ fn build_kb_node_update_request(
         }
         None => mae_sync::wire::kb_node_update_request(req_id, kb_id, node_id, &payload_b64),
     };
-    (request, new_op_set_state)
+    (request, new_op_set_state, sealed_op_id)
+}
+
+/// ADR-037 §D2 (#146 Phase 2b): recover **this peer's** per-KB content key from a
+/// collection doc, in the network task (the only place that holds both the collection
+/// bytes — at the join/share response — and the identity secret). Returns `None` for
+/// an unencrypted KB, a collection without a trusted genesis, or a wrap that doesn't
+/// open for me (non-member / not yet wrapped to me). Pure derivation, no key server:
+/// the genesis owner self-admit is the trust anchor, and the latest owner-authored
+/// `wrapped_key` targeting me (causal order) is unwrapped with my Ed25519 secret.
+fn derive_kb_content_key(
+    collection_state: &[u8],
+    identity: &mae_mcp::identity::Identity,
+) -> Option<mae_sync::content_crypto::ContentKey> {
+    let coll = mae_sync::kb::KbCollectionDoc::from_bytes(collection_state).ok()?;
+    if coll.encryption() != mae_sync::kb::Encryption::E2e {
+        return None;
+    }
+    let ops = coll.oplog_ops();
+    // Anchor: the genesis owner self-admit (mirror of `derive_governance` /
+    // `derive_content_key`). Without it there is no trust root and we derive nothing.
+    let anchor_owner_pubkey = ops
+        .iter()
+        .find(|o| {
+            o.op.prev_hash.is_empty()
+                && o.op.action == mae_sync::membership::MembershipAction::Admit
+                && o.op.subject == o.op.author
+        })?
+        .author_pubkey;
+    mae_sync::membership::derive_content_key(
+        &ops,
+        &anchor_owner_pubkey,
+        &identity.fingerprint(),
+        &identity.secret_bytes(),
+    )
+}
+
+/// ADR-037 §2b (#146): route one inbound `kb:{node}` sync_update to the main thread as
+/// plaintext. The single seam shared by both inbound formats (`notifications/sync_update`
+/// + legacy `sync/update`) so the encrypted + plaintext paths can't drift (principle #8).
+///
+/// - **No content key** for this node's KB (unencrypted, or a node not yet registered in
+///   `node_to_kb`) ⇒ **plaintext passthrough**: emit the bytes verbatim, exactly as the
+///   pre-encryption code did (byte-identical behaviour).
+/// - **Encrypted:** merge the inbound op-set update (the daemon relayed opaque ciphertext
+///   blobs) into our op-set mirror, `open_new_ops` the ops we haven't materialized yet
+///   (causal order; blobs that don't open are skipped), and emit each inner **plaintext**
+///   update. `seen_ops` makes this idempotent and suppresses the echo of our own ops.
+fn route_kb_node_update(
+    node_id: &str,
+    bytes: Vec<u8>,
+    content_keys: &std::collections::HashMap<String, mae_sync::content_crypto::ContentKey>,
+    node_to_kb: &std::collections::HashMap<String, String>,
+    op_sets: &mut std::collections::HashMap<String, Vec<u8>>,
+    seen_ops: &mut std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+    evt_tx: &mpsc::Sender<CollabEvent>,
+) {
+    let kb_id = node_to_kb.get(node_id).cloned().unwrap_or_default();
+    let key = node_to_kb.get(node_id).and_then(|kb| content_keys.get(kb));
+    let Some(key) = key else {
+        // Plaintext passthrough — unencrypted KB or not-yet-keyed node.
+        try_send_evt(
+            evt_tx,
+            CollabEvent::KbNodeUpdate {
+                kb_id,
+                node_id: node_id.to_string(),
+                update_bytes: bytes,
+            },
+        );
+        return;
+    };
+    let merged = mae_sync::op_set::merge(
+        op_sets.get(node_id).map(|v| v.as_slice()).unwrap_or(&[]),
+        &bytes,
+    )
+    .unwrap_or_else(|_| bytes.clone());
+    let seen = seen_ops.entry(node_id.to_string()).or_default();
+    let opened = mae_sync::op_set::open_new_ops(&merged, key, seen);
+    for (op_id, plaintext) in opened {
+        seen.insert(op_id);
+        try_send_evt(
+            evt_tx,
+            CollabEvent::KbNodeUpdate {
+                kb_id: kb_id.clone(),
+                node_id: node_id.to_string(),
+                update_bytes: plaintext,
+            },
+        );
+    }
+    op_sets.insert(node_id.to_string(), merged);
 }
 
 /// Background task that owns the TCP connection to the state server.
@@ -2669,6 +2761,18 @@ async fn run_collab_task(
     let mut pending_responses: HashMap<u64, PendingResponseKind> = HashMap::new();
     // WU1: Track wal_seq per doc for gap detection.
     let mut seq_tracker: HashMap<String, u64> = HashMap::new();
+    // ADR-037 E2E (#146 Phase 2b): all content-key crypto lives here in the network
+    // task — the only place that holds both the collection bytes (join/share response)
+    // and the identity secret. The main thread only ever sees plaintext.
+    //   content_keys: kb_id  → per-KB content key (derived on join/share)
+    //   op_sets:      node_id → full op-set yrs state (the ciphertext YMap mirror)
+    //   node_to_kb:   node_id → kb_id (selects the content key on receive)
+    //   seen_ops:     node_id → op_ids already materialized (avoids re-applying echoes)
+    // All transient: rebuilt from the collection + daemon op-set on (re)join.
+    let mut content_keys: HashMap<String, mae_sync::content_crypto::ContentKey> = HashMap::new();
+    let mut op_sets: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut node_to_kb: HashMap<String, String> = HashMap::new();
+    let mut seen_ops: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
     // WU6: Transport health counter for periodic diagnostics.
     let mut messages_received: u64 = 0;
     // WU2: Heartbeat interval (from collab_heartbeat_interval option, disabled if 0).
@@ -3095,6 +3199,20 @@ async fn run_collab_task(
                         }
                         CollabCommand::LeaveKb { kb_id } => {
                             info!(kb = %kb_id, "leaving KB");
+                            // ADR-037 §2b: drop the content key + per-node op-set / seen /
+                            // routing state for this KB (leaving discards the synced replica;
+                            // a later re-join rebuilds from the collection + daemon op-set).
+                            content_keys.remove(&kb_id);
+                            let gone: Vec<String> = node_to_kb
+                                .iter()
+                                .filter(|(_, k)| *k == &kb_id)
+                                .map(|(n, _)| n.clone())
+                                .collect();
+                            for n in &gone {
+                                node_to_kb.remove(n);
+                                op_sets.remove(n);
+                                seen_ops.remove(n);
+                            }
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
                                 next_request_id += 1;
@@ -3128,23 +3246,40 @@ async fn run_collab_task(
                                 next_request_id += 1;
                                 // ADR-036 D2: sign the authorship header when we hold
                                 // a key-mode identity (else legacy unsigned).
-                                // ADR-037 §2b (TODO): pass the KB's content key + the
-                                // node's op-set state here to encrypt on push; until
-                                // wired, `None`/`&[]` keep the plaintext path.
-                                let (req, _new_op_set) = build_kb_node_update_request(
+                                // ADR-037 §2b: on an encrypted KB the plaintext update is
+                                // sealed into the op-set under the content key (None ⇒
+                                // plaintext path). Register node→kb so the receive side
+                                // can pick this key (covers owner + member, every node).
+                                node_to_kb
+                                    .entry(node_id.clone())
+                                    .or_insert_with(|| kb_id.clone());
+                                let op_set_state = op_sets.get(&node_id).cloned().unwrap_or_default();
+                                let (req, new_op_set, sealed_op_id) = build_kb_node_update_request(
                                     req_id,
                                     &kb_id,
                                     &node_id,
                                     &update,
                                     epoch,
                                     signing_identity.as_ref(),
-                                    None,
-                                    &[],
+                                    content_keys.get(&kb_id),
+                                    &op_set_state,
                                 );
                                 match serde_json::to_vec(&req) {
                                     Ok(body) => match write_framed(w, &body, write_timeout).await {
                                         Ok(()) => {
                                             delivered = true;
+                                            // Commit the advanced op-set state ONLY now
+                                            // that the op is on the wire — a failed write
+                                            // requeues + rebuilds from the unchanged state
+                                            // (no double-seal). `seen_ops` suppresses the
+                                            // daemon's echo of our own op.
+                                            if let Some(op_id) = sealed_op_id {
+                                                op_sets.insert(node_id.clone(), new_op_set);
+                                                seen_ops
+                                                    .entry(node_id.clone())
+                                                    .or_default()
+                                                    .insert(op_id);
+                                            }
                                             pending_responses.insert(req_id, PendingResponseKind::KbNodeUpdate {
                                                 kb_id: kb_id.clone(),
                                                 node_id: node_id.clone(),
@@ -3276,6 +3411,13 @@ async fn run_collab_task(
                                 &mut pending_responses,
                                 &mut shared_docs,
                                 &mut seq_tracker,
+                                &mut KbCryptoCtx {
+                                    content_keys: &mut content_keys,
+                                    op_sets: &mut op_sets,
+                                    node_to_kb: &mut node_to_kb,
+                                    seen_ops: &mut seen_ops,
+                                    signing_identity: signing_identity.as_ref(),
+                                },
                             );
                             // Any valid message resets the ping_pending flag.
                             ping_pending = false;
@@ -3484,12 +3626,27 @@ fn compute_backoff(base_secs: u64, factor: u64, attempt: u32) -> u64 {
 /// Handle an incoming JSON-RPC message from the server.
 /// Dispatches to response handler or notification handler based on content.
 /// Non-blocking: uses try_send to avoid backpressure deadlock.
+/// ADR-037 §2b (#146): the network task's content-encryption state, threaded into the
+/// message handlers (which live outside `run_collab_task`). Bundling these keeps the
+/// handler signatures sane and the crypto state in one place. `signing_identity` is the
+/// secret half — used only to derive a content key on join/share. See `run_collab_task`.
+pub(crate) struct KbCryptoCtx<'a> {
+    pub content_keys:
+        &'a mut std::collections::HashMap<String, mae_sync::content_crypto::ContentKey>,
+    pub op_sets: &'a mut std::collections::HashMap<String, Vec<u8>>,
+    pub node_to_kb: &'a mut std::collections::HashMap<String, String>,
+    pub seen_ops: &'a mut std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+    pub signing_identity: Option<&'a std::sync::Arc<mae_mcp::identity::Identity>>,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_incoming_message(
     text: &str,
     evt_tx: &mpsc::Sender<CollabEvent>,
     pending_responses: &mut std::collections::HashMap<u64, PendingResponseKind>,
     shared_docs: &mut Vec<String>,
     seq_tracker: &mut std::collections::HashMap<String, u64>,
+    kb: &mut KbCryptoCtx,
 ) {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(text) else {
         return;
@@ -3502,7 +3659,7 @@ pub(crate) fn handle_incoming_message(
                 let has_error = val.get("error").is_some();
                 debug!(id, has_error, kind = ?std::mem::discriminant(&kind),
                     "bridge: matched response to pending request");
-                handle_response(&val, kind, evt_tx, shared_docs, seq_tracker);
+                handle_response(&val, kind, evt_tx, shared_docs, seq_tracker, kb);
             } else {
                 debug!(id, "bridge: response for unknown/expired request id");
             }
@@ -3561,13 +3718,14 @@ pub(crate) fn handle_incoming_message(
                                 // Route KB node updates to KbNodeUpdate event.
                                 if let Some(node_id) = buffer_name.strip_prefix("kb:") {
                                     debug!(node = %node_id, wal_seq, "routing sync_update as KB node update");
-                                    try_send_evt(
+                                    route_kb_node_update(
+                                        node_id,
+                                        bytes,
+                                        kb.content_keys,
+                                        kb.node_to_kb,
+                                        kb.op_sets,
+                                        kb.seen_ops,
                                         evt_tx,
-                                        CollabEvent::KbNodeUpdate {
-                                            kb_id: String::new(), // not available in notification
-                                            node_id: node_id.to_string(),
-                                            update_bytes: bytes,
-                                        },
                                     );
                                 } else {
                                     try_send_evt(
@@ -3609,13 +3767,14 @@ pub(crate) fn handle_incoming_message(
                         if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
                             // Route KB node updates to KbNodeUpdate event.
                             if let Some(node_id) = doc_id.strip_prefix("kb:") {
-                                try_send_evt(
+                                route_kb_node_update(
+                                    node_id,
+                                    bytes,
+                                    kb.content_keys,
+                                    kb.node_to_kb,
+                                    kb.op_sets,
+                                    kb.seen_ops,
                                     evt_tx,
-                                    CollabEvent::KbNodeUpdate {
-                                        kb_id: String::new(),
-                                        node_id: node_id.to_string(),
-                                        update_bytes: bytes,
-                                    },
                                 );
                             } else {
                                 try_send_evt(
@@ -3736,12 +3895,14 @@ pub(crate) fn handle_incoming_message(
 
 /// Handle a correlated JSON-RPC response based on the pending request kind.
 /// Non-blocking: uses try_send to avoid backpressure deadlock.
+#[allow(clippy::too_many_arguments)]
 fn handle_response(
     val: &serde_json::Value,
     kind: PendingResponseKind,
     evt_tx: &mpsc::Sender<CollabEvent>,
     shared_docs: &mut Vec<String>,
     seq_tracker: &mut std::collections::HashMap<String, u64>,
+    kb: &mut KbCryptoCtx,
 ) {
     let result = val.get("result");
 
@@ -3994,6 +4155,17 @@ fn handle_response(
                     .and_then(|v| v.as_str())
                     .and_then(|s| mae_sync::encoding::base64_to_update(s).ok())
                     .unwrap_or_default();
+                // ADR-037 §2b: the owner derives its own content key from the collection
+                // it just shared (the genesis self-wrap targets the owner, so
+                // `derive_content_key` recovers it). node→kb for the owner's nodes is
+                // registered lazily on the first push (the send arm). `None` until the
+                // owner has generated + self-wrapped a key (Phase 3 lifecycle).
+                if let Some(id) = kb.signing_identity {
+                    if let Some(content_key) = derive_kb_content_key(&collection_state, id) {
+                        kb.content_keys.insert(kb_id.clone(), content_key);
+                        debug!(kb = %kb_id, "ADR-037: derived owner content key on share");
+                    }
+                }
                 try_send_evt(
                     evt_tx,
                     CollabEvent::KbShared {
@@ -4126,6 +4298,20 @@ fn handle_response(
                     let node_doc = format!("kb:{}", n.id);
                     if !shared_docs.contains(&node_doc) {
                         shared_docs.push(node_doc);
+                    }
+                }
+                // ADR-037 §2b: on an encrypted KB, derive THIS peer's content key from
+                // the collection's signed op-log (the network task holds both the bytes
+                // AND the identity secret here) and register every joined node → kb, so
+                // inbound op-set updates select the right key. `None` ⇒ unencrypted /
+                // not a member / not yet wrapped to me ⇒ plaintext path (unchanged).
+                if let Some(id) = kb.signing_identity {
+                    if let Some(content_key) = derive_kb_content_key(&collection_state, id) {
+                        kb.content_keys.insert(kb_id.clone(), content_key);
+                        for n in &nodes {
+                            kb.node_to_kb.insert(n.id.clone(), kb_id.clone());
+                        }
+                        debug!(kb = %kb_id, nodes = nodes.len(), "ADR-037: derived content key on join");
                     }
                 }
                 try_send_evt(
