@@ -54,6 +54,27 @@ pub enum JoinOutcome {
     Pulled { nodes: usize },
     /// The owner queued us for approval (invite policy); retry after approval.
     Pending,
+    /// The owner explicitly REJECTED the join (not a member / not shared over P2p /
+    /// role denied) — an authorization decision that retrying cannot change.
+    Rejected(String),
+}
+
+/// Why a peer session ended — drives the dialer's reconnect policy ([`run_peer`]).
+enum SessionEnd {
+    /// Recoverable (network drop, owner offline/restarting, still-pending approval) —
+    /// reconnect with bounded backoff. The default for an opaque error.
+    Transient(String),
+    /// The owner won't accept us (explicit reject). Stop retrying + surface — a
+    /// reconnect loop can't fix an authorization decision (it just wastes the mesh).
+    Terminal(String),
+}
+
+impl From<String> for SessionEnd {
+    /// An opaque string error is transient by default (network/protocol); terminal
+    /// rejects are constructed explicitly from a [`JoinOutcome::Rejected`].
+    fn from(s: String) -> Self {
+        SessionEnd::Transient(s)
+    }
 }
 
 /// Background task (spawned with the mesh): for each accepted join ticket, spawn a
@@ -108,9 +129,16 @@ async fn run_peer(
                 info!(kb_id = %ticket.kb_id, "mesh peer session ended cleanly; reconnecting");
                 backoff = RECONNECT_MIN;
             }
-            Err(e) => {
+            Err(SessionEnd::Transient(e)) => {
                 warn!(kb_id = %ticket.kb_id, error = %e, backoff_s = backoff.as_secs(),
                     "mesh peer session ended; backing off");
+            }
+            Err(SessionEnd::Terminal(e)) => {
+                // Stop the loop: the owner won't accept us. Re-sharing / re-adding the
+                // member re-queues a fresh ticket, which spawns a new session.
+                warn!(kb_id = %ticket.kb_id, reason = %e,
+                    "mesh peer: TERMINAL reject — not retrying (re-share or re-add to resume)");
+                return;
             }
         }
         tokio::time::sleep(backoff).await;
@@ -127,7 +155,7 @@ async fn peer_session(
     ticket: &JoinTicket,
     doc_store: &Arc<DocStore>,
     broadcaster: &SharedBroadcaster,
-) -> Result<(), String> {
+) -> Result<(), SessionEnd> {
     let dialer_sid = next_dialer_sid();
     let conn = connect_verify_anchor(local, ticket, doc_store).await?;
     let (mut send, recv) = conn.open_bi().await.map_err(|e| format!("open_bi: {e}"))?;
@@ -149,7 +177,15 @@ async fn peer_session(
         JoinOutcome::Pulled { nodes } => {
             info!(kb_id = %ticket.kb_id, nodes, "mesh peer: synced KB")
         }
-        JoinOutcome::Pending => return Err("pending owner approval".to_string()),
+        // Pending approval is TRANSIENT — the owner may approve us later, so keep
+        // reconnecting (backoff) and re-requesting.
+        JoinOutcome::Pending => {
+            return Err(SessionEnd::Transient("pending owner approval".to_string()))
+        }
+        // An explicit reject is TERMINAL — stop the reconnect loop.
+        JoinOutcome::Rejected(why) => {
+            return Err(SessionEnd::Terminal(format!("owner rejected join: {why}")))
+        }
     }
 
     // No explicit notifications/subscribe is needed: the owner's kb/join handler
@@ -246,7 +282,8 @@ async fn peer_session(
         .unwrap_or_else(|e| e.into_inner())
         .unsubscribe(dialer_sid);
     reader_task.abort();
-    result
+    // Read/forward/EOF failures are all network/protocol — transient, so reconnect.
+    result.map_err(SessionEnd::Transient)
 }
 
 /// The `kb:{node}` doc names currently in a KB's collection (for doc-scoped local
@@ -385,7 +422,8 @@ async fn apply_join_response(
 ) -> Result<JoinOutcome, String> {
     let v: Value = serde_json::from_str(resp).map_err(|e| format!("bad response json: {e}"))?;
     if let Some(err) = v.get("error") {
-        return Err(format!("owner rejected join: {err}"));
+        // The owner explicitly rejected us — terminal, not a transient network error.
+        return Ok(JoinOutcome::Rejected(format!("{err}")));
     }
     let result = v.get("result").ok_or("response has no result")?;
     if result.get("status").and_then(|s| s.as_str()) == Some("pending") {
@@ -963,6 +1001,55 @@ mod tests {
         assert!(
             landed,
             "owner must apply B's VALID signed edit (B→A relay verified, selective)"
+        );
+    }
+
+    /// `apply_join_response` classifies the owner's reply: an explicit error is a
+    /// TERMINAL `Rejected` (carrying the reason), a pending status is `Pending`
+    /// (transient). This is the seam that decides whether the dialer keeps retrying.
+    #[tokio::test]
+    async fn apply_join_response_classifies_reject_vs_pending() {
+        let store = mem_store();
+        let reject = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"not a member of KB 'k'"}}"#;
+        match apply_join_response(reject, "k", &store, None, 7).await {
+            Ok(JoinOutcome::Rejected(why)) => {
+                assert!(
+                    why.contains("not a member"),
+                    "reject carries the reason: {why}"
+                )
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+        let pending = r#"{"jsonrpc":"2.0","id":1,"result":{"status":"pending"}}"#;
+        assert_eq!(
+            apply_join_response(pending, "k", &store, None, 7)
+                .await
+                .unwrap(),
+            JoinOutcome::Pending
+        );
+    }
+
+    /// The reliability fix: on a TERMINAL reject (here, dialing a KB the owner does
+    /// not host → an explicit error), `run_peer` STOPS — the task returns instead of
+    /// retrying forever. A transient failure would keep the loop alive past the
+    /// timeout; this asserts the loop actually ends.
+    #[tokio::test]
+    async fn run_peer_stops_on_terminal_reject() {
+        let a_id = Arc::new(Identity::generate("owner-A"));
+        let b_id = Identity::generate("joiner-B");
+        let (addr, _a_store, _a_bc) = serve_owner_kb(&a_id, "kbl", Some(&b_id.fingerprint())).await;
+
+        let b_endpoint = bind_endpoint(&b_id, RelayMode::Disabled).await.unwrap();
+        let b_store = mem_store();
+        let b_bc = bc();
+        // Dial a KB the owner doesn't host ⇒ the owner rejects ⇒ terminal.
+        let ticket = JoinTicket::new(addr, "ghost-kb");
+        let peer = tokio::spawn(run_peer(b_endpoint, ticket, Arc::clone(&b_store), b_bc));
+
+        let stopped = tokio::time::timeout(Duration::from_secs(8), peer).await;
+        assert!(
+            stopped.is_ok(),
+            "run_peer must STOP on a terminal reject, not retry forever"
         );
     }
 }

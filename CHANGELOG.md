@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.7] - 2026-06-26
+
+### Bug Fixes
+
+- *(mesh)* Stop the dialer's reconnect loop on a terminal reject (#133) ([910eca5](https://github.com/cuttlefisch/mae/commit/910eca55bd7af7194aba7528dab4c42a1901dc58))
+
+### Miscellaneous
+
+- Bump version to 0.14.7 ([14920af](https://github.com/cuttlefisch/mae/commit/14920afbd6d071897d50539a67f817058f2b55a5))
+
 ## [0.14.6] - 2026-06-26
 
 ### Features
