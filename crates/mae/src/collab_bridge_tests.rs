@@ -2733,8 +2733,11 @@ fn build_kb_node_update_request_signs_with_identity_else_unsigned() {
     let id = Arc::new(Identity::generate("editor"));
 
     // Signed: the daemon's parser reconstructs the op, the signature verifies, and
-    // the author + epoch + node_id are exactly what the editor stamped.
-    let req = build_kb_node_update_request(7, "kb1", "concept:n", &update, 3, Some(&id));
+    // the author + epoch + node_id are exactly what the editor stamped. (Plaintext KB:
+    // no content key ⇒ the payload is the plaintext update, op-set state unchanged.)
+    let (req, op_set) =
+        build_kb_node_update_request(7, "kb1", "concept:n", &update, 3, Some(&id), None, &[]);
+    assert!(op_set.is_empty(), "no content key ⇒ no op-set");
     assert_eq!(req["id"], 7, "still a request (carries an id)");
     let parsed = SignedContentOp::from_params(&req["params"], update.clone())
         .expect("signed request parses");
@@ -2751,10 +2754,74 @@ fn build_kb_node_update_request_signs_with_identity_else_unsigned() {
     assert_eq!(parsed.op.node_id, "concept:n");
 
     // Unsigned (psk/none): no authorship header ⇒ the legacy path.
-    let unsigned = build_kb_node_update_request(8, "kb1", "concept:n", &update, 3, None);
+    let (unsigned, _) =
+        build_kb_node_update_request(8, "kb1", "concept:n", &update, 3, None, None, &[]);
     assert!(
         SignedContentOp::from_params(&unsigned["params"], update).is_none(),
         "no identity ⇒ legacy unsigned op"
+    );
+}
+
+/// ADR-037 §2a (#146): on an ENCRYPTED KB, `build_kb_node_update_request` seals the
+/// plaintext update into the op-set — the wire payload is the outer op-set op (NOT the
+/// plaintext), signed over the ciphertext (encrypt-then-sign), and the op-set state
+/// advances. The op-set carries no plaintext, yet a member opens + materializes it.
+#[test]
+fn build_kb_node_update_request_seals_on_encrypted_kb() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::ContentKey;
+    use mae_sync::content_ops::SignedContentOp;
+    use mae_sync::kb::KbNodeDoc;
+    use std::sync::Arc;
+
+    let id = Arc::new(Identity::generate("editor"));
+    let key = ContentKey::generate();
+    let mut node = KbNodeDoc::new_with_client_id("n1", "", "", &[], 5);
+
+    // Seal op 0 (the node structure), then a title edit — accumulating the op-set.
+    let (_r0, op_set0) = build_kb_node_update_request(
+        1,
+        "kb1",
+        "n1",
+        &node.encode_state(),
+        0,
+        Some(&id),
+        Some(&key),
+        &[],
+    );
+    let edit = node.set_title("Secret");
+    let (req, op_set) =
+        build_kb_node_update_request(2, "kb1", "n1", &edit, 0, Some(&id), Some(&key), &op_set0);
+
+    // The wire payload is the OUTER op-set op, signed + verifying — and is NOT the
+    // plaintext edit. The op-set bytes carry no plaintext.
+    let payload =
+        mae_sync::encoding::base64_to_update(req["params"]["update"].as_str().unwrap()).unwrap();
+    let parsed = SignedContentOp::from_params(&req["params"], payload.clone()).expect("signed");
+    assert!(
+        parsed.verify_signed(),
+        "signature over the sealed op verifies"
+    );
+    assert_ne!(
+        payload, edit,
+        "the wire payload is sealed, not the plaintext edit"
+    );
+    assert!(!op_set.is_empty(), "the op-set state advanced");
+    assert!(
+        !op_set.windows(6).any(|w| w == b"Secret"),
+        "the op-set carries no plaintext"
+    );
+
+    // A member opens the op-set (causal order) + materializes the title.
+    let opened = mae_sync::op_set::open_new_ops(&op_set, &key, &std::collections::BTreeSet::new());
+    let mut reader = KbNodeDoc::from_bytes(&opened[0].1).unwrap();
+    for (_oid, pt) in &opened[1..] {
+        reader.apply_update(pt).unwrap();
+    }
+    assert_eq!(
+        reader.title(),
+        "Secret",
+        "a member materializes the sealed edit"
     );
 }
 

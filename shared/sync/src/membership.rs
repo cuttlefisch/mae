@@ -677,6 +677,21 @@ pub fn derive_content_key(
     my_fingerprint: &str,
     my_ed25519_secret: &[u8; 32],
 ) -> Option<crate::content_crypto::ContentKey> {
+    let wrapped = find_wrapped_content_key(ops, anchor_owner_pubkey, my_fingerprint)?;
+    crate::content_crypto::unwrap_as_member(&wrapped, my_ed25519_secret).ok()
+}
+
+/// The **find** half of [`derive_content_key`]: my CURRENT wrapped content key in the
+/// signed op-log — the wrapped blob from the LATEST owner-authored op targeting me, in
+/// causal order (rotation supersedes the original admit). Pure, and crucially **needs
+/// no secret**, so the editor's main thread (which holds the collection doc but not the
+/// identity key) can extract the blob and hand it to the network task, which unwraps it
+/// with the secret. `None` ⇒ an unencrypted KB or no key delivered to me.
+pub fn find_wrapped_content_key(
+    ops: &[SignedMembershipOp],
+    anchor_owner_pubkey: &[u8; 32],
+    my_fingerprint: &str,
+) -> Option<Vec<u8>> {
     // Crypto-valid ops only, indexed by chain_hash (mirrors derive_governance §1).
     let crypto: Vec<&SignedMembershipOp> = ops.iter().filter(|o| o.verify_signed()).collect();
     let by_hash: BTreeMap<String, &SignedMembershipOp> =
@@ -690,16 +705,16 @@ pub fn derive_content_key(
     let owner = genesis.op.subject.clone();
     let order = causal_order(&by_hash, &genesis.chain_hash());
     // Latest owner-authored wrapped key targeting me wins (rotation supersedes admit).
-    let mut latest: Option<&Vec<u8>> = None;
+    let mut latest: Option<Vec<u8>> = None;
     for h in &order {
         let o = &by_hash[h].op;
         if o.author == owner && o.subject == my_fingerprint {
             if let Some(wk) = &o.wrapped_key {
-                latest = Some(wk);
+                latest = Some(wk.clone());
             }
         }
     }
-    crate::content_crypto::unwrap_as_member(latest?, my_ed25519_secret).ok()
+    latest
 }
 
 /// Membership as of one op's causal position — the final member map over just the
