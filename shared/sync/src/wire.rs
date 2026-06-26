@@ -39,6 +39,33 @@ pub fn kb_node_update_request(id: u64, kb_id: &str, node_id: &str, update_b64: &
     })
 }
 
+/// As [`kb_node_update_request`], with the ADR-036 signed authorship header merged
+/// into `params` — the editor's sign-on-push form. `header` is
+/// [`crate::content_ops::SignedContentOp::header_params`]; the daemon parses it back
+/// with `SignedContentOp::from_params`. The legacy (unsigned) path omits the header
+/// and uses [`kb_node_update_request`]; the two are wire-compatible (the header
+/// fields are purely additive, so an old daemon ignores them and an op without them
+/// is treated as unsigned). Keeping this here — beside the parser's mirror in
+/// `content_ops` — is what stops the editor and daemon ever disagreeing on the shape.
+pub fn kb_node_update_request_signed(
+    id: u64,
+    kb_id: &str,
+    node_id: &str,
+    update_b64: &str,
+    header: Value,
+) -> Value {
+    let mut req = kb_node_update_request(id, kb_id, node_id, update_b64);
+    if let (Some(params), Some(h)) = (
+        req.get_mut("params").and_then(|p| p.as_object_mut()),
+        header.as_object(),
+    ) {
+        for (k, v) in h {
+            params.insert(k.clone(), v.clone());
+        }
+    }
+    req
+}
+
 /// Build a `kb/share` JSON-RPC **request** (owner shares all nodes of a KB).
 ///
 /// `collection_state_b64` is the base64 `KbCollectionDoc` state; `nodes` is the
@@ -127,6 +154,49 @@ mod tests {
         assert_eq!(req["params"]["kb_id"], "collabtest");
         assert_eq!(req["params"]["node_id"], "collabtest:overview");
         assert_eq!(req["params"]["update"], "AAEC");
+    }
+
+    /// The signed builder (editor side) and `SignedContentOp::from_params` (daemon
+    /// side) agree on the wire shape: a request built by `kb_node_update_request_
+    /// signed` parses back into the identical op and still verifies. This is the
+    /// editor↔daemon contract for ADR-036, enforced in one place.
+    #[test]
+    fn signed_node_update_builder_roundtrips_through_the_parser() {
+        use crate::content_ops::{ContentOp, SignedContentOp};
+        use ed25519_dalek::SigningKey;
+
+        let secret = [7u8; 32];
+        let pubkey = SigningKey::from_bytes(&secret).verifying_key().to_bytes();
+        let author = crate::membership::fingerprint_of(&pubkey);
+        let payload = b"\x00yrs-delta";
+        let op = ContentOp {
+            kb_id: "k".to_string(),
+            node_id: "k:n".to_string(),
+            base_sv: vec![1, 2, 3],
+            author,
+            epoch: 4,
+            issued_at: 1_700_000_000,
+        };
+        let sig = op.sign(&secret, payload);
+        let signed = SignedContentOp {
+            op,
+            payload: payload.to_vec(),
+            sig,
+            author_pubkey: pubkey,
+        };
+
+        let req = kb_node_update_request_signed(
+            9,
+            "k",
+            "k:n",
+            &crate::encoding::update_to_base64(payload),
+            signed.header_params(),
+        );
+        assert_eq!(req["id"], 9, "still a request (carries an id)");
+        let parsed = SignedContentOp::from_params(&req["params"], payload.to_vec())
+            .expect("daemon parses the editor's signed request");
+        assert_eq!(parsed, signed);
+        assert!(parsed.verify_signed());
     }
 
     /// Every request-shaped builder here must carry a non-null `id` and a `method`.
