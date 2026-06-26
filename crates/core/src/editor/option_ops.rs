@@ -183,6 +183,7 @@ impl super::Editor {
             "collab_auth_mode" => self.collab.auth_mode.clone(),
             "collab_host_key_policy" => self.collab.host_key_policy.clone(),
             "collab_tls" => self.collab.tls.to_string(),
+            "daemon_mode" => self.kb.daemon_mode.as_str().to_string(),
             "daemon_enabled" => self.kb.daemon_enabled.to_string(),
             "daemon_socket" => self.kb.daemon_socket.display().to_string(),
             "daemon_cache_size" => self.kb.daemon_cache_size.to_string(),
@@ -753,8 +754,24 @@ impl super::Editor {
             "collab_tls" => {
                 self.collab.tls = parse_option_bool(value)?;
             }
+            "daemon_mode" => {
+                let mode = crate::editor::kb_state::DaemonMode::parse(value).ok_or_else(|| {
+                    format!("Invalid daemon_mode '{value}' (expected off|on-demand|shared)")
+                })?;
+                self.kb.daemon_mode = mode;
+                // Keep the runtime connection gate in sync with the configured mode.
+                self.kb.daemon_enabled = mode.connects();
+            }
             "daemon_enabled" => {
-                self.kb.daemon_enabled = parse_option_bool(value)?;
+                // Back-compat alias: the bool maps onto the richer daemon_mode
+                // (true ⇒ on-demand, false ⇒ off) so both stay consistent.
+                let enabled = parse_option_bool(value)?;
+                self.kb.daemon_enabled = enabled;
+                self.kb.daemon_mode = if enabled {
+                    crate::editor::kb_state::DaemonMode::OnDemand
+                } else {
+                    crate::editor::kb_state::DaemonMode::Off
+                };
             }
             "daemon_default" => {
                 self.kb.daemon_default = parse_option_bool(value)?;
@@ -1652,5 +1669,77 @@ impl super::Editor {
         let buf_idx = self.buffers.len();
         self.buffers.push(buf);
         self.display_buffer(buf_idx);
+    }
+}
+
+#[cfg(test)]
+mod daemon_mode_tests {
+    use crate::editor::{DaemonMode, Editor};
+
+    #[test]
+    fn daemon_mode_parse_and_as_str_roundtrip() {
+        for (s, m) in [
+            ("off", DaemonMode::Off),
+            ("on-demand", DaemonMode::OnDemand),
+            ("shared", DaemonMode::Shared),
+        ] {
+            assert_eq!(DaemonMode::parse(s), Some(m));
+            assert_eq!(m.as_str(), s);
+        }
+        // Conveniences + case-insensitivity.
+        assert_eq!(DaemonMode::parse("ON_DEMAND"), Some(DaemonMode::OnDemand));
+        assert_eq!(DaemonMode::parse("OnDemand"), Some(DaemonMode::OnDemand));
+        assert_eq!(DaemonMode::parse("bogus"), None);
+        assert!(!DaemonMode::Off.connects());
+        assert!(DaemonMode::OnDemand.connects());
+        assert!(DaemonMode::Shared.connects());
+    }
+
+    #[test]
+    fn daemon_mode_option_set_get_and_gate_sync() {
+        let mut editor = Editor::new();
+        // Default is the in-process floor.
+        assert_eq!(editor.get_option("daemon_mode").unwrap().0, "off");
+        assert!(!editor.kb.daemon_enabled);
+
+        // Each mode round-trips and keeps the runtime gate in sync.
+        editor.set_option("daemon_mode", "shared").unwrap();
+        assert_eq!(editor.get_option("daemon_mode").unwrap().0, "shared");
+        assert_eq!(editor.kb.daemon_mode, DaemonMode::Shared);
+        assert!(editor.kb.daemon_enabled, "shared connects");
+
+        editor.set_option("daemon_mode", "off").unwrap();
+        assert_eq!(editor.kb.daemon_mode, DaemonMode::Off);
+        assert!(
+            !editor.kb.daemon_enabled,
+            "off is the floor — no connection"
+        );
+
+        editor.set_option("daemon_mode", "on-demand").unwrap();
+        assert_eq!(editor.kb.daemon_mode, DaemonMode::OnDemand);
+        assert!(editor.kb.daemon_enabled);
+
+        // Invalid value is rejected, state unchanged.
+        assert!(editor.set_option("daemon_mode", "nonsense").is_err());
+        assert_eq!(editor.kb.daemon_mode, DaemonMode::OnDemand);
+    }
+
+    #[test]
+    fn legacy_daemon_enabled_aliases_daemon_mode() {
+        let mut editor = Editor::new();
+        // true ⇒ on-demand
+        editor.set_option("daemon_enabled", "true").unwrap();
+        assert_eq!(editor.kb.daemon_mode, DaemonMode::OnDemand);
+        assert_eq!(editor.get_option("daemon_mode").unwrap().0, "on-demand");
+        assert_eq!(editor.get_option("daemon_enabled").unwrap().0, "true");
+
+        // false ⇒ off
+        editor.set_option("daemon_enabled", "false").unwrap();
+        assert_eq!(editor.kb.daemon_mode, DaemonMode::Off);
+        assert_eq!(editor.get_option("daemon_enabled").unwrap().0, "false");
+
+        // Setting the mode reflects back through the legacy bool.
+        editor.set_option("daemon_mode", "shared").unwrap();
+        assert_eq!(editor.get_option("daemon_enabled").unwrap().0, "true");
     }
 }

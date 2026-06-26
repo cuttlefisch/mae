@@ -23,6 +23,54 @@ pub(crate) fn default_daemon_socket() -> PathBuf {
         .join("mae-daemon.sock")
 }
 
+/// How the editor relates to a `mae-daemon` (ADR-035 boundary). The configured
+/// behavior-set behind the `daemon_mode` option; the canonical source of truth
+/// for whether/how the editor attaches to a daemon. The in-process embedded KB
+/// is the **floor** (`Off`) — the daemon is an optional optimization, never a
+/// hard dependency for single-user KB/AI/IDE features (principle #12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DaemonMode {
+    /// Pure in-process embedded CozoDB. No daemon, no IPC, no setup. The floor.
+    #[default]
+    Off,
+    /// `emacsclient -a ''` model: attach to a running daemon if present, else
+    /// auto-spawn + supervise a co-located one (the spawn/supervision wiring is a
+    /// follow-up; today this attaches when a daemon is present, like `Shared`).
+    /// The recommended "persistence/collab without thinking about it" mode.
+    OnDemand,
+    /// Attach to an existing OS-supervised (systemd/launchd) or remote-mesh
+    /// daemon; never auto-spawn or own its lifecycle. The multi-session /
+    /// multi-machine + P2P tier (ADR-025/026/027).
+    Shared,
+}
+
+impl DaemonMode {
+    /// Stable wire/config string (matches the option's enum variants + `daemon.mode`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DaemonMode::Off => "off",
+            DaemonMode::OnDemand => "on-demand",
+            DaemonMode::Shared => "shared",
+        }
+    }
+
+    /// Parse a configured value. Accepts `on_demand`/`ondemand` as conveniences.
+    pub fn parse(s: &str) -> Option<DaemonMode> {
+        match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "off" => Some(DaemonMode::Off),
+            "on-demand" | "ondemand" => Some(DaemonMode::OnDemand),
+            "shared" => Some(DaemonMode::Shared),
+            _ => None,
+        }
+    }
+
+    /// Whether this mode connects to a daemon at all (`Off` does not). This is the
+    /// configured equivalent of the legacy `daemon_enabled` bool.
+    pub fn connects(&self) -> bool {
+        !matches!(self, DaemonMode::Off)
+    }
+}
+
 /// Synchronous daemon control-socket operations the editor needs but cannot
 /// perform itself — `mae-core` deliberately does not depend on `mae-mcp` /
 /// `DaemonClient`. The binary injects a concrete `DaemonClient`-backed
@@ -102,7 +150,16 @@ pub struct KbContext {
     /// LRU-cached query layer backed by daemon RPC.
     /// When set, `effective_query_layer()` returns this instead of the local query layer.
     daemon_query: Option<Arc<dyn KbQueryLayer>>,
-    /// Whether daemon connection is enabled.
+    /// The configured editor↔daemon relationship (ADR-035): the canonical,
+    /// `:set-save`-persisted source of truth for *whether/how* the editor attaches
+    /// to a daemon. `Off` is the in-process floor. Drives `daemon_enabled` at
+    /// config time (set together); the legacy `daemon_enabled` option is a
+    /// back-compat alias that maps to/from this.
+    pub daemon_mode: DaemonMode,
+    /// Runtime connection gate: is daemon connectivity active *right now*? Derived
+    /// from `daemon_mode` when the option is set, but the startup probe may force
+    /// it true at runtime when a daemon is detected hosting the primary
+    /// (config-vs-runtime split — not persisted independently of `daemon_mode`).
     pub daemon_enabled: bool,
     /// Option (`daemon_default`): when a local daemon is connected, host the
     /// primary KB on it (CRDT source of truth) instead of the editor's on-disk
@@ -341,6 +398,7 @@ impl KbContext {
             write_guard: HashSet::new(),
             query: None,
             daemon_query: None,
+            daemon_mode: DaemonMode::Off,
             daemon_enabled: false,
             daemon_default: false,
             daemon_hosts_primary: false,

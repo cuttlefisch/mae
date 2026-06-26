@@ -52,7 +52,7 @@ pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use help_ops::is_builtin_node;
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
 pub use kb_ops::KbWatcherStats;
-pub use kb_state::{DaemonControl, KbContext};
+pub use kb_state::{DaemonControl, DaemonMode, KbContext};
 pub use lsp_state::LspContext;
 pub use vi_state::ViState;
 

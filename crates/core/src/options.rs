@@ -480,8 +480,12 @@ impl OptionRegistry {
                     &["info", "success", "warning", "error", "action-required"]),
 
                 // --- Daemon ---
+                opt!("daemon_mode", &["daemon-mode"],
+                    "Editor↔daemon relationship (ADR-035): off = in-process embedded KB only (the floor, no daemon); on-demand = attach to a running daemon or auto-spawn a co-located one (persistence/collab without ceremony); shared = attach to an existing OS-supervised/remote daemon, never spawn (multi-session + P2P). Supersedes daemon_enabled.",
+                    OptionKind::String, "off", Some("daemon.mode"),
+                    &["off", "on-demand", "shared"]),
                 opt!("daemon_enabled", &["daemon-enabled"],
-                    "Connect to mae-daemon for KB persistence and background services",
+                    "DEPRECATED alias for daemon_mode: true ⇒ on-demand, false ⇒ off. Prefer daemon_mode.",
                     OptionKind::Bool, "false", Some("daemon.enabled"), &[]),
                 opt!("daemon_socket", &["daemon-socket"],
                     "Unix socket path for daemon communication (empty = auto: $XDG_RUNTIME_DIR/mae-daemon.sock, matching the daemon's bind path)",
