@@ -117,6 +117,9 @@ pub(crate) async fn run_terminal_loop(
             }
             // Autosave + swap writes (same 30s cadence as GUI HealthTick).
             editor.try_autosave();
+            // On-demand daemon supervision (ADR-035 PR B2) — parity with the GUI
+            // HealthCheck: restart a daemon we own if it has died (bounded).
+            crate::daemon_supervisor::supervise_daemon(editor);
             last_health_check = tokio::time::Instant::now();
         }
 

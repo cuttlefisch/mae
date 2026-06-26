@@ -2404,6 +2404,9 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 }
                 // Autosave check (piggybacks on 30s health tick).
                 self.editor.try_autosave();
+                // On-demand daemon supervision (ADR-035 PR B2): restart a daemon we
+                // own if it has died (bounded; the reconnect loop re-attaches).
+                daemon_supervisor::supervise_daemon(&mut self.editor);
             }
             MaeEvent::CollabEvent(collab_event) => {
                 collab_bridge::handle_collab_event(&mut self.editor, collab_event);

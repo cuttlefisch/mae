@@ -4,9 +4,9 @@
 //! spawns + supervises a co-located `mae-daemon` (the `emacsclient -a ''` model):
 //! the user gets persistence/collab without ceremony, and the editor owns the
 //! lifecycle. `shared` never spawns (it attaches to an OS-supervised/remote
-//! daemon); `off` is the in-process floor. This module owns the *startup* spawn
-//! decision + the readiness handshake; session-long restart/supervision is a
-//! follow-up.
+//! daemon); `off` is the in-process floor. This module owns the startup spawn +
+//! readiness handshake AND session-long supervision (restart-on-crash with a
+//! circuit-breaker, driven by the ~30s health-check tick).
 //!
 //! Cross-platform (principle #13): the daemon binary is resolved next to the
 //! running editor first (a release ships them together), then `PATH`; the socket
@@ -64,23 +64,29 @@ pub fn daemon_responds(socket: &Path, timeout: Duration) -> bool {
     client.call("daemon/status", serde_json::json!({})).is_ok()
 }
 
-/// Spawn a co-located `mae-daemon` and wait (bounded) until it answers on
-/// `socket`. The child is detached (its own KB persistence + collab listeners
-/// outlive nothing here — we just need it up); on readiness-timeout we return an
-/// error and the caller falls back to the in-process KB. Synchronous: called from
-/// the editor's (sync) startup before the daemon attach.
-pub fn spawn_and_wait_ready(socket: &Path, ready_timeout: Duration) -> Result<(), String> {
+/// Spawn a co-located `mae-daemon`, detached, without waiting for readiness.
+/// Returns its pid. The child outlives this process's attention (it has its own
+/// KB persistence + listeners); we silence stdout and inherit stderr for its
+/// logs. `bare mae-daemon` brings up the KB Unix socket + collab listeners.
+/// Fast + non-blocking — safe to call from a UI tick (the supervision watchdog).
+pub fn spawn_daemon_process() -> Result<u32, String> {
     let binary = resolve_daemon_binary();
-    // Inherit stderr (the daemon logs there); silence stdout. No `start` arg —
-    // bare `mae-daemon` brings up the KB Unix socket + collab listeners.
     let mut cmd = std::process::Command::new(&binary);
     cmd.stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::inherit());
     let child = cmd
         .spawn()
         .map_err(|e| format!("could not launch {}: {e}", binary.display()))?;
-    let pid = child.id();
-    info!(pid, binary = %binary.display(), "spawned on-demand mae-daemon; awaiting readiness");
+    Ok(child.id())
+}
+
+/// Spawn a co-located `mae-daemon` and wait (bounded) until it answers on
+/// `socket`. On readiness-timeout we return an error and the caller falls back to
+/// the in-process KB. Synchronous: called from the editor's (sync) startup before
+/// the daemon attach.
+pub fn spawn_and_wait_ready(socket: &Path, ready_timeout: Duration) -> Result<(), String> {
+    let pid = spawn_daemon_process()?;
+    info!(pid, "spawned on-demand mae-daemon; awaiting readiness");
 
     // Poll until the daemon answers or we exhaust the budget. 150ms cadence keeps
     // startup snappy without hammering the socket.
@@ -124,9 +130,143 @@ pub fn ensure_on_demand_daemon(mode: DaemonMode, socket: &Path) -> bool {
     }
 }
 
+// --- Session-long supervision (ADR-035 PR B2) --------------------------------
+//
+// The editor owns the `on-demand` daemon it spawned, so it restarts it if it
+// dies mid-session — but with a circuit-breaker so a daemon that won't stay up
+// can't respawn-loop. A periodic health-check tick (~30s, shared by the GUI +
+// TUI loops) drives `supervise_daemon`. `shared`/`off` are never supervised:
+// `shared` is OS-managed (systemd/launchd), `off` has no daemon.
+
+/// Max consecutive failed-to-stay-up restarts before the breaker opens.
+pub const MAX_DAEMON_RESTARTS: u32 = 5;
+
+/// What the watchdog should do this tick, given the daemon's liveness + how many
+/// restarts have already failed to stick. Pure + unit-tested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuperviseAction {
+    /// Not an on-demand daemon — nothing to supervise.
+    NotOwned,
+    /// Daemon is alive — reset the failure counter.
+    Healthy,
+    /// Daemon is down and within budget — re-spawn it.
+    Restart,
+    /// Daemon is down but the breaker is open — stop trying.
+    CircuitOpen,
+}
+
+/// Decide the supervision action. `responds` is the daemon's current liveness;
+/// `failures` is the consecutive-restart counter.
+pub fn supervise_decision(mode: DaemonMode, responds: bool, failures: u32) -> SuperviseAction {
+    if mode != DaemonMode::OnDemand {
+        return SuperviseAction::NotOwned;
+    }
+    if responds {
+        return SuperviseAction::Healthy;
+    }
+    if failures >= MAX_DAEMON_RESTARTS {
+        return SuperviseAction::CircuitOpen;
+    }
+    SuperviseAction::Restart
+}
+
+/// Periodic supervision tick for an on-demand daemon (call from the ~30s
+/// health-check in both the GUI and TUI loops). Probes liveness and, if the
+/// daemon we own has died, re-spawns it (bounded by `MAX_DAEMON_RESTARTS`); the
+/// existing collab reconnect loop re-establishes the session once it's back.
+/// Best-effort + non-blocking: the probe is a fast local-socket connect and the
+/// re-spawn is detached (no readiness wait on the UI thread).
+pub fn supervise_daemon(editor: &mut mae_core::Editor) {
+    let mode = editor.kb.daemon_mode;
+    if mode != DaemonMode::OnDemand {
+        return;
+    }
+    let socket = editor.kb.daemon_socket.clone();
+    let responds = daemon_responds(&socket, Duration::from_millis(750));
+    match supervise_decision(mode, responds, editor.kb.daemon_restart_failures) {
+        SuperviseAction::NotOwned => {}
+        SuperviseAction::Healthy => {
+            // Stable again — clear the counter and any prior circuit-open notice.
+            if editor.kb.daemon_restart_failures > 0 {
+                editor.kb.daemon_restart_failures = 0;
+            }
+        }
+        SuperviseAction::Restart => {
+            editor.kb.daemon_restart_failures += 1;
+            match spawn_daemon_process() {
+                Ok(pid) => {
+                    info!(
+                        pid,
+                        attempt = editor.kb.daemon_restart_failures,
+                        "on-demand mae-daemon was down — re-spawned it"
+                    );
+                    editor.notify(
+                        mae_core::notifications::Notification::info("collab", "Daemon restarted")
+                            .key("daemon:connection")
+                            .body("The on-demand daemon had stopped; restarted it."),
+                    );
+                }
+                Err(e) => {
+                    warn!(error = %e, "on-demand mae-daemon re-spawn failed");
+                }
+            }
+        }
+        SuperviseAction::CircuitOpen => {
+            // Raise once (keyed); the editor keeps working on the in-process floor.
+            editor.notify(
+                mae_core::notifications::Notification::warning(
+                    "collab",
+                    "Daemon keeps stopping — auto-restart paused",
+                )
+                .key("daemon:supervise:circuit")
+                .body(
+                    "The on-demand daemon failed to stay up after several restarts; \
+                     auto-restart is paused. The editor works locally; restart it \
+                     manually with `mae setup-daemon` once resolved.",
+                ),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn supervise_decision_matrix() {
+        use SuperviseAction::*;
+        // Not on-demand → never supervised.
+        assert_eq!(supervise_decision(DaemonMode::Off, false, 0), NotOwned);
+        assert_eq!(supervise_decision(DaemonMode::Shared, false, 9), NotOwned);
+        // On-demand + alive → healthy (resets).
+        assert_eq!(supervise_decision(DaemonMode::OnDemand, true, 3), Healthy);
+        // On-demand + dead + within budget → restart.
+        assert_eq!(supervise_decision(DaemonMode::OnDemand, false, 0), Restart);
+        assert_eq!(
+            supervise_decision(DaemonMode::OnDemand, false, MAX_DAEMON_RESTARTS - 1),
+            Restart
+        );
+        // On-demand + dead + budget exhausted → circuit open (stop respawning).
+        assert_eq!(
+            supervise_decision(DaemonMode::OnDemand, false, MAX_DAEMON_RESTARTS),
+            CircuitOpen
+        );
+        assert_eq!(
+            supervise_decision(DaemonMode::OnDemand, false, MAX_DAEMON_RESTARTS + 5),
+            CircuitOpen
+        );
+    }
+
+    #[test]
+    fn supervise_daemon_is_inert_when_not_on_demand() {
+        // Off mode: no probe, no spawn, no counter change.
+        let mut ed = mae_core::Editor::new();
+        ed.kb.daemon_mode = DaemonMode::Off;
+        ed.kb.daemon_restart_failures = 2;
+        supervise_daemon(&mut ed);
+        assert_eq!(ed.kb.daemon_restart_failures, 2, "off mode is untouched");
+    }
 
     #[test]
     fn should_spawn_only_on_demand_when_absent() {
