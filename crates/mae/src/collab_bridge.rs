@@ -2525,6 +2525,7 @@ fn spawn_reader_task<R: tokio::io::AsyncBufRead + Unpin + Send + 'static>(
 /// empty: per ADR-036 §D4 the yrs SV + the daemon's epoch fence carry replay safety,
 /// so the signature binds author + epoch + payload, and a node-SV binding is a
 /// documented future refinement (not a security boundary here).
+#[allow(clippy::too_many_arguments)]
 fn build_kb_node_update_request(
     req_id: u64,
     kb_id: &str,
@@ -2532,9 +2533,35 @@ fn build_kb_node_update_request(
     update: &[u8],
     epoch: u64,
     signing_identity: Option<&std::sync::Arc<mae_mcp::identity::Identity>>,
-) -> serde_json::Value {
-    let update_b64 = mae_sync::encoding::update_to_base64(update);
-    match signing_identity {
+    content_key: Option<&mae_sync::content_crypto::ContentKey>,
+    op_set_state: &[u8],
+) -> (serde_json::Value, Vec<u8>) {
+    // ADR-037 E2E (#146): on an encrypted KB, the PLAINTEXT node update is sealed into
+    // the op-set — encrypt under the content key, build the outer YMap-insert op
+    // (stamped with the epoch client_id so the daemon's ADR-023 fence still authorizes
+    // it) — and THAT outer op becomes the wire payload + what's signed (encrypt-then-
+    // sign: the daemon verifies authorship over the ciphertext-bearing op, key-blind).
+    // The returned op-set state advances by the sealed op. Without a content key the
+    // plaintext update is the payload (today's behaviour) and the state is unchanged.
+    let (payload, new_op_set_state): (Vec<u8>, Vec<u8>) = match (content_key, signing_identity) {
+        (Some(key), Some(id)) => {
+            let client_id = mae_sync::kb::derive_kb_client_id(&id.fingerprint(), epoch);
+            match mae_sync::op_set::seal_op(op_set_state, key, update, client_id) {
+                Ok((_op_id, outer)) => {
+                    let merged = mae_sync::op_set::merge(op_set_state, &outer)
+                        .unwrap_or_else(|_| op_set_state.to_vec());
+                    (outer, merged)
+                }
+                // Sealing can't fail for a valid op-set, but fail safe: keep the
+                // plaintext payload rather than dropping the edit.
+                Err(_) => (update.to_vec(), op_set_state.to_vec()),
+            }
+        }
+        _ => (update.to_vec(), op_set_state.to_vec()),
+    };
+
+    let payload_b64 = mae_sync::encoding::update_to_base64(&payload);
+    let request = match signing_identity {
         Some(id) => {
             let op = mae_sync::content_ops::ContentOp {
                 kb_id: kb_id.to_string(),
@@ -2547,10 +2574,10 @@ fn build_kb_node_update_request(
                     .map(|d| d.as_secs())
                     .unwrap_or(0),
             };
-            let sig = op.sign(&id.secret_bytes(), update);
+            let sig = op.sign(&id.secret_bytes(), &payload);
             let signed = mae_sync::content_ops::SignedContentOp {
                 op,
-                payload: update.to_vec(),
+                payload: payload.clone(),
                 sig,
                 author_pubkey: id.public().to_bytes(),
             };
@@ -2558,12 +2585,13 @@ fn build_kb_node_update_request(
                 req_id,
                 kb_id,
                 node_id,
-                &update_b64,
+                &payload_b64,
                 signed.header_params(),
             )
         }
-        None => mae_sync::wire::kb_node_update_request(req_id, kb_id, node_id, &update_b64),
-    }
+        None => mae_sync::wire::kb_node_update_request(req_id, kb_id, node_id, &payload_b64),
+    };
+    (request, new_op_set_state)
 }
 
 /// Background task that owns the TCP connection to the state server.
@@ -3100,13 +3128,18 @@ async fn run_collab_task(
                                 next_request_id += 1;
                                 // ADR-036 D2: sign the authorship header when we hold
                                 // a key-mode identity (else legacy unsigned).
-                                let req = build_kb_node_update_request(
+                                // ADR-037 §2b (TODO): pass the KB's content key + the
+                                // node's op-set state here to encrypt on push; until
+                                // wired, `None`/`&[]` keep the plaintext path.
+                                let (req, _new_op_set) = build_kb_node_update_request(
                                     req_id,
                                     &kb_id,
                                     &node_id,
                                     &update,
                                     epoch,
                                     signing_identity.as_ref(),
+                                    None,
+                                    &[],
                                 );
                                 match serde_json::to_vec(&req) {
                                     Ok(body) => match write_framed(w, &body, write_timeout).await {
