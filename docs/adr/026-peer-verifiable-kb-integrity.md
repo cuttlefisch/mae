@@ -5,8 +5,9 @@
 **cascade**, **local blocklist**, and **quorum** governance — all unit-tested. Wired into the daemon:
 sign-on-mutate for owned KBs; `kb_access` peer-verifies derived membership for **anchored** (joined)
 KBs. **#72 landed** (PR #99), so the peer-enforceable epoch fence (§A5 / Phase 4) is unblocked.
-**Remaining:** signed **content** ops (Phase 4 second half); quorum sourced in the daemon gate
-(mae-sync ready); the fully-leaderless auth-DAG (§B, research).
+**Remaining:** signed **content** ops (Phase 4 second half — now designed in **ADR-036**); quorum sourced
+in the daemon gate (mae-sync ready, #132); E2E content **confidentiality** (the deferred read-protection
+called out below — now designed in **ADR-037**); the fully-leaderless auth-DAG (§B, research — ADR-039).
 **Extends:** ADR-017 (mTLS-as-identity), ADR-018 (identity-anchored RBAC), ADR-021 (membership audit
 log), ADR-022 (SV-reconcile), ADR-023 (epoch-fenced rebase).
 **Depends on:** #72 (unpredictable daemon-issued epoch token) — a security prerequisite.
