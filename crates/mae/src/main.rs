@@ -133,6 +133,34 @@ fn parse_truthy(v: &str) -> bool {
 /// `MAE_COLLAB_AUTO_CONNECT`) or beaten by a later `(set-option! …)` in
 /// `init.scm`. Env: `MAE_COLLAB_SERVER` (address), `MAE_COLLAB_AUTO_CONNECT`
 /// (parsed truthy/falsy). CLI `--connect` wins last.
+/// ADR-020 B-16 / ADR-023: derive this peer's STABLE yrs `client_id` (and remember its
+/// principal fingerprint) from the durable collab identity, so KB node edits + the
+/// share lineage author under `derive_kb_client_id(fp, epoch)` — the SAME id the daemon's
+/// epoch fence expects. **Shared by the interactive launch AND the headless `--test`
+/// runner.** Without it on the `--test` path, scenarios fell back to `client_id = 1`,
+/// disagreeing with the daemon's `c_now = derive_kb_client_id(fp, 0)` and tripping the
+/// fence on every node edit (#166 — a test-harness gap, not a production bug). Idempotent.
+fn init_collab_kb_client_id(editor: &mut Editor) {
+    if editor.collab.local_kb_client_id != 0 {
+        return;
+    }
+    if let Some(dir) = mae_mcp::identity::default_collab_dir() {
+        let label = editor.collab.user_name.clone();
+        if let Ok(id) = mae_mcp::identity::Identity::load_or_generate(&dir, &label) {
+            let fp = id.fingerprint();
+            let cid = mae_core::editor::derive_kb_client_id(&fp, 0);
+            editor.collab.local_kb_client_id = cid;
+            // Remember our own principal so node edits can be re-derived under a rotated
+            // per-KB authorization epoch (see kb_client_id_for).
+            editor.collab.local_fingerprint = fp;
+            info!(
+                client_id = cid,
+                "KB CRDT client_id derived from collab identity"
+            );
+        }
+    }
+}
+
 fn apply_collab_launch_overrides(editor: &mut Editor, connect_addr: Option<&str>) {
     if let Ok(addr) = std::env::var("MAE_COLLAB_SERVER") {
         if !addr.trim().is_empty() {
@@ -806,6 +834,11 @@ fn main() -> io::Result<()> {
         // `--test` has no `--connect`. See apply_collab_launch_overrides.
         apply_collab_launch_overrides(&mut editor, None);
 
+        // #166: derive the KB CRDT client_id from the collab identity here too (the
+        // interactive path does this) so scenario node edits author under the daemon's
+        // expected `derive_kb_client_id(fp, 0)` and don't trip the epoch fence.
+        init_collab_kb_client_id(&mut editor);
+
         // Build a minimal tokio runtime for the collab bridge.
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1036,23 +1069,7 @@ fn main() -> io::Result<()> {
     // client_id collide in yrs' clock space and their concurrent edits diverge;
     // seeding from the per-install Ed25519 fingerprint makes every peer distinct
     // and stable across restarts (so a peer's edits chain on one lineage).
-    if editor.collab.local_kb_client_id == 0 {
-        if let Some(dir) = mae_mcp::identity::default_collab_dir() {
-            let label = editor.collab.user_name.clone();
-            if let Ok(id) = mae_mcp::identity::Identity::load_or_generate(&dir, &label) {
-                let fp = id.fingerprint();
-                let cid = mae_core::editor::derive_kb_client_id(&fp, 0);
-                editor.collab.local_kb_client_id = cid;
-                // ADR-023: remember our own principal so node edits can be re-derived
-                // under a rotated per-KB authorization epoch (see kb_client_id_for).
-                editor.collab.local_fingerprint = fp;
-                info!(
-                    client_id = cid,
-                    "KB CRDT client_id derived from collab identity"
-                );
-            }
-        }
-    }
+    init_collab_kb_client_id(&mut editor);
 
     // NB: per-launch collab overrides (env + CLI `--connect`) are applied AFTER
     // init.scm loads (below), so they win over config files — see
