@@ -22,6 +22,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "kb_remove_member" => execute_kb_remove_member(editor, &call.arguments),
         "kb_approve" => execute_kb_approve(editor, &call.arguments),
         "kb_set_policy" => execute_kb_set_policy(editor, &call.arguments),
+        "kb_set_encryption" => execute_kb_set_encryption(editor, &call.arguments),
         "kb_sharing_status" => execute_kb_sharing_status(editor, &call.arguments),
         "daemon_status" => execute_daemon_status(editor, &call.arguments),
         _ => return None,
@@ -450,6 +451,36 @@ fn execute_kb_set_policy(editor: &mut Editor, args: &Value) -> Result<String, St
         "kb_id": kb_id,
         "policy": policy,
         "message": format!("Policy change queued: KB '{kb_id}' → {policy} (owner-only; applied by the daemon)"),
+    })
+    .to_string())
+}
+
+fn execute_kb_set_encryption(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let kb_id = args
+        .get("kb_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'kb_id' parameter")?
+        .to_string();
+    let mode = args
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("e2e")
+        .to_string();
+    if mode != "e2e" {
+        return Err(format!(
+            "Invalid mode '{mode}' (only 'e2e' is supported; encryption is one-way)"
+        ));
+    }
+    editor.collab.pending_intent = Some(CollabIntent::KbSetEncryption {
+        kb_id: kb_id.clone(),
+        mode: mode.clone(),
+    });
+    editor.set_status(format!("Enabling E2E encryption on KB '{kb_id}'..."));
+    Ok(serde_json::json!({
+        "action": "kb_set_encryption",
+        "kb_id": kb_id,
+        "mode": mode,
+        "message": format!("E2E encryption queued for KB '{kb_id}' (owner-only, one-way; the owner generates + distributes the content key, the daemon stays key-blind)"),
     })
     .to_string())
 }

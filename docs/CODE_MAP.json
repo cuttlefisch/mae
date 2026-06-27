@@ -1348,6 +1348,10 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "kb-set-encryption",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "kb-remove-link!",
       "source": "crates/scheme/src/runtime.rs"
     },

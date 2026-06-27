@@ -496,6 +496,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-remove-member` | `crates/scheme/src/runtime.rs` |
 | `kb-approve` | `crates/scheme/src/runtime.rs` |
 | `kb-set-policy` | `crates/scheme/src/runtime.rs` |
+| `kb-set-encryption` | `crates/scheme/src/runtime.rs` |
 | `kb-remove-link!` | `crates/scheme/src/runtime.rs` |
 | `kb-add-meta-member!` | `crates/scheme/src/runtime.rs` |
 | `kb-remove-meta-member!` | `crates/scheme/src/runtime.rs` |

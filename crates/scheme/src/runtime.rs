@@ -1712,6 +1712,24 @@ impl SchemeRuntime {
             },
         );
 
+        // (kb-set-encryption KB-ID MODE) — enable E2E content encryption (owner-only,
+        // one-way: MODE = "e2e"). ADR-037/039.
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-set-encryption",
+            "Enable E2E content encryption on an owned KB (owner-only, one-way): MODE = \"e2e\"",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let kb_id = arg_string(args, 0, "kb-set-encryption")?;
+                let mode = arg_string(args, 1, "kb-set-encryption")?;
+                s.lock()
+                    .unwrap()
+                    .pending_kb_collab_actions
+                    .push(mae_core::KbCollabAction::SetEncryption { kb_id, mode });
+                Ok(Value::Void)
+            },
+        );
+
         // (kb-remove-link! SOURCE-ID TARGET-ID)
         let s = shared.clone();
         vm.register_fn(
