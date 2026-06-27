@@ -3083,6 +3083,39 @@ mod tests {
         );
     }
 
+    /// ADR-037 #167/#168 — on an E2e KB a deletion is SEALED into a client-id-stamped
+    /// outer op-set op, so `update_new_op_authors` attributes it to the SEAL client_id and
+    /// the ADR-023 fence rejects a stale-epoch sealed delete. This is WHY #168's always-seal
+    /// closes #167's deletion-fence gap for E2e KBs. (Contrast: a PLAINTEXT pure-delete is
+    /// unattributable — yrs tombstones carry no deleter — the residual #167 gap on the
+    /// unencrypted path, which needs a separate deleter-attribution design.)
+    #[test]
+    fn update_new_op_authors_attributes_a_sealed_delete_to_the_seal_client() {
+        use crate::content_crypto::ContentKey;
+        use crate::op_set;
+        let key = ContentKey::generate();
+        let mut node = KbNodeDoc::new_with_client_id("n", "T", "secret-body", &[], 1);
+        let create = node.encode_state();
+        let inner_delete = node.set_body(""); // a pure delete at the plaintext layer
+                                              // Owner seals the create (op-set base); the attacker seals the delete at a STALE epoch.
+        let valid_cid = derive_kb_client_id("SHA256:owner", 0);
+        let (_i0, outer0) = op_set::seal_op(&[], &key, &create, valid_cid).unwrap();
+        let base = op_set::merge(&[], &outer0).unwrap();
+        let stale_cid = derive_kb_client_id("SHA256:attacker", 0);
+        let (_i1, outer1) = op_set::seal_op(&base, &key, &inner_delete, stale_cid).unwrap();
+        // The fence's author extraction reports the STALE seal client (so it rejects it),
+        // even though the INNER op is a pure (otherwise-unattributable) delete.
+        let authors = update_new_op_authors(&outer1, &base).unwrap();
+        assert!(
+            authors.contains(&stale_cid),
+            "the sealed delete's outer op carries the stale seal client_id ⇒ the fence catches it"
+        );
+        assert!(
+            !authors.contains(&valid_cid),
+            "the prior op-set base is grandfathered, not re-reported as a new author"
+        );
+    }
+
     #[test]
     fn oplog_head_advances_along_the_chain() {
         let (osec, opub, owner_fp) = oplog_keypair(1);
