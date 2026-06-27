@@ -125,6 +125,20 @@ Sources: [RFC 9420 (MLS)](https://www.rfc-editor.org/rfc/rfc9420.html) ·
    ordering is load-bearing.
 7. **Unbounded growth:** the op-set + membership log are grow-only (no compaction yet — ADR-028); long-lived
    heavily-edited KBs accumulate all historical ciphertext.
+8. **Enabling E2e does NOT retro-protect already-shared content (#171).** The natural flow — share a KB with
+   content, *then* `kb-set-encryption e2e` — transmits that content as plaintext while the KB is still
+   unencrypted, so the daemon holds plaintext `kb:{node}` docs that enabling does not re-seal; only subsequent
+   *edits* seal. Workaround: enable E2e on an empty KB before adding content. The fix (re-encryption-on-enable)
+   is tracked as #171.
+
+> **Fail-closed seal (the operational guardrail, §7.6, is now enforced in code — #168/#170).** Both write paths
+> refuse to emit plaintext on an E2e KB: `kb/node_update` (`build_kb_node_update_request` returns *refuse* and
+> requeues when it holds no content key or sealing fails — #168) and the `kb/share` / reconnect-re-share path
+> (`select_share_node_states` ships the sealed op-set or skips the node, never the plaintext snapshot — #170).
+> The E2e decision reads the **signed** `derive_encryption` (anchor-pinned), not the relay-flippable unsigned
+> flag, so a downgrade (F2) cannot trick the editor into plaintext. This closes the F2 downgrade *and* the
+> deletion-fence gap for E2e KBs (a sealed delete rides a client-id-stamped outer op the ADR-023 fence catches;
+> see #167).
 
 ## 8. Security review findings (issue #155)
 
