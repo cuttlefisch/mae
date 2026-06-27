@@ -2725,6 +2725,39 @@ fn kb_collection_is_e2e(collection_state: &[u8]) -> bool {
     mae_sync::membership::derive_encryption(&ops, &anchor) == mae_sync::kb::Encryption::E2e
 }
 
+/// #170 fail-CLOSED: choose the node states to put on the wire for a `kb/share`. On an
+/// UNENCRYPTED KB this is byte-identical to the legacy path (base64 the plaintext state).
+/// On an **E2e** KB it NEVER ships the plaintext snapshot to the key-blind daemon: it sends
+/// the already-sealed op-set state we hold for the node (idempotent — the daemon stores the
+/// same op-set that `kb/node_update` produces), and SKIPS a node we have no op-set for (its
+/// content is either pre-encryption — already on the daemon — or arrives via a sealed
+/// node_update). Pure + unit-testable (principle #8).
+fn select_share_node_states(
+    kb_id: &str,
+    e2e: bool,
+    node_states: &[(String, Vec<u8>)],
+    op_sets: &std::collections::HashMap<String, Vec<u8>>,
+) -> Vec<(String, String)> {
+    node_states
+        .iter()
+        .filter_map(|(id, state)| {
+            if e2e {
+                match op_sets.get(id) {
+                    Some(sealed) if !sealed.is_empty() => {
+                        Some((id.clone(), mae_sync::encoding::update_to_base64(sealed)))
+                    }
+                    _ => {
+                        warn!(target: "kb_sync", kb = %kb_id, node = %id, "E2e share: no sealed op-set for node — SKIPPING (refusing to ship plaintext snapshot, #170)");
+                        None
+                    }
+                }
+            } else {
+                Some((id.clone(), mae_sync::encoding::update_to_base64(state)))
+            }
+        })
+        .collect()
+}
+
 /// ADR-037 §D2 (#146 Phase 2b): recover **this peer's** per-KB content key from a
 /// collection doc, in the network task (the only place that holds both the collection
 /// bytes — at the join/share response — and the identity secret). Returns `None` for
@@ -3256,13 +3289,20 @@ async fn run_collab_task(
                             }
                         }
                         CollabCommand::ShareKb { kb_id, name, creator, collection_state, node_states } => {
-                            info!(kb = %kb_id, nodes = node_states.len(), "sharing KB");
+                            // #170 fail-CLOSED: on an E2e KB, NEVER ship plaintext node
+                            // snapshots to the key-blind daemon (the share/re-share path).
+                            // Send the already-sealed op-set state we hold (idempotent — the
+                            // daemon stores the same op-set node_updates produce); SKIP a node
+                            // we have no op-set for rather than leak its plaintext (its content
+                            // is either pre-encryption — already on the daemon — or arrives via
+                            // a sealed node_update). The unencrypted path stays byte-identical.
+                            let e2e = kb_collection_is_e2e(&collection_state);
+                            info!(kb = %kb_id, nodes = node_states.len(), e2e, "sharing KB");
                             if let Some(ref mut w) = writer {
                                 let req_id = next_request_id;
                                 next_request_id += 1;
-                                let nodes: Vec<(String, String)> = node_states.iter().map(|(id, state)| {
-                                    (id.clone(), mae_sync::encoding::update_to_base64(state))
-                                }).collect();
+                                let nodes =
+                                    select_share_node_states(&kb_id, e2e, &node_states, &op_sets);
                                 let req = mae_sync::wire::kb_share_request(
                                     req_id,
                                     &kb_id,
