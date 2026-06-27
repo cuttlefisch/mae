@@ -306,6 +306,19 @@ impl Client {
         self.recv().await
     }
 
+    /// ADR-037 Phase 3a: ship an owner-signed, opaque collection delta (the editor's
+    /// outbound collection-write path). Returns the daemon's response.
+    async fn kb_collection_op(&mut self, kb_id: &str, update: &[u8]) -> serde_json::Value {
+        let msg = mae_sync::wire::kb_collection_op_request(
+            self.next_id,
+            kb_id,
+            &update_to_base64(update),
+        );
+        self.next_id += 1;
+        self.send(&msg).await;
+        self.recv().await
+    }
+
     /// Drain any pending notifications (non-blocking). Includes buffered ones.
     async fn drain_notifications(&mut self) -> Vec<serde_json::Value> {
         let mut notifications: Vec<serde_json::Value> =
@@ -2509,5 +2522,113 @@ async fn kb_join_with_svs_returns_reconcile_diff_else_full_state() {
         carol_doc.title(),
         "V2 [reconcile]",
         "carol gets the current v2 state"
+    );
+}
+
+/// ADR-037 Phase 3a: the editor's outbound `kb/collection_op` path. The owner authors
+/// SIGNED membership ops locally and ships the opaque bytes; the daemon stores +
+/// rebroadcasts them KEY-BLIND (it never parses the op or holds a key), yet a peer
+/// DERIVES the correct membership from the signed op-log — and a forged op (signature
+/// not matching the claimed author pubkey) is NOT a valid member (store-blind ≠ trust-blind).
+#[tokio::test]
+async fn kb_collection_op_stores_owner_signed_membership_keyblind() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::kb::{KbCollectionDoc, Role};
+    use mae_sync::membership::{derive_valid_members, MembershipAction};
+    init_tracing();
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut owner = Client::connect(store.clone(), bc.clone()).await;
+    owner.initialize().await;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let owner_id = Identity::generate("owner");
+    let member_id = Identity::generate("member");
+    let kb = "kbEnc";
+
+    // Owner shares an owned collection (none-mode preserves the owner as-is).
+    let mut coll = KbCollectionDoc::new_owned(kb, &owner_id.fingerprint(), "owner");
+    owner
+        .kb_share(kb, &update_to_base64(&coll.encode_state()), &[])
+        .await;
+
+    // Genesis self-admit + admit a member, each owner-signed, each shipped via the new RPC.
+    let g = coll.build_membership_op(
+        kb,
+        MembershipAction::Admit,
+        &owner_id.fingerprint(),
+        Some(Role::Owner),
+        true,
+        &owner_id.fingerprint(),
+        0,
+        None,
+        0,
+    );
+    let gsig = g.sign(&owner_id.secret_bytes());
+    let gup = coll.append_signed_op(&g, &gsig, &owner_id.public().to_bytes());
+    let r1 = owner.kb_collection_op(kb, &gup).await;
+    assert_eq!(r1["result"]["applied"], true, "genesis applied: {r1}");
+
+    let a = coll.build_membership_op(
+        kb,
+        MembershipAction::Admit,
+        &member_id.fingerprint(),
+        Some(Role::Editor),
+        false,
+        &owner_id.fingerprint(),
+        1,
+        None,
+        0,
+    );
+    let asig = a.sign(&owner_id.secret_bytes());
+    let aup = coll.append_signed_op(&a, &asig, &owner_id.public().to_bytes());
+    let r2 = owner.kb_collection_op(kb, &aup).await;
+    assert_eq!(r2["result"]["applied"], true, "admit applied: {r2}");
+
+    // The daemon's authoritative collection now carries the signed log it merely relayed.
+    let anchor = owner_id.public().to_bytes();
+    let state = owner.full_state(&format!("kbc:{kb}")).await;
+    let server = KbCollectionDoc::from_bytes(&state).unwrap();
+    let members = derive_valid_members(&server.oplog_ops(), &anchor, now);
+    assert_eq!(
+        members.get(&owner_id.fingerprint()).map(|m| m.role),
+        Some(Role::Owner),
+        "owner derived from the relayed signed op-log"
+    );
+    assert_eq!(
+        members.get(&member_id.fingerprint()).map(|m| m.role),
+        Some(Role::Editor),
+        "admitted member derived from the relayed signed op-log"
+    );
+
+    // Forge: an Admit signed with the WRONG key but claiming the owner's pubkey. The
+    // daemon stores it blindly; derivation rejects it (verify_signed fails).
+    let bad = coll.build_membership_op(
+        kb,
+        MembershipAction::Admit,
+        "SHA256:attacker",
+        Some(Role::Owner),
+        true,
+        &owner_id.fingerprint(),
+        2,
+        None,
+        0,
+    );
+    let bad_sig = bad.sign(&member_id.secret_bytes()); // signed by member, not owner
+    let bad_up = coll.append_signed_op(&bad, &bad_sig, &owner_id.public().to_bytes());
+    let r3 = owner.kb_collection_op(kb, &bad_up).await;
+    assert_eq!(
+        r3["result"]["applied"], true,
+        "daemon stores it key-blind: {r3}"
+    );
+    let state2 = owner.full_state(&format!("kbc:{kb}")).await;
+    let server2 = KbCollectionDoc::from_bytes(&state2).unwrap();
+    let members2 = derive_valid_members(&server2.oplog_ops(), &anchor, now);
+    assert!(
+        !members2.contains_key("SHA256:attacker"),
+        "a forged op (signature != claimed author pubkey) is NOT a valid member"
     );
 }

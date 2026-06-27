@@ -39,6 +39,24 @@ pub fn kb_node_update_request(id: u64, kb_id: &str, node_id: &str, update_b64: &
     })
 }
 
+/// ADR-037 Phase 3a: the owner editor's outbound collection-write request. `update_b64`
+/// is an **owner-signed, opaque** collection delta (a signed membership op appended via
+/// `KbCollectionDoc::append_signed_op`, or a `set_encryption` flip). The daemon stays
+/// key-blind — it confirms owner authority (`kb_access(Manage)`) and stores+rebroadcasts
+/// the bytes without inspecting them. The editor is otherwise a read-only collection
+/// mirror; this is the only authoring path for an editor-owned KB's signed op-log.
+pub fn kb_collection_op_request(id: u64, kb_id: &str, update_b64: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "kb/collection_op",
+        "params": {
+            "kb_id": kb_id,
+            "update": update_b64,
+        }
+    })
+}
+
 /// As [`kb_node_update_request`], with the ADR-036 signed authorship header merged
 /// into `params` — the editor's sign-on-push form. `header` is
 /// [`crate::content_ops::SignedContentOp::header_params`]; the daemon parses it back

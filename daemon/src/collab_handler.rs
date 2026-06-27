@@ -539,6 +539,7 @@ async fn handle_doc_notification_inner(
         | "kb/add_member"
         | "kb/remove_member"
         | "kb/approve_member"
+        | "kb/collection_op"
         | "kb/set_policy"
         | "kb/set_governance"
         | "kb/revoke" => {
@@ -2278,6 +2279,79 @@ async fn handle_doc_request_inner(
             }
         }
 
+        "kb/collection_op" => {
+            // ADR-037 Phase 3a: the editor's outbound collection-write path. The owner
+            // authors a signed collection delta LOCALLY (a signed membership op, an
+            // encryption-flag flip, …) and ships the opaque bytes here. The daemon stays
+            // KEY-BLIND: it never inspects op semantics nor holds a content key — it only
+            // confirms owner authority (Manage) and stores + rebroadcasts the
+            // owner-signed bytes. `append_signed_op` (which produced them) does not
+            // validate; every peer DERIVES validity from the signed log. This is the
+            // only way to author signed membership for an EDITOR-owned KB while keeping
+            // the daemon unable to read content (the owner, not the daemon, holds the key).
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    );
+                }
+            };
+            let update = match params["update"].as_str() {
+                Some(s) => match base64_to_update(s) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        return JsonRpcResponse::error(
+                            id,
+                            McpError::parse_error(format!("invalid 'update' base64: {e}")),
+                        );
+                    }
+                },
+                None => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'update' field".to_string()),
+                    );
+                }
+            };
+            if update.len() > MAX_UPDATE_SIZE {
+                return JsonRpcResponse::error(
+                    id,
+                    McpError::internal_error(format!(
+                        "collection update exceeds {MAX_UPDATE_SIZE} bytes"
+                    )),
+                );
+            }
+            // ADR-018: owner-only (Manage). A non-owner cannot inject collection ops.
+            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
+                Ok(AccessDecision::Allow) => {}
+                Ok(AccessDecision::Deny(m)) | Err(m) => {
+                    return JsonRpcResponse::error(id, McpError::internal_error(m));
+                }
+                Ok(_) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
+                    );
+                }
+            }
+            match persist_and_broadcast_collection(
+                doc_store,
+                broadcaster,
+                session_id,
+                &kb_id,
+                &update,
+            )
+            .await
+            {
+                Ok(wal_seq) => JsonRpcResponse::success(
+                    id,
+                    serde_json::json!({ "applied": true, "wal_seq": wal_seq }),
+                ),
+                Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+            }
+        }
         "kb/add_member" | "kb/remove_member" => {
             let add = request.method == "kb/add_member";
             let kb_id = match params["kb_id"].as_str() {
