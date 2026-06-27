@@ -4,9 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Documentation
+
+- E2E KB-sharing security reviews, holistic reference, ADR-038/039, adversarial-testing principle (#159) ([99e6ebe](https://github.com/cuttlefisch/mae/commit/99e6ebe3dcbfb8a836d25c652d16f81072dc4300))
+
+## [0.14.13] - 2026-06-27
+
 ### Features
 
 - *(daemon)* Kb/collection_op — key-blind owner-signed collection write (ADR-037 #150, Phase 3a) (#154) ([274ff53](https://github.com/cuttlefisch/mae/commit/274ff531848c5693ff7358ea64e9083dd82dbd0b))
+
+### Miscellaneous
+
+- Bump version to 0.14.13 ([2ee3ff4](https://github.com/cuttlefisch/mae/commit/2ee3ff4e2f5b54100bb86c51b32cc7ef6ba4294c))
 
 ## [0.14.12] - 2026-06-26
 
