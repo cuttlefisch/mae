@@ -818,6 +818,33 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        ToolDefinition {
+            name: "kb_set_encryption".into(),
+            description: "Enable E2E content encryption on an owned KB (owner-only, one-way; ADR-037). The owner generates a per-KB content key, wraps it to each member through the signed membership log, and the daemon/relay stays key-blind (cannot read content). Restricted to single-owner KBs.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB identifier (e.g. 'collabtest')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "mode".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Encryption mode (only 'e2e'; one-way)".into(),
+                            enum_values: Some(vec!["e2e".into()]),
+                        },
+                    ),
+                ]),
+                required: vec!["kb_id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Graph KB tools (v0.12.0) ---
         ToolDefinition {
             name: "kb_agenda".into(),

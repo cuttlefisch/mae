@@ -38,6 +38,12 @@ pub enum MembershipAction {
     /// membership derivation (it admits/removes no one — `build_members` skips
     /// non-`Admit` ops); read separately by [`derive_governance`].
     SetGovernance,
+    /// Set the KB's content-encryption mode (ADR-039 F2). Owner-authored; `subject`
+    /// carries the mode (`"e2e"`). Putting the mode in the SIGNED log (not the unsigned
+    /// collection flag) stops a relay downgrading `e2e→none` to coax a victim into
+    /// emitting plaintext. Inert to membership derivation; read by [`derive_encryption`],
+    /// which is monotonic (`e2e` is one-way — no downgrade).
+    SetEncryption,
 }
 
 impl MembershipAction {
@@ -48,6 +54,7 @@ impl MembershipAction {
             MembershipAction::SetRole => "set_role",
             MembershipAction::Revoke => "revoke",
             MembershipAction::SetGovernance => "set_governance",
+            MembershipAction::SetEncryption => "set_encryption",
         }
     }
     pub fn parse(s: &str) -> Option<MembershipAction> {
@@ -57,6 +64,7 @@ impl MembershipAction {
             "set_role" => Some(MembershipAction::SetRole),
             "revoke" => Some(MembershipAction::Revoke),
             "set_governance" => Some(MembershipAction::SetGovernance),
+            "set_encryption" => Some(MembershipAction::SetEncryption),
             _ => None,
         }
     }
@@ -618,6 +626,9 @@ fn authorized(
         // map (`build_members` skips non-Admit ops); this only keeps it in the
         // valid set when owner-authored so `derive_governance` can read it.
         MembershipAction::SetGovernance => author.role == Role::Owner,
+        // Encryption mode is owner-managed (ADR-039 F2). Inert to the member map; kept in
+        // the valid set when owner-authored so `derive_encryption` can read it.
+        MembershipAction::SetEncryption => author.role == Role::Owner,
     }
 }
 
@@ -657,6 +668,41 @@ pub fn derive_governance(ops: &[SignedMembershipOp], anchor_owner_pubkey: &[u8; 
         }
     }
     gov
+}
+
+/// ADR-039 F2: derive the KB's content-encryption mode from the signed op-log — the
+/// anti-downgrade counterpart to [`derive_governance`]. Owner-rooted and **monotonic**:
+/// any owner-authored `SetEncryption("e2e")` op makes the KB E2e **permanently**, so a
+/// later op (forged, or even owner-authored `"none"`) cannot downgrade it — the seal path
+/// reads this value and stays fail-closed once it is `E2e`. Absent ⇒ [`Encryption::None`].
+/// Because the mode lives in the signed log, a relay cannot flip the unsigned collection
+/// flag to coax a victim into emitting plaintext.
+pub fn derive_encryption(
+    ops: &[SignedMembershipOp],
+    anchor_owner_pubkey: &[u8; 32],
+) -> crate::kb::Encryption {
+    let crypto: Vec<&SignedMembershipOp> = ops.iter().filter(|o| o.verify_signed()).collect();
+    let genesis = match crypto.iter().find(|o| {
+        o.op.prev_hash.is_empty()
+            && o.op.action == MembershipAction::Admit
+            && o.op.subject == o.op.author
+            && &o.author_pubkey == anchor_owner_pubkey
+    }) {
+        Some(g) => g,
+        None => return crate::kb::Encryption::None,
+    };
+    let owner = genesis.op.subject.clone();
+    // Monotonic: ANY owner-authored `e2e` op latches E2e (one-way, no downgrade). No
+    // causal ordering needed — once it's asserted, it stays.
+    if crypto.iter().any(|o| {
+        o.op.action == MembershipAction::SetEncryption
+            && o.op.author == owner
+            && o.op.subject == "e2e"
+    }) {
+        crate::kb::Encryption::E2e
+    } else {
+        crate::kb::Encryption::None
+    }
 }
 
 /// ADR-037 §D2: recover **this peer's** per-KB content key from the signed op-log —
@@ -1204,6 +1250,78 @@ mod tests {
         assert_eq!(o.role, Role::Owner);
         assert!(o.can_invite);
         assert_eq!(o.invited_by, owner.fp);
+    }
+
+    #[test]
+    fn derive_encryption_latches_e2e_and_resists_downgrade_and_forgery() {
+        use crate::kb::Encryption;
+        let owner = id(1);
+        let attacker = id(2); // a non-owner member with can_invite
+        let g = genesis(&owner);
+
+        // No SetEncryption op ⇒ None (the default; unencrypted KBs unaffected).
+        assert_eq!(
+            derive_encryption(std::slice::from_ref(&g), &owner.pubkey),
+            Encryption::None,
+            "absent ⇒ None"
+        );
+
+        // Owner asserts e2e ⇒ E2e.
+        let enable = make(
+            &owner,
+            MembershipAction::SetEncryption,
+            "e2e",
+            None,
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        assert_eq!(
+            derive_encryption(&[g.clone(), enable.clone()], &owner.pubkey),
+            Encryption::E2e,
+            "owner SetEncryption(e2e) ⇒ E2e"
+        );
+
+        // Downgrade resistance: a LATER owner `none` op does NOT un-encrypt (monotonic).
+        let downgrade = make(
+            &owner,
+            MembershipAction::SetEncryption,
+            "none",
+            None,
+            false,
+            None,
+            &enable.chain_hash(),
+        );
+        assert_eq!(
+            derive_encryption(&[g.clone(), enable.clone(), downgrade], &owner.pubkey),
+            Encryption::E2e,
+            "e2e is one-way — a later owner 'none' cannot downgrade"
+        );
+
+        // Forgery: a NON-owner asserting e2e is ignored (only the anchored owner counts).
+        let forged = make(
+            &attacker,
+            MembershipAction::SetEncryption,
+            "e2e",
+            None,
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        assert_eq!(
+            derive_encryption(&[g.clone(), forged.clone()], &owner.pubkey),
+            Encryption::None,
+            "a non-owner SetEncryption(e2e) does NOT enable encryption"
+        );
+
+        // Tamper: corrupt the enable op's signature ⇒ it fails verify_signed ⇒ ignored.
+        let mut tampered = enable.clone();
+        tampered.author_pubkey = attacker.pubkey; // claim a different author key
+        assert_eq!(
+            derive_encryption(&[g, tampered], &owner.pubkey),
+            Encryption::None,
+            "an op whose signature doesn't match its claimed author key is ignored"
+        );
     }
 
     #[test]

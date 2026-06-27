@@ -137,6 +137,11 @@ pub enum KbCollabAction {
         kb_id: String,
         policy: String,
     },
+    /// Enable E2E content encryption on an owned KB (owner-only, ADR-037/039).
+    SetEncryption {
+        kb_id: String,
+        mode: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -200,6 +205,8 @@ pub enum CollabIntent {
     KbListPending { kb_id: String },
     /// Set a KB's join policy (restrictive|invite|permissive; owner-only, ADR-018).
     KbSetPolicy { kb_id: String, policy: String },
+    /// Enable E2E content encryption on an owned KB (owner-only, ADR-037/039).
+    KbSetEncryption { kb_id: String, mode: String },
     /// Send a CRDT update for a KB node to the server.
     KbNodeUpdate {
         kb_id: String,

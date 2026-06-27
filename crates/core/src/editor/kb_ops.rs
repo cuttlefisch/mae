@@ -1382,6 +1382,9 @@ impl Editor {
             KbCollabAction::SetPolicy { kb_id, policy } => {
                 CollabIntent::KbSetPolicy { kb_id, policy }
             }
+            KbCollabAction::SetEncryption { kb_id, mode } => {
+                CollabIntent::KbSetEncryption { kb_id, mode }
+            }
         };
         self.collab.pending_intent = Some(intent);
     }

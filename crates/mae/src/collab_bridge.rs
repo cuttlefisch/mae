@@ -263,6 +263,23 @@ pub enum CollabCommand {
         kb_id: String,
         policy: String,
     },
+    /// Enable E2E encryption on an owned KB (ADR-037/038/039, owner-only). The network
+    /// task generates + persists the content key, self-wraps it, authors the signed
+    /// genesis + `SetEncryption` op against `collection_state` (carried from the main
+    /// thread's replica), and ships the combined delta via `kb/collection_op`.
+    KbSetEncryption {
+        kb_id: String,
+        mode: String,
+        collection_state: Vec<u8>,
+    },
+    /// Ship an owner-signed, opaque collection delta to the daemon's key-blind
+    /// `kb/collection_op` RPC (ADR-038). The send + disconnect handling is ready here;
+    /// the producer (wrap-on-admit) lands in PR B (#151 follow-up).
+    #[allow(dead_code)]
+    KbCollectionOp {
+        kb_id: String,
+        update: Vec<u8>,
+    },
 }
 
 /// Events sent from the collab background task back to the main thread.
@@ -714,6 +731,21 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         },
         CollabIntent::KbListPending { kb_id } => CollabCommand::KbListPending { kb_id },
         CollabIntent::KbSetPolicy { kb_id, policy } => CollabCommand::KbSetPolicy { kb_id, policy },
+        CollabIntent::KbSetEncryption { kb_id, mode } => {
+            // Carry the main thread's cached collection replica so the network task (which
+            // holds the identity secret) can author the signed genesis + SetEncryption op.
+            let collection_state = editor
+                .collab
+                .kb_collection_state
+                .get(&kb_id)
+                .cloned()
+                .unwrap_or_default();
+            CollabCommand::KbSetEncryption {
+                kb_id,
+                mode,
+                collection_state,
+            }
+        }
         CollabIntent::KbNodeUpdate {
             kb_id,
             node_id,
@@ -901,6 +933,8 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::KbApprove { .. } => "kb-approve",
         CollabCommand::KbListPending { .. } => "kb-pending",
         CollabCommand::KbSetPolicy { .. } => "kb-policy",
+        CollabCommand::KbSetEncryption { .. } => "kb-set-encryption",
+        CollabCommand::KbCollectionOp { .. } => "kb-collection-op",
         CollabCommand::ListDocs { .. } => "list-docs",
         CollabCommand::JoinDoc { .. } => "join-doc",
         CollabCommand::ShareKb { .. } => "share-kb",
@@ -2609,9 +2643,6 @@ fn derive_kb_content_key(
     identity: &mae_mcp::identity::Identity,
 ) -> Option<mae_sync::content_crypto::ContentKey> {
     let coll = mae_sync::kb::KbCollectionDoc::from_bytes(collection_state).ok()?;
-    if coll.encryption() != mae_sync::kb::Encryption::E2e {
-        return None;
-    }
     let ops = coll.oplog_ops();
     // Anchor: the genesis owner self-admit (mirror of `derive_governance` /
     // `derive_content_key`). Without it there is no trust root and we derive nothing.
@@ -2623,6 +2654,22 @@ fn derive_kb_content_key(
                 && o.op.subject == o.op.author
         })?
         .author_pubkey;
+    // F1/A3 (ADR-039): the genesis anchor MUST be the AUTHENTICATED owner — `COLL_OWNER_KEY`,
+    // which the daemon binds to the verified mTLS principal (ADR-018). This refuses a forged
+    // genesis a relay substituted (its key wouldn't match the daemon-attested owner) instead
+    // of TOFU-trusting whatever genesis the collection carries. (Mesh node-id pinning = #158.)
+    if mae_sync::membership::fingerprint_of(&anchor_owner_pubkey) != coll.owner() {
+        return None;
+    }
+    // F2 (ADR-039): the AUTHORITATIVE encryption mode is the SIGNED, monotonic op-log — NOT
+    // the unsigned collection flag a relay could flip to `none`. Once it asserts E2e the key
+    // is derived; the seal path (gated on the resulting `content_keys` entry) stays
+    // fail-closed — it never reverts to plaintext on a flag downgrade.
+    if mae_sync::membership::derive_encryption(&ops, &anchor_owner_pubkey)
+        != mae_sync::kb::Encryption::E2e
+    {
+        return None;
+    }
     mae_sync::membership::derive_content_key(
         &ops,
         &anchor_owner_pubkey,
@@ -3380,6 +3427,86 @@ async fn run_collab_task(
                                     "jsonrpc": "2.0", "id": req_id, "method": "kb/set_policy",
                                     "params": { "kb_id": kb_id, "policy": policy }
                                 });
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    let _ = write_framed(w, &body, write_timeout).await;
+                                }
+                            }
+                        }
+                        CollabCommand::KbSetEncryption { kb_id, mode, collection_state } => {
+                            // ADR-037/038/039: enable E2E. ALL key crypto stays in this
+                            // network task (it holds the secret); the daemon stays key-blind
+                            // (it only stores the owner-signed delta via kb/collection_op).
+                            if mode != "e2e" {
+                                warn!(kb = %kb_id, %mode, "kb/set_encryption: only 'e2e' is supported (one-way)");
+                            } else if let Some(id) = signing_identity.as_ref() {
+                                let owner_fp = id.fingerprint();
+                                let owner_pubkey = id.public().to_bytes();
+                                let owner_secret = id.secret_bytes();
+                                match mae_sync::kb::KbCollectionDoc::from_bytes(&collection_state) {
+                                    Ok(mut coll) if coll.owner() == owner_fp => {
+                                        // F4 (ADR-039): E2e requires SingleOwner governance
+                                        // (a quorum-removable owner would freeze the key).
+                                        let gov = mae_sync::membership::derive_governance(
+                                            &coll.oplog_ops(), &owner_pubkey,
+                                        );
+                                        if gov != mae_sync::membership::Governance::SingleOwner {
+                                            warn!(kb = %kb_id, "kb/set_encryption: E2e requires SingleOwner governance — refused");
+                                        } else {
+                                            // Generate-or-load + persist the content key.
+                                            let dir = mae_mcp::content_key_store::content_keys_dir();
+                                            let key = match dir.as_ref().and_then(|d| mae_mcp::content_key_store::load(d, &kb_id)) {
+                                                Some(b) => mae_sync::content_crypto::ContentKey::from_bytes(b),
+                                                None => {
+                                                    let k = mae_sync::content_crypto::ContentKey::generate();
+                                                    if let Some(d) = dir.as_ref() {
+                                                        if let Err(e) = mae_mcp::content_key_store::save(d, &kb_id, k.as_bytes()) {
+                                                            warn!(kb = %kb_id, error = %e, "kb/set_encryption: failed to persist content key");
+                                                        }
+                                                    }
+                                                    k
+                                                }
+                                            };
+                                            match mae_sync::content_crypto::wrap_to_member(&key, &owner_pubkey) {
+                                                Ok(self_wrap) => {
+                                                    let now = std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .map(|d| d.as_secs())
+                                                        .unwrap_or(0);
+                                                    let delta = coll.author_e2e_genesis(
+                                                        &kb_id, &owner_fp, &owner_secret, &owner_pubkey, self_wrap, now,
+                                                    );
+                                                    if let Some(ref mut w) = writer {
+                                                        let req_id = next_request_id;
+                                                        next_request_id += 1;
+                                                        let req = mae_sync::wire::kb_collection_op_request(
+                                                            req_id, &kb_id, &mae_sync::encoding::update_to_base64(&delta),
+                                                        );
+                                                        if let Ok(body) = serde_json::to_vec(&req) {
+                                                            let _ = write_framed(w, &body, write_timeout).await;
+                                                        }
+                                                    }
+                                                    // Register the key so the owner's edits now seal (Phase 2b).
+                                                    content_keys.insert(kb_id.clone(), key);
+                                                    info!(kb = %kb_id, "ADR-037: E2E enabled — content key generated + self-wrapped, signed genesis authored");
+                                                }
+                                                Err(e) => warn!(kb = %kb_id, error = ?e, "kb/set_encryption: self-wrap failed"),
+                                            }
+                                        }
+                                    }
+                                    Ok(_) => warn!(kb = %kb_id, "kb/set_encryption: not the KB owner — skipped"),
+                                    Err(e) => warn!(kb = %kb_id, error = %e, "kb/set_encryption: collection decode failed"),
+                                }
+                            } else {
+                                warn!(kb = %kb_id, "kb/set_encryption: E2E requires key mode (no signing identity)");
+                            }
+                        }
+                        CollabCommand::KbCollectionOp { kb_id, update } => {
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let req = mae_sync::wire::kb_collection_op_request(
+                                    req_id, &kb_id, &mae_sync::encoding::update_to_base64(&update),
+                                );
                                 if let Ok(body) = serde_json::to_vec(&req) {
                                     let _ = write_framed(w, &body, write_timeout).await;
                                 }
@@ -4660,6 +4787,10 @@ async fn handle_disconnected_cmd(
             ..
         } => {
             debug!(kb = %kb_id, node = %node_id, add, "not connected — KB manifest op dropped (heals on reconnect re-share)");
+        }
+        CollabCommand::KbSetEncryption { kb_id, .. }
+        | CollabCommand::KbCollectionOp { kb_id, .. } => {
+            debug!(kb = %kb_id, "not connected — KB collection op dropped (re-enable on reconnect)");
         }
     }
 }

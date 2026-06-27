@@ -793,6 +793,10 @@
           "kind": "mod"
         },
         {
+          "name": "content_key_store",
+          "kind": "mod"
+        },
+        {
           "name": "daemon_client",
           "kind": "mod"
         },
@@ -1341,6 +1345,10 @@
     },
     {
       "name": "kb-set-policy",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-set-encryption",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
