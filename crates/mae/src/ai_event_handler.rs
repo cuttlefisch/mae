@@ -1213,7 +1213,7 @@ pub fn drain_pending_scheme_evals(
     if editor.pending_scheme_eval.is_empty() {
         return None;
     }
-    let exprs: Vec<String> = editor.pending_scheme_eval.drain(..).collect();
+    let exprs: Vec<String> = std::mem::take(&mut editor.pending_scheme_eval);
     let mut results = Vec::new();
     for code in &exprs {
         scheme.inject_editor_state(editor);
