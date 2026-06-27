@@ -1208,6 +1208,51 @@ async fn handle_doc_request_inner(
                 }
             }
 
+            // #169 M1: a `kb:{node}` write arriving via `sync/update` must carry its `kb_id`
+            // and clear the ADR-023 epoch fence — the SAME mediation as `kb/node_update` and
+            // the mesh dialer. Before this, a bare `kb:` `sync/update` (no `kb_id`) skipped
+            // `verify_relayed_content_op` (it's gated on `kb_id`), `kb_access`, AND the fence,
+            // writing the node CRDT with no role/signature/epoch check, then broadcasting.
+            // Text buffers (non-`kb:` docs) are unaffected.
+            if let Some(node_id) = doc_name.strip_prefix("kb:") {
+                match params.get("kb_id").and_then(|v| v.as_str()) {
+                    Some(kb_id) => {
+                        // Fence on the VERIFIED header author (a relayed op's true author —
+                        // never the connection principal), mirroring the dialer's #157 N1 path.
+                        if let Some(author) = sync_content_header
+                            .as_ref()
+                            .and_then(|h| h.get("author").and_then(|a| a.as_str()))
+                        {
+                            if let Err(reason) = enforce_epoch_fence(
+                                doc_store,
+                                kb_id,
+                                node_id,
+                                &doc_name,
+                                &update_bytes,
+                                author,
+                            )
+                            .await
+                            {
+                                warn!(session = session_id, doc = %doc_name, %reason, "sync/update: kb node REJECTED (epoch fence — #169 M1)");
+                                return JsonRpcResponse::error(
+                                    id,
+                                    McpError::internal_error(reason),
+                                );
+                            }
+                        }
+                    }
+                    None => {
+                        warn!(session = session_id, doc = %doc_name, "sync/update: kb node write WITHOUT kb_id — REJECTED (would bypass membership + epoch fence, #169 M1)");
+                        return JsonRpcResponse::error(
+                            id,
+                            McpError::internal_error(
+                                "kb node writes via sync/update must carry kb_id".to_string(),
+                            ),
+                        );
+                    }
+                }
+            }
+
             match doc_store
                 .apply_update(&doc_name, &update_bytes, client_id)
                 .await

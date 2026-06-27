@@ -58,6 +58,63 @@ async fn handle_doc_sync_update_and_read() {
     assert_eq!(resp.result.unwrap()["content"], "hello");
 }
 
+/// #169 M1 — the attacker's test. A `kb:{node}` write smuggled in via `sync/update`
+/// WITHOUT a `kb_id` must be REJECTED: it would otherwise skip `verify_relayed_content_op`
+/// (gated on `kb_id`), `kb_access`, AND the epoch fence, then apply + broadcast. The
+/// selective control: a plain (non-`kb:`) buffer is unaffected.
+#[tokio::test]
+async fn sync_update_to_kb_doc_without_kb_id_is_rejected() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut ts = TextSync::with_client_id("", 1);
+    let update = ts.insert(0, "smuggled-node-write");
+    let msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "sync/update",
+        "params": { "doc": "kb:concept:smuggle", "update": update_to_base64(&update) }
+    });
+    let resp = handle_doc_request(
+        &msg.to_string(),
+        &store,
+        &bc,
+        std::time::Instant::now(),
+        0,
+        &mut HashSet::new(),
+    )
+    .await;
+    assert!(
+        resp.error.is_some(),
+        "a kb: sync/update with no kb_id MUST be rejected (#169 M1 bypass)"
+    );
+    assert!(
+        resp.error.unwrap().message.contains("kb_id"),
+        "the rejection cites the missing kb_id"
+    );
+
+    // SELECTIVE control: a non-kb (text buffer) doc without kb_id still applies — the gate
+    // is specific to kb: docs, not a blanket sync/update break.
+    let mut ts2 = TextSync::with_client_id("", 2);
+    let upd2 = ts2.insert(0, "ok");
+    let msg2 = serde_json::json!({
+        "jsonrpc": "2.0", "id": 2, "method": "sync/update",
+        "params": { "doc": "plain-buffer", "update": update_to_base64(&upd2) }
+    });
+    let resp2 = handle_doc_request(
+        &msg2.to_string(),
+        &store,
+        &bc,
+        std::time::Instant::now(),
+        0,
+        &mut HashSet::new(),
+    )
+    .await;
+    assert!(
+        resp2.error.is_none(),
+        "a non-kb doc is unaffected by the kb: gate: {:?}",
+        resp2.error
+    );
+}
+
 #[tokio::test]
 async fn handle_doc_state_vector() {
     let store = test_doc_store();

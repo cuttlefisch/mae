@@ -989,7 +989,15 @@ mod tests {
         // (the dialer is subscribed, doc-scoped to this KB) → forwarded to the owner.
         let mut b_node = {
             let (st, _) = b_store.encode_state_and_sv("kb:concept:n").await.unwrap();
-            TextSync::from_state(&st).unwrap()
+            // A real editor authors KB node ops under derive_kb_client_id(fp, epoch)
+            // (kb_ops.rs:1161). The B→A forward now clears the epoch fence on the owner's
+            // sync/update path too (#169 M1), so B's edit must be stamped the way the editor
+            // would — a plain client_id is (correctly) fenced as stale-lineage.
+            TextSync::from_state_with_client_id(
+                &st,
+                mae_sync::kb::derive_kb_client_id(&b_id.fingerprint(), 0),
+            )
+            .unwrap()
         };
         let edit = b_node.insert(0, "B-EDIT ");
         b_store
