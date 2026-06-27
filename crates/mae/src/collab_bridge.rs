@@ -2769,6 +2769,7 @@ fn derive_kb_content_key(
     collection_state: &[u8],
     identity: &mae_mcp::identity::Identity,
 ) -> Option<mae_sync::content_crypto::ContentKey> {
+    let me = identity.fingerprint();
     let coll = mae_sync::kb::KbCollectionDoc::from_bytes(collection_state).ok()?;
     let ops = coll.oplog_ops();
     // Anchor: the genesis owner self-admit (mirror of `derive_governance` /
@@ -2779,8 +2780,8 @@ fn derive_kb_content_key(
             o.op.prev_hash.is_empty()
                 && o.op.action == mae_sync::membership::MembershipAction::Admit
                 && o.op.subject == o.op.author
-        })?
-        .author_pubkey;
+        })
+        .map(|o| o.author_pubkey)?;
     // F1/A3 (ADR-039): the genesis anchor MUST be the AUTHENTICATED owner — `COLL_OWNER_KEY`,
     // which the daemon binds to the verified mTLS principal (ADR-018). This refuses a forged
     // genesis a relay substituted (its key wouldn't match the daemon-attested owner) instead
@@ -2800,7 +2801,7 @@ fn derive_kb_content_key(
     mae_sync::membership::derive_content_key(
         &ops,
         &anchor_owner_pubkey,
-        &identity.fingerprint(),
+        &me,
         &identity.secret_bytes(),
     )
 }
@@ -3684,8 +3685,21 @@ async fn run_collab_task(
                             if let (Some(key), Some(id)) =
                                 (content_keys.get(&kb_id).cloned(), signing_identity.as_ref())
                             {
+                                // Author against the network task's OWN replica (`kb_collections`),
+                                // NOT the main-thread `collection_state` snapshot. #173 keeps the
+                                // replica CRDT-merged from the ops WE authored (genesis +
+                                // SetEncryption) plus every daemon broadcast (incl. the pending-add
+                                // carrying the joiner's pubkey), on the SAME yrs lineage the daemon
+                                // holds. The main-thread snapshot is a DIVERGENT lineage whose
+                                // re-created oplog-map root would tombstone the genesis/SetEncryption
+                                // ops when the daemon merges our delta — the joiner then never gets a
+                                // valid wrapped-key `Admit` and cannot derive the content key.
+                                let base_state = kb_collections
+                                    .get(&kb_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| collection_state.clone());
                                 if let Ok(mut coll) =
-                                    mae_sync::kb::KbCollectionDoc::from_bytes(&collection_state)
+                                    mae_sync::kb::KbCollectionDoc::from_bytes(&base_state)
                                 {
                                     let member_pk = coll
                                         .pending()
@@ -3718,6 +3732,10 @@ async fn run_collab_task(
                                                     let _ = write_framed(w, &body, write_timeout).await;
                                                 }
                                             }
+                                            // Advance our replica so a later admit/rotation
+                                            // chains onto admit-bob (same single-authority lineage).
+                                            kb_collections
+                                                .insert(kb_id.clone(), coll.encode_state());
                                             shipped_e2e = true;
                                             info!(kb = %kb_id, member = %principal, "ADR-037: approved member with wrapped content key");
                                         }
@@ -4798,7 +4816,7 @@ fn handle_response(
                 // incremental `diff` (we sent an SV → reconcile) or a full `state`
                 // (first join / pre-ADR-022 daemon). `daemon_sv` is None only for an
                 // old daemon that omits `sv` → the member falls back to adopt.
-                let nodes: Vec<JoinedNode> = result
+                let mut nodes: Vec<JoinedNode> = result
                     .and_then(|r| r.get("nodes"))
                     .and_then(|v| v.as_array())
                     .map(|arr| {
@@ -4851,11 +4869,42 @@ fn handle_response(
                     kb.kb_collections
                         .insert(kb_id.clone(), collection_state.clone());
                     if let Some(content_key) = derive_kb_content_key(&collection_state, id) {
-                        kb.content_keys.insert(kb_id.clone(), content_key);
-                        for n in &nodes {
+                        for n in &mut nodes {
                             kb.node_to_kb.insert(n.id.clone(), kb_id.clone());
+                            // JOIN-DECRYPT: on an E2e KB the join snapshot is the SEALED
+                            // op-set (the same wire form node_updates carry) — OPEN it into
+                            // the plaintext node CRDT so the joiner stores READABLE content,
+                            // not ciphertext. Without this, a member who joins can't read any
+                            // encrypted content (the live route_kb_node_update path opens
+                            // op-sets; the join snapshot did not). Seed op_sets + seen_ops so
+                            // subsequent live updates dedupe + chain on this state.
+                            let prev = kb.op_sets.get(&n.id).cloned().unwrap_or_default();
+                            let merged = mae_sync::op_set::merge(&prev, &n.bytes)
+                                .unwrap_or_else(|_| n.bytes.clone());
+                            let seen = kb.seen_ops.entry(n.id.clone()).or_default();
+                            let opened =
+                                mae_sync::op_set::open_new_ops(&merged, &content_key, seen);
+                            if !opened.is_empty() {
+                                // Reconstruct the node CRDT: op 0 is the base doc, the rest
+                                // are incremental updates (mirror of the seal round-trip).
+                                if let Ok(mut reader) =
+                                    mae_sync::kb::KbNodeDoc::from_bytes(&opened[0].1)
+                                {
+                                    for (_oid, pt) in &opened[1..] {
+                                        let _ = reader.apply_update(pt);
+                                    }
+                                    debug!(target: "kb_sync", node = %n.id, "JOIN-DECRYPT: materialized plaintext from sealed snapshot on join");
+                                    n.bytes = reader.encode_state();
+                                }
+                                for (op_id, _) in &opened {
+                                    seen.insert(op_id.clone());
+                                }
+                                kb.op_sets.insert(n.id.clone(), merged);
+                            }
+                            // opened empty ⇒ unencrypted node / not-our-key ⇒ leave raw.
                         }
-                        debug!(kb = %kb_id, nodes = nodes.len(), "ADR-037: derived content key on join");
+                        kb.content_keys.insert(kb_id.clone(), content_key);
+                        debug!(kb = %kb_id, nodes = nodes.len(), "ADR-037: derived content key + opened sealed snapshots on join");
                     }
                 }
                 try_send_evt(
