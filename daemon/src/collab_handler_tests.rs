@@ -861,6 +861,7 @@ async fn kb_share_as(
         0,
         auth_label,
         auth_principal,
+        None,
         session_docs,
         Transport::Hub,
     )
@@ -884,6 +885,7 @@ async fn dispatch_as(
         0,
         auth_label,
         auth_principal,
+        None,
         docs,
         Transport::Hub,
     )
