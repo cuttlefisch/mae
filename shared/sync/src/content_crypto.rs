@@ -123,6 +123,11 @@ pub fn wrap_to_member(
     let ephemeral = StaticSecret::from(rand::random::<[u8; 32]>());
     let ephemeral_pub = XPublicKey::from(&ephemeral);
     let shared = ephemeral.diffie_hellman(&recipient_x);
+    // F6 (security review): reject a non-contributory (all-zero / low-order) DH result so
+    // a low-order recipient key can't force a predictable wrap key.
+    if !shared.was_contributory() {
+        return Err(CryptoError::Malformed);
+    }
     let wrap_key = derive_wrap_key(
         shared.as_bytes(),
         ephemeral_pub.as_bytes(),
@@ -153,6 +158,12 @@ pub fn unwrap_as_member(
     let my_x = ed25519_secret_to_x25519(my_ed25519_secret);
     let my_x_pub = XPublicKey::from(&my_x);
     let shared = my_x.diffie_hellman(&ephemeral_pub);
+    // F6 (security review): the blob's `ephemeral_pub` is fully attacker-controlled — a
+    // low-order point would force a known shared secret (hence a known wrap key). Reject a
+    // non-contributory DH so an attacker can't seal an attacker-known content key to us.
+    if !shared.was_contributory() {
+        return Err(CryptoError::Malformed);
+    }
     let wrap_key = derive_wrap_key(shared.as_bytes(), ephemeral_pub_bytes, my_x_pub.as_bytes());
     let k_bytes = decrypt(&wrap_key, sealed)?;
     let k: [u8; 32] = k_bytes.try_into().map_err(|_| CryptoError::Malformed)?;
@@ -351,5 +362,26 @@ mod tests {
         assert_ne!(a, b, "ephemeral key must be fresh per wrap");
         assert_eq!(unwrap_as_member(&a, &seed).unwrap(), k);
         assert_eq!(unwrap_as_member(&b, &seed).unwrap(), k);
+    }
+
+    #[test]
+    fn key_wrap_rejects_low_order_ephemeral_point() {
+        // F6 (security review): a blob whose ephemeral pubkey is a low-order point forces
+        // an all-zero shared secret — a wrap key the attacker knows. `unwrap` MUST reject
+        // it (non-contributory DH) rather than open an attacker-chosen content key. The
+        // all-zero u-coordinate is the canonical small-order X25519 point.
+        let (seed, pubk) = identities(1)[0];
+        let mut hostile = vec![0u8; X25519_LEN]; // low-order ephemeral_pub
+        hostile.extend_from_slice(&[7u8; NONCE_LEN + 16 + 32]); // arbitrary sealed region
+        assert_eq!(
+            unwrap_as_member(&hostile, &seed),
+            Err(CryptoError::Malformed),
+            "a low-order ephemeral point must be rejected before deriving the wrap key"
+        );
+        // Control: a legitimate wrap to the SAME member still round-trips (the check is
+        // selective — it rejects only the non-contributory case).
+        let k = ContentKey::generate();
+        let ok = wrap_to_member(&k, &pubk).unwrap();
+        assert_eq!(unwrap_as_member(&ok, &seed).unwrap(), k);
     }
 }
