@@ -2262,9 +2262,15 @@ async fn handle_doc_request_inner(
             // (possibly malicious) client behaviour. Only enforced in key-auth mode:
             // `none`/loopback has no per-identity principal to derive an epoch from.
             if let Some(principal) = auth_principal {
-                if let Err(reason) =
-                    enforce_epoch_fence(doc_store, &kb_id, &node_id, &node_doc, &update_bytes, principal)
-                        .await
+                if let Err(reason) = enforce_epoch_fence(
+                    doc_store,
+                    &kb_id,
+                    &node_id,
+                    &node_doc,
+                    &update_bytes,
+                    principal,
+                )
+                .await
                 {
                     warn!(
                         session = session_id, kb_id = %kb_id, node_id = %node_id, %reason,
