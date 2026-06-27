@@ -230,6 +230,13 @@ pub enum CollabCommand {
         /// holds the signing identity but not editor state — can stamp the ADR-036
         /// signed authorship header without a round-trip.
         epoch: u64,
+        /// ADR-037 fail-CLOSED gate (#168): whether this KB is E2e per its AUTHORITATIVE
+        /// signed encryption mode (`derive_encryption`), stamped on the editor thread
+        /// (the authority that holds the collection replica). When `true`, the network
+        /// task MUST NOT emit plaintext — if it holds no content key (and can't reload
+        /// one) or sealing fails, it refuses + requeues rather than leaking plaintext to
+        /// the key-blind daemon.
+        e2e: bool,
         pending_rowid: Option<i64>,
     },
     /// Add or remove a peer (by principal) from a KB's members (owner-only). For a
@@ -503,11 +510,19 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             }
             tracing::debug!(target: "kb_sync", kb_id = %pu.kb_id, node_id = %pu.node_id, rowid = pu.rowid, bytes = pu.update_bytes.len(), "drain: send kb/node_update (durable)");
             let epoch = editor.collab.kb_epochs.get(&pu.kb_id).copied().unwrap_or(0);
+            // #168: stamp the authoritative E2e status from the cached collection so the
+            // network task fails closed (never plaintext) if it can't seal.
+            let e2e = editor
+                .collab
+                .kb_collection_state
+                .get(&pu.kb_id)
+                .is_some_and(|s| kb_collection_is_e2e(s));
             let cmd = CollabCommand::KbNodeUpdate {
                 kb_id: pu.kb_id,
                 node_id: pu.node_id,
                 update: pu.update_bytes,
                 epoch,
+                e2e,
                 pending_rowid: Some(pu.rowid),
             };
             if collab_tx.try_send(cmd).is_err() {
@@ -523,11 +538,17 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         for (kb_id, node_id, update) in std::mem::take(&mut editor.collab.pending_kb_updates) {
             tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, bytes = update.len(), "drain: send kb/node_update (in-mem)");
             let epoch = editor.collab.kb_epochs.get(&kb_id).copied().unwrap_or(0);
+            let e2e = editor
+                .collab
+                .kb_collection_state
+                .get(&kb_id)
+                .is_some_and(|s| kb_collection_is_e2e(s));
             let cmd = CollabCommand::KbNodeUpdate {
                 kb_id,
                 node_id,
                 update,
                 epoch,
+                e2e,
                 pending_rowid: None,
             };
             if collab_tx.try_send(cmd).is_err() {
@@ -785,8 +806,9 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             node_id,
             update,
             // This intent path is not a live producer (node updates flow via the
-            // drain, which stamps the real epoch); 0 is the unsigned/epoch-0 default.
+            // drain, which stamps the real epoch + e2e); 0 / false are the defaults.
             epoch: 0,
+            e2e: false,
             pending_rowid: None,
         },
         CollabIntent::KbAdoptNode { kb_id, node_id } => {
@@ -2589,6 +2611,10 @@ fn spawn_reader_task<R: tokio::io::AsyncBufRead + Unpin + Send + 'static>(
 /// empty: per ADR-036 §D4 the yrs SV + the daemon's epoch fence carry replay safety,
 /// so the signature binds author + epoch + payload, and a node-SV binding is a
 /// documented future refinement (not a security boundary here).
+/// Returns `None` to mean **refuse / fail-closed** (#168): an E2e KB for which we hold no
+/// content key (and couldn't reload one) or for which sealing failed — the caller MUST NOT
+/// fall back to plaintext; it requeues until a key arrives. `Some(..)` carries the request,
+/// the advanced op-set state, and the sealed op-id (when sealed).
 #[allow(clippy::too_many_arguments)]
 fn build_kb_node_update_request(
     req_id: u64,
@@ -2598,17 +2624,21 @@ fn build_kb_node_update_request(
     epoch: u64,
     signing_identity: Option<&std::sync::Arc<mae_mcp::identity::Identity>>,
     content_key: Option<&mae_sync::content_crypto::ContentKey>,
+    e2e: bool,
     op_set_state: &[u8],
-) -> (serde_json::Value, Vec<u8>, Option<String>) {
+) -> Option<(serde_json::Value, Vec<u8>, Option<String>)> {
     // ADR-037 E2E (#146): on an encrypted KB, the PLAINTEXT node update is sealed into
     // the op-set — encrypt under the content key, build the outer YMap-insert op
     // (stamped with the epoch client_id so the daemon's ADR-023 fence still authorizes
     // it) — and THAT outer op becomes the wire payload + what's signed (encrypt-then-
     // sign: the daemon verifies authorship over the ciphertext-bearing op, key-blind).
-    // The returned op-set state advances by the sealed op. Without a content key the
-    // plaintext update is the payload (today's behaviour) and the state is unchanged.
+    // The returned op-set state advances by the sealed op. On an UNENCRYPTED KB the
+    // plaintext update is the payload (legacy behaviour) and the state is unchanged.
     // `sealed_op_id` is `Some` only when we sealed — the caller records it in
     // `seen_ops` so the daemon's echo of our own op isn't re-materialized.
+    //
+    // #168 fail-CLOSED: when `e2e` is true we NEVER emit plaintext to the key-blind
+    // daemon — a missing key or a seal failure returns `None` (refuse), not the cleartext.
     let (payload, new_op_set_state, sealed_op_id): (Vec<u8>, Vec<u8>, Option<String>) =
         match (content_key, signing_identity) {
             (Some(key), Some(id)) => {
@@ -2619,11 +2649,15 @@ fn build_kb_node_update_request(
                             .unwrap_or_else(|_| op_set_state.to_vec());
                         (outer, merged, Some(op_id))
                     }
-                    // Sealing can't fail for a valid op-set, but fail safe: keep the
-                    // plaintext payload rather than dropping the edit.
+                    // Sealing can't fail for a valid op-set; on an E2e KB refuse rather
+                    // than leak plaintext, else (unencrypted, impossible here) keep it.
+                    Err(_) if e2e => return None,
                     Err(_) => (update.to_vec(), op_set_state.to_vec(), None),
                 }
             }
+            // No content key: refuse on an E2e KB (fail closed); plaintext only when
+            // the KB is genuinely unencrypted.
+            _ if e2e => return None,
             _ => (update.to_vec(), op_set_state.to_vec(), None),
         };
 
@@ -2658,7 +2692,37 @@ fn build_kb_node_update_request(
         }
         None => mae_sync::wire::kb_node_update_request(req_id, kb_id, node_id, &payload_b64),
     };
-    (request, new_op_set_state, sealed_op_id)
+    Some((request, new_op_set_state, sealed_op_id))
+}
+
+/// ADR-037 fail-CLOSED gate (#168): is `collection_state` an E2e KB per its AUTHORITATIVE
+/// signed op-log? Mirrors the F1 anchor pin + F2 signed-mode read of `derive_kb_content_key`
+/// but needs no identity — the editor thread calls it to stamp
+/// `CollabCommand::KbNodeUpdate.e2e`, so the seal path can refuse to emit plaintext on an
+/// encrypted KB. Reads `derive_encryption` (the SIGNED, monotonic mode), never the
+/// relay-flippable unsigned `coll.encryption()` flag, so a downgrade can't trick us into
+/// shipping plaintext. `false` on a malformed/un-anchored/unencrypted collection.
+fn kb_collection_is_e2e(collection_state: &[u8]) -> bool {
+    let Ok(coll) = mae_sync::kb::KbCollectionDoc::from_bytes(collection_state) else {
+        return false;
+    };
+    let ops = coll.oplog_ops();
+    let Some(anchor) = ops
+        .iter()
+        .find(|o| {
+            o.op.prev_hash.is_empty()
+                && o.op.action == mae_sync::membership::MembershipAction::Admit
+                && o.op.subject == o.op.author
+        })
+        .map(|o| o.author_pubkey)
+    else {
+        return false;
+    };
+    // F1: the genesis anchor must be the authenticated owner (refuse a forged genesis).
+    if mae_sync::membership::fingerprint_of(&anchor) != coll.owner() {
+        return false;
+    }
+    mae_sync::membership::derive_encryption(&ops, &anchor) == mae_sync::kb::Encryption::E2e
 }
 
 /// ADR-037 §D2 (#146 Phase 2b): recover **this peer's** per-KB content key from a
@@ -3308,7 +3372,7 @@ async fn run_collab_task(
                                 }
                             }
                         }
-                        CollabCommand::KbNodeUpdate { kb_id, node_id, update, epoch, pending_rowid } => {
+                        CollabCommand::KbNodeUpdate { kb_id, node_id, update, epoch, e2e, pending_rowid } => {
                             // ADR-020: a kb/node_update is a REQUEST (carries an `id`),
                             // built via the shared `mae_sync::wire` constructor so the
                             // editor and the daemon (+ tests) serialise identically. The
@@ -3330,8 +3394,25 @@ async fn run_collab_task(
                                 node_to_kb
                                     .entry(node_id.clone())
                                     .or_insert_with(|| kb_id.clone());
+                                // #168 fail-CLOSED + restart liveness: on an E2e KB with no
+                                // in-memory key, lazily reload the persisted one from the
+                                // key store (the owner's key survives a restart this way)
+                                // BEFORE the seal decision — so a post-restart edit seals
+                                // instead of being refused.
+                                if e2e && !content_keys.contains_key(&kb_id) {
+                                    if let Some(b) = mae_mcp::content_key_store::content_keys_dir()
+                                        .as_ref()
+                                        .and_then(|d| mae_mcp::content_key_store::load(d, &kb_id))
+                                    {
+                                        content_keys.insert(
+                                            kb_id.clone(),
+                                            mae_sync::content_crypto::ContentKey::from_bytes(b),
+                                        );
+                                        info!(target: "kb_sync", kb_id = %kb_id, "bg: reloaded persisted content key for E2e KB (post-restart)");
+                                    }
+                                }
                                 let op_set_state = op_sets.get(&node_id).cloned().unwrap_or_default();
-                                let (req, new_op_set, sealed_op_id) = build_kb_node_update_request(
+                                let built = build_kb_node_update_request(
                                     req_id,
                                     &kb_id,
                                     &node_id,
@@ -3339,8 +3420,19 @@ async fn run_collab_task(
                                     epoch,
                                     signing_identity.as_ref(),
                                     content_keys.get(&kb_id),
+                                    e2e,
                                     &op_set_state,
                                 );
+                                let Some((req, new_op_set, sealed_op_id)) = built else {
+                                    // #168 FAIL-CLOSED: E2e KB, no content key (and none on
+                                    // disk) or seal failed — REFUSE to emit plaintext to the
+                                    // key-blind daemon. `delivered` stays false → the update
+                                    // is requeued and retried once the key arrives (owner: on
+                                    // reload; member: on approve). Loud + observable.
+                                    warn!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, "bg: E2e KB has no content key — REFUSING to send plaintext (fail-closed, #168); requeued");
+                                    try_send_evt(&evt_tx, CollabEvent::KbUpdateRequeue { kb_id, node_id, update, pending_rowid });
+                                    continue;
+                                };
                                 match serde_json::to_vec(&req) {
                                     Ok(body) => match write_framed(w, &body, write_timeout).await {
                                         Ok(()) => {
@@ -4934,9 +5026,10 @@ async fn handle_disconnected_cmd(
             kb_id,
             node_id,
             update,
-            // Re-derived from `kb_epochs` at the next drain, so the stale epoch isn't
-            // carried across the requeue.
+            // Re-derived from `kb_epochs` / the cached collection at the next drain, so the
+            // stale epoch + e2e flag aren't carried across the requeue.
             epoch: _,
+            e2e: _,
             pending_rowid,
         } => {
             // ADR-020 durability: not connected — re-queue (don't drop) so the

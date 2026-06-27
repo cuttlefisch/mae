@@ -2707,6 +2707,7 @@ fn collab_kb_drain_pending_updates_sends_commands() {
             node_id,
             update,
             epoch: _,
+            e2e: _,
             pending_rowid,
         } => {
             assert_eq!(kb_id, "kb-1");
@@ -2728,6 +2729,7 @@ fn collab_kb_drain_pending_updates_sends_commands() {
             node_id,
             update,
             epoch: _,
+            e2e: _,
             pending_rowid,
         } => {
             assert_eq!(kb_id, "kb-1");
@@ -2764,8 +2766,18 @@ fn build_kb_node_update_request_signs_with_identity_else_unsigned() {
     // Signed: the daemon's parser reconstructs the op, the signature verifies, and
     // the author + epoch + node_id are exactly what the editor stamped. (Plaintext KB:
     // no content key ⇒ the payload is the plaintext update, op-set state unchanged.)
-    let (req, op_set, op_id) =
-        build_kb_node_update_request(7, "kb1", "concept:n", &update, 3, Some(&id), None, &[]);
+    let (req, op_set, op_id) = build_kb_node_update_request(
+        7,
+        "kb1",
+        "concept:n",
+        &update,
+        3,
+        Some(&id),
+        None,
+        false,
+        &[],
+    )
+    .expect("unencrypted KB ⇒ Some (plaintext path)");
     assert!(op_set.is_empty(), "no content key ⇒ no op-set");
     assert!(op_id.is_none(), "no content key ⇒ nothing sealed");
     assert_eq!(req["id"], 7, "still a request (carries an id)");
@@ -2785,7 +2797,8 @@ fn build_kb_node_update_request_signs_with_identity_else_unsigned() {
 
     // Unsigned (psk/none): no authorship header ⇒ the legacy path.
     let (unsigned, _, _) =
-        build_kb_node_update_request(8, "kb1", "concept:n", &update, 3, None, None, &[]);
+        build_kb_node_update_request(8, "kb1", "concept:n", &update, 3, None, None, false, &[])
+            .expect("unencrypted KB ⇒ Some (plaintext path)");
     assert!(
         SignedContentOp::from_params(&unsigned["params"], update).is_none(),
         "no identity ⇒ legacy unsigned op"
@@ -2817,12 +2830,24 @@ fn build_kb_node_update_request_seals_on_encrypted_kb() {
         0,
         Some(&id),
         Some(&key),
+        true,
         &[],
-    );
+    )
+    .expect("e2e seal ⇒ Some");
     assert!(id0.is_some(), "sealing yields an op_id");
     let edit = node.set_title("Secret");
-    let (req, op_set, id1) =
-        build_kb_node_update_request(2, "kb1", "n1", &edit, 0, Some(&id), Some(&key), &op_set0);
+    let (req, op_set, id1) = build_kb_node_update_request(
+        2,
+        "kb1",
+        "n1",
+        &edit,
+        0,
+        Some(&id),
+        Some(&key),
+        true,
+        &op_set0,
+    )
+    .expect("e2e seal ⇒ Some");
     assert_ne!(id0, id1, "distinct ops get distinct ids");
 
     // The wire payload is the OUTER op-set op, signed + verifying — and is NOT the
@@ -2854,6 +2879,89 @@ fn build_kb_node_update_request_seals_on_encrypted_kb() {
         reader.title(),
         "Secret",
         "a member materializes the sealed edit"
+    );
+}
+
+/// ADR-037 #168 — the FAIL-CLOSED oracle (the attacker's test). On an E2e KB with no
+/// content key (or where sealing fails), `build_kb_node_update_request` MUST return
+/// `None` (refuse) — it must NEVER fall back to emitting the plaintext update to the
+/// key-blind daemon. The unencrypted KB still ships plaintext (legacy). This is the
+/// regression guard for the confidentiality breach: a missing key must drop to "refuse",
+/// not "leak".
+#[test]
+fn build_kb_node_update_request_fails_closed_on_e2e_without_key() {
+    use mae_mcp::identity::Identity;
+    use std::sync::Arc;
+    let id = Arc::new(Identity::generate("editor"));
+    let update = vec![1u8, 0, 2, 0, 9];
+
+    // E2e KB, signed, NO content key → MUST refuse (None), never plaintext.
+    assert!(
+        build_kb_node_update_request(1, "kb1", "n1", &update, 0, Some(&id), None, true, &[])
+            .is_none(),
+        "E2e KB with no content key MUST NOT emit plaintext (fail-closed #168)"
+    );
+    // E2e KB, UNSIGNED (psk/none), no key → still refuse: e2e gates regardless of identity.
+    assert!(
+        build_kb_node_update_request(2, "kb1", "n1", &update, 0, None, None, true, &[]).is_none(),
+        "E2e + no key refuses even on the unsigned path"
+    );
+    // SELECTIVE oracle: the SAME inputs on an UNENCRYPTED KB DO ship (Some, plaintext path)
+    // — proving the refusal above is the e2e gate doing its job, not the function being dead.
+    assert!(
+        build_kb_node_update_request(3, "kb1", "n1", &update, 0, Some(&id), None, false, &[])
+            .is_some(),
+        "unencrypted KB still ships (legacy plaintext path)"
+    );
+    // And with a key present, the E2e path seals + ships (Some).
+    let key = mae_sync::content_crypto::ContentKey::generate();
+    let node = mae_sync::kb::KbNodeDoc::new_with_client_id("n1", "", "", &[], 5);
+    assert!(
+        build_kb_node_update_request(
+            4,
+            "kb1",
+            "n1",
+            &node.encode_state(),
+            0,
+            Some(&id),
+            Some(&key),
+            true,
+            &[]
+        )
+        .is_some(),
+        "E2e KB WITH a key seals + ships"
+    );
+}
+
+/// ADR-037 #168 — the editor-side E2e gate reads the AUTHORITATIVE SIGNED mode. A plain
+/// KB is not e2e; after a signed enable it is; and a relay flipping the unsigned flag
+/// can't downgrade the verdict (we read `derive_encryption`, not `coll.encryption()`).
+#[test]
+fn kb_collection_is_e2e_reads_signed_mode_not_the_flippable_flag() {
+    use mae_mcp::identity::Identity;
+    let owner = Identity::generate("owner");
+    let (ofp, opk, osec) = (
+        owner.fingerprint(),
+        owner.public().to_bytes(),
+        owner.secret_bytes(),
+    );
+    let mut coll = mae_sync::kb::KbCollectionDoc::new_owned("KB", &ofp, "owner");
+    assert!(
+        !kb_collection_is_e2e(&coll.encode_state()),
+        "a plain (un-genesis'd) KB is not e2e"
+    );
+    let k = mae_sync::content_crypto::ContentKey::generate();
+    let wrap = mae_sync::content_crypto::wrap_to_member(&k, &opk).unwrap();
+    coll.author_e2e_genesis("KB", &ofp, &osec, &opk, wrap, 1000);
+    assert!(
+        kb_collection_is_e2e(&coll.encode_state()),
+        "after a SIGNED enable the KB is e2e (read from the op-log)"
+    );
+    // A relay forging the unsigned flag back to None must NOT downgrade the verdict.
+    coll.set_encryption(mae_sync::kb::Encryption::None);
+    assert!(
+        kb_collection_is_e2e(&coll.encode_state()),
+        "the unsigned flag is ignored — the SIGNED monotonic mode still says e2e"
     );
 }
 
@@ -3405,8 +3513,10 @@ fn encrypted_node_seals_on_send_and_materializes_on_receive() {
             0,
             Some(&sender),
             Some(&key),
+            true,
             &op_set,
-        );
+        )
+        .expect("e2e seal ⇒ Some");
         assert!(op_id.is_some(), "each push seals an op");
         op_set = new_state;
         payloads.push(
@@ -3518,8 +3628,18 @@ fn receive_passthrough_without_key_and_idempotent_with_key() {
     let key = ContentKey::generate();
     let mut node = KbNodeDoc::new_with_client_id("n1", "", "", &[], 7);
     let edit = node.set_title("Secret");
-    let (req, _state, _id) =
-        build_kb_node_update_request(1, "kb1", "n1", &edit, 0, Some(&sender), Some(&key), &[]);
+    let (req, _state, _id) = build_kb_node_update_request(
+        1,
+        "kb1",
+        "n1",
+        &edit,
+        0,
+        Some(&sender),
+        Some(&key),
+        true,
+        &[],
+    )
+    .expect("e2e seal ⇒ Some");
     let payload =
         mae_sync::encoding::base64_to_update(req["params"]["update"].as_str().unwrap()).unwrap();
 
