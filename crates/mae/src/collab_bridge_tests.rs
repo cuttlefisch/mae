@@ -3219,6 +3219,23 @@ fn build_e2e_collection(
     );
     let gsig = g.sign(&owner.secret_bytes());
     coll.append_signed_op(&g, &gsig, &owner.public().to_bytes());
+    // Signed SetEncryption(e2e) — the authoritative, anti-downgrade mode source (F2). The
+    // unsigned flag alone is no longer enough for `derive_kb_content_key`.
+    if encrypted {
+        let se = coll.build_membership_op(
+            kb_id,
+            MembershipAction::SetEncryption,
+            "e2e",
+            None,
+            false,
+            &owner.fingerprint(),
+            0,
+            None,
+            0,
+        );
+        let sesig = se.sign(&owner.secret_bytes());
+        coll.append_signed_op(&se, &sesig, &owner.public().to_bytes());
+    }
     // Owner admits each member, wrapping the content key to them (encrypted only).
     for (i, m) in members.iter().enumerate() {
         let mut a = coll.build_membership_op(
@@ -3280,6 +3297,79 @@ fn derive_kb_content_key_recovers_for_members_excludes_others() {
     assert!(
         derive_kb_content_key(&plain, &m1).is_none(),
         "unencrypted KB ⇒ no content key, even for an admitted member (the E2e gate)",
+    );
+}
+
+/// ADR-039 F1+F2: `derive_kb_content_key` refuses (a) a KB whose E2e is asserted ONLY by
+/// the unsigned collection flag (no signed `SetEncryption` op — a relay could set the flag)
+/// and (b) a genesis NOT authored by the daemon-attested owner (`COLL_OWNER_KEY`) — a relay
+/// substituting a forged genesis to inject an attacker-known key.
+#[test]
+fn derive_kb_content_key_requires_signed_mode_and_owner_anchor() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::{wrap_to_member, ContentKey};
+    use mae_sync::kb::{Encryption, KbCollectionDoc, Role};
+    use mae_sync::membership::MembershipAction;
+
+    let owner = Identity::generate("owner");
+    let key = ContentKey::generate();
+
+    // (F2) Unsigned flag ONLY: genesis + self-wrap, but NO signed SetEncryption op.
+    let mut flag_only = KbCollectionDoc::new_owned("kb", &owner.fingerprint(), "owner");
+    flag_only.set_encryption(Encryption::E2e); // unsigned flag a relay could also set
+    let mut g = flag_only.build_membership_op(
+        "kb",
+        MembershipAction::Admit,
+        &owner.fingerprint(),
+        Some(Role::Owner),
+        true,
+        &owner.fingerprint(),
+        0,
+        None,
+        0,
+    );
+    g.wrapped_key = Some(wrap_to_member(&key, &owner.public().to_bytes()).unwrap());
+    let gsig = g.sign(&owner.secret_bytes());
+    flag_only.append_signed_op(&g, &gsig, &owner.public().to_bytes());
+    assert!(
+        derive_kb_content_key(&flag_only.encode_state(), &owner).is_none(),
+        "the unsigned flag alone must NOT enable derivation — the signed op-log is authoritative (F2)"
+    );
+
+    // (F1) Substituted genesis: COLL_OWNER_KEY is the legit owner, but the genesis (+ the
+    // signed SetEncryption + the wrap to the victim) is authored by an ATTACKER's key.
+    let attacker = Identity::generate("attacker");
+    let mut forged = KbCollectionDoc::new_owned("kb", &owner.fingerprint(), "owner");
+    let mut ag = forged.build_membership_op(
+        "kb",
+        MembershipAction::Admit,
+        &attacker.fingerprint(),
+        Some(Role::Owner),
+        true,
+        &attacker.fingerprint(),
+        0,
+        None,
+        0,
+    );
+    ag.wrapped_key = Some(wrap_to_member(&key, &owner.public().to_bytes()).unwrap());
+    let agsig = ag.sign(&attacker.secret_bytes());
+    forged.append_signed_op(&ag, &agsig, &attacker.public().to_bytes());
+    let ase = forged.build_membership_op(
+        "kb",
+        MembershipAction::SetEncryption,
+        "e2e",
+        None,
+        false,
+        &attacker.fingerprint(),
+        0,
+        None,
+        0,
+    );
+    let asesig = ase.sign(&attacker.secret_bytes());
+    forged.append_signed_op(&ase, &asesig, &attacker.public().to_bytes());
+    assert!(
+        derive_kb_content_key(&forged.encode_state(), &owner).is_none(),
+        "a genesis NOT authored by the attested owner is refused, even with a wrap to the victim (F1)"
     );
 }
 

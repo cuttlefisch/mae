@@ -2643,9 +2643,6 @@ fn derive_kb_content_key(
     identity: &mae_mcp::identity::Identity,
 ) -> Option<mae_sync::content_crypto::ContentKey> {
     let coll = mae_sync::kb::KbCollectionDoc::from_bytes(collection_state).ok()?;
-    if coll.encryption() != mae_sync::kb::Encryption::E2e {
-        return None;
-    }
     let ops = coll.oplog_ops();
     // Anchor: the genesis owner self-admit (mirror of `derive_governance` /
     // `derive_content_key`). Without it there is no trust root and we derive nothing.
@@ -2657,6 +2654,22 @@ fn derive_kb_content_key(
                 && o.op.subject == o.op.author
         })?
         .author_pubkey;
+    // F1/A3 (ADR-039): the genesis anchor MUST be the AUTHENTICATED owner — `COLL_OWNER_KEY`,
+    // which the daemon binds to the verified mTLS principal (ADR-018). This refuses a forged
+    // genesis a relay substituted (its key wouldn't match the daemon-attested owner) instead
+    // of TOFU-trusting whatever genesis the collection carries. (Mesh node-id pinning = #158.)
+    if mae_sync::membership::fingerprint_of(&anchor_owner_pubkey) != coll.owner() {
+        return None;
+    }
+    // F2 (ADR-039): the AUTHORITATIVE encryption mode is the SIGNED, monotonic op-log — NOT
+    // the unsigned collection flag a relay could flip to `none`. Once it asserts E2e the key
+    // is derived; the seal path (gated on the resulting `content_keys` entry) stays
+    // fail-closed — it never reverts to plaintext on a flag downgrade.
+    if mae_sync::membership::derive_encryption(&ops, &anchor_owner_pubkey)
+        != mae_sync::kb::Encryption::E2e
+    {
+        return None;
+    }
     mae_sync::membership::derive_content_key(
         &ops,
         &anchor_owner_pubkey,
