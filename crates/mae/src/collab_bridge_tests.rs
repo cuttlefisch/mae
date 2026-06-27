@@ -10,6 +10,7 @@ macro_rules! kb_ctx {
             op_sets: &mut std::collections::HashMap::new(),
             node_to_kb: &mut std::collections::HashMap::new(),
             seen_ops: &mut std::collections::HashMap::new(),
+            kb_collections: &mut std::collections::HashMap::new(),
             signing_identity: None,
         }
     };
@@ -2895,25 +2896,20 @@ fn build_kb_node_update_request_fails_closed_on_e2e_without_key() {
     let id = Arc::new(Identity::generate("editor"));
     let update = vec![1u8, 0, 2, 0, 9];
 
-    // E2e KB, signed, NO content key → MUST refuse (None), never plaintext.
     assert!(
         build_kb_node_update_request(1, "kb1", "n1", &update, 0, Some(&id), None, true, &[])
             .is_none(),
         "E2e KB with no content key MUST NOT emit plaintext (fail-closed #168)"
     );
-    // E2e KB, UNSIGNED (psk/none), no key → still refuse: e2e gates regardless of identity.
     assert!(
         build_kb_node_update_request(2, "kb1", "n1", &update, 0, None, None, true, &[]).is_none(),
         "E2e + no key refuses even on the unsigned path"
     );
-    // SELECTIVE oracle: the SAME inputs on an UNENCRYPTED KB DO ship (Some, plaintext path)
-    // — proving the refusal above is the e2e gate doing its job, not the function being dead.
     assert!(
         build_kb_node_update_request(3, "kb1", "n1", &update, 0, Some(&id), None, false, &[])
             .is_some(),
         "unencrypted KB still ships (legacy plaintext path)"
     );
-    // And with a key present, the E2e path seals + ships (Some).
     let key = mae_sync::content_crypto::ContentKey::generate();
     let node = mae_sync::kb::KbNodeDoc::new_with_client_id("n1", "", "", &[], 5);
     assert!(
@@ -2957,7 +2953,6 @@ fn kb_collection_is_e2e_reads_signed_mode_not_the_flippable_flag() {
         kb_collection_is_e2e(&coll.encode_state()),
         "after a SIGNED enable the KB is e2e (read from the op-log)"
     );
-    // A relay forging the unsigned flag back to None must NOT downgrade the verdict.
     coll.set_encryption(mae_sync::kb::Encryption::None);
     assert!(
         kb_collection_is_e2e(&coll.encode_state()),
@@ -2974,14 +2969,13 @@ fn select_share_node_states_never_ships_plaintext_on_e2e() {
     use std::collections::HashMap;
     let canary = b"PLAINTEXT-SECRET-canary-170".to_vec();
     let node_states = vec![
-        ("n-sealed".to_string(), canary.clone()), // we hold a sealed op-set for this one
-        ("n-bare".to_string(), canary.clone()),   // no op-set — must be skipped, not leaked
+        ("n-sealed".to_string(), canary.clone()),
+        ("n-bare".to_string(), canary.clone()),
     ];
     let sealed = b"SEALED-OPSET-BYTES".to_vec();
     let mut op_sets: HashMap<String, Vec<u8>> = HashMap::new();
     op_sets.insert("n-sealed".to_string(), sealed.clone());
 
-    // E2e: the sealed node ships its OP-SET (not plaintext); the bare node is SKIPPED.
     let out = select_share_node_states("kb", true, &node_states, &op_sets);
     assert_eq!(out.len(), 1, "the no-op-set node is skipped, not leaked");
     assert_eq!(out[0].0, "n-sealed");
@@ -2998,14 +2992,110 @@ fn select_share_node_states_never_ships_plaintext_on_e2e() {
         );
     }
 
-    // SELECTIVE control: UNENCRYPTED ships every plaintext node (legacy, byte-identical) —
-    // proving the E2e skip/seal above is the gate working, not a dead function.
     let out2 = select_share_node_states("kb", false, &node_states, &op_sets);
     assert_eq!(out2.len(), 2, "unencrypted ships every node");
     assert_eq!(
         mae_sync::encoding::base64_to_update(&out2[0].1).unwrap(),
         canary,
         "unencrypted ships the plaintext (legacy)"
+    );
+}
+
+/// #173 — the rotation-delivery oracle (the attacker's test). After the owner rotates a
+/// member out, a REMAINING member receiving the rotation's `kbc:` collection delta MUST
+/// re-derive the NEW key k'; the REMOVED member stays stranded on the OLD key k.
+#[test]
+fn refresh_kb_content_key_re_derives_on_rotation_remaining_yes_removed_no() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::{wrap_to_member, ContentKey};
+    use mae_sync::kb::{KbCollectionDoc, Role};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let owner = Identity::generate("owner");
+    let b = Arc::new(Identity::generate("member-b"));
+    let c = Arc::new(Identity::generate("member-c"));
+    let (ofp, opk, osec) = (
+        owner.fingerprint(),
+        owner.public().to_bytes(),
+        owner.secret_bytes(),
+    );
+    let (bfp, bpk) = (b.fingerprint(), b.public().to_bytes());
+    let (cfp, cpk) = (c.fingerprint(), c.public().to_bytes());
+
+    let k = ContentKey::generate();
+    let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+    coll.author_e2e_genesis(
+        "KB",
+        &ofp,
+        &osec,
+        &opk,
+        wrap_to_member(&k, &opk).unwrap(),
+        1000,
+    );
+    coll.author_member_admit(
+        "KB",
+        &bfp,
+        &bpk,
+        Role::Editor,
+        "b",
+        wrap_to_member(&k, &bpk).unwrap(),
+        &ofp,
+        &osec,
+        &opk,
+        1001,
+    );
+    coll.author_member_admit(
+        "KB",
+        &cfp,
+        &cpk,
+        Role::Editor,
+        "c",
+        wrap_to_member(&k, &cpk).unwrap(),
+        &ofp,
+        &osec,
+        &opk,
+        1002,
+    );
+    let pre_rotation = coll.encode_state();
+
+    let k2 = ContentKey::generate();
+    assert_ne!(k.as_bytes(), k2.as_bytes());
+    let rewraps = vec![
+        (ofp.clone(), wrap_to_member(&k2, &opk).unwrap()),
+        (cfp.clone(), wrap_to_member(&k2, &cpk).unwrap()),
+    ];
+    let delta = coll.author_rotate_on_remove("KB", &bfp, &rewraps, &ofp, &osec, &opk, 2000);
+
+    let run = |id: &Arc<Identity>| -> Option<[u8; 32]> {
+        let mut content_keys: HashMap<String, ContentKey> = HashMap::new();
+        content_keys.insert("KB".to_string(), ContentKey::from_bytes(*k.as_bytes()));
+        let mut collections: HashMap<String, Vec<u8>> = HashMap::new();
+        collections.insert("KB".to_string(), pre_rotation.clone());
+        let (mut os, mut n2k, mut so) = (HashMap::new(), HashMap::new(), HashMap::new());
+        {
+            let mut ctx = KbCryptoCtx {
+                content_keys: &mut content_keys,
+                op_sets: &mut os,
+                node_to_kb: &mut n2k,
+                seen_ops: &mut so,
+                kb_collections: &mut collections,
+                signing_identity: Some(id),
+            };
+            refresh_kb_content_key_on_collection_delta(&mut ctx, "kbc:KB", &delta);
+        }
+        content_keys.get("KB").map(|k| *k.as_bytes())
+    };
+
+    assert_eq!(
+        run(&c),
+        Some(*k2.as_bytes()),
+        "remaining member C re-derives the rotated key k' on the collection delta"
+    );
+    assert_eq!(
+        run(&b),
+        Some(*k.as_bytes()),
+        "removed member B is stranded on the OLD k (cannot derive k')"
     );
 }
 
