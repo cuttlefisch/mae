@@ -4,9 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Features
+
+- E2E enable flow — owner key lifecycle, daemon key-blind (ADR-037/038/039, #151 Phase 3b PR A) (#160) ([8dc9cc9](https://github.com/cuttlefisch/mae/commit/8dc9cc9813a04bff1551c55fc48c85b16cf3ffe8))
+
+## [0.14.14] - 2026-06-27
+
 ### Documentation
 
 - E2E KB-sharing security reviews, holistic reference, ADR-038/039, adversarial-testing principle (#159) ([99e6ebe](https://github.com/cuttlefisch/mae/commit/99e6ebe3dcbfb8a836d25c652d16f81072dc4300))
+
+### Miscellaneous
+
+- Bump version to 0.14.14 ([7be38d4](https://github.com/cuttlefisch/mae/commit/7be38d4236713d21479cca1201068a7b840a3324))
 
 ## [0.14.13] - 2026-06-27
 
