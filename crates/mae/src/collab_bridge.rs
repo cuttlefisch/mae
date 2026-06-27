@@ -248,11 +248,14 @@ pub enum CollabCommand {
         title: String,
         add: bool,
     },
-    /// Approve a pending join request as `role` (owner-only, ADR-018).
+    /// Approve a pending join request as `role` (owner-only, ADR-018). `collection_state`
+    /// (the main thread's replica) lets the network task wrap the content key to the
+    /// approved member on an E2e KB (ADR-037/038); empty for the legacy unencrypted path.
     KbApprove {
         kb_id: String,
         principal: String,
         role: String,
+        collection_state: Vec<u8>,
     },
     /// List pending join requests for a KB (owner-only, ADR-018).
     KbListPending {
@@ -724,11 +727,20 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             kb_id,
             principal,
             role,
-        } => CollabCommand::KbApprove {
-            kb_id,
-            principal,
-            role,
-        },
+        } => {
+            let collection_state = editor
+                .collab
+                .kb_collection_state
+                .get(&kb_id)
+                .cloned()
+                .unwrap_or_default();
+            CollabCommand::KbApprove {
+                kb_id,
+                principal,
+                role,
+                collection_state,
+            }
+        }
         CollabIntent::KbListPending { kb_id } => CollabCommand::KbListPending { kb_id },
         CollabIntent::KbSetPolicy { kb_id, policy } => CollabCommand::KbSetPolicy { kb_id, policy },
         CollabIntent::KbSetEncryption { kb_id, mode } => {
@@ -3393,16 +3405,68 @@ async fn run_collab_task(
                                 }
                             }
                         }
-                        CollabCommand::KbApprove { kb_id, principal, role } => {
-                            if let Some(ref mut w) = writer {
-                                let req_id = next_request_id;
-                                next_request_id += 1;
-                                let req = serde_json::json!({
-                                    "jsonrpc": "2.0", "id": req_id, "method": "kb/approve_member",
-                                    "params": { "kb_id": kb_id, "principal": principal, "role": role }
-                                });
-                                if let Ok(body) = serde_json::to_vec(&req) {
-                                    let _ = write_framed(w, &body, write_timeout).await;
+                        CollabCommand::KbApprove { kb_id, principal, role, collection_state } => {
+                            // ADR-037/038: on an E2e KB the OWNER authors a signed Admit
+                            // carrying the content key wrapped to the approved member (whose
+                            // pubkey rode the pending request), shipped via the key-blind
+                            // kb/collection_op. Else: the legacy daemon-authored approve.
+                            let mut shipped_e2e = false;
+                            if let (Some(key), Some(id)) =
+                                (content_keys.get(&kb_id).cloned(), signing_identity.as_ref())
+                            {
+                                if let Ok(mut coll) =
+                                    mae_sync::kb::KbCollectionDoc::from_bytes(&collection_state)
+                                {
+                                    let member_pk = coll
+                                        .pending()
+                                        .into_iter()
+                                        .find(|p| p.fingerprint == principal)
+                                        .and_then(|p| p.pubkey);
+                                    if let Some(member_pk) = member_pk {
+                                        if let Ok(wrapped) =
+                                            mae_sync::content_crypto::wrap_to_member(&key, &member_pk)
+                                        {
+                                            let role_enum = mae_sync::kb::Role::parse(&role)
+                                                .unwrap_or(mae_sync::kb::Role::Editor);
+                                            let now = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .map(|d| d.as_secs())
+                                                .unwrap_or(0);
+                                            let delta = coll.author_member_admit(
+                                                &kb_id, &principal, &member_pk, role_enum,
+                                                &principal, wrapped, &id.fingerprint(),
+                                                &id.secret_bytes(), &id.public().to_bytes(), now,
+                                            );
+                                            if let Some(ref mut w) = writer {
+                                                let req_id = next_request_id;
+                                                next_request_id += 1;
+                                                let req = mae_sync::wire::kb_collection_op_request(
+                                                    req_id, &kb_id,
+                                                    &mae_sync::encoding::update_to_base64(&delta),
+                                                );
+                                                if let Ok(body) = serde_json::to_vec(&req) {
+                                                    let _ = write_framed(w, &body, write_timeout).await;
+                                                }
+                                            }
+                                            shipped_e2e = true;
+                                            info!(kb = %kb_id, member = %principal, "ADR-037: approved member with wrapped content key");
+                                        }
+                                    } else {
+                                        warn!(kb = %kb_id, member = %principal, "kb/approve: E2e KB but the pending request carries no pubkey — falling back to legacy (member keyless until re-wrap)");
+                                    }
+                                }
+                            }
+                            if !shipped_e2e {
+                                if let Some(ref mut w) = writer {
+                                    let req_id = next_request_id;
+                                    next_request_id += 1;
+                                    let req = serde_json::json!({
+                                        "jsonrpc": "2.0", "id": req_id, "method": "kb/approve_member",
+                                        "params": { "kb_id": kb_id, "principal": principal, "role": role }
+                                    });
+                                    if let Ok(body) = serde_json::to_vec(&req) {
+                                        let _ = write_framed(w, &body, write_timeout).await;
+                                    }
                                 }
                             }
                         }

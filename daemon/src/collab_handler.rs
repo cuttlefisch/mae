@@ -161,6 +161,9 @@ async fn run_session<R, W>(
     let auth_principal: Option<String> = session.authenticated_principal().map(str::to_string);
     // The display label (key/TLS sessions) — logging/attribution only.
     let auth_label: Option<String> = session.authenticated_label().map(str::to_string);
+    // ADR-038: the authenticated peer's Ed25519 public key — captured here so a `kb/join`
+    // can record it in the pending request for the owner to wrap the content key to.
+    let auth_pubkey: Option<[u8; 32]> = session.peer_identity.as_ref().map(|p| p.pubkey);
     if let Some((principal, label)) = session.principal_and_label() {
         info!(session = session_id, principal, peer = %label, "authenticated peer");
     }
@@ -267,7 +270,7 @@ async fn run_session<R, W>(
                 }
 
                 let mut response = if is_doc {
-                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), &mut session_docs, transport).await
+                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), auth_pubkey.as_ref(), &mut session_docs, transport).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
@@ -572,6 +575,7 @@ async fn handle_doc_request(
         broadcaster,
         start_time,
         session_id,
+        None,
         None,
         None,
         session_docs,
@@ -1013,6 +1017,7 @@ async fn handle_doc_request_inner(
     session_id: u64,
     auth_label: Option<&str>,
     auth_principal: Option<&str>,
+    auth_pubkey: Option<&[u8; 32]>,
     session_docs: &mut HashSet<String>,
     transport: Transport,
 ) -> JsonRpcResponse {
@@ -1853,6 +1858,7 @@ async fn handle_doc_request_inner(
                             principal,
                             auth_label.unwrap_or(principal),
                             &now_stamp(),
+                            auth_pubkey,
                         );
                         let _ = persist_and_broadcast_collection(
                             doc_store,

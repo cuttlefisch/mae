@@ -861,6 +861,7 @@ async fn kb_share_as(
         0,
         auth_label,
         auth_principal,
+        None,
         session_docs,
         Transport::Hub,
     )
@@ -884,6 +885,7 @@ async fn dispatch_as(
         0,
         auth_label,
         auth_principal,
+        None,
         docs,
         Transport::Hub,
     )
@@ -2325,7 +2327,7 @@ async fn transport_policy_gate() {
     async fn share(store: &DocStore, owner: &str, member: &str, policy: TransportPolicy) {
         let mut coll = KbCollectionDoc::new_owned("KB", owner, "owner");
         coll.set_transport_policy(policy);
-        coll.add_pending(member, "bob", "t0");
+        coll.add_pending(member, "bob", "t0", None);
         coll.approve(member, SyncRole::Editor);
         store
             .share_doc("kbc:kbx", &coll.encode_state())
