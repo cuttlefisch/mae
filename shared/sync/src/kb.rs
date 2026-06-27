@@ -555,6 +555,7 @@ const MEMBER_LABEL_KEY: &str = "label";
 /// Stored as a decimal string (mirrors the role/label string fields).
 const MEMBER_EPOCH_KEY: &str = "epoch";
 const PENDING_AT_KEY: &str = "requested_at";
+const PENDING_PUBKEY_KEY: &str = "pubkey"; // hex Ed25519 (ADR-038, optional)
 
 /// Collection schema version. v2 = ADR-018 (principal-anchored owner/roles/policy).
 pub const SCHEMA_VERSION: u32 = 2;
@@ -743,6 +744,11 @@ pub struct PendingRequest {
     pub fingerprint: String,
     pub label: String,
     pub requested_at: String,
+    /// ADR-038: the joiner's Ed25519 public key, captured by the daemon from the
+    /// authenticated session at `kb/join`. Rides the `kbc:` broadcast so the OWNER can
+    /// `wrap_to_member` the content key on approval (the owner has only the fingerprint
+    /// otherwise). `None` for a pre-ADR-038 pending record (backward-compatible).
+    pub pubkey: Option<[u8; 32]>,
 }
 
 /// A KB collection manifest represented as a yrs document.
@@ -1115,10 +1121,16 @@ impl KbCollectionDoc {
                         .get(&txn, PENDING_AT_KEY)
                         .map(|t| t.to_string(&txn))
                         .unwrap_or_default();
+                    let pubkey = req
+                        .get(&txn, PENDING_PUBKEY_KEY)
+                        .map(|p| p.to_string(&txn))
+                        .and_then(|h| hex::decode(h).ok())
+                        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
                     out.push(PendingRequest {
                         fingerprint: fp.to_string(),
                         label,
                         requested_at,
+                        pubkey,
                     });
                 }
             }
@@ -1334,8 +1346,16 @@ impl KbCollectionDoc {
         txn.encode_update_v1()
     }
 
-    /// Record a pending join request (idempotent re-request).
-    pub fn add_pending(&mut self, principal: &str, label: &str, requested_at: &str) -> Vec<u8> {
+    /// Record a pending join request (idempotent re-request). `pubkey` (ADR-038) is the
+    /// joiner's Ed25519 key, captured by the daemon from the authenticated session so the
+    /// owner can wrap the content key to them on approval; `None` preserves the v1 record.
+    pub fn add_pending(
+        &mut self,
+        principal: &str,
+        label: &str,
+        requested_at: &str,
+        pubkey: Option<&[u8; 32]>,
+    ) -> Vec<u8> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let mut txn = self.doc.transact_mut();
         let p = match root.get(&txn, COLL_PENDING_KEY) {
@@ -1345,6 +1365,9 @@ impl KbCollectionDoc {
         let req = p.insert(&mut txn, principal, MapPrelim::default());
         req.insert(&mut txn, MEMBER_LABEL_KEY, label);
         req.insert(&mut txn, PENDING_AT_KEY, requested_at);
+        if let Some(pk) = pubkey {
+            req.insert(&mut txn, PENDING_PUBKEY_KEY, hex::encode(pk));
+        }
         txn.encode_update_v1()
     }
 
@@ -2445,7 +2468,7 @@ mod tests {
     #[test]
     fn collection_v2_pending_then_approve_atomic() {
         let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
-        coll.add_pending("SHA256:bob", "bob", "2026-06-16T00:00:00Z");
+        coll.add_pending("SHA256:bob", "bob", "2026-06-16T00:00:00Z", None);
         assert_eq!(coll.pending().len(), 1);
         assert_eq!(coll.role_of("SHA256:bob"), None);
         coll.approve("SHA256:bob", Role::Editor);
@@ -2457,6 +2480,35 @@ mod tests {
             .find(|m| m.fingerprint == "SHA256:bob")
             .unwrap();
         assert_eq!(m.label, "bob", "approve carries the pending label");
+    }
+
+    #[test]
+    fn add_pending_round_trips_the_joiner_pubkey() {
+        let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
+        // With a pubkey: pending() recovers it, so the owner can wrap_to_member on approve.
+        let pk = [42u8; 32];
+        coll.add_pending("SHA256:bob", "bob", "t", Some(&pk));
+        let bob = coll
+            .pending()
+            .into_iter()
+            .find(|p| p.fingerprint == "SHA256:bob")
+            .unwrap();
+        assert_eq!(
+            bob.pubkey,
+            Some(pk),
+            "the joiner's pubkey round-trips through the pending record"
+        );
+        // Without a pubkey (a v1 record): reads back None (backward-compatible).
+        coll.add_pending("SHA256:carol", "carol", "t", None);
+        let carol = coll
+            .pending()
+            .into_iter()
+            .find(|p| p.fingerprint == "SHA256:carol")
+            .unwrap();
+        assert_eq!(
+            carol.pubkey, None,
+            "a pubkey-less pending record reads back None"
+        );
     }
 
     #[test]
@@ -2481,7 +2533,7 @@ mod tests {
         let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
         coll.upsert_member("SHA256:bob", "bob", Role::Viewer);
         coll.set_join_policy(JoinPolicy::Permissive);
-        coll.add_pending("SHA256:eve", "eve", "t");
+        coll.add_pending("SHA256:eve", "eve", "t", None);
         let bytes = coll.encode_state();
         let r = KbCollectionDoc::from_bytes(&bytes).unwrap();
         assert_eq!(r.schema_version(), 2);

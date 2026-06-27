@@ -220,7 +220,7 @@ mod tests {
         editor.collab.local_fingerprint = "alicefp".to_string();
         let mut coll = KbCollectionDoc::new_owned("Team", "alicefp", "alice");
         let _ = coll.upsert_member("bobfp", "bob", Role::Editor);
-        let _ = coll.add_pending("carolfp", "carol", "2026-06-23");
+        let _ = coll.add_pending("carolfp", "carol", "2026-06-23", None);
         editor
             .collab
             .kb_collection_state
@@ -296,7 +296,7 @@ mod tests {
         editor.collab.local_fingerprint = "bobfp".to_string();
         let mut coll = KbCollectionDoc::new_owned("Team", "alicefp", "alice");
         let _ = coll.upsert_member("bobfp", "bob", Role::Viewer);
-        let _ = coll.add_pending("carolfp", "carol", "2026-06-23");
+        let _ = coll.add_pending("carolfp", "carol", "2026-06-23", None);
         editor
             .collab
             .kb_collection_state

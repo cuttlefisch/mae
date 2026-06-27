@@ -85,7 +85,7 @@ fn owner_notified_of_new_pending_join_request() {
         .insert("team".to_string(), coll.encode_state());
 
     // A peer's join request arrives as a kbc: broadcast.
-    let update = coll.add_pending("carolfp", "carol", "2026-06-23");
+    let update = coll.add_pending("carolfp", "carol", "2026-06-23", None);
     handle_collab_event(
         &mut editor,
         CollabEvent::RemoteUpdate {
