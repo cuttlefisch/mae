@@ -17,10 +17,12 @@ the authorization scheme is a well-constructed **capability + ReBAC hybrid** (UC
 Keybase-style sigchains, p2panda strong-removal, an external-anchored signed membership op-log derived
 identically by every peer). **No authentication-bypass and no privilege-escalation path was found in the
 membership layer.** The defects are concentrated at **(a) the boundary between the new signed op-log and the
-legacy `member_roles` store, and (b) enforcement-point coverage** — and they share one root cause and one
-fix: *derive role, epoch, and blocklist from the single signed op-log, via one shared fence helper, on every
-write path* (the project's own principle #8). The remaining items are defense-in-depth + lifecycle (key
-rotation, at-rest protection, single-key separation) — none an architectural dead-end.
+legacy `member_roles` store, and (b) enforcement-point coverage** — and the two HIGH bugs (A1, N1) share one
+root cause and one fix: *derive role and epoch from the single signed op-log, via one shared fence helper, on
+every write path* (the project's own principle #8) — **shipped in #157**. The MEDIUM A2 turned out to be a
+*missing feature* (the local-blocklist deny-list is designed but unwired everywhere — not a live bypass) and
+is split into its own tracked issue. The remaining items are defense-in-depth + lifecycle (key rotation,
+at-rest protection, single-key separation) — none an architectural dead-end.
 
 ## 2. Findings summary
 
@@ -28,7 +30,7 @@ rotation, at-rest protection, single-key separation) — none an architectural d
 |---|---|---|---|---|
 | **A1** | Authz | **Epoch source asymmetry** — `kb_access` reads role from the op-log (anchored), but the epoch fence reads epoch from legacy `member_roles` (`epoch_of`→0 for a mesh-admitted member) → valid edits by any non-epoch-0 member are wrongly rejected | **HIGH (bug)** | fix issue |
 | **N1-authz** | Authz | **Epoch fence absent on the mesh dialer path** — the ADR-023 fence runs only in hub `kb/node_update`, not `dialer::apply_doc` → incomplete mediation | **HIGH (bug)** | fix issue |
-| **A2** | Authz | **Local blocklist ignored in `verify_content_op`** (derives with `MembershipView::default()`) → a locally-blocked principal's signed content ops are still admitted | **MEDIUM** | fix issue |
+| **A2** | Authz | **Local blocklist mechanism unimplemented** — designed in `membership.rs` but unwired everywhere (`MembershipView::default()` at all derive sites, no storage, no setter). NOT a live bypass (no block can be set); the real fix is a feature (durable deny-list + block/unblock RPC + thread all sites + editor surface) | **MEDIUM** | feature issue |
 | **N2-authz** | Authz | **Content-key authority frozen at genesis owner** — a quorum can remove the owner from governance but cannot rekey (only the genesis owner authors honored `wrapped_key` ops) | **MEDIUM** | restrict E2e⇒SingleOwner (3b/#151) or generalize |
 | **N3-authz** | Authz | `expires_at` enforced against local wall-clock, not a log-derived logical time → peers can disagree on a time-boxed member | LOW | document/harden |
 | **N4-authz** | Authz | Permissive auto-join races a concurrent `set_policy(restrictive)` (TOCTOU) | LOW | harden (re-check in crit. section) |
@@ -137,10 +139,19 @@ collection into existence.
   [Zanzibar](https://www.usenix.org/system/files/atc19-pang.pdf)).
 - **Fence missing on the mesh path (N1, HIGH).** The fence runs only on hub `kb/node_update`, not
   `dialer::apply_doc`. Fix: one shared fence helper on both write paths (complete mediation).
-- **Local blocklist not enforced on the content path (A2, MEDIUM).** `verify_content_op` uses an empty
-  blocklist. Revocation/deny-lists must apply at *every* enforcement point
-  ([SPKI/SDSI RFC 2692](https://www.rfc-editor.org/rfc/rfc2692),
-  [UCAN revocation](https://ucan.xyz/revocation/)). Fix: thread the peer's `MembershipView` in.
+- **Local blocklist mechanism unimplemented (A2, MEDIUM — NOT a live bypass).** Re-scoped on closer reading:
+  the `MembershipView.blocklist` self-protection deny-list is *designed* in `membership.rs` (step 7 of
+  `derive_valid_members_governed`) but **entirely unwired** — every daemon derive site (`kb_access`,
+  `verify_content_op`, `verify_relayed_content_op`, the strong-removal path) passes `MembershipView::default()`
+  (empty), there is no DocStore storage for blocked principals, and no RPC/command to set one. Because no block
+  can be set, the empty default is *consistent* everywhere — there is no admit-a-blocked-principal hole today.
+  The real fix is therefore a **feature**, not a one-line wiring change: local durable per-KB deny-list +
+  operator-local block/unblock RPC + thread the loaded view into *every* enforcement point (deny-lists must
+  apply at all of them — [SPKI/SDSI RFC 2692](https://www.rfc-editor.org/rfc/rfc2692),
+  [UCAN revocation](https://ucan.xyz/revocation/)) + editor command/Scheme/MCP surface for human↔AI parity +
+  adversarial tests. Tracked as a dedicated issue (see §5). (Global op-log removal — `Revoke`/`Remove` — already
+  works and propagates; A2 is the *local* self-protection override for principals you cannot get globally
+  removed.)
 - **Content-key authority frozen at genesis owner (N2, MEDIUM).** A quorum can remove the owner from
   governance but cannot rekey. Unlike MLS, removal does not force re-encryption
   ([RFC 9420 §12](https://www.rfc-editor.org/rfc/rfc9420.html)). v1 fix: restrict E2e to `SingleOwner`;
@@ -153,9 +164,12 @@ smuggling defenses were reviewed and found **sound — no privilege-escalation p
 
 ## 5. Fix priority & cadence
 
-1. **The unified fence (A1 + N1 + A2)** — the highest-value fix: one helper derives role + **epoch** + applies
-   the **blocklist** from the signed op-log, called on **both** the hub and mesh write paths. Closes two HIGH
-   bugs + one MEDIUM at once. (3b's dual-write is the interim hub mitigation for A1.)
+1. **The unified fence (A1 + N1)** — DONE (#157): one `enforce_epoch_fence` helper derives role + **epoch**
+   from the signed op-log and is called on **both** the hub `kb/node_update` and the mesh dialer relay paths
+   (complete mediation). Closes both HIGH bugs. (3b's dual-write was the interim hub mitigation for A1.)
+   **A2 split out** as its own MEDIUM feature issue (local-blocklist mechanism is unimplemented, not a live
+   bypass — see §4): durable deny-list + block/unblock RPC + thread every derive site + editor surface +
+   adversarial tests. Picks up after the core encryption story (3c/3d) closes.
 2. **N2 / E2e governance** — restrict E2e KBs to `SingleOwner` for v1 (folds into 3b/#151, F4); generalize
    later.
 3. **I-series identity hardening** — document I1/I3/I5/I6 now (this doc); I4 (Windows) before any Windows
