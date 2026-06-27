@@ -117,6 +117,7 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
    - **Performance impact**: Does this add work to a hot path? Is it O(1), O(n), or O(n²)?
    - **Type safety at boundaries**: When extracting shared code, verify that type conversions (e.g., `usize` ↔ `u16`) don't silently truncate.
    - **Regression guard**: If the change touches rendering or input handling, verify both TUI and GUI backends. If it touches options, verify the Scheme API + `:set` + `:set-save` persistence (which writes `init.scm` — the primary config surface; `config.toml` is legacy bootstrap for AI provider + theme only) all work.
+   - **Adversarial test (security/auth/crypto/sync)**: any change to these subsystems MUST add or extend a test that exercises the *failure mode* (forged signature, wrong/rotated key, stale epoch, removed member, hostile key-blind relay, out-of-order/concurrent ops) — not just the success path. See principle #14.
 
 10. **Multi-client safety by design.** Any state mutation must be safe for concurrent observation. The MCP server may have N connected clients. Editor state changes emit events to a broadcast channel. Clients that can't keep up are dropped (bounded queues, write timeouts). File writes use content-hash verification + advisory locks. No operation assumes single-client.
 
@@ -129,6 +130,12 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
     - **Shell scripts use portable tooling.** No Linux-only commands without a fallback: `ss` → `lsof` → `netstat`; `timeout` → `gtimeout` → optional/omitted; avoid GNU-only behavior (`sed -i` arg differences, `readlink -f`, `mktemp` templates, `date` flags). Prefer POSIX; gate platform branches on capability (`command -v`), not `uname`. Keep the Linux path first so CI/driver behavior is unchanged.
     - **CI must exercise both OSes** for anything touching paths, sockets, or scripts — the collab e2e (`scripts/collab-*-e2e.sh`) especially, since that's where this bites.
     This is the cross-machine corollary to principles #8 (shared computation) and #9 (downstream impact): verify the change on *both* platforms, not just the one in front of you.
+
+14. **Adversarial testing, not confirmation.** A test exists to *falsify* the implementation, not to congratulate it. We hold the line against three failure modes that let bugs ship green:
+    - **No fragile linear tests.** A test that only walks the happy path in one fixed order — setup → do → assert-it-worked — proves the code works *on that one path*, nothing more. Prefer **property/round-trip** tests (encode↔decode, seal↔open, the same result under shuffled apply order), **N-way convergence** (≥3 peers/writers, not 2), and **state-machine** coverage (the transitions, not one trace).
+    - **No cherry-picked "unicorn" values.** Inputs chosen because they make the test pass — a magic constant, a single hand-picked identity, a value that dodges the edge — hide the bug they were chosen around. Use **real inputs** (freshly generated identities/keys, varied/boundary/random-but-seeded values, multiple distinct cases) and **selective oracles** that pin the *meaningful* outcome (the decrypted title equals the edit; the forged op is *not* a member), not an incidental one.
+    - **Favor the attacker's test.** For anything security-, auth-, crypto-, or sync-relevant, the primary test encodes the **attacker model**: wrong key opens nothing, a tampered signature is rejected, a stale-epoch op is fenced, a removed member can't read post-rotation, a malicious key-blind relay sees only ciphertext, concurrent/out-of-order ops still converge. A negative/adversarial case that *must fail* is worth more than ten that pass.
+    - **Per-phase adversarial review.** Every lettered phase / PR gets a review pass that asks "what did these tests *not* try to break?" — and the gap becomes the next test. The goal is software that is correct *because we tried hard to falsify it and couldn't*. (This is the standing testing discipline; it supersedes any habit of writing only confirmation tests.)
 
 ### Rendering Pipeline
 The GUI renderer uses a three-phase pipeline: `compute_layout()` produces
@@ -270,6 +277,7 @@ make test-scheme-all                # All local tests
 - **TAP v14 output.** Machine-parseable, CI-friendly.
 - **Rust-side iteration preferred.** Don't add `(run-tests)` at end of test files. The runner calls `run-nth-test` with `apply_to_editor` + `sync_scheme_state` between each step.
 - **Clean environment for e2e tests.** The e2e tests run in CI with no user config (`init.scm`, `config.toml`) and no on-disk modules. When testing locally, use a clean HOME: `HOME=/tmp/mae-test XDG_CONFIG_HOME=/tmp/mae-test/.config XDG_DATA_HOME=/tmp/mae-test/.local/share ./target/release/mae --test tests/editor/`
+- **Adversarial, not confirmation (principle #14).** Don't write happy-path-only linear tests, and don't pick "unicorn" inputs that make the test pass. Use real/varied inputs + selective oracles + round-trip/property + N-way convergence + the negative case that must fail (wrong key, forged sig, stale epoch, removed member, hostile relay). Test isolation: per-test fixtures (e.g. a per-test tmp dir/name), never a shared/address-derived path that breaks under parallelism.
 
 ### Adding New Test Primitives
 - **Read-only state**: Add to `SharedState`, register Rust function in `new()` that reads from SharedState, update SharedState in `inject_editor_state`.
