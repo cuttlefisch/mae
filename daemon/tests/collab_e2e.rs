@@ -322,7 +322,7 @@ impl Client {
     /// Drain any pending notifications (non-blocking). Includes buffered ones.
     async fn drain_notifications(&mut self) -> Vec<serde_json::Value> {
         let mut notifications: Vec<serde_json::Value> =
-            self.notification_buffer.drain(..).collect();
+            std::mem::take(&mut self.notification_buffer);
         while let Some(msg) = self.recv_timeout(50).await {
             if msg.get("method").is_some() {
                 notifications.push(msg);
