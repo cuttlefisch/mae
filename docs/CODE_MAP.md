@@ -320,6 +320,7 @@ Source: `shared/mcp/src/lib.rs`
 | `broadcast` | mod |
 | `client` | mod |
 | `client_mgr` | mod |
+| `content_key_store` | mod |
 | `daemon_client` | mod |
 | `identity` | mod |
 | `keystore` | mod |

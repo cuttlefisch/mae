@@ -17,6 +17,7 @@ rand = "0.10"
 async-trait = "0.1"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
 base64 = "0.22"
+hex = "0.4"
 # TLS transport (collab `key` mode). Use the ring backend uniformly + an explicit
 # CryptoProvider so we never clash with reqwest's aws-lc-rs default in the editor.
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging"] }

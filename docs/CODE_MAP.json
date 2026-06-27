@@ -793,6 +793,10 @@
           "kind": "mod"
         },
         {
+          "name": "content_key_store",
+          "kind": "mod"
+        },
+        {
           "name": "daemon_client",
           "kind": "mod"
         },
