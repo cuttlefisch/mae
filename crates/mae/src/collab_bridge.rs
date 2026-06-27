@@ -232,12 +232,17 @@ pub enum CollabCommand {
         epoch: u64,
         pending_rowid: Option<i64>,
     },
-    /// Add or remove a peer (by principal) from a KB's members (owner-only).
+    /// Add or remove a peer (by principal) from a KB's members (owner-only). For a
+    /// REMOVE from an E2e KB, `collection_state` carries the main thread's cached
+    /// collection replica so the network task (which holds the identity secret + the
+    /// content key) can author the §D3 rotation (signed Remove + re-key the remaining
+    /// members) and ship it key-blind via `kb/collection_op`. Empty for adds / legacy.
     KbMember {
         kb_id: String,
         member: String,
         role: String,
         add: bool,
+        collection_state: Vec<u8>,
     },
     /// Phase D1.1 (ADR-029): add/remove a node in a KB's collection manifest so the
     /// daemon's projector materializes the create/removes the delete. The node doc
@@ -716,13 +721,26 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             member,
             role,
             add: true,
+            collection_state: Vec::new(),
         },
-        CollabIntent::KbRemoveMember { kb_id, member } => CollabCommand::KbMember {
-            kb_id,
-            member,
-            role: String::new(),
-            add: false,
-        },
+        CollabIntent::KbRemoveMember { kb_id, member } => {
+            // Carry the cached collection replica so the network task can author the
+            // §D3 content-key rotation if this KB is E2e (else it's ignored — legacy
+            // daemon-authored remove). Mirrors KbApprove / KbSetEncryption.
+            let collection_state = editor
+                .collab
+                .kb_collection_state
+                .get(&kb_id)
+                .cloned()
+                .unwrap_or_default();
+            CollabCommand::KbMember {
+                kb_id,
+                member,
+                role: String::new(),
+                add: false,
+                collection_state,
+            }
+        }
         CollabIntent::KbApprove {
             kb_id,
             principal,
@@ -3361,23 +3379,126 @@ async fn run_collab_task(
                                 try_send_evt(&evt_tx, CollabEvent::KbUpdateRequeue { kb_id, node_id, update, pending_rowid });
                             }
                         }
-                        CollabCommand::KbMember { kb_id, member, role, add } => {
-                            if let Some(ref mut w) = writer {
-                                let req_id = next_request_id;
-                                next_request_id += 1;
-                                let method = if add { "kb/add_member" } else { "kb/remove_member" };
-                                let req = serde_json::json!({
-                                    "jsonrpc": "2.0",
-                                    "id": req_id,
-                                    "method": method,
-                                    "params": { "kb_id": kb_id, "member": member, "role": role, "label": member }
-                                });
-                                if let Ok(body) = serde_json::to_vec(&req) {
-                                    if write_framed(w, &body, write_timeout).await.is_ok() {
-                                        pending_responses.insert(
-                                            req_id,
-                                            PendingResponseKind::KbMember { kb_id, member, add },
-                                        );
+                        CollabCommand::KbMember { kb_id, member, role, add, collection_state } => {
+                            // ADR-037 §D3: removing a member from an E2e KB ROTATES the content
+                            // key — the owner authors a signed Remove + a fresh-key re-wrap to
+                            // each remaining member, shipped key-blind via kb/collection_op. The
+                            // removed member receives no new wrap → it keeps only the old key and
+                            // can't read post-rotation content. Adds + legacy removes fall through.
+                            let mut shipped_e2e = false;
+                            if !add {
+                                if let (Some(_old_key), Some(id)) =
+                                    (content_keys.get(&kb_id).cloned(), signing_identity.as_ref())
+                                {
+                                    if let Ok(mut coll) =
+                                        mae_sync::kb::KbCollectionDoc::from_bytes(&collection_state)
+                                    {
+                                        let owner_fp = id.fingerprint();
+                                        if coll.owner() == owner_fp {
+                                            let owner_pubkey = id.public().to_bytes();
+                                            let owner_secret = id.secret_bytes();
+                                            let now = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .map(|d| d.as_secs())
+                                                .unwrap_or(0);
+                                            let ops = coll.oplog_ops();
+                                            let gov = mae_sync::membership::derive_governance(
+                                                &ops,
+                                                &owner_pubkey,
+                                            );
+                                            let members =
+                                                mae_sync::membership::derive_valid_members_governed(
+                                                    &ops,
+                                                    &owner_pubkey,
+                                                    now,
+                                                    gov,
+                                                    &mae_sync::membership::MembershipView::default(),
+                                                );
+                                            // Fresh key, wrapped once per REMAINING member (owner
+                                            // re-keys itself via its own pubkey).
+                                            let k2 = mae_sync::content_crypto::ContentKey::generate();
+                                            let mut rewraps: Vec<(String, Vec<u8>)> = Vec::new();
+                                            let mut skipped: Vec<String> = Vec::new();
+                                            for fp in members.keys() {
+                                                if *fp == member {
+                                                    continue;
+                                                }
+                                                let pk = if *fp == owner_fp {
+                                                    Some(owner_pubkey)
+                                                } else {
+                                                    coll.member_pubkey(fp)
+                                                };
+                                                match pk.and_then(|pk| {
+                                                    mae_sync::content_crypto::wrap_to_member(&k2, &pk)
+                                                        .ok()
+                                                }) {
+                                                    Some(w) => rewraps.push((fp.clone(), w)),
+                                                    None => skipped.push(fp.clone()),
+                                                }
+                                            }
+                                            if !skipped.is_empty() {
+                                                warn!(kb = %kb_id, ?skipped, "kb/remove (E2e): re-key skipped members with no stored pubkey — they keep the OLD key until a re-share re-wraps them");
+                                            }
+                                            let delta = coll.author_rotate_on_remove(
+                                                &kb_id,
+                                                &member,
+                                                &rewraps,
+                                                &owner_fp,
+                                                &owner_secret,
+                                                &owner_pubkey,
+                                                now,
+                                            );
+                                            if let Some(ref mut w) = writer {
+                                                let req_id = next_request_id;
+                                                next_request_id += 1;
+                                                let req = mae_sync::wire::kb_collection_op_request(
+                                                    req_id,
+                                                    &kb_id,
+                                                    &mae_sync::encoding::update_to_base64(&delta),
+                                                );
+                                                if let Ok(body) = serde_json::to_vec(&req) {
+                                                    let _ = write_framed(w, &body, write_timeout).await;
+                                                }
+                                            }
+                                            // Persist k' + register it so the owner's next edits seal
+                                            // under the rotated key.
+                                            if let Some(d) =
+                                                mae_mcp::content_key_store::content_keys_dir().as_ref()
+                                            {
+                                                if let Err(e) = mae_mcp::content_key_store::save(
+                                                    d,
+                                                    &kb_id,
+                                                    k2.as_bytes(),
+                                                ) {
+                                                    warn!(kb = %kb_id, error = %e, "kb/remove (E2e): failed to persist rotated content key");
+                                                }
+                                            }
+                                            content_keys.insert(kb_id.clone(), k2);
+                                            shipped_e2e = true;
+                                            info!(kb = %kb_id, member = %member, remaining = rewraps.len(), "ADR-037 §D3: removed member + rotated content key to remaining members");
+                                        }
+                                    }
+                                }
+                            }
+                            if !shipped_e2e {
+                                if let Some(ref mut w) = writer {
+                                    let req_id = next_request_id;
+                                    next_request_id += 1;
+                                    let method =
+                                        if add { "kb/add_member" } else { "kb/remove_member" };
+                                    let req = serde_json::json!({
+                                        "jsonrpc": "2.0",
+                                        "id": req_id,
+                                        "method": method,
+                                        "params": { "kb_id": kb_id, "member": member, "role": role, "label": member }
+                                    });
+                                    if let Ok(body) = serde_json::to_vec(&req) {
+                                        if write_framed(w, &body, write_timeout).await.is_ok() {
+                                            pending_responses.insert(
+                                                req_id,
+                                                PendingResponseKind::KbMember { kb_id, member, add },
+                                            );
+                                        }
                                     }
                                 }
                             }

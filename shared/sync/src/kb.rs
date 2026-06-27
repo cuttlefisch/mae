@@ -1710,6 +1710,89 @@ impl KbCollectionDoc {
         txn.encode_state_as_update_v1(&sv_d)
     }
 
+    /// ADR-037 §D3: **rotate the content key on member removal.** Authors, in ONE combined
+    /// collection delta: (1) a signed `Remove` of `removed_fp` (and mirrors the member_roles
+    /// removal, which #72-tombstones their epoch), then (2) one owner-authored *wrap-only*
+    /// `Admit` per REMAINING member carrying the NEW key wrapped to them. Each re-key op
+    /// re-asserts the member's CURRENT derived role/can_invite/epoch verbatim — a re-admit
+    /// overwrites the derived entry ("later re-admit wins"), so preserving them avoids a
+    /// silent membership downgrade; and the epoch is NOT bumped (re-keying must not force the
+    /// remaining members to rebase — the removed member is dropped from derived membership, so
+    /// their stale lineage is refused regardless of epoch).
+    ///
+    /// `rewraps` is `(remaining_member_fp, new_wrapped_key)` for every member to KEEP — the
+    /// caller (which holds the secret + the members' pubkeys) wraps the fresh key once per
+    /// member; the owner re-keys itself by appearing in this list. The removed member receives
+    /// no new wrapped op, so `find_wrapped_content_key` returns only their OLD key — they
+    /// cannot open post-rotation ciphertext (the §D3 security property). Returns the delta to
+    /// ship via the key-blind `kb/collection_op`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn author_rotate_on_remove(
+        &mut self,
+        kb_id: &str,
+        removed_fp: &str,
+        rewraps: &[(String, Vec<u8>)],
+        owner_fp: &str,
+        owner_secret: &[u8; 32],
+        owner_pubkey: &[u8; 32],
+        now: u64,
+    ) -> Vec<u8> {
+        let sv = self.state_vector();
+        // Snapshot the authoritative attributes BEFORE the Remove so each re-key Admit can
+        // re-assert them verbatim (the op-log is the source of truth; `owner_pubkey` anchors).
+        let ops = self.oplog_ops();
+        let governance = crate::membership::derive_governance(&ops, owner_pubkey);
+        let members = crate::membership::derive_valid_members_governed(
+            &ops,
+            owner_pubkey,
+            now,
+            governance,
+            &crate::membership::MembershipView::default(),
+        );
+        // (1) Signed Remove of the departed member + the member_roles mirror.
+        let remove_op = self.build_membership_op(
+            kb_id,
+            MembershipAction::Remove,
+            removed_fp,
+            None,
+            false,
+            owner_fp,
+            now,
+            None,
+            0,
+        );
+        let sig = remove_op.sign(owner_secret);
+        self.append_signed_op(&remove_op, &sig, owner_pubkey);
+        self.remove_principal(removed_fp);
+        // (2) One wrap-only re-key Admit per remaining member, current attributes preserved.
+        for (member_fp, wrapped) in rewraps {
+            if member_fp == removed_fp {
+                continue; // defensive: never re-key the member we just removed
+            }
+            let (role, can_invite, epoch) = members
+                .get(member_fp)
+                .map(|m| (m.role, m.can_invite, m.epoch))
+                .unwrap_or((Role::Editor, false, self.epoch_of(member_fp)));
+            let mut op = self.build_membership_op(
+                kb_id,
+                MembershipAction::Admit,
+                member_fp,
+                Some(role),
+                can_invite,
+                owner_fp,
+                now,
+                None,
+                epoch,
+            );
+            op.wrapped_key = Some(wrapped.clone());
+            let sig = op.sign(owner_secret);
+            self.append_signed_op(&op, &sig, owner_pubkey);
+        }
+        let sv_d = yrs::StateVector::decode_v1(&sv).unwrap_or_default();
+        let txn = self.doc.transact();
+        txn.encode_state_as_update_v1(&sv_d)
+    }
+
     /// Store a member's Ed25519 pubkey in their `member_roles` entry (for re-wrap on
     /// rotation). No-op if the member entry doesn't exist yet.
     fn store_member_pubkey(&mut self, principal: &str, pubkey: &[u8; 32]) {
@@ -2849,6 +2932,154 @@ mod tests {
         assert!(
             derive_content_key(&coll.oplog_ops(), &opk, &xfp, &_xsec).is_none(),
             "a non-member recovers no key"
+        );
+    }
+
+    #[test]
+    fn rotate_on_remove_rekeys_remaining_members_and_strands_the_removed_one() {
+        // ADR-037 §D3 — the SELECTIVE security oracle. 3 members (owner + B + C) share key k.
+        // Remove B with a fresh k'. The remaining two must CONVERGE on k' and the removed B
+        // must keep ONLY the old k (reads nothing new), not break entirely — proving the
+        // rotation denies k' specifically, rather than just severing B's pipeline.
+        use crate::content_crypto::{wrap_to_member, ContentKey};
+        use crate::membership::{
+            derive_content_key, derive_governance, derive_valid_members_governed, MembershipView,
+        };
+        let (osec, opk, ofp) = oplog_keypair(1);
+        let (bsec, bpk, bfp) = oplog_keypair(2);
+        let (csec, cpk, cfp) = oplog_keypair(3);
+
+        let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+        let k = ContentKey::generate();
+        coll.author_e2e_genesis(
+            "KB",
+            &ofp,
+            &osec,
+            &opk,
+            wrap_to_member(&k, &opk).unwrap(),
+            1000,
+        );
+        coll.author_member_admit(
+            "KB",
+            &bfp,
+            &bpk,
+            Role::Editor,
+            "b",
+            wrap_to_member(&k, &bpk).unwrap(),
+            &ofp,
+            &osec,
+            &opk,
+            1001,
+        );
+        coll.author_member_admit(
+            "KB",
+            &cfp,
+            &cpk,
+            Role::Editor,
+            "c",
+            wrap_to_member(&k, &cpk).unwrap(),
+            &ofp,
+            &osec,
+            &opk,
+            1002,
+        );
+        // Everyone holds k before rotation.
+        for (fp, sec) in [(&ofp, &osec), (&bfp, &bsec), (&cfp, &csec)] {
+            assert_eq!(
+                derive_content_key(&coll.oplog_ops(), &opk, fp, sec).map(|c| *c.as_bytes()),
+                Some(*k.as_bytes()),
+                "every member holds k before rotation"
+            );
+        }
+        let c_epoch_before = coll.epoch_of(&cfp);
+        // Exact pre-rotation replica (matching chain hashes) so the rotation DELTA grafts.
+        let pre_rotation_state = coll.encode_state();
+
+        // Rotate: remove B, re-wrap a FRESH k' to the remaining members (owner + C).
+        let k2 = ContentKey::generate();
+        assert_ne!(k.as_bytes(), k2.as_bytes(), "fresh rotation key");
+        let rewraps = vec![
+            (ofp.clone(), wrap_to_member(&k2, &opk).unwrap()),
+            (cfp.clone(), wrap_to_member(&k2, &cpk).unwrap()),
+        ];
+        let delta = coll.author_rotate_on_remove("KB", &bfp, &rewraps, &ofp, &osec, &opk, 2000);
+
+        let ops = coll.oplog_ops();
+        // (1) The two remaining members converge on k'.
+        assert_eq!(
+            derive_content_key(&ops, &opk, &ofp, &osec).map(|c| *c.as_bytes()),
+            Some(*k2.as_bytes()),
+            "owner re-keys to k'"
+        );
+        assert_eq!(
+            derive_content_key(&ops, &opk, &cfp, &csec).map(|c| *c.as_bytes()),
+            Some(*k2.as_bytes()),
+            "remaining member C re-keys to k'"
+        );
+        // (2) THE ORACLE: the removed B still derives the OLD k (its last wrap) — NOT k', and
+        // NOT nothing. It can decrypt pre-rotation content but no post-rotation ciphertext.
+        assert_eq!(
+            derive_content_key(&ops, &opk, &bfp, &bsec).map(|c| *c.as_bytes()),
+            Some(*k.as_bytes()),
+            "removed B keeps ONLY the old k — stranded from k'"
+        );
+        // (3) B is gone from derived membership; owner + C remain with UNCHANGED attributes
+        // (the re-key Admit must not silently downgrade role/can_invite or bump epoch).
+        let gov = derive_governance(&ops, &opk);
+        let members =
+            derive_valid_members_governed(&ops, &opk, 2000, gov, &MembershipView::default());
+        assert!(!members.contains_key(&bfp), "B removed from membership");
+        assert_eq!(members.len(), 2, "only owner + C remain");
+        assert_eq!(members[&ofp].role, Role::Owner, "owner role preserved");
+        assert!(
+            members[&ofp].can_invite,
+            "owner can_invite preserved (genesis)"
+        );
+        assert_eq!(members[&cfp].role, Role::Editor, "C role preserved");
+        assert_eq!(
+            members[&cfp].epoch, c_epoch_before,
+            "C epoch NOT bumped by re-key"
+        );
+
+        // (4) Convergence: a replica at the pre-rotation state applies ONLY the relayed delta
+        // (as the key-blind daemon ships it) and agrees on every point.
+        let mut peer = KbCollectionDoc::from_bytes(&pre_rotation_state).unwrap();
+        peer.apply_update(&delta).unwrap();
+        let pops = peer.oplog_ops();
+        assert_eq!(
+            derive_content_key(&pops, &opk, &cfp, &csec).map(|c| *c.as_bytes()),
+            Some(*k2.as_bytes()),
+            "peer: C converges on k'"
+        );
+        assert_eq!(
+            derive_content_key(&pops, &opk, &bfp, &bsec).map(|c| *c.as_bytes()),
+            Some(*k.as_bytes()),
+            "peer: removed B still stranded on old k"
+        );
+        assert!(
+            !derive_valid_members_governed(
+                &pops,
+                &opk,
+                2000,
+                derive_governance(&pops, &opk),
+                &MembershipView::default()
+            )
+            .contains_key(&bfp),
+            "peer agrees B is removed"
+        );
+
+        // (5) The Remove op is genuinely owner-signed (not a daemon-forged membership change).
+        let remove = ops
+            .iter()
+            .find(|o| o.op.action == MembershipAction::Remove && o.op.subject == bfp)
+            .expect("a Remove op for B exists");
+        assert!(
+            remove.verify_signed(),
+            "Remove is a verifiable owner signature"
+        );
+        assert_eq!(
+            remove.author_pubkey, opk,
+            "Remove authored by the owner key"
         );
     }
 
