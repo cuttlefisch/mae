@@ -1,0 +1,166 @@
+# Security Review — Identity & Authorization for E2E KB Sharing
+
+> **Status:** design-pass review (companion to `E2E_ENCRYPTION.md`, which covers the content-encryption
+> primitives). This document audits the **identity** and **authorization** foundations under MAE's
+> multi-user encrypted KB sharing. Every finding is grounded in primary-source prior art and cites
+> `file:line`. Findings are tracked as GitHub issues; fixes land per the cadence in §5.
+
+## 1. Scope & verdict
+
+Reviewed: `shared/mcp/src/{identity,tls,auth,keystore}.rs`, `shared/sync/src/{membership,kb,content_ops,
+content_crypto}.rs`, `daemon/src/{collab_handler,dialer,ticket,main}.rs`. Adversary model: a network MITM, a
+malicious/compromised **key-blind relay/host daemon**, an unauthorized peer attempting to join/write, a
+**removed** member, and concurrent-op races.
+
+**Verdict.** The identity scheme is a coherent, prior-art-faithful **SSH-style asymmetric trust model** and
+the authorization scheme is a well-constructed **capability + ReBAC hybrid** (UCAN-style attenuation,
+Keybase-style sigchains, p2panda strong-removal, an external-anchored signed membership op-log derived
+identically by every peer). **No authentication-bypass and no privilege-escalation path was found in the
+membership layer.** The defects are concentrated at **(a) the boundary between the new signed op-log and the
+legacy `member_roles` store, and (b) enforcement-point coverage** — and they share one root cause and one
+fix: *derive role, epoch, and blocklist from the single signed op-log, via one shared fence helper, on every
+write path* (the project's own principle #8). The remaining items are defense-in-depth + lifecycle (key
+rotation, at-rest protection, single-key separation) — none an architectural dead-end.
+
+## 2. Findings summary
+
+| # | Area | Finding | Severity | Status |
+|---|---|---|---|---|
+| **A1** | Authz | **Epoch source asymmetry** — `kb_access` reads role from the op-log (anchored), but the epoch fence reads epoch from legacy `member_roles` (`epoch_of`→0 for a mesh-admitted member) → valid edits by any non-epoch-0 member are wrongly rejected | **HIGH (bug)** | fix issue |
+| **N1-authz** | Authz | **Epoch fence absent on the mesh dialer path** — the ADR-023 fence runs only in hub `kb/node_update`, not `dialer::apply_doc` → incomplete mediation | **HIGH (bug)** | fix issue |
+| **A2** | Authz | **Local blocklist ignored in `verify_content_op`** (derives with `MembershipView::default()`) → a locally-blocked principal's signed content ops are still admitted | **MEDIUM** | fix issue |
+| **N2-authz** | Authz | **Content-key authority frozen at genesis owner** — a quorum can remove the owner from governance but cannot rekey (only the genesis owner authors honored `wrapped_key` ops) | **MEDIUM** | restrict E2e⇒SingleOwner (3b/#151) or generalize |
+| **N3-authz** | Authz | `expires_at` enforced against local wall-clock, not a log-derived logical time → peers can disagree on a time-boxed member | LOW | document/harden |
+| **N4-authz** | Authz | Permissive auto-join races a concurrent `set_policy(restrictive)` (TOCTOU) | LOW | harden (re-check in crit. section) |
+| **N5-authz** | Authz | Capability attenuation, owner-only governance, transport gate, smuggling defense — **reviewed sound** | OK | — |
+| **I1** | Identity | **Single-key reuse** — one Ed25519 seed signs membership+content ops, backs TLS, is the mesh node-id, AND is the X25519 wrap key; runs against signing/key-exchange separation guidance (each context is domain-separated) | WEAKNESS | document; HKDF subkeys follow-up |
+| **I2** | Identity | **No key rotation / rebind** — rotating a key = a new principal → lose every KB membership + every content-key wrap | WEAKNESS | ADR follow-up (cross-signing-style rebind op) |
+| **I3** | Identity | **At-rest plaintext** — identity key, PSK keystore, and per-KB content keys are `0600` hex, no passphrase/OS-keychain | WEAKNESS | document; opt-in passphrase/keychain follow-up |
+| **I4** | Identity | **Non-unix chmod not enforced + no warning** (Windows exposure) — tension with principle #13 | WEAKNESS | fix before any Windows release |
+| **I5** | Identity | **Revocation propagation** — `authorized_keys` (transport) ≠ membership op-log ≠ content-key epoch; removal must rotate the content key to exclude an already-joined ex-member | LIMITATION | document; verify rotation-on-removal (3c) |
+| **I6** | Identity | TOFU `accept-new` first-contact window (`known_hosts` path); mesh ticket closes it in-band | LIMITATION | document; recommend OOB fingerprint / `strict` |
+| **I7** | Identity | Fingerprint (full SHA-256, no truncation); self-signed cert expiry ignored (RFC-7250 raw-public-key style); label is display-only — **all sound** | OK | — |
+
+Content-crypto findings (F1–F9) are in `E2E_ENCRYPTION.md §8`; **A3 = content-review F1** (anchor TOFU — pin
+to the OOB-verified owner), folded into 3b.
+
+## 3. Identity & Trust
+
+### Trust model
+MAE uses an SSH-style asymmetric identity model, not a CA/WebPKI one. Every participant — editor and daemon
+alike — has a long-lived **Ed25519 keypair** ("identity"). The *public key is the identity*; there is no
+certificate authority and no name-to-key PKI. Trust is established as in OpenSSH:
+- **Daemon side (`authorized_keys`).** A daemon trusts a peer iff its Ed25519 public key is listed
+  (`$XDG_DATA_HOME/mae/collab/authorized_keys`). The file is **re-read on every handshake**, so
+  `mae-daemon authorize`/`revoke` take effect with no restart. Access control compares the **full 32-byte
+  key**; the human label is display-only and is never a trust input.
+- **Client side (`known_hosts`, TOFU).** An editor pins a daemon's key on first connection; on a *changed*
+  key it **aborts and does not re-pin** (OpenSSH `StrictHostKeyChecking=accept-new` semantics). Policy:
+  `strict` / `accept-new` (headless default) / `prompt`.
+- **Transport.** TLS 1.3, but the X.509 cert is only a carrier for the Ed25519 key (RFC 7250 "raw public
+  key"); custom verifiers check the key (OID `1.3.101.112` + 32-byte length) and intentionally ignore cert
+  validity/expiry/CA chains — the key, not the cert, is the identity.
+- **Fingerprints.** `SHA256:<base64(sha256(pubkey))>`, full 256-bit, untruncated (modern OpenSSH format).
+  Compare out-of-band (`mae-daemon identity`) to verify a TOFU prompt, like a Signal "safety number."
+- **Mesh (P2P).** A `mae://join/<…>` ticket carries the owner's node-id (its Ed25519 key); the dialer
+  asserts the live connection's identity matches the ticket **before** trusting anything (addresses are
+  routing hints only) — the out-of-band binding RFC 7250 / TOFU require, closing the first-contact window
+  on the mesh path. KB membership is then derived from the signed op-log anchored on the owner key.
+
+### Trust roots
+(1) each peer's Ed25519 identity key; (2) the daemon's `authorized_keys`; (3) the client's `known_hosts`
+pins; (4) a KB's owner key (the membership op-log anchor); (5) the per-KB content key, wrapped to each
+member's identity key through the membership op-log (the daemon stays key-blind).
+
+### Honest weaknesses
+- **One identity key serves several roles** (I1) — signs membership + content ops, backs TLS, is the mesh
+  node-id, and (via the standard Ed25519→X25519 map) is the E2E key-wrap key. Each context is
+  domain-separated, but reusing one key for both signing and key-exchange runs against standard
+  key-separation guidance — a deliberate, documented trade-off; HKDF-derived per-context subkeys are the
+  hardening path. *(Sources: [filippo.io](https://words.filippo.io/using-ed25519-keys-for-encryption/),
+  [EdDSA double-pubkey oracle](https://arxiv.org/pdf/2308.15009),
+  [libsodium ed25519→curve25519](https://libsodium.gitbook.io/doc/advanced/ed25519-curve25519).)*
+- **No key rotation/rebind** (I2) — rotating = a new principal (lose memberships + wraps). The fix is a
+  signed rebind op (old key endorses new key), replayed through the membership op-log so peers transfer
+  membership + re-wrap — Matrix **cross-signing** solves exactly this.
+  *([MSC1680](https://github.com/matrix-org/matrix-spec-proposals/issues/1680).)*
+- **Keys are plaintext at rest** (I3) — identity key, PSK keystore, per-KB content keys (`0600`, no
+  passphrase). The local-first posture (assumes full-disk encryption); an opt-in passphrase/keychain wrap is
+  the documented next step — the import path already rejects *encrypted* SSH keys, so half the precedent
+  exists. *([age #252](https://github.com/FiloSottile/age/discussions/252).)*
+- **Windows** (I4) — file permissions are **not** enforced and no warning is emitted on non-unix. Must be
+  addressed before any Windows release (principle #13).
+- **First-contact TOFU window** (I6) on the `known_hosts` path; mitigate via OOB fingerprint comparison or
+  `strict` policy, or use the mesh ticket path (binds the key in-band).
+  *([RFC 7250](https://www.rfc-editor.org/rfc/rfc7250.html), [SSH accept-new](https://linux-audit.com/ssh/config/client/option-stricthostkeychecking/).)*
+- **PSK auth is coarse** — all peers sharing a PSK collapse to one `psk:<keyid>` principal (no per-peer
+  attribution/revoke). Use `key` mode for real multi-user access control.
+- **Two-layer revocation** (I5) — removing from `authorized_keys` blocks new connections but does not remove
+  a member from a KB's op-log; an E2E ex-member who already holds the content key retains read access until
+  the key is **rotated + re-wrapped** to the reduced set (3c).
+
+## 4. Authorization & Membership
+
+### Model
+Access to a shared KB is governed by a signed, hash-chained **membership operation log** (ADR-026). Each
+mutation — admit, remove, role-change, revoke, governance — is an Ed25519-signed `MembershipOp` whose
+validity *every peer derives locally and identically* (`derive_valid_members_governed`), without trusting the
+relaying daemon. It composes established prior art: **UCAN**-style capability delegation with attenuation (a
+grant never exceeds the granter's role; `can_invite` is a delegable capability); **Keybase**-style sigchains
+(ops hash-chained via `prev_hash`); and **p2panda-auth** "strong removal" for deterministic
+concurrent-conflict resolution (mutual removals both apply; a removed member's concurrent actions are
+transitively invalidated). Roles are hierarchical (Owner ⊇ Editor ⊇ Viewer). Governance is `SingleOwner`
+(default) or `Quorum{m}` (removing an admin needs *m* distinct admin co-signatures).
+
+### Trust anchor
+Every valid log is rooted at a **genesis owner self-admit** signed by an *external* anchor: the owner's own
+key for a hosted KB, or the join-ticket node-id for a KB joined from an untrusted relay (ADR-025). A log
+whose genesis is not signed by the registered anchor yields **zero** members — a relay cannot self-attest a
+collection into existence.
+
+### Enforcement points
+1. **`kb_access`** (the RBAC chokepoint, `collab_handler.rs:898`): resolves the caller's role from its
+   cryptographic principal (key fingerprint, never a label; ADR-018 strict binding) via the op-log for
+   anchored KBs or `member_roles` for owned KBs, then applies hierarchical RBAC × join policy × transport
+   policy (owner-bypass). Every lifecycle handler routes through it at `Manage`.
+2. **Epoch fence** (ADR-023): a granted member must author content under their current-epoch yrs client_id;
+   pre-grant divergent lineage is rejected. *(See A1/N1 — currently split source + hub-only.)*
+3. **Signed content ops** (ADR-036): a content edit's author (from the *signed header*, not the connection)
+   must be a current Editor+ member at the op's epoch.
+4. **Collection-smuggling defense**: raw writes to `kbc:` are owner-only — membership/policy cannot be
+   mutated outside the gated handlers.
+
+### Honest gaps (and fix status)
+- **Split epoch source (A1, HIGH).** Role from op-log, epoch from the legacy `member_roles` (empty for a
+  mesh member) → non-epoch-0 members wrongly fenced. Fix: derive the epoch from the same op-log
+  (one source of authority — a basic ReBAC tenet,
+  [Zanzibar](https://www.usenix.org/system/files/atc19-pang.pdf)).
+- **Fence missing on the mesh path (N1, HIGH).** The fence runs only on hub `kb/node_update`, not
+  `dialer::apply_doc`. Fix: one shared fence helper on both write paths (complete mediation).
+- **Local blocklist not enforced on the content path (A2, MEDIUM).** `verify_content_op` uses an empty
+  blocklist. Revocation/deny-lists must apply at *every* enforcement point
+  ([SPKI/SDSI RFC 2692](https://www.rfc-editor.org/rfc/rfc2692),
+  [UCAN revocation](https://ucan.xyz/revocation/)). Fix: thread the peer's `MembershipView` in.
+- **Content-key authority frozen at genesis owner (N2, MEDIUM).** A quorum can remove the owner from
+  governance but cannot rekey. Unlike MLS, removal does not force re-encryption
+  ([RFC 9420 §12](https://www.rfc-editor.org/rfc/rfc9420.html)). v1 fix: restrict E2e to `SingleOwner`;
+  later: let current owners author rotation ops under the active governance.
+- **Local-clock expiry (N3) + permissive-join/policy-flip TOCTOU (N4)** — LOW hardening: derive a logical
+  "now" from causally-prior ops; re-check policy inside the membership-write critical section.
+
+Capability attenuation, owner-only governance, the strong-removal/quorum resolver, transport gating, and
+smuggling defenses were reviewed and found **sound — no privilege-escalation path identified**.
+
+## 5. Fix priority & cadence
+
+1. **The unified fence (A1 + N1 + A2)** — the highest-value fix: one helper derives role + **epoch** + applies
+   the **blocklist** from the signed op-log, called on **both** the hub and mesh write paths. Closes two HIGH
+   bugs + one MEDIUM at once. (3b's dual-write is the interim hub mitigation for A1.)
+2. **N2 / E2e governance** — restrict E2e KBs to `SingleOwner` for v1 (folds into 3b/#151, F4); generalize
+   later.
+3. **I-series identity hardening** — document I1/I3/I5/I6 now (this doc); I4 (Windows) before any Windows
+   release; I2 (key rotation/rebind) + I1 (HKDF subkeys) as ADR follow-ups before E2E GA.
+4. **Implementation-pass review** re-runs after the fixes + 3b/3c land, gating 3d's confidentiality claim.
+
+Every fix above is security-relevant and ships with an **adversarial test** exercising the failure mode
+(malicious relay, removed member, stale/forged epoch, blocked principal) — per the testing-rigor principle.
