@@ -6,7 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(daemon)* Kb/collection_op — key-blind owner-signed collection write (ADR-037 #150, Phase 3a) (#154) ([274ff53](https://github.com/cuttlefisch/mae/commit/274ff531848c5693ff7358ea64e9083dd82dbd0b))
+
+## [0.14.12] - 2026-06-26
+
+### Features
+
 - *(editor)* Live E2E content-encryption wiring (ADR-037, #146 Phase 2b) (#149) ([606f0bb](https://github.com/cuttlefisch/mae/commit/606f0bb6fafa848998dec23c13c0b86defb86db1))
+
+### Miscellaneous
+
+- Bump version to 0.14.12 ([8e1f29a](https://github.com/cuttlefisch/mae/commit/8e1f29a9803859901607ee2ceaf36dac3a1a60fc))
 
 ## [0.14.11] - 2026-06-26
 
