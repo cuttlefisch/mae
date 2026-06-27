@@ -599,7 +599,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (526 built-in)
+## Commands (527 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1050,6 +1050,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-find` | Search KB nodes (SPC n f) |
 | `kb-edit-source` | Jump to source .org file for current help node (SPC n e) |
 | `kb-create` | Find or create a note — type title, auto-generates ID (SPC n c) |
+| `kb-update` | Replace a KB node's body: :kb-update <id> <body> (scriptable content edit) |
 | `kb-delete` | Delete a KB node by ID (SPC n D) |
 | `daily-goto-today` | Open today's daily note with chain-fill (SPC n d t) |
 | `daily-goto-yesterday` | Open yesterday's daily note (SPC n d y) |

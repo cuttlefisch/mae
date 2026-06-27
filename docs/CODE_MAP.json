@@ -3547,6 +3547,10 @@
       "doc": "Find or create a note — type title, auto-generates ID (SPC n c)"
     },
     {
+      "name": "kb-update",
+      "doc": "Replace a KB node's body: :kb-update <id> <body> (scriptable content edit)"
+    },
+    {
       "name": "kb-delete",
       "doc": "Delete a KB node by ID (SPC n D)"
     },
