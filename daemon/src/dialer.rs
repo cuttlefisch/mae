@@ -243,7 +243,28 @@ async fn peer_session(
                         match mae_daemon::collab_handler::verify_relayed_content_op(
                             doc_store, &ticket.kb_id, &doc, &update, header.as_ref(), true,
                         ).await {
-                            Ok(verified) => apply_doc(doc_store, Some(broadcaster), dialer_sid, &doc, &update, verified).await,
+                            Ok(verified) => {
+                                // #157 N1: the ADR-023 epoch fence runs on the mesh relay
+                                // too — not just the hub `kb/node_update` — so a stale-epoch
+                                // op can't slip in via the peer path (complete mediation).
+                                // The op's author (from the verified signed header) is the
+                                // principal whose current-epoch client_id must match.
+                                let fence_reject = match (
+                                    verified.as_ref().and_then(|h| h.get("author").and_then(|a| a.as_str())),
+                                    doc.strip_prefix("kb:"),
+                                ) {
+                                    (Some(author), Some(node_id)) => {
+                                        mae_daemon::collab_handler::enforce_epoch_fence(
+                                            doc_store, &ticket.kb_id, node_id, &doc, &update, author,
+                                        ).await.err()
+                                    }
+                                    _ => None, // unsigned/legacy/collection doc — no author to fence
+                                };
+                                match fence_reject {
+                                    Some(reason) => warn!(kb_id = %ticket.kb_id, doc = %doc, %reason, "mesh: REJECTED relayed op (epoch fence — #157 N1)"),
+                                    None => apply_doc(doc_store, Some(broadcaster), dialer_sid, &doc, &update, verified).await,
+                                }
+                            }
                             Err(e) => warn!(kb_id = %ticket.kb_id, doc = %doc, reason = %e, "mesh: REJECTED relayed content op (ADR-036)"),
                         }
                     }
@@ -778,7 +799,16 @@ mod tests {
         // node-update path does → A's session for B pushes a sync_update notification.
         let mut a_node = {
             let (st, _) = a_store.encode_state_and_sv("kb:concept:n").await.unwrap();
-            TextSync::from_state(&st).unwrap()
+            // A real editor authors KB node ops under derive_kb_client_id(fp, epoch)
+            // (kb_ops.rs:1161). The mesh epoch fence (#157 N1) binds the relayed
+            // payload's yrs client_id to the author's CURRENT epoch, so the test
+            // must stamp the edit the way the editor would — a plain daemon-store
+            // client_id would (correctly) be fenced as stale-lineage.
+            TextSync::from_state_with_client_id(
+                &st,
+                mae_sync::kb::derive_kb_client_id(&a_id.fingerprint(), 0),
+            )
+            .unwrap()
         };
         let edit = a_node.insert(0, "LIVE-EDIT ");
         a_store
@@ -901,7 +931,15 @@ mod tests {
         // assert-absence test would mask).
         let valid_edit = {
             let (st, _) = a_store.encode_state_and_sv("kb:concept:n").await.unwrap();
-            let mut node = TextSync::from_state(&st).unwrap();
+            // Stamp the way a real editor does (derive_kb_client_id, kb_ops.rs:1161)
+            // so the valid owner edit clears the #157 N1 mesh epoch fence — the
+            // SELECTIVE half of the oracle (the three rejects above never reach the
+            // fence; they're stopped earlier by verify_relayed_content_op).
+            let mut node = TextSync::from_state_with_client_id(
+                &st,
+                mae_sync::kb::derive_kb_client_id(&a_id.fingerprint(), 0),
+            )
+            .unwrap();
             node.insert(0, "VALID ")
         };
         push(

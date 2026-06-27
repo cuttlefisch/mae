@@ -926,6 +926,47 @@ async fn kb_member_epoch(
     }
 }
 
+/// ADR-023 (B-19) epoch fence — the security core. A granted member must author under
+/// their **current-epoch** `client_id`; any NEW op (beyond the daemon's authoritative node
+/// state) authored under a stale-epoch client_id is rejected — precisely a member's
+/// pre-grant divergent lineage (e.g. viewer-era edits) trying to cascade after a grant.
+/// `Ok(())` ⇒ passes; `Err(reason)` ⇒ fenced (the caller turns it into a rejection).
+///
+/// #157 N1: this is the ONE fence shared by every write path — the hub `kb/node_update`
+/// AND the mesh dialer relay — so enforcement can't be present on one and absent on the
+/// other (complete mediation). The epoch comes from [`kb_member_epoch`] (the signed op-log
+/// for anchored KBs — #157 A1).
+pub async fn enforce_epoch_fence(
+    doc_store: &DocStore,
+    kb_id: &str,
+    node_id: &str,
+    node_doc: &str,
+    update_bytes: &[u8],
+    principal: &str,
+) -> Result<(), String> {
+    let coll = load_collection(doc_store, kb_id)
+        .await
+        .map_err(|e| format!("epoch lookup failed for KB '{kb_id}': {e}"))?;
+    let epoch_now = kb_member_epoch(doc_store, kb_id, &coll, principal).await;
+    let c_now = derive_kb_client_id(principal, epoch_now);
+    // Full authoritative state (not just the SV) so the fence detects a contiguous-clock
+    // continuation of an already-canonical client (B-20) that the update's own SV hides.
+    let (base_state, _sv) = doc_store
+        .encode_state_and_sv(node_doc)
+        .await
+        .map_err(|e| format!("node state lookup failed for '{node_id}': {e}"))?;
+    let authors = update_new_op_authors(update_bytes, &base_state)
+        .map_err(|e| format!("could not decode update: {e}"))?;
+    if let Some(stale) = authors.iter().find(|a| **a != c_now) {
+        return Err(format!(
+            "rebase required: node '{node_id}' carries an op from stale-epoch client {stale} \
+             (current-epoch author is {c_now}, epoch {epoch_now}); adopt authoritative state \
+             and re-author the edit"
+        ));
+    }
+    Ok(())
+}
+
 /// here. Resolves the caller's role from its cryptographic **principal** (key
 /// fingerprint — never a label), then decides by hierarchical RBAC role × the
 /// KB's join policy × the operation. `principal == None` (the `none`/loopback
@@ -2221,64 +2262,15 @@ async fn handle_doc_request_inner(
             // (possibly malicious) client behaviour. Only enforced in key-auth mode:
             // `none`/loopback has no per-identity principal to derive an epoch from.
             if let Some(principal) = auth_principal {
-                let epoch_now = match load_collection(doc_store, &kb_id).await {
-                    // A1 (#157): derive the epoch from the SAME authority as the role —
-                    // the signed op-log for anchored KBs, not the legacy member_roles map.
-                    Ok(coll) => kb_member_epoch(doc_store, &kb_id, &coll, principal).await,
-                    Err(e) => {
-                        warn!(session = session_id, kb_id = %kb_id, reason = %e, "kb/node_update: epoch lookup failed");
-                        return JsonRpcResponse::error(
-                            id,
-                            McpError::internal_error(format!(
-                                "epoch lookup failed for KB '{kb_id}': {e}"
-                            )),
-                        );
-                    }
-                };
-                let c_now = derive_kb_client_id(principal, epoch_now);
-                // The daemon's authoritative STATE for this node — ops it already
-                // holds are grandfathered; only ops *beyond* it are fenced. We need
-                // the full state (not just the SV) so the fence can detect a
-                // contiguous-clock continuation of an already-canonical client (B-20),
-                // which the incoming update's own SV would hide.
-                let base_state = match doc_store.encode_state_and_sv(&node_doc).await {
-                    Ok((state, _sv)) => state,
-                    Err(e) => {
-                        return JsonRpcResponse::error(
-                            id,
-                            McpError::internal_error(format!(
-                                "node state lookup failed for '{node_id}': {e}"
-                            )),
-                        );
-                    }
-                };
-                match update_new_op_authors(&update_bytes, &base_state) {
-                    Ok(authors) => {
-                        if let Some(stale) = authors.iter().find(|a| **a != c_now) {
-                            warn!(
-                                session = session_id, kb_id = %kb_id, node_id = %node_id,
-                                stale_client = stale, current_client = c_now, epoch = epoch_now,
-                                "kb/node_update: REBASE REQUIRED (stale-epoch op fenced — B-19)"
-                            );
-                            return JsonRpcResponse::error(
-                                id,
-                                McpError::internal_error(format!(
-                                    "rebase required: node '{node_id}' carries an op from \
-                                     stale-epoch client {stale} (current-epoch author is \
-                                     {c_now}, epoch {epoch_now}); adopt authoritative state \
-                                     and re-author the edit"
-                                )),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        // An update we cannot decode cannot be fenced — fail closed.
-                        warn!(session = session_id, kb_id = %kb_id, node_id = %node_id, reason = %e, "kb/node_update: undecodable update rejected");
-                        return JsonRpcResponse::error(
-                            id,
-                            McpError::parse_error(format!("could not decode update: {e}")),
-                        );
-                    }
+                if let Err(reason) =
+                    enforce_epoch_fence(doc_store, &kb_id, &node_id, &node_doc, &update_bytes, principal)
+                        .await
+                {
+                    warn!(
+                        session = session_id, kb_id = %kb_id, node_id = %node_id, %reason,
+                        "kb/node_update: epoch fence rejected (B-19)"
+                    );
+                    return JsonRpcResponse::error(id, McpError::internal_error(reason));
                 }
             }
 
